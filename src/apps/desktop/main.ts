@@ -15,6 +15,7 @@ import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
+import { presentationAction, windowAllClosedAction } from "./lifecycle-policy";
 import {
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
@@ -25,23 +26,23 @@ const productName = "Farol Next Preview";
 const bundleId = "local.farol.next.preview";
 const windowMode = parsePreviewWindowMode(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
-const ownerTasks = [
+const demoTasks = [
   {
-    ownerId: "owner-local-preview",
+    ownerId: "demo-local-preview",
     taskId: "task-atlantic",
     sessionId: "session-atlantic",
     turnId: "turn-atlantic-1",
     generation: 1,
-    label: "Atlantic workspace check",
+    label: "Demo · Atlantic workspace check",
     hasComputer: true,
   },
   {
-    ownerId: "owner-local-preview",
+    ownerId: "demo-local-preview",
     taskId: "task-harbor",
     sessionId: "session-harbor",
     turnId: "turn-harbor-1",
     generation: 1,
-    label: "Harbor research stream",
+    label: "Demo · Harbor research stream",
     hasComputer: false,
   },
 ] as const;
@@ -73,7 +74,7 @@ const layoutSchema = z.strictObject({
 });
 const controlSchema = z.strictObject({
   taskId: z.string(),
-  action: z.enum(["release-tool", "release-completion"]),
+  action: z.enum(["release-tool", "finish-demo"]),
 });
 
 type RuntimeReady = z.infer<typeof readySchema>;
@@ -89,8 +90,9 @@ let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
 let runtimeError: string | null = null;
 let runtimeStopping = false;
 let section: Section = "browser";
-let selectedTaskId: string = ownerTasks[0].taskId;
+let selectedTaskId: string = demoTasks[0].taskId;
 let setupOpen = true;
+let windowOpening: Promise<void> | null = null;
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
 const taskSurfaceFailures = new Map<string, string>();
@@ -113,7 +115,7 @@ function bootstrap() {
     runtimeIdentity: runtime?.identity ?? null,
     embeddedNode: runtime?.embeddedNode ?? null,
     embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
-    tasks: (runtime?.tasks ?? ownerTasks).map(
+    tasks: (runtime?.tasks ?? demoTasks).map(
       ({ ownerId: _ownerId, generation: _generation, ...task }) => {
         const { readToken: _readToken, ...safeTask } = task as typeof task & {
           readToken?: string;
@@ -179,7 +181,11 @@ function failTaskSurface(taskId: string): void {
 }
 
 function handleRuntimeExit(code: number | null): void {
-  if (runtimeStopping) return;
+  if (runtimeStopping) {
+    runtimeChild = null;
+    runtime = null;
+    return;
+  }
   runtimeChild = null;
   runtime = null;
   runtimeState = "failed";
@@ -234,9 +240,9 @@ async function startRuntime(): Promise<void> {
         const parsed = readySchema.safeParse(message);
         if (!parsed.success || settled) return;
         const exactTasks =
-          parsed.data.tasks.length === ownerTasks.length &&
+          parsed.data.tasks.length === demoTasks.length &&
           parsed.data.tasks.every((task, index) => {
-            const expected = ownerTasks[index];
+            const expected = demoTasks[index];
             return (
               expected !== undefined &&
               task.ownerId === expected.ownerId &&
@@ -290,11 +296,11 @@ function installNetworkFence(): Electron.Session | null {
 
 function handleShortcut(input: Input): boolean {
   if (setupOpen) return false;
-  const index = ownerTasks.findIndex((task) => task.taskId === selectedTaskId);
+  const index = demoTasks.findIndex((task) => task.taskId === selectedTaskId);
   if (input.control && input.key === "Tab") {
     const direction = input.shift ? -1 : 1;
-    const next = (index + direction + ownerTasks.length) % ownerTasks.length;
-    selectedTaskId = ownerTasks[next]?.taskId ?? selectedTaskId;
+    const next = (index + direction + demoTasks.length) % demoTasks.length;
+    selectedTaskId = demoTasks[next]?.taskId ?? selectedTaskId;
     section = "browser";
     applyLayout();
     window?.webContents.send(channels.layout, {
@@ -490,7 +496,7 @@ function installIpc(): void {
     const parsed = controlSchema.safeParse(value);
     if (
       !parsed.success ||
-      !ownerTasks.some((task) => task.taskId === parsed.data.taskId)
+      !demoTasks.some((task) => task.taskId === parsed.data.taskId)
     ) {
       return { error: "IPC_CONTROL_INVALID" };
     }
@@ -527,7 +533,7 @@ function installIpc(): void {
     const parsed = layoutSchema.safeParse(value);
     if (
       !parsed.success ||
-      !ownerTasks.some((task) => task.taskId === parsed.data.taskId)
+      !demoTasks.some((task) => task.taskId === parsed.data.taskId)
     )
       return;
     section = parsed.data.section;
@@ -569,9 +575,7 @@ async function createWindow(): Promise<void> {
   });
   window.on("resize", applyLayout);
   window.on("closed", () => {
-    runtimeStopping = true;
     stopStreams();
-    runtimeChild?.postMessage("shutdown");
     disposeTaskViews();
     taskViews.clear();
     window = null;
@@ -585,22 +589,53 @@ async function createWindow(): Promise<void> {
       failTaskSurface(task.taskId);
     });
   }
-  if (windowMode === "secondary-visible") {
-    window.showInactive();
-  } else if (windowMode === "default") {
-    window.show();
+  revealWindow();
+}
+
+function revealWindow(): void {
+  if (!window || window.isDestroyed()) return;
+  if (window.isMinimized()) window.restore();
+  const action = presentationAction(windowMode);
+  if (action === "show-inactive") window.showInactive();
+  else if (action === "show-and-focus") window.show();
+}
+
+function ensureWindow(): Promise<void> {
+  if (window && !window.isDestroyed()) {
+    revealWindow();
+    return Promise.resolve();
   }
+  if (windowOpening) return windowOpening;
+  windowOpening = createWindow().finally(() => {
+    windowOpening = null;
+  });
+  return windowOpening;
+}
+
+function stopRuntime(): void {
+  runtimeStopping = true;
+  stopStreams();
+  pendingComputer.clear();
+  taskSurfaceFailures.clear();
+  runtimeChild?.postMessage("shutdown");
 }
 
 async function main(): Promise<void> {
+  app.on("second-instance", () => {
+    void ensureWindow();
+  });
   await app.whenReady();
   installIpc();
   await startRuntime();
-  await createWindow();
+  await ensureWindow();
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+    void ensureWindow();
   });
-  app.on("window-all-closed", () => app.quit());
+  app.on("before-quit", stopRuntime);
+  app.on("window-all-closed", () => {
+    if (windowAllClosedAction(process.platform) === "quit") app.quit();
+  });
 }
 
-void main().catch(() => app.exit(1));
+if (!app.requestSingleInstanceLock()) app.quit();
+else void main().catch(() => app.exit(1));

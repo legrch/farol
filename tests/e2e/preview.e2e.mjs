@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -16,17 +16,22 @@ const evidenceRoot = path.join(
   development ? "artifacts/e2e-dev" : "artifacts/e2e",
 );
 const metadataPath = path.join(root, "dist/package/artifact.json");
+const vendorElectron = path.join(
+  root,
+  "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+);
 
-function verifyArtifact(candidateMetadataPath) {
-  return spawnSync(
-    process.execPath,
-    [
-      path.join(root, "tooling/verify-package.mjs"),
-      "--artifact",
-      candidateMetadataPath,
-    ],
-    { cwd: root, encoding: "utf8" },
-  );
+function verifyArtifact(candidateMetadataPath, candidateAppPath = null) {
+  const arguments_ = [
+    path.join(root, "tooling/verify-package.mjs"),
+    "--artifact",
+    candidateMetadataPath,
+  ];
+  if (candidateAppPath) arguments_.push("--app", candidateAppPath);
+  return spawnSync(process.execPath, arguments_, {
+    cwd: root,
+    encoding: "utf8",
+  });
 }
 
 const expectedSource = sourceIdentity(path.resolve(root, ".."), "vnext");
@@ -71,6 +76,7 @@ await fs.rm(evidenceRoot, { recursive: true, force: true });
 await fs.mkdir(evidenceRoot, { recursive: true });
 
 const cases = [];
+let quitProofs = 0;
 
 if (development) {
   cases.push("development-build-identity");
@@ -82,7 +88,7 @@ if (development) {
     const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
     await fs.writeFile(
       malformedMetadata,
-      `${JSON.stringify({ ...artifact, schema: 3 })}\n`,
+      `${JSON.stringify({ ...artifact, schema: 999 })}\n`,
     );
     const malformed = verifyArtifact(malformedMetadata);
     assert.notEqual(malformed.status, 0);
@@ -97,22 +103,63 @@ if (development) {
       encoding: "utf8",
     });
     assert.equal(cloned.status, 0, `${cloned.stdout}${cloned.stderr}`);
+    const copied = verifyArtifact(metadataPath, tamperedApp);
+    assert.equal(copied.status, 0, `${copied.stdout}${copied.stderr}`);
+    cases.push("copied-destination-verified");
     await fs.appendFile(
       path.join(tamperedApp, "Contents/Resources/app/shell.html"),
       "\n<!-- deterministic tamper probe -->\n",
     );
-    const tamperedMetadata = path.join(corruptRoot, "tampered-artifact.json");
-    await fs.writeFile(
-      tamperedMetadata,
-      `${JSON.stringify({ ...artifact, artifactPath: tamperedApp })}\n`,
-    );
-    const tampered = verifyArtifact(tamperedMetadata);
+    const tampered = verifyArtifact(metadataPath, tamperedApp);
     assert.notEqual(tampered.status, 0);
     assert.match(
       `${tampered.stdout}${tampered.stderr}`,
       /PACKAGE_DIGEST_MISMATCH/u,
     );
     cases.push("tampered-artifact-rejected");
+
+    const extraResourceRoot = path.join(corruptRoot, "extra-resource");
+    await fs.mkdir(extraResourceRoot);
+    const extraResourceApp = path.join(
+      extraResourceRoot,
+      "Farol Next Preview.app",
+    );
+    const resourceClone = spawnSync(
+      "/bin/cp",
+      ["-cR", appPath, extraResourceApp],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      resourceClone.status,
+      0,
+      `${resourceClone.stdout}${resourceClone.stderr}`,
+    );
+    await fs.writeFile(
+      path.join(
+        extraResourceApp,
+        "Contents/Resources/app/legacy-private-state.json",
+      ),
+      "{}\n",
+    );
+    const extraResourceMetadata = path.join(
+      corruptRoot,
+      "extra-resource-artifact.json",
+    );
+    await fs.writeFile(
+      extraResourceMetadata,
+      `${JSON.stringify({
+        ...artifact,
+        artifactPath: extraResourceApp,
+        artifactSha256: await treeDigest(extraResourceApp),
+      })}\n`,
+    );
+    const extraResource = verifyArtifact(extraResourceMetadata);
+    assert.notEqual(extraResource.status, 0);
+    assert.match(
+      `${extraResource.stdout}${extraResource.stderr}`,
+      /PACKAGE_RESOURCE_SET_INVALID/u,
+    );
+    cases.push("legacy-private-resource-rejected");
 
     const wrongHelperRoot = path.join(corruptRoot, "wrong-helper");
     await fs.mkdir(wrongHelperRoot);
@@ -357,20 +404,22 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const launchArgs = [
+    ...launchPrefix,
+    `--user-data-dir=${userData}`,
+    `--preview-window-mode=${windowMode}`,
+    ...extraArgs,
+  ];
+  const launchEnvironment = {
+    HOME: isolatedHome,
+    LANG: "en_US.UTF-8",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    TMPDIR: os.tmpdir(),
+  };
   const application = await electron.launch({
     executablePath: executable,
-    args: [
-      ...launchPrefix,
-      `--user-data-dir=${userData}`,
-      `--preview-window-mode=${windowMode}`,
-      ...extraArgs,
-    ],
-    env: {
-      HOME: isolatedHome,
-      LANG: "en_US.UTF-8",
-      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-      TMPDIR: os.tmpdir(),
-    },
+    args: launchArgs,
+    env: launchEnvironment,
     timeout: 15_000,
   });
   const window = await application.firstWindow({ timeout: 15_000 });
@@ -386,7 +435,113 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     userData,
     windowMode,
     presentation,
+    launchArgs,
+    launchEnvironment,
   };
+}
+
+function repeatLaunch(instance) {
+  const repeated = spawnSync(executable, instance.launchArgs, {
+    cwd: root,
+    env: instance.launchEnvironment,
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+  assert.equal(
+    repeated.status,
+    0,
+    `E2E_SECOND_LAUNCH_FAILED:${repeated.stdout}${repeated.stderr}`,
+  );
+}
+
+async function waitForWindowCount(application, count) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const actual = await application.evaluate(
+      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+    );
+    if (actual === count) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`E2E_WINDOW_COUNT_TIMEOUT:${count}`);
+}
+
+async function runtimeProcessId(application) {
+  return application.evaluate(({ app }) => {
+    const matches = app
+      .getAppMetrics()
+      .filter(
+        (metric) =>
+          metric.type === "Utility" &&
+          metric.name === "Farol Next Runtime" &&
+          metric.serviceName === "node.mojom.NodeService",
+      );
+    if (matches.length !== 1) {
+      throw new Error(`UTILITY_PROCESS_IDENTITY_INVALID:${matches.length}`);
+    }
+    return matches[0].pid;
+  });
+}
+
+async function startLegacyAppFixture() {
+  const isolatedHome = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-legacy-lifecycle-fixture-"),
+  );
+  const child = spawn(
+    vendorElectron,
+    [
+      path.join(root, "tests/e2e/legacy-app.fixture.cjs"),
+      `--user-data-dir=${path.join(isolatedHome, "user-data")}`,
+    ],
+    {
+      env: {
+        HOME: isolatedHome,
+        LANG: "en_US.UTF-8",
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        TMPDIR: os.tmpdir(),
+      },
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    },
+  );
+  const ready = await Promise.race([
+    once(child, "message").then(([message]) => message),
+    once(child, "exit").then(([code, signal]) => {
+      throw new Error(`LEGACY_FIXTURE_EXITED:${code}:${signal}`);
+    }),
+    new Promise((_, reject) =>
+      setTimeout(
+        () => reject(new Error("LEGACY_FIXTURE_START_TIMEOUT")),
+        10_000,
+      ),
+    ),
+  ]);
+  assert.deepEqual(
+    { kind: ready.kind, pid: ready.pid },
+    { kind: "legacy-fixture.ready", pid: child.pid },
+  );
+  assert.ok(Number.isSafeInteger(ready.port) && ready.port > 0);
+  return { child, isolatedHome, port: ready.port };
+}
+
+async function probeLegacyAppFixture(fixture) {
+  const response = await fetch(
+    `http://127.0.0.1:${fixture.port}/synthetic/read`,
+  );
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), "legacy-fixture-read-ok\n");
+}
+
+async function closeLegacyAppFixture(fixture) {
+  fixture.child.send("shutdown");
+  const [code, signal] = await once(fixture.child, "exit");
+  assert.equal(signal, null);
+  assert.equal(code, 0);
+  const real = path.resolve(fixture.isolatedHome);
+  assert.ok(
+    real.startsWith(
+      `${path.resolve(os.tmpdir())}${path.sep}farol-legacy-lifecycle-fixture-`,
+    ),
+  );
+  await fs.rm(real, { recursive: true, force: true });
 }
 
 async function close(instance) {
@@ -398,7 +553,37 @@ async function close(instance) {
       instance.windowMode === "secondary-visible",
     );
   }
+  const mainPid = instance.application.process().pid;
+  const utilityPids = await instance.application.evaluate(({ app }) =>
+    app
+      .getAppMetrics()
+      .filter(
+        (metric) =>
+          metric.type === "Utility" && metric.name === "Farol Next Runtime",
+      )
+      .map((metric) => metric.pid),
+  );
   await instance.application.close();
+  const exactPids = [mainPid, ...utilityPids].filter(
+    (pid) => Number.isSafeInteger(pid) && pid > 0,
+  );
+  for (const pid of exactPids) {
+    let alive = true;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if (error?.code === "ESRCH") {
+          alive = false;
+          break;
+        }
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(alive, false, `E2E_OWNED_PROCESS_SURVIVED_QUIT:${pid}`);
+  }
+  quitProofs += 1;
   const real = path.resolve(instance.isolatedHome);
   assert.ok(
     real.startsWith(
@@ -621,7 +806,7 @@ async function proveTaskCapabilityIsolation(application) {
       const read = await fetch("/events/task-harbor", {
         headers: { authorization: "Bearer " + taskToken }
       });
-      const control = await fetch("/control/task-harbor/release-completion", {
+      const control = await fetch("/control/task-harbor/finish-demo", {
         method: "POST",
         headers: { authorization: "Bearer " + taskToken }
       });
@@ -878,7 +1063,7 @@ try {
     false,
   );
 
-  await normal.window.locator("#release-completion").click();
+  await normal.window.locator("#finish-demo").click();
   await waitForTask(
     normal.application,
     "task-harbor",
@@ -896,7 +1081,7 @@ try {
     retained.answer,
     /Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1/u,
   );
-  await normal.window.locator("#release-completion").click();
+  await normal.window.locator("#finish-demo").click();
   await waitForTask(
     normal.application,
     "task-atlantic",
@@ -977,6 +1162,34 @@ try {
     focused.find((surface) => surface.state.taskId === "task-harbor")?.focused,
     false,
   );
+
+  const runtimeBeforeWindowClose = await runtimeProcessId(normal.application);
+  const reopenedWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await normal.window.close();
+  await waitForWindowCount(normal.application, 0);
+  assert.equal(
+    await runtimeProcessId(normal.application),
+    runtimeBeforeWindowClose,
+  );
+  repeatLaunch(normal);
+  normal.window = await reopenedWindow;
+  await normal.window
+    .locator("#task-tabs .task-tab")
+    .first()
+    .waitFor({ state: "visible" });
+  await waitForWindowPresentation(normal.application, normal.windowMode);
+  assert.equal(
+    await runtimeProcessId(normal.application),
+    runtimeBeforeWindowClose,
+  );
+  assert.equal(
+    await normal.application.evaluate(
+      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+    ),
+    1,
+  );
   cases.push(
     "visible-window-secondary-display",
     "visible-window-show-inactive",
@@ -993,9 +1206,27 @@ try {
     "client-delivery-acknowledged",
     "first-run-setup-journey",
     "settings-setup-reentry",
+    "second-launch-reuses-single-instance",
+    "window-close-reopen-keeps-runtime",
   );
 } finally {
   await close(normal);
+}
+
+const legacyFirst = await startLegacyAppFixture();
+try {
+  await probeLegacyAppFixture(legacyFirst);
+  const nextAfterLegacy = await launch();
+  try {
+    await probeLegacyAppFixture(legacyFirst);
+    assert.ok((await runtimeProcessId(nextAfterLegacy.application)) > 0);
+  } finally {
+    await close(nextAfterLegacy);
+  }
+  await probeLegacyAppFixture(legacyFirst);
+  cases.push("isolated-start-order-legacy-then-next");
+} finally {
+  await closeLegacyAppFixture(legacyFirst);
 }
 
 const failed = await launch(["--preview-failure"]);
@@ -1005,10 +1236,7 @@ try {
     .locator('[data-task-id="task-atlantic"] small')
     .getByText("Needs attention")
     .waitFor();
-  assert.equal(
-    await failed.window.locator("#release-completion").isDisabled(),
-    true,
-  );
+  assert.equal(await failed.window.locator("#finish-demo").isDisabled(), true);
   await failed.window.locator('[data-section="activity"]').click();
   assert.match(
     await failed.window.locator("#activity-list").innerText(),
@@ -1050,7 +1278,7 @@ try {
     "independent task survives stream failure",
   );
   await streamFailure.window.locator('[data-task-id="task-harbor"]').click();
-  await streamFailure.window.locator("#release-completion").click();
+  await streamFailure.window.locator("#finish-demo").click();
   await waitForTask(
     streamFailure.application,
     "task-harbor",
@@ -1101,8 +1329,11 @@ try {
 }
 
 const processDeath = await launch();
+let nextFirstLegacy = null;
 try {
   await completeSetup(processDeath);
+  nextFirstLegacy = await startLegacyAppFixture();
+  await probeLegacyAppFixture(nextFirstLegacy);
   const utilityPid = await processDeath.application.evaluate(({ app }) => {
     const matches = app
       .getAppMetrics()
@@ -1138,11 +1369,17 @@ try {
   });
   await setWindowSize(processDeath.application, 700, 600);
   assert.equal(processDeath.window.isClosed(), false);
+  await probeLegacyAppFixture(nextFirstLegacy);
   await processDeath.window.screenshot({
     path: path.join(evidenceRoot, "process-death-compact.png"),
   });
-  cases.push("utility-process-sigkill-state");
+  cases.push(
+    "utility-process-sigkill-state",
+    "isolated-start-order-next-then-legacy",
+    "next-only-failure-preserves-legacy-fixture",
+  );
 } finally {
+  if (nextFirstLegacy) await closeLegacyAppFixture(nextFirstLegacy);
   await close(processDeath);
 }
 
@@ -1155,6 +1392,8 @@ for (const stage of [
   cases.push(`utility-process-sigkill-${stage}`);
 }
 cases.push("fault-scenarios-remain-hidden");
+assert.ok(quitProofs >= 8, `E2E_QUIT_PROOF_INCOMPLETE:${quitProofs}`);
+cases.push("quit-terminates-exact-owned-processes");
 
 const report = {
   schema: 1,

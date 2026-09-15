@@ -20,22 +20,50 @@ export ELECTRON_FORCE_IS_PACKAGED=true
 exec "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
   "$contents_dir/Resources/app" "$@"
 `;
-const artifactIndex = process.argv.indexOf("--artifact");
+const arguments_ = process.argv.slice(2);
+
+function option(name) {
+  const indexes = arguments_
+    .map((argument, index) => (argument === name ? index : -1))
+    .filter((index) => index !== -1);
+  if (indexes.length > 1) throw new Error(`PACKAGE_OPTION_REPEATED:${name}`);
+  if (indexes.length === 0) return null;
+  const value = arguments_[indexes[0] + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`PACKAGE_OPTION_VALUE_MISSING:${name}`);
+  }
+  return value;
+}
+
+const artifactOption = option("--artifact");
+const appOption = option("--app");
+const known = new Set(["--artifact", "--app"]);
+for (let index = 0; index < arguments_.length; index += 1) {
+  const argument = arguments_[index];
+  if (!known.has(argument))
+    throw new Error(`PACKAGE_OPTION_INVALID:${argument}`);
+  index += 1;
+}
 const artifactFile = path.resolve(
-  artifactIndex === -1
-    ? path.join(root, "dist/package/artifact.json")
-    : (process.argv[artifactIndex + 1] ?? ""),
+  artifactOption ?? path.join(root, "dist/package/artifact.json"),
 );
 const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
+const packageDocument = JSON.parse(
+  await fs.readFile(path.join(root, "package.json"), "utf8"),
+);
 
 function requireValue(condition, code) {
   if (!condition) throw new Error(code);
 }
 
-requireValue(artifact.schema === 2, "PACKAGE_MANIFEST_SCHEMA_INVALID");
+requireValue(artifact.schema === 3, "PACKAGE_MANIFEST_SCHEMA_INVALID");
 requireValue(
   artifact.product === "Farol Next Preview",
   "PACKAGE_PRODUCT_INVALID",
+);
+requireValue(
+  artifact.version === packageDocument.version,
+  "PACKAGE_VERSION_INVALID",
 );
 requireValue(
   artifact.bundleId === "local.farol.next.preview",
@@ -84,7 +112,7 @@ requireValue(
   "PACKAGE_RUNTIME_CLOSURE_INVALID",
 );
 
-const appPath = path.resolve(artifact.artifactPath);
+const appPath = path.resolve(appOption ?? artifact.artifactPath);
 requireValue(
   path.basename(appPath) === "Farol Next Preview.app",
   "PACKAGE_PATH_INVALID",
@@ -95,7 +123,39 @@ requireValue(
   "PACKAGE_DIGEST_MISMATCH",
 );
 
+const contents = path.join(appPath, "Contents");
+requireValue(
+  (await fs.readdir(contents)).sort().join("\0") ===
+    ["Frameworks", "Info.plist", "MacOS", "Resources"].join("\0"),
+  "PACKAGE_CONTENTS_SET_INVALID",
+);
+requireValue(
+  (await fs.readdir(path.join(contents, "MacOS"))).join("\0") ===
+    "Farol Next Preview",
+  "PACKAGE_EXECUTABLE_SET_INVALID",
+);
+requireValue(
+  (await fs.readdir(path.join(contents, "Frameworks"))).join("\0") ===
+    "Electron Runtime.app",
+  "PACKAGE_FRAMEWORK_SET_INVALID",
+);
+requireValue(
+  (await fs.readdir(path.join(contents, "Resources"))).join("\0") === "app",
+  "PACKAGE_OUTER_RESOURCE_SET_INVALID",
+);
+
 const resources = path.join(appPath, "Contents/Resources/app");
+const expectedResourceEntries = [
+  ...BUILD_ENTRIES,
+  "THIRD_PARTY_NOTICES.txt",
+  "build-manifest.json",
+  "package.json",
+].sort();
+requireValue(
+  (await fs.readdir(resources)).sort().join("\0") ===
+    expectedResourceEntries.join("\0"),
+  "PACKAGE_RESOURCE_SET_INVALID",
+);
 const embedded = JSON.parse(
   await fs.readFile(path.join(resources, "build-manifest.json"), "utf8"),
 );
@@ -133,6 +193,31 @@ requireValue(
   "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
 );
 await verifyBuildEntries(resources, embedded.entrySha256);
+const embeddedPackage = JSON.parse(
+  await fs.readFile(path.join(resources, "package.json"), "utf8"),
+);
+requireValue(
+  embeddedPackage.name === "farol-next-preview-app" &&
+    embeddedPackage.productName === artifact.product &&
+    embeddedPackage.version === artifact.version &&
+    embeddedPackage.main === "main.cjs",
+  "PACKAGE_EMBEDDED_APP_IDENTITY_INVALID",
+);
+const resourceManifest = JSON.parse(
+  await fs.readFile(path.join(resources, "resource-manifest.json"), "utf8"),
+);
+requireValue(
+  resourceManifest.schema === "farol.next.resource-manifest/1" &&
+    resourceManifest.product?.name === artifact.product &&
+    resourceManifest.product?.version === artifact.version &&
+    resourceManifest.product?.bundleId === artifact.bundleId &&
+    resourceManifest.product?.updateChannel === artifact.updateChannel &&
+    resourceManifest.integrations?.tunnel === "absent" &&
+    resourceManifest.integrations?.mcpRegistration === "absent" &&
+    resourceManifest.integrations?.providerRegistration === "absent" &&
+    resourceManifest.integrations?.updater === "absent",
+  "PACKAGE_RESOURCE_MANIFEST_INVALID",
+);
 
 function plistValue(plist, key) {
   return execFileSync(
@@ -152,6 +237,11 @@ requireValue(
 requireValue(
   plistValue(mainPlist, "CFBundleExecutable") === "Farol Next Preview",
   "PACKAGE_PLIST_EXECUTABLE_MISMATCH",
+);
+requireValue(
+  plistValue(mainPlist, "CFBundleShortVersionString") ===
+    artifact.version.split("-", 1)[0],
+  "PACKAGE_PLIST_VERSION_MISMATCH",
 );
 await fs.access(path.join(appPath, "Contents/MacOS/Farol Next Preview"));
 await fs.access(path.join(resources, "THIRD_PARTY_NOTICES.txt"));
@@ -226,5 +316,5 @@ requireValue(
 );
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "pipe" });
 process.stdout.write(
-  `verified ${artifact.product} ${artifact.artifactSha256} (${artifact.sourceDirty ? "dirty" : "clean"})\n`,
+  `verified ${artifact.product} ${artifact.version} ${artifact.artifactSha256} (${artifact.sourceDirty ? "dirty" : "clean"}) at ${appPath}\n`,
 );

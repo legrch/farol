@@ -14,6 +14,11 @@ const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";
 const runtimeApp = path.join(appPath, runtimeRelativePath);
 const repositoryRoot = path.resolve(root, "..");
 const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const packageDocument = JSON.parse(
+  await fs.readFile(path.join(root, "package.json"), "utf8"),
+);
+const previewVersion = packageDocument.version;
+const bundleVersion = previewVersion.split("-", 1)[0];
 
 const launcher = `#!/bin/sh
 set -eu
@@ -49,7 +54,7 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${bundleVersion}</string>
   <key>CFBundleVersion</key>
   <string>1</string>
   <key>LSMinimumSystemVersion</key>
@@ -129,7 +134,7 @@ await fs.writeFile(
   `${JSON.stringify(
     {
       name: "farol-next-preview-app",
-      version: "0.1.0-preview.0",
+      version: previewVersion,
       private: true,
       productName: "Farol Next Preview",
       type: "module",
@@ -153,8 +158,9 @@ if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
 const artifact = {
-  schema: 2,
+  schema: 3,
   product: "Farol Next Preview",
+  version: previewVersion,
   bundleId: "local.farol.next.preview",
   sourceCommit: manifest.sourceCommit,
   sourceTreeDigest: manifest.sourceTreeDigest,

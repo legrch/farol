@@ -137,6 +137,9 @@ await Promise.all([
   readBuildInput("src/ui/shell.css").then((bytes) =>
     fs.writeFile("dist/app/shell.css", bytes),
   ),
+  readBuildInput("resources.json").then((bytes) =>
+    fs.writeFile("dist/app/resource-manifest.json", bytes),
+  ),
 ]);
 
 const current = sourceSnapshot(repositoryRoot, scope);

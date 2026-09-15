@@ -45,6 +45,8 @@ and offline states.
   run. Normal owner launches retain the product's ordinary foreground behavior.
 - The Computer action names the synthetic operation and target before approval.
   Unsupported native access is explicitly disabled.
+- The terminal demo action is labelled `Finish demo response`; it cannot be mistaken
+  for publishing, installing, or completing a product release.
 - Activity is an allowlisted projection: task label, phase, event kind, synthetic
   capability name, monotonic sequence, and timestamps only. Prompt text, answer
   text, tool arguments/results, bearer values, paths, cookies, and provider payloads

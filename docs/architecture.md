@@ -19,9 +19,12 @@ UI capabilities at composition rather than importing their implementations.
 The production utility process is launched with Electron's `utilityProcess.fork`.
 This deliberately uses the runtime shipped inside the exact Electron artifact, so a
 tester does not need Homebrew, Python, Node, npm, or Bun. Bun FFI is not used as a
-security boundary. The Electron main process owns child lifetime, requests bounded
-shutdown when its window closes, and converts an unexpected utility-process exit
-into an explicit failed state while keeping the shell available. Startup coverage
+security boundary. The Electron main process owns child lifetime. On macOS, closing
+the last window disposes its views and streams but keeps the application and utility
+runtime alive; a Dock activation or second launch recreates one window against the
+same runtime. Explicit Quit requests bounded runtime shutdown. An unexpected
+utility-process exit becomes an explicit failed state while keeping an open shell
+available. Startup coverage
 kills that exact utility after runtime readiness, during the first task-view load,
 and during the second task-view load; every case removes the partial task surfaces
 without terminating the shell.
@@ -84,3 +87,8 @@ events already acknowledged by the receiving client. If the unacknowledged windo
 is full, that task fails closed with `EVENT_STREAM_CAPACITY_EXCEEDED`; its stream is
 closed and late subscribers receive a conflict response. No other task or the
 runtime process is stopped by that local failure.
+
+The tracked machine-readable ownership table is `resources.json` and the build copies
+it to `Contents/Resources/app/resource-manifest.json`. Unimplemented tunnel, MCP,
+provider registration, native Computer/Agent, updater, and login-item identities remain
+explicitly absent rather than reserving global resources.

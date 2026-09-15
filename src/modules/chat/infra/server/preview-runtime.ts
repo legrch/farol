@@ -57,22 +57,22 @@ export type PreviewRuntimeDependencies = Readonly<{
 
 const tasks: readonly PreviewTask[] = [
   {
-    ownerId: "owner-local-preview",
+    ownerId: "demo-local-preview",
     taskId: "task-atlantic",
     sessionId: "session-atlantic",
     turnId: "turn-atlantic-1",
     generation: 1,
-    label: "Atlantic workspace check",
+    label: "Demo · Atlantic workspace check",
     hasComputer: true,
     readToken: "",
   },
   {
-    ownerId: "owner-local-preview",
+    ownerId: "demo-local-preview",
     taskId: "task-harbor",
     sessionId: "session-harbor",
     turnId: "turn-harbor-1",
     generation: 1,
-    label: "Harbor research stream",
+    label: "Demo · Harbor research stream",
     hasComputer: false,
     readToken: "",
   },
@@ -346,9 +346,7 @@ export async function startPreviewRuntime(
       return;
     }
     const controlMatch =
-      /^\/control\/([^/]+)\/(release-tool|release-completion)$/u.exec(
-        url.pathname,
-      );
+      /^\/control\/([^/]+)\/(release-tool|finish-demo)$/u.exec(url.pathname);
     if (request.method === "POST" && controlMatch?.[1] && controlMatch[2]) {
       const taskId = decodeURIComponent(controlMatch[1]);
       const taskControls = controls.get(taskId);

@@ -25,7 +25,11 @@ describe("source identity", () => {
       await fs.mkdir(path.join(repository, "vnext"));
       await fs.writeFile(
         path.join(repository, "vnext/.gitignore"),
-        ".DS_Store\nAGENTS.md\n",
+        ".DS_Store\n",
+      );
+      await fs.writeFile(
+        path.join(repository, "vnext/AGENTS.md"),
+        "tracked portable instructions\n",
       );
       await fs.writeFile(
         path.join(repository, "vnext/main.ts"),
@@ -46,14 +50,21 @@ describe("source identity", () => {
 
       const initial = sourceIdentity(repository, "vnext");
       await fs.writeFile(path.join(repository, "vnext/.DS_Store"), "host-a");
-      await fs.writeFile(
-        path.join(repository, "vnext/AGENTS.md"),
-        "task-local",
-      );
       const withIgnoredNoise = sourceIdentity(repository, "vnext");
 
       expect(withIgnoredNoise).toEqual(initial);
       expect(initial.dirty).toBe(false);
+
+      await fs.writeFile(
+        path.join(repository, "vnext/AGENTS.md"),
+        "changed portable instructions\n",
+      );
+      expect(sourceIdentity(repository, "vnext")).toMatchObject({
+        commit: initial.commit,
+        treeDigest: initial.treeDigest,
+        dirty: true,
+      });
+      git(repository, "restore", "vnext/AGENTS.md");
 
       await fs.writeFile(
         path.join(repository, "vnext/main.ts"),

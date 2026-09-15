@@ -192,7 +192,7 @@ describe("actual loopback SSE runtime", () => {
 
     expect(
       (
-        await fetch(`${base}/control/task-atlantic/release-completion`, {
+        await fetch(`${base}/control/task-atlantic/finish-demo`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },
           body: controlBody(runtime, "task-atlantic", null),
@@ -232,22 +232,16 @@ describe("actual loopback SSE runtime", () => {
     );
     expect(running.some((event) => event.kind === "turn.terminal")).toBe(false);
 
-    const first = await fetch(
-      `${base}/control/task-harbor/release-completion`,
-      {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
-        body: controlBody(runtime, "task-harbor", null),
-      },
-    );
-    const duplicate = await fetch(
-      `${base}/control/task-harbor/release-completion`,
-      {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
-        body: controlBody(runtime, "task-harbor", null),
-      },
-    );
+    const first = await fetch(`${base}/control/task-harbor/finish-demo`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: controlBody(runtime, "task-harbor", null),
+    });
+    const duplicate = await fetch(`${base}/control/task-harbor/finish-demo`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: controlBody(runtime, "task-harbor", null),
+    });
     expect(first.status).toBe(204);
     expect(duplicate.status).toBe(409);
     await expect(
@@ -298,14 +292,11 @@ describe("actual loopback SSE runtime", () => {
     await surviving.until(
       (event) => event.kind === "text.delta" && event.sequence === 2,
     );
-    const released = await fetch(
-      `${base}/control/task-harbor/release-completion`,
-      {
-        method: "POST",
-        headers: { ...headers, "content-type": "application/json" },
-        body: controlBody(runtime, "task-harbor", null),
-      },
-    );
+    const released = await fetch(`${base}/control/task-harbor/finish-demo`, {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: controlBody(runtime, "task-harbor", null),
+    });
     expect(released.status).toBe(204);
     await expect(
       surviving.until((event) => event.kind === "turn.terminal"),
@@ -334,7 +325,7 @@ describe("actual loopback SSE runtime", () => {
     expect(foreignRead.status).toBe(401);
 
     const foreignControl = await fetch(
-      `${base}/control/task-harbor/release-completion`,
+      `${base}/control/task-harbor/finish-demo`,
       { method: "POST", headers: taskAHeaders },
     );
     expect(foreignControl.status).toBe(401);

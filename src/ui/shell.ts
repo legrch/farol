@@ -203,7 +203,7 @@ function renderTabs(): void {
       return button;
     }),
   );
-  const completion = required<HTMLButtonElement>("#release-completion");
+  const completion = required<HTMLButtonElement>("#finish-demo");
   completion.disabled =
     bootstrap.runtimeState !== "ready" ||
     taskSurfaceStatuses.get(selectedTaskId)?.state === "failed" ||
@@ -516,10 +516,10 @@ async function start(): Promise<void> {
       required<HTMLButtonElement>("#approve-tool").disabled = true;
     },
   );
-  required<HTMLButtonElement>("#release-completion").addEventListener(
+  required<HTMLButtonElement>("#finish-demo").addEventListener(
     "click",
     async () => {
-      await window.farolNext.control(selectedTaskId, "release-completion");
+      await window.farolNext.control(selectedTaskId, "finish-demo");
     },
   );
   required<HTMLButtonElement>("#setup-back").addEventListener("click", () => {

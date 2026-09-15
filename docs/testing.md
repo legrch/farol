@@ -24,6 +24,20 @@ retain foreground product behavior. The two accepted test-only arguments are
 `--preview-window-mode=hidden` and
 `--preview-window-mode=secondary-visible`; unknown or repeated values fail closed.
 
+The sealed and development E2E lanes also close the macOS window, prove the exact
+`Farol Next Runtime` PID remains, invoke a second launch with the same isolated
+identity, and prove one window reopens without a second utility process. Quit then
+waits for the exact main and named utility PIDs to disappear; no generic Electron
+process-name cleanup is used. A separate task-owned Electron Legacy fixture is started
+before and after Next in isolated homes, and a Next utility-process failure must leave
+its synthetic read endpoint available.
+
+The final owner journey is separate from automation: `task next:run` is launched with
+the normal home and no test-only application arguments, the harmless Legacy connector
+read is repeated around it, and the application is quit by its exact instance. This
+live observation must be recorded as blocked when the connector is unavailable; status
+JSON is not a substitute.
+
 ## Why hidden evidence is still valid
 
 Electron documents that a `BrowserWindow` created with `show: false` paints by

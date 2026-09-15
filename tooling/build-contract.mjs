@@ -5,6 +5,7 @@ import path from "node:path";
 export const BUILD_ENTRIES = Object.freeze([
   "main.cjs",
   "preload.cjs",
+  "resource-manifest.json",
   "runtime.cjs",
   "shell.css",
   "shell.html",

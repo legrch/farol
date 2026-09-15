@@ -37,6 +37,18 @@ task next:package
 task next:test:e2e
 ```
 
+The canonical owner command is:
+
+```bash
+task next:run
+```
+
+It launches only the existing verified packaged candidate. It never builds, installs,
+updates, or activates either product, and it refuses a missing, dirty, stale, or
+digest-invalid package with the exact rebuild action. `task next:preview` is the
+separate development lane; it builds development bytes and is not artifact evidence.
+See [`docs/owner-preview.md`](docs/owner-preview.md) for controls and lifecycle.
+
 The deterministic gate includes strict typecheck, architecture fixtures, policy and
 integration coverage, Hunt selftest/proof/model, and a build-bound sanitized replay.
 The development E2E lane runs those exact clean built files through Electron's
@@ -64,7 +76,8 @@ Launch the exact built development preview through the pinned Electron runtime:
 npm --prefix vnext run preview
 ```
 
-After `task next:package`, launch the exact packaged preview from the repository root:
+After `task next:package`, the canonical command above verifies source identity and the
+bundle digest before launching this exact executable from the repository root:
 
 ```bash
 ./vnext/dist/package/Farol\ Next\ Preview.app/Contents/MacOS/Farol\ Next\ Preview
@@ -79,6 +92,8 @@ independent-recipient, update/rollback, live-provider or release-readiness evide
 ## Evidence
 
 - `dist/package/artifact.json` — exact source and packaged-tree identity;
+- packaged `Contents/Resources/app/resource-manifest.json` — app, process, state,
+  transport, receipt, and intentionally absent integration ownership;
 - `artifacts/e2e-dev/report.json` — exact development-build interaction evidence;
 - `artifacts/e2e/report.json` and its recorded PNG set — packaged interaction
   evidence;
@@ -96,5 +111,6 @@ the committed `vnext/` subtree. Packaging also requires every project build inpu
 to match its HEAD blob, rejects special index flags and tracked symlinks, records a
 dependency-input ledger, and binds every built entry by SHA-256. The separate
 `sourceDirty` flag reports tracked or untracked non-ignored worktree changes.
-Task-local instructions, `.DS_Store`, build output, coverage and other ignored host
-noise therefore cannot change the identity of the same clean commit.
+The portable `vnext/AGENTS.md` is tracked and contributes to this identity. `.DS_Store`,
+build output, coverage and other explicitly ignored host noise do not change the
+identity of the same clean commit.
