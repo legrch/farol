@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
@@ -155,37 +155,18 @@ await fs.writeFile(
   `Farol Next Preview direct runtime notice\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
 
-execFileSync(
-  "/usr/bin/codesign",
-  ["--force", "--deep", "--sign", "-", appPath],
-  {
-    stdio: "inherit",
-  },
-);
-execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath], {
-  stdio: "inherit",
+for (const helper of helperKinds) {
+  const name = `Farol Next Preview Helper${helper.suffix}`;
+  execFileSync(
+    "/usr/bin/codesign",
+    ["--remove-signature", path.join(frameworks, `${name}.app`)],
+    { stdio: "pipe" },
+  );
+}
+execFileSync("/usr/bin/codesign", ["--remove-signature", appPath], {
+  stdio: "pipe",
 });
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
-
-function codeSignature(app) {
-  const inspected = spawnSync("/usr/bin/codesign", ["-d", "--verbose=4", app], {
-    encoding: "utf8",
-  });
-  if (inspected.status !== 0) throw new Error("PACKAGE_SIGNATURE_UNREADABLE");
-  const detail = `${inspected.stdout}${inspected.stderr}`;
-  const cdHash = /^CDHash=([a-f0-9]{40})$/mu.exec(detail)?.[1];
-  if (
-    !cdHash ||
-    !/^Signature=adhoc$/mu.test(detail) ||
-    !/^TeamIdentifier=not set$/mu.test(detail) ||
-    !/^Identifier=local\.farol\.next\.preview$/mu.test(detail)
-  ) {
-    throw new Error("PACKAGE_SIGNATURE_IDENTITY_INVALID");
-  }
-  return { kind: "ad-hoc", teamIdentifier: null, cdHash };
-}
-
-const signing = codeSignature(appPath);
 
 const artifact = {
   schema: 2,
@@ -202,7 +183,7 @@ const artifact = {
     node: "embedded-in-electron",
     testerManagedRuntime: false,
   },
-  signing,
+  signing: { kind: "unsigned", reason: "local-development-preview" },
   notarized: false,
   updateChannel: "local-preview-only",
 };

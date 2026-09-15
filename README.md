@@ -7,8 +7,8 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 ## What runs
 
 - one Electron shell with two real `WebContentsView` task surfaces;
-- one Electron utility process with an OS-allocated loopback HTTP/SSE endpoint and
-  a per-run bearer;
+- one Electron utility process with an OS-allocated loopback HTTP/SSE endpoint,
+  task-scoped read capabilities and a separate main-process control capability;
 - two independent scripted local-provider sessions;
 - one bounded `fixture.inspect` Computer round-trip that returns to the exact
   owner/session/task/Turn/generation/call;
@@ -37,7 +37,8 @@ task next:test:e2e
 The deterministic gate includes strict typecheck, architecture fixtures, policy and
 integration coverage, Hunt selftest/proof/model, and a build-bound sanitized replay.
 Packaging verifies the app identity, embedded source manifest, runtime closure,
-helper names and bundle IDs, type-bound tree digest, plist and ad-hoc signature. E2E
+helper names and bundle IDs, contained symlinks, type-bound tree digest, plist and
+explicit unsigned status. E2E
 launches those packaged bytes under a throwaway home and explicit user-data root,
 checks the real UI and task views, rejects malformed and tampered artifacts, proves
 default-deny task egress, and exercises an actual utility-process death.
@@ -48,7 +49,7 @@ Launch the resulting local preview directly:
 ./vnext/dist/package/Farol\ Next\ Preview.app/Contents/MacOS/Farol\ Next\ Preview
 ```
 
-This is an ad-hoc-signed, local-preview-only artifact. It is not notarized, published,
+This is an explicitly unsigned, local-preview-only development artifact. It is not notarized, published,
 installed-product, independent-recipient, update/rollback, live-provider or release
 readiness evidence.
 
@@ -63,7 +64,9 @@ These directories are ignored because they are reproducible local evidence, not
 source inputs.
 
 `sourceTreeDigest` is the SHA-256 of the canonical recursive Git tree listing for
-the committed `vnext/` subtree. The separate `sourceDirty` flag reports tracked or
-untracked non-ignored worktree changes. Task-local instructions, `.DS_Store`, build
-output, coverage and other ignored host noise therefore cannot change the identity
-of the same clean commit.
+the committed `vnext/` subtree. Packaging also requires every project build input
+to match its HEAD blob, rejects special index flags and tracked symlinks, records a
+dependency-input ledger, and binds every built entry by SHA-256. The separate
+`sourceDirty` flag reports tracked or untracked non-ignored worktree changes.
+Task-local instructions, `.DS_Store`, build output, coverage and other ignored host
+noise therefore cannot change the identity of the same clean commit.

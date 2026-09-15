@@ -43,9 +43,8 @@ requireValue(
   "PACKAGE_DIRTY_STATE_INVALID",
 );
 requireValue(
-  artifact.signing?.kind === "ad-hoc" &&
-    artifact.signing?.teamIdentifier === null &&
-    /^[a-f0-9]{40}$/u.test(artifact.signing?.cdHash ?? ""),
+  artifact.signing?.kind === "unsigned" &&
+    artifact.signing?.reason === "local-development-preview",
   "PACKAGE_SIGNING_IDENTITY_INVALID",
 );
 requireValue(
@@ -145,6 +144,19 @@ const helpers = [
   { suffix: " (Plugin)", id: "helper.plugin" },
   { suffix: " (Renderer)", id: "helper.renderer" },
 ];
+function requireUnsigned(target) {
+  const signature = spawnSync("/usr/bin/codesign", ["-d", target], {
+    encoding: "utf8",
+  });
+  requireValue(
+    signature.status !== 0 &&
+      /code object is not signed at all/u.test(
+        `${signature.stdout}${signature.stderr}`,
+      ),
+    "PACKAGE_SIGNING_IDENTITY_INVALID",
+  );
+}
+
 for (const helper of helpers) {
   const name = `Farol Next Preview Helper${helper.suffix}`;
   const helperRoot = path.join(appPath, "Contents/Frameworks", `${name}.app`);
@@ -159,27 +171,10 @@ for (const helper of helpers) {
     "PACKAGE_HELPER_BUNDLE_MISMATCH",
   );
   await fs.access(path.join(helperRoot, "Contents/MacOS", name));
+  requireUnsigned(helperRoot);
 }
 
-execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath], {
-  stdio: "pipe",
-});
-const signature = spawnSync(
-  "/usr/bin/codesign",
-  ["-d", "--verbose=4", appPath],
-  { encoding: "utf8" },
-);
-requireValue(signature.status === 0, "PACKAGE_SIGNATURE_UNREADABLE");
-const signatureDetail = `${signature.stdout}${signature.stderr}`;
-requireValue(
-  /^Signature=adhoc$/mu.test(signatureDetail) &&
-    /^TeamIdentifier=not set$/mu.test(signatureDetail) &&
-    /^Identifier=local\.farol\.next\.preview$/mu.test(signatureDetail) &&
-    new RegExp(`^CDHash=${artifact.signing.cdHash}$`, "mu").test(
-      signatureDetail,
-    ),
-  "PACKAGE_SIGNING_IDENTITY_INVALID",
-);
+requireUnsigned(appPath);
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "pipe" });
 process.stdout.write(
   `verified ${artifact.product} ${artifact.artifactSha256} (${artifact.sourceDirty ? "dirty" : "clean"})\n`,
