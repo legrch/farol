@@ -61,3 +61,9 @@ readiness evidence.
 
 These directories are ignored because they are reproducible local evidence, not
 source inputs.
+
+`sourceTreeDigest` is the SHA-256 of the canonical recursive Git tree listing for
+the committed `vnext/` subtree. The separate `sourceDirty` flag reports tracked or
+untracked non-ignored worktree changes. Task-local instructions, `.DS_Store`, build
+output, coverage and other ignored host noise therefore cannot change the identity
+of the same clean commit.

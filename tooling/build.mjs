@@ -1,37 +1,11 @@
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
+import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
 const repositoryRoot = path.resolve(root, "..");
 const output = path.join(root, "dist/app");
-
-async function sourceFiles(directory) {
-  const entries = await fs.readdir(directory, { withFileTypes: true });
-  const files = [];
-  for (const entry of entries) {
-    if (["dist", "node_modules", "coverage", "artifacts"].includes(entry.name))
-      continue;
-    const target = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...(await sourceFiles(target)));
-    else files.push(target);
-  }
-  return files.sort();
-}
-
-async function digestInputs() {
-  const hash = createHash("sha256");
-  for (const file of await sourceFiles(root)) {
-    const relative = path.relative(root, file).split(path.sep).join("/");
-    hash.update(relative);
-    hash.update("\0");
-    hash.update(await fs.readFile(file));
-    hash.update("\0");
-  }
-  return hash.digest("hex");
-}
 
 await fs.rm(output, { recursive: true, force: true });
 await fs.mkdir(output, { recursive: true });
@@ -83,28 +57,17 @@ await Promise.all([
   fs.copyFile("src/ui/shell.css", "dist/app/shell.css"),
 ]);
 
-const commit = execFileSync(
-  "git",
-  ["-C", repositoryRoot, "rev-parse", "HEAD"],
-  {
-    encoding: "utf8",
-  },
-).trim();
-const dirty =
-  execFileSync(
-    "git",
-    ["-C", repositoryRoot, "status", "--porcelain", "--", "vnext"],
-    {
-      encoding: "utf8",
-    },
-  ).trim().length > 0;
+const identity = sourceIdentity(
+  repositoryRoot,
+  path.relative(repositoryRoot, root).split(path.sep).join("/"),
+);
 const manifest = {
   schema: 1,
   product: "Farol Next Preview",
   bundleId: "local.farol.next.preview",
-  sourceCommit: commit,
-  sourceTreeDigest: await digestInputs(),
-  dirty,
+  sourceCommit: identity.commit,
+  sourceTreeDigest: identity.treeDigest,
+  dirty: identity.dirty,
   entries: [
     "main.cjs",
     "preload.cjs",
