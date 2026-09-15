@@ -1,6 +1,12 @@
 import type { TurnIdentity, TurnPhase } from "../../domain/turn";
 
 type EventBase = TurnIdentity & Readonly<{ at: number }>;
+type ClientDeliverableKind =
+  | "turn.phase"
+  | "text.delta"
+  | "computer.requested"
+  | "computer.completed"
+  | "turn.terminal";
 
 export type ClientEvent =
   | (EventBase & Readonly<{ kind: "turn.phase"; phase: TurnPhase }>)
@@ -13,6 +19,14 @@ export type ClientEvent =
         operation: "inspect_fixture";
       }>)
   | (EventBase & Readonly<{ kind: "computer.completed"; callId: string }>)
+  | (EventBase &
+      Readonly<{
+        kind: "client.delivery_acknowledged";
+        deliveryId: number;
+        deliveredKind: ClientDeliverableKind;
+        phase: TurnPhase;
+        sequence: number | null;
+      }>)
   | (EventBase &
       Readonly<{ kind: "turn.terminal"; phase: TurnPhase; code: string }>);
 

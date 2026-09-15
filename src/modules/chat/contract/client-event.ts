@@ -41,6 +41,20 @@ export const ClientEventSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     ...identity,
+    kind: z.literal("client.delivery_acknowledged"),
+    deliveryId: z.number().int().positive(),
+    deliveredKind: z.enum([
+      "turn.phase",
+      "text.delta",
+      "computer.requested",
+      "computer.completed",
+      "turn.terminal",
+    ]),
+    phase,
+    sequence: z.number().int().positive().nullable(),
+  }),
+  z.strictObject({
+    ...identity,
     kind: z.literal("turn.terminal"),
     phase,
     code: z.string().min(1).max(120),

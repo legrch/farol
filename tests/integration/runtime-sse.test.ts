@@ -9,6 +9,7 @@ class SseReader {
   private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
   private readonly decoder = new TextDecoder();
   private carry = "";
+  readonly seen: { id: number; event: ClientEvent }[] = [];
 
   constructor(response: Response) {
     if (!response.body) throw new Error("SSE_BODY_MISSING");
@@ -26,12 +27,21 @@ class SseReader {
       const frames = this.carry.split("\n\n");
       this.carry = frames.pop() ?? "";
       for (const frame of frames) {
+        const id = Number(
+          frame
+            .split("\n")
+            .find((line) => line.startsWith("id: "))
+            ?.slice(4),
+        );
         const data = frame
           .split("\n")
           .find((line) => line.startsWith("data: "))
           ?.slice(6);
         if (!data) continue;
         const event = JSON.parse(data) as ClientEvent;
+        if (!Number.isSafeInteger(id) || id < 1)
+          throw new Error("SSE_EVENT_ID_INVALID");
+        this.seen.push({ id, event });
         events.push(event);
         if (predicate(event)) return events;
       }
@@ -59,6 +69,18 @@ function controlBody(
     turnId: task.turnId,
     generation: task.generation,
     callId,
+  });
+}
+
+function deliveryBody(runtime: PreviewRuntime, taskId: string) {
+  const task = runtime.tasks.find((candidate) => candidate.taskId === taskId);
+  if (!task) throw new Error(`TASK_MISSING:${taskId}`);
+  return JSON.stringify({
+    ownerId: task.ownerId,
+    sessionId: task.sessionId,
+    taskId: task.taskId,
+    turnId: task.turnId,
+    generation: task.generation,
   });
 }
 
@@ -99,6 +121,34 @@ describe("actual loopback SSE runtime", () => {
     expect(beforeTool.some((event) => event.kind === "turn.terminal")).toBe(
       false,
     );
+    const deliveredDelta = stream.seen.find(
+      ({ event }) => event.kind === "text.delta" && event.sequence === 1,
+    );
+    expect(deliveredDelta).toBeDefined();
+    const runningRuntime = runtime;
+    const acknowledge = () =>
+      fetch(`${base}/ack/task-atlantic/${deliveredDelta?.id}`, {
+        method: "POST",
+        headers: {
+          ...taskHeaders(runningRuntime, "task-atlantic"),
+          "content-type": "application/json",
+        },
+        body: deliveryBody(runningRuntime, "task-atlantic"),
+      });
+    expect((await acknowledge()).status).toBe(204);
+    expect((await acknowledge()).status).toBe(204);
+    expect(
+      (
+        await fetch(`${base}/ack/task-atlantic/${deliveredDelta?.id}`, {
+          method: "POST",
+          headers: {
+            ...taskHeaders(runningRuntime, "task-harbor"),
+            "content-type": "application/json",
+          },
+          body: deliveryBody(runningRuntime, "task-atlantic"),
+        })
+      ).status,
+    ).toBe(401);
 
     const waiting = await fetch(`${base}/snapshot`, { headers });
     const waitingSnapshot = (await waiting.json()) as {
@@ -160,6 +210,9 @@ describe("actual loopback SSE runtime", () => {
 
     const snapshot = await fetch(`${base}/snapshot`, { headers });
     const safeJson = JSON.stringify(await snapshot.json());
+    expect(
+      (safeJson.match(/client_delivery_acknowledged/gu) ?? []).length,
+    ).toBe(1);
     expect(safeJson).not.toContain(runtime.token);
     expect(safeJson).not.toContain("Synthetic local preview fixture");
     expect(safeJson).not.toContain("Checking the isolated fixture workspace");

@@ -49,6 +49,26 @@ type SafeActivity = Readonly<{
   at: number;
 }>;
 
+const phaseLabels: Readonly<Record<string, string>> = {
+  prepared: "Prepared",
+  submit_activated: "Submitting",
+  running: "Running",
+  tool_wait: "Awaiting approval",
+  completed: "Complete",
+  cancelled: "Cancelled",
+  failed: "Failed",
+  outcome_unknown: "Outcome unknown",
+};
+
+const activityLabels: Readonly<Record<string, string>> = {
+  "turn.phase": "Turn state changed",
+  "text.delta": "Response fragment received",
+  "computer.requested": "Computer approval requested",
+  "computer.completed": "Computer result returned",
+  "client.delivery_acknowledged": "Client delivery acknowledged",
+  "turn.terminal": "Turn finished",
+};
+
 declare global {
   interface Window {
     farolNext: Readonly<{
@@ -86,7 +106,9 @@ function statusFor(taskId: string): string {
     return bootstrap.runtimeState === "failed" ? "Runtime failed" : "Offline";
   }
   const events = taskEvents.get(taskId) ?? [];
-  const last = events.at(-1);
+  const last = events
+    .filter((event) => event.kind !== "client.delivery_acknowledged")
+    .at(-1);
   if (!last)
     return bootstrap.runtimeState === "ready" ? "Connecting" : "Offline";
   if (last.kind === "turn.terminal")
@@ -108,14 +130,32 @@ function renderRuntime(): void {
 
 function renderBrowser(): void {
   const loading = required<HTMLDivElement>("#browser-loading");
-  loading.textContent =
-    bootstrap.runtimeState === "ready"
-      ? "Opening isolated task surface…"
-      : bootstrap.runtimeState === "offline"
-        ? "Local runtime is offline. Open Settings for the recorded reason."
-        : bootstrap.runtimeState === "failed"
-          ? "Task surfaces are unavailable because the local runtime failed."
-          : "Preparing isolated task surfaces…";
+  const title = required<HTMLElement>("#browser-state-title");
+  const detail = required<HTMLElement>("#browser-state-detail");
+  const mark = required<HTMLElement>("#browser-state-mark");
+  loading.classList.toggle(
+    "failed",
+    bootstrap.runtimeState === "offline" || bootstrap.runtimeState === "failed",
+  );
+  if (bootstrap.runtimeState === "ready") {
+    mark.textContent = "◌";
+    title.textContent = "Opening task surface";
+    detail.textContent = "The selected isolated Browser view is ready.";
+  } else if (bootstrap.runtimeState === "offline") {
+    mark.textContent = "!";
+    title.textContent = "Local runtime is offline";
+    detail.textContent =
+      "Your task state is not being replayed. Open Settings for the recorded reason.";
+  } else if (bootstrap.runtimeState === "failed") {
+    mark.textContent = "!";
+    title.textContent = "Task surfaces are unavailable";
+    detail.textContent =
+      "The local runtime stopped. Do not resubmit an uncertain task automatically.";
+  } else {
+    mark.textContent = "◌";
+    title.textContent = "Preparing task surfaces";
+    detail.textContent = "Starting the isolated local runtime…";
+  }
 }
 
 function renderTabs(): void {
@@ -185,18 +225,40 @@ function renderComputer(): void {
 function renderActivity(): void {
   const list = required<HTMLOListElement>("#activity-list");
   const visible = activity.slice(-14).reverse();
+  if (visible.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "activity-empty";
+    const dot = document.createElement("i");
+    const message = document.createElement("span");
+    message.textContent = "Waiting for the first safe lifecycle event.";
+    empty.append(dot, message);
+    list.replaceChildren(empty);
+    return;
+  }
   list.replaceChildren(
     ...visible.map((record) => {
       const item = document.createElement("li");
       const dot = document.createElement("i");
-      const task = document.createElement("code");
-      task.textContent = record.taskId;
+      const task = document.createElement("span");
+      task.className = "activity-task";
+      task.textContent =
+        bootstrap.tasks.find((candidate) => candidate.taskId === record.taskId)
+          ?.label ?? "Unknown task";
       const message = document.createElement("b");
-      message.textContent = record.kind.replaceAll(".", " ");
+      message.textContent = activityLabels[record.kind] ?? "Lifecycle event";
       const phase = document.createElement("span");
       phase.textContent =
-        record.sequence === null ? record.phase : `delta ${record.sequence}`;
-      item.append(dot, task, message, phase);
+        record.sequence === null
+          ? (phaseLabels[record.phase] ?? "Updated")
+          : `Part ${record.sequence}`;
+      const at = document.createElement("time");
+      at.dateTime = new Date(record.at).toISOString();
+      at.textContent = new Intl.DateTimeFormat(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(record.at);
+      item.append(dot, task, message, phase, at);
       return item;
     }),
   );
@@ -275,13 +337,22 @@ function recordEvent(event: ClientEventDto): void {
   events.push(event);
   if (events.length > 128) events.shift();
   taskEvents.set(event.taskId, events);
-  activity.push({
-    taskId: event.taskId,
-    kind: event.kind,
-    phase: "phase" in event ? event.phase : event.kind,
-    sequence: event.kind === "text.delta" ? event.sequence : null,
-    at: event.at,
-  });
+  const quietReceipt =
+    event.kind === "client.delivery_acknowledged" &&
+    !["text.delta", "turn.terminal"].includes(event.deliveredKind);
+  if (!quietReceipt) {
+    activity.push({
+      taskId: event.taskId,
+      kind: event.kind,
+      phase: "phase" in event ? event.phase : event.kind,
+      sequence:
+        event.kind === "text.delta" ||
+        event.kind === "client.delivery_acknowledged"
+          ? event.sequence
+          : null,
+      at: event.at,
+    });
+  }
   if (activity.length > 256) activity.shift();
   render();
 }

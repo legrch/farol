@@ -198,7 +198,9 @@ async function taskSurfaces(application) {
               failed: document.body.dataset.failed === "true",
               visibility: document.visibilityState,
               answer: document.getElementById("answer")?.textContent ?? "",
-              status: document.getElementById("status")?.textContent ?? ""
+              status: document.getElementById("status")?.textContent ?? "",
+              recovery: document.getElementById("recovery")?.textContent ?? "",
+              offline: document.body.dataset.offline === "true"
             })`,
           ),
         })),
@@ -346,6 +348,32 @@ async function sendShortcutFromTask(application, taskId) {
   }, taskId);
 }
 
+async function setWindowSize(application, width, height) {
+  await application.evaluate(
+    ({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height);
+    },
+    { width, height },
+  );
+}
+
+async function shellGeometry(window) {
+  return window.evaluate(() =>
+    [".task-bar", ".surface", "#task-tabs"].map((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) throw new Error(`GEOMETRY_ELEMENT_MISSING:${selector}`);
+      const bounds = element.getBoundingClientRect();
+      return {
+        selector,
+        x: Math.round(bounds.x),
+        y: Math.round(bounds.y),
+        width: Math.round(bounds.width),
+        height: Math.round(bounds.height),
+      };
+    }),
+  );
+}
+
 const normal = await launch();
 try {
   assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
@@ -394,6 +422,15 @@ try {
     "task-atlantic",
     "running-browser-view.png",
   );
+  const wideBrowserGeometry = await shellGeometry(normal.window);
+  await setWindowSize(normal.application, 700, 600);
+  await captureTask(
+    normal.application,
+    "task-atlantic",
+    "running-browser-compact.png",
+  );
+  await setWindowSize(normal.application, 1180, 760);
+  assert.deepEqual(await shellGeometry(normal.window), wideBrowserGeometry);
 
   await normal.window.locator('[data-section="computer"]').click();
   const approve = normal.window.locator("#approve-tool");
@@ -407,6 +444,11 @@ try {
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "tool-wait-wide.png"),
   });
+  await setWindowSize(normal.application, 700, 600);
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "tool-wait-compact.png"),
+  });
+  await setWindowSize(normal.application, 1180, 760);
   await approve.click();
   const resumed = await waitForTask(
     normal.application,
@@ -420,7 +462,9 @@ try {
   assert.match(resumed.answer, /exact requesting turn/u);
 
   await normal.window.locator('[data-section="browser"]').click();
+  const beforeTabSwitch = await shellGeometry(normal.window);
   await normal.window.locator('[data-task-id="task-harbor"]').click();
+  assert.deepEqual(await shellGeometry(normal.window), beforeTabSwitch);
   const switched = await taskSurfaces(normal.application);
   const atlantic = switched.find(
     (surface) => surface.state.taskId === "task-atlantic",
@@ -473,12 +517,15 @@ try {
   assert.doesNotMatch(activityText, /Checking the isolated fixture/u);
   assert.doesNotMatch(activityText, /exact requesting turn/u);
   assert.doesNotMatch(activityText, /Bearer|token|\/private\//u);
+  assert.doesNotMatch(activityText, /task-atlantic|turn-atlantic/u);
+  assert.match(activityText, /Client delivery acknowledged/u);
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "complete-wide.png"),
   });
 
-  await normal.application.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]?.setSize(700, 600);
+  await setWindowSize(normal.application, 700, 600);
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "complete-compact.png"),
   });
   await normal.window.keyboard.press("Meta+4");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
@@ -505,6 +552,8 @@ try {
     "keyboard-focus",
     "activity-redaction",
     "compact-layout",
+    "stable-layout-geometry",
+    "client-delivery-acknowledged",
   );
 } finally {
   await close(normal);
@@ -521,8 +570,16 @@ try {
     true,
   );
   await failed.window.locator('[data-section="activity"]').click();
+  assert.match(
+    await failed.window.locator("#activity-list").innerText(),
+    /Turn finished/u,
+  );
   await failed.window.screenshot({
     path: path.join(evidenceRoot, "failure-wide.png"),
+  });
+  await setWindowSize(failed.application, 700, 600);
+  await failed.window.screenshot({
+    path: path.join(evidenceRoot, "failure-compact.png"),
   });
   cases.push("provider-failure-state");
 } finally {
@@ -581,6 +638,10 @@ try {
   await processDeath.window.screenshot({
     path: path.join(evidenceRoot, "process-death-wide.png"),
   });
+  await setWindowSize(processDeath.application, 700, 600);
+  await processDeath.window.screenshot({
+    path: path.join(evidenceRoot, "process-death-compact.png"),
+  });
   cases.push("utility-process-sigkill-state");
 } finally {
   await close(processDeath);
@@ -595,11 +656,16 @@ const report = {
   cases,
   screenshots: [
     "running-browser-view.png",
+    "running-browser-compact.png",
     "tool-wait-wide.png",
+    "tool-wait-compact.png",
     "complete-wide.png",
+    "complete-compact.png",
     "settings-compact.png",
     "failure-wide.png",
+    "failure-compact.png",
     "process-death-wide.png",
+    "process-death-compact.png",
   ],
 };
 for (const filename of report.screenshots) {

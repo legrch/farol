@@ -37,7 +37,7 @@
           ><kbd>⌘4</kbd>
         </button>
       </nav>
-      <div class="runtime-pill" id="runtime-pill">
+      <div class="runtime-pill" id="runtime-pill" aria-live="polite">
         <span></span><b>Starting</b>
       </div>
     </aside>
@@ -61,8 +61,14 @@
         data-panel="browser"
         aria-label="Browser task surface"
       >
-        <div class="browser-loading" id="browser-loading">
-          Preparing isolated task views…
+        <div class="browser-loading" id="browser-loading" role="status">
+          <span class="browser-state-mark" id="browser-state-mark">◌</span>
+          <div>
+            <strong id="browser-state-title">Preparing task surfaces</strong>
+            <span id="browser-state-detail"
+              >Starting the isolated local runtime…</span
+            >
+          </div>
         </div>
       </section>
       <section class="panel content-panel" data-panel="computer">

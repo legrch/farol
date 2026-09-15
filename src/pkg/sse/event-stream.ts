@@ -5,11 +5,16 @@ type RetainedEvent<Event extends TaskEvent> = Readonly<{
   id: number;
   event: Event;
 }>;
+export type DeliveryAcknowledgement<Event extends TaskEvent> =
+  | Readonly<{ status: "acknowledged"; event: Event }>
+  | Readonly<{ status: "duplicate" }>
+  | Readonly<{ status: "missing" }>;
 const noop = () => undefined;
 
 export class EventStream<Event extends TaskEvent> {
   private readonly history = new Map<string, RetainedEvent<Event>[]>();
   private readonly subscribers = new Map<string, Set<ServerResponse>>();
+  private readonly acknowledged = new Map<string, Set<number>>();
   private nextId = 1;
 
   constructor(
@@ -28,7 +33,14 @@ export class EventStream<Event extends TaskEvent> {
     const retained = { id: this.nextId++, event: structuredClone(event) };
     const history = this.history.get(event.taskId) ?? [];
     history.push(retained);
-    if (history.length > this.capacity) history.shift();
+    if (history.length > this.capacity) {
+      const evicted = history.shift();
+      if (evicted) {
+        const acknowledged = this.acknowledged.get(event.taskId);
+        acknowledged?.delete(evicted.id);
+        if (acknowledged?.size === 0) this.acknowledged.delete(event.taskId);
+      }
+    }
     this.history.set(event.taskId, history);
 
     const subscribers = this.subscribers.get(event.taskId);
@@ -79,11 +91,25 @@ export class EventStream<Event extends TaskEvent> {
     return structuredClone(this.history.get(taskId) ?? []);
   }
 
+  acknowledge(taskId: string, id: number): DeliveryAcknowledgement<Event> {
+    if (!Number.isSafeInteger(id) || id < 1) return { status: "missing" };
+    const retained = this.history
+      .get(taskId)
+      ?.find((candidate) => candidate.id === id);
+    if (!retained) return { status: "missing" };
+    const acknowledged = this.acknowledged.get(taskId) ?? new Set<number>();
+    if (acknowledged.has(id)) return { status: "duplicate" };
+    acknowledged.add(id);
+    this.acknowledged.set(taskId, acknowledged);
+    return { status: "acknowledged", event: structuredClone(retained.event) };
+  }
+
   close(): void {
     for (const responses of this.subscribers.values()) {
       for (const response of responses) response.end();
     }
     this.subscribers.clear();
+    this.acknowledged.clear();
   }
 
   private encode(retained: RetainedEvent<Event>): string {

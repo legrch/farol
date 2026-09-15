@@ -81,6 +81,21 @@ describe("shared runtime mechanisms", () => {
     expect(stream.retained("task-b")).toEqual([]);
   });
 
+  it("acknowledges an exact retained delivery once and never across tasks", async () => {
+    const stream = new EventStream<{ taskId: string; sequence: number }>();
+    await stream.publish({ taskId: "task-a", sequence: 1 });
+
+    expect(stream.acknowledge("task-a", 1)).toEqual({
+      status: "acknowledged",
+      event: { taskId: "task-a", sequence: 1 },
+    });
+    expect(stream.acknowledge("task-a", 1)).toEqual({
+      status: "duplicate",
+    });
+    expect(stream.acknowledge("task-b", 1)).toEqual({ status: "missing" });
+    expect(stream.acknowledge("task-a", 999)).toEqual({ status: "missing" });
+  });
+
   it("replays retained frames, honors backpressure, and removes closed subscribers", async () => {
     const stream = new EventStream<{ taskId: string; sequence: number }>();
     await stream.publish({ taskId: "task-a", sequence: 1 });

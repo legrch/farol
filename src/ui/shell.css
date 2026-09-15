@@ -240,8 +240,38 @@ kbd {
   display: block;
 }
 .browser-loading {
+  width: min(620px, calc(100% - 56px));
+  min-height: 116px;
+  margin: 42px auto;
+  padding: 24px 0;
+  border-block: 1px solid var(--line);
   color: var(--muted);
-  padding: 42px;
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  align-items: center;
+  gap: 18px;
+}
+.browser-state-mark {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--beacon);
+  background: rgba(233, 180, 93, 0.12);
+}
+.browser-loading strong,
+.browser-loading span:last-child {
+  display: block;
+}
+.browser-loading strong {
+  margin-bottom: 5px;
+  color: var(--fog);
+  font-size: 17px;
+}
+.browser-loading.failed .browser-state-mark {
+  color: var(--fault);
+  background: rgba(227, 115, 105, 0.12);
 }
 .content-panel {
   overflow: auto;
@@ -330,12 +360,29 @@ kbd {
 }
 .activity-list li {
   display: grid;
-  grid-template-columns: 14px 150px 1fr auto;
+  grid-template-columns: 14px minmax(130px, 190px) 1fr auto 76px;
   gap: 13px;
   align-items: center;
   min-height: 58px;
   border-bottom: 1px solid var(--line);
   color: var(--muted);
+}
+.activity-list .activity-task {
+  overflow: hidden;
+  color: #9bb0ae;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.activity-list time {
+  color: #718786;
+  font:
+    11px "SF Mono",
+    ui-monospace,
+    monospace;
+  text-align: right;
+}
+.activity-list .activity-empty {
+  grid-template-columns: 14px 1fr;
 }
 .activity-list i {
   width: 8px;
@@ -448,6 +495,10 @@ kbd {
   .content-panel {
     padding: 28px;
   }
+  .browser-loading {
+    width: calc(100% - 40px);
+    margin-top: 28px;
+  }
   .permission-sheet {
     grid-template-columns: 48px 1fr;
     padding-block: 20px;
@@ -458,6 +509,24 @@ kbd {
   .settings-list div {
     grid-template-columns: 1fr;
     gap: 6px;
+  }
+  .activity-list li {
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    gap: 9px;
+    padding-block: 11px;
+  }
+  .activity-list .activity-task {
+    grid-column: 2;
+  }
+  .activity-list b {
+    grid-column: 2;
+  }
+  .activity-list li > span:not(.activity-task) {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .activity-list time {
+    display: none;
   }
 }
 

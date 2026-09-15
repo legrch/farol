@@ -76,12 +76,15 @@ const tasks: readonly PreviewTask[] = [
   },
 ];
 
-const correlationSchema = z.strictObject({
+const turnIdentitySchema = z.strictObject({
   ownerId: z.string().min(1),
   sessionId: z.string().min(1),
   taskId: z.string().min(1),
   turnId: z.string().min(1),
   generation: z.number().int().nonnegative(),
+});
+
+const correlationSchema = turnIdentitySchema.extend({
   callId: z.string().min(1).nullable(),
 });
 
@@ -138,6 +141,19 @@ function sameCorrelation(
   );
 }
 
+function sameTurnIdentity(
+  received: z.infer<typeof turnIdentitySchema>,
+  expected: PreviewTask,
+): boolean {
+  return (
+    received.ownerId === expected.ownerId &&
+    received.sessionId === expected.sessionId &&
+    received.taskId === expected.taskId &&
+    received.turnId === expected.turnId &&
+    received.generation === expected.generation
+  );
+}
+
 export async function startPreviewRuntime(
   scenario: PreviewScenario = "normal",
 ): Promise<PreviewRuntime> {
@@ -149,6 +165,7 @@ export async function startPreviewRuntime(
   const events = new EventStream<ClientEvent>(128);
   const activity = new ActivityLog(256);
   const turns = new InMemoryTurns();
+  const runtimeClock = new SystemClock();
   const controls = new Map<
     string,
     Readonly<{
@@ -180,7 +197,10 @@ export async function startPreviewRuntime(
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const eventMatch = /^\/events\/([^/]+)$/u.exec(url.pathname);
     const pageMatch = /^\/task\/([^/]+)$/u.exec(url.pathname);
-    const scopedMatch = eventMatch ?? pageMatch;
+    const acknowledgementMatch = /^\/ack\/([^/]+)\/([1-9]\d*)$/u.exec(
+      url.pathname,
+    );
+    const scopedMatch = eventMatch ?? pageMatch ?? acknowledgementMatch;
     if (scopedMatch?.[1]) {
       const taskId = decodeURIComponent(scopedMatch[1]);
       const task = runtimeTasks.find(
@@ -257,6 +277,69 @@ export async function startPreviewRuntime(
         "x-content-type-options": "nosniff",
       });
       response.end(body);
+      return;
+    }
+    if (
+      request.method === "POST" &&
+      acknowledgementMatch?.[1] &&
+      acknowledgementMatch[2]
+    ) {
+      const taskId = decodeURIComponent(acknowledgementMatch[1]);
+      const task = runtimeTasks.find(
+        (candidate) => candidate.taskId === taskId,
+      );
+      const eventId = Number(acknowledgementMatch[2]);
+      const parsed = turnIdentitySchema.safeParse(await requestJson(request));
+      if (
+        !task ||
+        !Number.isSafeInteger(eventId) ||
+        !parsed.success ||
+        !sameTurnIdentity(parsed.data, task)
+      ) {
+        json(response, 409, { error: "DELIVERY_CORRELATION_MISMATCH" });
+        return;
+      }
+      const acknowledgement = events.acknowledge(taskId, eventId);
+      if (acknowledgement.status === "missing") {
+        json(response, 409, { error: "DELIVERY_EVENT_MISSING" });
+        return;
+      }
+      if (acknowledgement.status === "acknowledged") {
+        const turn = await turns.get(taskId);
+        if (turn) {
+          const acknowledgedAt = runtimeClock.now();
+          const sequence =
+            acknowledgement.event.kind === "text.delta"
+              ? acknowledgement.event.sequence
+              : null;
+          try {
+            await activity.record({
+              taskId: turn.identity.taskId,
+              turnId: turn.identity.turnId,
+              generation: turn.identity.generation,
+              at: acknowledgedAt,
+              kind: "client_delivery_acknowledged",
+              phase: turn.phase,
+              sequence,
+              capability: null,
+            });
+          } catch {
+            // The ACK is already known; evidence failure must not invite replay.
+          }
+          if (acknowledgement.event.kind !== "client.delivery_acknowledged") {
+            await events.publish({
+              ...turn.identity,
+              at: acknowledgedAt,
+              kind: "client.delivery_acknowledged",
+              deliveryId: eventId,
+              deliveredKind: acknowledgement.event.kind,
+              phase: turn.phase,
+              sequence,
+            });
+          }
+        }
+      }
+      noContent(response);
       return;
     }
     const controlMatch =
