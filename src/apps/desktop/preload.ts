@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { channels } from "../pkg/ipc/channels";
+import { channels } from "../../pkg/ipc/channels";
 
 contextBridge.exposeInMainWorld("farolNext", {
   bootstrap: () => ipcRenderer.invoke(channels.bootstrap) as Promise<unknown>,

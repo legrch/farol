@@ -1,6 +1,6 @@
 import type { ParentPort } from "electron";
 import { z } from "zod";
-import { startPreviewRuntime } from "./runtime-server";
+import { startPreviewRuntime } from "../../boot/runtime-server";
 
 const runtimeParentPort = (
   process as typeof process & { parentPort?: ParentPort }

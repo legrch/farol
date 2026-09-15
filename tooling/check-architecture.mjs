@@ -51,6 +51,9 @@ function relative(file) {
 function classify(file) {
   const parts = relative(file).split("/");
   if (parts[0] !== "src") return { kind: "outside" };
+  if (parts[1] === "apps" && parts.length > 3) {
+    return { kind: "application", application: parts[2] };
+  }
   if (parts[1] === "boot" && parts.length > 2) return { kind: "boot" };
   if (parts[1] === "ui" && parts.length > 2) return { kind: "ui" };
   if (parts[1] === "pkg" && parts[2] === "kernel" && parts.length > 4) {
@@ -229,8 +232,18 @@ function importsFrom(file, violations) {
 function violationFor(source, target) {
   if (source.kind === "unclassified" || target.kind === "unclassified")
     return null;
+  if (target.kind === "application" && source.kind !== "application")
+    return "ARCH_INNER_TO_APP";
+  if (
+    source.kind === "application" &&
+    target.kind === "application" &&
+    source.application !== target.application
+  )
+    return "ARCH_APP_CROSS_ENTRY";
   if (source.kind === "module" && target.kind === "boot")
     return "ARCH_MODULE_TO_BOOT";
+  if (source.kind === "module" && target.kind === "ui")
+    return "ARCH_MODULE_TO_UI";
   if (
     source.kind === "ui" &&
     target.kind === "module" &&
@@ -327,6 +340,14 @@ for (const file of files) {
     }
     const target = resolveLocal(file, specifier);
     if (target === null) {
+      if (sourceClass.kind === "boot") {
+        violations.push({
+          code: "ARCH_BOOT_HOST_IMPORT",
+          file: relative(file),
+          detail: specifier,
+        });
+        continue;
+      }
       if (pure && !pureExternalModules.has(specifier)) {
         violations.push({
           code: "ARCH_PURE_EXTERNAL_IMPORT",

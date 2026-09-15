@@ -95,7 +95,7 @@ const common = {
 await Promise.all([
   build({
     ...common,
-    entryPoints: ["src/boot/electron-main.ts"],
+    entryPoints: ["src/apps/desktop/main.ts"],
     outfile: "dist/app/main.cjs",
     platform: "node",
     format: "cjs",
@@ -103,7 +103,7 @@ await Promise.all([
   }),
   build({
     ...common,
-    entryPoints: ["src/boot/runtime-entry.ts"],
+    entryPoints: ["src/apps/runtime/main.ts"],
     outfile: "dist/app/runtime.cjs",
     platform: "node",
     format: "cjs",
@@ -111,7 +111,7 @@ await Promise.all([
   }),
   build({
     ...common,
-    entryPoints: ["src/boot/preload.ts"],
+    entryPoints: ["src/apps/desktop/preload.ts"],
     outfile: "dist/app/preload.cjs",
     platform: "node",
     format: "cjs",

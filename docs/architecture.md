@@ -10,6 +10,12 @@ surface. One utility process owns the local runtime and loopback SSE endpoint.
 Source modules communicate in process through consumer-owned ports and published
 contracts; HTTP is not an internal module boundary.
 
+`src/apps/desktop` owns the Electron main/preload host adapters and
+`src/apps/runtime` owns the utility-process entrypoint. The Chat-owned preview
+server adapter lives under `modules/chat/infra/server`; it receives Computer and
+UI capabilities at composition rather than importing their implementations.
+`src/boot/runtime-server.ts` only wires those concrete dependencies.
+
 The production utility process is launched with Electron's `utilityProcess.fork`.
 This deliberately uses the runtime shipped inside the exact Electron artifact, so a
 tester does not need Homebrew, Python, Node, npm, or Bun. Bun FFI is not used as a
@@ -27,6 +33,7 @@ infra/peer -> own app port + neighbour contract
 infra -> own layers + generic mechanisms
 kernel/infra -> kernel ports + generic mechanisms, never product modules
 boot -> all concrete composition
+apps -> executable host adapters and entrypoints
 ```
 
 Only `infra/peer` may cross a module boundary, and only to the neighbour's
@@ -36,7 +43,8 @@ modules, DOM, filesystem, network, or ambient timer modules. The architecture ga
 parses static imports, re-exports, aliases, literal dynamic imports and CommonJS
 `require`, rejects dynamic loaders and non-allowlisted pure-layer packages, rejects
 cycles and unclassified production files, and runs both positive and deliberately
-invalid fixtures.
+invalid fixtures. It also rejects host/vendor imports from composition-only `boot`,
+all inner-layer imports of executable `apps`, and module imports of UI.
 
 ## Shared infrastructure decision
 

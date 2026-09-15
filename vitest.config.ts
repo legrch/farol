@@ -7,11 +7,7 @@ export default defineConfig({
     sequence: { concurrent: false },
     coverage: {
       provider: "v8",
-      include: [
-        "src/modules/**/*.ts",
-        "src/pkg/**/*.ts",
-        "src/boot/runtime-server.ts",
-      ],
+      include: ["src/modules/**/*.ts", "src/pkg/**/*.ts"],
       exclude: [
         "src/**/*.d.ts",
         "src/**/contract/**/*.ts",
@@ -42,7 +38,7 @@ export default defineConfig({
           statements: 85,
           branches: 75,
         },
-        "src/boot/runtime-server.ts": {
+        "src/modules/chat/infra/server/preview-runtime.ts": {
           lines: 80,
           functions: 80,
           statements: 80,

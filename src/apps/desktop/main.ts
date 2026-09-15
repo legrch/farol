@@ -10,9 +10,9 @@ import {
 } from "electron";
 import path from "node:path";
 import { z } from "zod";
-import { ClientEventSchema } from "../modules/chat/contract/client-event";
-import { channels } from "../pkg/ipc/channels";
-import type { RuntimeStatus } from "../pkg/ipc/runtime-status";
+import { ClientEventSchema } from "../../modules/chat/contract/client-event";
+import { channels } from "../../pkg/ipc/channels";
+import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 
 const directory = __dirname;
 const productName = "Farol Next Preview";
