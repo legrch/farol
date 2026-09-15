@@ -28,6 +28,7 @@
     "package": "npm run build && node tooling/package.mjs",
     "verify:package": "node tooling/verify-package.mjs",
     "preview": "electron dist/app/main.cjs",
+    "test:e2e:dev": "npm run build && node tests/e2e/preview.e2e.mjs --development",
     "test:e2e": "node tests/e2e/preview.e2e.mjs",
     "ci": "npm run check:toolchain && npm run typecheck && npm run lint && npm run format:check && npm run architecture && npm run test:coverage && npm run hunt:report"
   },

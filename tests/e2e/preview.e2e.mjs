@@ -10,7 +10,11 @@ import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 
 const root = process.cwd();
-const evidenceRoot = path.join(root, "artifacts/e2e");
+const development = process.argv.includes("--development");
+const evidenceRoot = path.join(
+  root,
+  development ? "artifacts/e2e-dev" : "artifacts/e2e",
+);
 const metadataPath = path.join(root, "dist/package/artifact.json");
 
 function verifyArtifact(candidateMetadataPath) {
@@ -25,120 +29,148 @@ function verifyArtifact(candidateMetadataPath) {
   );
 }
 
-const artifact = JSON.parse(await fs.readFile(metadataPath, "utf8"));
-const verifiedArtifact = verifyArtifact(metadataPath);
-assert.equal(
-  verifiedArtifact.status,
-  0,
-  `${verifiedArtifact.stdout}${verifiedArtifact.stderr}`,
-);
 const expectedSource = sourceIdentity(path.resolve(root, ".."), "vnext");
 assert.equal(expectedSource.dirty, false, "E2E_SOURCE_NOT_HEAD_EXACT");
-assert.equal(artifact.sourceDirty, false, "E2E_DIRTY_ARTIFACT");
-assert.equal(artifact.sourceCommit, expectedSource.commit);
-assert.equal(artifact.sourceTreeDigest, expectedSource.treeDigest);
-const appPath = path.resolve(artifact.artifactPath);
-const executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+let artifact;
+let appPath;
+let executable;
+let launchPrefix = [];
+if (development) {
+  const buildRoot = path.join(root, "dist/app");
+  const build = JSON.parse(
+    await fs.readFile(path.join(buildRoot, "build-manifest.json"), "utf8"),
+  );
+  assert.equal(build.dirty, false, "E2E_DIRTY_DEVELOPMENT_BUILD");
+  assert.equal(build.inputExact, true, "E2E_DEVELOPMENT_INPUTS_NOT_EXACT");
+  assert.equal(build.sourceCommit, expectedSource.commit);
+  assert.equal(build.sourceTreeDigest, expectedSource.treeDigest);
+  artifact = {
+    artifactSha256: await treeDigest(buildRoot),
+    sourceCommit: build.sourceCommit,
+    sourceTreeDigest: build.sourceTreeDigest,
+    sourceDirty: build.dirty,
+  };
+  appPath = path.join(root, "node_modules/electron/dist/Electron.app");
+  executable = path.join(appPath, "Contents/MacOS/Electron");
+  launchPrefix = [path.join(buildRoot, "main.cjs")];
+} else {
+  artifact = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+  const verifiedArtifact = verifyArtifact(metadataPath);
+  assert.equal(
+    verifiedArtifact.status,
+    0,
+    `${verifiedArtifact.stdout}${verifiedArtifact.stderr}`,
+  );
+  assert.equal(artifact.sourceDirty, false, "E2E_DIRTY_ARTIFACT");
+  assert.equal(artifact.sourceCommit, expectedSource.commit);
+  assert.equal(artifact.sourceTreeDigest, expectedSource.treeDigest);
+  appPath = path.resolve(artifact.artifactPath);
+  executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+}
 await fs.rm(evidenceRoot, { recursive: true, force: true });
 await fs.mkdir(evidenceRoot, { recursive: true });
 
 const cases = [];
 
-const corruptRoot = await fs.mkdtemp(
-  path.join(os.tmpdir(), "farol-next-corruption-"),
-);
-try {
-  const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
-  await fs.writeFile(
-    malformedMetadata,
-    `${JSON.stringify({ ...artifact, schema: 3 })}\n`,
+if (development) {
+  cases.push("development-build-identity");
+} else {
+  const corruptRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-corruption-"),
   );
-  const malformed = verifyArtifact(malformedMetadata);
-  assert.notEqual(malformed.status, 0);
-  assert.match(
-    `${malformed.stdout}${malformed.stderr}`,
-    /PACKAGE_MANIFEST_SCHEMA_INVALID/u,
-  );
-  cases.push("malformed-artifact-rejected");
+  try {
+    const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
+    await fs.writeFile(
+      malformedMetadata,
+      `${JSON.stringify({ ...artifact, schema: 3 })}\n`,
+    );
+    const malformed = verifyArtifact(malformedMetadata);
+    assert.notEqual(malformed.status, 0);
+    assert.match(
+      `${malformed.stdout}${malformed.stderr}`,
+      /PACKAGE_MANIFEST_SCHEMA_INVALID/u,
+    );
+    cases.push("malformed-artifact-rejected");
 
-  const tamperedApp = path.join(corruptRoot, "Farol Next Preview.app");
-  const cloned = spawnSync("/bin/cp", ["-cR", appPath, tamperedApp], {
-    encoding: "utf8",
-  });
-  assert.equal(cloned.status, 0, `${cloned.stdout}${cloned.stderr}`);
-  await fs.appendFile(
-    path.join(tamperedApp, "Contents/Resources/app/shell.html"),
-    "\n<!-- deterministic tamper probe -->\n",
-  );
-  const tamperedMetadata = path.join(corruptRoot, "tampered-artifact.json");
-  await fs.writeFile(
-    tamperedMetadata,
-    `${JSON.stringify({ ...artifact, artifactPath: tamperedApp })}\n`,
-  );
-  const tampered = verifyArtifact(tamperedMetadata);
-  assert.notEqual(tampered.status, 0);
-  assert.match(
-    `${tampered.stdout}${tampered.stderr}`,
-    /PACKAGE_DIGEST_MISMATCH/u,
-  );
-  cases.push("tampered-artifact-rejected");
+    const tamperedApp = path.join(corruptRoot, "Farol Next Preview.app");
+    const cloned = spawnSync("/bin/cp", ["-cR", appPath, tamperedApp], {
+      encoding: "utf8",
+    });
+    assert.equal(cloned.status, 0, `${cloned.stdout}${cloned.stderr}`);
+    await fs.appendFile(
+      path.join(tamperedApp, "Contents/Resources/app/shell.html"),
+      "\n<!-- deterministic tamper probe -->\n",
+    );
+    const tamperedMetadata = path.join(corruptRoot, "tampered-artifact.json");
+    await fs.writeFile(
+      tamperedMetadata,
+      `${JSON.stringify({ ...artifact, artifactPath: tamperedApp })}\n`,
+    );
+    const tampered = verifyArtifact(tamperedMetadata);
+    assert.notEqual(tampered.status, 0);
+    assert.match(
+      `${tampered.stdout}${tampered.stderr}`,
+      /PACKAGE_DIGEST_MISMATCH/u,
+    );
+    cases.push("tampered-artifact-rejected");
 
-  const wrongHelperRoot = path.join(corruptRoot, "wrong-helper");
-  await fs.mkdir(wrongHelperRoot);
-  const wrongHelperApp = path.join(wrongHelperRoot, "Farol Next Preview.app");
-  const helperClone = spawnSync("/bin/cp", ["-cR", appPath, wrongHelperApp], {
-    encoding: "utf8",
-  });
-  assert.equal(
-    helperClone.status,
-    0,
-    `${helperClone.stdout}${helperClone.stderr}`,
-  );
-  const helperPlist = path.join(
-    wrongHelperApp,
-    "Contents/Frameworks/Farol Next Preview Helper (Renderer).app/Contents/Info.plist",
-  );
-  const changedHelper = spawnSync(
-    "/usr/libexec/PlistBuddy",
-    [
-      "-c",
-      "Set :CFBundleIdentifier local.farol.next.preview.foreign",
-      helperPlist,
-    ],
-    { encoding: "utf8" },
-  );
-  assert.equal(
-    changedHelper.status,
-    0,
-    `${changedHelper.stdout}${changedHelper.stderr}`,
-  );
-  const wrongHelperMetadata = path.join(
-    corruptRoot,
-    "wrong-helper-artifact.json",
-  );
-  await fs.writeFile(
-    wrongHelperMetadata,
-    `${JSON.stringify({
-      ...artifact,
-      artifactPath: wrongHelperApp,
-      artifactSha256: await treeDigest(wrongHelperApp),
-    })}\n`,
-  );
-  const wrongHelper = verifyArtifact(wrongHelperMetadata);
-  assert.notEqual(wrongHelper.status, 0);
-  assert.match(
-    `${wrongHelper.stdout}${wrongHelper.stderr}`,
-    /PACKAGE_HELPER_BUNDLE_MISMATCH/u,
-  );
-  cases.push("wrong-helper-bundle-rejected");
-} finally {
-  const real = path.resolve(corruptRoot);
-  assert.ok(
-    real.startsWith(
-      `${path.resolve(os.tmpdir())}${path.sep}farol-next-corruption-`,
-    ),
-  );
-  await fs.rm(real, { recursive: true, force: true });
+    const wrongHelperRoot = path.join(corruptRoot, "wrong-helper");
+    await fs.mkdir(wrongHelperRoot);
+    const wrongHelperApp = path.join(wrongHelperRoot, "Farol Next Preview.app");
+    const helperClone = spawnSync("/bin/cp", ["-cR", appPath, wrongHelperApp], {
+      encoding: "utf8",
+    });
+    assert.equal(
+      helperClone.status,
+      0,
+      `${helperClone.stdout}${helperClone.stderr}`,
+    );
+    const helperPlist = path.join(
+      wrongHelperApp,
+      "Contents/Frameworks/Farol Next Preview Helper (Renderer).app/Contents/Info.plist",
+    );
+    const changedHelper = spawnSync(
+      "/usr/libexec/PlistBuddy",
+      [
+        "-c",
+        "Set :CFBundleIdentifier local.farol.next.preview.foreign",
+        helperPlist,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      changedHelper.status,
+      0,
+      `${changedHelper.stdout}${changedHelper.stderr}`,
+    );
+    const wrongHelperMetadata = path.join(
+      corruptRoot,
+      "wrong-helper-artifact.json",
+    );
+    await fs.writeFile(
+      wrongHelperMetadata,
+      `${JSON.stringify({
+        ...artifact,
+        artifactPath: wrongHelperApp,
+        artifactSha256: await treeDigest(wrongHelperApp),
+      })}\n`,
+    );
+    const wrongHelper = verifyArtifact(wrongHelperMetadata);
+    assert.notEqual(wrongHelper.status, 0);
+    assert.match(
+      `${wrongHelper.stdout}${wrongHelper.stderr}`,
+      /PACKAGE_HELPER_BUNDLE_MISMATCH/u,
+    );
+    cases.push("wrong-helper-bundle-rejected");
+  } finally {
+    const real = path.resolve(corruptRoot);
+    assert.ok(
+      real.startsWith(
+        `${path.resolve(os.tmpdir())}${path.sep}farol-next-corruption-`,
+      ),
+    );
+    await fs.rm(real, { recursive: true, force: true });
+  }
 }
 
 async function launch(extraArgs = []) {
@@ -148,7 +180,7 @@ async function launch(extraArgs = []) {
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const application = await electron.launch({
     executablePath: executable,
-    args: [`--user-data-dir=${userData}`, ...extraArgs],
+    args: [...launchPrefix, `--user-data-dir=${userData}`, ...extraArgs],
     env: {
       HOME: isolatedHome,
       LANG: "en_US.UTF-8",
@@ -518,7 +550,11 @@ try {
   assert.doesNotMatch(activityText, /exact requesting turn/u);
   assert.doesNotMatch(activityText, /Bearer|token|\/private\//u);
   assert.doesNotMatch(activityText, /task-atlantic|turn-atlantic/u);
-  assert.match(activityText, /Client delivery acknowledged/u);
+  await normal.window
+    .locator("#activity-list")
+    .getByText("Client delivery acknowledged", { exact: true })
+    .first()
+    .waitFor();
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "complete-wide.png"),
   });
@@ -589,6 +625,9 @@ try {
 const processDeath = await launch();
 try {
   const parentPid = processDeath.application.process().pid;
+  const helperName = development
+    ? "Electron Helper"
+    : "Farol Next Preview Helper";
   let utilityPid = null;
   for (let attempt = 0; attempt < 50 && utilityPid === null; attempt += 1) {
     const listed = spawnSync("/bin/ps", ["-axo", "pid=,ppid=,command="], {
@@ -619,7 +658,7 @@ try {
       rows.find(
         (row) =>
           descendants.has(row.pid) &&
-          row.command.includes("Farol Next Preview Helper") &&
+          row.command.includes(helperName) &&
           row.command.includes("--utility-sub-type=node.mojom.NodeService"),
       )?.pid ?? null;
     if (utilityPid === null)
@@ -633,7 +672,7 @@ try {
     .waitFor({ timeout: 5_000 });
   await processDeath.window
     .locator("#browser-loading")
-    .getByText("local runtime failed", { exact: false })
+    .getByText("local runtime stopped", { exact: false })
     .waitFor();
   await processDeath.window.screenshot({
     path: path.join(evidenceRoot, "process-death-wide.png"),
@@ -649,6 +688,7 @@ try {
 
 const report = {
   schema: 1,
+  lane: development ? "development-build" : "sealed-package",
   artifactSha256: artifact.artifactSha256,
   sourceCommit: artifact.sourceCommit,
   sourceTreeDigest: artifact.sourceTreeDigest,

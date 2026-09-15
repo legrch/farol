@@ -30,33 +30,42 @@ From the repository root:
 ```bash
 npm ci --prefix vnext
 task next:ci
+task next:test:e2e:dev
 task next:package
 task next:test:e2e
 ```
 
 The deterministic gate includes strict typecheck, architecture fixtures, policy and
 integration coverage, Hunt selftest/proof/model, and a build-bound sanitized replay.
+The development E2E lane runs those exact clean built files through Electron's
+bundled runtime without modifying its signed vendor bundle; it writes evidence to
+`artifacts/e2e-dev/`. The separately sealed package lane remains the artifact gate.
 Packaging verifies the app identity, embedded source manifest, runtime closure,
 helper names and bundle IDs, contained symlinks, type-bound tree digest, plist and
 explicit unsigned status. E2E
-launches those packaged bytes under a throwaway home and explicit user-data root,
-checks the real UI and task views, rejects malformed and tampered artifacts, proves
-default-deny task egress, and exercises an actual utility-process death.
+is the sealed lane intended to launch those packaged bytes under a throwaway home
+and explicit user-data root, check the real UI and task views, reject malformed and
+tampered artifacts, prove default-deny task egress, and exercise an actual
+utility-process death.
 
-Launch the resulting local preview directly:
+Launch the exact built development preview through the pinned Electron runtime:
 
 ```bash
-./vnext/dist/package/Farol\ Next\ Preview.app/Contents/MacOS/Farol\ Next\ Preview
+npm --prefix vnext run preview
 ```
 
-This is an explicitly unsigned, local-preview-only development artifact. It is not notarized, published,
+The reconstructed `.app` is explicitly unsigned. On the current macOS host those
+modified unsigned bundle bytes are terminated before the first window, so direct
+package launch and the sealed E2E lane are not claimed until a separately authorized
+local ad-hoc or release signature exists. Neither lane is notarized, published,
 installed-product, independent-recipient, update/rollback, live-provider or release
 readiness evidence.
 
 ## Evidence
 
 - `dist/package/artifact.json` — exact source and packaged-tree identity;
-- `artifacts/e2e/report.json` and its six PNGs — packaged interaction evidence;
+- `artifacts/e2e-dev/report.json` — exact development-build interaction evidence;
+- `artifacts/e2e/report.json` and its eleven PNGs — packaged interaction evidence;
 - `artifacts/hunt/path.json` — semantic path, model/command-table version, controlled
   schedule, mutation proof and exact build identity.
 
