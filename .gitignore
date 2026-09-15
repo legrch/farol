@@ -3,3 +3,4 @@ dist/
 coverage/
 artifacts/
 .DS_Store
+AGENTS.md
