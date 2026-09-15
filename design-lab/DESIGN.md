@@ -30,6 +30,11 @@ Recorded on 2026-09-15 after the first lab:
   ownable signature.
 - No direction is approved.
 
+After the first Keeper's Slate render (2026-09-15, same day) the owner added: the warm, yellowish
+cast of the lab is not wanted; darker and cooler designs are preferred. Keeper's Slate was
+therefore retuned to a cool graphite palette with a dark task page; its composition, plate, and
+lamps did not change.
+
 The brief for the fourth direction therefore was: graphite and neutral materials as the dominant
 field; green or teal never as identity or broad surface; one coherent Farol signature from
 composition, hierarchy, a task-state device, material, or interaction; a composition that is
@@ -52,7 +57,7 @@ architecture.
 ### Provisional candidate: Keeper's Slate
 
 Keeper's Slate answers the feedback without borrowing the earlier conclusions: its field is
-graphite, its only chroma is six small lifecycle lamps and one lamplight action, and its
+cool graphite, its only chroma is six small lifecycle lamps and one moonlight action, and its
 composition differs from every baseline. Studio Rail remains the conventional sidebar fallback;
 Beacon Field remains the shelf composition the owner found interesting; Operator Grid remains the
 density reference. The owner's decision is one choice among four.
@@ -108,21 +113,21 @@ lamps stay legible at standard density (see the `@1x` evidence).
 
 ### Visual grammar
 
-| Role          | Lab token                                                 | Use                                                              |
-| ------------- | --------------------------------------------------------- | ---------------------------------------------------------------- |
-| Type          | `-apple-system`, BlinkMacSystemFont, SF Pro Text fallback | All UI and document labels; compact scale, no display typography |
-| Window ground | `#121315`                                                 | The well behind the tabs and around the plate                    |
-| Title bar     | `#1b1c1f`                                                 | Unified title bar with identity, lab controls, sections, runtime |
-| Plate         | `#202226` with `#4d5057` edge                             | The selected task's surface; the selected tab shares both        |
-| Document      | `#f2f0eb` / `#1f2124`                                     | The task-bound Browser page inside the plate                     |
-| Lamplight     | `#efe7d6` on `#1b1c1e` ink                                | The one forward action, the brand mark, text selection           |
-| Lamps         | warm white, amber, green, red, grey, warm white           | Six small lifecycle glyphs; the only chroma besides lamplight    |
-| Focus         | `#79b3ff`, 2 px outline                                   | Keyboard location, independent of any state colour               |
-| Geometry      | 6 px controls, 8 px tab shoulders, 10 px plate corners    | One silhouette: square top edge under the tabs, rounded bottom   |
+| Role          | Lab token                                                 | Use                                                               |
+| ------------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
+| Type          | `-apple-system`, BlinkMacSystemFont, SF Pro Text fallback | All UI and document labels; compact scale, no display typography  |
+| Window ground | `#0e1013`                                                 | The well behind the tabs and around the plate                     |
+| Title bar     | `#15181c`                                                 | Unified title bar with identity, lab controls, sections, runtime  |
+| Plate         | `#1b1f24` with `#4a535e` edge                             | The selected task's surface; the selected tab shares both         |
+| Document      | `#14171b` / `#e6eaef`                                     | The task-bound Browser page inside the plate, as dark as the tool |
+| Moonlight     | `#e7edf4` on `#12161b` ink                                | The one forward action, the brand mark, text selection            |
+| Lamps         | cool white, amber, green, red, grey, cool white           | Six small lifecycle glyphs; the only chroma besides moonlight     |
+| Focus         | `#79b3ff`, 2 px outline                                   | Keyboard location, independent of any state colour                |
+| Geometry      | 6 px controls, 8 px tab shoulders, 10 px plate corners    | One silhouette: square top edge under the tabs, rounded bottom    |
 
-Green appears only on the `Complete` lamp and the runtime-ready dot; teal does not appear.
-Measured contrast on the plate: body text 13.1:1, muted 6.6:1, quiet 4.9:1, lamps 4.9:1 to
-12.1:1, lamplight action ink 13.9:1.
+Green appears only on the `Complete` lamp and the runtime-ready dot; teal does not appear, and
+nothing warm-tinted covers a large surface. Measured contrast on the plate: body text 13.7:1,
+muted 6.5:1, quiet 4.8:1, lamps 5.3:1 to 13.4:1, moonlight action ink 15.4:1.
 
 ### Composition
 

@@ -31,7 +31,7 @@
     },
     "primaryFallback": false
   },
-  "prototypeSha256": "bd76dddc5225d27ef85531c298d5295d8f82feca730f9b5fed909c65f28b12c4",
+  "prototypeSha256": "3193cbe66295fa8d9b77e5b84a9099f3113bf2cf626413a3959ecc4831d4c79f",
   "cases": [
     "nonshipping-source-boundary",
     "sandboxed-electron-runner",
