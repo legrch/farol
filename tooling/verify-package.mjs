@@ -208,7 +208,7 @@ for (const suffix of helpers) {
   );
   const helperPlist = path.join(helperRoot, "Contents/Info.plist");
   requireValue(
-    plistValue(helperPlist, "CFBundleExecutable") === name,
+    plistValue(helperPlist, "CFBundleName") === name,
     "PACKAGE_HELPER_IDENTITY_MISMATCH",
   );
   requireValue(
