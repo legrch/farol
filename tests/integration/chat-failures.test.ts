@@ -56,12 +56,14 @@ function harness(
 ) {
   const events: ClientEvent[] = [];
   const prepare = vi.spyOn(provider, "prepare");
+  const execute = vi.fn().mockResolvedValue(computerResult);
   return {
     prepare,
+    execute,
     events,
     run: new RunTurn(
       provider,
-      { execute: vi.fn().mockResolvedValue(computerResult) },
+      { execute },
       turns,
       { publish: async (event) => void events.push(event) },
       { record: async () => undefined },
@@ -204,6 +206,191 @@ describe("Chat failure semantics", () => {
       phase: "failed",
       terminalReason: "PROVIDER_FIXTURE_FAILED",
     });
+  });
+
+  it("stops a Computer call rejected before provider dispatch", async () => {
+    const submitted = vi
+      .fn<ProviderSession["submitComputerResult"]>()
+      .mockResolvedValue(success(undefined));
+    const test = harness({
+      prepare: async () => ({
+        async *events() {
+          yield {
+            kind: "computer_call",
+            callId: "call-a",
+            operation: "inspect_fixture",
+            target: "synthetic://workspace/status",
+          } as const;
+        },
+        submitComputerResult: submitted,
+      }),
+    });
+
+    await expect(test.run.execute(command)).resolves.toMatchObject({
+      phase: "failed",
+      terminal: true,
+      terminalReason: "TURN_INVALID_TRANSITION",
+    });
+    expect(test.execute).not.toHaveBeenCalled();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(
+      test.events.filter(
+        (event) =>
+          event.kind === "computer.requested" ||
+          event.kind === "computer.completed",
+      ),
+    ).toEqual([]);
+  });
+
+  it("stops a Computer call rejected after activation but before acceptance", async () => {
+    const submitted = vi
+      .fn<ProviderSession["submitComputerResult"]>()
+      .mockResolvedValue(success(undefined));
+    const test = harness({
+      prepare: async () => ({
+        async *events() {
+          yield { kind: "submit_activated" } as const;
+          yield {
+            kind: "computer_call",
+            callId: "call-a",
+            operation: "inspect_fixture",
+            target: "synthetic://workspace/status",
+          } as const;
+        },
+        submitComputerResult: submitted,
+      }),
+    });
+
+    await expect(test.run.execute(command)).resolves.toMatchObject({
+      phase: "outcome_unknown",
+      terminal: true,
+      terminalReason: "TURN_INVALID_TRANSITION",
+    });
+    expect(test.execute).not.toHaveBeenCalled();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(
+      test.events.filter(
+        (event) =>
+          event.kind === "computer.requested" ||
+          event.kind === "computer.completed",
+      ),
+    ).toEqual([]);
+  });
+
+  it("stops an empty Computer call identity at the application boundary", async () => {
+    const submitted = vi
+      .fn<ProviderSession["submitComputerResult"]>()
+      .mockResolvedValue(success(undefined));
+    const test = harness({
+      prepare: async () => ({
+        async *events() {
+          yield { kind: "submit_activated" } as const;
+          yield { kind: "accepted" } as const;
+          yield {
+            kind: "computer_call",
+            callId: "",
+            operation: "inspect_fixture",
+            target: "synthetic://workspace/status",
+          } as const;
+        },
+        submitComputerResult: submitted,
+      }),
+    });
+
+    await expect(test.run.execute(command)).resolves.toMatchObject({
+      phase: "outcome_unknown",
+      terminal: true,
+      terminalReason: "TURN_INVALID_TRANSITION",
+    });
+    expect(test.execute).not.toHaveBeenCalled();
+    expect(submitted).not.toHaveBeenCalled();
+    expect(
+      test.events.filter(
+        (event) =>
+          event.kind === "computer.requested" ||
+          event.kind === "computer.completed",
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["repeated", 1],
+    ["decreasing", 0],
+  ])(
+    "does not publish a %s delta after its transition is rejected",
+    async (_case, invalidSequence) => {
+      const test = harness({
+        prepare: async () =>
+          sessionFrom(async function* () {
+            yield { kind: "submit_activated" };
+            yield { kind: "accepted" };
+            yield { kind: "delta", sequence: 1, text: "Accepted" };
+            yield {
+              kind: "delta",
+              sequence: invalidSequence,
+              text: "Rejected",
+            };
+          }),
+      });
+
+      await expect(test.run.execute(command)).resolves.toMatchObject({
+        phase: "outcome_unknown",
+        terminal: true,
+        terminalReason: "TURN_SEQUENCE",
+      });
+      expect(
+        test.events.filter((event) => event.kind === "text.delta"),
+      ).toEqual([
+        expect.objectContaining({
+          kind: "text.delta",
+          sequence: 1,
+          text: "Accepted",
+        }),
+      ]);
+      const terminalIndex = test.events.findIndex(
+        (event) => event.kind === "turn.terminal",
+      );
+      expect(terminalIndex).toBeGreaterThan(-1);
+      expect(
+        test.events
+          .slice(terminalIndex + 1)
+          .filter((event) => event.kind === "text.delta"),
+      ).toEqual([]);
+    },
+  );
+
+  it("deduplicates one Computer round-trip for the same executing Turn", async () => {
+    const submitted = vi
+      .fn<ProviderSession["submitComputerResult"]>()
+      .mockResolvedValue(success(undefined));
+    const provider: ChatProvider = {
+      prepare: vi.fn().mockImplementation(async () => ({
+        async *events() {
+          yield { kind: "submit_activated" } as const;
+          yield { kind: "accepted" } as const;
+          yield {
+            kind: "computer_call",
+            callId: "call-a",
+            operation: "inspect_fixture",
+            target: "synthetic://workspace/status",
+          } as const;
+          yield { kind: "delta", sequence: 1, text: "Only once" } as const;
+          yield { kind: "completed" } as const;
+        },
+        submitComputerResult: submitted,
+      })),
+    };
+    const test = harness(provider);
+
+    const [first, duplicate] = await Promise.all([
+      test.run.execute(command),
+      test.run.execute(command),
+    ]);
+
+    expect(first).toEqual(duplicate);
+    expect(test.prepare).toHaveBeenCalledTimes(1);
+    expect(test.execute).toHaveBeenCalledTimes(1);
+    expect(submitted).toHaveBeenCalledTimes(1);
   });
 
   it("tombstones the exact turn when Computer refuses after provider dispatch", async () => {

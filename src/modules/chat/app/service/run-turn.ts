@@ -121,6 +121,7 @@ export class RunTurn {
         event.sequence,
         dispatched,
       );
+      if (changed.terminal) return changed;
       await this.deliver(changed, {
         ...changed.identity,
         at: this.clock.now(),
@@ -162,6 +163,7 @@ export class RunTurn {
       null,
       dispatched,
     );
+    if (changed.terminal) return changed;
     await this.deliver(changed, {
       ...changed.identity,
       at: this.clock.now(),
@@ -207,6 +209,7 @@ export class RunTurn {
       null,
       dispatched,
     );
+    if (running.terminal) return running;
     await this.deliver(running, {
       ...running.identity,
       at: this.clock.now(),
