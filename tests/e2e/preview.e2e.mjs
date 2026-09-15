@@ -51,7 +51,7 @@ try {
   const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
   await fs.writeFile(
     malformedMetadata,
-    `${JSON.stringify({ ...artifact, schema: 2 })}\n`,
+    `${JSON.stringify({ ...artifact, schema: 3 })}\n`,
   );
   const malformed = verifyArtifact(malformedMetadata);
   assert.notEqual(malformed.status, 0);
