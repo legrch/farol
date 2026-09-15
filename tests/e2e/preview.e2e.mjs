@@ -1,0 +1,546 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { _electron as electron } from "playwright-core";
+import { treeDigest } from "../../tooling/artifact-digest.mjs";
+
+const root = process.cwd();
+const appPath = path.join(root, "dist/package/Farol Next Preview.app");
+const executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+const evidenceRoot = path.join(root, "artifacts/e2e");
+const artifact = JSON.parse(
+  await fs.readFile(path.join(root, "dist/package/artifact.json"), "utf8"),
+);
+if (artifact.sourceDirty && !process.argv.includes("--allow-dirty")) {
+  throw new Error(
+    "E2E_DIRTY_ARTIFACT: rebuild from the exact committed source",
+  );
+}
+await fs.rm(evidenceRoot, { recursive: true, force: true });
+await fs.mkdir(evidenceRoot, { recursive: true });
+
+const cases = [];
+
+function verifyArtifact(metadataPath) {
+  return spawnSync(
+    process.execPath,
+    [path.join(root, "tooling/verify-package.mjs"), "--artifact", metadataPath],
+    { cwd: root, encoding: "utf8" },
+  );
+}
+
+const corruptRoot = await fs.mkdtemp(
+  path.join(os.tmpdir(), "farol-next-corruption-"),
+);
+try {
+  const malformedMetadata = path.join(corruptRoot, "malformed-artifact.json");
+  await fs.writeFile(
+    malformedMetadata,
+    `${JSON.stringify({ ...artifact, schema: 2 })}\n`,
+  );
+  const malformed = verifyArtifact(malformedMetadata);
+  assert.notEqual(malformed.status, 0);
+  assert.match(
+    `${malformed.stdout}${malformed.stderr}`,
+    /PACKAGE_MANIFEST_SCHEMA_INVALID/u,
+  );
+  cases.push("malformed-artifact-rejected");
+
+  const tamperedApp = path.join(corruptRoot, "Farol Next Preview.app");
+  const cloned = spawnSync("/bin/cp", ["-cR", appPath, tamperedApp], {
+    encoding: "utf8",
+  });
+  assert.equal(cloned.status, 0, `${cloned.stdout}${cloned.stderr}`);
+  await fs.appendFile(
+    path.join(tamperedApp, "Contents/Resources/app/shell.html"),
+    "\n<!-- deterministic tamper probe -->\n",
+  );
+  const tamperedMetadata = path.join(corruptRoot, "tampered-artifact.json");
+  await fs.writeFile(
+    tamperedMetadata,
+    `${JSON.stringify({ ...artifact, artifactPath: tamperedApp })}\n`,
+  );
+  const tampered = verifyArtifact(tamperedMetadata);
+  assert.notEqual(tampered.status, 0);
+  assert.match(
+    `${tampered.stdout}${tampered.stderr}`,
+    /PACKAGE_DIGEST_MISMATCH/u,
+  );
+  cases.push("tampered-artifact-rejected");
+
+  const wrongHelperRoot = path.join(corruptRoot, "wrong-helper");
+  await fs.mkdir(wrongHelperRoot);
+  const wrongHelperApp = path.join(wrongHelperRoot, "Farol Next Preview.app");
+  const helperClone = spawnSync("/bin/cp", ["-cR", appPath, wrongHelperApp], {
+    encoding: "utf8",
+  });
+  assert.equal(
+    helperClone.status,
+    0,
+    `${helperClone.stdout}${helperClone.stderr}`,
+  );
+  const helperPlist = path.join(
+    wrongHelperApp,
+    "Contents/Frameworks/Farol Next Preview Helper (Renderer).app/Contents/Info.plist",
+  );
+  const changedHelper = spawnSync(
+    "/usr/libexec/PlistBuddy",
+    [
+      "-c",
+      "Set :CFBundleIdentifier local.farol.next.preview.foreign",
+      helperPlist,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(
+    changedHelper.status,
+    0,
+    `${changedHelper.stdout}${changedHelper.stderr}`,
+  );
+  const wrongHelperMetadata = path.join(
+    corruptRoot,
+    "wrong-helper-artifact.json",
+  );
+  await fs.writeFile(
+    wrongHelperMetadata,
+    `${JSON.stringify({
+      ...artifact,
+      artifactPath: wrongHelperApp,
+      artifactSha256: await treeDigest(wrongHelperApp),
+    })}\n`,
+  );
+  const wrongHelper = verifyArtifact(wrongHelperMetadata);
+  assert.notEqual(wrongHelper.status, 0);
+  assert.match(
+    `${wrongHelper.stdout}${wrongHelper.stderr}`,
+    /PACKAGE_HELPER_BUNDLE_MISMATCH/u,
+  );
+  cases.push("wrong-helper-bundle-rejected");
+} finally {
+  const real = path.resolve(corruptRoot);
+  assert.ok(
+    real.startsWith(
+      `${path.resolve(os.tmpdir())}${path.sep}farol-next-corruption-`,
+    ),
+  );
+  await fs.rm(real, { recursive: true, force: true });
+}
+
+async function launch(extraArgs = []) {
+  const isolatedHome = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-e2e-home-"),
+  );
+  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const application = await electron.launch({
+    executablePath: executable,
+    args: [`--user-data-dir=${userData}`, ...extraArgs],
+    env: {
+      HOME: isolatedHome,
+      LANG: "en_US.UTF-8",
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      TMPDIR: os.tmpdir(),
+    },
+    timeout: 15_000,
+  });
+  const window = await application.firstWindow({ timeout: 15_000 });
+  await window
+    .locator("#task-tabs .task-tab")
+    .first()
+    .waitFor({ state: "visible" });
+  return { application, window, isolatedHome, userData };
+}
+
+async function close(instance) {
+  await instance.application.close();
+  const real = path.resolve(instance.isolatedHome);
+  assert.ok(
+    real.startsWith(
+      `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
+    ),
+  );
+  await fs.rm(real, { recursive: true, force: true });
+}
+
+async function taskSurfaces(application) {
+  return application.evaluate(async ({ BrowserWindow, webContents }) => {
+    const viewByContentsId = new Map(
+      (BrowserWindow.getAllWindows()[0]?.contentView.children ?? [])
+        .filter((view) => "webContents" in view)
+        .map((view) => [view.webContents.id, view]),
+    );
+    return Promise.all(
+      webContents
+        .getAllWebContents()
+        .filter((contents) => contents.getURL().includes("/task/"))
+        .map(async (contents) => ({
+          url: contents.getURL(),
+          hostVisible: viewByContentsId.get(contents.id)?.getVisible() ?? null,
+          state: await contents.executeJavaScript(
+            `({
+              taskId: document.body.dataset.taskId,
+              deltaCount: Number(document.body.dataset.deltaCount),
+              terminal: document.body.dataset.terminal === "true",
+              failed: document.body.dataset.failed === "true",
+              visibility: document.visibilityState,
+              answer: document.getElementById("answer")?.textContent ?? "",
+              status: document.getElementById("status")?.textContent ?? ""
+            })`,
+          ),
+        })),
+    );
+  });
+}
+
+async function waitForTask(application, taskId, predicate, message) {
+  let last = [];
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const surfaces = await taskSurfaces(application);
+    last = surfaces;
+    const state = surfaces.find(
+      (surface) => surface.state.taskId === taskId,
+    )?.state;
+    if (state && predicate(state)) return state;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`E2E_TASK_TIMEOUT:${message}:${JSON.stringify(last)}`);
+}
+
+async function captureTask(application, taskId, filename) {
+  const base64 = await application.evaluate(
+    async ({ webContents }, targetTask) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((candidate) =>
+          candidate.getURL().endsWith(`/task/${targetTask}`),
+        );
+      if (!contents) throw new Error("TASK_SURFACE_MISSING");
+      contents.invalidate();
+      const nativeCapture = (
+        await contents.capturePage(undefined, { stayHidden: true })
+      )
+        .toPNG()
+        .toString("base64");
+      if (nativeCapture.length > 0) return nativeCapture;
+
+      const attached = contents.debugger.isAttached();
+      if (!attached) contents.debugger.attach("1.3");
+      try {
+        const capture = await contents.debugger.sendCommand(
+          "Page.captureScreenshot",
+          {
+            format: "png",
+            fromSurface: true,
+          },
+        );
+        return capture.data;
+      } finally {
+        if (!attached) contents.debugger.detach();
+      }
+    },
+    taskId,
+  );
+  assert.ok(base64.length > 1_000, "TASK_SCREENSHOT_EMPTY");
+  await fs.writeFile(
+    path.join(evidenceRoot, filename),
+    Buffer.from(base64, "base64"),
+  );
+}
+
+async function proveTaskEgressDenied(application) {
+  let requests = 0;
+  const probe = createServer((_request, response) => {
+    requests += 1;
+    response.end("unexpected");
+  });
+  probe.listen(0, "127.0.0.1");
+  await once(probe, "listening");
+  try {
+    const address = probe.address();
+    assert.ok(address && typeof address !== "string");
+    const target = `http://127.0.0.1:${address.port}/unexpected-egress`;
+    const outcome = await application.evaluate(async ({ webContents }, url) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((candidate) => candidate.getURL().includes("/task/"));
+      if (!contents) throw new Error("TASK_SURFACE_MISSING");
+      return contents.executeJavaScript(
+        `fetch(${JSON.stringify(url)}).then(() => "reached", () => "blocked")`,
+      );
+    }, target);
+    assert.equal(outcome, "blocked");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(requests, 0);
+  } finally {
+    await new Promise((resolve, reject) => {
+      probe.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+const normal = await launch();
+try {
+  assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
+  const runtimeLabel = await normal.window.locator("#runtime-pill").innerText();
+  if (!runtimeLabel.includes("Local runtime")) {
+    await normal.window.locator('[data-section="settings"]').click();
+    throw new Error(
+      `E2E_RUNTIME_NOT_READY:${runtimeLabel}:${await normal.window.locator("#settings-list").innerText()}`,
+    );
+  }
+  const resourceIdentity = await normal.application.evaluate(
+    ({ app, session }) => ({
+      userData: app.getPath("userData"),
+      taskStorage: session.fromPartition("persist:farol-next-preview")
+        .storagePath,
+    }),
+  );
+  const isolatedRoot = await fs.realpath(normal.isolatedHome);
+  assert.equal(
+    await fs.realpath(resourceIdentity.userData),
+    await fs.realpath(normal.userData),
+  );
+  assert.ok(resourceIdentity.taskStorage);
+  assert.ok(
+    (await fs.realpath(resourceIdentity.taskStorage)).startsWith(
+      `${isolatedRoot}${path.sep}`,
+    ),
+  );
+  assert.equal(
+    path.basename(resourceIdentity.userData),
+    "Farol Next Preview user-data",
+  );
+  await waitForTask(
+    normal.application,
+    "task-atlantic",
+    (state) =>
+      state.deltaCount >= 1 &&
+      state.status.includes("approval") &&
+      !state.terminal,
+    "first delta before tool approval",
+  );
+  await proveTaskEgressDenied(normal.application);
+  await captureTask(
+    normal.application,
+    "task-atlantic",
+    "running-browser-view.png",
+  );
+
+  await normal.window.locator('[data-section="computer"]').click();
+  const approve = normal.window.locator("#approve-tool");
+  await approve.waitFor({ state: "visible" });
+  await normal.window.waitForFunction(
+    () => !document.querySelector("#approve-tool")?.hasAttribute("disabled"),
+    undefined,
+    { timeout: 5_000 },
+  );
+  assert.equal(await approve.isEnabled(), true);
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "tool-wait-wide.png"),
+  });
+  await approve.click();
+  const resumed = await waitForTask(
+    normal.application,
+    "task-atlantic",
+    (state) =>
+      state.deltaCount === 2 &&
+      state.status.includes("result") &&
+      !state.terminal,
+    "tool result resumed exact turn",
+  );
+  assert.match(resumed.answer, /exact requesting turn/u);
+
+  await normal.window.locator('[data-section="browser"]').click();
+  await normal.window.locator('[data-task-id="task-harbor"]').click();
+  const switched = await taskSurfaces(normal.application);
+  const atlantic = switched.find(
+    (surface) => surface.state.taskId === "task-atlantic",
+  )?.state;
+  const harbor = switched.find(
+    (surface) => surface.state.taskId === "task-harbor",
+  )?.state;
+  assert.equal(atlantic?.terminal, false);
+  assert.equal(harbor?.terminal, false);
+  assert.equal(
+    switched.find((surface) => surface.state.taskId === "task-harbor")
+      ?.hostVisible,
+    true,
+  );
+  assert.equal(
+    switched.find((surface) => surface.state.taskId === "task-atlantic")
+      ?.hostVisible,
+    false,
+  );
+
+  await normal.window.locator("#release-completion").click();
+  await waitForTask(
+    normal.application,
+    "task-harbor",
+    (state) => state.terminal && state.status === "Completed",
+    "hidden-independent task completion",
+  );
+  await normal.window.locator('[data-task-id="task-atlantic"]').click();
+  const retained = await waitForTask(
+    normal.application,
+    "task-atlantic",
+    (state) => state.deltaCount === 2 && !state.terminal,
+    "atlantic retained while harbor completed",
+  );
+  assert.match(retained.answer, /Fixture workspace|requesting turn/u);
+  await normal.window.locator("#release-completion").click();
+  await waitForTask(
+    normal.application,
+    "task-atlantic",
+    (state) => state.terminal && state.status === "Completed",
+    "atlantic completion",
+  );
+
+  await normal.window.keyboard.press("Meta+3");
+  await normal.window.locator('[data-panel="activity"].active').waitFor();
+  const activityText = await normal.window
+    .locator('[data-panel="activity"]')
+    .innerText();
+  assert.doesNotMatch(activityText, /Synthetic local preview fixture/u);
+  assert.doesNotMatch(activityText, /Checking the isolated fixture/u);
+  assert.doesNotMatch(activityText, /exact requesting turn/u);
+  assert.doesNotMatch(activityText, /Bearer|token|\/private\//u);
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "complete-wide.png"),
+  });
+
+  await normal.application.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]?.setSize(700, 600);
+  });
+  await normal.window.keyboard.press("Meta+4");
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
+  assert.match(
+    await normal.window.locator("#settings-list").innerText(),
+    /local\.farol\.next\.preview/u,
+  );
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "settings-compact.png"),
+  });
+
+  await normal.window.keyboard.press("Meta+1");
+  await normal.window.keyboard.press("Control+Tab");
+  await normal.window
+    .locator('[data-task-id="task-harbor"][aria-selected="true"]')
+    .waitFor();
+  cases.push(
+    "isolated-state-root",
+    "task-network-default-deny",
+    "two-tabs-independent",
+    "incremental-before-terminal",
+    "computer-exact-correlation",
+    "keyboard-focus",
+    "activity-redaction",
+    "compact-layout",
+  );
+} finally {
+  await close(normal);
+}
+
+const failed = await launch(["--preview-failure"]);
+try {
+  await failed.window
+    .locator('[data-task-id="task-atlantic"] small')
+    .getByText("Needs attention")
+    .waitFor();
+  assert.equal(
+    await failed.window.locator("#release-completion").isDisabled(),
+    true,
+  );
+  await failed.window.locator('[data-section="activity"]').click();
+  await failed.window.screenshot({
+    path: path.join(evidenceRoot, "failure-wide.png"),
+  });
+  cases.push("provider-failure-state");
+} finally {
+  await close(failed);
+}
+
+const processDeath = await launch();
+try {
+  const parentPid = processDeath.application.process().pid;
+  let utilityPid = null;
+  for (let attempt = 0; attempt < 50 && utilityPid === null; attempt += 1) {
+    const listed = spawnSync("/bin/ps", ["-axo", "pid=,ppid=,command="], {
+      encoding: "utf8",
+    });
+    assert.equal(listed.status, 0);
+    const rows = listed.stdout
+      .split("\n")
+      .map((line) => /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line))
+      .filter(Boolean)
+      .map((match) => ({
+        pid: Number(match[1]),
+        parent: Number(match[2]),
+        command: match[3],
+      }));
+    const descendants = new Set([parentPid]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const row of rows) {
+        if (descendants.has(row.parent) && !descendants.has(row.pid)) {
+          descendants.add(row.pid);
+          changed = true;
+        }
+      }
+    }
+    utilityPid =
+      rows.find(
+        (row) =>
+          descendants.has(row.pid) &&
+          row.command.includes("Farol Next Preview Helper") &&
+          row.command.includes("--utility-sub-type=node.mojom.NodeService"),
+      )?.pid ?? null;
+    if (utilityPid === null)
+      await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(utilityPid !== null, "UTILITY_PROCESS_NOT_FOUND");
+  process.kill(utilityPid, "SIGTERM");
+  await processDeath.window
+    .locator("#runtime-pill")
+    .getByText("failed")
+    .waitFor({ timeout: 5_000 });
+  await processDeath.window
+    .locator("#browser-loading")
+    .getByText("local runtime failed", { exact: false })
+    .waitFor();
+  await processDeath.window.screenshot({
+    path: path.join(evidenceRoot, "process-death-wide.png"),
+  });
+  cases.push("utility-process-death-state");
+} finally {
+  await close(processDeath);
+}
+
+const report = {
+  schema: 1,
+  artifactSha256: artifact.artifactSha256,
+  sourceCommit: artifact.sourceCommit,
+  sourceTreeDigest: artifact.sourceTreeDigest,
+  sourceDirty: artifact.sourceDirty,
+  cases,
+  screenshots: [
+    "running-browser-view.png",
+    "tool-wait-wide.png",
+    "complete-wide.png",
+    "settings-compact.png",
+    "failure-wide.png",
+    "process-death-wide.png",
+  ],
+};
+for (const filename of report.screenshots) {
+  const evidence = await fs.stat(path.join(evidenceRoot, filename));
+  assert.ok(evidence.size > 1_000, `E2E_SCREENSHOT_EMPTY:${filename}`);
+}
+await fs.writeFile(
+  path.join(evidenceRoot, "report.json"),
+  `${JSON.stringify(report, null, 2)}\n`,
+);
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);

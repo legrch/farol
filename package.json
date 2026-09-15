@@ -1,0 +1,48 @@
+{
+  "name": "farol-next-preview",
+  "version": "0.1.0-preview.0",
+  "private": true,
+  "description": "Isolated local preview of the Farol Next modular monolith.",
+  "type": "module",
+  "engines": {
+    "node": "24.20.0 || 26.7.0",
+    "npm": "11.19.0"
+  },
+  "packageManager": "npm@11.19.0",
+  "scripts": {
+    "check:toolchain": "node tooling/check-toolchain.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "node tooling/lint.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "architecture": "node tooling/check-architecture.mjs",
+    "test": "vitest run",
+    "test:architecture": "vitest run tests/architecture",
+    "test:unit": "vitest run tests/unit tests/integration",
+    "test:coverage": "vitest run --coverage",
+    "hunt:selftest": "vitest run tests/hunt/selftest.test.ts",
+    "hunt:proof": "vitest run tests/hunt/proof.test.ts",
+    "hunt:model": "vitest run tests/hunt/model.test.ts",
+    "hunt:report": "node tooling/hunt-report.mjs",
+    "build": "node tooling/build.mjs",
+    "package": "npm run build && node tooling/package.mjs",
+    "verify:package": "node tooling/verify-package.mjs",
+    "preview": "electron dist/app/main.cjs",
+    "test:e2e": "node tests/e2e/preview.e2e.mjs",
+    "ci": "npm run check:toolchain && npm run typecheck && npm run lint && npm run format:check && npm run architecture && npm run test:coverage && npm run hunt:report"
+  },
+  "dependencies": {
+    "electron": "41.10.7",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.12.1",
+    "@vitest/coverage-v8": "5.0.0",
+    "esbuild": "0.28.2",
+    "fast-check": "4.9.0",
+    "playwright-core": "1.63.0",
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0"
+  }
+}

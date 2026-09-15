@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
+    />
+    <title>Farol Next Preview</title>
+    <link rel="stylesheet" href="shell.css" />
+  </head>
+  <body>
+    <aside class="rail" aria-label="Farol sections">
+      <div class="brand" aria-label="Farol Next Preview">
+        <span class="brand-mark">F</span><span class="brand-name">Farol</span>
+      </div>
+      <nav id="nav">
+        <button
+          class="nav-item active"
+          data-section="browser"
+          aria-current="page"
+        >
+          <span class="nav-glyph">◫</span><span class="nav-label">Browser</span
+          ><kbd>⌘1</kbd>
+        </button>
+        <button class="nav-item" data-section="computer">
+          <span class="nav-glyph">⌁</span><span class="nav-label">Computer</span
+          ><kbd>⌘2</kbd>
+        </button>
+        <button class="nav-item" data-section="activity">
+          <span class="nav-glyph">≋</span><span class="nav-label">Activity</span
+          ><kbd>⌘3</kbd>
+        </button>
+        <button class="nav-item" data-section="settings">
+          <span class="nav-glyph">◌</span><span class="nav-label">Settings</span
+          ><kbd>⌘4</kbd>
+        </button>
+      </nav>
+      <div class="runtime-pill" id="runtime-pill">
+        <span></span><b>Starting</b>
+      </div>
+    </aside>
+
+    <header class="task-bar">
+      <div
+        class="task-tabs"
+        id="task-tabs"
+        role="tablist"
+        aria-label="Task sessions"
+      ></div>
+      <div class="task-actions">
+        <button id="release-completion">Release completion</button>
+        <div class="preview-badge">Local preview</div>
+      </div>
+    </header>
+
+    <main class="surface">
+      <section
+        class="panel browser-panel active"
+        data-panel="browser"
+        aria-label="Browser task surface"
+      >
+        <div class="browser-loading" id="browser-loading">
+          Preparing isolated task views…
+        </div>
+      </section>
+      <section class="panel content-panel" data-panel="computer">
+        <div class="panel-heading">
+          <p>Bounded capability</p>
+          <h1>Computer</h1>
+          <span id="computer-summary">No request is waiting.</span>
+        </div>
+        <div class="permission-sheet">
+          <div class="permission-icon">⌁</div>
+          <div>
+            <h2 id="computer-title">Synthetic fixture only</h2>
+            <p id="computer-detail">
+              This preview cannot read files or run commands on your Mac.
+            </p>
+          </div>
+          <button id="approve-tool" disabled>Allow fixture check</button>
+        </div>
+        <div class="scope-row">
+          <span>Available</span><strong>Fixture status</strong>
+        </div>
+        <div class="scope-row muted">
+          <span>Unavailable</span
+          ><strong>Files · commands · screenshots</strong>
+        </div>
+      </section>
+      <section class="panel content-panel" data-panel="activity">
+        <div class="panel-heading">
+          <p>Content-free evidence</p>
+          <h1>Activity</h1>
+          <span
+            >Lifecycle facts only. Prompts, answers and tool payloads are never
+            shown here.</span
+          >
+        </div>
+        <ol class="activity-list" id="activity-list"></ol>
+      </section>
+      <section class="panel content-panel" data-panel="settings">
+        <div class="panel-heading">
+          <p>Isolated identity</p>
+          <h1>Settings</h1>
+          <span
+            >Farol Next runs beside the legacy product without sharing its state
+            or route.</span
+          >
+        </div>
+        <dl class="settings-list" id="settings-list"></dl>
+      </section>
+    </main>
+    <script src="shell.js"></script>
+  </body>
+</html>
