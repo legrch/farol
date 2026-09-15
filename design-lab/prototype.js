@@ -1,7 +1,12 @@
 (() => {
   "use strict";
 
-  const directions = new Set(["native", "dense", "beacon"]);
+  const directions = new Map([
+    ["native", "Studio Rail"],
+    ["dense", "Operator Grid"],
+    ["beacon", "Beacon Field"],
+    ["slate", "Keeper's Slate"],
+  ]);
   const sections = ["browser", "computer", "activity", "settings"];
   const states = new Set([
     "running",
@@ -342,6 +347,7 @@
       : ["complete", "running"].includes(currentState)
         ? currentState
         : "attention";
+    first.dataset.state = currentState;
     first.querySelector("strong").textContent = copy.title;
     first.querySelector("p").textContent =
       `${selectedTask().label}: ${copy.detail}`;
@@ -378,6 +384,7 @@
     });
     required("#section-name").textContent =
       section.charAt(0).toUpperCase() + section.slice(1);
+    required("#direction-name").textContent = directions.get(direction);
     renderTabs();
     renderBrowser();
     renderComputer();

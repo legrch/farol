@@ -2,7 +2,16 @@
   "schema": 1,
   "result": "passed",
   "fixture": "synthetic-local-atlantic",
-  "recommendedDirection": "beacon-field",
+  "directions": [
+    "studio-rail",
+    "operator-grid",
+    "beacon-field",
+    "keepers-slate"
+  ],
+  "comparisonCandidate": "keepers-slate",
+  "recommendedDirection": "keepers-slate",
+  "recommendationStatus": "provisional-session-2",
+  "previousRecommendation": "beacon-field",
   "ownerApproval": false,
   "sourceBoundary": "tracked-nonshipping-design-lab",
   "visibleWindow": {
@@ -22,7 +31,7 @@
     },
     "primaryFallback": false
   },
-  "prototypeSha256": "df0ea3d91af150f6557d5ffea2af2097f6f83a7f51e9ccdd608ef94d399b814d",
+  "prototypeSha256": "bd76dddc5225d27ef85531c298d5295d8f82feca730f9b5fed909c65f28b12c4",
   "cases": [
     "nonshipping-source-boundary",
     "sandboxed-electron-runner",
@@ -37,14 +46,45 @@
     "reduced-motion",
     "compact-route-accessible-names",
     "long-task-label-compact",
-    "three-directions-two-scenes-wide-and-compact-retina",
+    "slate-fused-task-plate",
+    "slate-shape-coded-lamps",
+    "slate-bounded-computer-approval",
+    "slate-anchored-task-menu",
+    "slate-anchored-fixture-menu",
+    "slate-keyboard-paths",
+    "slate-compact-plate",
+    "slate-title-bar-drag-region",
+    "slate-fixture-control-labelled",
+    "slate-dossier-tab-order",
+    "slate-title-row-resize-band",
+    "slate-focus-visible-evidence",
+    "slate-lamp-reduced-motion",
+    "four-directions-two-scenes-wide-and-compact-retina",
     "recommended-surface-states",
+    "candidate-surface-states",
     "exact-page-navigation-boundary",
+    "slate-standard-density-evidence",
     "rendered-comparison-gallery",
     "visible-secondary-display-launch",
     "no-external-network-or-render-errors"
   ],
   "screenshots": [
+    {
+      "file": "slate-task-menu-open-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-focus-visible-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
     {
       "file": "01-studio-rail-browser-running-wide@2x.png",
       "direction": "native",
@@ -142,6 +182,38 @@
       "pixels": "1520x1280"
     },
     {
+      "file": "04-keepers-slate-browser-running-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "04-keepers-slate-browser-running-compact@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "04-keepers-slate-computer-waiting-wide@2x.png",
+      "direction": "slate",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "04-keepers-slate-computer-waiting-compact@2x.png",
+      "direction": "slate",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
       "file": "beacon-activity-unknown-wide@2x.png",
       "direction": "beacon",
       "section": "activity",
@@ -166,12 +238,60 @@
       "pixels": "2360x1520"
     },
     {
+      "file": "slate-browser-waiting-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-activity-unknown-wide@2x.png",
+      "direction": "slate",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-settings-unavailable-compact@2x.png",
+      "direction": "slate",
+      "section": "settings",
+      "state": "unavailable",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "slate-browser-unknown-compact@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "unknown",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "slate-setup-wide@2x.png",
+      "direction": "slate",
+      "section": "setup",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-browser-waiting-wide@1x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "1180x760"
+    },
+    {
       "file": "directions-overview@2x.png",
       "direction": "comparison",
       "section": "browser+computer",
       "state": "running+waiting",
       "viewport": "1440xfull-page",
-      "pixels": "2850x2690"
+      "pixels": "2850x4096"
     }
   ]
 }

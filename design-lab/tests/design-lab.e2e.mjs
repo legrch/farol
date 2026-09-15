@@ -138,6 +138,10 @@ async function capture(application, page, definition) {
     `${definition.file}:vertical-overflow`,
   );
 
+  // Park the pointer and drop keyboard focus so earlier interaction residue
+  // (hover, focus rings) never leaks into evidence.
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => document.activeElement?.blur());
   const target = path.join(galleryRoot, definition.file);
   await page.screenshot({ path: target, animations: "disabled" });
   const dimensions = pngDimensions(await fs.readFile(target));
@@ -243,12 +247,12 @@ async function launchGallery() {
     { timeout: 10_000 },
   );
   await page.waitForFunction(
-    () => document.querySelectorAll("iframe").length === 6,
+    () => document.querySelectorAll("iframe").length === 8,
   );
   const prototypeFrames = page
     .frames()
     .filter((frame) => frame.url().includes("prototype.html"));
-  assert.equal(prototypeFrames.length, 6);
+  assert.equal(prototypeFrames.length, 8);
   await Promise.all(
     prototypeFrames.map((frame) =>
       frame.waitForFunction(
@@ -546,10 +550,482 @@ try {
   );
   cases.push("long-task-label-compact");
 
+  const snapshot = () => page.evaluate(() => window.farolLab.snapshot());
+  const lampShape = () =>
+    page.evaluate(
+      () =>
+        getComputedStyle(
+          document.querySelector('[data-task-id="atlantic"] small i'),
+        ).maskImage,
+    );
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  assert.equal(
+    (await page.locator("#direction-name").textContent()).trim(),
+    "Keeper's Slate",
+  );
+  const plate = await page.evaluate(() => {
+    const selected = document.querySelector(".task-tab.is-selected");
+    const other = document.querySelector(".task-tab:not(.is-selected)");
+    const surface = document.querySelector("#main-content");
+    if (!selected || !other || !surface) {
+      throw new Error("LAB_PLATE_TARGET_MISSING");
+    }
+    const selectedStyle = getComputedStyle(selected);
+    const selectedBounds = selected.getBoundingClientRect();
+    const surfaceBounds = surface.getBoundingClientRect();
+    return {
+      selectedBackground: selectedStyle.backgroundColor,
+      otherBackground: getComputedStyle(other).backgroundColor,
+      surfaceBackground: getComputedStyle(surface).backgroundColor,
+      selectedBottomBorder: selectedStyle.borderBottomWidth,
+      seam: Math.abs(selectedBounds.bottom - surfaceBounds.top),
+      selectedInsidePlate:
+        selectedBounds.left >= surfaceBounds.left &&
+        selectedBounds.right <= surfaceBounds.right,
+    };
+  });
+  assert.equal(plate.selectedBackground, plate.surfaceBackground);
+  assert.notEqual(plate.otherBackground, plate.surfaceBackground);
+  assert.equal(plate.selectedBottomBorder, "0px");
+  assert.ok(plate.seam <= 1, `plate-seam:${plate.seam}`);
+  assert.equal(plate.selectedInsidePlate, true);
+  const plateSeam = () =>
+    page.evaluate(() => {
+      const selected = document.querySelector(".task-tab.is-selected");
+      const surface = document.querySelector("#main-content");
+      return {
+        seam:
+          surface.getBoundingClientRect().top -
+          selected.getBoundingClientRect().bottom,
+        fused:
+          getComputedStyle(selected).backgroundColor ===
+          getComputedStyle(surface).backgroundColor,
+      };
+    });
+  for (const [section, fused] of [
+    ["browser", true],
+    ["computer", true],
+    ["activity", false],
+    ["settings", false],
+  ]) {
+    await setScene(page, {
+      direction: "slate",
+      section,
+      task: "atlantic",
+      state: "waiting",
+    });
+    const seam = await plateSeam();
+    assert.equal(seam.fused, fused, `plate-fusion:${section}`);
+    if (fused) {
+      assert.ok(
+        Math.abs(seam.seam) < 0.5,
+        `plate-seam:${section}:${seam.seam}`,
+      );
+    } else {
+      assert.ok(seam.seam >= 0.5, `plate-closed:${section}:${seam.seam}`);
+    }
+  }
+  cases.push("slate-fused-task-plate");
+
+  const lampShapes = new Set();
+  for (const state of [
+    "running",
+    "waiting",
+    "complete",
+    "failed",
+    "unavailable",
+    "unknown",
+  ]) {
+    await setScene(page, {
+      direction: "slate",
+      section: "browser",
+      task: "atlantic",
+      state,
+    });
+    const shape = await lampShape();
+    assert.notEqual(shape, "none", `slate-lamp-missing:${state}`);
+    lampShapes.add(shape);
+  }
+  assert.equal(lampShapes.size, 6, "slate-lamps-must-differ-by-state");
+  await setScene(page, {
+    direction: "beacon",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  assert.equal(await lampShape(), "none", "baseline-tabs-keep-plain-dots");
+  assert.equal(
+    (await page.locator("#direction-name").textContent()).trim(),
+    "Beacon Field",
+  );
+  cases.push("slate-shape-coded-lamps");
+
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator("#primary-action").click();
+  assert.equal((await snapshot()).section, "computer");
+  await page.locator("#allow-request").click();
+  assert.deepEqual(await snapshot(), {
+    direction: "slate",
+    section: "browser",
+    selectedTaskId: "atlantic",
+    state: "running",
+  });
+  cases.push("slate-bounded-computer-approval");
+
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator("#task-menu-button").click();
+  await page.locator("#task-menu").waitFor({ state: "visible" });
+  const anchoredMenu = await page.evaluate(() => {
+    const menu = document.querySelector("#task-menu").getBoundingClientRect();
+    const button = document
+      .querySelector("#task-menu-button")
+      .getBoundingClientRect();
+    return {
+      belowButton: menu.top >= button.bottom,
+      rightAligned: Math.abs(menu.right - button.right) <= 1,
+      insideViewport:
+        menu.left >= 0 &&
+        menu.top >= 0 &&
+        menu.right <= window.innerWidth &&
+        menu.bottom <= window.innerHeight,
+    };
+  });
+  assert.deepEqual(anchoredMenu, {
+    belowButton: true,
+    rightAligned: true,
+    insideViewport: true,
+  });
+  const taskMenuPath = path.join(
+    galleryRoot,
+    "slate-task-menu-open-wide@2x.png",
+  );
+  await page.screenshot({ path: taskMenuPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(taskMenuPath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "slate-task-menu-open-wide@2x.png",
+    direction: "slate",
+    section: "browser",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  assert.equal(await page.locator("#task-menu-computer").isEnabled(), true);
+  await page.locator("#task-menu-computer").click();
+  assert.equal((await snapshot()).section, "computer");
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "running",
+  });
+  await page.locator("#task-menu-button").click();
+  await page.locator("#task-menu").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#task-menu-computer").isDisabled(), true);
+  await page.keyboard.press("Escape");
+  await page.locator("#task-menu").waitFor({ state: "hidden" });
+  await page.waitForFunction(
+    () => document.activeElement?.id === "task-menu-button",
+  );
+  cases.push("slate-anchored-task-menu");
+
+  await page.locator("#fixture-button").click();
+  await page.locator("#fixture-menu").waitFor({ state: "visible" });
+  const anchoredFixtureMenu = await page.evaluate(() => {
+    const menu = document
+      .querySelector("#fixture-menu")
+      .getBoundingClientRect();
+    const button = document
+      .querySelector("#fixture-button")
+      .getBoundingClientRect();
+    return {
+      belowButton: menu.top >= button.bottom,
+      leftAligned: Math.abs(menu.left - button.left) <= 1,
+      insideViewport:
+        menu.left >= 0 &&
+        menu.top >= 0 &&
+        menu.right <= window.innerWidth &&
+        menu.bottom <= window.innerHeight,
+    };
+  });
+  assert.deepEqual(anchoredFixtureMenu, {
+    belowButton: true,
+    leftAligned: true,
+    insideViewport: true,
+  });
+  await page.locator('#fixture-menu [data-state="unknown"]').click();
+  await page.locator("#fixture-menu").waitFor({ state: "hidden" });
+  assert.equal((await snapshot()).state, "unknown");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "fixture-button",
+  );
+  cases.push("slate-anchored-fixture-menu");
+
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator('[data-task-id="atlantic"]').focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal((await snapshot()).selectedTaskId, "harbor");
+  await page.keyboard.press("Control+Tab");
+  assert.equal((await snapshot()).selectedTaskId, "release");
+  await page.keyboard.press("Meta+2");
+  assert.equal((await snapshot()).section, "computer");
+  await page.keyboard.press("Meta+1");
+  assert.equal((await snapshot()).section, "browser");
+  cases.push("slate-keyboard-paths");
+
+  await setContentSize(application, 760, 640);
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "release",
+    state: "complete",
+  });
+  const compactPlate = await page.evaluate(() => {
+    const within = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) throw new Error(`LAB_COMPACT_TARGET_MISSING:${selector}`);
+      const bounds = element.getBoundingClientRect();
+      return (
+        bounds.width > 0 &&
+        bounds.height > 0 &&
+        bounds.left >= 0 &&
+        bounds.top >= 0 &&
+        bounds.right <= window.innerWidth &&
+        bounds.bottom <= window.innerHeight
+      );
+    };
+    const tabLabel = document.querySelector('[data-task-id="release"] strong');
+    return {
+      primary: within("#primary-action"),
+      title: within("#inspector-title"),
+      menu: within("#task-menu-button"),
+      state: within("#inspector-state"),
+      document: within("#browser-title"),
+      truncates: tabLabel.scrollWidth > tabLabel.clientWidth,
+      noOverflow: document.documentElement.scrollWidth <= window.innerWidth,
+    };
+  });
+  assert.deepEqual(compactPlate, {
+    primary: true,
+    title: true,
+    menu: true,
+    state: true,
+    document: true,
+    truncates: true,
+    noOverflow: true,
+  });
+  for (const [section, name, shortcut] of compactRoutes) {
+    const route = page.getByRole("button", { name: `Open ${name}` });
+    assert.equal(await route.isVisible(), true);
+    assert.equal(await route.getAttribute("data-section"), section);
+    assert.equal(await route.getAttribute("title"), `${name} (${shortcut})`);
+  }
+  cases.push("slate-compact-plate");
+
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  const dragRegions = await page.evaluate(() => {
+    const region = (element) => {
+      const style = getComputedStyle(element);
+      return (
+        style.getPropertyValue("app-region").trim() ||
+        style.getPropertyValue("-webkit-app-region").trim()
+      );
+    };
+    return {
+      windowBar: region(document.querySelector(".window-bar")),
+      sidebar: region(document.querySelector(".sidebar")),
+      controls: [
+        ...new Set(
+          [
+            ...document.querySelectorAll(
+              ".nav-item, #fixture-button, #command-button",
+            ),
+          ].map(region),
+        ),
+      ],
+    };
+  });
+  assert.equal(dragRegions.windowBar, "drag");
+  assert.equal(dragRegions.sidebar, "drag");
+  assert.deepEqual(dragRegions.controls, ["no-drag"]);
+  cases.push("slate-title-bar-drag-region");
+
+  const fixturePrefix = await page.evaluate(
+    () =>
+      getComputedStyle(
+        document.querySelector('[data-testid="fixture-label"]'),
+        "::before",
+      ).content,
+  );
+  assert.match(fixturePrefix, /Fixture/u);
+  cases.push("slate-fixture-control-labelled");
+
+  await page.locator('[data-task-id="atlantic"]').focus();
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "task-menu-button",
+  );
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "primary-action",
+  );
+  const dossierOrder = await page.evaluate(() => {
+    const menu = document.querySelector("#task-menu-button");
+    const primary = document.querySelector("#primary-action");
+    return (
+      menu.getBoundingClientRect().right <= primary.getBoundingClientRect().left
+    );
+  });
+  assert.equal(dossierOrder, true, "dossier-menu-left-of-primary");
+  cases.push("slate-dossier-tab-order");
+
+  for (const width of [1180, 1000, 940, 900, 870]) {
+    await setContentSize(application, width, 760);
+    await page.waitForTimeout(60);
+    const titleRow = await page.evaluate(() => {
+      const sidebar = document.querySelector(".sidebar");
+      const labels = [...document.querySelectorAll(".nav-item span")];
+      const runtime = document
+        .querySelector("#runtime-status")
+        .getBoundingClientRect();
+      return {
+        width: window.innerWidth,
+        sidebarOverflow: sidebar.scrollWidth - sidebar.clientWidth,
+        clippedLabels: labels.filter(
+          (label) =>
+            label.offsetParent !== null &&
+            label.scrollWidth > label.clientWidth,
+        ).length,
+        runtimeVisible: runtime.width > 0 && runtime.right <= window.innerWidth,
+        documentOverflow:
+          document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    assert.equal(titleRow.width, width);
+    assert.ok(
+      titleRow.sidebarOverflow <= 0,
+      `title-row-overflow:${width}:${titleRow.sidebarOverflow}`,
+    );
+    assert.equal(titleRow.clippedLabels, 0, `title-row-clipped:${width}`);
+    assert.equal(titleRow.runtimeVisible, true, `runtime-visible:${width}`);
+    assert.ok(titleRow.documentOverflow <= 0, `document-overflow:${width}`);
+  }
+  cases.push("slate-title-row-resize-band");
+
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator('[data-task-id="harbor"]').focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForFunction(
+    () => document.activeElement?.dataset.taskId === "atlantic",
+  );
+  const focusRing = await page.evaluate(() => {
+    const tab = document.activeElement;
+    const strip = document.querySelector("#task-tabs").getBoundingClientRect();
+    const bounds = tab.getBoundingClientRect();
+    const style = getComputedStyle(tab);
+    const offset = Number.parseFloat(style.outlineOffset);
+    const outline = Number.parseFloat(style.outlineWidth);
+    return {
+      focusVisible: tab.matches(":focus-visible"),
+      outlineOffset: style.outlineOffset,
+      ringInsideStrip:
+        bounds.bottom + offset + outline <= strip.bottom + 0.5 &&
+        bounds.top - offset - outline >= strip.top - 0.5,
+    };
+  });
+  assert.equal(focusRing.focusVisible, true);
+  assert.equal(focusRing.outlineOffset, "-3px");
+  assert.equal(focusRing.ringInsideStrip, true);
+  const focusPath = path.join(galleryRoot, "slate-focus-visible-wide@2x.png");
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: focusPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(focusPath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "slate-focus-visible-wide@2x.png",
+    direction: "slate",
+    section: "browser",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  cases.push("slate-focus-visible-evidence");
+
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "running",
+  });
+  const lampMotion = () =>
+    page.evaluate(() => {
+      const read = (selector) => {
+        const style = getComputedStyle(document.querySelector(selector));
+        return {
+          name: style.animationName,
+          duration: style.animationDuration,
+          iterations: style.animationIterationCount,
+        };
+      };
+      return {
+        selected: read(".task-tab.is-selected small i"),
+        other: read(
+          '.task-tab:not(.is-selected)[data-state="running"] small i',
+        ),
+      };
+    });
+  const lampDefault = await lampMotion();
+  assert.equal(lampDefault.selected.iterations, "infinite");
+  assert.equal(lampDefault.other.name, "none");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const lampReduced = await lampMotion();
+  assert.ok(Number.parseFloat(lampReduced.selected.duration) <= 0.001);
+  assert.equal(lampReduced.selected.iterations, "1");
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  cases.push("slate-lamp-reduced-motion");
+
   const directionCaptures = [
     ["native", "01-studio-rail"],
     ["dense", "02-operator-grid"],
     ["beacon", "03-beacon-field"],
+    ["slate", "04-keepers-slate"],
   ];
   const comparisonScenes = [
     { slug: "browser-running", section: "browser", state: "running" },
@@ -574,7 +1050,7 @@ try {
       }
     }
   }
-  cases.push("three-directions-two-scenes-wide-and-compact-retina");
+  cases.push("four-directions-two-scenes-wide-and-compact-retina");
 
   const recommendedCaptures = [
     {
@@ -625,6 +1101,75 @@ try {
   cases.push("recommended-surface-states");
 
   await page.locator("#setup-close").click();
+  const candidateCaptures = [
+    {
+      section: "browser",
+      state: "waiting",
+      width: 1180,
+      height: 760,
+      file: "slate-browser-waiting-wide@2x.png",
+    },
+    {
+      section: "activity",
+      state: "unknown",
+      width: 1180,
+      height: 760,
+      file: "slate-activity-unknown-wide@2x.png",
+    },
+    {
+      section: "settings",
+      state: "unavailable",
+      width: 760,
+      height: 640,
+      file: "slate-settings-unavailable-compact@2x.png",
+    },
+    {
+      section: "browser",
+      state: "unknown",
+      width: 760,
+      height: 640,
+      file: "slate-browser-unknown-compact@2x.png",
+    },
+  ];
+  await setScene(page, {
+    direction: "slate",
+    section: "activity",
+    task: "atlantic",
+    state: "unknown",
+  });
+  await page.locator('[data-filter="all"]').click();
+  for (const definition of candidateCaptures) {
+    await capture(application, page, {
+      direction: "slate",
+      task: "atlantic",
+      ...definition,
+    });
+  }
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "slate",
+    section: "settings",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator("#review-setup").click();
+  const slateSetupPath = path.join(galleryRoot, "slate-setup-wide@2x.png");
+  await page.screenshot({ path: slateSetupPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(slateSetupPath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "slate-setup-wide@2x.png",
+    direction: "slate",
+    section: "setup",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  cases.push("candidate-surface-states");
+
+  await page.locator("#setup-close").click();
   const originalUrl = page.url();
   const blockedTargets = [
     pathToFileURL(path.join(nextRoot, "design-lab-other", "probe.html")).href,
@@ -644,6 +1189,54 @@ try {
   cases.push("exact-page-navigation-boundary");
 } finally {
   await close(prototype);
+}
+
+// macOS ignores force-device-scale-factor, so standard density is emulated
+// through CDP: the page is rasterised again at a device scale factor of 1.
+const standardDensity = await launchPrototype();
+try {
+  const { application, page } = standardDensity;
+  await setContentSize(application, 1180, 760);
+  const session = await page.context().newCDPSession(page);
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: 1180,
+    height: 760,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  await setScene(page, {
+    direction: "slate",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  assert.equal(await page.evaluate(() => window.devicePixelRatio), 1);
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.waitForTimeout(120);
+  const target = path.join(galleryRoot, "slate-browser-waiting-wide@1x.png");
+  // Playwright re-rasterises page.screenshot at the window's native scale, so
+  // the standard-density frame is captured through the same CDP session.
+  const shot = await session.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+  });
+  await fs.writeFile(target, Buffer.from(shot.data, "base64"));
+  assert.deepEqual(pngDimensions(await fs.readFile(target)), {
+    width: 1180,
+    height: 760,
+  });
+  screenshots.push({
+    file: "slate-browser-waiting-wide@1x.png",
+    direction: "slate",
+    section: "browser",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "1180x760",
+  });
+  cases.push("slate-standard-density-evidence");
+} finally {
+  await close(standardDensity);
 }
 
 const gallery = await launchGallery();
@@ -763,12 +1356,17 @@ const digestInputs = [
   "gallery.css",
   "gallery.js",
   "tooling/lab-main.cjs",
+  "tests/design-lab.e2e.mjs",
 ].map((file) => path.join(labRoot, file));
 const report = {
   schema: 1,
   result: "passed",
   fixture: "synthetic-local-atlantic",
-  recommendedDirection: "beacon-field",
+  directions: ["studio-rail", "operator-grid", "beacon-field", "keepers-slate"],
+  comparisonCandidate: "keepers-slate",
+  recommendedDirection: "keepers-slate",
+  recommendationStatus: "provisional-session-2",
+  previousRecommendation: "beacon-field",
   ownerApproval: false,
   sourceBoundary: "tracked-nonshipping-design-lab",
   visibleWindow,

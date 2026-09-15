@@ -55,7 +55,7 @@ automatic retry when duplicate submission is possible.
 ## Design constraints
 
 - Use the macOS system type stack and familiar window, navigation, toolbar, focus, and keyboard
-  conventions while making the three direction compositions materially distinct.
+  conventions while making the four direction compositions materially distinct.
 - Keep the app useful at `1180 x 760` and `760 x 640`; compact mode may collapse labels but must
   retain every primary route.
 - A hidden sidebar route must still have menu and keyboard parity in the production app.
@@ -72,6 +72,9 @@ All prototype data is synthetic. The shared comparison fixture is `Atlantic work
 two matched scenes: `Browser / Running` and `Computer / Waiting`. No network, account,
 filesystem, command, screenshot, native-host, signing, or publication action is represented as
 performed.
+
+The fourth direction, Keeper's Slate, reuses the same fixture, scenes, viewports, and evidence
+format; the three first-lab directions are preserved unchanged as the comparison baseline.
 
 The visual baseline was read from the existing sealed Next evidence set at source commit
 `a5e253426fe487ce8732dfec94fdf993c87a3228`. Its saved `vnext/artifacts/e2e/report.json` records

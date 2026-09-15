@@ -9,7 +9,7 @@
     />
     <meta
       name="description"
-      content="Three rendered visual directions for the Farol Next macOS design lab."
+      content="Four rendered visual directions for the Farol Next macOS design lab."
     />
     <title>Farol Next · Visual directions</title>
     <link rel="stylesheet" href="gallery.css" />
@@ -19,11 +19,13 @@
       <header class="gallery-header">
         <div>
           <p class="eyebrow">Farol Next · reversible design lab</p>
-          <h1>Three directions, one product truth</h1>
+          <h1>Four directions, one product truth</h1>
           <p class="intro">
-            Every direction uses the same synthetic task, content, two proof
-            scenes, and wide viewport. Only the visual system changes. No
-            direction is owner-approved.
+            Every direction renders the same synthetic task, content, two proof
+            scenes, and wide viewport. Only the visual system changes. Studio
+            Rail, Operator Grid, and Beacon Field are the first-lab baseline;
+            Keeper's Slate is the graphite-first candidate added after owner
+            first-look feedback. No direction is owner-approved.
           </p>
         </div>
         <div class="fixture-key" aria-label="Shared fixture">
@@ -79,7 +81,7 @@
               </div>
               <div>
                 <dt>Trade-off</dt>
-                <dd>Farol identity recedes</dd>
+                <dd>Farol identity recedes; no memorable signature</dd>
               </div>
             </dl>
           </div>
@@ -136,14 +138,14 @@
           </div>
         </article>
 
-        <article class="direction-card is-recommended" data-direction="beacon">
+        <article class="direction-card" data-direction="beacon">
           <header>
             <span class="direction-number">03</span>
             <div>
               <p class="direction-kind">Distinctive Farol</p>
               <h2>Beacon Field</h2>
             </div>
-            <span class="decision-tag">Provisional recommendation</span>
+            <span class="decision-tag">First-lab recommendation</span>
           </header>
           <div class="scene-pair">
             <section class="scene-preview">
@@ -172,16 +174,68 @@
           <div class="direction-notes">
             <p>
               A horizontal command shelf gives tasks the full canvas; deep teal
-              and a warm beacon preserve Farol identity.
+              and a warm beacon carry the identity.
             </p>
             <dl>
               <div>
                 <dt>Strength</dt>
-                <dd>Ownable identity with clear task state</dd>
+                <dd>Ownable composition with clear task state</dd>
               </div>
               <div>
                 <dt>Trade-off</dt>
-                <dd>Accent discipline must survive implementation</dd>
+                <dd>Green/teal identity did not pass owner first look</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+
+        <article class="direction-card is-candidate" data-direction="slate">
+          <header>
+            <span class="direction-number">04</span>
+            <div>
+              <p class="direction-kind">Graphite-first</p>
+              <h2>Keeper's Slate</h2>
+            </div>
+            <span class="decision-tag">Session-2 provisional candidate</span>
+          </header>
+          <div class="scene-pair">
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Browser</strong><span>Running</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Keeper's Slate Browser running scene"
+                  src="prototype.html?direction=slate&amp;section=browser&amp;task=atlantic&amp;state=running"
+                ></iframe>
+              </div>
+            </section>
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Computer</strong><span>Waiting</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Keeper's Slate Computer waiting scene"
+                  src="prototype.html?direction=slate&amp;section=computer&amp;task=atlantic&amp;state=waiting"
+                ></iframe>
+              </div>
+            </section>
+          </div>
+          <div class="direction-notes">
+            <p>
+              The selected task tab fuses into one graphite plate that holds its
+              Browser, dossier, and forward action; shape-coded lamps carry
+              lifecycle state.
+            </p>
+            <dl>
+              <div>
+                <dt>Strength</dt>
+                <dd>Ownership made physical; Browser gets the full width</dd>
+              </div>
+              <div>
+                <dt>Trade-off</dt>
+                <dd>Plate fusion and lamps still need native tab-view proof</dd>
               </div>
             </dl>
           </div>
@@ -191,13 +245,12 @@
       <footer class="decision-boundary">
         <div>
           <p class="eyebrow">Decision boundary</p>
-          <h2>Beacon Field is the prototype target, not an approval.</h2>
+          <h2>Four preserved candidates, one owner choice.</h2>
         </div>
         <p>
-          The recommendation is based on product fit, state clarity, compact
-          behavior, and identity. Native WebContentsView composition, production
-          menus, and live capability readiness remain separate implementation
-          gates.
+          Keeper's Slate is this session's provisional candidate, not an
+          approval. Native WebContentsView composition, production menus, and
+          live capability readiness remain separate implementation gates.
         </p>
       </footer>
     </main>
