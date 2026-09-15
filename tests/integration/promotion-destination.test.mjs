@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   assertPromotionDestination,
   preparePromotionParent,
+  trustedOwnerHome,
 } from "../../tooling/promotion-destination.mjs";
 
 const roots = [];
@@ -18,6 +19,40 @@ afterEach(async () => {
 });
 
 describe("Farol Next promotion destination", () => {
+  it("ignores an ordinary Legacy directory supplied as HOME", async () => {
+    const container = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-owner-home-"),
+    );
+    roots.push(container);
+    const accountHome = path.join(container, "owner-home");
+    const legacyHome = path.join(accountHome, ".farol");
+    await fs.mkdir(accountHome, { mode: 0o700 });
+    await fs.mkdir(legacyHome, { mode: 0o700 });
+    const originalHome = process.env.HOME;
+    process.env.HOME = legacyHome;
+    try {
+      const effectiveUid = process.geteuid?.() ?? 501;
+      const trusted = trustedOwnerHome(
+        { homedir: accountHome, uid: effectiveUid },
+        effectiveUid,
+      );
+      expect(trusted).toBe(accountHome);
+      expect(() =>
+        assertPromotionDestination({
+          home: trusted,
+          source: "/checkout/vnext/dist/package/Farol Next Preview.app",
+          destination: path.join(
+            legacyHome,
+            "Applications/Farol Next Preview.app",
+          ),
+        }),
+      ).toThrow("PROMOTION_DESTINATION_OUTSIDE_OWNER_APPLICATIONS");
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
+  });
+
   it("admits only the fixed app directly below the owner's Applications", () => {
     const home = "/Users/owner";
     const source = "/checkout/vnext/dist/package/Farol Next Preview.app";

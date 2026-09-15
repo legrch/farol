@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   PrimaryStartup,
+  primaryStartupReady,
   previewStartupDelay,
 } from "../../src/apps/desktop/primary-startup";
 
@@ -33,6 +34,33 @@ describe("primary startup coordination", () => {
     const failure = Promise.reject(new Error("synthetic startup failure"));
     startup.begin(failure);
     await expect(startup.whenReady()).rejects.toThrow("PRIMARY_STARTUP_FAILED");
+  });
+
+  it("requires a ready runtime, window, and every task view", () => {
+    expect(
+      primaryStartupReady({
+        runtimeState: "ready",
+        windowReady: true,
+        taskViewCount: 2,
+        expectedTaskViewCount: 2,
+      }),
+    ).toBe(true);
+    expect(
+      primaryStartupReady({
+        runtimeState: "failed",
+        windowReady: true,
+        taskViewCount: 0,
+        expectedTaskViewCount: 2,
+      }),
+    ).toBe(false);
+    expect(
+      primaryStartupReady({
+        runtimeState: "ready",
+        windowReady: true,
+        taskViewCount: 1,
+        expectedTaskViewCount: 2,
+      }),
+    ).toBe(false);
   });
 
   it("admits only a bounded explicit E2E startup delay", () => {

@@ -3,6 +3,24 @@ import path from "node:path";
 
 const APP_NAME = "Farol Next Preview.app";
 
+export function trustedOwnerHome(userInfo, effectiveUid) {
+  if (
+    !userInfo ||
+    typeof userInfo.homedir !== "string" ||
+    !path.isAbsolute(userInfo.homedir) ||
+    !Number.isSafeInteger(userInfo.uid) ||
+    !Number.isSafeInteger(effectiveUid) ||
+    userInfo.uid !== effectiveUid
+  ) {
+    throw new Error("PROMOTION_OWNER_IDENTITY_INVALID");
+  }
+  const home = path.resolve(userInfo.homedir);
+  if (home === path.parse(home).root) {
+    throw new Error("PROMOTION_OWNER_IDENTITY_INVALID");
+  }
+  return home;
+}
+
 export function assertPromotionDestination({ home, source, destination }) {
   const resolvedHome = path.resolve(home);
   const resolvedSource = path.resolve(source);

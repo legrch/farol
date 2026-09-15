@@ -8,7 +8,10 @@ import {
   assertExactSourceIdentity,
   candidatePaths,
 } from "./candidate-contract.mjs";
-import { assertPromotionDestination } from "./promotion-destination.mjs";
+import {
+  assertPromotionDestination,
+  trustedOwnerHome,
+} from "./promotion-destination.mjs";
 import { runPromotionApply } from "./promotion-apply.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
@@ -78,7 +81,7 @@ async function main() {
     "PROMOTION_SOURCE_NOT_EXACT",
   );
   const source = canonicalAppPath;
-  const home = os.homedir();
+  const home = trustedOwnerHome(os.userInfo(), process.geteuid?.());
   const { destination, receipt } = assertPromotionDestination({
     home,
     source,

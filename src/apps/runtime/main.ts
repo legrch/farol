@@ -8,10 +8,18 @@ const runtimeParentPort = (
 if (!runtimeParentPort) throw new Error("RUNTIME_PARENT_PORT_MISSING");
 
 async function main(): Promise<void> {
-  const scenarioSchema = z.enum(["normal", "failure", "stream-failure"]);
+  const scenarioSchema = z.enum([
+    "normal",
+    "failure",
+    "stream-failure",
+    "startup-failure",
+  ]);
   const parsedScenario = scenarioSchema.safeParse(
     process.env.FAROL_NEXT_PREVIEW_SCENARIO,
   );
+  if (parsedScenario.data === "startup-failure") {
+    throw new Error("RUNTIME_START_FAILURE_FIXTURE");
+  }
   const runtime = await startPreviewRuntime(
     parsedScenario.success ? parsedScenario.data : "normal",
   );

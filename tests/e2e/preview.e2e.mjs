@@ -9,6 +9,7 @@ import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { runBoundedProcess } from "./bounded-process.mjs";
 
 const root = process.cwd();
 const development = process.argv.includes("--development");
@@ -464,54 +465,6 @@ async function launch(extraArgs = [], windowMode = "hidden") {
   };
 }
 
-async function runBoundedProcess(command, arguments_, options) {
-  const child = spawn(command, arguments_, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const outputLimit = 64 * 1024;
-  let stdout = Buffer.alloc(0);
-  let stderr = Buffer.alloc(0);
-  let outputExceeded = false;
-  const append = (current, chunk) => {
-    const combined = Buffer.concat([current, Buffer.from(chunk)]);
-    if (combined.length <= outputLimit) return combined;
-    outputExceeded = true;
-    child.kill("SIGKILL");
-    return combined.subarray(0, outputLimit);
-  };
-  child.stdout.on("data", (chunk) => {
-    stdout = append(stdout, chunk);
-  });
-  child.stderr.on("data", (chunk) => {
-    stderr = append(stderr, chunk);
-  });
-  let timedOut = false;
-  const timeout = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, options.timeoutMs);
-  try {
-    const [status, signal] = await Promise.race([
-      once(child, "close"),
-      once(child, "error").then(([error]) => {
-        throw error;
-      }),
-    ]);
-    if (timedOut) throw new Error("E2E_CHILD_TIMEOUT");
-    if (outputExceeded) throw new Error("E2E_CHILD_OUTPUT_LIMIT");
-    return {
-      status,
-      signal,
-      stdout: stdout.toString("utf8"),
-      stderr: stderr.toString("utf8"),
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function proveSecondLaunchDuringStartup() {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
@@ -575,6 +528,51 @@ async function proveSecondLaunchDuringStartup() {
     assert.equal(bootstrap.runtimeState, "ready");
     assert.equal(bootstrap.runtimeIdentity, "farol-next-preview-runtime");
     assert.equal((await taskSurfaces(application)).length, 2);
+  } finally {
+    await close(instance);
+  }
+}
+
+async function proveSecondLaunchRejectsFailedStartup() {
+  const isolatedHome = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-e2e-home-"),
+  );
+  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const launchArgs = [
+    ...launchPrefix,
+    `--user-data-dir=${userData}`,
+    "--preview-window-mode=hidden",
+    "--preview-startup-delay-ms=500",
+    "--preview-runtime-start-failure",
+  ];
+  const launchEnvironment = {
+    FAROL_NEXT_E2E: "1",
+    HOME: isolatedHome,
+    LANG: "en_US.UTF-8",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    TMPDIR: os.tmpdir(),
+  };
+  const application = await electron.launch({
+    executablePath: executable,
+    args: launchArgs,
+    env: launchEnvironment,
+    timeout: 15_000,
+  });
+  const instance = { application, isolatedHome, userData };
+  try {
+    const repeated = await runBoundedProcess(executable, launchArgs, {
+      cwd: root,
+      env: launchEnvironment,
+      timeoutMs: 15_000,
+    });
+    assert.equal(
+      parseOwnerLaunchResult(`${repeated.stdout}${repeated.stderr}`),
+      "reopen-failed",
+    );
+    const window = await application.firstWindow({ timeout: 15_000 });
+    const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
+    assert.equal(bootstrap.runtimeState, "failed");
+    assert.equal((await taskSurfaces(application)).length, 0);
   } finally {
     await close(instance);
   }
@@ -1127,6 +1125,8 @@ async function completeSetup(instance, capture = false) {
 
 await proveSecondLaunchDuringStartup();
 cases.push("second-launch-waits-for-complete-primary-startup");
+await proveSecondLaunchRejectsFailedStartup();
+cases.push("second-launch-rejects-failed-primary-startup");
 
 const normal = await launch([], "secondary-visible");
 try {

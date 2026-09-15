@@ -18,6 +18,20 @@ export class PrimaryStartup {
   }
 }
 
+export function primaryStartupReady(state: {
+  runtimeState: "starting" | "ready" | "offline" | "failed";
+  windowReady: boolean;
+  taskViewCount: number;
+  expectedTaskViewCount: number;
+}): boolean {
+  return (
+    state.runtimeState === "ready" &&
+    state.windowReady &&
+    state.expectedTaskViewCount > 0 &&
+    state.taskViewCount === state.expectedTaskViewCount
+  );
+}
+
 export function previewStartupDelay(
   arguments_: readonly string[],
   enabled: boolean,

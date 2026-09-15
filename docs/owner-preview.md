@@ -83,8 +83,9 @@ durable outside the checkout, run this owner action:
 task next:promote -- --destination "$HOME/Applications/Farol Next Preview.app" --apply
 ```
 
-The operation accepts only the fixed app slot directly below the owner's real,
-non-symlinked, owner-controlled `$HOME/Applications` and refuses an unsafe HOME before
+The operation derives the owner's home from the operating-system account identity,
+never from the `HOME` environment variable, and accepts only the fixed app slot directly
+below that real, non-symlinked, owner-controlled home. It refuses an unsafe home before
 creating anything. A digest-attested Python helper opens that directory component by
 component and performs every mutation relative to the retained directory descriptor,
 so replacing its pathname cannot redirect the copy or cleanup into a Legacy root. It

@@ -33,7 +33,11 @@ import {
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
 } from "./window-placement";
-import { PrimaryStartup, previewStartupDelay } from "./primary-startup";
+import {
+  PrimaryStartup,
+  primaryStartupReady,
+  previewStartupDelay,
+} from "./primary-startup";
 
 const directory = __dirname;
 const productName = "Farol Next Preview";
@@ -229,9 +233,12 @@ async function startRuntime(): Promise<void> {
         "--preview-stream-failure",
       )
         ? "stream-failure"
-        : process.argv.includes("--preview-failure")
-          ? "failure"
-          : "normal",
+        : process.env.FAROL_NEXT_E2E === "1" &&
+            process.argv.includes("--preview-runtime-start-failure")
+          ? "startup-failure"
+          : process.argv.includes("--preview-failure")
+            ? "failure"
+            : "normal",
     },
     serviceName: "Farol Next Runtime",
     stdio: "ignore",
@@ -649,6 +656,15 @@ function reopenWindow(): void {
   void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
 }
 
+function isPrimaryReady(): boolean {
+  return primaryStartupReady({
+    runtimeState,
+    windowReady: window !== null && !window.isDestroyed(),
+    taskViewCount: taskViews.size,
+    expectedTaskViewCount: demoTasks.length,
+  });
+}
+
 async function handleSecondInstance(candidate: unknown): Promise<void> {
   const decision = decideSecondInstance(launchIdentity, candidate);
   if (!decision) return;
@@ -660,7 +676,9 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
         ensureWindow,
         recoverWindowOpenFailure,
       );
-      if (outcome === "failed") status = "reopen-failed";
+      if (outcome === "failed" || !isPrimaryReady()) {
+        status = "reopen-failed";
+      }
     } catch {
       status = "reopen-failed";
     }
@@ -736,10 +754,15 @@ if (!app.requestSingleInstanceLock(instanceRequest)) {
     });
 } else {
   const initialization = main();
-  primaryStartup.begin(initialization);
+  const readiness = initialization.then(() => {
+    if (!isPrimaryReady()) throw new Error("PRIMARY_STARTUP_INCOMPLETE");
+  });
+  primaryStartup.begin(readiness);
   void initialization
     .then(() => {
-      process.stderr.write(`${secondInstanceResultPrefix}primary-started\n`);
+      process.stderr.write(
+        `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
+      );
     })
     .catch(() => app.exit(1));
 }
