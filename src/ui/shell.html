@@ -116,8 +116,55 @@
           >
         </div>
         <dl class="settings-list" id="settings-list"></dl>
+        <div class="settings-action">
+          <div>
+            <strong>Setup journey</strong>
+            <span>Review each connection boundary and its current proof.</span>
+          </div>
+          <button id="review-setup">Review setup</button>
+        </div>
       </section>
     </main>
+    <dialog
+      class="setup-dialog"
+      id="setup-dialog"
+      aria-labelledby="setup-title"
+      aria-describedby="setup-copy"
+    >
+      <div class="setup-frame">
+        <header class="setup-header">
+          <div class="setup-brand"><span>F</span> Farol Next</div>
+          <button id="setup-close" aria-label="Close setup" hidden>
+            Close
+          </button>
+        </header>
+        <ol
+          class="setup-progress"
+          id="setup-progress"
+          aria-label="Setup progress"
+        >
+          <li data-setup-progress="chatgpt"><span>1</span><b>ChatGPT</b></li>
+          <li data-setup-progress="computer"><span>2</span><b>Computer</b></li>
+          <li data-setup-progress="connect"><span>3</span><b>Connect</b></li>
+          <li data-setup-progress="hosts"><span>4</span><b>Hosts</b></li>
+          <li data-setup-progress="verify"><span>5</span><b>Verify</b></li>
+        </ol>
+        <section class="setup-content">
+          <p class="setup-eyeline" id="setup-eyeline"></p>
+          <h1 id="setup-title"></h1>
+          <p class="setup-copy" id="setup-copy"></p>
+          <div class="setup-status" id="setup-status">
+            <i></i><strong></strong>
+          </div>
+          <ul class="setup-details" id="setup-details"></ul>
+        </section>
+        <footer class="setup-actions">
+          <span id="setup-counter"></span>
+          <button id="setup-back">Back</button>
+          <button class="primary" id="setup-next">Continue</button>
+        </footer>
+      </div>
+    </dialog>
     <script src="shell.js"></script>
   </body>
 </html>

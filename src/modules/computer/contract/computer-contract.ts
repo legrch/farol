@@ -15,6 +15,7 @@ export const ComputerCallOutputSchema = z.strictObject({
   kind: z.literal("synthetic-status"),
   label: z.string().min(1).max(120),
   state: z.literal("ready"),
+  receipt: z.string().min(1).max(120),
 });
 
 export const ComputerCallResponseSchema = z.discriminatedUnion("ok", [

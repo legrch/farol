@@ -8,7 +8,7 @@ import {
 } from "../../domain/access";
 import type {
   ComputerExecutor,
-  ComputerOutput,
+  ComputerExecutionResult,
 } from "../port/computer-executor";
 
 export class ComputerService {
@@ -22,10 +22,11 @@ export class ComputerService {
     request: ComputerRequest,
   ): Promise<
     Result<
-      ComputerOutput,
+      ComputerExecutionResult,
       | ComputerErrorCode
       | "COMPUTER_EXECUTION_FAILED"
       | "COMPUTER_EXECUTION_CANCELLED"
+      | "COMPUTER_EXECUTION_CORRELATION"
     >
   > {
     const authorized = authorizeComputerRequest(
@@ -34,6 +35,22 @@ export class ComputerService {
       this.clock.now(),
     );
     if (!authorized.ok) return authorized;
-    return this.executor.execute(authorized.value);
+    const result = await this.executor.execute(authorized.value);
+    if (!result.ok) return result;
+    const value = result.value;
+    if (
+      value.ownerId !== request.ownerId ||
+      value.sessionId !== request.sessionId ||
+      value.taskId !== request.taskId ||
+      value.turnId !== request.turnId ||
+      value.generation !== request.generation ||
+      value.callId !== request.callId
+    ) {
+      return {
+        ok: false,
+        error: { code: "COMPUTER_EXECUTION_CORRELATION", retry: "never" },
+      };
+    }
+    return result;
   }
 }

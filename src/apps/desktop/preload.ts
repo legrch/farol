@@ -9,8 +9,8 @@ contextBridge.exposeInMainWorld("farolNext", {
       taskId,
       action,
     }) as Promise<unknown>,
-  layout: (section: string, taskId: string) => {
-    ipcRenderer.send(channels.layout, { section, taskId });
+  layout: (section: string, taskId: string, setupOpen: boolean) => {
+    ipcRenderer.send(channels.layout, { section, taskId, setupOpen });
   },
   onRuntimeEvent: (listener: (event: unknown) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld("farolNext", {
       listener(value);
     ipcRenderer.on(channels.runtimeState, wrapped);
     return () => ipcRenderer.removeListener(channels.runtimeState, wrapped);
+  },
+  onTaskSurfaceState: (listener: (status: unknown) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      listener(value);
+    ipcRenderer.on(channels.taskSurfaceState, wrapped);
+    return () => ipcRenderer.removeListener(channels.taskSurfaceState, wrapped);
   },
   onLayout: (listener: (layout: unknown) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>

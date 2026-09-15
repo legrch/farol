@@ -13,6 +13,7 @@ import { z } from "zod";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
+import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 
 const directory = __dirname;
 const productName = "Farol Next Preview";
@@ -61,6 +62,7 @@ const readySchema = z.strictObject({
 const layoutSchema = z.strictObject({
   section: z.enum(["browser", "computer", "activity", "settings"]),
   taskId: z.string(),
+  setupOpen: z.boolean(),
 });
 const controlSchema = z.strictObject({
   taskId: z.string(),
@@ -81,8 +83,10 @@ let runtimeError: string | null = null;
 let runtimeStopping = false;
 let section: Section = "browser";
 let selectedTaskId: string = ownerTasks[0].taskId;
+let setupOpen = true;
 const taskViews = new Map<string, WebContentsView>();
-const streamControllers: AbortController[] = [];
+const streamControllers = new Map<string, AbortController>();
+const taskSurfaceFailures = new Map<string, string>();
 const pendingComputer = new Map<
   string,
   Extract<z.infer<typeof ClientEventSchema>, { kind: "computer.requested" }>
@@ -149,7 +153,22 @@ function disposeTaskViews(): void {
 }
 
 function stopStreams(): void {
-  streamControllers.splice(0).forEach((controller) => controller.abort());
+  for (const controller of streamControllers.values()) controller.abort();
+  streamControllers.clear();
+}
+
+function publishTaskSurfaceStatus(status: TaskSurfaceStatus): void {
+  window?.webContents.send(channels.taskSurfaceState, status);
+}
+
+function failTaskSurface(taskId: string): void {
+  const controller = streamControllers.get(taskId);
+  controller?.abort();
+  streamControllers.delete(taskId);
+  pendingComputer.delete(taskId);
+  const error = "TASK_STREAM_FAILED";
+  taskSurfaceFailures.set(taskId, error);
+  publishTaskSurfaceStatus({ taskId, state: "failed", error });
 }
 
 function handleRuntimeExit(code: number | null): void {
@@ -160,6 +179,7 @@ function handleRuntimeExit(code: number | null): void {
   runtimeError =
     code === 0 ? "RUNTIME_PROCESS_EXITED" : "RUNTIME_PROCESS_FAILED";
   stopStreams();
+  taskSurfaceFailures.clear();
   pendingComputer.clear();
   disposeTaskViews();
   publishRuntimeStatus();
@@ -170,9 +190,13 @@ async function startRuntime(): Promise<void> {
   const child = utilityProcess.fork(path.join(directory, "runtime.cjs"), [], {
     env: {
       LANG: process.env.LANG ?? "en_US.UTF-8",
-      FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes("--preview-failure")
-        ? "failure"
-        : "normal",
+      FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
+        "--preview-stream-failure",
+      )
+        ? "stream-failure"
+        : process.argv.includes("--preview-failure")
+          ? "failure"
+          : "normal",
     },
     serviceName: "Farol Next Runtime",
     stdio: "ignore",
@@ -258,6 +282,7 @@ function installNetworkFence(): Electron.Session | null {
 }
 
 function handleShortcut(input: Input): boolean {
+  if (setupOpen) return false;
   const index = ownerTasks.findIndex((task) => task.taskId === selectedTaskId);
   if (input.control && input.key === "Tab") {
     const direction = input.shift ? -1 : 1;
@@ -268,6 +293,7 @@ function handleShortcut(input: Input): boolean {
     window?.webContents.send(channels.layout, {
       section,
       taskId: selectedTaskId,
+      setupOpen,
     });
     return true;
   }
@@ -279,6 +305,7 @@ function handleShortcut(input: Input): boolean {
     window?.webContents.send(channels.layout, {
       section,
       taskId: selectedTaskId,
+      setupOpen,
     });
     return true;
   }
@@ -294,6 +321,7 @@ function applyLayout(): void {
   for (const [taskId, view] of taskViews) {
     const visible =
       runtimeState === "ready" &&
+      !setupOpen &&
       section === "browser" &&
       taskId === selectedTaskId;
     view.setVisible(visible);
@@ -338,6 +366,12 @@ async function createTaskViews(): Promise<void> {
           extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
         },
       );
+      taskSurfaceFailures.delete(task.taskId);
+      publishTaskSurfaceStatus({
+        taskId: task.taskId,
+        state: "ready",
+        error: null,
+      });
     } catch (error) {
       if (taskViews.get(task.taskId) === view) {
         disposeTaskView(task.taskId, view);
@@ -352,7 +386,8 @@ async function createTaskViews(): Promise<void> {
 async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
   if (!runtime || !window) return;
   const controller = new AbortController();
-  streamControllers.push(controller);
+  streamControllers.get(task.taskId)?.abort();
+  streamControllers.set(task.taskId, controller);
   const response = await fetch(
     `http://127.0.0.1:${runtime.port}/events/${encodeURIComponent(task.taskId)}`,
     {
@@ -401,6 +436,9 @@ async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
       }
       window?.webContents.send(channels.runtimeEvent, parsed.data);
     }
+  }
+  if (streamControllers.get(task.taskId) === controller) {
+    streamControllers.delete(task.taskId);
   }
 }
 
@@ -452,6 +490,9 @@ function installIpc(): void {
       (candidate) => candidate.taskId === parsed.data.taskId,
     );
     if (!task) return { error: "RUNTIME_OFFLINE" };
+    if (taskSurfaceFailures.has(task.taskId)) {
+      return { error: "TASK_STREAM_FAILED" };
+    }
     const correlation =
       parsed.data.action === "release-tool"
         ? pendingComputer.get(task.taskId)
@@ -483,6 +524,7 @@ function installIpc(): void {
       return;
     section = parsed.data.section;
     selectedTaskId = parsed.data.taskId;
+    setupOpen = parsed.data.setupOpen;
     applyLayout();
   });
 }
@@ -523,11 +565,7 @@ async function createWindow(): Promise<void> {
     void consumeSse(task).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
       if (runtimeState !== "ready") return;
-      runtimeState = "failed";
-      runtimeError = "RUNTIME_STREAM_FAILED";
-      stopStreams();
-      disposeTaskViews();
-      publishRuntimeStatus();
+      failTaskSurface(task.taskId);
     });
   }
   window.show();

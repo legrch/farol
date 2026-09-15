@@ -22,6 +22,7 @@ export type ChatComputerOutput = Readonly<{
     kind: "synthetic-status";
     label: string;
     state: "ready";
+    receipt: string;
   }>;
 }>;
 

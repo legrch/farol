@@ -5,6 +5,17 @@ export type ComputerOutput = Readonly<{
   kind: "synthetic-status";
   label: string;
   state: "ready";
+  receipt: string;
+}>;
+
+export type ComputerExecutionResult = Readonly<{
+  ownerId: string;
+  sessionId: string;
+  taskId: string;
+  turnId: string;
+  generation: number;
+  callId: string;
+  output: ComputerOutput;
 }>;
 
 export interface ComputerExecutor {
@@ -12,7 +23,7 @@ export interface ComputerExecutor {
     request: ComputerRequest,
   ): Promise<
     Result<
-      ComputerOutput,
+      ComputerExecutionResult,
       "COMPUTER_EXECUTION_FAILED" | "COMPUTER_EXECUTION_CANCELLED"
     >
   >;

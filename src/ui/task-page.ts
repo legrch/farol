@@ -61,6 +61,7 @@ export function taskPage(task: TaskPageIdentity, token: string): string {
     const status = document.getElementById("status");
     const recovery = document.getElementById("recovery");
     let carry = "";
+    let terminalSeen = false;
     document.addEventListener("securitypolicyviolation", (event) => {
       document.body.dataset.deliveryFailure = "csp-" + event.violatedDirective;
     });
@@ -78,7 +79,10 @@ export function taskPage(task: TaskPageIdentity, token: string): string {
         const decoder = new TextDecoder();
         while (true) {
           const part = await reader.read();
-          if (part.done) break;
+          if (part.done) {
+            if (!terminalSeen) throw new Error("stream ended before terminal");
+            break;
+          }
           carry += decoder.decode(part.value, { stream: true });
           const frames = carry.split("\\n\\n");
           carry = frames.pop() || "";
@@ -99,6 +103,7 @@ export function taskPage(task: TaskPageIdentity, token: string): string {
             if (event.kind === "computer.requested") status.textContent = "Waiting for fixture Computer approval";
             if (event.kind === "computer.completed") status.textContent = "Computer result returned to this turn";
             if (event.kind === "turn.terminal") {
+              terminalSeen = true;
               document.body.dataset.terminal = "true";
               document.body.dataset.failed = String(event.phase === "failed" || event.phase === "outcome_unknown");
               if (event.phase === "completed") {

@@ -406,6 +406,39 @@ async function shellGeometry(window) {
   );
 }
 
+const setupScreens = [
+  ["chatgpt", "setup-1-chatgpt-wide.png"],
+  ["computer", "setup-2-computer-wide.png"],
+  ["connect", "setup-3-connect-wide.png"],
+  ["hosts", "setup-4-hosts-wide.png"],
+  ["verify", "setup-5-verify-wide.png"],
+];
+
+async function completeSetup(instance, capture = false) {
+  const dialog = instance.window.locator("#setup-dialog");
+  await dialog.waitFor({ state: "visible" });
+  assert.equal(await dialog.getAttribute("data-mode"), "first-run");
+  assert.equal(
+    await instance.window.evaluate(() => document.activeElement?.id),
+    "setup-next",
+  );
+  for (const [stepId, screenshot] of setupScreens) {
+    assert.equal(await dialog.getAttribute("data-step-id"), stepId);
+    assert.match(await dialog.innerText(), /Step [1-5] of 5/u);
+    assert.match(
+      await dialog.innerText(),
+      /Not connected|Preview only|Local only|Not configured|Verified locally/u,
+    );
+    if (capture) {
+      await instance.window.screenshot({
+        path: path.join(evidenceRoot, screenshot),
+      });
+    }
+    await instance.window.locator("#setup-next").click();
+  }
+  await dialog.waitFor({ state: "hidden" });
+}
+
 const normal = await launch();
 try {
   assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
@@ -416,6 +449,7 @@ try {
       `E2E_RUNTIME_NOT_READY:${runtimeLabel}:${await normal.window.locator("#settings-list").innerText()}`,
     );
   }
+  await completeSetup(normal, true);
   const resourceIdentity = await normal.application.evaluate(
     ({ app, session }) => ({
       userData: app.getPath("userData"),
@@ -487,11 +521,16 @@ try {
     "task-atlantic",
     (state) =>
       state.deltaCount === 2 &&
-      state.answer.includes("exact requesting turn") &&
+      state.answer.includes(
+        "Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1",
+      ) &&
       !state.terminal,
     "tool result resumed exact turn",
   );
-  assert.match(resumed.answer, /exact requesting turn/u);
+  assert.match(
+    resumed.answer,
+    /Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1/u,
+  );
 
   await normal.window.locator('[data-section="browser"]').click();
   const beforeTabSwitch = await shellGeometry(normal.window);
@@ -531,7 +570,10 @@ try {
     (state) => state.deltaCount === 2 && !state.terminal,
     "atlantic retained while harbor completed",
   );
-  assert.match(retained.answer, /Fixture workspace|requesting turn/u);
+  assert.match(
+    retained.answer,
+    /Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1/u,
+  );
   await normal.window.locator("#release-completion").click();
   await waitForTask(
     normal.application,
@@ -547,7 +589,7 @@ try {
     .innerText();
   assert.doesNotMatch(activityText, /Synthetic local preview fixture/u);
   assert.doesNotMatch(activityText, /Checking the isolated fixture/u);
-  assert.doesNotMatch(activityText, /exact requesting turn/u);
+  assert.doesNotMatch(activityText, /Fixture result|computer-1/u);
   assert.doesNotMatch(activityText, /Bearer|token|\/private\//u);
   assert.doesNotMatch(activityText, /task-atlantic|turn-atlantic/u);
   await normal.window
@@ -572,6 +614,16 @@ try {
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "settings-compact.png"),
   });
+  await normal.window.locator("#review-setup").click();
+  const reviewedSetup = normal.window.locator("#setup-dialog");
+  await reviewedSetup.waitFor({ state: "visible" });
+  assert.equal(await reviewedSetup.getAttribute("data-mode"), "review");
+  assert.equal(await reviewedSetup.getAttribute("data-step-id"), "chatgpt");
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "setup-review-compact.png"),
+  });
+  await normal.window.locator("#setup-close").click();
+  await reviewedSetup.waitFor({ state: "hidden" });
 
   await normal.window.keyboard.press("Meta+1");
   await sendShortcutFromTask(normal.application, "task-atlantic");
@@ -590,6 +642,8 @@ try {
     "compact-layout",
     "stable-layout-geometry",
     "client-delivery-acknowledged",
+    "first-run-setup-journey",
+    "settings-setup-reentry",
   );
 } finally {
   await close(normal);
@@ -597,6 +651,7 @@ try {
 
 const failed = await launch(["--preview-failure"]);
 try {
+  await completeSetup(failed);
   await failed.window
     .locator('[data-task-id="task-atlantic"] small')
     .getByText("Needs attention")
@@ -622,8 +677,63 @@ try {
   await close(failed);
 }
 
+const streamFailure = await launch(["--preview-stream-failure"]);
+try {
+  await completeSetup(streamFailure);
+  await streamFailure.window
+    .locator('[data-task-id="task-atlantic"] small')
+    .getByText("Surface failed")
+    .waitFor({ timeout: 5_000 });
+  assert.match(
+    await streamFailure.window.locator("#runtime-pill").innerText(),
+    /Local runtime/u,
+  );
+  await waitForTask(
+    streamFailure.application,
+    "task-atlantic",
+    (state) => state.offline && !state.terminal,
+    "task-local stream failure",
+  );
+  await waitForTask(
+    streamFailure.application,
+    "task-harbor",
+    (state) => state.deltaCount === 2 && !state.terminal && !state.offline,
+    "independent task survives stream failure",
+  );
+  await streamFailure.window.locator('[data-task-id="task-harbor"]').click();
+  await streamFailure.window.locator("#release-completion").click();
+  await waitForTask(
+    streamFailure.application,
+    "task-harbor",
+    (state) => state.terminal && state.status === "Completed",
+    "surviving task completion",
+  );
+  const isolated = await taskSurfaces(streamFailure.application);
+  assert.equal(
+    isolated.find((surface) => surface.state.taskId === "task-atlantic")?.state
+      .offline,
+    true,
+  );
+  assert.equal(
+    isolated.find((surface) => surface.state.taskId === "task-harbor")?.state
+      .terminal,
+    true,
+  );
+  await streamFailure.window.screenshot({
+    path: path.join(evidenceRoot, "stream-failure-wide.png"),
+  });
+  await setWindowSize(streamFailure.application, 700, 600);
+  await streamFailure.window.screenshot({
+    path: path.join(evidenceRoot, "stream-failure-compact.png"),
+  });
+  cases.push("task-stream-failure-isolation");
+} finally {
+  await close(streamFailure);
+}
+
 const processDeath = await launch();
 try {
+  await completeSetup(processDeath);
   const utilityPid = await processDeath.application.evaluate(({ app }) => {
     const matches = app
       .getAppMetrics()
@@ -683,8 +793,16 @@ const report = {
     "complete-wide.png",
     "complete-compact.png",
     "settings-compact.png",
+    "setup-1-chatgpt-wide.png",
+    "setup-2-computer-wide.png",
+    "setup-3-connect-wide.png",
+    "setup-4-hosts-wide.png",
+    "setup-5-verify-wide.png",
+    "setup-review-compact.png",
     "failure-wide.png",
     "failure-compact.png",
+    "stream-failure-wide.png",
+    "stream-failure-compact.png",
     "process-death-wide.png",
     "process-death-compact.png",
   ],

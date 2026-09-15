@@ -19,7 +19,7 @@ import {
 import { ActivityLog } from "../repo/activity-log";
 import { InMemoryTurns } from "../repo/in-memory-turns";
 
-export type PreviewScenario = FixtureScenario;
+export type PreviewScenario = FixtureScenario | "stream-failure";
 
 export type PreviewTask = Readonly<{
   ownerId: string;
@@ -416,15 +416,29 @@ export async function startPreviewRuntime(
     if (!task.hasComputer) computerGate.release();
     const chatClock = dependencies.createClock();
     const computer = dependencies.createComputer(task, computerGate);
+    let streamFaultInjected = false;
     const runner = new RunTurn(
       new ScriptedProvider(
-        scenario,
+        scenario === "stream-failure" ? "normal" : scenario,
         { completion: completionGate },
         task.hasComputer,
       ),
       computer,
       turns,
-      { publish: (event) => events.publish(event) },
+      {
+        async publish(event) {
+          await events.publish(event);
+          if (
+            scenario === "stream-failure" &&
+            task.taskId === "task-atlantic" &&
+            event.kind === "computer.requested" &&
+            !streamFaultInjected
+          ) {
+            streamFaultInjected = true;
+            events.fail(task.taskId, "PREVIEW_STREAM_FAULT");
+          }
+        },
+      },
       activity,
       chatClock,
     );

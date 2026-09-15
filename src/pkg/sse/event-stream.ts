@@ -15,6 +15,7 @@ export class EventStream<Event extends TaskEvent> {
   private readonly history = new Map<string, RetainedEvent<Event>[]>();
   private readonly subscribers = new Map<string, Set<ServerResponse>>();
   private readonly acknowledged = new Map<string, Set<number>>();
+  private readonly failures = new Map<string, string>();
   private nextId = 1;
 
   constructor(
@@ -30,17 +31,25 @@ export class EventStream<Event extends TaskEvent> {
   }
 
   async publish(event: Event): Promise<void> {
-    const retained = { id: this.nextId++, event: structuredClone(event) };
+    const failed = this.failures.get(event.taskId);
+    if (failed) throw new Error(failed);
     const history = this.history.get(event.taskId) ?? [];
-    history.push(retained);
-    if (history.length > this.capacity) {
-      const evicted = history.shift();
-      if (evicted) {
-        const acknowledged = this.acknowledged.get(event.taskId);
-        acknowledged?.delete(evicted.id);
-        if (acknowledged?.size === 0) this.acknowledged.delete(event.taskId);
+    if (history.length >= this.capacity) {
+      const acknowledged = this.acknowledged.get(event.taskId);
+      const evictIndex = history.findIndex((candidate) =>
+        acknowledged?.has(candidate.id),
+      );
+      if (evictIndex === -1) {
+        const code = "EVENT_STREAM_CAPACITY_EXCEEDED";
+        this.fail(event.taskId, code);
+        throw new Error(code);
       }
+      const [evicted] = history.splice(evictIndex, 1);
+      if (evicted) acknowledged?.delete(evicted.id);
+      if (acknowledged?.size === 0) this.acknowledged.delete(event.taskId);
     }
+    const retained = { id: this.nextId++, event: structuredClone(event) };
+    history.push(retained);
     this.history.set(event.taskId, history);
 
     const subscribers = this.subscribers.get(event.taskId);
@@ -59,6 +68,17 @@ export class EventStream<Event extends TaskEvent> {
   }
 
   subscribe(taskId: string, response: ServerResponse): () => void {
+    const failed = this.failures.get(taskId);
+    if (failed) {
+      const body = JSON.stringify({ error: failed });
+      response.writeHead(409, {
+        "cache-control": "no-store",
+        "content-length": Buffer.byteLength(body),
+        "content-type": "application/json; charset=utf-8",
+      });
+      response.end(body);
+      return noop;
+    }
     response.writeHead(200, {
       "cache-control": "no-store",
       connection: "keep-alive",
@@ -104,12 +124,21 @@ export class EventStream<Event extends TaskEvent> {
     return { status: "acknowledged", event: structuredClone(retained.event) };
   }
 
+  fail(taskId: string, code: string): void {
+    if (this.failures.has(taskId)) return;
+    this.failures.set(taskId, code);
+    const responses = this.subscribers.get(taskId);
+    for (const response of responses ?? []) response.end();
+    this.subscribers.delete(taskId);
+  }
+
   close(): void {
     for (const responses of this.subscribers.values()) {
       for (const response of responses) response.end();
     }
     this.subscribers.clear();
     this.acknowledged.clear();
+    this.failures.clear();
   }
 
   private encode(retained: RetainedEvent<Event>): string {

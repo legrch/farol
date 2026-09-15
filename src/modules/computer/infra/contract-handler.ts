@@ -24,17 +24,6 @@ export class ComputerContractHandler implements ComputerContract {
       target: value.target,
     });
     if (!result.ok) return result;
-    return {
-      ok: true,
-      value: {
-        ownerId: value.ownerId,
-        sessionId: value.sessionId,
-        taskId: value.taskId,
-        turnId: value.turnId,
-        generation: value.generation,
-        callId: value.callId,
-        output: result.value,
-      },
-    };
+    return result;
   }
 }

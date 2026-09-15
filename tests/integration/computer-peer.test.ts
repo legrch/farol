@@ -9,9 +9,18 @@ describe("Chat -> Computer contract/peer", () => {
     const execute = vi.fn<ComputerExecutor["execute"]>().mockResolvedValue({
       ok: true,
       value: {
-        kind: "synthetic-status",
-        label: "Fixture workspace",
-        state: "ready",
+        ownerId: "owner-preview",
+        sessionId: "session-a",
+        taskId: "task-a",
+        turnId: "turn-a",
+        generation: 3,
+        callId: "call-a",
+        output: {
+          kind: "synthetic-status",
+          label: "Fixture workspace",
+          state: "ready",
+          receipt: "call-a",
+        },
       },
     });
     const handler = new ComputerContractHandler(
@@ -54,6 +63,7 @@ describe("Chat -> Computer contract/peer", () => {
           kind: "synthetic-status",
           label: "Fixture workspace",
           state: "ready",
+          receipt: "call-a",
         },
       },
     });
@@ -92,5 +102,55 @@ describe("Chat -> Computer contract/peer", () => {
       error: { code: "COMPUTER_OWNER_MISMATCH" },
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects an executor result correlated to another call", async () => {
+    const execute = vi.fn<ComputerExecutor["execute"]>().mockResolvedValue({
+      ok: true,
+      value: {
+        ownerId: "owner-preview",
+        sessionId: "session-a",
+        taskId: "task-a",
+        turnId: "turn-a",
+        generation: 3,
+        callId: "call-b",
+        output: {
+          kind: "synthetic-status",
+          label: "Result belonging to call-b",
+          state: "ready",
+          receipt: "call-b",
+        },
+      },
+    } as Awaited<ReturnType<ComputerExecutor["execute"]>>);
+    const handler = new ComputerContractHandler(
+      new ComputerService(
+        {
+          ownerId: "owner-preview",
+          sessionId: "session-a",
+          taskId: "task-a",
+          generation: 3,
+          capability: "fixture.inspect",
+          expiresAt: 2_000,
+        },
+        { execute },
+        { now: () => 1_000 },
+      ),
+    );
+
+    await expect(
+      new ComputerPeer(handler).execute({
+        ownerId: "owner-preview",
+        sessionId: "session-a",
+        taskId: "task-a",
+        turnId: "turn-a",
+        generation: 3,
+        callId: "call-a",
+        operation: "inspect_fixture",
+        target: "synthetic://workspace/status",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "COMPUTER_EXECUTION_CORRELATION" },
+    });
   });
 });

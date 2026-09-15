@@ -7,6 +7,17 @@ import {
   RuntimeStatusSchema,
   type RuntimeStatus,
 } from "../pkg/ipc/runtime-status";
+import {
+  TaskSurfaceStatusSchema,
+  type TaskSurfaceStatus,
+} from "../pkg/ipc/task-surface-status";
+import {
+  advanceSetup,
+  createSetupJourney,
+  reopenSetup,
+  retreatSetup,
+  setupSteps,
+} from "./setup-journey";
 
 const bootstrapSchema = z.strictObject({
   schema: z.literal(1),
@@ -37,6 +48,7 @@ const controlSuccessSchema = z.strictObject({ ok: z.literal(true) });
 const layoutSchema = z.strictObject({
   section: z.enum(["browser", "computer", "activity", "settings"]),
   taskId: z.string(),
+  setupOpen: z.boolean(),
 });
 
 type Bootstrap = z.infer<typeof bootstrapSchema>;
@@ -75,9 +87,10 @@ declare global {
       bootstrap(): Promise<unknown>;
       snapshot(): Promise<unknown>;
       control(taskId: string, action: string): Promise<unknown>;
-      layout(section: string, taskId: string): void;
+      layout(section: string, taskId: string, setupOpen: boolean): void;
       onRuntimeEvent(listener: (event: unknown) => void): () => void;
       onRuntimeState(listener: (status: unknown) => void): () => void;
+      onTaskSurfaceState(listener: (status: unknown) => void): () => void;
       onLayout(listener: (layout: unknown) => void): () => void;
     }>;
   }
@@ -95,15 +108,22 @@ let bootstrap: Bootstrap;
 let bootstrapReady = false;
 let section: Section = "browser";
 let selectedTaskId = "";
+let setupJourney = createSetupJourney();
+let setupFocusKey = "";
 const taskEvents = new Map<string, ClientEventDto[]>();
 const activity: SafeActivity[] = [];
 const pendingRuntimeEvents: ClientEventDto[] = [];
 let pendingRuntimeStatus: RuntimeStatus | null = null;
+const pendingTaskSurfaceStatuses: TaskSurfaceStatus[] = [];
 let pendingLayout: z.infer<typeof layoutSchema> | null = null;
+const taskSurfaceStatuses = new Map<string, TaskSurfaceStatus>();
 
 function statusFor(taskId: string): string {
   if (bootstrap.runtimeState !== "ready") {
     return bootstrap.runtimeState === "failed" ? "Runtime failed" : "Offline";
+  }
+  if (taskSurfaceStatuses.get(taskId)?.state === "failed") {
+    return "Surface failed";
   }
   const events = taskEvents.get(taskId) ?? [];
   const last = events
@@ -184,7 +204,10 @@ function renderTabs(): void {
     }),
   );
   const completion = required<HTMLButtonElement>("#release-completion");
-  completion.disabled = bootstrap.runtimeState !== "ready" || terminal;
+  completion.disabled =
+    bootstrap.runtimeState !== "ready" ||
+    taskSurfaceStatuses.get(selectedTaskId)?.state === "failed" ||
+    terminal;
 }
 
 function renderComputer(): void {
@@ -207,7 +230,10 @@ function renderComputer(): void {
     : false;
   const button = required<HTMLButtonElement>("#approve-tool");
   button.disabled =
-    !waiting || closedAfter || bootstrap.runtimeState !== "ready";
+    !waiting ||
+    closedAfter ||
+    bootstrap.runtimeState !== "ready" ||
+    taskSurfaceStatuses.get(selectedTaskId)?.state === "failed";
   required("#computer-summary").textContent =
     waiting && !closedAfter
       ? "One task is waiting for your bounded approval."
@@ -296,6 +322,58 @@ function renderSettings(): void {
   );
 }
 
+function renderSetup(): void {
+  const dialog = required<HTMLDialogElement>("#setup-dialog");
+  if (!setupJourney.open) {
+    setupFocusKey = "";
+    if (dialog.open) dialog.close();
+    return;
+  }
+  const step = setupSteps[setupJourney.step];
+  if (!step) throw new Error("SETUP_STEP_MISSING");
+  dialog.dataset.mode = setupJourney.mode;
+  dialog.dataset.stepId = step.id;
+  required("#setup-eyeline").textContent = step.eyeline;
+  required("#setup-title").textContent = step.title;
+  required("#setup-copy").textContent = step.copy;
+  const status = required<HTMLDivElement>("#setup-status");
+  status.className = `setup-status ${step.tone}`;
+  required<HTMLElement>("#setup-status strong").textContent =
+    step.id === "verify" && bootstrap.runtimeState !== "ready"
+      ? "Local runtime unavailable"
+      : step.status;
+  const details = required<HTMLUListElement>("#setup-details");
+  details.replaceChildren(
+    ...step.details.map((detail) => {
+      const item = document.createElement("li");
+      item.textContent = detail;
+      return item;
+    }),
+  );
+  document
+    .querySelectorAll<HTMLElement>("[data-setup-progress]")
+    .forEach((item, index) => {
+      item.classList.toggle("complete", index < setupJourney.step);
+      item.classList.toggle("active", index === setupJourney.step);
+      if (index === setupJourney.step)
+        item.setAttribute("aria-current", "step");
+      else item.removeAttribute("aria-current");
+    });
+  required("#setup-counter").textContent =
+    `Step ${setupJourney.step + 1} of ${setupSteps.length}`;
+  required<HTMLButtonElement>("#setup-back").disabled = setupJourney.step === 0;
+  required<HTMLButtonElement>("#setup-next").textContent =
+    setupJourney.step === setupSteps.length - 1 ? "Open Browser" : "Continue";
+  required<HTMLButtonElement>("#setup-close").hidden =
+    setupJourney.mode !== "review";
+  if (!dialog.open) dialog.showModal();
+  const focusKey = `${setupJourney.mode}:${setupJourney.step}`;
+  if (setupFocusKey !== focusKey) {
+    setupFocusKey = focusKey;
+    queueMicrotask(() => required<HTMLButtonElement>("#setup-next").focus());
+  }
+}
+
 function render(notifyHost = true): void {
   document.querySelectorAll<HTMLElement>(".nav-item").forEach((item) => {
     const active = item.dataset.section === section;
@@ -312,7 +390,9 @@ function render(notifyHost = true): void {
   renderComputer();
   renderActivity();
   renderSettings();
-  if (notifyHost) window.farolNext.layout(section, selectedTaskId);
+  renderSetup();
+  if (notifyHost)
+    window.farolNext.layout(section, selectedTaskId, setupJourney.open);
 }
 
 function selectTask(taskId: string): void {
@@ -369,6 +449,12 @@ function applyRuntimeStatus(status: RuntimeStatus): void {
   render();
 }
 
+function applyTaskSurfaceStatus(status: TaskSurfaceStatus): void {
+  if (!bootstrap.tasks.some((task) => task.taskId === status.taskId)) return;
+  taskSurfaceStatuses.set(status.taskId, status);
+  render();
+}
+
 async function start(): Promise<void> {
   window.farolNext.onLayout((value) => {
     const parsed = layoutSchema.safeParse(value);
@@ -401,6 +487,15 @@ async function start(): Promise<void> {
     }
     applyRuntimeStatus(parsed.data);
   });
+  window.farolNext.onTaskSurfaceState((value) => {
+    const parsed = TaskSurfaceStatusSchema.safeParse(value);
+    if (!parsed.success) return;
+    if (!bootstrapReady) {
+      pendingTaskSurfaceStatuses.push(parsed.data);
+      return;
+    }
+    applyTaskSurfaceStatus(parsed.data);
+  });
   bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
   selectedTaskId = bootstrap.tasks[0]?.taskId ?? "";
   document
@@ -427,8 +522,36 @@ async function start(): Promise<void> {
       await window.farolNext.control(selectedTaskId, "release-completion");
     },
   );
+  required<HTMLButtonElement>("#setup-back").addEventListener("click", () => {
+    setupJourney = retreatSetup(setupJourney);
+    render();
+  });
+  required<HTMLButtonElement>("#setup-next").addEventListener("click", () => {
+    const wasFirstRun = setupJourney.mode === "first-run";
+    setupJourney = advanceSetup(setupJourney);
+    if (!setupJourney.open && wasFirstRun) section = "browser";
+    render();
+  });
+  required<HTMLButtonElement>("#setup-close").addEventListener("click", () => {
+    setupJourney = { ...setupJourney, open: false };
+    render();
+  });
+  required<HTMLButtonElement>("#review-setup").addEventListener("click", () => {
+    setupJourney = reopenSetup(setupJourney);
+    render();
+  });
+  required<HTMLDialogElement>("#setup-dialog").addEventListener(
+    "cancel",
+    (event) => {
+      event.preventDefault();
+      if (setupJourney.mode !== "review") return;
+      setupJourney = { ...setupJourney, open: false };
+      render();
+    },
+  );
   bootstrapReady = true;
   if (pendingRuntimeStatus) applyRuntimeStatus(pendingRuntimeStatus);
+  pendingTaskSurfaceStatuses.splice(0).forEach(applyTaskSurfaceStatus);
   pendingRuntimeEvents.splice(0).forEach(recordEvent);
   if (pendingLayout) {
     section = pendingLayout.section;
@@ -436,6 +559,7 @@ async function start(): Promise<void> {
     pendingLayout = null;
   }
   window.addEventListener("keydown", (event) => {
+    if (setupJourney.open) return;
     if (event.metaKey && /^[1-4]$/u.test(event.key)) {
       event.preventDefault();
       selectSection(

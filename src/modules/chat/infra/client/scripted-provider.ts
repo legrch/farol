@@ -52,7 +52,7 @@ class ScriptedSession implements ProviderSession {
       yield {
         kind: "delta",
         sequence: 2,
-        text: " The exact requesting turn received the result.",
+        text: ` Fixture result ${this.submitted.output.label} is bound to ${this.submitted.output.receipt}.`,
       };
     } else {
       yield {

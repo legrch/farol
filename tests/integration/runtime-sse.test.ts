@@ -265,6 +265,64 @@ describe("actual loopback SSE runtime", () => {
     });
   });
 
+  it("fails one task stream without stopping the other task or runtime", async () => {
+    runtime = await startPreviewRuntime("stream-failure" as never);
+    const base = `http://127.0.0.1:${runtime.port}`;
+    const headers = { authorization: `Bearer ${runtime.token}` };
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      const snapshot = await fetch(`${base}/snapshot`, { headers });
+      const body = (await snapshot.json()) as {
+        tasks: { taskId: string; turn: { phase: string } | null }[];
+      };
+      if (
+        body.tasks.find((task) => task.taskId === "task-atlantic")?.turn
+          ?.phase === "tool_wait"
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    const failedStream = await fetch(`${base}/events/task-atlantic`, {
+      headers: taskHeaders(runtime, "task-atlantic"),
+    });
+    expect(failedStream.status).toBe(409);
+    await expect(failedStream.json()).resolves.toEqual({
+      error: "PREVIEW_STREAM_FAULT",
+    });
+
+    const survivingResponse = await fetch(`${base}/events/task-harbor`, {
+      headers: taskHeaders(runtime, "task-harbor"),
+    });
+    expect(survivingResponse.status).toBe(200);
+    const surviving = new SseReader(survivingResponse);
+    await surviving.until(
+      (event) => event.kind === "text.delta" && event.sequence === 2,
+    );
+    const released = await fetch(
+      `${base}/control/task-harbor/release-completion`,
+      {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: controlBody(runtime, "task-harbor", null),
+      },
+    );
+    expect(released.status).toBe(204);
+    await expect(
+      surviving.until((event) => event.kind === "turn.terminal"),
+    ).resolves.toContainEqual(
+      expect.objectContaining({ taskId: "task-harbor", phase: "completed" }),
+    );
+
+    const snapshot = await fetch(`${base}/snapshot`, { headers });
+    await expect(snapshot.json()).resolves.toMatchObject({
+      identity: "farol-next-preview-runtime",
+      tasks: [
+        { taskId: "task-atlantic", turn: { phase: "tool_wait" } },
+        { taskId: "task-harbor", turn: { phase: "completed" } },
+      ],
+    });
+  });
+
   it("does not let one task read or control another task", async () => {
     runtime = await startPreviewRuntime("normal");
     const base = `http://127.0.0.1:${runtime.port}`;

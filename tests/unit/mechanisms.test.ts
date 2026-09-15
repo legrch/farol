@@ -31,7 +31,8 @@ class ResponseProbe extends EventEmitter {
     return this;
   }
 
-  end(): this {
+  end(value?: string): this {
+    if (value) this.writes.push(value);
     this.writableEnded = true;
     return this;
   }
@@ -64,7 +65,7 @@ describe("shared runtime mechanisms", () => {
     expect(gate.cancel()).toBe(false);
   });
 
-  it("rejects invalid stream capacities and retains a bounded clone", async () => {
+  it("rejects invalid stream capacities and evicts only acknowledged history", async () => {
     expect(() => new EventStream(0)).toThrow("EVENT_STREAM_CAPACITY_INVALID");
     expect(() => new EventStream(1.5)).toThrow("EVENT_STREAM_CAPACITY_INVALID");
     expect(() => new EventStream(2, 0)).toThrow(
@@ -73,12 +74,34 @@ describe("shared runtime mechanisms", () => {
     const stream = new EventStream<{ taskId: string; sequence: number }>(2);
     await stream.publish({ taskId: "task-a", sequence: 1 });
     await stream.publish({ taskId: "task-a", sequence: 2 });
+    expect(stream.acknowledge("task-a", 1).status).toBe("acknowledged");
     await stream.publish({ taskId: "task-a", sequence: 3 });
     expect(stream.retained("task-a")).toEqual([
       { id: 2, event: { taskId: "task-a", sequence: 2 } },
       { id: 3, event: { taskId: "task-a", sequence: 3 } },
     ]);
     expect(stream.retained("task-b")).toEqual([]);
+  });
+
+  it("fails one task instead of silently evicting unacknowledged history", async () => {
+    const stream = new EventStream<{ taskId: string; sequence: number }>(2);
+    const active = new ResponseProbe();
+    stream.subscribe("task-a", active.asServerResponse());
+    await stream.publish({ taskId: "task-a", sequence: 1 });
+    await stream.publish({ taskId: "task-a", sequence: 2 });
+
+    await expect(
+      stream.publish({ taskId: "task-a", sequence: 3 }),
+    ).rejects.toThrow("EVENT_STREAM_CAPACITY_EXCEEDED");
+    expect(active.writableEnded).toBe(true);
+    const late = new ResponseProbe();
+    stream.subscribe("task-a", late.asServerResponse());
+    expect(late.status).toBe(409);
+    expect(late.writes.join("")).toContain("EVENT_STREAM_CAPACITY_EXCEEDED");
+
+    await expect(
+      stream.publish({ taskId: "task-b", sequence: 1 }),
+    ).resolves.toBeUndefined();
   });
 
   it("acknowledges an exact retained delivery once and never across tasks", async () => {

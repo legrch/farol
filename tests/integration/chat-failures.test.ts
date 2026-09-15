@@ -45,6 +45,7 @@ const exactComputerResult: Result<ChatComputerOutput, string> = success({
     kind: "synthetic-status" as const,
     label: "Fixture",
     state: "ready" as const,
+    receipt: "call-a",
   },
 });
 

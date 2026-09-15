@@ -23,6 +23,7 @@ function output(ownerId: string = request.ownerId) {
       kind: "synthetic-status" as const,
       label: "Fixture",
       state: "ready" as const,
+      receipt: "turn-a-computer-1",
     },
   };
 }
@@ -87,6 +88,11 @@ describe("scripted preview provider", () => {
     );
     const events = [];
     for await (const event of session.events()) events.push(event);
+    expect(events).toContainEqual({
+      kind: "delta",
+      sequence: 2,
+      text: " Fixture result Fixture is bound to turn-a-computer-1.",
+    });
     expect(events.at(-1)).toEqual({ kind: "completed" });
   });
 });
