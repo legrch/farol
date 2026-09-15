@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 
 const root = process.cwd();
@@ -474,6 +475,65 @@ function repeatLaunch(instance) {
     0,
     `E2E_SECOND_LAUNCH_FAILED:${repeated.stdout}${repeated.stderr}`,
   );
+}
+
+async function rejectMismatchedBuildLaunch(instance) {
+  const temporary = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-mismatched-build-"),
+  );
+  try {
+    let mismatchedExecutable;
+    let mismatchedArguments;
+    let manifestPath;
+    if (development) {
+      const copiedBuild = path.join(temporary, "app");
+      await fs.cp(path.join(root, "dist/app"), copiedBuild, {
+        recursive: true,
+        verbatimSymlinks: true,
+      });
+      mismatchedExecutable = executable;
+      mismatchedArguments = [
+        path.join(copiedBuild, "main.cjs"),
+        ...instance.launchArgs.slice(launchPrefix.length),
+      ];
+      manifestPath = path.join(copiedBuild, "build-manifest.json");
+    } else {
+      const copiedApp = path.join(temporary, "Farol Next Preview.app");
+      const copied = spawnSync("/bin/cp", ["-cR", appPath, copiedApp], {
+        encoding: "utf8",
+      });
+      assert.equal(copied.status, 0, `${copied.stdout}${copied.stderr}`);
+      mismatchedExecutable = path.join(
+        copiedApp,
+        "Contents/MacOS/Farol Next Preview",
+      );
+      mismatchedArguments = instance.launchArgs;
+      manifestPath = path.join(
+        copiedApp,
+        "Contents/Resources/app/build-manifest.json",
+      );
+    }
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    manifest.sourceCommit = "f".repeat(40);
+    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const mismatched = spawnSync(mismatchedExecutable, mismatchedArguments, {
+      cwd: root,
+      env: instance.launchEnvironment,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.equal(mismatched.status, 0);
+    assert.match(
+      `${mismatched.stdout}${mismatched.stderr}`,
+      /running build could not be verified as this exact candidate/u,
+    );
+    assert.equal(
+      parseOwnerLaunchResult(`${mismatched.stdout}${mismatched.stderr}`),
+      "identity-mismatch",
+    );
+  } finally {
+    await fs.rm(temporary, { recursive: true, force: true });
+  }
 }
 
 async function waitForWindowCount(application, count) {
@@ -1186,15 +1246,18 @@ try {
   );
 
   const runtimeBeforeWindowClose = await runtimeProcessId(normal.application);
-  const reopenedWindow = normal.application.waitForEvent("window", {
-    timeout: 15_000,
-  });
   await normal.window.close();
   await waitForWindowCount(normal.application, 0);
   assert.equal(
     await runtimeProcessId(normal.application),
     runtimeBeforeWindowClose,
   );
+  await rejectMismatchedBuildLaunch(normal);
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  await waitForWindowCount(normal.application, 0);
+  const reopenedWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
   repeatLaunch(normal);
   normal.window = await reopenedWindow;
   await normal.window
@@ -1234,6 +1297,7 @@ try {
     "client-delivery-acknowledged",
     "first-run-setup-journey",
     "settings-setup-reentry",
+    "mismatched-build-second-launch-rejected",
     "second-launch-reuses-single-instance",
     "window-close-reopen-keeps-runtime",
     "window-reopen-restores-runtime-connection",

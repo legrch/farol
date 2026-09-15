@@ -21,6 +21,14 @@ import {
   windowAllClosedAction,
 } from "./lifecycle-policy";
 import {
+  createInstanceRequest,
+  decideSecondInstance,
+  readBuildLaunchIdentity,
+  sameLaunchIdentity,
+  waitForInstanceAcknowledgement,
+  writeInstanceAcknowledgement,
+} from "./single-instance";
+import {
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
 } from "./window-placement";
@@ -28,6 +36,9 @@ import {
 const directory = __dirname;
 const productName = "Farol Next Preview";
 const bundleId = "local.farol.next.preview";
+const launchIdentity = readBuildLaunchIdentity(directory);
+const instanceRequest = createInstanceRequest(launchIdentity);
+const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
 const windowMode = parsePreviewWindowMode(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
 const demoTasks = [
@@ -631,6 +642,30 @@ function reopenWindow(): void {
   void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
 }
 
+async function handleSecondInstance(candidate: unknown): Promise<void> {
+  const decision = decideSecondInstance(launchIdentity, candidate);
+  if (!decision) return;
+  let status = decision.status;
+  if (status === "reopened") {
+    const outcome = await containWindowOpenFailure(
+      ensureWindow,
+      recoverWindowOpenFailure,
+    );
+    if (outcome === "failed") status = "reopen-failed";
+  }
+  try {
+    await writeInstanceAcknowledgement(
+      app.getPath("userData"),
+      candidate,
+      status,
+      launchIdentity,
+    );
+  } catch {
+    // The secondary process fails closed if this bounded acknowledgement is
+    // unavailable. Never reopen a mismatched build merely to make it exit 0.
+  }
+}
+
 function stopRuntime(): void {
   runtimeStopping = true;
   stopStreams();
@@ -640,7 +675,12 @@ function stopRuntime(): void {
 }
 
 async function main(): Promise<void> {
-  app.on("second-instance", reopenWindow);
+  app.on(
+    "second-instance",
+    (_event, _commandLine, _workingDirectory, candidate) => {
+      void handleSecondInstance(candidate);
+    },
+  );
   await app.whenReady();
   installIpc();
   await startRuntime();
@@ -652,5 +692,33 @@ async function main(): Promise<void> {
   });
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
-else void main().catch(() => app.exit(1));
+if (!app.requestSingleInstanceLock(instanceRequest)) {
+  void waitForInstanceAcknowledgement(app.getPath("userData"), instanceRequest)
+    .then((acknowledgement) => {
+      const accepted =
+        acknowledgement?.status === "reopened" &&
+        sameLaunchIdentity(launchIdentity, acknowledgement);
+      if (!accepted) {
+        const outcome =
+          acknowledgement?.status === "identity-mismatch" ||
+          acknowledgement?.status === "reopen-failed"
+            ? acknowledgement.status
+            : "unverified";
+        process.stderr.write(
+          "Farol Next refused the second launch because the running build could not be verified as this exact candidate.\n",
+        );
+        process.stderr.write(`${secondInstanceResultPrefix}${outcome}\n`);
+        app.quit();
+        return;
+      }
+      // Match Electron's graceful secondary-instance shutdown. A hard exit of
+      // the second macOS application process can hide the primary window that
+      // was just reopened.
+      process.stderr.write(`${secondInstanceResultPrefix}reopened\n`);
+      app.quit();
+    })
+    .catch(() => {
+      process.stderr.write(`${secondInstanceResultPrefix}unverified\n`);
+      app.quit();
+    });
+} else void main().catch(() => app.exit(1));

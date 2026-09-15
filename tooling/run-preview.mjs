@@ -12,6 +12,7 @@ import {
   ownerLaunchEnvironment,
   removeLaunchSnapshot,
 } from "./launch-snapshot.mjs";
+import { parseOwnerLaunchResult } from "./owner-launch-result.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -112,11 +113,22 @@ async function main() {
       `launching isolated verified candidate ${snapshot.appPath} from ${appPath}\n`,
     );
 
+    let launchOutput = "";
+    const capture = (chunk, destination) => {
+      destination.write(chunk);
+      if (launchOutput.length < 65_536) {
+        launchOutput += chunk
+          .toString("utf8")
+          .slice(0, 65_536 - launchOutput.length);
+      }
+    };
     const child = spawn(executable, [], {
       cwd: root,
       env: environment,
-      stdio: "inherit",
+      stdio: ["inherit", "pipe", "pipe"],
     });
+    child.stdout.on("data", (chunk) => capture(chunk, process.stdout));
+    child.stderr.on("data", (chunk) => capture(chunk, process.stderr));
     const forward = (signal) => {
       if (!child.killed) child.kill(signal);
     };
@@ -130,6 +142,12 @@ async function main() {
       });
     });
     if (code !== 0) throw new Error(`application exited with status ${code}`);
+    const ownerLaunchResult = parseOwnerLaunchResult(launchOutput);
+    if (ownerLaunchResult && ownerLaunchResult !== "reopened") {
+      throw new Error(
+        `running Farol Next instance rejected the exact candidate (${ownerLaunchResult}); quit it and launch again`,
+      );
+    }
   } finally {
     if (snapshot) await removeLaunchSnapshot(snapshot);
   }

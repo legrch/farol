@@ -47,7 +47,9 @@ The verified packaged candidate workflow copies the existing package into a priv
 isolated launch snapshot, verifies that final launch path, and launches only those
 verified bytes. It never builds, installs, updates, or activates either product, and
 it refuses a missing, dirty, stale, or digest-invalid package with the exact rebuild
-action.
+action. A second owner launch reopens the running app only after a nonce-bound
+acknowledgement proves that its source commit and tree digest match the exact
+candidate; a different or unverifiable running build is rejected.
 `task next:preview` is the separate development lane; it builds development bytes and
 is not artifact evidence. See [`docs/owner-preview.md`](docs/owner-preview.md) for
 controls and lifecycle.

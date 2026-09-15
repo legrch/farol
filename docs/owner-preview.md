@@ -47,9 +47,11 @@ is not evidence about the packaged candidate.
   tool payloads, paths, and bearer values.
 
 On macOS, closing the window leaves this preview application and its in-memory local
-runtime running. Launching it again or clicking its Dock icon reopens one window; it
-does not create a second instance. `Command+Q` quits the application and its exact
-utility process. The demo state is in memory and is not promised across Quit.
+runtime running. Launching the same exact build again or clicking its Dock icon
+reopens one window; it does not create a second instance. A different or unverifiable
+build is refused instead of silently opening the already-running bytes. `Command+Q`
+quits the application and its exact utility process. The demo state is in memory and
+is not promised across Quit.
 
 ## Product boundary
 
@@ -78,11 +80,13 @@ durable outside the checkout, run this owner action:
 task next:promote -- --destination "$HOME/Applications/Farol Next Preview.app" --apply
 ```
 
-The operation refuses any existing destination, copies into a newly claimed Next-only
-path, verifies the destination bytes against the source artifact digest, and writes
+The operation accepts only the fixed app slot directly below the owner's real,
+non-symlinked `$HOME/Applications`, refuses any existing destination, copies into a
+newly claimed Next-only path, verifies the destination bytes against the source
+artifact digest, and writes
 `$HOME/Applications/Farol Next Preview.app.receipt.json`. It never overwrites an
-application and never changes Legacy. This unsigned local Preview is not a signed,
-notarized, published, or independent-recipient release.
+application and never writes inside Legacy roots. This unsigned local Preview is not
+a signed, notarized, published, or independent-recipient release.
 
 If the copy is interrupted before the receipt exists, the exact Preview destination
 may be partial and remains fail-closed. After confirming the sibling receipt is absent,

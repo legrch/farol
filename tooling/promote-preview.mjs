@@ -8,6 +8,10 @@ import {
   assertExactSourceIdentity,
   candidatePaths,
 } from "./candidate-contract.mjs";
+import {
+  assertPromotionDestination,
+  preparePromotionParent,
+} from "./promotion-destination.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -88,16 +92,14 @@ async function main() {
     "PROMOTION_SOURCE_NOT_EXACT",
   );
   const source = canonicalAppPath;
-  const destination = path.resolve(
-    destinationOption ??
-      path.join(os.homedir(), "Applications/Farol Next Preview.app"),
-  );
-  const receipt = `${destination}.receipt.json`;
-  if (path.basename(destination) !== "Farol Next Preview.app") {
-    throw new Error("PROMOTION_DESTINATION_NAME_INVALID");
-  }
-  if (source === destination)
-    throw new Error("PROMOTION_DESTINATION_IS_SOURCE");
+  const home = os.homedir();
+  const { destination, parent, receipt } = assertPromotionDestination({
+    home,
+    source,
+    destination:
+      destinationOption ??
+      path.join(home, "Applications/Farol Next Preview.app"),
+  });
 
   const sourceVerification = verify(artifactFile, source);
   if (sourceVerification.status !== 0) {
@@ -134,12 +136,10 @@ async function main() {
     return;
   }
 
-  const parent = path.dirname(destination);
-  await fs.mkdir(parent, { recursive: true, mode: 0o755 });
-  const parentStat = await fs.lstat(parent);
-  if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) {
-    throw new Error("PROMOTION_PARENT_TYPE_INVALID");
-  }
+  await preparePromotionParent(home, parent);
+  if (await exists(destination))
+    throw new Error("PROMOTION_DESTINATION_EXISTS");
+  if (await exists(receipt)) throw new Error("PROMOTION_RECEIPT_EXISTS");
 
   let ownsDestination = false;
   try {
