@@ -35,6 +35,8 @@ describe("the executable architecture boundary", () => {
     ["external-in-pure-zone", "ARCH_PURE_EXTERNAL_IMPORT"],
     ["production-testkit", "ARCH_PRODUCTION_TESTKIT"],
     ["unclassified", "ARCH_UNCLASSIFIED"],
+    ["ui-to-module-infra", "ARCH_UI_TO_MODULE_INFRA"],
+    ["domain-to-kernel-app", "ARCH_LAYER_DIRECTION"],
   ] as const;
 
   for (const [fixture, code] of denied) {

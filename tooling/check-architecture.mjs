@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
 import process from "node:process";
+import { parse } from "@babel/parser";
 
 const extensions = [
   ".ts",
@@ -90,55 +91,137 @@ function resolveLocal(importer, specifier) {
 
 function importsFrom(file, violations) {
   const sourceText = fs.readFileSync(file, "utf8");
+  const sourceFile = parse(sourceText, {
+    sourceType: "unambiguous",
+    sourceFilename: file,
+    plugins: ["typescript", "jsx", "importAttributes"],
+  });
   const imports = new Set();
-  const staticPattern =
-    /\b(?:import|export)\s+(?:type\s+)?(?:[^;"']*?\s+from\s+)?["']([^"']+)["']/gu;
-  for (const match of sourceText.matchAll(staticPattern)) {
-    if (match[1]) imports.add(match[1]);
-  }
-  const dynamicPattern = /\bimport\s*\(([^)]*)\)/gu;
-  for (const match of sourceText.matchAll(dynamicPattern)) {
-    const expression = match[1]?.trim() ?? "";
-    const literal = /^(?:"([^"]+)"|'([^']+)')$/u.exec(expression);
-    const specifier = literal?.[1] ?? literal?.[2];
-    if (specifier) imports.add(specifier);
-    else
-      violations.push({
-        code: "ARCH_DYNAMIC_IMPORT",
-        file: relative(file),
-        detail: "dynamic import is not a string literal",
-      });
-  }
-  const requirePattern = /\b(?:require|module\.require)\s*\(([^)]*)\)/gu;
-  for (const match of sourceText.matchAll(requirePattern)) {
-    const expression = match[1]?.trim() ?? "";
-    const literal = /^(?:"([^"]+)"|'([^']+)')$/u.exec(expression);
-    const specifier = literal?.[1] ?? literal?.[2];
-    if (specifier) imports.add(specifier);
-    else
-      violations.push({
-        code: "ARCH_DYNAMIC_IMPORT",
-        file: relative(file),
-        detail: "dynamic require is not a string literal",
-      });
-  }
-
   const sourceClass = classify(file);
   const pure =
     (sourceClass.kind === "module" &&
       ["domain", "app", "contract"].includes(sourceClass.layer)) ||
     (sourceClass.kind === "kernel" &&
       ["domain", "app"].includes(sourceClass.layer));
-  if (pure) {
-    const bannedGlobals =
-      /\b(?:process|Buffer|document|window|HTMLElement|EventSource|WebSocket|fetch|setTimeout|setInterval)\b/u;
-    if (bannedGlobals.test(sourceText)) {
-      violations.push({
-        code: "ARCH_PURE_HOST_GLOBAL",
-        file: relative(file),
-        detail: "pure layer uses a host global",
-      });
+  const bannedGlobals = new Set([
+    "process",
+    "Buffer",
+    "globalThis",
+    "Bun",
+    "Deno",
+    "document",
+    "window",
+    "HTMLElement",
+    "EventSource",
+    "WebSocket",
+    "fetch",
+    "setTimeout",
+    "setInterval",
+    "eval",
+    "Function",
+  ]);
+  let hostGlobal = false;
+
+  function addCallSpecifier(argument, kind) {
+    if (argument?.type === "StringLiteral") {
+      imports.add(argument.value);
+      return;
     }
+    violations.push({
+      code: "ARCH_DYNAMIC_IMPORT",
+      file: relative(file),
+      detail: `dynamic ${kind} is not a string literal`,
+    });
+  }
+
+  function isNonReferenceIdentifier(node, parent, key) {
+    if (!parent) return false;
+    if (
+      (parent.type === "MemberExpression" ||
+        parent.type === "OptionalMemberExpression") &&
+      key === "property" &&
+      !parent.computed
+    ) {
+      return true;
+    }
+    if (
+      (parent.type === "ObjectProperty" ||
+        parent.type === "ObjectMethod" ||
+        parent.type === "ClassMethod" ||
+        parent.type === "ClassProperty") &&
+      key === "key" &&
+      !parent.computed
+    ) {
+      return true;
+    }
+    return (
+      key === "id" ||
+      key === "param" ||
+      key === "params" ||
+      key === "local" ||
+      key === "imported" ||
+      key === "exported" ||
+      key === "label"
+    );
+  }
+
+  function visit(node, parent = null, key = null) {
+    if (!node || typeof node !== "object") return;
+    if (
+      [
+        "ImportDeclaration",
+        "ExportNamedDeclaration",
+        "ExportAllDeclaration",
+      ].includes(node.type) &&
+      node.source?.type === "StringLiteral"
+    ) {
+      imports.add(node.source.value);
+    }
+    if (node.type === "ImportExpression") {
+      addCallSpecifier(node.source, "import");
+    }
+    if (node.type === "CallExpression") {
+      if (node.callee?.type === "Import") {
+        addCallSpecifier(node.arguments[0], "import");
+      } else if (
+        (node.callee?.type === "Identifier" &&
+          node.callee.name === "require") ||
+        (node.callee?.type === "MemberExpression" &&
+          node.callee.computed === false &&
+          node.callee.object?.type === "Identifier" &&
+          node.callee.object.name === "module" &&
+          node.callee.property?.type === "Identifier" &&
+          node.callee.property.name === "require")
+      ) {
+        addCallSpecifier(node.arguments[0], "require");
+      }
+    }
+    if (
+      pure &&
+      node.type === "Identifier" &&
+      bannedGlobals.has(node.name) &&
+      !isNonReferenceIdentifier(node, parent, key)
+    ) {
+      hostGlobal = true;
+    }
+    for (const [childKey, child] of Object.entries(node)) {
+      if (["loc", "start", "end", "extra", "errors"].includes(childKey))
+        continue;
+      if (Array.isArray(child)) {
+        for (const item of child) visit(item, node, childKey);
+      } else {
+        visit(child, node, childKey);
+      }
+    }
+  }
+  visit(sourceFile);
+
+  if (pure && hostGlobal) {
+    violations.push({
+      code: "ARCH_PURE_HOST_GLOBAL",
+      file: relative(file),
+      detail: "pure layer uses a host global",
+    });
   }
   return [...imports];
 }
@@ -148,6 +231,12 @@ function violationFor(source, target) {
     return null;
   if (source.kind === "module" && target.kind === "boot")
     return "ARCH_MODULE_TO_BOOT";
+  if (
+    source.kind === "ui" &&
+    target.kind === "module" &&
+    target.layer === "infra"
+  )
+    return "ARCH_UI_TO_MODULE_INFRA";
   if (source.kind === "kernel" && target.kind === "module")
     return "ARCH_KERNEL_TO_MODULE";
   if (
@@ -179,6 +268,12 @@ function violationFor(source, target) {
       return "ARCH_LAYER_DIRECTION";
   }
   if (source.kind === "module" && ["domain", "app"].includes(source.layer)) {
+    if (
+      source.layer === "domain" &&
+      target.kind === "kernel" &&
+      target.layer !== "domain"
+    )
+      return "ARCH_LAYER_DIRECTION";
     if (target.kind === "kernel" && target.layer === "infra")
       return "ARCH_LAYER_DIRECTION";
     if (target.kind === "mechanism") return "ARCH_LAYER_DIRECTION";
