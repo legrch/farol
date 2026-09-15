@@ -21,7 +21,12 @@ export class ComputerService {
   async execute(
     request: ComputerRequest,
   ): Promise<
-    Result<ComputerOutput, ComputerErrorCode | "COMPUTER_EXECUTION_FAILED">
+    Result<
+      ComputerOutput,
+      | ComputerErrorCode
+      | "COMPUTER_EXECUTION_FAILED"
+      | "COMPUTER_EXECUTION_CANCELLED"
+    >
   > {
     const authorized = authorizeComputerRequest(
       this.grant,

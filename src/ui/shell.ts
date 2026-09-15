@@ -34,6 +34,10 @@ const bootstrapSchema = z.strictObject({
 });
 
 const controlSuccessSchema = z.strictObject({ ok: z.literal(true) });
+const layoutSchema = z.strictObject({
+  section: z.enum(["browser", "computer", "activity", "settings"]),
+  taskId: z.string(),
+});
 
 type Bootstrap = z.infer<typeof bootstrapSchema>;
 type Section = "browser" | "computer" | "activity" | "settings";
@@ -54,6 +58,7 @@ declare global {
       layout(section: string, taskId: string): void;
       onRuntimeEvent(listener: (event: unknown) => void): () => void;
       onRuntimeState(listener: (status: unknown) => void): () => void;
+      onLayout(listener: (layout: unknown) => void): () => void;
     }>;
   }
 }
@@ -74,6 +79,7 @@ const taskEvents = new Map<string, ClientEventDto[]>();
 const activity: SafeActivity[] = [];
 const pendingRuntimeEvents: ClientEventDto[] = [];
 let pendingRuntimeStatus: RuntimeStatus | null = null;
+let pendingLayout: z.infer<typeof layoutSchema> | null = null;
 
 function statusFor(taskId: string): string {
   if (bootstrap.runtimeState !== "ready") {
@@ -228,7 +234,7 @@ function renderSettings(): void {
   );
 }
 
-function render(): void {
+function render(notifyHost = true): void {
   document.querySelectorAll<HTMLElement>(".nav-item").forEach((item) => {
     const active = item.dataset.section === section;
     item.classList.toggle("active", active);
@@ -244,7 +250,7 @@ function render(): void {
   renderComputer();
   renderActivity();
   renderSettings();
-  window.farolNext.layout(section, selectedTaskId);
+  if (notifyHost) window.farolNext.layout(section, selectedTaskId);
 }
 
 function selectTask(taskId: string): void {
@@ -293,6 +299,19 @@ function applyRuntimeStatus(status: RuntimeStatus): void {
 }
 
 async function start(): Promise<void> {
+  window.farolNext.onLayout((value) => {
+    const parsed = layoutSchema.safeParse(value);
+    if (!parsed.success) return;
+    if (!bootstrapReady) {
+      pendingLayout = parsed.data;
+      return;
+    }
+    if (!bootstrap.tasks.some((task) => task.taskId === parsed.data.taskId))
+      return;
+    section = parsed.data.section;
+    selectedTaskId = parsed.data.taskId;
+    render(false);
+  });
   window.farolNext.onRuntimeEvent((value) => {
     const parsed = ClientEventSchema.safeParse(value);
     if (!parsed.success) return;
@@ -340,6 +359,11 @@ async function start(): Promise<void> {
   bootstrapReady = true;
   if (pendingRuntimeStatus) applyRuntimeStatus(pendingRuntimeStatus);
   pendingRuntimeEvents.splice(0).forEach(recordEvent);
+  if (pendingLayout) {
+    section = pendingLayout.section;
+    selectedTaskId = pendingLayout.taskId;
+    pendingLayout = null;
+  }
   window.addEventListener("keydown", (event) => {
     if (event.metaKey && /^[1-4]$/u.test(event.key)) {
       event.preventDefault();

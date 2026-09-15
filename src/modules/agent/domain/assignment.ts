@@ -5,7 +5,10 @@ import {
 } from "../../../pkg/kernel/domain/result";
 
 export type AssignmentErrorCode =
-  "AGENT_CORRELATION" | "AGENT_ALREADY_STARTED" | "AGENT_TERMINAL";
+  | "AGENT_CORRELATION"
+  | "AGENT_ALREADY_STARTED"
+  | "AGENT_TERMINAL"
+  | "AGENT_ADMISSION_FAILED";
 
 export type AssignmentIdentity = Readonly<{
   assignmentId: string;
@@ -14,6 +17,7 @@ export type AssignmentIdentity = Readonly<{
 }>;
 
 export type ChildCorrelation = Readonly<{
+  assignmentId: string;
   ownerId: string;
   generation: number;
   childId: string;
@@ -40,6 +44,7 @@ function matches(
   correlation: ChildCorrelation,
 ): boolean {
   return (
+    assignment.identity.assignmentId === correlation.assignmentId &&
     assignment.identity.ownerId === correlation.ownerId &&
     assignment.identity.generation === correlation.generation
   );

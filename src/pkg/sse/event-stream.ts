@@ -5,6 +5,7 @@ type RetainedEvent<Event extends TaskEvent> = Readonly<{
   id: number;
   event: Event;
 }>;
+const noop = () => undefined;
 
 export class EventStream<Event extends TaskEvent> {
   private readonly history = new Map<string, RetainedEvent<Event>[]>();
@@ -54,12 +55,12 @@ export class EventStream<Event extends TaskEvent> {
     });
     if (!response.write(": farol-next\n\n")) {
       response.destroy();
-      return () => undefined;
+      return noop;
     }
     for (const retained of this.history.get(taskId) ?? []) {
       if (!response.write(this.encode(retained))) {
         response.destroy();
-        return () => undefined;
+        return noop;
       }
     }
     const subscribers =

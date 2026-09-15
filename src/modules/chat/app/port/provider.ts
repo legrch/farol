@@ -31,5 +31,6 @@ export interface ProviderSession {
 }
 
 export interface ChatProvider {
-  open(request: ProviderRequest): Promise<ProviderSession>;
+  /** Prepare a session without dispatching. Only submit_activated proves dispatch. */
+  prepare(request: ProviderRequest): Promise<ProviderSession>;
 }

@@ -1,13 +1,37 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+
+const gitEnvironment = Object.freeze({
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_OPTIONAL_LOCKS: "0",
+  LC_ALL: "C",
+});
 
 function git(repositoryRoot, arguments_, encoding = null) {
   return execFileSync("git", ["-C", repositoryRoot, ...arguments_], {
     encoding,
+    env: gitEnvironment,
   });
 }
 
-export function sourceIdentity(repositoryRoot, scope = "vnext") {
+function parseTree(tree) {
+  const entries = new Map();
+  for (const record of tree.toString("utf8").split("\0")) {
+    if (!record) continue;
+    const match = /^(\d+) (blob|commit) ([a-f0-9]+)\t(.+)$/u.exec(record);
+    if (!match?.[1] || !match[3] || !match[4]) {
+      throw new Error("SOURCE_TREE_RECORD_INVALID");
+    }
+    entries.set(match[4], { mode: match[1], objectId: match[3] });
+  }
+  return entries;
+}
+
+export function sourceSnapshot(repositoryRoot, scope = "vnext") {
   const commit = git(
     repositoryRoot,
     ["rev-parse", "--verify", "HEAD"],
@@ -24,6 +48,36 @@ export function sourceIdentity(repositoryRoot, scope = "vnext") {
   ]);
   if (tree.length === 0) throw new Error("SOURCE_TREE_EMPTY");
 
+  const entries = parseTree(tree);
+  let exact = true;
+  for (const [relative, entry] of entries) {
+    if (entry.mode !== "100644" && entry.mode !== "100755") {
+      exact = false;
+      continue;
+    }
+    const target = path.join(repositoryRoot, relative);
+    let stat;
+    try {
+      stat = fs.lstatSync(target);
+    } catch {
+      exact = false;
+      continue;
+    }
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      exact = false;
+      continue;
+    }
+    const expected = git(repositoryRoot, ["cat-file", "blob", entry.objectId]);
+    const actual = fs.readFileSync(target);
+    entry.bytes = expected;
+    if (!actual.equals(expected)) exact = false;
+  }
+
+  const indexFlags = git(repositoryRoot, ["ls-files", "-v", "-z", "--", scope]);
+  for (const record of indexFlags.toString("utf8").split("\0")) {
+    if (record && !record.startsWith("H ")) exact = false;
+  }
+
   const status = git(repositoryRoot, [
     "status",
     "--porcelain=v1",
@@ -32,12 +86,21 @@ export function sourceIdentity(repositoryRoot, scope = "vnext") {
     "--",
     scope,
   ]);
-  return {
+  const identity = {
     commit,
     treeDigest: createHash("sha256")
       .update("git-ls-tree-v1\0")
       .update(tree)
       .digest("hex"),
-    dirty: status.length > 0,
+    dirty: status.length > 0 || !exact,
   };
+  return { ...identity, entries };
+}
+
+export function sourceIdentity(repositoryRoot, scope = "vnext") {
+  const { entries: _entries, ...identity } = sourceSnapshot(
+    repositoryRoot,
+    scope,
+  );
+  return identity;
 }

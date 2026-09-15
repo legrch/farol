@@ -61,7 +61,7 @@ class ScriptedSession implements ProviderSession {
         text: " Its hidden view stayed alive.",
       };
     }
-    await this.controls.completion.wait();
+    if ((await this.controls.completion.wait()) === "cancelled") return;
     yield { kind: "completed" };
   }
 
@@ -87,7 +87,7 @@ export class ScriptedProvider implements ChatProvider {
     private readonly withComputer: boolean,
   ) {}
 
-  async open(request: ProviderRequest): Promise<ProviderSession> {
+  async prepare(request: ProviderRequest): Promise<ProviderSession> {
     const identity = {
       ownerId: request.ownerId,
       sessionId: request.sessionId,

@@ -25,6 +25,8 @@ import {
 export type RunTurnCommand = TurnIdentity & Readonly<{ prompt: string }>;
 
 export class RunTurn {
+  private readonly inFlight = new Map<string, Promise<Turn>>();
+
   constructor(
     private readonly provider: ChatProvider,
     private readonly computer: ComputerCapability,
@@ -34,9 +36,29 @@ export class RunTurn {
     private readonly clock: Clock,
   ) {}
 
-  async execute(command: RunTurnCommand): Promise<Turn> {
+  execute(command: RunTurnCommand): Promise<Turn> {
+    const key = JSON.stringify([
+      command.ownerId,
+      command.sessionId,
+      command.taskId,
+      command.turnId,
+      command.generation,
+    ]);
+    const existing = this.inFlight.get(key);
+    if (existing) return existing;
+    const execution = this.executeAdmitted(command).finally(() => {
+      this.inFlight.delete(key);
+    });
+    this.inFlight.set(key, execution);
+    return execution;
+  }
+
+  private async executeAdmitted(command: RunTurnCommand): Promise<Turn> {
     let turn = createTurn(command);
     try {
+      const admission = await this.turns.admit(turn);
+      if (admission.status === "existing") return admission.turn;
+      turn = admission.turn;
       await this.saveAndReport(turn, "phase");
     } catch {
       const failed = failTurn(turn, "local_persistence_failed_before_dispatch");
@@ -46,13 +68,14 @@ export class RunTurn {
     }
     let dispatched = false;
     try {
-      const session = await this.provider.open(command);
+      const session = await this.provider.prepare(command);
       for await (const event of session.events()) {
         if (event.kind === "submit_activated") dispatched = true;
         const next = await this.applyEvent(
           turn,
           event,
           session.submitComputerResult.bind(session),
+          dispatched,
         );
         turn = next;
         if (turn.terminal) return turn;
@@ -79,14 +102,15 @@ export class RunTurn {
     turn: Turn,
     event: ProviderEvent,
     submitComputerResult: ProviderSession["submitComputerResult"],
+    dispatched: boolean,
   ): Promise<Turn> {
     if (event.kind === "submit_activated") {
       const next = activateSubmission(turn);
-      return this.requireTransition(next, turn, "phase");
+      return this.requireTransition(next, turn, "phase", null, dispatched);
     }
     if (event.kind === "accepted") {
       const next = acceptSubmission(turn);
-      return this.requireTransition(next, turn, "phase");
+      return this.requireTransition(next, turn, "phase", null, dispatched);
     }
     if (event.kind === "delta") {
       const next = appendDelta(turn, event.sequence);
@@ -95,6 +119,7 @@ export class RunTurn {
         turn,
         "delta_observed",
         event.sequence,
+        dispatched,
       );
       await this.deliver(changed, {
         ...changed.identity,
@@ -111,14 +136,15 @@ export class RunTurn {
         event,
         this.computer,
         submitComputerResult,
+        dispatched,
       );
     }
     if (event.kind === "completed") {
       const next = completeTurn(turn);
-      return this.requireTransition(next, turn, "terminal");
+      return this.requireTransition(next, turn, "terminal", null, dispatched);
     }
     const failed = failTurn(turn, event.code);
-    return this.requireTransition(failed, turn, "terminal");
+    return this.requireTransition(failed, turn, "terminal", null, dispatched);
   }
 
   private async submitComputer(
@@ -126,12 +152,15 @@ export class RunTurn {
     event: Extract<ProviderEvent, { kind: "computer_call" }>,
     computer: ComputerCapability,
     submitResult: ProviderSession["submitComputerResult"],
+    dispatched: boolean,
   ): Promise<Turn> {
     const waiting = requestComputer(turn, event.callId);
     const changed = await this.requireTransition(
       waiting,
       turn,
       "computer_requested",
+      null,
+      dispatched,
     );
     await this.deliver(changed, {
       ...changed.identity,
@@ -147,13 +176,25 @@ export class RunTurn {
       target: event.target,
     });
     if (!result.ok) {
-      const failed = failTurn(changed, result.error.code);
-      return this.requireTransition(failed, changed, "terminal");
+      const unknown = markOutcomeUnknown(changed, result.error.code);
+      return this.requireTransition(
+        unknown,
+        changed,
+        "terminal",
+        null,
+        dispatched,
+      );
     }
     const submitted = await submitResult(result.value);
     if (!submitted.ok) {
       const unknown = markOutcomeUnknown(changed, submitted.error.code);
-      return this.requireTransition(unknown, changed, "terminal");
+      return this.requireTransition(
+        unknown,
+        changed,
+        "terminal",
+        null,
+        dispatched,
+      );
     }
     const resumed = resolveComputer(changed, {
       ...changed.identity,
@@ -163,6 +204,8 @@ export class RunTurn {
       resumed,
       changed,
       "computer_completed",
+      null,
+      dispatched,
     );
     await this.deliver(running, {
       ...running.identity,
@@ -183,9 +226,12 @@ export class RunTurn {
       | "computer_completed"
       | "terminal",
     sequence: number | null = null,
+    dispatched = false,
   ): Promise<Turn> {
     if (!result.ok) {
-      const failed = failTurn(previous, result.error.code);
+      const failed = dispatched
+        ? markOutcomeUnknown(previous, result.error.code)
+        : failTurn(previous, result.error.code);
       if (!failed.ok) return previous;
       await this.saveAndReport(failed.value, "terminal");
       return failed.value;

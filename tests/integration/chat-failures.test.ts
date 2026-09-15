@@ -54,9 +54,9 @@ function harness(
   turns: TurnRepository = new InMemoryTurns(),
 ) {
   const events: ClientEvent[] = [];
-  const open = vi.spyOn(provider, "open");
+  const prepare = vi.spyOn(provider, "prepare");
   return {
-    open,
+    prepare,
     events,
     run: new RunTurn(
       provider,
@@ -73,11 +73,12 @@ describe("Chat failure semantics", () => {
   it("keeps known provider completion when terminal client delivery fails", async () => {
     const saved: Turn[] = [];
     const turns: TurnRepository = {
+      admit: async (turn) => ({ status: "admitted", turn }),
       save: async (turn) => void saved.push(turn),
       get: async () => null,
     };
     const provider: ChatProvider = {
-      open: async () =>
+      prepare: async () =>
         sessionFrom(async function* () {
           yield { kind: "submit_activated" };
           yield { kind: "accepted" };
@@ -117,9 +118,9 @@ describe("Chat failure semantics", () => {
     });
   });
 
-  it("classifies provider-open failure before dispatch without retry", async () => {
+  it("classifies provider-prepare failure before dispatch without retry", async () => {
     const provider: ChatProvider = {
-      open: vi.fn().mockRejectedValue(new Error("provider unavailable")),
+      prepare: vi.fn().mockRejectedValue(new Error("provider unavailable")),
     };
     const test = harness(provider);
     await expect(test.run.execute(command)).resolves.toMatchObject({
@@ -127,7 +128,7 @@ describe("Chat failure semantics", () => {
       terminal: true,
       terminalReason: "provider_not_dispatched",
     });
-    expect(test.open).toHaveBeenCalledTimes(1);
+    expect(test.prepare).toHaveBeenCalledTimes(1);
     expect(test.events.at(-1)).toMatchObject({
       kind: "turn.terminal",
       phase: "failed",
@@ -136,7 +137,7 @@ describe("Chat failure semantics", () => {
 
   it("tombstones a stream that ends or throws after dispatch", async () => {
     const ended = harness({
-      open: async () =>
+      prepare: async () =>
         sessionFrom(async function* () {
           yield { kind: "submit_activated" };
           yield { kind: "accepted" };
@@ -148,7 +149,7 @@ describe("Chat failure semantics", () => {
     });
 
     const thrown = harness({
-      open: async () =>
+      prepare: async () =>
         sessionFrom(async function* () {
           yield { kind: "submit_activated" };
           throw new Error("connection lost");
@@ -162,7 +163,7 @@ describe("Chat failure semantics", () => {
 
   it("fails a stream that ends before dispatch without forging a terminal prepared state", async () => {
     const test = harness({
-      open: async () => sessionFrom(async function* () {}),
+      prepare: async () => sessionFrom(async function* () {}),
     });
 
     await expect(test.run.execute(command)).resolves.toMatchObject({
@@ -170,7 +171,7 @@ describe("Chat failure semantics", () => {
       terminal: true,
       terminalReason: "provider_not_dispatched",
     });
-    expect(test.open).toHaveBeenCalledTimes(1);
+    expect(test.prepare).toHaveBeenCalledTimes(1);
     expect(test.events.at(-1)).toMatchObject({
       kind: "turn.terminal",
       phase: "failed",
@@ -180,7 +181,7 @@ describe("Chat failure semantics", () => {
 
   it("turns invalid provider order and explicit provider failure into terminal failure", async () => {
     const invalid = harness({
-      open: async () =>
+      prepare: async () =>
         sessionFrom(async function* () {
           yield { kind: "accepted" };
         }),
@@ -191,7 +192,7 @@ describe("Chat failure semantics", () => {
     });
 
     const explicit = harness({
-      open: async () =>
+      prepare: async () =>
         sessionFrom(async function* () {
           yield { kind: "submit_activated" };
           yield { kind: "accepted" };
@@ -204,11 +205,11 @@ describe("Chat failure semantics", () => {
     });
   });
 
-  it("stops the exact turn when Computer refuses before result submission", async () => {
+  it("tombstones the exact turn when Computer refuses after provider dispatch", async () => {
     const submitted = vi.fn<ProviderSession["submitComputerResult"]>();
     const test = harness(
       {
-        open: async () => ({
+        prepare: async () => ({
           async *events() {
             yield { kind: "submit_activated" } as const;
             yield { kind: "accepted" } as const;
@@ -226,17 +227,40 @@ describe("Chat failure semantics", () => {
       failure("COMPUTER_FIXTURE_DENIED"),
     );
     await expect(test.run.execute(command)).resolves.toMatchObject({
-      phase: "failed",
+      phase: "outcome_unknown",
       terminalReason: "COMPUTER_FIXTURE_DENIED",
     });
     expect(submitted).not.toHaveBeenCalled();
   });
 
+  it("atomically admits one provider dispatch for a duplicate Turn identity", async () => {
+    const provider: ChatProvider = {
+      prepare: vi.fn().mockImplementation(async () =>
+        sessionFrom(async function* () {
+          yield { kind: "submit_activated" };
+          yield { kind: "accepted" };
+          yield { kind: "delta", sequence: 1, text: "Only once" };
+          yield { kind: "completed" };
+        }),
+      ),
+    };
+    const test = harness(provider);
+
+    const [first, duplicate] = await Promise.all([
+      test.run.execute(command),
+      test.run.execute(command),
+    ]);
+
+    expect(first).toEqual(duplicate);
+    expect(test.prepare).toHaveBeenCalledTimes(1);
+  });
+
   it("does not dispatch when the initial Turn cannot be persisted", async () => {
     const provider: ChatProvider = {
-      open: vi.fn().mockRejectedValue(new Error("must not dispatch")),
+      prepare: vi.fn().mockRejectedValue(new Error("must not dispatch")),
     };
     const turns: TurnRepository = {
+      admit: vi.fn().mockRejectedValue(new Error("persistence unavailable")),
       save: vi.fn().mockRejectedValue(new Error("persistence unavailable")),
       get: vi.fn().mockResolvedValue(null),
     };
@@ -246,7 +270,7 @@ describe("Chat failure semantics", () => {
       terminal: true,
       terminalReason: "local_persistence_failed_before_dispatch",
     });
-    expect(test.open).not.toHaveBeenCalled();
+    expect(test.prepare).not.toHaveBeenCalled();
   });
 
   it("returns outcome-unknown without replay when persistence fails after dispatch", async () => {
@@ -254,9 +278,15 @@ describe("Chat failure semantics", () => {
       yield { kind: "submit_activated" };
       yield { kind: "accepted" };
     });
-    const provider: ChatProvider = { open: vi.fn().mockResolvedValue(session) };
+    const provider: ChatProvider = {
+      prepare: vi.fn().mockResolvedValue(session),
+    };
     let saves = 0;
     const turns: TurnRepository = {
+      admit: vi.fn().mockImplementation(async (turn: Turn) => ({
+        status: "admitted" as const,
+        turn,
+      })),
       save: vi.fn().mockImplementation(async () => {
         saves += 1;
         if (saves > 1) throw new Error("persistence unavailable");
@@ -269,6 +299,6 @@ describe("Chat failure semantics", () => {
       terminal: true,
       terminalReason: "provider_outcome_unknown",
     });
-    expect(test.open).toHaveBeenCalledTimes(1);
+    expect(test.prepare).toHaveBeenCalledTimes(1);
   });
 });

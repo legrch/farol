@@ -7,8 +7,23 @@ function escapeHtml(value: string): string {
     .replaceAll("'", "&#039;");
 }
 
-export function taskPage(taskId: string, label: string, token: string): string {
-  const safeTask = JSON.stringify(taskId);
+type TaskPageIdentity = Readonly<{
+  ownerId: string;
+  sessionId: string;
+  taskId: string;
+  turnId: string;
+  generation: number;
+  label: string;
+}>;
+
+export function taskPage(task: TaskPageIdentity, token: string): string {
+  const safeIdentity = JSON.stringify({
+    ownerId: task.ownerId,
+    sessionId: task.sessionId,
+    taskId: task.taskId,
+    turnId: task.turnId,
+    generation: task.generation,
+  });
   const safeToken = JSON.stringify(token);
   return `<!doctype html>
 <html lang="en">
@@ -16,7 +31,7 @@ export function taskPage(taskId: string, label: string, token: string): string {
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src http://127.0.0.1:*">
-  <title>${escapeHtml(label)}</title>
+  <title>${escapeHtml(task.label)}</title>
   <style>
     :root { color-scheme: dark; font-family: "Avenir Next", system-ui, sans-serif; background: #10202a; color: #dde8e6; }
     body { margin: 0; padding: 34px clamp(28px, 5vw, 70px); min-height: 100vh; box-sizing: border-box; }
@@ -29,18 +44,18 @@ export function taskPage(taskId: string, label: string, token: string): string {
     body[data-failed="true"] .dot { background: #e37369; box-shadow: none; }
   </style>
 </head>
-<body data-task-id=${JSON.stringify(taskId)} data-delta-count="0" data-terminal="false">
-  <div class="eyeline">Isolated local fixture · ${escapeHtml(taskId)}</div>
-  <h1>${escapeHtml(label)}</h1>
+<body data-task-id=${JSON.stringify(task.taskId)} data-delta-count="0" data-terminal="false">
+  <div class="eyeline">Isolated local fixture · ${escapeHtml(task.taskId)}</div>
+  <h1>${escapeHtml(task.label)}</h1>
   <main class="answer" id="answer" aria-live="polite"></main>
   <div class="status"><span class="dot"></span><span id="status">Connecting to local stream…</span></div>
   <script>
-    const taskId = ${safeTask};
+    const identity = ${safeIdentity};
     const token = ${safeToken};
     const answer = document.getElementById("answer");
     const status = document.getElementById("status");
     let carry = "";
-    fetch("/events/" + encodeURIComponent(taskId), { headers: { authorization: "Bearer " + token } })
+    fetch("/events/" + encodeURIComponent(identity.taskId), { headers: { authorization: "Bearer " + token } })
       .then(async (response) => {
         if (!response.ok || !response.body) throw new Error("stream unavailable");
         const reader = response.body.getReader();
@@ -55,6 +70,9 @@ export function taskPage(taskId: string, label: string, token: string): string {
             const data = frame.split("\\n").find((line) => line.startsWith("data: "));
             if (!data) continue;
             const event = JSON.parse(data.slice(6));
+            if (event.ownerId !== identity.ownerId || event.sessionId !== identity.sessionId || event.taskId !== identity.taskId || event.turnId !== identity.turnId || event.generation !== identity.generation) {
+              throw new Error("foreign event");
+            }
             if (event.kind === "text.delta") {
               answer.textContent += event.text;
               document.body.dataset.deltaCount = String(Number(document.body.dataset.deltaCount) + 1);

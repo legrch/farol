@@ -7,31 +7,42 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import { sourceIdentity } from "../../tooling/source-identity.mjs";
 
 const root = process.cwd();
-const appPath = path.join(root, "dist/package/Farol Next Preview.app");
-const executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 const evidenceRoot = path.join(root, "artifacts/e2e");
-const artifact = JSON.parse(
-  await fs.readFile(path.join(root, "dist/package/artifact.json"), "utf8"),
-);
-if (artifact.sourceDirty && !process.argv.includes("--allow-dirty")) {
-  throw new Error(
-    "E2E_DIRTY_ARTIFACT: rebuild from the exact committed source",
+const metadataPath = path.join(root, "dist/package/artifact.json");
+
+function verifyArtifact(candidateMetadataPath) {
+  return spawnSync(
+    process.execPath,
+    [
+      path.join(root, "tooling/verify-package.mjs"),
+      "--artifact",
+      candidateMetadataPath,
+    ],
+    { cwd: root, encoding: "utf8" },
   );
 }
+
+const artifact = JSON.parse(await fs.readFile(metadataPath, "utf8"));
+const verifiedArtifact = verifyArtifact(metadataPath);
+assert.equal(
+  verifiedArtifact.status,
+  0,
+  `${verifiedArtifact.stdout}${verifiedArtifact.stderr}`,
+);
+const expectedSource = sourceIdentity(path.resolve(root, ".."), "vnext");
+assert.equal(expectedSource.dirty, false, "E2E_SOURCE_NOT_HEAD_EXACT");
+assert.equal(artifact.sourceDirty, false, "E2E_DIRTY_ARTIFACT");
+assert.equal(artifact.sourceCommit, expectedSource.commit);
+assert.equal(artifact.sourceTreeDigest, expectedSource.treeDigest);
+const appPath = path.resolve(artifact.artifactPath);
+const executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 await fs.rm(evidenceRoot, { recursive: true, force: true });
 await fs.mkdir(evidenceRoot, { recursive: true });
 
 const cases = [];
-
-function verifyArtifact(metadataPath) {
-  return spawnSync(
-    process.execPath,
-    [path.join(root, "tooling/verify-package.mjs"), "--artifact", metadataPath],
-    { cwd: root, encoding: "utf8" },
-  );
-}
 
 const corruptRoot = await fs.mkdtemp(
   path.join(os.tmpdir(), "farol-next-corruption-"),
@@ -281,6 +292,60 @@ async function proveTaskEgressDenied(application) {
   }
 }
 
+async function proveTaskCapabilityIsolation(application) {
+  const result = await application.evaluate(async ({ webContents }) => {
+    const contents = webContents
+      .getAllWebContents()
+      .find((candidate) => candidate.getURL().endsWith("/task/task-atlantic"));
+    if (!contents) throw new Error("TASK_SURFACE_MISSING");
+    return contents.executeJavaScript(`(async () => {
+      const source = [...document.scripts].map((script) => script.textContent || "").join("\\n");
+      const encoded = /const token = ("[^"]+");/.exec(source)?.[1];
+      if (!encoded) throw new Error("TASK_READ_TOKEN_MISSING");
+      const taskToken = JSON.parse(encoded);
+      const read = await fetch("/events/task-harbor", {
+        headers: { authorization: "Bearer " + taskToken }
+      });
+      const control = await fetch("/control/task-harbor/release-completion", {
+        method: "POST",
+        headers: { authorization: "Bearer " + taskToken }
+      });
+      return {
+        readStatus: read.status,
+        controlStatus: control.status,
+        privilegedBridge: typeof window.farolNext
+      };
+    })()`);
+  });
+  assert.deepEqual(result, {
+    readStatus: 401,
+    controlStatus: 401,
+    privilegedBridge: "undefined",
+  });
+}
+
+async function sendShortcutFromTask(application, taskId) {
+  await application.evaluate(({ webContents }, expectedTaskId) => {
+    const contents = webContents
+      .getAllWebContents()
+      .find((candidate) =>
+        candidate.getURL().endsWith(`/task/${expectedTaskId}`),
+      );
+    if (!contents) throw new Error("TASK_SURFACE_MISSING");
+    contents.focus();
+    contents.sendInputEvent({
+      type: "keyDown",
+      keyCode: "Tab",
+      modifiers: ["control"],
+    });
+    contents.sendInputEvent({
+      type: "keyUp",
+      keyCode: "Tab",
+      modifiers: ["control"],
+    });
+  }, taskId);
+}
+
 const normal = await launch();
 try {
   assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
@@ -323,6 +388,7 @@ try {
     "first delta before tool approval",
   );
   await proveTaskEgressDenied(normal.application);
+  await proveTaskCapabilityIsolation(normal.application);
   await captureTask(
     normal.application,
     "task-atlantic",
@@ -425,13 +491,14 @@ try {
   });
 
   await normal.window.keyboard.press("Meta+1");
-  await normal.window.keyboard.press("Control+Tab");
+  await sendShortcutFromTask(normal.application, "task-atlantic");
   await normal.window
     .locator('[data-task-id="task-harbor"][aria-selected="true"]')
     .waitFor();
   cases.push(
     "isolated-state-root",
     "task-network-default-deny",
+    "task-capability-isolation",
     "two-tabs-independent",
     "incremental-before-terminal",
     "computer-exact-correlation",
@@ -502,7 +569,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 50));
   }
   assert.ok(utilityPid !== null, "UTILITY_PROCESS_NOT_FOUND");
-  process.kill(utilityPid, "SIGTERM");
+  process.kill(utilityPid, "SIGKILL");
   await processDeath.window
     .locator("#runtime-pill")
     .getByText("failed")
@@ -514,7 +581,7 @@ try {
   await processDeath.window.screenshot({
     path: path.join(evidenceRoot, "process-death-wide.png"),
   });
-  cases.push("utility-process-death-state");
+  cases.push("utility-process-sigkill-state");
 } finally {
   await close(processDeath);
 }

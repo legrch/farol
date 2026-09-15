@@ -4,6 +4,39 @@ import path from "node:path";
 
 export async function treeDigest(directory) {
   const hash = createHash("sha256");
+  const root = await fs.realpath(directory);
+
+  async function containedSymlink(target) {
+    const link = await fs.readlink(target);
+    if (path.isAbsolute(link)) {
+      throw new Error("ARTIFACT_SYMLINK_ESCAPES_ROOT");
+    }
+    const parent = await fs.realpath(path.dirname(target));
+    const lexical = path.resolve(parent, link);
+    const lexicalRelative = path.relative(root, lexical);
+    if (
+      path.isAbsolute(lexicalRelative) ||
+      lexicalRelative === ".." ||
+      lexicalRelative.startsWith(`..${path.sep}`)
+    ) {
+      throw new Error("ARTIFACT_SYMLINK_ESCAPES_ROOT");
+    }
+    let resolved;
+    try {
+      resolved = await fs.realpath(target);
+    } catch {
+      throw new Error("ARTIFACT_SYMLINK_TARGET_INVALID");
+    }
+    const relative = path.relative(root, resolved);
+    if (
+      path.isAbsolute(relative) ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`)
+    ) {
+      throw new Error("ARTIFACT_SYMLINK_ESCAPES_ROOT");
+    }
+    return link;
+  }
 
   async function walk(current) {
     const entries = await fs.readdir(current, { withFileTypes: true });
@@ -31,7 +64,7 @@ export async function treeDigest(directory) {
       hash.update("\0");
       hash.update(String(stat.mode & 0o777));
       hash.update("\0");
-      if (entry.isSymbolicLink()) hash.update(await fs.readlink(target));
+      if (entry.isSymbolicLink()) hash.update(await containedSymlink(target));
       else if (entry.isDirectory()) await walk(target);
       else hash.update(await fs.readFile(target));
       hash.update("\0");

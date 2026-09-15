@@ -19,16 +19,20 @@ const productName = "Farol Next Preview";
 const bundleId = "local.farol.next.preview";
 const ownerTasks = [
   {
+    ownerId: "owner-local-preview",
     taskId: "task-atlantic",
     sessionId: "session-atlantic",
     turnId: "turn-atlantic-1",
+    generation: 1,
     label: "Atlantic workspace check",
     hasComputer: true,
   },
   {
+    ownerId: "owner-local-preview",
     taskId: "task-harbor",
     sessionId: "session-harbor",
     turnId: "turn-harbor-1",
+    generation: 1,
     label: "Harbor research stream",
     hasComputer: false,
   },
@@ -42,10 +46,13 @@ const readySchema = z.strictObject({
   tasks: z.array(
     z.strictObject({
       taskId: z.string(),
+      ownerId: z.string(),
       sessionId: z.string(),
       turnId: z.string(),
+      generation: z.number().int().nonnegative(),
       label: z.string(),
       hasComputer: z.boolean(),
+      readToken: z.string().min(32),
     }),
   ),
   embeddedNode: z.string(),
@@ -76,6 +83,10 @@ let section: Section = "browser";
 let selectedTaskId: string = ownerTasks[0].taskId;
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers: AbortController[] = [];
+const pendingComputer = new Map<
+  string,
+  Extract<z.infer<typeof ClientEventSchema>, { kind: "computer.requested" }>
+>();
 
 function runtimeBase(): string | null {
   return runtime ? `http://127.0.0.1:${runtime.port}` : null;
@@ -91,7 +102,14 @@ function bootstrap() {
     runtimeIdentity: runtime?.identity ?? null,
     embeddedNode: runtime?.embeddedNode ?? null,
     embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
-    tasks: runtime?.tasks ?? ownerTasks,
+    tasks: (runtime?.tasks ?? ownerTasks).map(
+      ({ ownerId: _ownerId, generation: _generation, ...task }) => {
+        const { readToken: _readToken, ...safeTask } = task as typeof task & {
+          readToken?: string;
+        };
+        return safeTask;
+      },
+    ),
     partition: "persist:farol-next-preview",
     updateChannel: "local-preview-only",
     nativeFilesystem: false,
@@ -132,6 +150,7 @@ function handleRuntimeExit(code: number | null): void {
   runtimeError =
     code === 0 ? "RUNTIME_PROCESS_EXITED" : "RUNTIME_PROCESS_FAILED";
   stopStreams();
+  pendingComputer.clear();
   hideTaskViews();
   publishRuntimeStatus();
 }
@@ -173,6 +192,27 @@ async function startRuntime(): Promise<void> {
       child.on("message", (message) => {
         const parsed = readySchema.safeParse(message);
         if (!parsed.success || settled) return;
+        const exactTasks =
+          parsed.data.tasks.length === ownerTasks.length &&
+          parsed.data.tasks.every((task, index) => {
+            const expected = ownerTasks[index];
+            return (
+              expected !== undefined &&
+              task.ownerId === expected.ownerId &&
+              task.sessionId === expected.sessionId &&
+              task.taskId === expected.taskId &&
+              task.turnId === expected.turnId &&
+              task.generation === expected.generation &&
+              task.label === expected.label &&
+              task.hasComputer === expected.hasComputer
+            );
+          });
+        if (!exactTasks) {
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error("RUNTIME_TASK_MANIFEST_MISMATCH"));
+          return;
+        }
         settled = true;
         clearTimeout(timer);
         resolve(parsed.data);
@@ -279,21 +319,21 @@ async function createTaskViews(): Promise<void> {
     await view.webContents.loadURL(
       `${base}/task/${encodeURIComponent(task.taskId)}`,
       {
-        extraHeaders: `Authorization: Bearer ${runtime.token}\n`,
+        extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
       },
     );
   }
   applyLayout();
 }
 
-async function consumeSse(taskId: string): Promise<void> {
+async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
   if (!runtime || !window) return;
   const controller = new AbortController();
   streamControllers.push(controller);
   const response = await fetch(
-    `http://127.0.0.1:${runtime.port}/events/${encodeURIComponent(taskId)}`,
+    `http://127.0.0.1:${runtime.port}/events/${encodeURIComponent(task.taskId)}`,
     {
-      headers: { authorization: `Bearer ${runtime.token}` },
+      headers: { authorization: `Bearer ${task.readToken}` },
       signal: controller.signal,
     },
   );
@@ -319,17 +359,46 @@ async function consumeSse(taskId: string): Promise<void> {
       if (!data) continue;
       const parsed = ClientEventSchema.safeParse(JSON.parse(data));
       if (!parsed.success) throw new Error("RUNTIME_EVENT_INVALID");
+      if (
+        parsed.data.ownerId !== task.ownerId ||
+        parsed.data.sessionId !== task.sessionId ||
+        parsed.data.taskId !== task.taskId ||
+        parsed.data.turnId !== task.turnId ||
+        parsed.data.generation !== task.generation
+      ) {
+        throw new Error("RUNTIME_EVENT_CORRELATION");
+      }
+      if (parsed.data.kind === "computer.requested") {
+        pendingComputer.set(task.taskId, parsed.data);
+      } else if (
+        parsed.data.kind === "computer.completed" ||
+        parsed.data.kind === "turn.terminal"
+      ) {
+        pendingComputer.delete(task.taskId);
+      }
       window?.webContents.send(channels.runtimeEvent, parsed.data);
     }
   }
 }
 
-async function runtimeJson(pathname: string, method = "GET"): Promise<unknown> {
+async function runtimeJson(
+  pathname: string,
+  method = "GET",
+  body?: unknown,
+): Promise<unknown> {
   if (!runtime) return { error: "RUNTIME_OFFLINE" };
-  const response = await fetch(`http://127.0.0.1:${runtime.port}${pathname}`, {
+  const options: RequestInit = {
     method,
-    headers: { authorization: `Bearer ${runtime.token}` },
-  });
+    headers: {
+      authorization: `Bearer ${runtime.token}`,
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+    },
+  };
+  if (body !== undefined) options.body = JSON.stringify(body);
+  const response = await fetch(
+    `http://127.0.0.1:${runtime.port}${pathname}`,
+    options,
+  );
   if (response.status === 204) return { ok: true };
   const value = (await response.json()) as unknown;
   return response.ok ? value : { ok: false, status: response.status, value };
@@ -356,9 +425,29 @@ function installIpc(): void {
     ) {
       return { error: "IPC_CONTROL_INVALID" };
     }
+    const task = runtime?.tasks.find(
+      (candidate) => candidate.taskId === parsed.data.taskId,
+    );
+    if (!task) return { error: "RUNTIME_OFFLINE" };
+    const correlation =
+      parsed.data.action === "release-tool"
+        ? pendingComputer.get(task.taskId)
+        : { ...task, callId: null };
+    if (!correlation) return { error: "CONTROL_NOT_PENDING" };
     return runtimeJson(
       `/control/${encodeURIComponent(parsed.data.taskId)}/${parsed.data.action}`,
       "POST",
+      {
+        ownerId: correlation.ownerId,
+        sessionId: correlation.sessionId,
+        taskId: correlation.taskId,
+        turnId: correlation.turnId,
+        generation: correlation.generation,
+        callId:
+          "callId" in correlation && typeof correlation.callId === "string"
+            ? correlation.callId
+            : null,
+      },
     );
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
@@ -407,7 +496,7 @@ async function createWindow(): Promise<void> {
   await window.loadFile(path.join(directory, "shell.html"));
   await createTaskViews();
   for (const task of runtime?.tasks ?? []) {
-    void consumeSse(task.taskId).catch((error: unknown) => {
+    void consumeSse(task).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
       if (runtimeState !== "ready") return;
       runtimeState = "failed";

@@ -5,6 +5,7 @@ import {
 } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { once } from "node:events";
+import { z } from "zod";
 import { DeferredGate } from "../pkg/async/deferred-gate";
 import { EventStream } from "../pkg/sse/event-stream";
 import { SystemClock } from "../pkg/kernel/infra/system-clock";
@@ -25,11 +26,14 @@ import { taskPage } from "../ui/task-page";
 export type PreviewScenario = FixtureScenario;
 
 export type PreviewTask = Readonly<{
+  ownerId: string;
   taskId: string;
   sessionId: string;
   turnId: string;
+  generation: number;
   label: string;
   hasComputer: boolean;
+  readToken: string;
 }>;
 
 export type PreviewRuntime = Readonly<{
@@ -37,25 +41,51 @@ export type PreviewRuntime = Readonly<{
   port: number;
   token: string;
   tasks: readonly PreviewTask[];
-  close(): Promise<void>;
+  close(): Promise<PreviewCloseReceipt>;
+}>;
+
+export type PreviewCloseReceipt = Readonly<{
+  tasks: readonly Readonly<{
+    taskId: string;
+    phase: string | null;
+    terminal: boolean | null;
+  }>[];
+  activityKinds: readonly string[];
 }>;
 
 const tasks: readonly PreviewTask[] = [
   {
+    ownerId: "owner-local-preview",
     taskId: "task-atlantic",
     sessionId: "session-atlantic",
     turnId: "turn-atlantic-1",
+    generation: 1,
     label: "Atlantic workspace check",
     hasComputer: true,
+    readToken: "",
   },
   {
+    ownerId: "owner-local-preview",
     taskId: "task-harbor",
     sessionId: "session-harbor",
     turnId: "turn-harbor-1",
+    generation: 1,
     label: "Harbor research stream",
     hasComputer: false,
+    readToken: "",
   },
 ];
+
+const correlationSchema = z.strictObject({
+  ownerId: z.string().min(1),
+  sessionId: z.string().min(1),
+  taskId: z.string().min(1),
+  turnId: z.string().min(1),
+  generation: z.number().int().nonnegative(),
+  callId: z.string().min(1).nullable(),
+});
+
+type ControlCorrelation = z.infer<typeof correlationSchema>;
 
 function authorized(request: IncomingMessage, token: string): boolean {
   const header = request.headers.authorization;
@@ -82,20 +112,58 @@ function noContent(response: ServerResponse): void {
   response.end();
 }
 
+async function requestJson(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += value.length;
+    if (length > 4_096) throw new Error("RUNTIME_BODY_TOO_LARGE");
+    chunks.push(value);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+function sameCorrelation(
+  received: ControlCorrelation,
+  expected: ControlCorrelation,
+): boolean {
+  return (
+    received.ownerId === expected.ownerId &&
+    received.sessionId === expected.sessionId &&
+    received.taskId === expected.taskId &&
+    received.turnId === expected.turnId &&
+    received.generation === expected.generation &&
+    received.callId === expected.callId
+  );
+}
+
 export async function startPreviewRuntime(
   scenario: PreviewScenario = "normal",
 ): Promise<PreviewRuntime> {
   const token = randomBytes(32).toString("base64url");
-  const ownerId = "owner-local-preview";
-  const generation = 1;
+  const runtimeTasks = tasks.map((task) => ({
+    ...task,
+    readToken: randomBytes(32).toString("base64url"),
+  }));
   const events = new EventStream<ClientEvent>(128);
   const activity = new ActivityLog(256);
   const turns = new InMemoryTurns();
   const controls = new Map<
     string,
-    Readonly<{ computer: DeferredGate; completion: DeferredGate }>
+    Readonly<{
+      computer: Readonly<{
+        gate: DeferredGate;
+        correlation: ControlCorrelation;
+      }>;
+      completion: Readonly<{
+        gate: DeferredGate;
+        correlation: ControlCorrelation;
+      }>;
+    }>
   >();
   const executions: Promise<unknown>[] = [];
+  let closing: Promise<PreviewCloseReceipt> | null = null;
 
   const server = createServer((request, response) => {
     void handle(request, response).catch(() => {
@@ -110,7 +178,23 @@ export async function startPreviewRuntime(
     response: ServerResponse,
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    if (!authorized(request, token)) {
+    const eventMatch = /^\/events\/([^/]+)$/u.exec(url.pathname);
+    const pageMatch = /^\/task\/([^/]+)$/u.exec(url.pathname);
+    const scopedMatch = eventMatch ?? pageMatch;
+    if (scopedMatch?.[1]) {
+      const taskId = decodeURIComponent(scopedMatch[1]);
+      const task = runtimeTasks.find(
+        (candidate) => candidate.taskId === taskId,
+      );
+      if (!task) {
+        json(response, 404, { error: "TASK_NOT_FOUND" });
+        return;
+      }
+      if (!authorized(request, task.readToken)) {
+        json(response, 401, { error: "RUNTIME_UNAUTHORIZED" });
+        return;
+      }
+    } else if (!authorized(request, token)) {
       json(response, 401, { error: "RUNTIME_UNAUTHORIZED" });
       return;
     }
@@ -119,13 +203,13 @@ export async function startPreviewRuntime(
         schema: 1,
         identity: "farol-next-preview-runtime",
         scenario,
-        tasks,
+        tasks: runtimeTasks.map(({ readToken: _readToken, ...task }) => task),
       });
       return;
     }
     if (request.method === "GET" && url.pathname === "/snapshot") {
       const taskStates = await Promise.all(
-        tasks.map(async (task) => {
+        runtimeTasks.map(async (task) => {
           const turn = await turns.get(task.taskId);
           return {
             taskId: task.taskId,
@@ -150,25 +234,21 @@ export async function startPreviewRuntime(
       });
       return;
     }
-    const eventMatch = /^\/events\/([^/]+)$/u.exec(url.pathname);
     if (request.method === "GET" && eventMatch?.[1]) {
       const taskId = decodeURIComponent(eventMatch[1]);
-      if (!tasks.some((task) => task.taskId === taskId)) {
-        json(response, 404, { error: "TASK_NOT_FOUND" });
-        return;
-      }
       events.subscribe(taskId, response);
       return;
     }
-    const pageMatch = /^\/task\/([^/]+)$/u.exec(url.pathname);
     if (request.method === "GET" && pageMatch?.[1]) {
       const taskId = decodeURIComponent(pageMatch[1]);
-      const task = tasks.find((candidate) => candidate.taskId === taskId);
+      const task = runtimeTasks.find(
+        (candidate) => candidate.taskId === taskId,
+      );
       if (!task) {
         json(response, 404, { error: "TASK_NOT_FOUND" });
         return;
       }
-      const body = taskPage(task.taskId, task.label, token);
+      const body = taskPage(task, task.readToken);
       response.writeHead(200, {
         "cache-control": "no-store",
         "content-security-policy":
@@ -190,11 +270,19 @@ export async function startPreviewRuntime(
         json(response, 404, { error: "TASK_NOT_FOUND" });
         return;
       }
-      const gate =
+      const selected =
         controlMatch[2] === "release-tool"
           ? taskControls.computer
           : taskControls.completion;
-      if (!gate.release()) {
+      const parsed = correlationSchema.safeParse(await requestJson(request));
+      if (
+        !parsed.success ||
+        !sameCorrelation(parsed.data, selected.correlation)
+      ) {
+        json(response, 409, { error: "CONTROL_CORRELATION_MISMATCH" });
+        return;
+      }
+      if (!selected.gate.release()) {
         json(response, 409, { error: "CONTROL_ALREADY_RELEASED" });
         return;
       }
@@ -212,22 +300,42 @@ export async function startPreviewRuntime(
     throw new Error("RUNTIME_ADDRESS_UNAVAILABLE");
   }
 
-  for (const task of tasks) {
+  for (const task of runtimeTasks) {
     const computerGate = new DeferredGate(`${task.taskId}:computer`);
     const completionGate = new DeferredGate(`${task.taskId}:completion`);
     controls.set(task.taskId, {
-      computer: computerGate,
-      completion: completionGate,
+      computer: {
+        gate: computerGate,
+        correlation: {
+          ownerId: task.ownerId,
+          sessionId: task.sessionId,
+          taskId: task.taskId,
+          turnId: task.turnId,
+          generation: task.generation,
+          callId: `${task.turnId}-computer-1`,
+        },
+      },
+      completion: {
+        gate: completionGate,
+        correlation: {
+          ownerId: task.ownerId,
+          sessionId: task.sessionId,
+          taskId: task.taskId,
+          turnId: task.turnId,
+          generation: task.generation,
+          callId: null,
+        },
+      },
     });
     if (!task.hasComputer) computerGate.release();
     const computerClock = new SystemClock();
     const chatClock = new SystemClock();
     const computer = new ComputerService(
       {
-        ownerId,
+        ownerId: task.ownerId,
         sessionId: task.sessionId,
         taskId: task.taskId,
-        generation,
+        generation: task.generation,
         capability: "fixture.inspect",
         expiresAt: computerClock.now() + 3_600_000,
       },
@@ -248,31 +356,50 @@ export async function startPreviewRuntime(
     );
     executions.push(
       runner.execute({
-        ownerId,
+        ownerId: task.ownerId,
         sessionId: task.sessionId,
         taskId: task.taskId,
         turnId: task.turnId,
-        generation,
+        generation: task.generation,
         prompt: "Synthetic local preview fixture",
       }),
     );
+  }
+
+  async function closeRuntime(): Promise<PreviewCloseReceipt> {
+    for (const taskControls of controls.values()) {
+      taskControls.computer.gate.cancel();
+      taskControls.completion.gate.cancel();
+    }
+    events.close();
+    await Promise.allSettled(executions);
+    const closedTasks = await Promise.all(
+      runtimeTasks.map(async (task) => {
+        const turn = await turns.get(task.taskId);
+        return {
+          taskId: task.taskId,
+          phase: turn?.phase ?? null,
+          terminal: turn?.terminal ?? null,
+        };
+      }),
+    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    return {
+      tasks: closedTasks,
+      activityKinds: activity.snapshot().map((record) => record.kind),
+    };
   }
 
   return {
     identity: "farol-next-preview-runtime",
     port: address.port,
     token,
-    tasks,
-    async close() {
-      for (const taskControls of controls.values()) {
-        taskControls.computer.release();
-        taskControls.completion.release();
-      }
-      events.close();
-      await Promise.allSettled(executions);
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+    tasks: runtimeTasks,
+    close() {
+      closing ??= closeRuntime();
+      return closing;
     },
   };
 }

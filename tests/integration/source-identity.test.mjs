@@ -80,6 +80,41 @@ describe("source identity", () => {
       expect(changed.dirty).toBe(false);
       expect(changed.commit).not.toBe(initial.commit);
       expect(changed.treeDigest).not.toBe(initial.treeDigest);
+
+      git(repository, "update-index", "--assume-unchanged", "vnext/main.ts");
+      await fs.writeFile(
+        path.join(repository, "vnext/main.ts"),
+        "export const hidden = true;\n",
+      );
+      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
+      git(repository, "update-index", "--no-assume-unchanged", "vnext/main.ts");
+      git(repository, "restore", "vnext/main.ts");
+
+      git(repository, "update-index", "--skip-worktree", "vnext/main.ts");
+      await fs.writeFile(
+        path.join(repository, "vnext/main.ts"),
+        "export const skipped = true;\n",
+      );
+      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
+      git(repository, "update-index", "--no-skip-worktree", "vnext/main.ts");
+      git(repository, "restore", "vnext/main.ts");
+
+      await fs.symlink(
+        "../../outside.ts",
+        path.join(repository, "vnext/link.ts"),
+      );
+      git(repository, "add", "vnext/link.ts");
+      git(
+        repository,
+        "-c",
+        "user.name=Farol Next Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "tracked symlink",
+      );
+      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
     } finally {
       await fs.rm(repository, { recursive: true, force: true });
     }

@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
@@ -17,7 +17,7 @@ function requireValue(condition, code) {
   if (!condition) throw new Error(code);
 }
 
-requireValue(artifact.schema === 1, "PACKAGE_MANIFEST_SCHEMA_INVALID");
+requireValue(artifact.schema === 2, "PACKAGE_MANIFEST_SCHEMA_INVALID");
 requireValue(
   artifact.product === "Farol Next Preview",
   "PACKAGE_PRODUCT_INVALID",
@@ -42,7 +42,16 @@ requireValue(
   typeof artifact.sourceDirty === "boolean",
   "PACKAGE_DIRTY_STATE_INVALID",
 );
-requireValue(artifact.signing === "ad-hoc", "PACKAGE_SIGNING_IDENTITY_INVALID");
+requireValue(
+  artifact.signing?.kind === "ad-hoc" &&
+    artifact.signing?.teamIdentifier === null &&
+    /^[a-f0-9]{40}$/u.test(artifact.signing?.cdHash ?? ""),
+  "PACKAGE_SIGNING_IDENTITY_INVALID",
+);
+requireValue(
+  /^[a-f0-9]{64}$/u.test(artifact.electronSourceSha256 ?? ""),
+  "PACKAGE_ELECTRON_SOURCE_INVALID",
+);
 requireValue(
   artifact.notarized === false,
   "PACKAGE_NOTARIZATION_CLAIM_INVALID",
@@ -73,7 +82,13 @@ const resources = path.join(appPath, "Contents/Resources/app");
 const embedded = JSON.parse(
   await fs.readFile(path.join(resources, "build-manifest.json"), "utf8"),
 );
-requireValue(embedded.schema === 1, "PACKAGE_EMBEDDED_MANIFEST_INVALID");
+requireValue(embedded.schema === 2, "PACKAGE_EMBEDDED_MANIFEST_INVALID");
+requireValue(
+  embedded.sourceMode === "head-exact" &&
+    embedded.inputExact === true &&
+    /^[a-f0-9]{64}$/u.test(embedded.inputLedgerSha256 ?? ""),
+  "PACKAGE_EMBEDDED_ATTESTATION_INVALID",
+);
 requireValue(
   embedded.product === artifact.product,
   "PACKAGE_EMBEDDED_PRODUCT_MISMATCH",
@@ -149,6 +164,22 @@ for (const helper of helpers) {
 execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath], {
   stdio: "pipe",
 });
+const signature = spawnSync(
+  "/usr/bin/codesign",
+  ["-d", "--verbose=4", appPath],
+  { encoding: "utf8" },
+);
+requireValue(signature.status === 0, "PACKAGE_SIGNATURE_UNREADABLE");
+const signatureDetail = `${signature.stdout}${signature.stderr}`;
+requireValue(
+  /^Signature=adhoc$/mu.test(signatureDetail) &&
+    /^TeamIdentifier=not set$/mu.test(signatureDetail) &&
+    /^Identifier=local\.farol\.next\.preview$/mu.test(signatureDetail) &&
+    new RegExp(`^CDHash=${artifact.signing.cdHash}$`, "mu").test(
+      signatureDetail,
+    ),
+  "PACKAGE_SIGNING_IDENTITY_INVALID",
+);
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "pipe" });
 process.stdout.write(
   `verified ${artifact.product} ${artifact.artifactSha256} (${artifact.sourceDirty ? "dirty" : "clean"})\n`,

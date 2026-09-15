@@ -34,7 +34,7 @@ describe("scripted preview provider", () => {
       "failure",
       { completion },
       false,
-    ).open(request);
+    ).prepare(request);
     const events = [];
     for await (const event of session.events()) events.push(event);
     expect(events.at(-1)).toEqual({
@@ -48,7 +48,7 @@ describe("scripted preview provider", () => {
       "normal",
       { completion: new DeferredGate("completion") },
       true,
-    ).open(request);
+    ).prepare(request);
     const iterator = session.events()[Symbol.asyncIterator]();
     await iterator.next();
     await iterator.next();
@@ -69,7 +69,7 @@ describe("scripted preview provider", () => {
       "normal",
       { completion },
       true,
-    ).open(request);
+    ).prepare(request);
     await expect(
       session.submitComputerResult(output("foreign-owner")),
     ).resolves.toMatchObject({

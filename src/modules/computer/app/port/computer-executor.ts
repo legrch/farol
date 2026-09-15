@@ -10,5 +10,10 @@ export type ComputerOutput = Readonly<{
 export interface ComputerExecutor {
   execute(
     request: ComputerRequest,
-  ): Promise<Result<ComputerOutput, "COMPUTER_EXECUTION_FAILED">>;
+  ): Promise<
+    Result<
+      ComputerOutput,
+      "COMPUTER_EXECUTION_FAILED" | "COMPUTER_EXECUTION_CANCELLED"
+    >
+  >;
 }

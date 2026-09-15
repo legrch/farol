@@ -24,4 +24,10 @@ contextBridge.exposeInMainWorld("farolNext", {
     ipcRenderer.on(channels.runtimeState, wrapped);
     return () => ipcRenderer.removeListener(channels.runtimeState, wrapped);
   },
+  onLayout: (listener: (layout: unknown) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      listener(value);
+    ipcRenderer.on(channels.layout, wrapped);
+    return () => ipcRenderer.removeListener(channels.layout, wrapped);
+  },
 });

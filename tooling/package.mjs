@@ -1,19 +1,29 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
 const builtRoot = path.join(root, "dist/app");
 const packageRoot = path.join(root, "dist/package");
 const appPath = path.join(packageRoot, "Farol Next Preview.app");
 const electronApp = path.join(root, "node_modules/electron/dist/Electron.app");
-const allowDirty = process.argv.includes("--allow-dirty");
+const repositoryRoot = path.resolve(root, "..");
+const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
 
 const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
+if (
+  manifest.schema !== 2 ||
+  manifest.sourceMode !== "head-exact" ||
+  manifest.inputExact !== true ||
+  !/^[a-f0-9]{64}$/u.test(manifest.inputLedgerSha256 ?? "")
+) {
+  throw new Error("BUILD_SOURCE_ATTESTATION_INVALID");
+}
 if (
   !Array.isArray(manifest.entries) ||
   manifest.entries.length !== BUILD_ENTRIES.length ||
@@ -22,11 +32,19 @@ if (
   throw new Error("BUILD_ENTRY_SET_INVALID");
 }
 await verifyBuildEntries(builtRoot, manifest.entrySha256);
-if (manifest.dirty && !allowDirty) {
+const currentSource = sourceIdentity(repositoryRoot, scope);
+if (
+  manifest.dirty ||
+  currentSource.dirty ||
+  currentSource.commit !== manifest.sourceCommit ||
+  currentSource.treeDigest !== manifest.sourceTreeDigest
+) {
   throw new Error(
     "PACKAGE_DIRTY_SOURCE: commit the exact vNext source and rebuild first",
   );
 }
+
+const electronSourceSha256 = await treeDigest(electronApp);
 
 await fs.rm(packageRoot, { recursive: true, force: true });
 await fs.mkdir(packageRoot, { recursive: true });
@@ -149,8 +167,28 @@ execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath], {
 });
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
+function codeSignature(app) {
+  const inspected = spawnSync("/usr/bin/codesign", ["-d", "--verbose=4", app], {
+    encoding: "utf8",
+  });
+  if (inspected.status !== 0) throw new Error("PACKAGE_SIGNATURE_UNREADABLE");
+  const detail = `${inspected.stdout}${inspected.stderr}`;
+  const cdHash = /^CDHash=([a-f0-9]{40})$/mu.exec(detail)?.[1];
+  if (
+    !cdHash ||
+    !/^Signature=adhoc$/mu.test(detail) ||
+    !/^TeamIdentifier=not set$/mu.test(detail) ||
+    !/^Identifier=local\.farol\.next\.preview$/mu.test(detail)
+  ) {
+    throw new Error("PACKAGE_SIGNATURE_IDENTITY_INVALID");
+  }
+  return { kind: "ad-hoc", teamIdentifier: null, cdHash };
+}
+
+const signing = codeSignature(appPath);
+
 const artifact = {
-  schema: 1,
+  schema: 2,
   product: "Farol Next Preview",
   bundleId: "local.farol.next.preview",
   sourceCommit: manifest.sourceCommit,
@@ -158,12 +196,13 @@ const artifact = {
   sourceDirty: manifest.dirty,
   artifactPath: appPath,
   artifactSha256: await treeDigest(appPath),
+  electronSourceSha256,
   runtime: {
     electron: "41.10.7",
     node: "embedded-in-electron",
     testerManagedRuntime: false,
   },
-  signing: "ad-hoc",
+  signing,
   notarized: false,
   updateChannel: "local-preview-only",
 };

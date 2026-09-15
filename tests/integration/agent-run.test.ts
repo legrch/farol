@@ -4,10 +4,16 @@ import type {
   AgentSpawnReceipt,
   AgentWaitReceipt,
 } from "../../src/modules/agent/app/port/agent-host";
+import type { AssignmentRepository } from "../../src/modules/agent/app/port/assignment-repository";
 import { RunAgentAssignment } from "../../src/modules/agent/app/service/run-agent-assignment";
+import { InMemoryAssignments } from "../../src/modules/agent/infra/repo/in-memory-assignments";
 import type {
   AssignmentIdentity,
   ChildCorrelation,
+} from "../../src/modules/agent/domain/assignment";
+import {
+  createAssignment,
+  startAssignment,
 } from "../../src/modules/agent/domain/assignment";
 
 const identity: AssignmentIdentity = {
@@ -42,10 +48,15 @@ class AgentHostDouble implements AgentHost {
 }
 
 const exactChild: ChildCorrelation = {
+  assignmentId: identity.assignmentId,
   ownerId: identity.ownerId,
   generation: identity.generation,
   childId: "child-preview-a",
 };
+
+function createRunner(host: AgentHost): RunAgentAssignment {
+  return new RunAgentAssignment(host, new InMemoryAssignments());
+}
 
 describe("Agent app service", () => {
   it("spawns once, waits once and accepts only the same child result", async () => {
@@ -58,7 +69,7 @@ describe("Agent app service", () => {
       },
     );
 
-    const receipt = await new RunAgentAssignment(host).execute(identity);
+    const receipt = await createRunner(host).execute(identity);
 
     expect(receipt).toMatchObject({
       ok: true,
@@ -75,6 +86,121 @@ describe("Agent app service", () => {
     expect(host.waitCalls).toBe(1);
   });
 
+  it("atomically admits only one child for a duplicate assignment", async () => {
+    const host = new AgentHostDouble(
+      { status: "started", correlation: exactChild },
+      {
+        status: "completed",
+        correlation: exactChild,
+        resultRef: "result-preview-a",
+      },
+    );
+    const runner = createRunner(host);
+
+    const [first, duplicate] = await Promise.all([
+      runner.execute(identity),
+      runner.execute(identity),
+    ]);
+
+    expect(first).toEqual(duplicate);
+    expect(host.spawnCalls).toBe(1);
+    expect(host.waitCalls).toBe(1);
+  });
+
+  it("returns a stored terminal receipt without spawning again", async () => {
+    const repository = new InMemoryAssignments();
+    const host = new AgentHostDouble(
+      { status: "started", correlation: exactChild },
+      {
+        status: "completed",
+        correlation: exactChild,
+        resultRef: "result-preview-a",
+      },
+    );
+    const runner = new RunAgentAssignment(host, repository);
+    const first = await runner.execute(identity);
+    const duplicate = await runner.execute(identity);
+
+    expect(duplicate).toEqual(first);
+    expect(host.spawnCalls).toBe(1);
+    expect(host.waitCalls).toBe(1);
+  });
+
+  it("tombstones prepared and running records recovered without an in-flight owner", async () => {
+    const preparedRepository = new InMemoryAssignments();
+    await preparedRepository.admit({
+      assignment: createAssignment(identity),
+      resultRef: null,
+    });
+    const preparedHost = new AgentHostDouble(new Error("must not spawn"), null);
+    await expect(
+      new RunAgentAssignment(preparedHost, preparedRepository).execute(
+        identity,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "outcome_unknown", terminal: true } },
+    });
+    expect(preparedHost.spawnCalls).toBe(0);
+
+    const runningRepository = new InMemoryAssignments();
+    const running = startAssignment(createAssignment(identity), exactChild);
+    if (!running.ok) throw new Error("RUNNING_FIXTURE_INVALID");
+    await runningRepository.admit({
+      assignment: running.value,
+      resultRef: null,
+    });
+    const runningHost = new AgentHostDouble(new Error("must not spawn"), null);
+    await expect(
+      new RunAgentAssignment(runningHost, runningRepository).execute(identity),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "outcome_unknown", terminal: true } },
+    });
+    expect(runningHost.spawnCalls).toBe(0);
+  });
+
+  it("fails closed before spawn when assignment admission is unavailable", async () => {
+    const repository: AssignmentRepository = {
+      admit: async () => {
+        throw new Error("repository unavailable");
+      },
+      save: async () => undefined,
+    };
+    const host = new AgentHostDouble(new Error("must not spawn"), null);
+    await expect(
+      new RunAgentAssignment(host, repository).execute(identity),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_ADMISSION_FAILED" },
+    });
+    expect(host.spawnCalls).toBe(0);
+  });
+
+  it("does not rewrite a known host result when evidence persistence fails", async () => {
+    class FailingSaveAssignments extends InMemoryAssignments {
+      override async save(): Promise<void> {
+        throw new Error("evidence unavailable");
+      }
+    }
+    const host = new AgentHostDouble(
+      { status: "started", correlation: exactChild },
+      {
+        status: "completed",
+        correlation: exactChild,
+        resultRef: "result-preview-a",
+      },
+    );
+    await expect(
+      new RunAgentAssignment(host, new FailingSaveAssignments()).execute(
+        identity,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "completed" } },
+    });
+  });
+
   it("rejects a foreign child result without spawning or waiting again", async () => {
     const host = new AgentHostDouble(
       { status: "started", correlation: exactChild },
@@ -85,7 +211,7 @@ describe("Agent app service", () => {
       },
     );
 
-    const receipt = await new RunAgentAssignment(host).execute(identity);
+    const receipt = await createRunner(host).execute(identity);
 
     expect(receipt).toMatchObject({
       ok: false,
@@ -102,7 +228,7 @@ describe("Agent app service", () => {
       null,
     );
 
-    const receipt = await new RunAgentAssignment(host).execute(identity);
+    const receipt = await createRunner(host).execute(identity);
 
     expect(receipt).toMatchObject({
       ok: true,
@@ -174,12 +300,12 @@ describe("Agent app service", () => {
     "terminates $name without retry",
     async ({ host: createHost, phase, waitCalls }) => {
       const host = createHost();
-      await expect(
-        new RunAgentAssignment(host).execute(identity),
-      ).resolves.toMatchObject({
-        ok: true,
-        value: { assignment: { phase, terminal: true }, resultRef: null },
-      });
+      await expect(createRunner(host).execute(identity)).resolves.toMatchObject(
+        {
+          ok: true,
+          value: { assignment: { phase, terminal: true }, resultRef: null },
+        },
+      );
       expect(host.spawnCalls).toBe(1);
       expect(host.waitCalls).toBe(waitCalls);
     },
@@ -193,9 +319,7 @@ describe("Agent app service", () => {
       },
       null,
     );
-    await expect(
-      new RunAgentAssignment(host).execute(identity),
-    ).resolves.toMatchObject({
+    await expect(createRunner(host).execute(identity)).resolves.toMatchObject({
       ok: false,
       error: { code: "AGENT_CORRELATION", retry: "never" },
     });

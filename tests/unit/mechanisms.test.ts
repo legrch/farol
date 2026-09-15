@@ -54,9 +54,22 @@ describe("shared runtime mechanisms", () => {
     expect(gate.release()).toBe(false);
   });
 
+  it("cancels a deferred gate without reporting an approval", async () => {
+    const gate = new DeferredGate("fixture");
+    const waiting = gate.wait();
+    expect(gate.cancel()).toBe(true);
+    await expect(waiting).resolves.toBe("cancelled");
+    expect(gate.isReleased()).toBe(false);
+    expect(gate.release()).toBe(false);
+    expect(gate.cancel()).toBe(false);
+  });
+
   it("rejects invalid stream capacities and retains a bounded clone", async () => {
     expect(() => new EventStream(0)).toThrow("EVENT_STREAM_CAPACITY_INVALID");
     expect(() => new EventStream(1.5)).toThrow("EVENT_STREAM_CAPACITY_INVALID");
+    expect(() => new EventStream(2, 0)).toThrow(
+      "EVENT_STREAM_DRAIN_TIMEOUT_INVALID",
+    );
     const stream = new EventStream<{ taskId: string; sequence: number }>(2);
     await stream.publish({ taskId: "task-a", sequence: 1 });
     await stream.publish({ taskId: "task-a", sequence: 2 });
@@ -99,6 +112,31 @@ describe("shared runtime mechanisms", () => {
     const writesBeforePublish = response.writes.length;
     await stream.publish({ taskId: "task-a", sequence: 1 });
     expect(response.writes).toHaveLength(writesBeforePublish);
+  });
+
+  it("rejects a subscriber that backpressures while retained frames replay", async () => {
+    const stream = new EventStream<{ taskId: string; sequence: number }>();
+    await stream.publish({ taskId: "task-a", sequence: 1 });
+    const response = new ResponseProbe();
+    response.backpressure = true;
+    response.drainOnBackpressure = false;
+
+    const cleanup = stream.subscribe("task-a", response.asServerResponse());
+
+    expect(response.destroyed).toBe(true);
+    cleanup();
+  });
+
+  it("rejects a subscriber that backpressures on the initial stream frame", () => {
+    const stream = new EventStream<{ taskId: string; sequence: number }>();
+    const response = new ResponseProbe();
+    response.backpressure = true;
+    response.drainOnBackpressure = false;
+
+    const cleanup = stream.subscribe("task-a", response.asServerResponse());
+
+    expect(response.destroyed).toBe(true);
+    cleanup();
   });
 
   it("evicts a subscriber that never drains within the bounded wait", async () => {

@@ -17,6 +17,7 @@ describe("Agent assignment policy", () => {
       generation: 2,
     });
     const started = startAssignment(assignment, {
+      assignmentId: "assignment-a",
       ownerId: "owner-preview",
       generation: 2,
       childId: "child-a",
@@ -25,6 +26,7 @@ describe("Agent assignment policy", () => {
     if (!started.ok) return;
     expect(
       completeAssignment(started.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-b",
@@ -32,6 +34,7 @@ describe("Agent assignment policy", () => {
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
     expect(
       completeAssignment(started.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-a",
@@ -46,6 +49,7 @@ describe("Agent assignment policy", () => {
       generation: 2,
     });
     const stale = startAssignment(assignment, {
+      assignmentId: "assignment-a",
       ownerId: "owner-preview",
       generation: 1,
       childId: "child-a",
@@ -55,6 +59,7 @@ describe("Agent assignment policy", () => {
       error: { code: "AGENT_CORRELATION" },
     });
     const started = startAssignment(assignment, {
+      assignmentId: "assignment-a",
       ownerId: "owner-preview",
       generation: 2,
       childId: "child-a",
@@ -62,6 +67,7 @@ describe("Agent assignment policy", () => {
     if (!started.ok) throw new Error("start failed");
     expect(
       startAssignment(started.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-b",
@@ -85,6 +91,7 @@ describe("Agent assignment policy", () => {
     });
 
     const started = startAssignment(prepared, {
+      assignmentId: "assignment-a",
       ownerId: "owner-preview",
       generation: 2,
       childId: "child-a",
@@ -100,6 +107,7 @@ describe("Agent assignment policy", () => {
     });
     expect(
       failChildAssignment(started.value, {
+        assignmentId: "assignment-a",
         ownerId: "foreign-owner",
         generation: 2,
         childId: "child-a",
@@ -107,6 +115,7 @@ describe("Agent assignment policy", () => {
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
     expect(
       failChildAssignment(started.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-a",
@@ -114,6 +123,7 @@ describe("Agent assignment policy", () => {
     ).toMatchObject({ ok: true, value: { phase: "failed", terminal: true } });
     expect(
       markChildOutcomeUnknown(started.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-a",
@@ -124,6 +134,7 @@ describe("Agent assignment policy", () => {
     });
 
     const terminal = completeAssignment(started.value, {
+      assignmentId: "assignment-a",
       ownerId: "owner-preview",
       generation: 2,
       childId: "child-a",
@@ -131,6 +142,7 @@ describe("Agent assignment policy", () => {
     if (!terminal.ok) throw new Error("completion failed");
     expect(
       startAssignment(terminal.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-a",
@@ -138,6 +150,7 @@ describe("Agent assignment policy", () => {
     ).toMatchObject({ ok: false, error: { code: "AGENT_TERMINAL" } });
     expect(
       completeAssignment(terminal.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-a",
@@ -153,6 +166,7 @@ describe("Agent assignment policy", () => {
     });
     expect(
       failChildAssignment(terminal.value, {
+        assignmentId: "assignment-a",
         ownerId: "owner-preview",
         generation: 2,
         childId: "child-a",

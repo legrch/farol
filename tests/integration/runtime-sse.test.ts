@@ -39,6 +39,29 @@ class SseReader {
   }
 }
 
+function taskHeaders(runtime: PreviewRuntime, taskId: string) {
+  const task = runtime.tasks.find((candidate) => candidate.taskId === taskId);
+  if (!task) throw new Error(`TASK_MISSING:${taskId}`);
+  return { authorization: `Bearer ${task.readToken}` };
+}
+
+function controlBody(
+  runtime: PreviewRuntime,
+  taskId: string,
+  callId: string | null,
+) {
+  const task = runtime.tasks.find((candidate) => candidate.taskId === taskId);
+  if (!task) throw new Error(`TASK_MISSING:${taskId}`);
+  return JSON.stringify({
+    ownerId: task.ownerId,
+    sessionId: task.sessionId,
+    taskId: task.taskId,
+    turnId: task.turnId,
+    generation: task.generation,
+    callId,
+  });
+}
+
 describe("actual loopback SSE runtime", () => {
   let runtime: PreviewRuntime | null = null;
 
@@ -60,7 +83,9 @@ describe("actual loopback SSE runtime", () => {
       tasks: [{ taskId: "task-atlantic" }, { taskId: "task-harbor" }],
     });
 
-    const response = await fetch(`${base}/events/task-atlantic`, { headers });
+    const response = await fetch(`${base}/events/task-atlantic`, {
+      headers: taskHeaders(runtime, "task-atlantic"),
+    });
     expect(response.status).toBe(200);
     const stream = new SseReader(response);
     const beforeTool = await stream.until(
@@ -89,7 +114,12 @@ describe("actual loopback SSE runtime", () => {
       (
         await fetch(`${base}/control/task-atlantic/release-tool`, {
           method: "POST",
-          headers,
+          headers: { ...headers, "content-type": "application/json" },
+          body: controlBody(
+            runtime,
+            "task-atlantic",
+            "turn-atlantic-1-computer-1",
+          ),
         })
       ).status,
     ).toBe(204);
@@ -114,7 +144,8 @@ describe("actual loopback SSE runtime", () => {
       (
         await fetch(`${base}/control/task-atlantic/release-completion`, {
           method: "POST",
-          headers,
+          headers: { ...headers, "content-type": "application/json" },
+          body: controlBody(runtime, "task-atlantic", null),
         })
       ).status,
     ).toBe(204);
@@ -139,7 +170,9 @@ describe("actual loopback SSE runtime", () => {
     runtime = await startPreviewRuntime("normal");
     const base = `http://127.0.0.1:${runtime.port}`;
     const headers = { authorization: `Bearer ${runtime.token}` };
-    const response = await fetch(`${base}/events/task-harbor`, { headers });
+    const response = await fetch(`${base}/events/task-harbor`, {
+      headers: taskHeaders(runtime, "task-harbor"),
+    });
     const stream = new SseReader(response);
     const running = await stream.until(
       (event) => event.kind === "text.delta" && event.sequence === 2,
@@ -150,14 +183,16 @@ describe("actual loopback SSE runtime", () => {
       `${base}/control/task-harbor/release-completion`,
       {
         method: "POST",
-        headers,
+        headers: { ...headers, "content-type": "application/json" },
+        body: controlBody(runtime, "task-harbor", null),
       },
     );
     const duplicate = await fetch(
       `${base}/control/task-harbor/release-completion`,
       {
         method: "POST",
-        headers,
+        headers: { ...headers, "content-type": "application/json" },
+        body: controlBody(runtime, "task-harbor", null),
       },
     );
     expect(first.status).toBe(204);
@@ -175,5 +210,65 @@ describe("actual loopback SSE runtime", () => {
         { taskId: "task-harbor", turn: { phase: "completed" } },
       ],
     });
+  });
+
+  it("does not let one task read or control another task", async () => {
+    runtime = await startPreviewRuntime("normal");
+    const base = `http://127.0.0.1:${runtime.port}`;
+    const taskAHeaders = taskHeaders(runtime, "task-atlantic");
+
+    const foreignRead = await fetch(`${base}/events/task-harbor`, {
+      headers: taskAHeaders,
+    });
+    expect(foreignRead.status).toBe(401);
+
+    const foreignControl = await fetch(
+      `${base}/control/task-harbor/release-completion`,
+      { method: "POST", headers: taskAHeaders },
+    );
+    expect(foreignControl.status).toBe(401);
+
+    const taskPage = await fetch(`${base}/task/task-atlantic`, {
+      headers: taskAHeaders,
+    });
+    expect(await taskPage.text()).not.toContain(runtime.token);
+  });
+
+  it("rejects a stale or incomplete Computer approval correlation", async () => {
+    runtime = await startPreviewRuntime("normal");
+    const base = `http://127.0.0.1:${runtime.port}`;
+    const headers = {
+      authorization: `Bearer ${runtime.token}`,
+      "content-type": "application/json",
+    };
+    const response = await fetch(`${base}/control/task-atlantic/release-tool`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ taskId: "task-atlantic" }),
+    });
+    expect(response.status).toBe(409);
+  });
+
+  it("cancels pending work during shutdown without converting it to approval", async () => {
+    runtime = await startPreviewRuntime("normal");
+    const base = `http://127.0.0.1:${runtime.port}`;
+    const response = await fetch(`${base}/events/task-atlantic`, {
+      headers: taskHeaders(runtime, "task-atlantic"),
+    });
+    const stream = new SseReader(response);
+    await stream.until((event) => event.kind === "computer.requested");
+
+    const receipt = await runtime.close();
+    runtime = null;
+
+    expect(receipt.tasks).toEqual([
+      {
+        taskId: "task-atlantic",
+        phase: "outcome_unknown",
+        terminal: true,
+      },
+      { taskId: "task-harbor", phase: "outcome_unknown", terminal: true },
+    ]);
+    expect(receipt.activityKinds).not.toContain("computer_completed");
   });
 });

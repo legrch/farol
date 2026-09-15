@@ -54,7 +54,9 @@ describe("the complete local Chat application slice", () => {
       },
       submitComputerResult: submitted,
     };
-    const provider: ChatProvider = { open: vi.fn().mockResolvedValue(session) };
+    const provider: ChatProvider = {
+      prepare: vi.fn().mockResolvedValue(session),
+    };
     const clientEvents: ClientEvent[] = [];
     const activity: ActivityRecord[] = [];
     const turns = new InMemoryTurns();
@@ -158,7 +160,7 @@ describe("the complete local Chat application slice", () => {
       }),
     };
     const run = new RunTurn(
-      { open: vi.fn().mockResolvedValue(session) },
+      { prepare: vi.fn().mockResolvedValue(session) },
       {
         execute: vi.fn().mockResolvedValue({
           ok: true,
