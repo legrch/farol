@@ -7,6 +7,11 @@ import {
   assertExactSourceIdentity,
   candidatePaths,
 } from "./candidate-contract.mjs";
+import {
+  createLaunchSnapshot,
+  ownerLaunchEnvironment,
+  removeLaunchSnapshot,
+} from "./launch-snapshot.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -19,7 +24,7 @@ function fail(message) {
   process.exitCode = 1;
 }
 
-function verify(artifactPath, candidateAppPath) {
+function verify(artifactPath, candidateAppPath, environment) {
   return spawnSync(
     process.execPath,
     [
@@ -29,11 +34,14 @@ function verify(artifactPath, candidateAppPath) {
       "--app",
       candidateAppPath,
     ],
-    { cwd: root, encoding: "utf8" },
+    { cwd: root, encoding: "utf8", env: environment },
   );
 }
 
 async function main() {
+  if (process.env.FAROL_NEXT_OWNER_LAUNCH !== "1") {
+    throw new Error("use the canonical owner command 'task next:run'");
+  }
   if (process.argv.length !== 2) {
     throw new Error(
       "task next:run accepts no launch flags; use task next:preview for development",
@@ -41,8 +49,10 @@ async function main() {
   }
 
   let artifact;
+  let artifactBytes;
   try {
-    artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
+    artifactBytes = await fs.readFile(artifactFile);
+    artifact = JSON.parse(artifactBytes.toString("utf8"));
   } catch {
     throw new Error("package is missing; run 'task next:package' first");
   }
@@ -67,42 +77,62 @@ async function main() {
     );
   }
 
-  const verified = verify(artifactFile, appPath);
-  if (verified.status !== 0) {
-    const detail = `${verified.stderr}${verified.stdout}`.trim();
-    throw new Error(
-      `package verification failed; run 'task next:package' (${detail || "no verifier detail"})`,
-    );
-  }
-  process.stdout.write(verified.stdout);
-
-  assertExactSourceIdentity(
-    sourceIdentity(repositoryRoot, scope),
-    artifact,
-    "CANDIDATE_SOURCE_CHANGED_DURING_VERIFICATION",
-  );
-  const executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
-  await fs.access(executable);
-  process.stdout.write(`launching verified packaged candidate ${appPath}\n`);
-
-  const child = spawn(executable, [], {
-    cwd: root,
-    env: process.env,
-    stdio: "inherit",
-  });
-  const forward = (signal) => {
-    if (!child.killed) child.kill(signal);
-  };
-  process.once("SIGINT", () => forward("SIGINT"));
-  process.once("SIGTERM", () => forward("SIGTERM"));
-  const code = await new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (status, signal) => {
-      if (signal) reject(new Error(`application stopped by ${signal}`));
-      else resolve(status ?? 1);
+  const environment = ownerLaunchEnvironment();
+  let snapshot;
+  try {
+    snapshot = await createLaunchSnapshot({
+      sourceApp: appPath,
+      artifactBytes,
+      artifactSha256: artifact.artifactSha256,
     });
-  });
-  if (code !== 0) throw new Error(`application exited with status ${code}`);
+    const verified = verify(
+      snapshot.artifactFile,
+      snapshot.appPath,
+      environment,
+    );
+    if (verified.status !== 0) {
+      const detail = `${verified.stderr}${verified.stdout}`.trim();
+      throw new Error(
+        `package verification failed; run 'task next:package' (${detail || "no verifier detail"})`,
+      );
+    }
+    process.stdout.write(verified.stdout);
+
+    assertExactSourceIdentity(
+      sourceIdentity(repositoryRoot, scope),
+      artifact,
+      "CANDIDATE_SOURCE_CHANGED_DURING_VERIFICATION",
+    );
+    const executable = path.join(
+      snapshot.appPath,
+      "Contents/MacOS/Farol Next Preview",
+    );
+    await fs.access(executable);
+    process.stdout.write(
+      `launching isolated verified candidate ${snapshot.appPath} from ${appPath}\n`,
+    );
+
+    const child = spawn(executable, [], {
+      cwd: root,
+      env: environment,
+      stdio: "inherit",
+    });
+    const forward = (signal) => {
+      if (!child.killed) child.kill(signal);
+    };
+    process.once("SIGINT", () => forward("SIGINT"));
+    process.once("SIGTERM", () => forward("SIGTERM"));
+    const code = await new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (status, signal) => {
+        if (signal) reject(new Error(`application stopped by ${signal}`));
+        else resolve(status ?? 1);
+      });
+    });
+    if (code !== 0) throw new Error(`application exited with status ${code}`);
+  } finally {
+    if (snapshot) await removeLaunchSnapshot(snapshot);
+  }
 }
 
 try {

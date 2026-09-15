@@ -43,11 +43,14 @@ The canonical owner command is:
 task next:run
 ```
 
-It launches only the existing verified packaged candidate. It never builds, installs,
-updates, or activates either product, and it refuses a missing, dirty, stale, or
-digest-invalid package with the exact rebuild action. `task next:preview` is the
-separate development lane; it builds development bytes and is not artifact evidence.
-See [`docs/owner-preview.md`](docs/owner-preview.md) for controls and lifecycle.
+The verified packaged candidate workflow copies the existing package into a private
+isolated launch snapshot, verifies that final launch path, and launches only those
+verified bytes. It never builds, installs, updates, or activates either product, and
+it refuses a missing, dirty, stale, or digest-invalid package with the exact rebuild
+action.
+`task next:preview` is the separate development lane; it builds development bytes and
+is not artifact evidence. See [`docs/owner-preview.md`](docs/owner-preview.md) for
+controls and lifecycle.
 
 The deterministic gate includes strict typecheck, architecture fixtures, policy and
 integration coverage, Hunt selftest/proof/model, and a build-bound sanitized replay.
@@ -76,12 +79,9 @@ Launch the exact built development preview through the pinned Electron runtime:
 npm --prefix vnext run preview
 ```
 
-After `task next:package`, the canonical command above verifies source identity and the
-bundle digest before launching this exact executable from the repository root:
-
-```bash
-./vnext/dist/package/Farol\ Next\ Preview.app/Contents/MacOS/Farol\ Next\ Preview
-```
+After `task next:package`, use only the canonical command above. Running the executable
+inside `dist/package` directly bypasses source, manifest, resource, and digest
+verification and is unsupported.
 
 The outer `.app` and its fixed launcher are explicitly unsigned. The launcher uses
 an unmodified, digest-bound copy of the pinned vendor Electron bundle, so creating

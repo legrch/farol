@@ -55,10 +55,21 @@ describe("portable Farol Next repository contract", () => {
       "utf8",
     );
     const readme = await fs.readFile(path.join(vnextRoot, "README.md"), "utf8");
+    const packageDocument = JSON.parse(
+      await fs.readFile(path.join(vnextRoot, "package.json"), "utf8"),
+    );
     expect(taskfile).toMatch(/^  next:run:$/mu);
     expect(taskfile).toMatch(/^  next:preview:$/mu);
     expect(taskfile).not.toContain("launch an already verified .app directly");
+    expect(taskfile).toContain("/usr/bin/env -i");
+    expect(taskfile).toContain("FAROL_NEXT_OWNER_LAUNCH=1");
+    expect(taskfile).toContain('PATH="$clean_path"');
+    expect(packageDocument.scripts.run).toBeUndefined();
     expect(readme).toContain("task next:run");
     expect(readme).toContain("verified packaged candidate");
+    expect(readme).toContain("isolated launch snapshot");
+    expect(readme).not.toContain(
+      "./vnext/dist/package/Farol\\ Next\\ Preview.app/Contents/MacOS/Farol\\ Next\\ Preview",
+    );
   });
 });

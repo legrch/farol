@@ -27,7 +27,6 @@
     "build": "node tooling/build.mjs",
     "package": "npm run build && node tooling/package.mjs",
     "verify:package": "node tooling/verify-package.mjs",
-    "run": "node tooling/run-preview.mjs",
     "promote": "node tooling/promote-preview.mjs",
     "preview": "electron dist/app/main.cjs",
     "test:e2e:dev": "npm run build && node tests/e2e/preview.e2e.mjs --development",

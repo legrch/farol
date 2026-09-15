@@ -36,6 +36,16 @@ outer bundle owns the Farol Next product and launch identity; the nested Electro
 bundle remains a verified runtime dependency rather than rewritten, stripped, or
 newly signed executable code.
 
+The canonical owner launcher copies that package into a private per-invocation
+snapshot and verifies the snapshot before execution. Product-controlled package
+replacement therefore cannot change the bytes between verification and launch or
+while the application is running. The Taskfile starts the guard and verifier from an
+allowlisted environment, and the child receives a minimal explicit environment;
+arbitrary same-owner mutation of the private snapshot is outside this unsigned local
+preview's threat boundary. A snapshot is never reused; the launcher removes it after
+an observed application exit, while an ungraceful launcher or host death can leave a
+private temporary copy behind.
+
 ## Enforced dependency direction
 
 ```text
