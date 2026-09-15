@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en" data-ready="false">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="description"
+      content="Three rendered visual directions for the Farol Next macOS design lab."
+    />
+    <title>Farol Next · Visual directions</title>
+    <link rel="stylesheet" href="gallery.css" />
+  </head>
+  <body>
+    <main>
+      <header class="gallery-header">
+        <div>
+          <p class="eyebrow">Farol Next · reversible design lab</p>
+          <h1>Three directions, one product truth</h1>
+          <p class="intro">
+            Every direction uses the same synthetic task, content, two proof
+            scenes, and wide viewport. Only the visual system changes. No
+            direction is owner-approved.
+          </p>
+        </div>
+        <div class="fixture-key" aria-label="Shared fixture">
+          <span>Shared fixture</span>
+          <strong>Atlantic workspace check</strong>
+          <small>Browser · Running + Computer · Waiting · 1180 × 760</small>
+        </div>
+      </header>
+
+      <section class="directions" aria-label="Visual directions">
+        <article class="direction-card" data-direction="native">
+          <header>
+            <span class="direction-number">01</span>
+            <div>
+              <p class="direction-kind">Mac restraint</p>
+              <h2>Studio Rail</h2>
+            </div>
+            <span class="decision-tag">Lowest learning cost</span>
+          </header>
+          <div class="scene-pair">
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Browser</strong><span>Running</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Studio Rail Browser running scene"
+                  src="prototype.html?direction=native&amp;section=browser&amp;task=atlantic&amp;state=running"
+                ></iframe>
+              </div>
+            </section>
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Computer</strong><span>Waiting</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Studio Rail Computer waiting scene"
+                  src="prototype.html?direction=native&amp;section=computer&amp;task=atlantic&amp;state=waiting"
+                ></iframe>
+              </div>
+            </section>
+          </div>
+          <div class="direction-notes">
+            <p>
+              Graphite chrome, a light work document, system blue, and familiar
+              Mac spacing.
+            </p>
+            <dl>
+              <div>
+                <dt>Strength</dt>
+                <dd>Calm and immediately legible</dd>
+              </div>
+              <div>
+                <dt>Trade-off</dt>
+                <dd>Farol identity recedes</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+
+        <article class="direction-card" data-direction="dense">
+          <header>
+            <span class="direction-number">02</span>
+            <div>
+              <p class="direction-kind">Expert density</p>
+              <h2>Operator Grid</h2>
+            </div>
+            <span class="decision-tag">Fastest scanning</span>
+          </header>
+          <div class="scene-pair">
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Browser</strong><span>Running</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Operator Grid Browser running scene"
+                  src="prototype.html?direction=dense&amp;section=browser&amp;task=atlantic&amp;state=running"
+                ></iframe>
+              </div>
+            </section>
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Computer</strong><span>Waiting</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Operator Grid Computer waiting scene"
+                  src="prototype.html?direction=dense&amp;section=computer&amp;task=atlantic&amp;state=waiting"
+                ></iframe>
+              </div>
+            </section>
+          </div>
+          <div class="direction-notes">
+            <p>
+              Compact rail, higher information density, sharper boundaries, and
+              cyan signal.
+            </p>
+            <dl>
+              <div>
+                <dt>Strength</dt>
+                <dd>Efficient for repeat operators</dd>
+              </div>
+              <div>
+                <dt>Trade-off</dt>
+                <dd>More visual and cognitive pressure</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+
+        <article class="direction-card is-recommended" data-direction="beacon">
+          <header>
+            <span class="direction-number">03</span>
+            <div>
+              <p class="direction-kind">Distinctive Farol</p>
+              <h2>Beacon Field</h2>
+            </div>
+            <span class="decision-tag">Provisional recommendation</span>
+          </header>
+          <div class="scene-pair">
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Browser</strong><span>Running</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Beacon Field Browser running scene"
+                  src="prototype.html?direction=beacon&amp;section=browser&amp;task=atlantic&amp;state=running"
+                ></iframe>
+              </div>
+            </section>
+            <section class="scene-preview">
+              <header class="scene-label">
+                <strong>Computer</strong><span>Waiting</span>
+              </header>
+              <div class="preview-shell">
+                <iframe
+                  title="Beacon Field Computer waiting scene"
+                  src="prototype.html?direction=beacon&amp;section=computer&amp;task=atlantic&amp;state=waiting"
+                ></iframe>
+              </div>
+            </section>
+          </div>
+          <div class="direction-notes">
+            <p>
+              A horizontal command shelf gives tasks the full canvas; deep teal
+              and a warm beacon preserve Farol identity.
+            </p>
+            <dl>
+              <div>
+                <dt>Strength</dt>
+                <dd>Ownable identity with clear task state</dd>
+              </div>
+              <div>
+                <dt>Trade-off</dt>
+                <dd>Accent discipline must survive implementation</dd>
+              </div>
+            </dl>
+          </div>
+        </article>
+      </section>
+
+      <footer class="decision-boundary">
+        <div>
+          <p class="eyebrow">Decision boundary</p>
+          <h2>Beacon Field is the prototype target, not an approval.</h2>
+        </div>
+        <p>
+          The recommendation is based on product fit, state clarity, compact
+          behavior, and identity. Native WebContentsView composition, production
+          menus, and live capability readiness remain separate implementation
+          gates.
+        </p>
+      </footer>
+    </main>
+    <script src="gallery.js"></script>
+  </body>
+</html>
