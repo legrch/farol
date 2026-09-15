@@ -26,6 +26,13 @@ kills that exact utility after runtime readiness, during the first task-view loa
 and during the second task-view load; every case removes the partial task surfaces
 without terminating the shell.
 
+The local package is an unsigned outer Farol Next bundle with a fixed, argument-safe
+launcher. It embeds the pinned vendor `Electron.app` byte-for-byte under its own
+Frameworks directory and passes the embedded application directory explicitly. The
+outer bundle owns the Farol Next product and launch identity; the nested Electron
+bundle remains a verified runtime dependency rather than rewritten, stripped, or
+newly signed executable code.
+
 ## Enforced dependency direction
 
 ```text

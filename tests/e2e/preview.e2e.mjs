@@ -127,7 +127,7 @@ if (development) {
     );
     const helperPlist = path.join(
       wrongHelperApp,
-      "Contents/Frameworks/Farol Next Preview Helper (Renderer).app/Contents/Info.plist",
+      "Contents/Frameworks/Electron Runtime.app/Contents/Frameworks/Electron Helper (Renderer).app/Contents/Info.plist",
     );
     const changedHelper = spawnSync(
       "/usr/libexec/PlistBuddy",
@@ -159,7 +159,7 @@ if (development) {
     assert.notEqual(wrongHelper.status, 0);
     assert.match(
       `${wrongHelper.stdout}${wrongHelper.stderr}`,
-      /PACKAGE_HELPER_BUNDLE_MISMATCH/u,
+      /PACKAGE_RUNTIME_HELPER_BUNDLE_MISMATCH/u,
     );
     cases.push("wrong-helper-bundle-rejected");
   } finally {

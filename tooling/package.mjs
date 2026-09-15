@@ -10,8 +10,57 @@ const builtRoot = path.join(root, "dist/app");
 const packageRoot = path.join(root, "dist/package");
 const appPath = path.join(packageRoot, "Farol Next Preview.app");
 const electronApp = path.join(root, "node_modules/electron/dist/Electron.app");
+const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";
+const runtimeApp = path.join(appPath, runtimeRelativePath);
 const repositoryRoot = path.resolve(root, "..");
 const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+
+const launcher = `#!/bin/sh
+set -eu
+
+launcher_path=$0
+case "$launcher_path" in
+  /*) ;;
+  *) launcher_path="$PWD/$launcher_path" ;;
+esac
+macos_dir=\${launcher_path%/*}
+contents_dir=\${macos_dir%/*}
+export ELECTRON_FORCE_IS_PACKAGED=true
+exec "$contents_dir/Frameworks/Electron Runtime.app/Contents/MacOS/Electron" \\
+  "$contents_dir/Resources/app" "$@"
+`;
+
+const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>Farol Next Preview</string>
+  <key>CFBundleExecutable</key>
+  <string>Farol Next Preview</string>
+  <key>CFBundleIdentifier</key>
+  <string>local.farol.next.preview</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Farol Next Preview</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>12.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Local development preview</string>
+</dict>
+</plist>
+`;
 
 const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
@@ -47,80 +96,24 @@ if (
 const electronSourceSha256 = await treeDigest(electronApp);
 
 await fs.rm(packageRoot, { recursive: true, force: true });
-await fs.mkdir(packageRoot, { recursive: true });
-await fs.cp(electronApp, appPath, {
+await fs.mkdir(path.join(appPath, "Contents/MacOS"), { recursive: true });
+await fs.mkdir(path.join(appPath, "Contents/Resources/app"), {
+  recursive: true,
+});
+await fs.mkdir(path.dirname(runtimeApp), { recursive: true });
+await fs.cp(electronApp, runtimeApp, {
   recursive: true,
   verbatimSymlinks: true,
   preserveTimestamps: true,
 });
-
-function setPlist(plist, key, type, value) {
-  try {
-    execFileSync(
-      "/usr/libexec/PlistBuddy",
-      ["-c", `Set :${key} ${value}`, plist],
-      {
-        stdio: "pipe",
-      },
-    );
-  } catch {
-    execFileSync(
-      "/usr/libexec/PlistBuddy",
-      ["-c", `Add :${key} ${type} ${value}`, plist],
-      {
-        stdio: "pipe",
-      },
-    );
-  }
-}
-
-async function renameExecutable(app, oldName, nextName) {
-  const source = path.join(app, "Contents/MacOS", oldName);
-  const target = path.join(app, "Contents/MacOS", nextName);
-  await fs.rename(source, target);
-  const plist = path.join(app, "Contents/Info.plist");
-  setPlist(plist, "CFBundleExecutable", "string", nextName);
-  setPlist(plist, "CFBundleDisplayName", "string", nextName);
-  setPlist(plist, "CFBundleName", "string", nextName);
-}
-
-await renameExecutable(appPath, "Electron", "Farol Next Preview");
 const mainPlist = path.join(appPath, "Contents/Info.plist");
-setPlist(mainPlist, "CFBundleIdentifier", "string", "local.farol.next.preview");
-setPlist(mainPlist, "CFBundleShortVersionString", "string", "0.1.0");
-setPlist(mainPlist, "CFBundleVersion", "string", "1");
-setPlist(
-  mainPlist,
-  "NSHumanReadableCopyright",
-  "string",
-  "Local development preview",
-);
-
-const helperKinds = [
-  { suffix: "", id: "helper" },
-  { suffix: " (GPU)", id: "helper.gpu" },
-  { suffix: " (Plugin)", id: "helper.plugin" },
-  { suffix: " (Renderer)", id: "helper.renderer" },
-];
-const frameworks = path.join(appPath, "Contents/Frameworks");
-for (const helper of helperKinds) {
-  const oldApp = path.join(frameworks, `Electron Helper${helper.suffix}.app`);
-  const nextName = `Farol Next Preview Helper${helper.suffix}`;
-  await renameExecutable(oldApp, `Electron Helper${helper.suffix}`, nextName);
-  setPlist(
-    path.join(oldApp, "Contents/Info.plist"),
-    "CFBundleIdentifier",
-    "string",
-    `local.farol.next.preview.${helper.id}`,
-  );
-  await fs.rename(oldApp, path.join(frameworks, `${nextName}.app`));
-}
+await fs.writeFile(mainPlist, infoPlist, { mode: 0o644 });
+const launcherPath = path.join(appPath, "Contents/MacOS/Farol Next Preview");
+await fs.writeFile(launcherPath, launcher, { mode: 0o755 });
+await fs.chmod(launcherPath, 0o755);
 
 const resources = path.join(appPath, "Contents/Resources");
-await fs.rm(path.join(resources, "default_app.asar"), { force: true });
 const appResources = path.join(resources, "app");
-await fs.rm(appResources, { recursive: true, force: true });
-await fs.mkdir(appResources, { recursive: true });
 for (const entry of BUILD_ENTRIES) {
   await fs.copyFile(
     path.join(builtRoot, entry),
@@ -154,18 +147,9 @@ await fs.writeFile(
   path.join(appResources, "THIRD_PARTY_NOTICES.txt"),
   `Farol Next Preview direct runtime notice\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
-
-for (const helper of helperKinds) {
-  const name = `Farol Next Preview Helper${helper.suffix}`;
-  execFileSync(
-    "/usr/bin/codesign",
-    ["--remove-signature", path.join(frameworks, `${name}.app`)],
-    { stdio: "pipe" },
-  );
+if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
+  throw new Error("PACKAGE_RUNTIME_COPY_MISMATCH");
 }
-execFileSync("/usr/bin/codesign", ["--remove-signature", appPath], {
-  stdio: "pipe",
-});
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
 const artifact = {
@@ -182,8 +166,14 @@ const artifact = {
     electron: "41.10.7",
     node: "embedded-in-electron",
     testerManagedRuntime: false,
+    layout: "nested-unmodified-vendor-bundle",
+    relativePath: runtimeRelativePath,
   },
-  signing: { kind: "unsigned", reason: "local-development-preview" },
+  signing: {
+    kind: "unsigned",
+    reason: "local-development-preview",
+    runtimeBytes: "unmodified-vendor-bundle",
+  },
   notarized: false,
   updateChannel: "local-preview-only",
 };

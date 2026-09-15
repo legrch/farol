@@ -43,11 +43,11 @@ The development E2E lane runs those exact clean built files through Electron's
 bundled runtime without modifying its signed vendor bundle; it writes evidence to
 `artifacts/e2e-dev/`. The separately sealed package lane remains the artifact gate.
 Packaging verifies the app identity, embedded source manifest, runtime closure,
-helper names and bundle IDs, contained symlinks, type-bound tree digest, plist and
-explicit unsigned status. E2E is the sealed lane intended to launch those packaged bytes under a throwaway home
-and explicit user-data root, check the real UI and task views, reject malformed and
-tampered artifacts, prove default-deny task egress, and exercise an actual
-utility-process death.
+the immutable nested Electron runtime and helper identities, contained symlinks,
+type-bound tree digest, plist, fixed launcher and explicit unsigned status. E2E
+launches those packaged bytes under a throwaway home and explicit user-data root,
+checks the real UI and task views, rejects malformed and tampered artifacts, proves
+default-deny task egress, and exercises actual utility-process death.
 
 Launch the exact built development preview through the pinned Electron runtime:
 
@@ -55,12 +55,17 @@ Launch the exact built development preview through the pinned Electron runtime:
 npm --prefix vnext run preview
 ```
 
-The reconstructed `.app` is explicitly unsigned. On the current macOS host those
-modified unsigned bundle bytes are terminated before the first window, so direct
-package launch and the sealed E2E lane are not claimed until a separately authorized
-local ad-hoc or release signature exists. Neither lane is notarized, published,
-installed-product, independent-recipient, update/rollback, live-provider or release
-readiness evidence.
+After `task next:package`, launch the exact packaged preview from the repository root:
+
+```bash
+./vnext/dist/package/Farol\ Next\ Preview.app/Contents/MacOS/Farol\ Next\ Preview
+```
+
+The outer `.app` and its fixed launcher are explicitly unsigned. The launcher uses
+an unmodified, digest-bound copy of the pinned vendor Electron bundle, so creating
+this local artifact does not remove or add a code signature. This is local preview
+evidence only: it is not notarized, published, installed-product,
+independent-recipient, update/rollback, live-provider or release-readiness evidence.
 
 ## Evidence
 
