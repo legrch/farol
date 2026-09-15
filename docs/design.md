@@ -40,6 +40,9 @@ and offline states.
   view alone is visible; hidden views keep running with background throttling off.
 - Reduced-motion preference removes transforms and transition duration.
 - Status changes update text and color together; color is never the only signal.
+- Test-only window presentation is closed and explicit: hidden for ordinary fault and
+  recovery evidence, or inactive on a non-primary display for the one visual/focus
+  run. Normal owner launches retain the product's ordinary foreground behavior.
 - The Computer action names the synthetic operation and target before approval.
   Unsupported native access is explicitly disabled.
 - Activity is an allowlisted projection: task label, phase, event kind, synthetic

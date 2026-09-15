@@ -2,6 +2,7 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  screen,
   session,
   utilityProcess,
   WebContentsView,
@@ -14,10 +15,16 @@ import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
+import {
+  parsePreviewWindowMode,
+  selectPreviewWindowPlacement,
+} from "./window-placement";
 
 const directory = __dirname;
 const productName = "Farol Next Preview";
 const bundleId = "local.farol.next.preview";
+const windowMode = parsePreviewWindowMode(process.argv);
+const initialWindowSize = { width: 1180, height: 760 } as const;
 const ownerTasks = [
   {
     ownerId: "owner-local-preview",
@@ -531,12 +538,21 @@ function installIpc(): void {
 }
 
 async function createWindow(): Promise<void> {
+  const testPlacement =
+    windowMode === "secondary-visible"
+      ? selectPreviewWindowPlacement(
+          screen.getAllDisplays(),
+          screen.getPrimaryDisplay().id,
+          initialWindowSize,
+        )
+      : null;
   window = new BrowserWindow({
     title: productName,
-    width: 1180,
-    height: 760,
-    minWidth: 640,
-    minHeight: 520,
+    width: initialWindowSize.width,
+    height: initialWindowSize.height,
+    ...(testPlacement?.bounds ?? {}),
+    minWidth: Math.min(640, testPlacement?.bounds.width ?? 640),
+    minHeight: Math.min(520, testPlacement?.bounds.height ?? 520),
     backgroundColor: "#0d1821",
     show: false,
     webPreferences: {
@@ -569,7 +585,11 @@ async function createWindow(): Promise<void> {
       failTaskSurface(task.taskId);
     });
   }
-  window.show();
+  if (windowMode === "secondary-visible") {
+    window.showInactive();
+  } else if (windowMode === "default") {
+    window.show();
+  }
 }
 
 async function main(): Promise<void> {

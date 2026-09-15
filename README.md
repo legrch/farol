@@ -49,6 +49,13 @@ launches those packaged bytes under a throwaway home and explicit user-data root
 checks the real UI and task views, rejects malformed and tampered artifacts, proves
 default-deny task egress, and exercises actual utility-process death.
 
+Both E2E lanes follow the non-interference contract in `docs/testing.md`. One
+native-visible interaction run is positioned on the non-primary built-in display
+before first show and shown without taking focus. Fault and recovery runs stay hidden
+while their renderers continue to paint for DOM and screenshot evidence. A machine
+with no secondary display uses an explicit primary-display fallback recorded in the
+JSON report; it never silently relies on Electron's default placement.
+
 Launch the exact built development preview through the pinned Electron runtime:
 
 ```bash
@@ -75,6 +82,9 @@ independent-recipient, update/rollback, live-provider or release-readiness evide
   evidence;
 - `artifacts/hunt/path.json` — semantic path, model/command-table version, controlled
   schedule, mutation proof and exact build identity.
+
+The E2E reports also record the visible run's selected-display class, work area,
+window bounds, initial focus state, and the scenarios proved while hidden.
 
 These directories are ignored because they are reproducible local evidence, not
 source inputs.

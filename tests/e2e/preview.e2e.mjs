@@ -256,14 +256,115 @@ if (development) {
   }
 }
 
-async function launch(extraArgs = []) {
+async function inspectWindowPresentation(application) {
+  return application.evaluate(({ BrowserWindow, screen }) => {
+    const targetWindow = BrowserWindow.getAllWindows()[0];
+    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    const bounds = targetWindow.getBounds();
+    const primary = screen.getPrimaryDisplay();
+    const selected = screen.getDisplayMatching(bounds);
+    const displays = screen.getAllDisplays().map((display) => ({
+      id: display.id,
+      internal: display.internal,
+      primary: display.id === primary.id,
+      workArea: display.workArea,
+    }));
+    return {
+      mode:
+        process.argv
+          .find((argument) => argument.startsWith("--preview-window-mode="))
+          ?.slice("--preview-window-mode=".length) ?? "default",
+      visible: targetWindow.isVisible(),
+      focused: targetWindow.isFocused(),
+      taskViewCount: targetWindow.contentView.children.filter(
+        (view) => "webContents" in view,
+      ).length,
+      bounds,
+      display: {
+        id: selected.id,
+        internal: selected.internal,
+        primary: selected.id === primary.id,
+        selection:
+          selected.id !== primary.id
+            ? selected.internal
+              ? "non-primary-internal"
+              : "non-primary"
+            : selected.internal
+              ? "internal-primary-fallback"
+              : "primary-fallback",
+        workArea: selected.workArea,
+      },
+      displays,
+    };
+  });
+}
+
+function assertVisibleWindowPlacement(presentation) {
+  assert.equal(presentation.mode, "secondary-visible");
+  assert.equal(presentation.visible, true);
+  assert.equal(presentation.focused, false);
+  const preferred = presentation.displays.filter(
+    (display) => !display.primary && display.internal,
+  );
+  const secondary = presentation.displays.filter((display) => !display.primary);
+  if (preferred.length > 0) {
+    assert.equal(presentation.display.internal, true);
+    assert.equal(presentation.display.primary, false);
+  } else if (secondary.length > 0) {
+    assert.equal(presentation.display.primary, false);
+  } else {
+    assert.equal(presentation.display.primary, true);
+  }
+  const { bounds, display } = presentation;
+  assert.ok(bounds.x >= display.workArea.x);
+  assert.ok(bounds.y >= display.workArea.y);
+  assert.ok(
+    bounds.x + bounds.width <= display.workArea.x + display.workArea.width,
+  );
+  assert.ok(
+    bounds.y + bounds.height <= display.workArea.y + display.workArea.height,
+  );
+}
+
+async function waitForWindowPresentation(application, windowMode) {
+  let last = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    last = await inspectWindowPresentation(application);
+    if (last.taskViewCount === 2) {
+      if (windowMode === "hidden") {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        last = await inspectWindowPresentation(application);
+        assert.equal(last.visible, false);
+      } else {
+        if (!last.visible) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        assertVisibleWindowPlacement(last);
+      }
+      assert.equal(last.mode, windowMode);
+      return last;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `E2E_WINDOW_PRESENTATION_TIMEOUT:${windowMode}:${JSON.stringify(last)}`,
+  );
+}
+
+async function launch(extraArgs = [], windowMode = "hidden") {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const application = await electron.launch({
     executablePath: executable,
-    args: [...launchPrefix, `--user-data-dir=${userData}`, ...extraArgs],
+    args: [
+      ...launchPrefix,
+      `--user-data-dir=${userData}`,
+      `--preview-window-mode=${windowMode}`,
+      ...extraArgs,
+    ],
     env: {
       HOME: isolatedHome,
       LANG: "en_US.UTF-8",
@@ -277,10 +378,26 @@ async function launch(extraArgs = []) {
     .locator("#task-tabs .task-tab")
     .first()
     .waitFor({ state: "visible" });
-  return { application, window, isolatedHome, userData };
+  const presentation = await waitForWindowPresentation(application, windowMode);
+  return {
+    application,
+    window,
+    isolatedHome,
+    userData,
+    windowMode,
+    presentation,
+  };
 }
 
 async function close(instance) {
+  if (instance.windowMode) {
+    const presentation = await inspectWindowPresentation(instance.application);
+    assert.equal(presentation.mode, instance.windowMode);
+    assert.equal(
+      presentation.visible,
+      instance.windowMode === "secondary-visible",
+    );
+  }
   await instance.application.close();
   const real = path.resolve(instance.isolatedHome);
   assert.ok(
@@ -298,7 +415,11 @@ async function proveStartupRuntimeDeath(stage) {
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const application = await electron.launch({
     executablePath: executable,
-    args: [...launchPrefix, `--user-data-dir=${userData}`],
+    args: [
+      ...launchPrefix,
+      `--user-data-dir=${userData}`,
+      "--preview-window-mode=hidden",
+    ],
     env: {
       HOME: isolatedHome,
       LANG: "en_US.UTF-8",
@@ -348,6 +469,13 @@ async function proveStartupRuntimeDeath(stage) {
       .getByText("failed")
       .waitFor({ timeout: 5_000 });
     assert.equal(startupWindow.isClosed(), false);
+    assert.equal(
+      await instance.application.evaluate(
+        ({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0]?.isVisible() ?? null,
+      ),
+      false,
+    );
     const remainingTaskViews = await instance.application.evaluate(
       ({ BrowserWindow }) =>
         (BrowserWindow.getAllWindows()[0]?.contentView.children ?? []).filter(
@@ -595,7 +723,7 @@ async function completeSetup(instance, capture = false) {
   await dialog.waitFor({ state: "hidden" });
 }
 
-const normal = await launch();
+const normal = await launch([], "secondary-visible");
 try {
   if (!development) {
     const launchIdentity = await normal.application.evaluate(({ app }) => ({
@@ -831,6 +959,8 @@ try {
     false,
   );
   cases.push(
+    "visible-window-secondary-display",
+    "visible-window-show-inactive",
     "isolated-state-root",
     "task-network-default-deny",
     "task-capability-isolation",
@@ -1005,6 +1135,7 @@ for (const stage of [
   await proveStartupRuntimeDeath(stage);
   cases.push(`utility-process-sigkill-${stage}`);
 }
+cases.push("fault-scenarios-remain-hidden");
 
 const report = {
   schema: 1,
@@ -1013,6 +1144,27 @@ const report = {
   sourceCommit: artifact.sourceCommit,
   sourceTreeDigest: artifact.sourceTreeDigest,
   sourceDirty: artifact.sourceDirty,
+  windowPolicy: {
+    visibleRun: {
+      mode: normal.presentation.mode,
+      focusedAtFirstPaint: normal.presentation.focused,
+      displayId: normal.presentation.display.id,
+      displayInternal: normal.presentation.display.internal,
+      displayPrimary: normal.presentation.display.primary,
+      selection: normal.presentation.display.selection,
+      displayCount: normal.presentation.displays.length,
+      bounds: normal.presentation.bounds,
+      workArea: normal.presentation.display.workArea,
+    },
+    hiddenRuns: [
+      "provider-failure",
+      "stream-failure",
+      "runtime-process-death",
+      "startup-runtime-death-after-ready",
+      "startup-runtime-death-during-first-view",
+      "startup-runtime-death-during-second-view",
+    ],
+  },
   cases,
   screenshots: [
     "running-browser-view.png",
