@@ -664,6 +664,24 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
   );
 }
 
+async function activateForNativeFocusProof(application) {
+  await application.evaluate(({ app, BrowserWindow }) => {
+    const targetWindow = BrowserWindow.getAllWindows()[0];
+    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    app.focus({ steal: true });
+    targetWindow.focus();
+  });
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const focused = await application.evaluate(
+      ({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.isFocused() ?? false,
+    );
+    if (focused) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("E2E_NATIVE_WINDOW_FOCUS_TIMEOUT");
+}
+
 async function setWindowSize(application, width, height) {
   await application.evaluate(
     ({ BrowserWindow }, size) => {
@@ -930,6 +948,7 @@ try {
   await reviewedSetup.waitFor({ state: "hidden" });
 
   await normal.window.keyboard.press("Meta+1");
+  await activateForNativeFocusProof(normal.application);
   await sendShortcutFromTask(normal.application, "task-atlantic");
   await normal.window
     .locator('[data-task-id="task-harbor"][aria-selected="true"]')
@@ -1155,6 +1174,7 @@ const report = {
       displayCount: normal.presentation.displays.length,
       bounds: normal.presentation.bounds,
       workArea: normal.presentation.display.workArea,
+      nativeFocusProof: "bounded-final-active-phase",
     },
     hiddenRuns: [
       "provider-failure",

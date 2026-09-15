@@ -10,7 +10,8 @@ a renderer. Use the least visible route that preserves the evidence:
    in a `BrowserWindow` created with `show: false` and never shown.
 3. One interaction run may be visible because it proves the native
    `WebContentsView` surface and focus transfer. It is positioned before first show
-   and displayed with `showInactive()`.
+   and displayed with `showInactive()`. The window is activated only for the final
+   native focus-transfer assertion, then closed immediately.
 
 The visible selector is deterministic: non-primary internal, any non-primary,
 internal, then primary. The chosen 1180x760 bounds are clamped and centered inside

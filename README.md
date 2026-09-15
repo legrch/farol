@@ -54,7 +54,9 @@ native-visible interaction run is positioned on the non-primary built-in display
 before first show and shown without taking focus. Fault and recovery runs stay hidden
 while their renderers continue to paint for DOM and screenshot evidence. A machine
 with no secondary display uses an explicit primary-display fallback recorded in the
-JSON report; it never silently relies on Electron's default placement.
+JSON report; it never silently relies on Electron's default placement. Only the final
+native focus-transfer assertion activates that secondary-display window, and teardown
+follows immediately.
 
 Launch the exact built development preview through the pinned Electron runtime:
 
