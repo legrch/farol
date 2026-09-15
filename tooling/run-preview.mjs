@@ -2,22 +2,33 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertCanonicalArtifactPath,
+  assertExactSourceIdentity,
+  candidatePaths,
+} from "./candidate-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.resolve(root, "..");
 const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
-const artifactFile = path.join(root, "dist/package/artifact.json");
+const { artifactFile, appPath } = candidatePaths(root);
 
 function fail(message) {
   process.stderr.write(`Farol Next Preview is not runnable: ${message}\n`);
   process.exitCode = 1;
 }
 
-function verify(artifactPath) {
+function verify(artifactPath, candidateAppPath) {
   return spawnSync(
     process.execPath,
-    [path.join(root, "tooling/verify-package.mjs"), "--artifact", artifactPath],
+    [
+      path.join(root, "tooling/verify-package.mjs"),
+      "--artifact",
+      artifactPath,
+      "--app",
+      candidateAppPath,
+    ],
     { cwd: root, encoding: "utf8" },
   );
 }
@@ -36,19 +47,27 @@ async function main() {
     throw new Error("package is missing; run 'task next:package' first");
   }
 
-  const current = sourceIdentity(repositoryRoot, scope);
-  if (
-    current.dirty ||
-    artifact.sourceDirty ||
-    current.commit !== artifact.sourceCommit ||
-    current.treeDigest !== artifact.sourceTreeDigest
-  ) {
+  try {
+    assertCanonicalArtifactPath(root, artifact);
+  } catch {
+    throw new Error(
+      "package manifest does not identify the canonical repository candidate; run 'task next:package'",
+    );
+  }
+
+  try {
+    assertExactSourceIdentity(
+      sourceIdentity(repositoryRoot, scope),
+      artifact,
+      "CANDIDATE_SOURCE_NOT_EXACT",
+    );
+  } catch {
     throw new Error(
       "package is stale or source is not exact; commit the intended Next source and run 'task next:package'",
     );
   }
 
-  const verified = verify(artifactFile);
+  const verified = verify(artifactFile, appPath);
   if (verified.status !== 0) {
     const detail = `${verified.stderr}${verified.stdout}`.trim();
     throw new Error(
@@ -57,7 +76,11 @@ async function main() {
   }
   process.stdout.write(verified.stdout);
 
-  const appPath = path.resolve(artifact.artifactPath);
+  assertExactSourceIdentity(
+    sourceIdentity(repositoryRoot, scope),
+    artifact,
+    "CANDIDATE_SOURCE_CHANGED_DURING_VERIFICATION",
+  );
   const executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
   await fs.access(executable);
   process.stdout.write(`launching verified packaged candidate ${appPath}\n`);

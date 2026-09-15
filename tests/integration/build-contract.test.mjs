@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUILD_ENTRIES,
   snapshotBuildEntries,
+  verifyAbsentIntegrations,
   verifyBuildEntries,
 } from "../../tooling/build-contract.mjs";
 
@@ -47,6 +48,32 @@ describe("build entry contract", () => {
       const { [BUILD_ENTRIES[0]]: _removed, ...missing } = snapshot;
       await expect(verifyBuildEntries(root, missing)).rejects.toThrow(
         "BUILD_ENTRY_SET_INVALID",
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    "setLoginItemSettings",
+    "setAsDefaultProtocolClient",
+    "autoUpdater",
+    "registerSchemesAsPrivileged",
+    "codex-chatgpt-web",
+    "secure-mcp-tunnel",
+  ])("rejects the forbidden built capability token %s", async (token) => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-absence-contract-"),
+    );
+    try {
+      await Promise.all(
+        ["main.cjs", "preload.cjs", "runtime.cjs", "shell.js"].map((entry) =>
+          fs.writeFile(path.join(root, entry), `safe:${entry}\n`),
+        ),
+      );
+      await fs.appendFile(path.join(root, "main.cjs"), `${token}\n`);
+      await expect(verifyAbsentIntegrations(root)).rejects.toThrow(
+        "BUILD_FORBIDDEN_INTEGRATION",
       );
     } finally {
       await fs.rm(root, { recursive: true, force: true });

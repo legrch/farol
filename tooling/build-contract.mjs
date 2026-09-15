@@ -12,6 +12,21 @@ export const BUILD_ENTRIES = Object.freeze([
   "shell.js",
 ]);
 
+const CAPABILITY_BOUNDARY_ENTRIES = Object.freeze([
+  "main.cjs",
+  "preload.cjs",
+  "runtime.cjs",
+  "shell.js",
+]);
+const FORBIDDEN_INTEGRATION_TOKENS = Object.freeze([
+  "setLoginItemSettings",
+  "setAsDefaultProtocolClient",
+  "autoUpdater",
+  "registerSchemesAsPrivileged",
+  "codex-chatgpt-web",
+  "secure-mcp-tunnel",
+]);
+
 async function digestFile(file) {
   const stat = await fs.lstat(file);
   if (!stat.isFile() || stat.isSymbolicLink()) {
@@ -55,6 +70,17 @@ export async function verifyBuildEntries(root, expected) {
     }
     if ((await digestFile(path.join(root, entry))) !== claimed) {
       throw new Error(`BUILD_ENTRY_DIGEST_MISMATCH:${entry}`);
+    }
+  }
+}
+
+export async function verifyAbsentIntegrations(root) {
+  for (const entry of CAPABILITY_BOUNDARY_ENTRIES) {
+    const source = await fs.readFile(path.join(root, entry), "utf8");
+    for (const token of FORBIDDEN_INTEGRATION_TOKENS) {
+      if (source.includes(token)) {
+        throw new Error(`BUILD_FORBIDDEN_INTEGRATION:${entry}:${token}`);
+      }
     }
   }
 }

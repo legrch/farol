@@ -58,11 +58,16 @@ If the destination and receipt are absent and you choose to make the local previ
 durable outside the checkout, run this owner action:
 
 ```bash
-task next:promote -- --destination "/Users/ac/Applications/Farol Next Preview.app" --apply
+task next:promote -- --destination "$HOME/Applications/Farol Next Preview.app" --apply
 ```
 
 The operation refuses any existing destination, copies into a newly claimed Next-only
 path, verifies the destination bytes against the source artifact digest, and writes
-`/Users/ac/Applications/Farol Next Preview.app.receipt.json`. It never overwrites an
+`$HOME/Applications/Farol Next Preview.app.receipt.json`. It never overwrites an
 application and never changes Legacy. This unsigned local Preview is not a signed,
 notarized, published, or independent-recipient release.
+
+If the copy is interrupted before the receipt exists, the exact Preview destination
+may be partial and remains fail-closed. After confirming the sibling receipt is absent,
+the owner may move only `Farol Next Preview.app` to Trash and run the same command
+again; the tool never removes an existing destination on a later invocation.

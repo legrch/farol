@@ -1,10 +1,17 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import {
+  assertCanonicalArtifactPath,
+  candidatePaths,
+} from "./candidate-contract.mjs";
+import { assertResourceManifest } from "./resource-contract.mjs";
 
-const root = process.cwd();
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const canonical = candidatePaths(root);
 const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";
 const expectedLauncher = `#!/bin/sh
 set -eu
@@ -111,8 +118,9 @@ requireValue(
     artifact.runtime?.relativePath === runtimeRelativePath,
   "PACKAGE_RUNTIME_CLOSURE_INVALID",
 );
+assertCanonicalArtifactPath(root, artifact);
 
-const appPath = path.resolve(appOption ?? artifact.artifactPath);
+const appPath = path.resolve(appOption ?? canonical.appPath);
 requireValue(
   path.basename(appPath) === "Farol Next Preview.app",
   "PACKAGE_PATH_INVALID",
@@ -206,18 +214,11 @@ requireValue(
 const resourceManifest = JSON.parse(
   await fs.readFile(path.join(resources, "resource-manifest.json"), "utf8"),
 );
-requireValue(
-  resourceManifest.schema === "farol.next.resource-manifest/1" &&
-    resourceManifest.product?.name === artifact.product &&
-    resourceManifest.product?.version === artifact.version &&
-    resourceManifest.product?.bundleId === artifact.bundleId &&
-    resourceManifest.product?.updateChannel === artifact.updateChannel &&
-    resourceManifest.integrations?.tunnel === "absent" &&
-    resourceManifest.integrations?.mcpRegistration === "absent" &&
-    resourceManifest.integrations?.providerRegistration === "absent" &&
-    resourceManifest.integrations?.updater === "absent",
-  "PACKAGE_RESOURCE_MANIFEST_INVALID",
+const sourceResourceManifest = JSON.parse(
+  await fs.readFile(path.join(root, "resources.json"), "utf8"),
 );
+assertResourceManifest(sourceResourceManifest);
+assertResourceManifest(resourceManifest);
 
 function plistValue(plist, key) {
   return execFileSync(

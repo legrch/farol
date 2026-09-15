@@ -27,7 +27,15 @@ describe("portable Farol Next repository contract", () => {
     const ignored = spawnSync(
       "git",
       ["-C", repositoryRoot, "check-ignore", "-q", "vnext/AGENTS.md"],
-      { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" } },
+      {
+        env: {
+          ...process.env,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_OPTIONAL_LOCKS: "0",
+          LC_ALL: "C",
+        },
+      },
     );
     expect(ignored.status).toBe(1);
 
@@ -49,6 +57,7 @@ describe("portable Farol Next repository contract", () => {
     const readme = await fs.readFile(path.join(vnextRoot, "README.md"), "utf8");
     expect(taskfile).toMatch(/^  next:run:$/mu);
     expect(taskfile).toMatch(/^  next:preview:$/mu);
+    expect(taskfile).not.toContain("launch an already verified .app directly");
     expect(readme).toContain("task next:run");
     expect(readme).toContain("verified packaged candidate");
   });

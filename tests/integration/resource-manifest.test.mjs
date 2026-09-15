@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  EXPECTED_RESOURCE_MANIFEST,
+  assertResourceManifest,
+} from "../../tooling/resource-contract.mjs";
 
 const vnextRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -10,35 +14,25 @@ describe("Farol Next resource ownership", () => {
       await fs.readFile(path.join(vnextRoot, "resources.json"), "utf8"),
     );
 
-    expect(manifest).toMatchObject({
-      schema: "farol.next.resource-manifest/1",
-      product: {
-        name: "Farol Next Preview",
-        version: "0.1.0-preview.0",
-        bundleId: "local.farol.next.preview",
-      },
-      application: {
-        singleInstanceScope: "userData",
-        browserPartition: "persist:farol-next-preview",
-      },
-      runtime: {
-        port: "os-allocated-loopback",
-        bearer: "per-launch-memory-only",
-      },
-      integrations: {
-        tunnel: "absent",
-        mcpRegistration: "absent",
-        providerRegistration: "absent",
-        updater: "absent",
-      },
-    });
-    expect(manifest.exclusions).toEqual(
-      expect.arrayContaining([
-        "~/.farol",
-        "local.farol.app",
-        "persist:farol-chatgpt",
-        "codex-chatgpt-web",
-      ]),
+    expect(manifest).toEqual(EXPECTED_RESOURCE_MANIFEST);
+    expect(() => assertResourceManifest(manifest)).not.toThrow();
+  });
+
+  it.each([
+    ["application", ["application", "userData"], "${appData}/Farol"],
+    ["runtime", ["runtime", "process"], "Farol Runtime"],
+    ["processes", ["processes", 0, "name"], "Farol"],
+    ["native Computer", ["integrations", "nativeComputer"], "present"],
+    ["native Agent", ["integrations", "nativeAgent"], "present"],
+    ["login item", ["integrations", "loginItem"], "registered"],
+    ["exclusions", ["exclusions", 0], "~/.farol-next"],
+  ])("rejects drift in the %s declaration", (_name, segments, replacement) => {
+    const changed = structuredClone(EXPECTED_RESOURCE_MANIFEST);
+    let cursor = changed;
+    for (const segment of segments.slice(0, -1)) cursor = cursor[segment];
+    cursor[segments.at(-1)] = replacement;
+    expect(() => assertResourceManifest(changed)).toThrow(
+      "PACKAGE_RESOURCE_MANIFEST_INVALID",
     );
   });
 });

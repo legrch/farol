@@ -15,7 +15,11 @@ import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
-import { presentationAction, windowAllClosedAction } from "./lifecycle-policy";
+import {
+  containWindowOpenFailure,
+  presentationAction,
+  windowAllClosedAction,
+} from "./lifecycle-policy";
 import {
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
@@ -612,6 +616,21 @@ function ensureWindow(): Promise<void> {
   return windowOpening;
 }
 
+function recoverWindowOpenFailure(): void {
+  stopStreams();
+  disposeTaskViews();
+  taskViews.clear();
+  pendingComputer.clear();
+  taskSurfaceFailures.clear();
+  const failedWindow = window;
+  window = null;
+  if (failedWindow && !failedWindow.isDestroyed()) failedWindow.destroy();
+}
+
+function reopenWindow(): void {
+  void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
+}
+
 function stopRuntime(): void {
   runtimeStopping = true;
   stopStreams();
@@ -621,16 +640,12 @@ function stopRuntime(): void {
 }
 
 async function main(): Promise<void> {
-  app.on("second-instance", () => {
-    void ensureWindow();
-  });
+  app.on("second-instance", reopenWindow);
   await app.whenReady();
   installIpc();
   await startRuntime();
   await ensureWindow();
-  app.on("activate", () => {
-    void ensureWindow();
-  });
+  app.on("activate", reopenWindow);
   app.on("before-quit", stopRuntime);
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();

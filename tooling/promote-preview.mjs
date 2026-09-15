@@ -3,9 +3,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertCanonicalArtifactPath,
+  assertExactSourceIdentity,
+  candidatePaths,
+} from "./candidate-contract.mjs";
+import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const artifactFile = path.join(root, "dist/package/artifact.json");
+const repositoryRoot = path.resolve(root, "..");
+const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const { artifactFile, appPath: canonicalAppPath } = candidatePaths(root);
 
 function option(arguments_, name) {
   const indexes = arguments_
@@ -69,7 +77,17 @@ async function main() {
   }
 
   const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
-  const source = path.resolve(artifact.artifactPath);
+  assertCanonicalArtifactPath(
+    root,
+    artifact,
+    "PROMOTION_ARTIFACT_PATH_INVALID",
+  );
+  assertExactSourceIdentity(
+    sourceIdentity(repositoryRoot, scope),
+    artifact,
+    "PROMOTION_SOURCE_NOT_EXACT",
+  );
+  const source = canonicalAppPath;
   const destination = path.resolve(
     destinationOption ??
       path.join(os.homedir(), "Applications/Farol Next Preview.app"),
@@ -87,6 +105,11 @@ async function main() {
       `PROMOTION_SOURCE_INVALID:${`${sourceVerification.stderr}${sourceVerification.stdout}`.trim()}`,
     );
   }
+  assertExactSourceIdentity(
+    sourceIdentity(repositoryRoot, scope),
+    artifact,
+    "PROMOTION_SOURCE_CHANGED_DURING_VERIFICATION",
+  );
   if (await exists(destination))
     throw new Error("PROMOTION_DESTINATION_EXISTS");
   if (await exists(receipt)) throw new Error("PROMOTION_RECEIPT_EXISTS");
@@ -98,6 +121,7 @@ async function main() {
     version: artifact.version,
     sourceCommit: artifact.sourceCommit,
     sourceTreeDigest: artifact.sourceTreeDigest,
+    sourceDirty: artifact.sourceDirty,
     artifactSha256: artifact.artifactSha256,
     source,
     destination,
@@ -128,6 +152,11 @@ async function main() {
         `PROMOTION_DESTINATION_INVALID:${`${destinationVerification.stderr}${destinationVerification.stdout}`.trim()}`,
       );
     }
+    assertExactSourceIdentity(
+      sourceIdentity(repositoryRoot, scope),
+      artifact,
+      "PROMOTION_SOURCE_CHANGED_DURING_COPY",
+    );
     const promotionReceipt = {
       ...plan,
       operation: "applied",

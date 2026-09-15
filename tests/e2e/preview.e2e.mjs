@@ -16,6 +16,10 @@ const evidenceRoot = path.join(
   development ? "artifacts/e2e-dev" : "artifacts/e2e",
 );
 const metadataPath = path.join(root, "dist/package/artifact.json");
+const canonicalPackagePath = path.join(
+  root,
+  "dist/package/Farol Next Preview.app",
+);
 const vendorElectron = path.join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
@@ -69,7 +73,8 @@ if (development) {
   assert.equal(artifact.sourceDirty, false, "E2E_DIRTY_ARTIFACT");
   assert.equal(artifact.sourceCommit, expectedSource.commit);
   assert.equal(artifact.sourceTreeDigest, expectedSource.treeDigest);
-  appPath = path.resolve(artifact.artifactPath);
+  assert.equal(artifact.artifactPath, canonicalPackagePath);
+  appPath = canonicalPackagePath;
   executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 }
 await fs.rm(evidenceRoot, { recursive: true, force: true });
@@ -106,6 +111,21 @@ if (development) {
     const copied = verifyArtifact(metadataPath, tamperedApp);
     assert.equal(copied.status, 0, `${copied.stdout}${copied.stderr}`);
     cases.push("copied-destination-verified");
+    const redirectedMetadata = path.join(
+      corruptRoot,
+      "redirected-artifact.json",
+    );
+    await fs.writeFile(
+      redirectedMetadata,
+      `${JSON.stringify({ ...artifact, artifactPath: tamperedApp })}\n`,
+    );
+    const redirected = verifyArtifact(redirectedMetadata);
+    assert.notEqual(redirected.status, 0);
+    assert.match(
+      `${redirected.stdout}${redirected.stderr}`,
+      /PACKAGE_ARTIFACT_PATH_INVALID/u,
+    );
+    cases.push("manifest-redirected-artifact-rejected");
     await fs.appendFile(
       path.join(tamperedApp, "Contents/Resources/app/shell.html"),
       "\n<!-- deterministic tamper probe -->\n",
@@ -149,11 +169,13 @@ if (development) {
       extraResourceMetadata,
       `${JSON.stringify({
         ...artifact,
-        artifactPath: extraResourceApp,
         artifactSha256: await treeDigest(extraResourceApp),
       })}\n`,
     );
-    const extraResource = verifyArtifact(extraResourceMetadata);
+    const extraResource = verifyArtifact(
+      extraResourceMetadata,
+      extraResourceApp,
+    );
     assert.notEqual(extraResource.status, 0);
     assert.match(
       `${extraResource.stdout}${extraResource.stderr}`,
@@ -198,11 +220,10 @@ if (development) {
       wrongHelperMetadata,
       `${JSON.stringify({
         ...artifact,
-        artifactPath: wrongHelperApp,
         artifactSha256: await treeDigest(wrongHelperApp),
       })}\n`,
     );
-    const wrongHelper = verifyArtifact(wrongHelperMetadata);
+    const wrongHelper = verifyArtifact(wrongHelperMetadata, wrongHelperApp);
     assert.notEqual(wrongHelper.status, 0);
     assert.match(
       `${wrongHelper.stdout}${wrongHelper.stderr}`,
@@ -238,11 +259,13 @@ if (development) {
       wrongLauncherMetadata,
       `${JSON.stringify({
         ...artifact,
-        artifactPath: wrongLauncherApp,
         artifactSha256: await treeDigest(wrongLauncherApp),
       })}\n`,
     );
-    const wrongLauncher = verifyArtifact(wrongLauncherMetadata);
+    const wrongLauncher = verifyArtifact(
+      wrongLauncherMetadata,
+      wrongLauncherApp,
+    );
     assert.notEqual(wrongLauncher.status, 0);
     assert.match(
       `${wrongLauncher.stdout}${wrongLauncher.stderr}`,
@@ -281,11 +304,10 @@ if (development) {
       wrongRuntimeMetadata,
       `${JSON.stringify({
         ...artifact,
-        artifactPath: wrongRuntimeApp,
         artifactSha256: await treeDigest(wrongRuntimeApp),
       })}\n`,
     );
-    const wrongRuntime = verifyArtifact(wrongRuntimeMetadata);
+    const wrongRuntime = verifyArtifact(wrongRuntimeMetadata, wrongRuntimeApp);
     assert.notEqual(wrongRuntime.status, 0);
     assert.match(
       `${wrongRuntime.stdout}${wrongRuntime.stderr}`,
@@ -1180,6 +1202,12 @@ try {
     .first()
     .waitFor({ state: "visible" });
   await waitForWindowPresentation(normal.application, normal.windowMode);
+  const reopenedBootstrap = await normal.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(reopenedBootstrap.runtimeState, "ready");
+  assert.equal(reopenedBootstrap.runtimeIdentity, "farol-next-preview-runtime");
+  assert.equal((await taskSurfaces(normal.application)).length, 2);
   assert.equal(
     await runtimeProcessId(normal.application),
     runtimeBeforeWindowClose,
@@ -1208,6 +1236,7 @@ try {
     "settings-setup-reentry",
     "second-launch-reuses-single-instance",
     "window-close-reopen-keeps-runtime",
+    "window-reopen-restores-runtime-connection",
   );
 } finally {
   await close(normal);

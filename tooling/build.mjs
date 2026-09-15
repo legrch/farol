@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
-import { BUILD_ENTRIES, snapshotBuildEntries } from "./build-contract.mjs";
+import {
+  BUILD_ENTRIES,
+  snapshotBuildEntries,
+  verifyAbsentIntegrations,
+} from "./build-contract.mjs";
+import { assertResourceManifest } from "./resource-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
 
 const root = process.cwd();
@@ -137,10 +142,12 @@ await Promise.all([
   readBuildInput("src/ui/shell.css").then((bytes) =>
     fs.writeFile("dist/app/shell.css", bytes),
   ),
-  readBuildInput("resources.json").then((bytes) =>
-    fs.writeFile("dist/app/resource-manifest.json", bytes),
-  ),
+  readBuildInput("resources.json").then((bytes) => {
+    assertResourceManifest(JSON.parse(bytes.toString("utf8")));
+    return fs.writeFile("dist/app/resource-manifest.json", bytes);
+  }),
 ]);
+await verifyAbsentIntegrations(output);
 
 const current = sourceSnapshot(repositoryRoot, scope);
 const sourceInputs = [...inputRecords.values()].filter(
