@@ -21,7 +21,10 @@ This deliberately uses the runtime shipped inside the exact Electron artifact, s
 tester does not need Homebrew, Python, Node, npm, or Bun. Bun FFI is not used as a
 security boundary. The Electron main process owns child lifetime, requests bounded
 shutdown when its window closes, and converts an unexpected utility-process exit
-into an explicit failed state while keeping the shell available.
+into an explicit failed state while keeping the shell available. Startup coverage
+kills that exact utility after runtime readiness, during the first task-view load,
+and during the second task-view load; every case removes the partial task surfaces
+without terminating the shell.
 
 ## Enforced dependency direction
 
@@ -68,3 +71,9 @@ installed browser profile is used.
 The local provider and Computer capability are controlled fixtures. They prove the
 module/IPC/SSE/tool loop, not ChatGPT readiness, native Codex ownership, Mac
 filesystem containment, or Farol Agent admission.
+
+The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
+events already acknowledged by the receiving client. If the unacknowledged window
+is full, that task fails closed with `EVENT_STREAM_CAPACITY_EXCEEDED`; its stream is
+closed and late subscribers receive a conflict response. No other task or the
+runtime process is stopped by that local failure.

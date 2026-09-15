@@ -12,6 +12,8 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 - two independent scripted local-provider sessions;
 - one bounded `fixture.inspect` Computer round-trip that returns to the exact
   owner/session/task/Turn/generation/call;
+- one mandatory five-step first-run Setup journey, available again from Settings,
+  which reports every preview-only or unavailable integration explicitly;
 - content-free Activity and explicit provider/runtime failure states.
 
 The provider and Computer executor are labelled local fixtures. Native filesystem
@@ -42,8 +44,7 @@ bundled runtime without modifying its signed vendor bundle; it writes evidence t
 `artifacts/e2e-dev/`. The separately sealed package lane remains the artifact gate.
 Packaging verifies the app identity, embedded source manifest, runtime closure,
 helper names and bundle IDs, contained symlinks, type-bound tree digest, plist and
-explicit unsigned status. E2E
-is the sealed lane intended to launch those packaged bytes under a throwaway home
+explicit unsigned status. E2E is the sealed lane intended to launch those packaged bytes under a throwaway home
 and explicit user-data root, check the real UI and task views, reject malformed and
 tampered artifacts, prove default-deny task egress, and exercise an actual
 utility-process death.
@@ -65,7 +66,8 @@ readiness evidence.
 
 - `dist/package/artifact.json` — exact source and packaged-tree identity;
 - `artifacts/e2e-dev/report.json` — exact development-build interaction evidence;
-- `artifacts/e2e/report.json` and its eleven PNGs — packaged interaction evidence;
+- `artifacts/e2e/report.json` and its recorded PNG set — packaged interaction
+  evidence;
 - `artifacts/hunt/path.json` — semantic path, model/command-table version, controlled
   schedule, mutation proof and exact build identity.
 

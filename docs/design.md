@@ -8,6 +8,11 @@ Computer explains the exact capability waiting for consent, Activity shows a qui
 sanitized evidence trail, and Settings reports isolation and unavailable live
 integrations without pretending they are configured.
 
+The first launch opens a required five-step Setup journey for ChatGPT, Computer,
+Connect, Hosts, and Verify. It records no credentials and makes no live connection;
+each step states the exact preview boundary. Settings can reopen the same journey so
+the boundary remains inspectable after dismissal.
+
 ## Visual direction: Atlantic lighthouse
 
 - Atlantic Midnight `#0d1821` and Harbor Slate `#172733` form the calm shell.
@@ -28,8 +33,8 @@ and offline states.
 ## Interaction contract
 
 - `Command+1…4` selects Browser, Computer, Activity, or Settings.
-- `Control+Tab` and `Control+Shift+Tab` move between task tabs without cancelling or
-  focusing the hidden task's page.
+- `Control+Tab` and `Control+Shift+Tab` move between task tabs without cancelling the
+  hidden task. Keyboard focus moves to the newly visible task surface.
 - Visible controls have a two-pixel Sea Glass focus ring and a minimum 40 px target.
 - Switching views does not recreate WebContentsView instances. The selected browser
   view alone is visible; hidden views keep running with background throttling off.
