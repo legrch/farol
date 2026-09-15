@@ -2687,6 +2687,17 @@ dialog::backdrop {
   }
 }
 
+/* Shared lamp glyphs: one shape per lifecycle state (Keeper's Slate, Watch Rail). */
+:root {
+  --lamp-shape-running: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%226.4%22%20cy%3D%228%22%20r%3D%223.5%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M11%204.8a4.5%204.5%200%200%201%200%206.4M13.3%202.5a7.8%207.8%200%200%201%200%2011%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E");
+  --lamp-shape-waiting: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.6%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-dasharray%3D%2224.5%2010.7%22%20transform%3D%22rotate(-25%208%208)%22%2F%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%221.7%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E");
+  --lamp-shape-complete: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226.5%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M5.1%208.2l2.1%202.1%203.9-4.3%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E");
+  --lamp-shape-failed: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226.5%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M5.6%205.6l4.8%204.8M10.4%205.6l-4.8%204.8%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E");
+  --lamp-shape-unavailable: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.6%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-dasharray%3D%222.2%202.8%22%2F%3E%3C%2Fsvg%3E");
+  --lamp-shape-unknown: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.9%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M6.2%206.6a1.8%201.8%200%201%201%202.6%201.6c-.5.3-.8.6-.8%201.1v.2%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%2F%3E%3Ccircle%20cx%3D%228%22%20cy%3D%2211.4%22%20r%3D%22.9%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E");
+  --lamp-shape-neutral: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.6%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.5%22%2F%3E%3C%2Fsvg%3E");
+}
+
 /* ---------------------------------------------------------------------- */
 /* Direction 04 · Keeper's Slate                                            */
 /* Graphite-first. The selected task tab fuses into one graphite plate that */
@@ -2734,13 +2745,6 @@ html[data-direction="slate"] {
   --radius-panel: 10px;
   --radius-large: 14px;
   --focus: #79b3ff;
-  --lamp-shape-running: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%226.4%22%20cy%3D%228%22%20r%3D%223.5%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M11%204.8a4.5%204.5%200%200%201%200%206.4M13.3%202.5a7.8%207.8%200%200%201%200%2011%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.6%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E");
-  --lamp-shape-waiting: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.6%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-dasharray%3D%2224.5%2010.7%22%20transform%3D%22rotate(-25%208%208)%22%2F%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%221.7%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E");
-  --lamp-shape-complete: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226.5%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M5.1%208.2l2.1%202.1%203.9-4.3%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E");
-  --lamp-shape-failed: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%226.5%22%20fill%3D%22%23fff%22%2F%3E%3Cpath%20d%3D%22M5.6%205.6l4.8%204.8M10.4%205.6l-4.8%204.8%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%2F%3E%3C%2Fsvg%3E");
-  --lamp-shape-unavailable: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.6%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-dasharray%3D%222.2%202.8%22%2F%3E%3C%2Fsvg%3E");
-  --lamp-shape-unknown: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.9%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.5%22%2F%3E%3Cpath%20d%3D%22M6.2%206.6a1.8%201.8%200%201%201%202.6%201.6c-.5.3-.8.6-.8%201.1v.2%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%2F%3E%3Ccircle%20cx%3D%228%22%20cy%3D%2211.4%22%20r%3D%22.9%22%20fill%3D%22%23fff%22%2F%3E%3C%2Fsvg%3E");
-  --lamp-shape-neutral: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2016%2016%22%3E%3Ccircle%20cx%3D%228%22%20cy%3D%228%22%20r%3D%225.6%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%221.5%22%2F%3E%3C%2Fsvg%3E");
 }
 
 html[data-direction="slate"] .app-shell {
@@ -2954,11 +2958,12 @@ html[data-direction="slate"] .fixture-menu {
 
 /* Lamps: one shape-coded lifecycle glyph family for every surface. */
 
-html[data-direction="slate"] .task-tab small i,
-html[data-direction="slate"] .state-dot,
-html[data-direction="slate"] .timeline-mark,
-html[data-direction="slate"] .status-label i,
-html[data-direction="slate"] .inspector-state::before {
+html:is([data-direction="slate"], [data-direction="watch"]) .task-tab small i,
+html:is([data-direction="slate"], [data-direction="watch"]) .state-dot,
+html:is([data-direction="slate"], [data-direction="watch"]) .timeline-mark,
+html:is([data-direction="slate"], [data-direction="watch"]) .status-label i,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state::before {
   width: 12px;
   height: 12px;
   flex: 0 0 auto;
@@ -2969,26 +2974,38 @@ html[data-direction="slate"] .inspector-state::before {
   mask-mode: luminance;
 }
 
-html[data-direction="slate"] .inspector-state::before {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state::before {
   content: "";
   width: 14px;
   height: 14px;
 }
 
-html[data-direction="slate"] .task-tab[data-state="running"] small,
-html[data-direction="slate"] .inspector-state[data-state="running"],
-html[data-direction="slate"] .state-dot.running,
-html[data-direction="slate"] .status-label.running,
-html[data-direction="slate"] .timeline li[data-tone="running"] .timeline-mark {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab[data-state="running"]
+  small,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="running"],
+html:is([data-direction="slate"], [data-direction="watch"]) .state-dot.running,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.running,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .timeline
+  li[data-tone="running"]
+  .timeline-mark {
   --lamp-shape: var(--lamp-shape-running);
   color: var(--lamp-running);
 }
 
-html[data-direction="slate"] .task-tab[data-state="waiting"] small,
-html[data-direction="slate"] .inspector-state[data-state="waiting"],
-html[data-direction="slate"] .state-dot.waiting,
-html[data-direction="slate"] .status-label.attention,
-html[data-direction="slate"]
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab[data-state="waiting"]
+  small,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="waiting"],
+html:is([data-direction="slate"], [data-direction="watch"]) .state-dot.waiting,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.attention,
+html:is([data-direction="slate"], [data-direction="watch"])
   .timeline
   li[data-tone="attention"]
   .timeline-mark {
@@ -2996,60 +3013,94 @@ html[data-direction="slate"]
   color: var(--lamp-waiting);
 }
 
-html[data-direction="slate"] .task-tab[data-state="complete"] small,
-html[data-direction="slate"] .inspector-state[data-state="complete"],
-html[data-direction="slate"] .state-dot.complete,
-html[data-direction="slate"] .status-label.complete,
-html[data-direction="slate"] .timeline li[data-tone="complete"] .timeline-mark {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab[data-state="complete"]
+  small,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="complete"],
+html:is([data-direction="slate"], [data-direction="watch"]) .state-dot.complete,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.complete,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .timeline
+  li[data-tone="complete"]
+  .timeline-mark {
   --lamp-shape: var(--lamp-shape-complete);
   color: var(--lamp-complete);
 }
 
-html[data-direction="slate"] .task-tab[data-state="failed"] small,
-html[data-direction="slate"] .inspector-state[data-state="failed"],
-html[data-direction="slate"] .state-dot.failed,
-html[data-direction="slate"] .status-label.failed,
-html[data-direction="slate"] .timeline li[data-tone="failed"] .timeline-mark {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab[data-state="failed"]
+  small,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="failed"],
+html:is([data-direction="slate"], [data-direction="watch"]) .state-dot.failed,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.failed,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .timeline
+  li[data-tone="failed"]
+  .timeline-mark {
   --lamp-shape: var(--lamp-shape-failed);
   color: var(--lamp-failed);
 }
 
-html[data-direction="slate"] .task-tab[data-state="unavailable"] small,
-html[data-direction="slate"] .inspector-state[data-state="unavailable"],
-html[data-direction="slate"] .state-dot.unavailable,
-html[data-direction="slate"] .status-label.unavailable {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab[data-state="unavailable"]
+  small,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="unavailable"],
+html:is([data-direction="slate"], [data-direction="watch"])
+  .state-dot.unavailable,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.unavailable {
   --lamp-shape: var(--lamp-shape-unavailable);
   color: var(--lamp-unavailable);
 }
 
-html[data-direction="slate"] .task-tab[data-state="unknown"] small,
-html[data-direction="slate"] .inspector-state[data-state="unknown"],
-html[data-direction="slate"] .state-dot.unknown,
-html[data-direction="slate"] .status-label.unknown {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab[data-state="unknown"]
+  small,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="unknown"],
+html:is([data-direction="slate"], [data-direction="watch"]) .state-dot.unknown,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.unknown {
   --lamp-shape: var(--lamp-shape-unknown);
   color: var(--lamp-unknown);
 }
 
-html[data-direction="slate"] .task-tab:not(.is-selected) small {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .task-tab:not(.is-selected)
+  small {
   opacity: 0.82;
 }
 
-html[data-direction="slate"] .timeline-mark,
-html[data-direction="slate"] .timeline li[data-tone="neutral"] .timeline-mark {
+html:is([data-direction="slate"], [data-direction="watch"]) .timeline-mark,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .timeline
+  li[data-tone="neutral"]
+  .timeline-mark {
   --lamp-shape: var(--lamp-shape-neutral);
   color: var(--quiet);
 }
 
-html[data-direction="slate"] .timeline li[data-tone] .timeline-mark {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .timeline
+  li[data-tone]
+  .timeline-mark {
   background: currentColor;
 }
 
-html[data-direction="slate"] .timeline li[data-state="unknown"] .timeline-mark {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .timeline
+  li[data-state="unknown"]
+  .timeline-mark {
   --lamp-shape: var(--lamp-shape-unknown);
   color: var(--lamp-unknown);
 }
 
-html[data-direction="slate"]
+html:is([data-direction="slate"], [data-direction="watch"])
   .timeline
   li[data-state="unavailable"]
   .timeline-mark {
@@ -3057,11 +3108,13 @@ html[data-direction="slate"]
   color: var(--lamp-unavailable);
 }
 
-html[data-direction="slate"] .timeline li {
+html:is([data-direction="slate"], [data-direction="watch"]) .timeline li {
   grid-template-columns: 14px minmax(0, 1fr) auto auto;
 }
 
-html[data-direction="slate"] .fixture-menu > button {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .fixture-menu
+  > button {
   grid-template-columns: 12px minmax(0, 1fr);
 }
 
@@ -3071,12 +3124,15 @@ html[data-direction="slate"] .fixture-menu > button {
   }
 }
 
-html[data-direction="slate"]
+html:is([data-direction="slate"], [data-direction="watch"])
   .task-tab.is-selected[data-state="running"]
   small
   i,
-html[data-direction="slate"] .inspector-state[data-state="running"]::before,
-html[data-direction="slate"] .status-label.running i {
+html:is([data-direction="slate"], [data-direction="watch"])
+  .inspector-state[data-state="running"]::before,
+html:is([data-direction="slate"], [data-direction="watch"])
+  .status-label.running
+  i {
   animation: slate-lamp-breathe 2.8s ease-in-out infinite;
 }
 
@@ -3424,5 +3480,1241 @@ html[data-direction="slate"] .setup-content h1 {
     --muted: #c3cad2;
     --quiet: #aab2bb;
     --document-muted: #c3cad2;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Direction 05 · Watch Rail                                                */
+/* Studio Rail's places-and-tasks model, finished. The sidebar collapses to */
+/* a rail that keeps watch: every section carries a live signal, so a task  */
+/* waiting for Computer approval is visible from anywhere. One accent light */
+/* marks selection and the next action; lifecycle states stay lamps.        */
+/* ---------------------------------------------------------------------- */
+
+@font-face {
+  font-family: "Farol Geist";
+  src: url("fonts/geist/Geist-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Farol Geist Mono";
+  src: url("fonts/geist/GeistMono-Variable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Farol Plex Sans";
+  src: url("fonts/ibm-plex/ibm-plex-sans-latin-400-normal.woff2")
+    format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Farol Plex Sans";
+  src: url("fonts/ibm-plex/ibm-plex-sans-latin-500-normal.woff2")
+    format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Farol Plex Sans";
+  src: url("fonts/ibm-plex/ibm-plex-sans-latin-600-normal.woff2")
+    format("woff2");
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Farol Plex Mono";
+  src: url("fonts/ibm-plex/ibm-plex-mono-latin-400-normal.woff2")
+    format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: block;
+}
+
+@font-face {
+  font-family: "Farol Plex Mono";
+  src: url("fonts/ibm-plex/ibm-plex-mono-latin-500-normal.woff2")
+    format("woff2");
+  font-weight: 500 700;
+  font-style: normal;
+  font-display: block;
+}
+
+html[data-direction="watch"] {
+  --font-system:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
+    sans-serif;
+  --font-system-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --font-ui: "Farol Geist", var(--font-system);
+  --font-mono: "Farol Geist Mono", var(--font-system-mono);
+  --display-weight: 600;
+  --display-tracking: -0.032em;
+  --label-weight: 500;
+  --sidebar-full: 216px;
+  --sidebar-rail: 72px;
+  --sidebar-width: var(--sidebar-full);
+  --window-height: 52px;
+  --task-height: 54px;
+  --radius-control: 7px;
+  --radius-panel: 10px;
+  --radius-large: 14px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --bg: #0a0a0d;
+  --chrome: #131316;
+  --chrome-raised: #1d1c21;
+  --sidebar: #19181d;
+  --surface: #131316;
+  --surface-raised: #1d1c21;
+  --surface-soft: #27262e;
+  --line: #24232a;
+  --line-strong: #37363f;
+  --text: #edecf3;
+  --text-strong: #ffffff;
+  --muted: #abaab6;
+  --quiet: #8e8c9b;
+  --accent: #7f6bff;
+  --accent-fill-top: #705def;
+  --accent-fill-bottom: #5945de;
+  --accent-light: #b4a8ff;
+  --accent-ink: #ffffff;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 44%, transparent);
+  --focus: #9e8fff;
+  --success: #6fd19a;
+  --success-soft: color-mix(in srgb, #6fd19a 13%, transparent);
+  --attention: #e8ab55;
+  --attention-soft: color-mix(in srgb, #e8ab55 14%, transparent);
+  --danger: #f27a73;
+  --danger-soft: color-mix(in srgb, #f27a73 14%, transparent);
+  --lamp-running: #dbe2f0;
+  --lamp-waiting: #e8ab55;
+  --lamp-complete: #6fd19a;
+  --lamp-failed: #f27a73;
+  --lamp-unavailable: #8d8d9e;
+  --lamp-unknown: #dcdce8;
+  --document-bg: #0e0d10;
+  --document-ink: #edecf3;
+  --document-muted: #a09fad;
+  font-family: var(--font-ui);
+}
+
+html[data-direction="watch"][data-accent="cobalt"] {
+  --bg: #0a0b0d;
+  --chrome: #131416;
+  --chrome-raised: #1c1e21;
+  --sidebar: #181a1d;
+  --surface: #131416;
+  --surface-raised: #1c1e21;
+  --surface-soft: #26292e;
+  --line: #23252a;
+  --line-strong: #36393f;
+  --text: #eceff3;
+  --muted: #aaaeb6;
+  --quiet: #8c929b;
+  --accent: #4788ff;
+  --accent-fill-top: #2e6ee5;
+  --accent-fill-bottom: #215cca;
+  --accent-light: #8fb6ff;
+  --focus: #70a2ff;
+  --lamp-unavailable: #8a919c;
+  --document-bg: #0d0e10;
+  --document-muted: #9fa4ad;
+}
+
+html[data-direction="watch"][data-accent="orchid"] {
+  --bg: #0c0a0d;
+  --chrome: #151316;
+  --chrome-raised: #201c21;
+  --sidebar: #1c181d;
+  --surface: #151316;
+  --surface-raised: #201c21;
+  --surface-soft: #2c262e;
+  --line: #28232a;
+  --line-strong: #3d363f;
+  --text: #f1ecf3;
+  --muted: #b3aab6;
+  --quiet: #978c9b;
+  --accent: #d676f9;
+  --accent-fill-top: #ad45d3;
+  --accent-fill-bottom: #9832bd;
+  --accent-light: #e9adff;
+  --focus: #e499ff;
+  --lamp-unavailable: #968d9b;
+  --document-bg: #0f0d10;
+  --document-muted: #aaa1ad;
+}
+
+html[data-direction="watch"][data-type="plex"] {
+  --font-ui: "Farol Plex Sans", var(--font-system);
+  --font-mono: "Farol Plex Mono", var(--font-system-mono);
+  --display-weight: 600;
+  --display-tracking: -0.018em;
+}
+
+html[data-direction="watch"][data-type="system"] {
+  --font-ui: var(--font-system);
+  --font-mono: var(--font-system-mono);
+  --display-weight: 650;
+  --display-tracking: -0.026em;
+}
+
+html[data-direction="watch"] body {
+  letter-spacing: 0;
+}
+
+html[data-direction="watch"] kbd {
+  font-family: var(--font-mono);
+}
+
+html[data-direction="watch"] ::selection {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: #ffffff;
+}
+
+/* Shell: a full-height sidebar with the toolbar over the content, as in
+   current Mac sidebar apps. */
+
+html[data-direction="watch"] .app-shell {
+  position: relative;
+  grid-template-areas:
+    "sidebar window"
+    "sidebar tasks"
+    "sidebar main";
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  grid-template-rows: var(--window-height) var(--task-height) minmax(0, 1fr);
+  background: var(--surface);
+  box-shadow: none;
+}
+
+html[data-direction="watch"][data-sidebar="rail"],
+html[data-direction="watch"][data-sidebar="overlay"] {
+  --sidebar-width: var(--sidebar-rail);
+}
+
+html[data-direction="watch"][data-sidebar-motion] .app-shell {
+  transition: grid-template-columns 220ms var(--ease);
+}
+
+html[data-direction="watch"][data-sidebar-motion] .sidebar {
+  transition:
+    width 220ms var(--ease),
+    box-shadow 220ms var(--ease);
+}
+
+html[data-direction="watch"] .traffic-lights {
+  position: absolute;
+  z-index: 40;
+  top: 20px;
+  left: 15px;
+}
+
+html[data-direction="watch"] .sidebar-toggle {
+  position: absolute;
+  z-index: 40;
+  top: 11px;
+  left: 82px;
+  width: 30px;
+  height: 30px;
+  color: var(--muted);
+}
+
+html[data-direction="watch"] .sidebar-toggle:hover {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--text);
+}
+
+html[data-direction="watch"] .sidebar-toggle svg {
+  width: 18px;
+  height: 18px;
+}
+
+html[data-direction="watch"] .window-bar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 0 12px 0 20px;
+  border-bottom: 0;
+  background: var(--surface);
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .window-bar,
+html[data-direction="watch"][data-sidebar="overlay"] .window-bar {
+  padding-left: 52px;
+}
+
+html[data-direction="watch"] .window-identity {
+  justify-content: flex-start;
+  gap: 10px;
+  font-size: 0.8rem;
+}
+
+html[data-direction="watch"] .window-identity strong {
+  font-weight: 600;
+}
+
+html[data-direction="watch"] .lab-disclosure {
+  color: var(--quiet);
+}
+
+html[data-direction="watch"] .window-mark {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: linear-gradient(
+    150deg,
+    var(--accent-light),
+    var(--accent-fill-bottom) 70%
+  );
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.28),
+    0 6px 16px -8px var(--accent);
+}
+
+html[data-direction="watch"] .window-mark b,
+html[data-direction="watch"] .window-mark b::after {
+  border-color: var(--accent-ink);
+}
+
+html[data-direction="watch"] .model-readout {
+  display: none;
+}
+
+html[data-direction="watch"] .command-button {
+  color: var(--muted);
+}
+
+html[data-direction="watch"] .fixture-button {
+  height: 30px;
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+  anchor-name: --watch-fixture-menu;
+}
+
+html[data-direction="watch"]
+  .fixture-button
+  [data-testid="fixture-label"]::before {
+  content: "Fixture · ";
+  color: var(--quiet);
+  font-weight: 500;
+}
+
+html[data-direction="watch"] .fixture-menu {
+  position-anchor: --watch-fixture-menu;
+  inset: auto;
+  top: calc(anchor(bottom) + 6px);
+  right: anchor(right);
+}
+
+/* Sidebar and rail. */
+
+html[data-direction="watch"] .sidebar {
+  position: relative;
+  z-index: 30;
+  width: var(--sidebar-width);
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background:
+    radial-gradient(
+      120% 220px at 20% -60px,
+      color-mix(in srgb, var(--accent) 16%, transparent),
+      transparent 72%
+    ),
+    var(--sidebar);
+}
+
+html[data-direction="watch"][data-sidebar="overlay"] .sidebar {
+  width: var(--sidebar-full);
+  border-right-color: var(--line-strong);
+  box-shadow: 28px 0 60px rgb(0 0 0 / 0.55);
+}
+
+html[data-direction="watch"][data-sidebar="overlay"] .task-strip,
+html[data-direction="watch"][data-sidebar="overlay"] .work-surface {
+  filter: brightness(0.62);
+}
+
+html[data-direction="watch"] .brand-block {
+  height: var(--window-height);
+  min-height: var(--window-height);
+  flex: 0 0 auto;
+  padding: 0;
+  -webkit-app-region: drag;
+}
+
+html[data-direction="watch"] .brand-block > * {
+  display: none;
+}
+
+html[data-direction="watch"] .section-nav {
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+html[data-direction="watch"] .nav-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  justify-content: stretch;
+  gap: 11px;
+  min-height: 34px;
+  padding: 0 7px 0 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+html[data-direction="watch"] .nav-item svg {
+  width: 18px;
+  height: 18px;
+}
+
+html[data-direction="watch"] .nav-item > span:not(.nav-signal) {
+  display: block;
+  font-weight: var(--label-weight);
+}
+
+html[data-direction="watch"] .nav-item kbd {
+  display: none;
+}
+
+html[data-direction="watch"] .nav-item:hover {
+  background: rgb(255 255 255 / 0.045);
+  color: var(--text);
+}
+
+html[data-direction="watch"] .nav-item.is-active {
+  border-color: var(--accent-line);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 26%, transparent),
+    color-mix(in srgb, var(--accent) 8%, transparent)
+  );
+  color: var(--text-strong);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+
+html[data-direction="watch"] .nav-item.is-active svg {
+  color: var(--accent-light);
+}
+
+html[data-direction="watch"] .nav-item .nav-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px 0 6px;
+  overflow: visible;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--signal) 15%, transparent);
+  color: var(--signal);
+  font-size: 0.74rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-direction="watch"] .nav-signal i {
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+  background: currentColor;
+  mask: var(--signal-shape) center / contain no-repeat;
+  mask-mode: luminance;
+}
+
+html[data-direction="watch"] .nav-signal b {
+  font-weight: 600;
+}
+
+html[data-direction="watch"] .nav-signal b:empty {
+  display: none;
+}
+
+html[data-direction="watch"] .nav-signal[data-tone="running"] {
+  --signal: var(--lamp-running);
+  --signal-shape: var(--lamp-shape-running);
+}
+
+html[data-direction="watch"] .nav-signal[data-tone="waiting"] {
+  --signal: var(--lamp-waiting);
+  --signal-shape: var(--lamp-shape-waiting);
+}
+
+html[data-direction="watch"] .nav-signal[data-tone="failed"] {
+  --signal: var(--lamp-failed);
+  --signal-shape: var(--lamp-shape-failed);
+}
+
+html[data-direction="watch"] .nav-signal[data-tone="unknown"] {
+  --signal: var(--lamp-unknown);
+  --signal-shape: var(--lamp-shape-unknown);
+}
+
+html[data-direction="watch"] .nav-signal[data-tone="unavailable"] {
+  --signal: var(--lamp-unavailable);
+  --signal-shape: var(--lamp-shape-unavailable);
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .section-nav {
+  gap: 6px;
+  padding: 8px 14px;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .nav-item {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  min-height: 42px;
+  padding: 0;
+}
+
+html[data-direction="watch"][data-sidebar="rail"]
+  .nav-item
+  > span:not(.nav-signal) {
+  display: none;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .nav-item .nav-signal {
+  position: absolute;
+  top: 0;
+  right: 0;
+  justify-content: center;
+  height: 18px;
+  gap: 3px;
+  padding: 0 5px 0 4px;
+  border-radius: 9px;
+  background: var(--signal);
+  color: var(--bg);
+  box-shadow: 0 0 0 2px var(--sidebar);
+  font-size: 0.72rem;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .nav-signal i {
+  width: 10px;
+  height: 10px;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .nav-signal:has(b:empty) {
+  padding: 0 4px;
+}
+
+html[data-direction="watch"] .sidebar-footer {
+  gap: 3px;
+  margin-top: auto;
+  padding: 14px 18px 16px;
+  border-top: 1px solid var(--line);
+}
+
+html[data-direction="watch"] .runtime-status {
+  font-size: 0.76rem;
+}
+
+html[data-direction="watch"] .runtime-status i {
+  width: 11px;
+  height: 11px;
+  border-radius: 0;
+  background: var(--success);
+  mask: var(--lamp-shape-complete) center / contain no-repeat;
+  mask-mode: luminance;
+}
+
+html[data-direction="watch"] .runtime-status.is-offline i {
+  background: var(--danger);
+  mask-image: var(--lamp-shape-unavailable);
+}
+
+html[data-direction="watch"] .runtime-status b {
+  display: inline;
+  font-weight: 500;
+}
+
+html[data-direction="watch"] .sidebar-footer small {
+  display: block;
+  padding-left: 15px;
+  font-size: 0.7rem;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .sidebar-footer {
+  justify-items: center;
+  padding: 18px 0;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .runtime-status b {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+html[data-direction="watch"][data-sidebar="rail"] .sidebar-footer small {
+  display: none;
+}
+
+/* Tasks. */
+
+html[data-direction="watch"] .task-strip {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+html[data-direction="watch"] .task-heading {
+  display: none;
+}
+
+html[data-direction="watch"] .task-tabs {
+  align-items: center;
+  gap: 4px;
+  height: 100%;
+  padding: 0 2px;
+}
+
+html[data-direction="watch"] .task-tab {
+  min-width: 172px;
+  max-width: 236px;
+  height: 42px;
+  flex: 1 0 172px;
+  gap: 3px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+}
+
+html[data-direction="watch"] .task-tab::after {
+  display: none;
+}
+
+html[data-direction="watch"] .task-tab:hover {
+  background: rgb(255 255 255 / 0.04);
+  color: var(--text);
+}
+
+html[data-direction="watch"] .task-tab.is-selected {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
+  color: var(--text-strong);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.05);
+}
+
+html[data-direction="watch"] .task-tab.is-selected::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 14px;
+  left: 14px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+}
+
+html[data-direction="watch"] .task-tab:focus-visible {
+  outline-offset: -3px;
+}
+
+html[data-direction="watch"] .task-tab strong {
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+html[data-direction="watch"] .task-tab small {
+  font-size: 0.74rem;
+  font-weight: 500;
+}
+
+html[data-direction="watch"] .event-state,
+html[data-direction="watch"] .timeline time,
+html[data-direction="watch"] .filter-group button,
+html[data-direction="watch"] .capability-row > span:last-child,
+html[data-direction="watch"] .capability-row small {
+  font-size: 0.74rem;
+}
+
+html[data-direction="watch"] .new-task {
+  min-width: auto;
+  height: 34px;
+  padding: 0 10px;
+  border-left: 0;
+  border-radius: 8px;
+  font-size: 0.76rem;
+}
+
+html[data-direction="watch"] .new-task small {
+  font-size: 0.68rem;
+}
+
+/* The selected task: one dossier bar above a full-width Browser. */
+
+html[data-direction="watch"] .work-surface {
+  background: var(--surface);
+}
+
+html[data-direction="watch"] .browser-layout {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  column-gap: 14px;
+}
+
+html[data-direction="watch"] .task-inspector,
+html[data-direction="watch"] .task-inspector > header {
+  display: contents;
+}
+
+html[data-direction="watch"] .inspector-state {
+  grid-area: 1 / 1 / 2 / 2;
+  align-self: center;
+  gap: 8px;
+  margin: 14px 0 0 20px;
+  font-size: 0.74rem;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+}
+
+html[data-direction="watch"] .task-inspector h2 {
+  grid-area: 1 / 2 / 2 / 3;
+  align-self: center;
+  margin: 14px 0 0;
+  overflow: hidden;
+  font-size: 1.04rem;
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-wrap: initial;
+  white-space: nowrap;
+}
+
+html[data-direction="watch"] .task-inspector .more-button {
+  grid-area: 1 / 3 / 2 / 4;
+  align-self: center;
+  justify-self: end;
+  margin: 12px 0 0;
+  border: 1px solid var(--line-strong);
+  anchor-name: --watch-task-menu;
+}
+
+html[data-direction="watch"] .task-inspector .primary-action {
+  grid-area: 1 / 4 / 2 / 5;
+  align-self: center;
+  justify-self: end;
+  min-height: 32px;
+  margin: 12px 14px 0 0;
+  padding: 0 13px;
+  font-size: 0.82rem;
+}
+
+html[data-direction="watch"] .task-inspector > p {
+  display: none;
+}
+
+html[data-direction="watch"] .task-facts {
+  grid-area: 2 / 1 / 3 / 5;
+  display: flex;
+  justify-content: flex-end;
+  gap: 18px;
+  margin: 4px 16px 12px 0;
+  border: 0;
+}
+
+html[data-direction="watch"] .task-facts div {
+  display: flex;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+}
+
+html[data-direction="watch"] .task-facts dt {
+  font-size: 0.72rem;
+}
+
+html[data-direction="watch"] .task-facts dd {
+  overflow: visible;
+  font-size: 0.74rem;
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+html[data-direction="watch"] .text-action {
+  display: none;
+}
+
+html[data-direction="watch"] .truth-note {
+  grid-area: 4 / 1 / 5 / 5;
+  margin: 0;
+  padding: 8px 20px 10px;
+  border: 0;
+}
+
+html[data-direction="watch"] .task-menu {
+  position-anchor: --watch-task-menu;
+  inset: auto;
+  top: calc(anchor(bottom) + 6px);
+  right: anchor(right);
+}
+
+html[data-direction="watch"] .browser-frame {
+  grid-area: 3 / 1 / 4 / 5;
+  grid-template-rows: 38px minmax(0, 1fr);
+  margin: 0 12px;
+  border-color: var(--line-strong);
+  border-radius: 10px;
+  background: var(--document-bg);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.03),
+    0 24px 60px -36px rgb(0 0 0 / 0.9);
+}
+
+html[data-direction="watch"] .browser-toolbar {
+  border-bottom-color: var(--line);
+  background: var(--chrome);
+  color: var(--muted);
+}
+
+html[data-direction="watch"] .address-field {
+  border-color: var(--line);
+  background: var(--bg);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+}
+
+html[data-direction="watch"] .synthetic-badge {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+html[data-direction="watch"] .browser-document {
+  padding: clamp(28px, 5vh, 46px) clamp(28px, 4.2vw, 64px) 22px;
+  background: var(--document-bg);
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+html[data-direction="watch"] .document-meta {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+}
+
+html[data-direction="watch"] .document-meta #task-run-id,
+html[data-direction="watch"] .document-footer time {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+html[data-direction="watch"] .browser-document h1 {
+  max-width: 760px;
+  font-size: clamp(2rem, 3.4vw, 2.85rem);
+  font-weight: var(--display-weight);
+  letter-spacing: var(--display-tracking);
+  line-height: 1.04;
+}
+
+html[data-direction="watch"] .browser-lede {
+  max-width: 700px;
+  font-size: clamp(0.94rem, 1.2vw, 1.04rem);
+}
+
+html[data-direction="watch"] .progress-rail .is-done {
+  background: var(--accent);
+}
+
+html[data-direction="watch"] .progress-rail .is-current {
+  background: color-mix(in srgb, var(--accent-light) 55%, transparent);
+}
+
+html[data-direction="watch"] .browser-state {
+  border-color: var(--line);
+}
+
+html[data-direction="watch"] .browser-state strong {
+  font-weight: 600;
+}
+
+html[data-direction="watch"]
+  .browser-state[data-state="running"]
+  .state-symbol {
+  background: var(--accent-soft);
+  color: var(--accent-light);
+}
+
+html[data-direction="watch"]
+  .browser-state[data-state="unknown"]
+  .state-symbol {
+  background: rgb(255 255 255 / 0.06);
+  color: var(--lamp-unknown);
+}
+
+html[data-direction="watch"] .document-footer {
+  font-size: 0.72rem;
+}
+
+/* Buttons. */
+
+html[data-direction="watch"] .primary-action {
+  border: 1px solid
+    color-mix(in srgb, var(--accent-light) 36%, var(--accent-fill-top));
+  background: linear-gradient(
+    180deg,
+    var(--accent-fill-top),
+    var(--accent-fill-bottom)
+  );
+  color: var(--accent-ink);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.2),
+    0 10px 28px -12px var(--accent);
+  font-weight: 600;
+}
+
+html[data-direction="watch"] .primary-action:hover {
+  background: linear-gradient(
+    180deg,
+    var(--accent-fill-top),
+    color-mix(in srgb, var(--accent-fill-bottom) 82%, #000000)
+  );
+}
+
+html[data-direction="watch"] .secondary-action {
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+}
+
+html[data-direction="watch"] .more-button:hover,
+html[data-direction="watch"] .icon-button:hover {
+  background: rgb(255 255 255 / 0.06);
+}
+
+/* Global views. */
+
+html[data-direction="watch"] .content-view {
+  padding: 26px 32px 34px;
+}
+
+html[data-direction="watch"] .view-header {
+  padding-bottom: 18px;
+}
+
+html[data-direction="watch"] .view-context {
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+html[data-direction="watch"] .view-header h1,
+html[data-direction="watch"] .setup-content h1 {
+  font-weight: var(--display-weight);
+  letter-spacing: var(--display-tracking);
+}
+
+html[data-direction="watch"] .view-header h1 {
+  font-size: 1.95rem;
+  line-height: 1.08;
+}
+
+html[data-direction="watch"] .view-header p {
+  margin-top: 6px;
+  font-size: 0.9rem;
+}
+
+html[data-direction="watch"] .request-heading h2,
+html[data-direction="watch"] .capability-list h2,
+html[data-direction="watch"] .activity-explainer h2,
+html[data-direction="watch"] .settings-group h2 {
+  font-weight: 600;
+  letter-spacing: -0.012em;
+}
+
+html[data-direction="watch"] .status-label {
+  gap: 8px;
+  padding: 6px 11px 6px 9px;
+  border-color: var(--line-strong);
+  background: var(--surface-raised);
+}
+
+html[data-direction="watch"] .computer-glyph {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-light);
+}
+
+html[data-direction="watch"] .scope-list dd,
+html[data-direction="watch"] .settings-group dd,
+html[data-direction="watch"] .activity-explainer dd {
+  font-weight: 500;
+}
+
+html[data-direction="watch"] .filter-group,
+html[data-direction="watch"] .appearance-picker {
+  background: var(--bg);
+}
+
+html[data-direction="watch"] .filter-group button.is-selected,
+html[data-direction="watch"] .settings-nav button.is-selected {
+  background: var(--accent-soft);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+html[data-direction="watch"] .timeline time {
+  font-family: var(--font-mono);
+}
+
+html[data-direction="watch"] .timeline li {
+  align-items: flex-start;
+  padding: 13px 0;
+}
+
+html[data-direction="watch"] .timeline li > span:first-child,
+html[data-direction="watch"] .timeline time,
+html[data-direction="watch"] .event-state {
+  margin-top: 1px;
+}
+
+html[data-direction="watch"] .timeline p {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+html[data-direction="watch"] .setup-progress li.is-current span {
+  border-color: var(--accent-light);
+  background: linear-gradient(
+    180deg,
+    var(--accent-fill-top),
+    var(--accent-fill-bottom)
+  );
+  color: var(--accent-ink);
+}
+
+html[data-direction="watch"] .setup-content h1 {
+  font-size: clamp(1.9rem, 3vw, 2.5rem);
+}
+
+html[data-direction="watch"] .command-results button.is-selected {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+/* Appearance study controls (lab only). */
+
+html[data-direction="watch"] #appearance-accent,
+html[data-direction="watch"] #appearance-type {
+  align-items: center;
+}
+
+html[data-direction="watch"] .appearance-picker {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+html[data-direction="watch"] .appearance-picker button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+html[data-direction="watch"] .appearance-picker button:hover {
+  color: var(--text);
+}
+
+html[data-direction="watch"] .appearance-picker button[aria-checked="true"] {
+  background: var(--surface-soft);
+  color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+html[data-direction="watch"] .accent-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.2);
+}
+
+html[data-direction="watch"] [data-value="iris"] .accent-swatch {
+  background: linear-gradient(150deg, #b4a8ff, #5945de);
+}
+
+html[data-direction="watch"] [data-value="cobalt"] .accent-swatch {
+  background: linear-gradient(150deg, #8fb6ff, #215cca);
+}
+
+html[data-direction="watch"] [data-value="orchid"] .accent-swatch {
+  background: linear-gradient(150deg, #e9adff, #9832bd);
+}
+
+html[data-direction="watch"] .type-sample {
+  font-style: normal;
+  font-weight: 600;
+}
+
+html[data-direction="watch"] [data-value="geist"] .type-sample {
+  font-family: "Farol Geist", var(--font-system);
+}
+
+html[data-direction="watch"] [data-value="plex"] .type-sample {
+  font-family: "Farol Plex Sans", var(--font-system);
+}
+
+html[data-direction="watch"] [data-value="system"] .type-sample {
+  font-family: var(--font-system);
+}
+
+/* Narrow windows: the sidebar yields to a rail first, then the content
+   compacts. The rail can still open the full sidebar above the content. */
+
+@media (max-width: 860px) {
+  html[data-direction="watch"] {
+    --task-height: 52px;
+  }
+
+  html[data-direction="watch"] .window-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding-right: 8px;
+  }
+
+  html[data-direction="watch"] .fixture-button {
+    padding: 0 7px;
+    gap: 5px;
+  }
+
+  html[data-direction="watch"] .task-strip {
+    padding: 0 6px 0 8px;
+  }
+
+  html[data-direction="watch"] .task-tab {
+    min-width: 160px;
+    max-width: 198px;
+    flex-basis: 160px;
+    padding: 0 11px;
+  }
+
+  html[data-direction="watch"] .browser-layout {
+    grid-template-rows: auto minmax(0, 1fr);
+    column-gap: 10px;
+  }
+
+  html[data-direction="watch"] .inspector-state {
+    margin: 12px 0 0 14px;
+  }
+
+  html[data-direction="watch"] .task-inspector h2 {
+    margin-top: 12px;
+    font-size: 0.96rem;
+  }
+
+  html[data-direction="watch"] .task-inspector .more-button {
+    display: inline-flex;
+    margin-top: 10px;
+  }
+
+  html[data-direction="watch"] .task-inspector .primary-action {
+    max-width: 240px;
+    margin: 10px 10px 0 0;
+  }
+
+  html[data-direction="watch"] .task-inspector .primary-action span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html[data-direction="watch"] .task-inspector > p,
+  html[data-direction="watch"] .task-facts,
+  html[data-direction="watch"] .truth-note {
+    display: none;
+  }
+
+  html[data-direction="watch"] .browser-frame {
+    grid-area: 2 / 1 / 3 / 5;
+    margin: 12px 10px 10px;
+  }
+
+  html[data-direction="watch"] .content-view {
+    padding: 18px 20px 26px;
+  }
+
+  html[data-direction="watch"] .view-header h1 {
+    font-size: 1.6rem;
+  }
+
+  html[data-direction="watch"][data-sidebar="overlay"] .nav-item {
+    display: grid;
+    justify-content: stretch;
+    min-height: 34px;
+    padding: 0 7px 0 11px;
+  }
+
+  html[data-direction="watch"][data-sidebar="overlay"]
+    .nav-item
+    > span:not(.nav-signal) {
+    display: block;
+  }
+
+  html[data-direction="watch"][data-sidebar="overlay"] .sidebar-footer {
+    justify-items: start;
+    padding: 14px 18px 16px;
+  }
+
+  html[data-direction="watch"][data-sidebar="overlay"] .runtime-status b {
+    display: inline;
+  }
+
+  html[data-direction="watch"][data-sidebar="overlay"] .sidebar-footer small {
+    display: block;
+  }
+}
+
+@media (prefers-contrast: more) {
+  html[data-direction="watch"] {
+    --line: #4a4955;
+    --line-strong: #7d7c8b;
+    --muted: #c9c8d3;
+    --quiet: #b1b0bd;
+    --accent-line: color-mix(in srgb, var(--accent-light) 70%, transparent);
   }
 }

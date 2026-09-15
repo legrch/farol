@@ -6,12 +6,17 @@
     "studio-rail",
     "operator-grid",
     "beacon-field",
-    "keepers-slate"
+    "keepers-slate",
+    "watch-rail"
   ],
-  "comparisonCandidate": "keepers-slate",
-  "recommendedDirection": "keepers-slate",
-  "recommendationStatus": "provisional-session-2",
-  "previousRecommendation": "beacon-field",
+  "comparisonCandidate": "watch-rail",
+  "recommendedDirection": "watch-rail",
+  "recommendationStatus": "provisional-session-3",
+  "previousRecommendation": "keepers-slate",
+  "openChoices": {
+    "accent": ["iris", "cobalt", "orchid"],
+    "typeface": ["geist", "plex", "system"]
+  },
   "ownerApproval": false,
   "sourceBoundary": "tracked-nonshipping-design-lab",
   "visibleWindow": {
@@ -31,7 +36,7 @@
     },
     "primaryFallback": false
   },
-  "prototypeSha256": "3193cbe66295fa8d9b77e5b84a9099f3113bf2cf626413a3959ecc4831d4c79f",
+  "prototypeSha256": "ac81a30d940dbd71871db90add350eadf3288a96c6f510747d617f5f8949fbeb",
   "cases": [
     "nonshipping-source-boundary",
     "sandboxed-electron-runner",
@@ -59,11 +64,22 @@
     "slate-title-row-resize-band",
     "slate-focus-visible-evidence",
     "slate-lamp-reduced-motion",
-    "four-directions-two-scenes-wide-and-compact-retina",
+    "five-directions-two-scenes-wide-and-compact-retina",
     "recommended-surface-states",
     "candidate-surface-states",
+    "watch-local-fonts-loaded",
+    "watch-sidebar-collapses-to-rail",
+    "watch-rail-keeps-watch",
+    "watch-title-bar-and-dossier-order",
+    "watch-bounded-approval-and-keyboard",
+    "watch-computer-names-the-waiting-task",
+    "watch-status-type-and-recovery-text",
+    "watch-appearance-study-controls",
+    "watch-accent-contrast",
+    "watch-compact-sidebar-overlay",
+    "watch-surface-and-appearance-evidence",
     "exact-page-navigation-boundary",
-    "slate-standard-density-evidence",
+    "standard-density-evidence",
     "rendered-comparison-gallery",
     "visible-secondary-display-launch",
     "no-external-network-or-render-errors"
@@ -214,6 +230,38 @@
       "pixels": "1520x1280"
     },
     {
+      "file": "05-watch-rail-browser-running-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "05-watch-rail-browser-running-compact@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "05-watch-rail-computer-waiting-wide@2x.png",
+      "direction": "watch",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "05-watch-rail-computer-waiting-compact@2x.png",
+      "direction": "watch",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
       "file": "beacon-activity-unknown-wide@2x.png",
       "direction": "beacon",
       "section": "activity",
@@ -278,8 +326,144 @@
       "pixels": "2360x1520"
     },
     {
+      "file": "watch-settings-appearance-wide@2x.png",
+      "direction": "watch",
+      "section": "settings",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-compact-sidebar-overlay@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "watch-browser-waiting-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-rail-browser-waiting-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-activity-unknown-wide@2x.png",
+      "direction": "watch",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-settings-unavailable-compact@2x.png",
+      "direction": "watch",
+      "section": "settings",
+      "state": "unavailable",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "watch-accent-cobalt-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-accent-orchid-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-type-plex-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-type-system-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-setup-wide@2x.png",
+      "direction": "watch",
+      "section": "setup",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-rail-attention-wide@2x.png",
+      "direction": "watch",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-activity-unknown-compact@2x.png",
+      "direction": "watch",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "watch-browser-waiting-medium@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "940x700",
+      "pixels": "1880x1400"
+    },
+    {
+      "file": "watch-task-menu-open-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-focus-visible-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
       "file": "slate-browser-waiting-wide@1x.png",
       "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "1180x760"
+    },
+    {
+      "file": "watch-browser-waiting-wide@1x.png",
+      "direction": "watch",
       "section": "browser",
       "state": "waiting",
       "viewport": "1180x760",
@@ -291,7 +475,7 @@
       "section": "browser+computer",
       "state": "running+waiting",
       "viewport": "1440xfull-page",
-      "pixels": "2850x4096"
+      "pixels": "2850x6420"
     }
   ]
 }

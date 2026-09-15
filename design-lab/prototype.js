@@ -6,7 +6,10 @@
     ["dense", "Operator Grid"],
     ["beacon", "Beacon Field"],
     ["slate", "Keeper's Slate"],
+    ["watch", "Watch Rail"],
   ]);
+  const accents = new Set(["iris", "cobalt", "orchid"]);
+  const typefaces = new Set(["geist", "plex", "system"]);
   const sections = ["browser", "computer", "activity", "settings"];
   const states = new Set([
     "running",
@@ -178,6 +181,12 @@
   let toastTimer = 0;
   let activeSettingsCategory = "General";
   let activeActivityFilter = "all";
+  let accent = accents.has(query.get("accent")) ? query.get("accent") : "iris";
+  let typeface = typefaces.has(query.get("type")) ? query.get("type") : "geist";
+  let sidebarPreference = query.get("sidebar") === "rail" ? "rail" : "full";
+  let sidebarOverlayOpen = false;
+  let sidebarMotionTimer = 0;
+  const narrowSidebar = window.matchMedia("(max-width: 980px)");
 
   const required = (selector) => {
     const element = document.querySelector(selector);
@@ -299,13 +308,31 @@
     required("#task-menu-computer").disabled = currentState !== "waiting";
   }
 
+  function waitingTask() {
+    return tasks.find((task) => stateForTask(task) === "waiting") ?? null;
+  }
+
   function renderComputer() {
-    const waiting = currentState === "waiting";
+    const pending = waitingTask();
+    const waiting = Boolean(pending);
     const status = required("[data-panel='computer'] .status-label");
     status.className = `status-label ${waiting ? "attention" : currentState}`;
     status.innerHTML = `<i></i>${escapeMarkup(waiting ? "Approval required" : stateCopy[currentState].label)}`;
+    const owner = pending ?? selectedTask();
+    required("#computer-context").textContent =
+      `${pending && pending.id !== selectedTaskId ? "Waiting task" : "Selected task"} · ${owner.label}`;
     required("#allow-request").disabled = !waiting;
     required("#decline-request").disabled = !waiting;
+  }
+
+  function resolveWaitingTask(nextState) {
+    const pending = waitingTask();
+    if (!pending) return;
+    if (pending.id !== selectedTaskId) {
+      selectedTaskId = pending.id;
+      currentState = pending.state;
+    }
+    setState(nextState);
   }
 
   function renderRuntime() {
@@ -367,6 +394,179 @@
     });
   }
 
+  const overlayRegions = () => [
+    required(".task-strip"),
+    required("#main-content"),
+    required(".window-tools"),
+  ];
+
+  function sidebarMode() {
+    if (narrowSidebar.matches) return sidebarOverlayOpen ? "overlay" : "rail";
+    return sidebarPreference;
+  }
+
+  function renderSignals() {
+    const taskStates = tasks.map(stateForTask);
+    const count = (predicate) => taskStates.filter(predicate).length;
+    const plural = (value, one, many) => (value === 1 ? one : many);
+    const running = count((state) => state === "running");
+    const waiting = count((state) => state === "waiting");
+    const attentionOrder = ["failed", "unknown", "unavailable", "waiting"];
+    const attention = count((state) => attentionOrder.includes(state));
+    const signals = {
+      browser: running
+        ? {
+            tone: "running",
+            count: String(running),
+            text: ` ${plural(running, "task", "tasks")} running`,
+          }
+        : null,
+      computer: waiting
+        ? {
+            tone: "waiting",
+            count: String(waiting),
+            text: ` ${plural(waiting, "request", "requests")} waiting for approval`,
+          }
+        : null,
+      activity: attention
+        ? {
+            tone: attentionOrder.find((tone) => taskStates.includes(tone)),
+            count: String(attention),
+            text: ` ${plural(attention, "task needs", "tasks need")} attention`,
+          }
+        : null,
+      settings:
+        currentState === "unavailable"
+          ? { tone: "failed", count: "", text: "Local runtime offline" }
+          : null,
+    };
+    document.querySelectorAll(".nav-item").forEach((button) => {
+      const badge = button.querySelector(".nav-signal");
+      const signal = signals[button.dataset.section];
+      if (!badge) return;
+      const route = button.dataset.section;
+      const base = `${route.charAt(0).toUpperCase() + route.slice(1)} (⌘${sections.indexOf(route) + 1})`;
+      if (!signal) {
+        badge.hidden = true;
+        button.removeAttribute("aria-describedby");
+        button.title = base;
+        return;
+      }
+      badge.hidden = false;
+      badge.dataset.tone = signal.tone;
+      badge.querySelector("b").textContent = signal.count;
+      badge.querySelector("small").textContent = signal.text;
+      button.setAttribute("aria-describedby", badge.id);
+      button.title = `${base} · ${`${signal.count}${signal.text}`.trim()}`;
+    });
+  }
+
+  function renderRadioGroup(selector, value) {
+    document.querySelectorAll(`${selector} [role="radio"]`).forEach((radio) => {
+      const checked = radio.dataset.value === value;
+      radio.setAttribute("aria-checked", String(checked));
+      radio.tabIndex = checked ? 0 : -1;
+    });
+  }
+
+  function renderWatch() {
+    const root = document.documentElement;
+    const watch = direction === "watch";
+    const toggle = required("#sidebar-toggle");
+    toggle.hidden = !watch;
+    required("#appearance-accent").hidden = !watch;
+    required("#appearance-type").hidden = !watch;
+    required("#keyboard-sidebar").hidden = !watch;
+    if (!watch) {
+      delete root.dataset.sidebar;
+      delete root.dataset.accent;
+      delete root.dataset.type;
+      document.querySelectorAll(".nav-signal").forEach((badge) => {
+        badge.hidden = true;
+      });
+      document.querySelectorAll(".nav-item").forEach((button) => {
+        button.removeAttribute("aria-describedby");
+        const route = button.dataset.section;
+        button.title = `${route.charAt(0).toUpperCase() + route.slice(1)} (⌘${sections.indexOf(route) + 1})`;
+      });
+      for (const region of overlayRegions()) region.removeAttribute("inert");
+      return;
+    }
+    const mode = sidebarMode();
+    for (const region of overlayRegions()) {
+      region.toggleAttribute("inert", mode === "overlay");
+    }
+    root.dataset.sidebar = mode;
+    root.dataset.accent = accent;
+    root.dataset.type = typeface;
+    const expanded = mode !== "rail";
+    const label = narrowSidebar.matches
+      ? expanded
+        ? "Hide sidebar"
+        : "Show sidebar"
+      : expanded
+        ? "Collapse sidebar"
+        : "Expand sidebar";
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", label);
+    toggle.title = `${label} (⌃⌘S)`;
+    renderSignals();
+    renderRadioGroup("#accent-picker", accent);
+    renderRadioGroup("#type-picker", typeface);
+  }
+
+  function markSidebarMotion() {
+    const root = document.documentElement;
+    root.dataset.sidebarMotion = "true";
+    window.clearTimeout(sidebarMotionTimer);
+    sidebarMotionTimer = window.setTimeout(() => {
+      delete root.dataset.sidebarMotion;
+    }, 320);
+  }
+
+  function toggleSidebar() {
+    if (direction !== "watch") return;
+    markSidebarMotion();
+    const opensOverlay = narrowSidebar.matches && !sidebarOverlayOpen;
+    if (narrowSidebar.matches) sidebarOverlayOpen = !sidebarOverlayOpen;
+    else sidebarPreference = sidebarPreference === "full" ? "rail" : "full";
+    renderWatch();
+    if (opensOverlay) {
+      restoreFocus(
+        document.querySelector(".nav-item.is-active") ??
+          required("#section-nav"),
+      );
+    }
+  }
+
+  function closeSidebarOverlay(returnFocus) {
+    if (!sidebarOverlayOpen) return false;
+    markSidebarMotion();
+    sidebarOverlayOpen = false;
+    renderWatch();
+    if (returnFocus) restoreFocus(required("#sidebar-toggle"));
+    return true;
+  }
+
+  function setSidebar(preference) {
+    if (!["full", "rail"].includes(preference)) return;
+    sidebarPreference = preference;
+    sidebarOverlayOpen = false;
+    renderWatch();
+  }
+
+  function setAccent(nextAccent) {
+    if (!accents.has(nextAccent)) return;
+    accent = nextAccent;
+    renderWatch();
+  }
+
+  function setTypeface(nextTypeface) {
+    if (!typefaces.has(nextTypeface)) return;
+    typeface = nextTypeface;
+    renderWatch();
+  }
+
   function render() {
     document.documentElement.dataset.direction = direction;
     document.documentElement.dataset.state = currentState;
@@ -391,6 +591,7 @@
     renderRuntime();
     renderTimeline();
     renderSettings();
+    renderWatch();
   }
 
   function selectTask(taskId, moveToBrowser = false) {
@@ -405,6 +606,7 @@
   function selectSection(nextSection, moveFocus = false) {
     if (!sections.includes(nextSection)) return;
     section = nextSection;
+    sidebarOverlayOpen = false;
     render();
     if (moveFocus) required("#main-content").focus();
   }
@@ -419,6 +621,7 @@
   function setDirection(nextDirection) {
     if (!directions.has(nextDirection)) return;
     direction = nextDirection;
+    sidebarOverlayOpen = false;
     render();
   }
 
@@ -580,12 +783,12 @@
     selectSection("activity", true),
   );
   required("#allow-request").addEventListener("click", () => {
-    setState("running");
+    resolveWaitingTask("running");
     selectSection("browser", true);
     showToast("Fixture approval recorded once. The task is running.");
   });
   required("#decline-request").addEventListener("click", () => {
-    setState("failed");
+    resolveWaitingTask("failed");
     selectSection("activity", true);
     showToast("Fixture request declined. No Computer action ran.");
   });
@@ -643,6 +846,36 @@
     });
   });
 
+  function bindRadioGroup(selector, apply) {
+    const radios = [...document.querySelectorAll(`${selector} [role="radio"]`)];
+    const steps = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+    radios.forEach((radio, index) => {
+      radio.addEventListener("click", () => apply(radio.dataset.value));
+      radio.addEventListener("keydown", (event) => {
+        if (!(event.key in steps)) return;
+        event.preventDefault();
+        const next =
+          radios[(index + steps[event.key] + radios.length) % radios.length];
+        apply(next.dataset.value);
+        next.focus();
+      });
+    });
+  }
+
+  bindRadioGroup("#accent-picker", setAccent);
+  bindRadioGroup("#type-picker", setTypeface);
+
+  required("#sidebar-toggle").addEventListener("click", toggleSidebar);
+  narrowSidebar.addEventListener("change", () => {
+    if (!narrowSidebar.matches) sidebarOverlayOpen = false;
+    renderWatch();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!sidebarOverlayOpen) return;
+    if (event.target.closest("#sidebar, #sidebar-toggle")) return;
+    closeSidebarOverlay(false);
+  });
+
   window.addEventListener("keydown", (event) => {
     if (event.metaKey && event.key.toLocaleLowerCase() === "k") {
       event.preventDefault();
@@ -651,6 +884,20 @@
     }
     if (required("#setup-dialog").open || required("#command-dialog").open)
       return;
+    if (
+      direction === "watch" &&
+      event.ctrlKey &&
+      event.metaKey &&
+      event.key.toLocaleLowerCase() === "s"
+    ) {
+      event.preventDefault();
+      toggleSidebar();
+      return;
+    }
+    if (event.key === "Escape" && closeSidebarOverlay(true)) {
+      event.preventDefault();
+      return;
+    }
     if (event.metaKey && /^[1-4]$/.test(event.key)) {
       event.preventDefault();
       selectSection(sections[Number(event.key) - 1], true);
@@ -671,6 +918,15 @@
     setTask: selectTask,
     openSetup,
     openCommands,
+    setAccent,
+    setTypeface,
+    setSidebar,
+    toggleSidebar,
+    appearance: () => ({
+      accent,
+      typeface,
+      sidebar: direction === "watch" ? sidebarMode() : null,
+    }),
     snapshot: () => ({
       direction,
       section,

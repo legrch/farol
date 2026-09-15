@@ -105,11 +105,18 @@ async function setContentSize(application, width, height) {
 }
 
 async function setScene(page, scene) {
-  await page.evaluate((nextScene) => {
+  await page.evaluate(async (nextScene) => {
     window.farolLab.setTask(nextScene.task);
     window.farolLab.setDirection(nextScene.direction);
     window.farolLab.setState(nextScene.state);
     window.farolLab.setSection(nextScene.section);
+    if (nextScene.direction === "watch") {
+      window.farolLab.setAccent(nextScene.accent ?? "iris");
+      window.farolLab.setTypeface(nextScene.typeface ?? "geist");
+      window.farolLab.setSidebar(nextScene.sidebar ?? "full");
+    }
+    void document.body.offsetHeight;
+    await document.fonts.ready;
   }, scene);
   await page.waitForTimeout(80);
 }
@@ -247,12 +254,12 @@ async function launchGallery() {
     { timeout: 10_000 },
   );
   await page.waitForFunction(
-    () => document.querySelectorAll("iframe").length === 8,
+    () => document.querySelectorAll("iframe").length === 16,
   );
   const prototypeFrames = page
     .frames()
     .filter((frame) => frame.url().includes("prototype.html"));
-  assert.equal(prototypeFrames.length, 8);
+  assert.equal(prototypeFrames.length, 16);
   await Promise.all(
     prototypeFrames.map((frame) =>
       frame.waitForFunction(
@@ -1026,6 +1033,7 @@ try {
     ["dense", "02-operator-grid"],
     ["beacon", "03-beacon-field"],
     ["slate", "04-keepers-slate"],
+    ["watch", "05-watch-rail"],
   ];
   const comparisonScenes = [
     { slug: "browser-running", section: "browser", state: "running" },
@@ -1050,7 +1058,7 @@ try {
       }
     }
   }
-  cases.push("four-directions-two-scenes-wide-and-compact-retina");
+  cases.push("five-directions-two-scenes-wide-and-compact-retina");
 
   const recommendedCaptures = [
     {
@@ -1170,6 +1178,880 @@ try {
   cases.push("candidate-surface-states");
 
   await page.locator("#setup-close").click();
+
+  const watchSnapshot = () => page.evaluate(() => window.farolLab.snapshot());
+  const watchAppearance = () =>
+    page.evaluate(() => window.farolLab.appearance());
+  const shell = () =>
+    page.evaluate(() => {
+      const sidebar = document
+        .querySelector("#sidebar")
+        .getBoundingClientRect();
+      const main = document
+        .querySelector("#main-content")
+        .getBoundingClientRect();
+      const toggle = document.querySelector("#sidebar-toggle");
+      return {
+        mode: document.documentElement.dataset.sidebar,
+        sidebarWidth: Math.round(sidebar.width),
+        mainLeft: Math.round(main.left),
+        expanded: toggle.getAttribute("aria-expanded"),
+        label: toggle.getAttribute("aria-label"),
+        labelsVisible: [
+          ...document.querySelectorAll(".nav-item > span:not(.nav-signal)"),
+        ].filter((label) => label.getBoundingClientRect().width > 0).length,
+      };
+    });
+  const railSignals = () =>
+    page.evaluate(() =>
+      Object.fromEntries(
+        [...document.querySelectorAll(".nav-item")].map((button) => {
+          const badge = button.querySelector(".nav-signal");
+          const describedBy = button.getAttribute("aria-describedby");
+          return [
+            button.dataset.section,
+            badge.hidden
+              ? null
+              : {
+                  tone: badge.dataset.tone,
+                  count: badge.querySelector("b").textContent,
+                  description: describedBy
+                    ? document.getElementById(describedBy).textContent.trim()
+                    : null,
+                },
+          ];
+        }),
+      ),
+    );
+
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  assert.equal(
+    (await page.locator("#direction-name").textContent()).trim(),
+    "Watch Rail",
+  );
+  const watchFonts = await page.evaluate(() => ({
+    loaded: [
+      ...new Set(
+        [...document.fonts]
+          .filter((face) => face.status === "loaded")
+          .map((face) => face.family.replaceAll('"', "")),
+      ),
+    ].sort(),
+    title: getComputedStyle(document.querySelector("#inspector-title"))
+      .fontFamily,
+    address: getComputedStyle(document.querySelector(".address-field"))
+      .fontFamily,
+  }));
+  assert.deepEqual(watchFonts.loaded, ["Farol Geist", "Farol Geist Mono"]);
+  assert.match(watchFonts.title, /^"?Farol Geist"?,/u);
+  assert.match(watchFonts.address, /^"?Farol Geist Mono"?,/u);
+  cases.push("watch-local-fonts-loaded");
+
+  assert.deepEqual(await shell(), {
+    mode: "full",
+    sidebarWidth: 216,
+    mainLeft: 216,
+    expanded: "true",
+    label: "Collapse sidebar",
+    labelsVisible: 4,
+  });
+  await page.locator("#sidebar-toggle").click();
+  await page.waitForTimeout(360);
+  assert.deepEqual(await shell(), {
+    mode: "rail",
+    sidebarWidth: 72,
+    mainLeft: 72,
+    expanded: "false",
+    label: "Expand sidebar",
+    labelsVisible: 0,
+  });
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    "sidebar-toggle",
+  );
+  await page.keyboard.press("Control+Meta+s");
+  await page.waitForTimeout(360);
+  assert.equal((await shell()).mode, "full");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.locator("#sidebar-toggle").click();
+  const reducedSidebarMotion = await page.evaluate(() => ({
+    marked: document.documentElement.dataset.sidebarMotion === "true",
+    duration: Number.parseFloat(
+      getComputedStyle(document.querySelector(".app-shell")).transitionDuration,
+    ),
+  }));
+  assert.equal(reducedSidebarMotion.marked, true);
+  assert.ok(reducedSidebarMotion.duration <= 0.001);
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  await page.keyboard.press("Control+Meta+s");
+  await page.waitForTimeout(360);
+  assert.equal((await shell()).mode, "full");
+  cases.push("watch-sidebar-collapses-to-rail");
+
+  assert.deepEqual(await railSignals(), {
+    browser: { tone: "running", count: "1", description: "1 task running" },
+    computer: {
+      tone: "waiting",
+      count: "1",
+      description: "1 request waiting for approval",
+    },
+    activity: {
+      tone: "waiting",
+      count: "1",
+      description: "1 task needs attention",
+    },
+    settings: null,
+  });
+  assert.equal(
+    await page.locator('[data-section="computer"]').getAttribute("title"),
+    "Computer (⌘2) · 1 request waiting for approval",
+  );
+  for (const [state, expected] of [
+    [
+      "running",
+      {
+        browser: {
+          tone: "running",
+          count: "2",
+          description: "2 tasks running",
+        },
+        computer: null,
+        activity: null,
+        settings: null,
+      },
+    ],
+    [
+      "unknown",
+      {
+        browser: { tone: "running", count: "1", description: "1 task running" },
+        computer: null,
+        activity: {
+          tone: "unknown",
+          count: "1",
+          description: "1 task needs attention",
+        },
+        settings: null,
+      },
+    ],
+    [
+      "unavailable",
+      {
+        browser: { tone: "running", count: "1", description: "1 task running" },
+        computer: null,
+        activity: {
+          tone: "unavailable",
+          count: "1",
+          description: "1 task needs attention",
+        },
+        settings: {
+          tone: "failed",
+          count: "",
+          description: "Local runtime offline",
+        },
+      },
+    ],
+  ]) {
+    await setScene(page, {
+      direction: "watch",
+      section: "browser",
+      task: "atlantic",
+      state,
+    });
+    assert.deepEqual(await railSignals(), expected, `rail-signals:${state}`);
+  }
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+    sidebar: "rail",
+  });
+  const railBadge = await page.evaluate(() => {
+    const button = document.querySelector('[data-section="computer"]');
+    const badge = button.querySelector(".nav-signal");
+    const buttonBounds = button.getBoundingClientRect();
+    const badgeBounds = badge.getBoundingClientRect();
+    return {
+      visible: badgeBounds.width > 0 && badgeBounds.height > 0,
+      onIcon:
+        badgeBounds.left >= buttonBounds.left - 2 &&
+        badgeBounds.right <= buttonBounds.right + 2 &&
+        badgeBounds.top >= buttonBounds.top - 2,
+      background: getComputedStyle(badge).backgroundColor,
+      waitingLamp: getComputedStyle(document.documentElement)
+        .getPropertyValue("--lamp-waiting")
+        .trim(),
+    };
+  });
+  assert.equal(railBadge.visible, true);
+  assert.equal(railBadge.onIcon, true);
+  assert.equal(railBadge.background, "rgb(232, 171, 85)");
+  assert.equal(railBadge.waitingLamp, "#e8ab55");
+  const railShapes = await page.evaluate(() => {
+    const mask = (selector) =>
+      getComputedStyle(document.querySelector(selector)).maskImage;
+    return {
+      computerBadge: mask('[data-section="computer"] .nav-signal i'),
+      browserBadge: mask('[data-section="browser"] .nav-signal i'),
+      runtime: mask("#runtime-status i"),
+      badgeVisible: document
+        .querySelector('[data-section="computer"] .nav-signal i')
+        .getBoundingClientRect().width,
+      runtimeLabel: document
+        .querySelector("#runtime-status-label")
+        .getBoundingClientRect().width,
+    };
+  });
+  assert.notEqual(railShapes.computerBadge, "none");
+  assert.notEqual(railShapes.runtime, "none");
+  assert.notEqual(railShapes.computerBadge, railShapes.browserBadge);
+  assert.ok(railShapes.badgeVisible > 0, "rail-badge-keeps-its-lamp");
+  assert.ok(
+    railShapes.runtimeLabel > 0,
+    "rail-runtime-label-stays-in-the-accessibility-tree",
+  );
+  await setScene(page, {
+    direction: "native",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  assert.equal(await page.locator(".nav-signal:not([hidden])").count(), 0);
+  assert.equal(await page.locator(".nav-item[aria-describedby]").count(), 0);
+  assert.equal(await page.locator("#sidebar-toggle").isHidden(), true);
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.documentElement.dataset.sidebar ??
+        document.documentElement.dataset.accent ??
+        null,
+    ),
+    null,
+  );
+  cases.push("watch-rail-keeps-watch");
+
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  const watchRegions = await page.evaluate(() => {
+    const region = (element) => {
+      const style = getComputedStyle(element);
+      return (
+        style.getPropertyValue("app-region").trim() ||
+        style.getPropertyValue("-webkit-app-region").trim()
+      );
+    };
+    return {
+      windowBar: region(document.querySelector(".window-bar")),
+      sidebarTop: region(document.querySelector(".brand-block")),
+      controls: [
+        ...new Set(
+          [
+            ...document.querySelectorAll(
+              "#sidebar-toggle, .nav-item, #fixture-button, #command-button",
+            ),
+          ].map(region),
+        ),
+      ],
+    };
+  });
+  assert.deepEqual(watchRegions, {
+    windowBar: "drag",
+    sidebarTop: "drag",
+    controls: ["no-drag"],
+  });
+  await page.locator('[data-task-id="atlantic"]').focus();
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "task-menu-button",
+  );
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(
+    () => document.activeElement?.id === "primary-action",
+  );
+  assert.equal(
+    await page.evaluate(
+      () =>
+        document.querySelector("#task-menu-button").getBoundingClientRect()
+          .right <=
+        document.querySelector("#primary-action").getBoundingClientRect().left,
+    ),
+    true,
+  );
+  await page.locator("#task-menu-button").click();
+  await page.locator("#task-menu").waitFor({ state: "visible" });
+  const watchMenu = await page.evaluate(() => {
+    const menu = document.querySelector("#task-menu").getBoundingClientRect();
+    const button = document
+      .querySelector("#task-menu-button")
+      .getBoundingClientRect();
+    return {
+      belowButton: menu.top >= button.bottom,
+      rightAligned: Math.abs(menu.right - button.right) <= 1,
+    };
+  });
+  assert.deepEqual(watchMenu, { belowButton: true, rightAligned: true });
+  await page.keyboard.press("Escape");
+  await page.locator("#task-menu").waitFor({ state: "hidden" });
+  cases.push("watch-title-bar-and-dossier-order");
+
+  await page.locator("#primary-action").click();
+  assert.equal((await watchSnapshot()).section, "computer");
+  await page.locator("#allow-request").click();
+  assert.deepEqual(await watchSnapshot(), {
+    direction: "watch",
+    section: "browser",
+    selectedTaskId: "atlantic",
+    state: "running",
+  });
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator('[data-task-id="atlantic"]').focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal((await watchSnapshot()).selectedTaskId, "harbor");
+  await page.keyboard.press("Control+Tab");
+  assert.equal((await watchSnapshot()).selectedTaskId, "release");
+  await page.keyboard.press("Meta+3");
+  assert.equal((await watchSnapshot()).section, "activity");
+  await page.keyboard.press("Meta+1");
+  assert.equal((await watchSnapshot()).section, "browser");
+  cases.push("watch-bounded-approval-and-keyboard");
+
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "harbor",
+    state: "running",
+  });
+  assert.equal((await watchSnapshot()).selectedTaskId, "harbor");
+  await page.keyboard.press("Meta+2");
+  const foreignRequest = await page.evaluate(() => ({
+    context: document.querySelector("#computer-context").textContent.trim(),
+    allow: !document.querySelector("#allow-request").disabled,
+    decline: !document.querySelector("#decline-request").disabled,
+    status: document
+      .querySelector("[data-panel='computer'] .status-label")
+      .textContent.trim(),
+  }));
+  assert.deepEqual(foreignRequest, {
+    context: "Waiting task · Atlantic workspace check",
+    allow: true,
+    decline: true,
+    status: "Approval required",
+  });
+  await page.locator("#allow-request").click();
+  assert.deepEqual(await watchSnapshot(), {
+    direction: "watch",
+    section: "browser",
+    selectedTaskId: "atlantic",
+    state: "running",
+  });
+  await setScene(page, {
+    direction: "watch",
+    section: "computer",
+    task: "atlantic",
+    state: "complete",
+  });
+  assert.equal(
+    await page.evaluate(() =>
+      document.querySelector("#computer-context").textContent.trim(),
+    ),
+    "Selected task · Atlantic workspace check",
+  );
+  assert.equal(await page.locator("#allow-request").isDisabled(), true);
+  cases.push("watch-computer-names-the-waiting-task");
+
+  await setContentSize(application, 1180, 760);
+  const statusType = await page.evaluate(() => {
+    window.farolLab.setDirection("watch");
+    window.farolLab.setSection("activity");
+    window.farolLab.setState("unknown");
+    const size = (selector) =>
+      Number.parseFloat(
+        getComputedStyle(document.querySelector(selector)).fontSize,
+      );
+    const family = (selector) =>
+      getComputedStyle(document.querySelector(selector)).fontFamily;
+    return {
+      sizes: {
+        tabState: size(".task-tab.is-selected small"),
+        eventState: size(".event-state"),
+        filter: size('.filter-group [data-filter="all"]'),
+        sidebarBadge: size('[data-section="activity"] .nav-signal'),
+      },
+      stateWordFamily: family("#inspector-state"),
+      activityDetail: (() => {
+        const detail = document.querySelector("#timeline li p");
+        return {
+          clipped: detail.scrollWidth > detail.clientWidth,
+          text: detail.textContent.trim(),
+        };
+      })(),
+    };
+  });
+  for (const [name, value] of Object.entries(statusType.sizes)) {
+    assert.ok(value >= 10, `watch-status-type:${name}:${value}`);
+  }
+  assert.match(statusType.stateWordFamily, /^"?Farol Geist"?,/u);
+  assert.equal(statusType.activityDetail.clipped, false);
+  assert.match(statusType.activityDetail.text, /before any retry/u);
+  const stateWordSize = await page.evaluate(() =>
+    Number.parseFloat(
+      getComputedStyle(document.querySelector("#inspector-state")).fontSize,
+    ),
+  );
+  assert.ok(stateWordSize >= 10, `watch-state-word:${stateWordSize}`);
+  cases.push("watch-status-type-and-recovery-text");
+
+  await setScene(page, {
+    direction: "watch",
+    section: "settings",
+    task: "atlantic",
+    state: "running",
+  });
+  await page.getByRole("button", { name: "Appearance", exact: true }).click();
+  const iris = page.getByRole("radio", { name: "Iris" });
+  assert.equal(await iris.getAttribute("aria-checked"), "true");
+  assert.equal(await iris.getAttribute("tabindex"), "0");
+  await iris.focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal((await watchAppearance()).accent, "cobalt");
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.dataset.value),
+    "cobalt",
+  );
+  await page.getByRole("radio", { name: "Orchid" }).click();
+  assert.equal(
+    await page.evaluate(() => document.documentElement.dataset.accent),
+    "orchid",
+  );
+  await page.getByRole("radio", { name: "IBM Plex" }).click();
+  await page.evaluate(() => document.fonts.ready);
+  assert.match(
+    await page.evaluate(
+      () =>
+        getComputedStyle(document.querySelector("#settings-title")).fontFamily,
+    ),
+    /^"?Farol Plex Sans"?,/u,
+  );
+  await page.keyboard.press("ArrowRight");
+  assert.equal((await watchAppearance()).typeface, "system");
+  const settingsAppearancePath = path.join(
+    galleryRoot,
+    "watch-settings-appearance-wide@2x.png",
+  );
+  await page.getByRole("radio", { name: "Iris" }).click();
+  await page.getByRole("radio", { name: "Geist" }).click();
+  await page.evaluate(() => document.fonts.ready);
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.screenshot({
+    path: settingsAppearancePath,
+    animations: "disabled",
+  });
+  assert.deepEqual(pngDimensions(await fs.readFile(settingsAppearancePath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "watch-settings-appearance-wide@2x.png",
+    direction: "watch",
+    section: "settings",
+    state: "running",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  await setScene(page, {
+    direction: "native",
+    section: "settings",
+    task: "atlantic",
+    state: "running",
+  });
+  assert.equal(await page.locator("#appearance-accent").isHidden(), true);
+  assert.equal(await page.locator("#appearance-type").isHidden(), true);
+  cases.push("watch-appearance-study-controls");
+
+  const watchContrast = await page.evaluate(() => {
+    const canvas = document.createElement("canvas").getContext("2d");
+    const rgb = (value) => {
+      canvas.fillStyle = "#000000";
+      canvas.fillStyle = value.trim();
+      const hex = canvas.fillStyle;
+      return [1, 3, 5].map((index) =>
+        Number.parseInt(hex.slice(index, index + 2), 16),
+      );
+    };
+    const luminance = (value) => {
+      const [red, green, blue] = rgb(value).map((channel) => {
+        const unit = channel / 255;
+        return unit <= 0.03928 ? unit / 12.92 : ((unit + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    };
+    const ratio = (first, second) => {
+      const [high, low] = [luminance(first), luminance(second)].sort(
+        (left, right) => right - left,
+      );
+      return (high + 0.05) / (low + 0.05);
+    };
+    window.farolLab.setDirection("watch");
+    const report = {};
+    for (const accent of ["iris", "cobalt", "orchid"]) {
+      window.farolLab.setAccent(accent);
+      const style = getComputedStyle(document.documentElement);
+      const token = (name) => style.getPropertyValue(name);
+      report[accent] = {
+        inkOnFillTop: ratio(token("--accent-ink"), token("--accent-fill-top")),
+        inkOnFillBottom: ratio(
+          token("--accent-ink"),
+          token("--accent-fill-bottom"),
+        ),
+        lightOnSurface: ratio(token("--accent-light"), token("--surface")),
+        textOnSurface: ratio(token("--text"), token("--surface")),
+        mutedOnSurface: ratio(token("--muted"), token("--surface")),
+        quietOnSurface: ratio(token("--quiet"), token("--surface")),
+        quietOnSidebar: ratio(token("--quiet"), token("--sidebar")),
+        documentMuted: ratio(token("--document-muted"), token("--document-bg")),
+        waitingLamp: ratio(token("--lamp-waiting"), token("--surface")),
+        failedLamp: ratio(token("--lamp-failed"), token("--surface")),
+        unavailableLamp: ratio(token("--lamp-unavailable"), token("--surface")),
+      };
+    }
+    window.farolLab.setAccent("iris");
+    return report;
+  });
+  for (const [accent, pairs] of Object.entries(watchContrast)) {
+    for (const [pair, value] of Object.entries(pairs)) {
+      assert.ok(value >= 4.5, `watch-contrast:${accent}:${pair}:${value}`);
+    }
+  }
+  cases.push("watch-accent-contrast");
+
+  await setContentSize(application, 760, 640);
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  assert.equal((await shell()).mode, "rail");
+  const compactDossier = await page.evaluate(() => {
+    const within = (selector) => {
+      const bounds = document.querySelector(selector).getBoundingClientRect();
+      return (
+        bounds.width > 0 &&
+        bounds.left >= 0 &&
+        bounds.top >= 0 &&
+        bounds.right <= window.innerWidth &&
+        bounds.bottom <= window.innerHeight
+      );
+    };
+    return {
+      state: within("#inspector-state"),
+      title: within("#inspector-title"),
+      menu: within("#task-menu-button"),
+      primary: within("#primary-action"),
+      page: within("#browser-title"),
+      noOverflow: document.documentElement.scrollWidth <= window.innerWidth,
+    };
+  });
+  assert.deepEqual(compactDossier, {
+    state: true,
+    title: true,
+    menu: true,
+    primary: true,
+    page: true,
+    noOverflow: true,
+  });
+  const mainBefore = await page.locator("#main-content").boundingBox();
+  await page.locator("#sidebar-toggle").click();
+  await page.waitForTimeout(360);
+  assert.deepEqual(await shell(), {
+    mode: "overlay",
+    sidebarWidth: 216,
+    mainLeft: 72,
+    expanded: "true",
+    label: "Hide sidebar",
+    labelsVisible: 4,
+  });
+  assert.deepEqual(
+    await page.locator("#main-content").boundingBox(),
+    mainBefore,
+  );
+  assert.equal(
+    await page.evaluate(
+      () => document.activeElement?.classList.contains("nav-item") ?? false,
+    ),
+    true,
+  );
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      taskStrip: document.querySelector(".task-strip").hasAttribute("inert"),
+      main: document.querySelector("#main-content").hasAttribute("inert"),
+      tools: document.querySelector(".window-tools").hasAttribute("inert"),
+      toggle: document.querySelector("#sidebar-toggle").hasAttribute("inert"),
+    })),
+    { taskStrip: true, main: true, tools: true, toggle: false },
+  );
+  const overlayPath = path.join(
+    galleryRoot,
+    "watch-compact-sidebar-overlay@2x.png",
+  );
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: overlayPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(overlayPath)), {
+    width: 1520,
+    height: 1280,
+  });
+  screenshots.push({
+    file: "watch-compact-sidebar-overlay@2x.png",
+    direction: "watch",
+    section: "browser",
+    state: "waiting",
+    viewport: "760x640",
+    pixels: "1520x1280",
+  });
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  await page.waitForFunction(
+    () => document.activeElement?.id === "sidebar-toggle",
+  );
+  await page.locator("#sidebar-toggle").click();
+  await page.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "overlay",
+  );
+  await page.getByRole("button", { name: "Open Activity" }).click();
+  assert.equal((await watchSnapshot()).section, "activity");
+  assert.equal((await shell()).mode, "rail");
+  await page.locator("#sidebar-toggle").click();
+  await page.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "overlay",
+  );
+  await page.mouse.click(600, 420);
+  await page.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  assert.deepEqual(
+    await page.evaluate(() => ({
+      taskStrip: document.querySelector(".task-strip").hasAttribute("inert"),
+      main: document.querySelector("#main-content").hasAttribute("inert"),
+    })),
+    { taskStrip: false, main: false },
+  );
+  await setContentSize(application, 1180, 760);
+  await page.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
+  cases.push("watch-compact-sidebar-overlay");
+
+  await setScene(page, {
+    direction: "watch",
+    section: "activity",
+    task: "atlantic",
+    state: "unknown",
+  });
+  await page.locator('[data-filter="all"]').click();
+  await setScene(page, {
+    direction: "watch",
+    section: "settings",
+    task: "atlantic",
+    state: "unavailable",
+  });
+  await page.getByRole("button", { name: "Privacy", exact: true }).click();
+  const watchCaptures = [
+    {
+      section: "browser",
+      state: "waiting",
+      width: 1180,
+      height: 760,
+      file: "watch-browser-waiting-wide@2x.png",
+    },
+    {
+      section: "browser",
+      state: "waiting",
+      sidebar: "rail",
+      width: 1180,
+      height: 760,
+      file: "watch-rail-browser-waiting-wide@2x.png",
+    },
+    {
+      section: "activity",
+      state: "unknown",
+      width: 1180,
+      height: 760,
+      file: "watch-activity-unknown-wide@2x.png",
+    },
+    {
+      section: "settings",
+      state: "unavailable",
+      width: 760,
+      height: 640,
+      file: "watch-settings-unavailable-compact@2x.png",
+    },
+    {
+      section: "browser",
+      state: "running",
+      accent: "cobalt",
+      width: 1180,
+      height: 760,
+      file: "watch-accent-cobalt-wide@2x.png",
+    },
+    {
+      section: "browser",
+      state: "running",
+      accent: "orchid",
+      width: 1180,
+      height: 760,
+      file: "watch-accent-orchid-wide@2x.png",
+    },
+    {
+      section: "browser",
+      state: "running",
+      typeface: "plex",
+      width: 1180,
+      height: 760,
+      file: "watch-type-plex-wide@2x.png",
+    },
+    {
+      section: "browser",
+      state: "running",
+      typeface: "system",
+      width: 1180,
+      height: 760,
+      file: "watch-type-system-wide@2x.png",
+    },
+  ];
+  for (const definition of watchCaptures) {
+    await capture(application, page, {
+      direction: "watch",
+      task: "atlantic",
+      ...definition,
+    });
+  }
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "watch",
+    section: "settings",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator("#review-setup").click();
+  const watchSetupPath = path.join(galleryRoot, "watch-setup-wide@2x.png");
+  await page.screenshot({ path: watchSetupPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(watchSetupPath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "watch-setup-wide@2x.png",
+    direction: "watch",
+    section: "setup",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  await page.locator("#setup-close").click();
+  await page.locator("#setup-dialog").waitFor({ state: "hidden" });
+  const extraWatchCaptures = [
+    {
+      section: "activity",
+      state: "unknown",
+      sidebar: "rail",
+      width: 1180,
+      height: 760,
+      file: "watch-rail-attention-wide@2x.png",
+    },
+    {
+      section: "activity",
+      state: "unknown",
+      width: 760,
+      height: 640,
+      file: "watch-activity-unknown-compact@2x.png",
+    },
+    {
+      section: "browser",
+      state: "waiting",
+      width: 940,
+      height: 700,
+      file: "watch-browser-waiting-medium@2x.png",
+    },
+  ];
+  for (const definition of extraWatchCaptures) {
+    await capture(application, page, {
+      direction: "watch",
+      task: "atlantic",
+      ...definition,
+    });
+  }
+  await setContentSize(application, 1180, 760);
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.locator("#task-menu-button").click();
+  await page.locator("#task-menu").waitFor({ state: "visible" });
+  const watchMenuPath = path.join(
+    galleryRoot,
+    "watch-task-menu-open-wide@2x.png",
+  );
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: watchMenuPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(watchMenuPath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "watch-task-menu-open-wide@2x.png",
+    direction: "watch",
+    section: "browser",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  await page.keyboard.press("Escape");
+  await page.locator("#task-menu").waitFor({ state: "hidden" });
+  await page.locator('[data-task-id="harbor"]').focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForFunction(
+    () => document.activeElement?.dataset.taskId === "atlantic",
+  );
+  const watchFocusPath = path.join(
+    galleryRoot,
+    "watch-focus-visible-wide@2x.png",
+  );
+  await page.mouse.move(0, 0);
+  await page.screenshot({ path: watchFocusPath, animations: "disabled" });
+  assert.deepEqual(pngDimensions(await fs.readFile(watchFocusPath)), {
+    width: 2360,
+    height: 1520,
+  });
+  screenshots.push({
+    file: "watch-focus-visible-wide@2x.png",
+    direction: "watch",
+    section: "browser",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "2360x1520",
+  });
+  cases.push("watch-surface-and-appearance-evidence");
+
   const originalUrl = page.url();
   const blockedTargets = [
     pathToFileURL(path.join(nextRoot, "design-lab-other", "probe.html")).href,
@@ -1234,7 +2116,37 @@ try {
     viewport: "1180x760",
     pixels: "1180x760",
   });
-  cases.push("slate-standard-density-evidence");
+  await setScene(page, {
+    direction: "watch",
+    section: "browser",
+    task: "atlantic",
+    state: "waiting",
+  });
+  await page.waitForTimeout(120);
+  await page.mouse.move(0, 0);
+  await page.evaluate(() => document.activeElement?.blur());
+  const watchStandard = path.join(
+    galleryRoot,
+    "watch-browser-waiting-wide@1x.png",
+  );
+  const watchShot = await session.send("Page.captureScreenshot", {
+    format: "png",
+    fromSurface: true,
+  });
+  await fs.writeFile(watchStandard, Buffer.from(watchShot.data, "base64"));
+  assert.deepEqual(pngDimensions(await fs.readFile(watchStandard)), {
+    width: 1180,
+    height: 760,
+  });
+  screenshots.push({
+    file: "watch-browser-waiting-wide@1x.png",
+    direction: "watch",
+    section: "browser",
+    state: "waiting",
+    viewport: "1180x760",
+    pixels: "1180x760",
+  });
+  cases.push("standard-density-evidence");
 } finally {
   await close(standardDensity);
 }
@@ -1362,11 +2274,21 @@ const report = {
   schema: 1,
   result: "passed",
   fixture: "synthetic-local-atlantic",
-  directions: ["studio-rail", "operator-grid", "beacon-field", "keepers-slate"],
-  comparisonCandidate: "keepers-slate",
-  recommendedDirection: "keepers-slate",
-  recommendationStatus: "provisional-session-2",
-  previousRecommendation: "beacon-field",
+  directions: [
+    "studio-rail",
+    "operator-grid",
+    "beacon-field",
+    "keepers-slate",
+    "watch-rail",
+  ],
+  comparisonCandidate: "watch-rail",
+  recommendedDirection: "watch-rail",
+  recommendationStatus: "provisional-session-3",
+  previousRecommendation: "keepers-slate",
+  openChoices: {
+    accent: ["iris", "cobalt", "orchid"],
+    typeface: ["geist", "plex", "system"],
+  },
   ownerApproval: false,
   sourceBoundary: "tracked-nonshipping-design-lab",
   visibleWindow,
