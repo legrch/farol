@@ -647,10 +647,18 @@ try {
     .locator("#browser-loading")
     .getByText("local runtime stopped", { exact: false })
     .waitFor();
+  const remainingTaskViews = await processDeath.application.evaluate(
+    ({ BrowserWindow }) =>
+      (BrowserWindow.getAllWindows()[0]?.contentView.children ?? []).filter(
+        (view) => "webContents" in view,
+      ).length,
+  );
+  assert.equal(remainingTaskViews, 0);
   await processDeath.window.screenshot({
     path: path.join(evidenceRoot, "process-death-wide.png"),
   });
   await setWindowSize(processDeath.application, 700, 600);
+  assert.equal(processDeath.window.isClosed(), false);
   await processDeath.window.screenshot({
     path: path.join(evidenceRoot, "process-death-compact.png"),
   });

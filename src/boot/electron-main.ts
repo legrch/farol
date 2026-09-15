@@ -132,9 +132,19 @@ function publishRuntimeStatus(): void {
   window?.webContents.send(channels.runtimeState, currentRuntimeStatus());
 }
 
-function hideTaskViews(): void {
-  for (const view of taskViews.values()) {
-    view.setVisible(false);
+function disposeTaskView(taskId: string, view: WebContentsView): void {
+  taskViews.delete(taskId);
+  if (window && !window.isDestroyed()) {
+    window.contentView.removeChildView(view);
+  }
+  if (!view.webContents.isDestroyed()) {
+    view.webContents.close({ waitForBeforeUnload: false });
+  }
+}
+
+function disposeTaskViews(): void {
+  for (const [taskId, view] of [...taskViews]) {
+    disposeTaskView(taskId, view);
   }
 }
 
@@ -151,7 +161,7 @@ function handleRuntimeExit(code: number | null): void {
     code === 0 ? "RUNTIME_PROCESS_EXITED" : "RUNTIME_PROCESS_FAILED";
   stopStreams();
   pendingComputer.clear();
-  hideTaskViews();
+  disposeTaskViews();
   publishRuntimeStatus();
 }
 
@@ -282,7 +292,10 @@ function applyLayout(): void {
   const height = size[1] ?? 1;
   const rail = width < 760 ? 64 : 176;
   for (const [taskId, view] of taskViews) {
-    const visible = section === "browser" && taskId === selectedTaskId;
+    const visible =
+      runtimeState === "ready" &&
+      section === "browser" &&
+      taskId === selectedTaskId;
     view.setVisible(visible);
     view.setBounds({
       x: rail,
@@ -295,9 +308,11 @@ function applyLayout(): void {
 
 async function createTaskViews(): Promise<void> {
   if (!window || !runtime) return;
+  const activeRuntime = runtime;
   const base = runtimeBase();
   if (!base || !installNetworkFence()) return;
-  for (const task of runtime.tasks) {
+  for (const task of activeRuntime.tasks) {
+    if (runtimeState !== "ready" || runtime !== activeRuntime) return;
     const view = new WebContentsView({
       webPreferences: {
         partition: partitionName(),
@@ -316,14 +331,22 @@ async function createTaskViews(): Promise<void> {
     view.webContents.on("before-input-event", (event, input) => {
       if (handleShortcut(input)) event.preventDefault();
     });
-    await view.webContents.loadURL(
-      `${base}/task/${encodeURIComponent(task.taskId)}`,
-      {
-        extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
-      },
-    );
+    try {
+      await view.webContents.loadURL(
+        `${base}/task/${encodeURIComponent(task.taskId)}`,
+        {
+          extraHeaders: `Authorization: Bearer ${task.readToken}\n`,
+        },
+      );
+    } catch (error) {
+      if (taskViews.get(task.taskId) === view) {
+        disposeTaskView(task.taskId, view);
+      }
+      if (runtimeState !== "ready" || runtime !== activeRuntime) return;
+      throw error;
+    }
   }
-  applyLayout();
+  if (runtimeState === "ready" && runtime === activeRuntime) applyLayout();
 }
 
 async function consumeSse(task: RuntimeReady["tasks"][number]): Promise<void> {
@@ -490,6 +513,7 @@ async function createWindow(): Promise<void> {
     runtimeStopping = true;
     stopStreams();
     runtimeChild?.postMessage("shutdown");
+    disposeTaskViews();
     taskViews.clear();
     window = null;
   });
@@ -502,7 +526,7 @@ async function createWindow(): Promise<void> {
       runtimeState = "failed";
       runtimeError = "RUNTIME_STREAM_FAILED";
       stopStreams();
-      hideTaskViews();
+      disposeTaskViews();
       publishRuntimeStatus();
     });
   }
