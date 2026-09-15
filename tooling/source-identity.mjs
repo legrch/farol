@@ -11,10 +11,15 @@ const gitEnvironment = Object.freeze({
   LC_ALL: "C",
 });
 
+// Tracked evidence such as a Retina comparison PNG exceeds Node's 1 MiB
+// default spawn buffer; the cap is a limit, not an allocation.
+const gitMaxBuffer = 256 * 1024 * 1024;
+
 function git(repositoryRoot, arguments_, encoding = null) {
   return execFileSync("git", ["-C", repositoryRoot, ...arguments_], {
     encoding,
     env: gitEnvironment,
+    maxBuffer: gitMaxBuffer,
   });
 }
 
