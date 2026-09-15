@@ -1,6 +1,6 @@
 # Farol Next design-lab product brief
 
-Status: `OWNER_REVIEW_PENDING`
+Status: `OWNER_DIRECTION_CHOSEN` · Watch Rail, Iris, Geist; production integration not started
 
 This brief scopes the reversible visual prototype. It does not redefine Farol Next, change
 Legacy, or establish live provider or native-host readiness.

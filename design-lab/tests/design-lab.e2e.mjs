@@ -1383,7 +1383,23 @@ try {
         badgeBounds.left >= buttonBounds.left - 2 &&
         badgeBounds.right <= buttonBounds.right + 2 &&
         badgeBounds.top >= buttonBounds.top - 2,
-      background: getComputedStyle(badge).backgroundColor,
+      lampColour: getComputedStyle(badge).color,
+      countHidden:
+        getComputedStyle(badge.querySelector("b")).display === "none",
+      coversIcon: (() => {
+        const glyph = button.querySelector("svg").getBoundingClientRect();
+        const lamp = badge.querySelector("i").getBoundingClientRect();
+        const overlap =
+          Math.max(
+            0,
+            Math.min(glyph.right, lamp.right) - Math.max(glyph.left, lamp.left),
+          ) *
+          Math.max(
+            0,
+            Math.min(glyph.bottom, lamp.bottom) - Math.max(glyph.top, lamp.top),
+          );
+        return overlap / (glyph.width * glyph.height);
+      })(),
       waitingLamp: getComputedStyle(document.documentElement)
         .getPropertyValue("--lamp-waiting")
         .trim(),
@@ -1391,7 +1407,12 @@ try {
   });
   assert.equal(railBadge.visible, true);
   assert.equal(railBadge.onIcon, true);
-  assert.equal(railBadge.background, "rgb(232, 171, 85)");
+  assert.equal(railBadge.lampColour, "rgb(232, 171, 85)");
+  assert.equal(railBadge.countHidden, true);
+  assert.ok(
+    railBadge.coversIcon < 0.2,
+    `rail-lamp-covers-the-icon:${railBadge.coversIcon}`,
+  );
   assert.equal(railBadge.waitingLamp, "#e8ab55");
   const railShapes = await page.evaluate(() => {
     const mask = (selector) =>
@@ -2283,13 +2304,20 @@ const report = {
   ],
   comparisonCandidate: "watch-rail",
   recommendedDirection: "watch-rail",
-  recommendationStatus: "provisional-session-3",
+  recommendationStatus: "owner-chosen-session-3",
   previousRecommendation: "keepers-slate",
-  openChoices: {
+  studiedChoices: {
     accent: ["iris", "cobalt", "orchid"],
     typeface: ["geist", "plex", "system"],
   },
-  ownerApproval: false,
+  ownerDecision: {
+    direction: "watch-rail",
+    accent: "iris",
+    typeface: "geist",
+    recordedOn: "2026-09-16",
+    scope: "visual direction only; production integration not started",
+  },
+  ownerApproval: true,
   sourceBoundary: "tracked-nonshipping-design-lab",
   visibleWindow,
   prototypeSha256: await digestFiles(digestInputs),

@@ -3991,34 +3991,41 @@ html[data-direction="watch"][data-sidebar="rail"] .nav-item {
   padding: 0;
 }
 
+html[data-direction="watch"][data-sidebar="rail"] .nav-item.is-active {
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 html[data-direction="watch"][data-sidebar="rail"]
   .nav-item
   > span:not(.nav-signal) {
   display: none;
 }
 
+/* In the rail the signal is only a lamp: it must not cover the icon. The
+   count stays in the item's tooltip and in its spoken description. */
 html[data-direction="watch"][data-sidebar="rail"] .nav-item .nav-signal {
   position: absolute;
-  top: 0;
-  right: 0;
-  justify-content: center;
-  height: 18px;
-  gap: 3px;
-  padding: 0 5px 0 4px;
-  border-radius: 9px;
-  background: var(--signal);
-  color: var(--bg);
-  box-shadow: 0 0 0 2px var(--sidebar);
-  font-size: 0.72rem;
+  top: 3px;
+  right: 3px;
+  height: 12px;
+  gap: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--signal);
+  box-shadow: none;
 }
 
 html[data-direction="watch"][data-sidebar="rail"] .nav-signal i {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
+  filter: drop-shadow(0 0 2px var(--sidebar))
+    drop-shadow(0 0 3px var(--sidebar));
 }
 
-html[data-direction="watch"][data-sidebar="rail"] .nav-signal:has(b:empty) {
-  padding: 0 4px;
+html[data-direction="watch"][data-sidebar="rail"] .nav-signal b {
+  display: none;
 }
 
 html[data-direction="watch"] .sidebar-footer {

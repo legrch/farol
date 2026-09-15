@@ -11,13 +11,20 @@
   ],
   "comparisonCandidate": "watch-rail",
   "recommendedDirection": "watch-rail",
-  "recommendationStatus": "provisional-session-3",
+  "recommendationStatus": "owner-chosen-session-3",
   "previousRecommendation": "keepers-slate",
-  "openChoices": {
+  "studiedChoices": {
     "accent": ["iris", "cobalt", "orchid"],
     "typeface": ["geist", "plex", "system"]
   },
-  "ownerApproval": false,
+  "ownerDecision": {
+    "direction": "watch-rail",
+    "accent": "iris",
+    "typeface": "geist",
+    "recordedOn": "2026-09-16",
+    "scope": "visual direction only; production integration not started"
+  },
+  "ownerApproval": true,
   "sourceBoundary": "tracked-nonshipping-design-lab",
   "visibleWindow": {
     "visible": true,
@@ -36,7 +43,7 @@
     },
     "primaryFallback": false
   },
-  "prototypeSha256": "ac81a30d940dbd71871db90add350eadf3288a96c6f510747d617f5f8949fbeb",
+  "prototypeSha256": "efec1a4f80dea98928e651a8bf60663ee8026d7d519e9972e6c93d6a9d3260ef",
   "cases": [
     "nonshipping-source-boundary",
     "sandboxed-electron-runner",

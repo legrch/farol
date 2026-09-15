@@ -1,13 +1,12 @@
 # Farol Next design-lab specification
 
-Status: `OWNER_REVIEW_PENDING`
+Status: `OWNER_DIRECTION_CHOSEN` · production integration not started
 
-Five preserved directions, one owner decision. `Watch Rail` is the third design session's
-provisional candidate: Studio Rail's sidebar, finished with a rail that keeps watch, graphite
-materials, one accent light, and a typeface study. Its accent and typeface stay open for the
-owner. `Keeper's Slate` is the second session's candidate; Studio Rail, Operator Grid, and Beacon
-Field are the unchanged first-lab baseline. No direction is owner-approved, and none is
-integrated into the product UI.
+Five preserved directions, one owner decision, now made. On 2026-09-16 the owner chose
+**Watch Rail** with the **Iris** accent and the **Geist** typeface. That decision covers the visual
+direction only: nothing here is integrated into the product UI, and the production pass described
+at the end has not started. The other four directions and the alternate accents and typefaces stay
+in the lab as the record of the comparison.
 
 ## Evidence levels
 
@@ -65,18 +64,20 @@ All five directions render the same `Atlantic workspace check` fixture in two ma
 gallery changes composition, tokens, and density, not content, state, or information
 architecture.
 
-| Direction          | Intent                                                                                   | Strength                                             | Trade-off                                               |
-| ------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------- |
-| **Studio Rail**    | Native Mac restraint: graphite chrome, light work document, system blue                  | Clearest structure: places left, tasks on top        | Farol identity recedes; no memorable signature          |
-| **Operator Grid**  | Dense expert tool: compact rail, sharper boundaries, cyan signal                         | Fast scanning and more working area                  | Cyan signal reads as too bright                         |
-| **Beacon Field**   | Distinctive Farol: horizontal command shelf, deep teal field, warm beacon                | Ownable composition with clear task state            | Warm and teal identity did not land                     |
-| **Keeper's Slate** | Graphite-first: the selected task fuses into one plate; shape-coded lamps carry state    | Ownership made physical; Browser gets the full width | Sections and tasks both on top; harder to extend        |
-| **Watch Rail**     | Studio Rail's sidebar, finished: a rail that keeps watch, one accent light, a type study | Clear structure with its own light and a live rail   | Accent and typeface still open; rail needs native proof |
+| Direction          | Intent                                                                                   | Strength                                                   | Trade-off                                         |
+| ------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------- |
+| **Studio Rail**    | Native Mac restraint: graphite chrome, light work document, system blue                  | Clearest structure: places left, tasks on top              | Farol identity recedes; no memorable signature    |
+| **Operator Grid**  | Dense expert tool: compact rail, sharper boundaries, cyan signal                         | Fast scanning and more working area                        | Cyan signal reads as too bright                   |
+| **Beacon Field**   | Distinctive Farol: horizontal command shelf, deep teal field, warm beacon                | Ownable composition with clear task state                  | Warm and teal identity did not land               |
+| **Keeper's Slate** | Graphite-first: the selected task fuses into one plate; shape-coded lamps carry state    | Ownership made physical; Browser gets the full width       | Sections and tasks both on top; harder to extend  |
+| **Watch Rail**     | Studio Rail's sidebar, finished: a rail that keeps watch, one accent light, a type study | Chosen; clear structure with its own light and a live rail | Rail signals and overlays still need native proof |
 
-### Provisional candidate: Watch Rail
+### Chosen direction: Watch Rail, Iris, Geist
 
-Watch Rail takes the owner's answer seriously: the most understandable structure is Studio Rail's,
-so it keeps that structure and fixes what made Studio Rail forgettable. The sidebar collapses to a
+The owner chose this direction on 2026-09-16, with the Iris accent and the Geist typeface, after
+opening the gallery and the running prototype. Watch Rail takes the owner's answer seriously: the
+most understandable structure is Studio Rail's, so it keeps that structure and fixes what made
+Studio Rail forgettable. The sidebar collapses to a
 rail that still reports every task; the work page turns dark with the tool; one accent carries
 selection and the next action; and typography gets a sharper voice. Keeper's Slate stays the
 top-oriented alternative, Beacon Field the shelf composition, Operator Grid the density reference.
@@ -124,8 +125,9 @@ The accent never encodes a state: Running has its own cool-white lamp in every a
 - **Sidebar.** Full height, with the traffic lights and the sidebar toggle in its title area, the
   four sections with live signals, and runtime readiness at the bottom. A faint accent light falls
   from the top of the sidebar; it is the shell's only ambient colour.
-- **Rail.** `⌃⌘S` or the toggle collapses the sidebar to 72 px: icons, badges, tooltips, and
-  unchanged accessible names. Below 980 px the rail is the default, and the toggle opens the full
+- **Rail.** `⌃⌘S` or the toggle collapses the sidebar to 72 px: the icons stay legible, each
+  signal shrinks to a small lamp in the icon's corner, and its count moves into the tooltip and the
+  spoken description. Accessible names do not change. Below 980 px the rail is the default, and the toggle opens the full
   sidebar above the content instead of pushing it; Escape, choosing a section, or clicking outside
   closes it, and Escape returns focus to the toggle.
 - **Toolbar.** The brand mark, `Farol Next`, the `Interactive lab · synthetic data` disclosure,
@@ -498,6 +500,5 @@ The lab runner follows the existing GUI policy: non-primary internal display, th
 display, then an explicit internal-primary or primary fallback; visible launch is shown inactive.
 
 That pass waits for explicit path ownership coordination and the owner's visual decision. The
-next owner action is one question: **Which of Studio Rail, Operator Grid, Beacon Field, Keeper's
-Slate, or Watch Rail becomes the production design target, and if it is Watch Rail, with which
-accent and typeface?**
+owner has answered the design question: **Watch Rail, Iris, Geist.** What remains is engineering
+rather than taste, starting with the decision about how overlays sit above the native page.
