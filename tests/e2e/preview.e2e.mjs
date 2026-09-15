@@ -624,47 +624,20 @@ try {
 
 const processDeath = await launch();
 try {
-  const parentPid = processDeath.application.process().pid;
-  const helperName = development
-    ? "Electron Helper"
-    : "Farol Next Preview Helper";
-  let utilityPid = null;
-  for (let attempt = 0; attempt < 50 && utilityPid === null; attempt += 1) {
-    const listed = spawnSync("/bin/ps", ["-axo", "pid=,ppid=,command="], {
-      encoding: "utf8",
-    });
-    assert.equal(listed.status, 0);
-    const rows = listed.stdout
-      .split("\n")
-      .map((line) => /^\s*(\d+)\s+(\d+)\s+(.+)$/u.exec(line))
-      .filter(Boolean)
-      .map((match) => ({
-        pid: Number(match[1]),
-        parent: Number(match[2]),
-        command: match[3],
-      }));
-    const descendants = new Set([parentPid]);
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (const row of rows) {
-        if (descendants.has(row.parent) && !descendants.has(row.pid)) {
-          descendants.add(row.pid);
-          changed = true;
-        }
-      }
+  const utilityPid = await processDeath.application.evaluate(({ app }) => {
+    const matches = app
+      .getAppMetrics()
+      .filter(
+        (metric) =>
+          metric.type === "Utility" &&
+          metric.name === "Farol Next Runtime" &&
+          metric.serviceName === "node.mojom.NodeService",
+      );
+    if (matches.length !== 1) {
+      throw new Error(`UTILITY_PROCESS_IDENTITY_INVALID:${matches.length}`);
     }
-    utilityPid =
-      rows.find(
-        (row) =>
-          descendants.has(row.pid) &&
-          row.command.includes(helperName) &&
-          row.command.includes("--utility-sub-type=node.mojom.NodeService"),
-      )?.pid ?? null;
-    if (utilityPid === null)
-      await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  assert.ok(utilityPid !== null, "UTILITY_PROCESS_NOT_FOUND");
+    return matches[0].pid;
+  });
   process.kill(utilityPid, "SIGKILL");
   await processDeath.window
     .locator("#runtime-pill")
