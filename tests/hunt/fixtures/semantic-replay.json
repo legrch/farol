@@ -1,0 +1,44 @@
+{
+  "replayId": "farol-next-hunt-replay/v1",
+  "modelVersion": "farol-next-hunt-model/v1",
+  "commandTableVersion": "farol-next-hunt-commands/v1",
+  "schedule": {
+    "identity": "farol-next-hunt/schedule/serial-v1",
+    "mode": "serial",
+    "clock": "fixed-1000"
+  },
+  "buildIdentity": "<build-identity-recorded-by-final-runner>",
+  "seed": 260915,
+  "commands": [
+    { "kind": "chat.activate_submission" },
+    { "kind": "chat.accept_submission" },
+    { "kind": "chat.append_delta", "sequence": 1 },
+    { "kind": "chat.request_computer", "callId": "call-a" },
+    {
+      "kind": "chat.resolve_computer",
+      "ownerId": "owner-preview",
+      "sessionId": "session-a",
+      "taskId": "task-a",
+      "turnId": "turn-a",
+      "generation": 7,
+      "callId": "call-a"
+    },
+    { "kind": "chat.append_delta", "sequence": 2 },
+    { "kind": "chat.complete" },
+    {
+      "kind": "computer.authorize",
+      "ownerId": "owner-preview",
+      "sessionId": "session-a",
+      "taskId": "task-a",
+      "turnId": "turn-a",
+      "generation": 7,
+      "callId": "call-a",
+      "target": "fixture-status"
+    },
+    { "kind": "release.admit_work", "workId": "work-a" },
+    { "kind": "release.prepare_update", "candidateGeneration": "generation-b" },
+    { "kind": "release.release_work", "workId": "work-a" },
+    { "kind": "release.switch_generation" },
+    { "kind": "release.verify_generation", "accepted": true }
+  ]
+}
