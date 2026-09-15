@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { build } from "esbuild";
+import { BUILD_ENTRIES, snapshotBuildEntries } from "./build-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
@@ -68,14 +69,8 @@ const manifest = {
   sourceCommit: identity.commit,
   sourceTreeDigest: identity.treeDigest,
   dirty: identity.dirty,
-  entries: [
-    "main.cjs",
-    "preload.cjs",
-    "runtime.cjs",
-    "shell.css",
-    "shell.html",
-    "shell.js",
-  ],
+  entries: BUILD_ENTRIES,
+  entrySha256: await snapshotBuildEntries(output),
 };
 await fs.writeFile(
   "dist/app/build-manifest.json",

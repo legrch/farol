@@ -3,7 +3,16 @@ import { builtinModules } from "node:module";
 import path from "node:path";
 import process from "node:process";
 
-const extensions = [".ts", ".tsx", ".js", ".mjs", ".cjs"];
+const extensions = [
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+];
 const hostModules = new Set([
   ...builtinModules,
   ...builtinModules.map((name) => `node:${name}`),
@@ -122,7 +131,7 @@ function importsFrom(file, violations) {
       ["domain", "app"].includes(sourceClass.layer));
   if (pure) {
     const bannedGlobals =
-      /\b(?:document|window|HTMLElement|EventSource|WebSocket|fetch|setTimeout|setInterval)\b/u;
+      /\b(?:process|Buffer|document|window|HTMLElement|EventSource|WebSocket|fetch|setTimeout|setInterval)\b/u;
     if (bannedGlobals.test(sourceText)) {
       violations.push({
         code: "ARCH_PURE_HOST_GLOBAL",

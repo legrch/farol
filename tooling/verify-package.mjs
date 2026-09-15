@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
+import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 
 const root = process.cwd();
 const artifactIndex = process.argv.indexOf("--artifact");
@@ -93,6 +94,13 @@ requireValue(
   embedded.dirty === artifact.sourceDirty,
   "PACKAGE_EMBEDDED_DIRTY_MISMATCH",
 );
+requireValue(
+  Array.isArray(embedded.entries) &&
+    embedded.entries.length === BUILD_ENTRIES.length &&
+    embedded.entries.every((entry, index) => entry === BUILD_ENTRIES[index]),
+  "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
+);
+await verifyBuildEntries(resources, embedded.entrySha256);
 
 function plistValue(plist, key) {
   return execFileSync(

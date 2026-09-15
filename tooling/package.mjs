@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
+import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 
 const root = process.cwd();
 const builtRoot = path.join(root, "dist/app");
@@ -13,6 +14,14 @@ const allowDirty = process.argv.includes("--allow-dirty");
 const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
+if (
+  !Array.isArray(manifest.entries) ||
+  manifest.entries.length !== BUILD_ENTRIES.length ||
+  !manifest.entries.every((entry, index) => entry === BUILD_ENTRIES[index])
+) {
+  throw new Error("BUILD_ENTRY_SET_INVALID");
+}
+await verifyBuildEntries(builtRoot, manifest.entrySha256);
 if (manifest.dirty && !allowDirty) {
   throw new Error(
     "PACKAGE_DIRTY_SOURCE: commit the exact vNext source and rebuild first",
@@ -94,7 +103,7 @@ await fs.rm(path.join(resources, "default_app.asar"), { force: true });
 const appResources = path.join(resources, "app");
 await fs.rm(appResources, { recursive: true, force: true });
 await fs.mkdir(appResources, { recursive: true });
-for (const entry of manifest.entries) {
+for (const entry of BUILD_ENTRIES) {
   await fs.copyFile(
     path.join(builtRoot, entry),
     path.join(appResources, entry),

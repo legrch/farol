@@ -13,6 +13,7 @@ import type {
 } from "../../src/modules/chat/app/port/provider";
 import type { TurnRepository } from "../../src/modules/chat/app/port/turn-repository";
 import { RunTurn } from "../../src/modules/chat/app/service/run-turn";
+import type { Turn } from "../../src/modules/chat/domain/turn";
 import { InMemoryTurns } from "../../src/modules/chat/infra/repo/in-memory-turns";
 
 const command = {
@@ -69,6 +70,53 @@ function harness(
 }
 
 describe("Chat failure semantics", () => {
+  it("keeps known provider completion when terminal client delivery fails", async () => {
+    const saved: Turn[] = [];
+    const turns: TurnRepository = {
+      save: async (turn) => void saved.push(turn),
+      get: async () => null,
+    };
+    const provider: ChatProvider = {
+      open: async () =>
+        sessionFrom(async function* () {
+          yield { kind: "submit_activated" };
+          yield { kind: "accepted" };
+          yield { kind: "delta", sequence: 1, text: "Known response" };
+          yield { kind: "completed" };
+        }),
+    };
+    const run = new RunTurn(
+      provider,
+      { execute: vi.fn().mockResolvedValue(exactComputerResult) },
+      turns,
+      {
+        publish: async (event) => {
+          if (event.kind === "turn.terminal") {
+            throw new Error("client disconnected");
+          }
+        },
+      },
+      {
+        record: async (record) => {
+          if (record.kind === "terminal") {
+            throw new Error("activity unavailable");
+          }
+        },
+      },
+      { now: () => 1_000 },
+    );
+
+    await expect(run.execute(command)).resolves.toMatchObject({
+      phase: "completed",
+      terminal: true,
+      terminalReason: "completed",
+    });
+    expect(saved.at(-1)).toMatchObject({
+      phase: "completed",
+      terminalReason: "completed",
+    });
+  });
+
   it("classifies provider-open failure before dispatch without retry", async () => {
     const provider: ChatProvider = {
       open: vi.fn().mockRejectedValue(new Error("provider unavailable")),

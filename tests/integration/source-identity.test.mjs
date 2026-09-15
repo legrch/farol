@@ -8,6 +8,11 @@ import { sourceIdentity } from "../../tooling/source-identity.mjs";
 function git(repository, ...arguments_) {
   return execFileSync("git", ["-C", repository, ...arguments_], {
     encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+    },
   }).trim();
 }
 

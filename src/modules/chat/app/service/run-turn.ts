@@ -96,7 +96,7 @@ export class RunTurn {
         "delta_observed",
         event.sequence,
       );
-      await this.publish({
+      await this.deliver(changed, {
         ...changed.identity,
         at: this.clock.now(),
         kind: "text.delta",
@@ -133,7 +133,7 @@ export class RunTurn {
       turn,
       "computer_requested",
     );
-    await this.publish({
+    await this.deliver(changed, {
       ...changed.identity,
       at: this.clock.now(),
       kind: "computer.requested",
@@ -164,7 +164,7 @@ export class RunTurn {
       changed,
       "computer_completed",
     );
-    await this.publish({
+    await this.deliver(running, {
       ...running.identity,
       at: this.clock.now(),
       kind: "computer.completed",
@@ -205,16 +205,20 @@ export class RunTurn {
     sequence: number | null = null,
   ): Promise<void> {
     await this.turns.save(turn);
-    await this.activity.record({
-      taskId: turn.identity.taskId,
-      turnId: turn.identity.turnId,
-      generation: turn.identity.generation,
-      at: this.clock.now(),
-      kind,
-      phase: turn.phase,
-      sequence,
-      capability: kind === "computer_requested" ? "inspect_fixture" : null,
-    });
+    try {
+      await this.activity.record({
+        taskId: turn.identity.taskId,
+        turnId: turn.identity.turnId,
+        generation: turn.identity.generation,
+        at: this.clock.now(),
+        kind,
+        phase: turn.phase,
+        sequence,
+        capability: kind === "computer_requested" ? "inspect_fixture" : null,
+      });
+    } catch {
+      // Activity is evidence; its sink cannot rewrite a provider decision.
+    }
     const event: ClientEvent = turn.terminal
       ? {
           ...turn.identity,
@@ -229,7 +233,7 @@ export class RunTurn {
           kind: "turn.phase",
           phase: turn.phase,
         };
-    await this.publish(event);
+    await this.deliver(turn, event);
   }
 
   private async bestEffortSaveAndReport(
@@ -256,7 +260,7 @@ export class RunTurn {
       // Activity is evidence, never authority to replay an uncertain operation.
     }
     try {
-      await this.publish({
+      await this.deliver(turn, {
         ...turn.identity,
         at: this.clock.now(),
         kind: "turn.terminal",
@@ -268,7 +272,24 @@ export class RunTurn {
     }
   }
 
-  private async publish(event: ClientEvent): Promise<void> {
-    await this.events.publish(event);
+  private async deliver(turn: Turn, event: ClientEvent): Promise<void> {
+    try {
+      await this.events.publish(event);
+    } catch {
+      try {
+        await this.activity.record({
+          taskId: turn.identity.taskId,
+          turnId: turn.identity.turnId,
+          generation: turn.identity.generation,
+          at: this.clock.now(),
+          kind: "client_delivery_failed",
+          phase: turn.phase,
+          sequence: event.kind === "text.delta" ? event.sequence : null,
+          capability: null,
+        });
+      } catch {
+        // Delivery evidence is best effort and cannot change provider outcome.
+      }
+    }
   }
 }

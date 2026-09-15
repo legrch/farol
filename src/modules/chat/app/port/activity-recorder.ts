@@ -10,6 +10,7 @@ export type ActivityRecord = Readonly<{
     | "delta_observed"
     | "computer_requested"
     | "computer_completed"
+    | "client_delivery_failed"
     | "terminal";
   phase: TurnPhase;
   sequence: number | null;

@@ -29,6 +29,8 @@ describe("the executable architecture boundary", () => {
     ["dynamic-import", "ARCH_DYNAMIC_IMPORT"],
     ["cycle", "ARCH_CYCLE"],
     ["host-in-pure-zone", "ARCH_PURE_HOST_IMPORT"],
+    ["host-global-in-pure-zone", "ARCH_PURE_HOST_GLOBAL"],
+    ["hidden-extension-in-pure-zone", "ARCH_PURE_HOST_IMPORT"],
     ["require-host-in-pure-zone", "ARCH_PURE_HOST_IMPORT"],
     ["external-in-pure-zone", "ARCH_PURE_EXTERNAL_IMPORT"],
     ["production-testkit", "ARCH_PRODUCTION_TESTKIT"],

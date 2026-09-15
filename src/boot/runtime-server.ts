@@ -268,8 +268,8 @@ export async function startPreviewRuntime(
         taskControls.computer.release();
         taskControls.completion.release();
       }
-      await Promise.allSettled(executions);
       events.close();
+      await Promise.allSettled(executions);
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

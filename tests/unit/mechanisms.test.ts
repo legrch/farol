@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DeferredGate } from "../../src/pkg/async/deferred-gate";
 import { EventStream } from "../../src/pkg/sse/event-stream";
 
@@ -10,6 +10,7 @@ class ResponseProbe extends EventEmitter {
   readonly writes: string[] = [];
   status = 0;
   backpressure = false;
+  drainOnBackpressure = true;
 
   writeHead(status: number): this {
     this.status = status;
@@ -20,8 +21,14 @@ class ResponseProbe extends EventEmitter {
     this.writes.push(value);
     if (!this.backpressure) return true;
     this.backpressure = false;
-    queueMicrotask(() => this.emit("drain"));
+    if (this.drainOnBackpressure) queueMicrotask(() => this.emit("drain"));
     return false;
+  }
+
+  destroy(): this {
+    this.destroyed = true;
+    this.emit("close");
+    return this;
   }
 
   end(): this {
@@ -35,6 +42,8 @@ class ResponseProbe extends EventEmitter {
 }
 
 describe("shared runtime mechanisms", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("releases a deferred gate exactly once", async () => {
     const gate = new DeferredGate("fixture");
     expect(gate.isReleased()).toBe(false);
@@ -90,5 +99,26 @@ describe("shared runtime mechanisms", () => {
     const writesBeforePublish = response.writes.length;
     await stream.publish({ taskId: "task-a", sequence: 1 });
     expect(response.writes).toHaveLength(writesBeforePublish);
+  });
+
+  it("evicts a subscriber that never drains within the bounded wait", async () => {
+    vi.useFakeTimers();
+    const stream = new EventStream<{ taskId: string; sequence: number }>(
+      128,
+      5,
+    );
+    const response = new ResponseProbe();
+    response.backpressure = true;
+    response.drainOnBackpressure = false;
+    stream.subscribe("task-a", response.asServerResponse());
+
+    const result = Promise.race([
+      stream.publish({ taskId: "task-a", sequence: 1 }).then(() => "published"),
+      new Promise((resolve) => setTimeout(() => resolve("stalled"), 6)),
+    ]);
+    await vi.advanceTimersByTimeAsync(6);
+
+    await expect(result).resolves.toBe("published");
+    expect(response.destroyed).toBe(true);
   });
 });

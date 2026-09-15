@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import type { ServerResponse } from "node:http";
 
 type TaskEvent = Readonly<{ taskId: string }>;
@@ -12,9 +11,15 @@ export class EventStream<Event extends TaskEvent> {
   private readonly subscribers = new Map<string, Set<ServerResponse>>();
   private nextId = 1;
 
-  constructor(private readonly capacity = 128) {
+  constructor(
+    private readonly capacity = 128,
+    private readonly drainTimeoutMs = 250,
+  ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1) {
       throw new Error("EVENT_STREAM_CAPACITY_INVALID");
+    }
+    if (!Number.isSafeInteger(drainTimeoutMs) || drainTimeoutMs < 1) {
+      throw new Error("EVENT_STREAM_DRAIN_TIMEOUT_INVALID");
     }
   }
 
@@ -25,10 +30,19 @@ export class EventStream<Event extends TaskEvent> {
     if (history.length > this.capacity) history.shift();
     this.history.set(event.taskId, history);
 
-    const writes = [...(this.subscribers.get(event.taskId) ?? [])].map(
-      (response) => this.write(response, retained),
+    const subscribers = this.subscribers.get(event.taskId);
+    const writes = await Promise.all(
+      [...(subscribers ?? [])].map(async (response) => ({
+        response,
+        keep: await this.write(response, retained),
+      })),
     );
-    await Promise.all(writes);
+    for (const result of writes) {
+      if (result.keep) continue;
+      subscribers?.delete(result.response);
+      if (!result.response.destroyed) result.response.destroy();
+    }
+    if (subscribers?.size === 0) this.subscribers.delete(event.taskId);
   }
 
   subscribe(taskId: string, response: ServerResponse): () => void {
@@ -38,9 +52,15 @@ export class EventStream<Event extends TaskEvent> {
       "content-type": "text/event-stream; charset=utf-8",
       "x-accel-buffering": "no",
     });
-    response.write(": farol-next\n\n");
+    if (!response.write(": farol-next\n\n")) {
+      response.destroy();
+      return () => undefined;
+    }
     for (const retained of this.history.get(taskId) ?? []) {
-      response.write(this.encode(retained));
+      if (!response.write(this.encode(retained))) {
+        response.destroy();
+        return () => undefined;
+      }
     }
     const subscribers =
       this.subscribers.get(taskId) ?? new Set<ServerResponse>();
@@ -72,9 +92,25 @@ export class EventStream<Event extends TaskEvent> {
   private async write(
     response: ServerResponse,
     retained: RetainedEvent<Event>,
-  ): Promise<void> {
-    if (response.destroyed || response.writableEnded) return;
-    if (response.write(this.encode(retained))) return;
-    await Promise.race([once(response, "drain"), once(response, "close")]);
+  ): Promise<boolean> {
+    if (response.destroyed || response.writableEnded) return false;
+    if (response.write(this.encode(retained))) return true;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (keep: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        response.removeListener("drain", drained);
+        response.removeListener("close", closed);
+        resolve(keep);
+      };
+      const drained = () => finish(true);
+      const closed = () => finish(false);
+      const timer = setTimeout(() => finish(false), this.drainTimeoutMs);
+      timer.unref();
+      response.once("drain", drained);
+      response.once("close", closed);
+    });
   }
 }
