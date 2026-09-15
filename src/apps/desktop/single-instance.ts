@@ -56,6 +56,7 @@ export type AcknowledgementPublicationOptions = Readonly<{
 const ACK_DIRECTORY = "single-instance-acks";
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_ACK_BYTES = 4 * 1024;
+const DEFAULT_ACK_TIMEOUT_MS = 10_000;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 
@@ -265,7 +266,7 @@ export async function waitForInstanceAcknowledgement(
   const request = parseRequest(candidate);
   if (!request) throw new Error("INSTANCE_REQUEST_INVALID");
   await ensureAcknowledgementDirectory(userData);
-  const timeoutMs = options.timeoutMs ?? 2_500;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_ACK_TIMEOUT_MS;
   const pollMs = options.pollMs ?? 25;
   const deadline = Date.now() + timeoutMs;
   do {

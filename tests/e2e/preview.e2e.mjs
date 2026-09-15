@@ -504,7 +504,7 @@ async function proveSecondLaunchDuringStartup() {
       cwd: root,
       env: launchEnvironment,
       encoding: "utf8",
-      timeout: 10_000,
+      timeout: 15_000,
     });
     assert.equal(
       repeated.status,
