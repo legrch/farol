@@ -487,7 +487,7 @@ try {
     "task-atlantic",
     (state) =>
       state.deltaCount === 2 &&
-      state.status.includes("result") &&
+      state.answer.includes("exact requesting turn") &&
       !state.terminal,
     "tool result resumed exact turn",
   );
