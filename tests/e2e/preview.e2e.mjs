@@ -162,6 +162,89 @@ if (development) {
       /PACKAGE_RUNTIME_HELPER_BUNDLE_MISMATCH/u,
     );
     cases.push("wrong-helper-bundle-rejected");
+
+    const wrongLauncherRoot = path.join(corruptRoot, "wrong-launcher");
+    await fs.mkdir(wrongLauncherRoot);
+    const wrongLauncherApp = path.join(
+      wrongLauncherRoot,
+      "Farol Next Preview.app",
+    );
+    const launcherClone = spawnSync(
+      "/bin/cp",
+      ["-cR", appPath, wrongLauncherApp],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      launcherClone.status,
+      0,
+      `${launcherClone.stdout}${launcherClone.stderr}`,
+    );
+    await fs.appendFile(
+      path.join(wrongLauncherApp, "Contents/MacOS/Farol Next Preview"),
+      "\n# deterministic tamper probe\n",
+    );
+    const wrongLauncherMetadata = path.join(
+      corruptRoot,
+      "wrong-launcher-artifact.json",
+    );
+    await fs.writeFile(
+      wrongLauncherMetadata,
+      `${JSON.stringify({
+        ...artifact,
+        artifactPath: wrongLauncherApp,
+        artifactSha256: await treeDigest(wrongLauncherApp),
+      })}\n`,
+    );
+    const wrongLauncher = verifyArtifact(wrongLauncherMetadata);
+    assert.notEqual(wrongLauncher.status, 0);
+    assert.match(
+      `${wrongLauncher.stdout}${wrongLauncher.stderr}`,
+      /PACKAGE_LAUNCHER_INVALID/u,
+    );
+    cases.push("tampered-launcher-rejected");
+
+    const wrongRuntimeRoot = path.join(corruptRoot, "wrong-runtime");
+    await fs.mkdir(wrongRuntimeRoot);
+    const wrongRuntimeApp = path.join(
+      wrongRuntimeRoot,
+      "Farol Next Preview.app",
+    );
+    const runtimeClone = spawnSync(
+      "/bin/cp",
+      ["-cR", appPath, wrongRuntimeApp],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      runtimeClone.status,
+      0,
+      `${runtimeClone.stdout}${runtimeClone.stderr}`,
+    );
+    await fs.appendFile(
+      path.join(
+        wrongRuntimeApp,
+        "Contents/Frameworks/Electron Runtime.app/Contents/Resources/default_app.asar",
+      ),
+      "\ndeterministic tamper probe\n",
+    );
+    const wrongRuntimeMetadata = path.join(
+      corruptRoot,
+      "wrong-runtime-artifact.json",
+    );
+    await fs.writeFile(
+      wrongRuntimeMetadata,
+      `${JSON.stringify({
+        ...artifact,
+        artifactPath: wrongRuntimeApp,
+        artifactSha256: await treeDigest(wrongRuntimeApp),
+      })}\n`,
+    );
+    const wrongRuntime = verifyArtifact(wrongRuntimeMetadata);
+    assert.notEqual(wrongRuntime.status, 0);
+    assert.match(
+      `${wrongRuntime.stdout}${wrongRuntime.stderr}`,
+      /PACKAGE_RUNTIME_DIGEST_MISMATCH/u,
+    );
+    cases.push("tampered-runtime-rejected");
   } finally {
     const real = path.resolve(corruptRoot);
     assert.ok(
@@ -514,6 +597,26 @@ async function completeSetup(instance, capture = false) {
 
 const normal = await launch();
 try {
+  if (!development) {
+    const launchIdentity = await normal.application.evaluate(({ app }) => ({
+      name: app.getName(),
+      version: app.getVersion(),
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      executable: process.execPath,
+    }));
+    assert.deepEqual(launchIdentity, {
+      name: "Farol Next Preview",
+      version: "0.1.0-preview.0",
+      isPackaged: true,
+      appPath: path.join(appPath, "Contents/Resources/app"),
+      executable: path.join(
+        appPath,
+        "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+      ),
+    });
+    cases.push("packaged-launcher-identity");
+  }
   assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
   const runtimeLabel = await normal.window.locator("#runtime-pill").innerText();
   if (!runtimeLabel.includes("Local runtime")) {
