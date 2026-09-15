@@ -454,8 +454,10 @@ kbd {
 .setup-dialog {
   width: min(780px, calc(100vw - 72px));
   max-width: none;
+  max-height: calc(100vh - 34px);
   margin: auto;
   padding: 0;
+  overflow: hidden;
   border: 1px solid rgba(221, 232, 230, 0.16);
   border-radius: 14px;
   background: #12232d;

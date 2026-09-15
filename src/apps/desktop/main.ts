@@ -295,6 +295,7 @@ function handleShortcut(input: Input): boolean {
       taskId: selectedTaskId,
       setupOpen,
     });
+    taskViews.get(selectedTaskId)?.webContents.focus();
     return true;
   }
   if (input.meta && /^[1-4]$/u.test(input.key)) {

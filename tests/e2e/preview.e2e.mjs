@@ -208,6 +208,75 @@ async function close(instance) {
   await fs.rm(real, { recursive: true, force: true });
 }
 
+async function proveStartupRuntimeDeath(stage) {
+  const isolatedHome = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-e2e-home-"),
+  );
+  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const application = await electron.launch({
+    executablePath: executable,
+    args: [...launchPrefix, `--user-data-dir=${userData}`],
+    env: {
+      HOME: isolatedHome,
+      LANG: "en_US.UTF-8",
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      TMPDIR: os.tmpdir(),
+    },
+    timeout: 15_000,
+  });
+  const instance = { application, isolatedHome, userData };
+  try {
+    const killed = await instance.application.evaluate(
+      async ({ app, BrowserWindow }, targetStage) => {
+        for (let attempt = 0; attempt < 5_000; attempt += 1) {
+          const targetWindow = BrowserWindow.getAllWindows()[0];
+          const viewCount =
+            targetWindow?.contentView.children.filter(
+              (view) => "webContents" in view,
+            ).length ?? 0;
+          const utility = app
+            .getAppMetrics()
+            .find(
+              (metric) =>
+                metric.type === "Utility" &&
+                metric.name === "Farol Next Runtime" &&
+                metric.serviceName === "node.mojom.NodeService",
+            );
+          const reached =
+            targetStage === "after-runtime-ready"
+              ? targetWindow !== undefined && viewCount === 0
+              : targetStage === "during-first-view-load"
+                ? viewCount === 1
+                : viewCount >= 2;
+          if (utility && reached) {
+            process.kill(utility.pid, "SIGKILL");
+            return { pid: utility.pid, viewCount };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        throw new Error(`STARTUP_FAULT_POINT_TIMEOUT:${targetStage}`);
+      },
+      stage,
+    );
+    assert.ok(killed.pid > 0);
+    const startupWindow = await application.firstWindow({ timeout: 15_000 });
+    await startupWindow
+      .locator("#runtime-pill")
+      .getByText("failed")
+      .waitFor({ timeout: 5_000 });
+    assert.equal(startupWindow.isClosed(), false);
+    const remainingTaskViews = await instance.application.evaluate(
+      ({ BrowserWindow }) =>
+        (BrowserWindow.getAllWindows()[0]?.contentView.children ?? []).filter(
+          (view) => "webContents" in view,
+        ).length,
+    );
+    assert.equal(remainingTaskViews, 0);
+  } finally {
+    await close(instance);
+  }
+}
+
 async function taskSurfaces(application) {
   return application.evaluate(async ({ BrowserWindow, webContents }) => {
     const viewByContentsId = new Map(
@@ -222,6 +291,7 @@ async function taskSurfaces(application) {
         .map(async (contents) => ({
           url: contents.getURL(),
           hostVisible: viewByContentsId.get(contents.id)?.getVisible() ?? null,
+          focused: contents.isFocused(),
           state: await contents.executeJavaScript(
             `({
               taskId: document.body.dataset.taskId,
@@ -358,26 +428,29 @@ async function proveTaskCapabilityIsolation(application) {
   });
 }
 
-async function sendShortcutFromTask(application, taskId) {
-  await application.evaluate(({ webContents }, expectedTaskId) => {
-    const contents = webContents
-      .getAllWebContents()
-      .find((candidate) =>
-        candidate.getURL().endsWith(`/task/${expectedTaskId}`),
-      );
-    if (!contents) throw new Error("TASK_SURFACE_MISSING");
-    contents.focus();
-    contents.sendInputEvent({
-      type: "keyDown",
-      keyCode: "Tab",
-      modifiers: ["control"],
-    });
-    contents.sendInputEvent({
-      type: "keyUp",
-      keyCode: "Tab",
-      modifiers: ["control"],
-    });
-  }, taskId);
+async function sendShortcutFromTask(application, taskId, reverse = false) {
+  await application.evaluate(
+    ({ webContents }, input) => {
+      const contents = webContents
+        .getAllWebContents()
+        .find((candidate) =>
+          candidate.getURL().endsWith(`/task/${input.taskId}`),
+        );
+      if (!contents) throw new Error("TASK_SURFACE_MISSING");
+      contents.focus();
+      contents.sendInputEvent({
+        type: "keyDown",
+        keyCode: "Tab",
+        modifiers: input.reverse ? ["control", "shift"] : ["control"],
+      });
+      contents.sendInputEvent({
+        type: "keyUp",
+        keyCode: "Tab",
+        modifiers: input.reverse ? ["control", "shift"] : ["control"],
+      });
+    },
+    { taskId, reverse },
+  );
 }
 
 async function setWindowSize(application, width, height) {
@@ -630,6 +703,30 @@ try {
   await normal.window
     .locator('[data-task-id="task-harbor"][aria-selected="true"]')
     .waitFor();
+  let focused = await taskSurfaces(normal.application);
+  assert.equal(
+    focused.find((surface) => surface.state.taskId === "task-harbor")?.focused,
+    true,
+  );
+  assert.equal(
+    focused.find((surface) => surface.state.taskId === "task-atlantic")
+      ?.focused,
+    false,
+  );
+  await sendShortcutFromTask(normal.application, "task-harbor", true);
+  await normal.window
+    .locator('[data-task-id="task-atlantic"][aria-selected="true"]')
+    .waitFor();
+  focused = await taskSurfaces(normal.application);
+  assert.equal(
+    focused.find((surface) => surface.state.taskId === "task-atlantic")
+      ?.focused,
+    true,
+  );
+  assert.equal(
+    focused.find((surface) => surface.state.taskId === "task-harbor")?.focused,
+    false,
+  );
   cases.push(
     "isolated-state-root",
     "task-network-default-deny",
@@ -715,9 +812,29 @@ try {
     true,
   );
   assert.equal(
+    isolated.find((surface) => surface.state.taskId === "task-atlantic")
+      ?.hostVisible,
+    false,
+  );
+  assert.equal(
     isolated.find((surface) => surface.state.taskId === "task-harbor")?.state
       .terminal,
     true,
+  );
+  assert.equal(
+    isolated.find((surface) => surface.state.taskId === "task-harbor")
+      ?.hostVisible,
+    true,
+  );
+  await captureTask(
+    streamFailure.application,
+    "task-atlantic",
+    "stream-failure-offline-task.png",
+  );
+  await captureTask(
+    streamFailure.application,
+    "task-harbor",
+    "stream-failure-survivor-task.png",
   );
   await streamFailure.window.screenshot({
     path: path.join(evidenceRoot, "stream-failure-wide.png"),
@@ -777,6 +894,15 @@ try {
   await close(processDeath);
 }
 
+for (const stage of [
+  "after-runtime-ready",
+  "during-first-view-load",
+  "during-second-view-load",
+]) {
+  await proveStartupRuntimeDeath(stage);
+  cases.push(`utility-process-sigkill-${stage}`);
+}
+
 const report = {
   schema: 1,
   lane: development ? "development-build" : "sealed-package",
@@ -803,6 +929,8 @@ const report = {
     "failure-compact.png",
     "stream-failure-wide.png",
     "stream-failure-compact.png",
+    "stream-failure-offline-task.png",
+    "stream-failure-survivor-task.png",
     "process-death-wide.png",
     "process-death-compact.png",
   ],
