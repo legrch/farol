@@ -95,28 +95,47 @@ function proveMutation(
 }
 
 describe("bounded Hunt mutation proof", () => {
-  it("plants and kills exactly the five required defects", () => {
-    expect(MUTATION_CASES.map((mutation) => mutation.id)).toEqual(DEFECT_IDS);
+  it(
+    "plants and kills exactly the five required defects",
+    {
+      meta: {
+        hunt: { suiteId: "proof", testId: "required-mutations" },
+      },
+    },
+    ({ task }) => {
+      expect(MUTATION_CASES.map((mutation) => mutation.id)).toEqual(DEFECT_IDS);
 
-    const reports = MUTATION_CASES.map(proveMutation);
-    expect(reports).toHaveLength(5);
-    expect(reports.map((report) => report.status)).toEqual([
-      "killed",
-      "killed",
-      "killed",
-      "killed",
-      "killed",
-    ]);
+      const reports = MUTATION_CASES.map(proveMutation);
+      task.meta.hunt = {
+        suiteId: "proof",
+        testId: "required-mutations",
+        mutation: {
+          results: reports.map((report) => ({
+            id: report.id,
+            status: report.status === "killed" ? "killed" : "survived",
+          })),
+          shrinkBudget: SHRINK_BUDGET,
+        },
+      };
+      expect(reports).toHaveLength(5);
+      expect(reports.map((report) => report.status)).toEqual([
+        "killed",
+        "killed",
+        "killed",
+        "killed",
+        "killed",
+      ]);
 
-    for (const report of reports) {
-      expect(report.invariant.length).toBeGreaterThan(0);
-      expect(report.samePathWasReplayed).toBe(true);
-      expect(report.attempts).toBeLessThanOrEqual(SHRINK_BUDGET);
-      expect(report.evidence.status).toBe("FAIL");
-      if (report.evidence.status === "FAIL") {
-        expect(report.evidence.invariant).toBe(report.invariant);
-        expect(report.evidence.step).toBeGreaterThanOrEqual(0);
+      for (const report of reports) {
+        expect(report.invariant.length).toBeGreaterThan(0);
+        expect(report.samePathWasReplayed).toBe(true);
+        expect(report.attempts).toBeLessThanOrEqual(SHRINK_BUDGET);
+        expect(report.evidence.status).toBe("FAIL");
+        if (report.evidence.status === "FAIL") {
+          expect(report.evidence.invariant).toBe(report.invariant);
+          expect(report.evidence.step).toBeGreaterThanOrEqual(0);
+        }
       }
-    }
-  });
+    },
+  );
 });
