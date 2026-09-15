@@ -8,10 +8,8 @@ import {
   assertExactSourceIdentity,
   candidatePaths,
 } from "./candidate-contract.mjs";
-import {
-  assertPromotionDestination,
-  preparePromotionParent,
-} from "./promotion-destination.mjs";
+import { assertPromotionDestination } from "./promotion-destination.mjs";
+import { runPromotionApply } from "./promotion-apply.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -56,18 +54,6 @@ function verify(artifactPath, appPath) {
   );
 }
 
-async function copyContents(source, destination) {
-  for (const name of (await fs.readdir(source)).sort()) {
-    await fs.cp(path.join(source, name), path.join(destination, name), {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-      preserveTimestamps: true,
-      verbatimSymlinks: true,
-    });
-  }
-}
-
 async function main() {
   const arguments_ = process.argv.slice(2);
   const destinationOption = option(arguments_, "--destination");
@@ -93,7 +79,7 @@ async function main() {
   );
   const source = canonicalAppPath;
   const home = os.homedir();
-  const { destination, parent, receipt } = assertPromotionDestination({
+  const { destination, receipt } = assertPromotionDestination({
     home,
     source,
     destination:
@@ -136,48 +122,19 @@ async function main() {
     return;
   }
 
-  await preparePromotionParent(home, parent);
-  if (await exists(destination))
-    throw new Error("PROMOTION_DESTINATION_EXISTS");
-  if (await exists(receipt)) throw new Error("PROMOTION_RECEIPT_EXISTS");
-
-  let ownsDestination = false;
-  try {
-    await fs.mkdir(destination, { mode: 0o755 });
-    ownsDestination = true;
-    await copyContents(source, destination);
-    const destinationVerification = verify(artifactFile, destination);
-    if (destinationVerification.status !== 0) {
-      throw new Error(
-        `PROMOTION_DESTINATION_INVALID:${`${destinationVerification.stderr}${destinationVerification.stdout}`.trim()}`,
-      );
-    }
-    assertExactSourceIdentity(
-      sourceIdentity(repositoryRoot, scope),
-      artifact,
-      "PROMOTION_SOURCE_CHANGED_DURING_COPY",
-    );
-    const promotionReceipt = {
-      ...plan,
-      operation: "applied",
-      verifiedDestinationSha256: artifact.artifactSha256,
-    };
-    await fs.writeFile(
-      receipt,
-      `${JSON.stringify(promotionReceipt, null, 2)}\n`,
-      {
-        flag: "wx",
-        mode: 0o600,
-      },
-    );
-    process.stdout.write(destinationVerification.stdout);
-    process.stdout.write(`${JSON.stringify(promotionReceipt, null, 2)}\n`);
-  } catch (error) {
-    if (ownsDestination) {
-      await fs.rm(destination, { recursive: true, force: true });
-    }
-    throw error;
-  }
+  const promotionReceipt = {
+    ...plan,
+    operation: "applied",
+    verifiedDestinationSha256: artifact.artifactSha256,
+  };
+  const receiptText = `${JSON.stringify(promotionReceipt, null, 2)}\n`;
+  await runPromotionApply({
+    home,
+    source,
+    artifactSha256: artifact.artifactSha256,
+    receiptText,
+  });
+  process.stdout.write(receiptText);
 }
 
 try {

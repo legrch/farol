@@ -30,21 +30,55 @@ export async function preparePromotionParent(home, parent) {
   if (path.resolve(parent) !== expectedParent) {
     throw new Error("PROMOTION_PARENT_OUTSIDE_OWNER_APPLICATIONS");
   }
+  let homeInfo;
+  let realHome;
   try {
-    await fs.mkdir(expectedParent, { mode: 0o755 });
-  } catch (error) {
-    if (error?.code !== "EEXIST") throw error;
+    [homeInfo, realHome] = await Promise.all([
+      fs.lstat(resolvedHome),
+      fs.realpath(resolvedHome),
+    ]);
+  } catch {
+    throw new Error("PROMOTION_HOME_TYPE_INVALID");
   }
-  const [homeInfo, parentInfo, realHome, realParent] = await Promise.all([
-    fs.lstat(resolvedHome),
-    fs.lstat(expectedParent),
-    fs.realpath(resolvedHome),
-    fs.realpath(expectedParent),
-  ]);
   const effectiveUser = process.geteuid?.();
   if (
     !homeInfo.isDirectory() ||
     homeInfo.isSymbolicLink() ||
+    (effectiveUser !== undefined && homeInfo.uid !== effectiveUser) ||
+    (homeInfo.mode & 0o022) !== 0
+  ) {
+    throw new Error("PROMOTION_HOME_TYPE_INVALID");
+  }
+  const realHomeInfo = await fs.lstat(realHome);
+  if (
+    realHomeInfo.dev !== homeInfo.dev ||
+    realHomeInfo.ino !== homeInfo.ino ||
+    !realHomeInfo.isDirectory() ||
+    realHomeInfo.isSymbolicLink()
+  ) {
+    throw new Error("PROMOTION_HOME_TYPE_INVALID");
+  }
+  const realExpectedParent = path.join(realHome, "Applications");
+  try {
+    await fs.mkdir(realExpectedParent, { mode: 0o755 });
+  } catch (error) {
+    if (error?.code !== "EEXIST") throw error;
+  }
+  const [currentHomeInfo, parentInfo, currentRealHome, realParent] =
+    await Promise.all([
+      fs.lstat(resolvedHome),
+      fs.lstat(realExpectedParent),
+      fs.realpath(resolvedHome),
+      fs.realpath(realExpectedParent),
+    ]);
+  if (
+    currentHomeInfo.dev !== homeInfo.dev ||
+    currentHomeInfo.ino !== homeInfo.ino ||
+    currentRealHome !== realHome
+  ) {
+    throw new Error("PROMOTION_HOME_TYPE_INVALID");
+  }
+  if (
     !parentInfo.isDirectory() ||
     parentInfo.isSymbolicLink() ||
     (effectiveUser !== undefined && parentInfo.uid !== effectiveUser) ||

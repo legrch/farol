@@ -49,9 +49,12 @@ is not evidence about the packaged candidate.
 On macOS, closing the window leaves this preview application and its in-memory local
 runtime running. Launching the same exact build again or clicking its Dock icon
 reopens one window; it does not create a second instance. A different or unverifiable
-build is refused instead of silently opening the already-running bytes. `Command+Q`
-quits the application and its exact utility process. The demo state is in memory and
-is not promised across Quit.
+build is refused instead of silently opening the already-running bytes. A launch that
+arrives while the primary is still starting waits for the same initialization promise;
+it is acknowledged only after the runtime, task views, and streams are ready. ACK files
+are published complete through a private temporary file and an exclusive atomic link.
+`Command+Q` quits the application and its exact utility process. The demo state is in
+memory and is not promised across Quit.
 
 ## Product boundary
 
@@ -81,9 +84,12 @@ task next:promote -- --destination "$HOME/Applications/Farol Next Preview.app" -
 ```
 
 The operation accepts only the fixed app slot directly below the owner's real,
-non-symlinked `$HOME/Applications`, refuses any existing destination, copies into a
-newly claimed Next-only path, verifies the destination bytes against the source
-artifact digest, and writes
+non-symlinked, owner-controlled `$HOME/Applications` and refuses an unsafe HOME before
+creating anything. A digest-attested Python helper opens that directory component by
+component and performs every mutation relative to the retained directory descriptor,
+so replacing its pathname cannot redirect the copy or cleanup into a Legacy root. It
+refuses any existing destination, copies into a newly claimed Next-only path, verifies
+the destination bytes against the source artifact digest, and writes
 `$HOME/Applications/Farol Next Preview.app.receipt.json`. It never overwrites an
 application and never writes inside Legacy roots. This unsigned local Preview is not
 a signed, notarized, published, or independent-recipient release.

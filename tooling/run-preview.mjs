@@ -12,7 +12,7 @@ import {
   ownerLaunchEnvironment,
   removeLaunchSnapshot,
 } from "./launch-snapshot.mjs";
-import { parseOwnerLaunchResult } from "./owner-launch-result.mjs";
+import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -113,37 +113,52 @@ async function main() {
       `launching isolated verified candidate ${snapshot.appPath} from ${appPath}\n`,
     );
 
-    let launchOutput = "";
-    const capture = (chunk, destination) => {
-      destination.write(chunk);
-      if (launchOutput.length < 65_536) {
-        launchOutput += chunk
-          .toString("utf8")
-          .slice(0, 65_536 - launchOutput.length);
-      }
-    };
+    const resultCollector = createOwnerLaunchResultCollector();
+    let protocolError = null;
     const child = spawn(executable, [], {
       cwd: root,
       env: environment,
       stdio: ["inherit", "pipe", "pipe"],
     });
-    child.stdout.on("data", (chunk) => capture(chunk, process.stdout));
-    child.stderr.on("data", (chunk) => capture(chunk, process.stderr));
+    child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      if (protocolError) return;
+      try {
+        resultCollector.push(chunk);
+      } catch (error) {
+        protocolError = error;
+        child.kill("SIGTERM");
+      }
+    });
     const forward = (signal) => {
       if (!child.killed) child.kill(signal);
     };
-    process.once("SIGINT", () => forward("SIGINT"));
-    process.once("SIGTERM", () => forward("SIGTERM"));
-    const code = await new Promise((resolve, reject) => {
+    const forwardInterrupt = () => forward("SIGINT");
+    const forwardTermination = () => forward("SIGTERM");
+    process.once("SIGINT", forwardInterrupt);
+    process.once("SIGTERM", forwardTermination);
+    const outcome = await new Promise((resolve, reject) => {
       child.once("error", reject);
-      child.once("exit", (status, signal) => {
-        if (signal) reject(new Error(`application stopped by ${signal}`));
-        else resolve(status ?? 1);
+      child.once("close", (status, signal) => {
+        resolve({ status: status ?? 1, signal });
       });
+    }).finally(() => {
+      process.removeListener("SIGINT", forwardInterrupt);
+      process.removeListener("SIGTERM", forwardTermination);
     });
-    if (code !== 0) throw new Error(`application exited with status ${code}`);
-    const ownerLaunchResult = parseOwnerLaunchResult(launchOutput);
-    if (ownerLaunchResult && ownerLaunchResult !== "reopened") {
+    if (protocolError) throw protocolError;
+    if (outcome.signal) {
+      throw new Error(`application stopped by ${outcome.signal}`);
+    }
+    if (outcome.status !== 0) {
+      throw new Error(`application exited with status ${outcome.status}`);
+    }
+    const ownerLaunchResult = resultCollector.finish();
+    if (
+      ownerLaunchResult !== "primary-started" &&
+      ownerLaunchResult !== "reopened"
+    ) {
       throw new Error(
         `running Farol Next instance rejected the exact candidate (${ownerLaunchResult}); quit it and launch again`,
       );

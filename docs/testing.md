@@ -23,6 +23,9 @@ Ordinary `npm --prefix vnext run preview` launches do not carry a test window mo
 retain foreground product behavior. The two accepted test-only arguments are
 `--preview-window-mode=hidden` and
 `--preview-window-mode=secondary-visible`; unknown or repeated values fail closed.
+The E2E harness also sets `FAROL_NEXT_E2E=1` for one bounded startup-delay argument;
+without that explicit harness marker the delay is ignored. This makes a second launch
+during startup deterministic without changing the owner command.
 
 The sealed and development E2E lanes also close the macOS window, prove the exact
 `Farol Next Runtime` PID remains, invoke a second launch with the same isolated
@@ -30,7 +33,8 @@ identity, and prove one window reopens without a second utility process. Quit th
 waits for the exact main and named utility PIDs to disappear; no generic Electron
 process-name cleanup is used. A separate task-owned Electron Legacy fixture is started
 before and after Next in isolated homes, and a Next utility-process failure must leave
-its synthetic read endpoint available.
+its synthetic read endpoint available. The startup-race case additionally proves that
+the reopened window already has both task views and live runtime bootstrap state.
 
 The final owner journey is separate from automation: `task next:run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector

@@ -99,4 +99,41 @@ describe("Farol Next single-instance identity", () => {
       }),
     ).resolves.toBeNull();
   });
+
+  it("publishes only a complete acknowledgement while a reader is polling", async () => {
+    const userData = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-instance-atomic-"),
+    );
+    roots.push(userData);
+    const second = request(primary);
+    let releasePublication: (() => void) | undefined;
+    const publicationReleased = new Promise<void>((resolve) => {
+      releasePublication = resolve;
+    });
+    let announcePublished: (() => void) | undefined;
+    const published = new Promise<void>((resolve) => {
+      announcePublished = resolve;
+    });
+    const writer = writeInstanceAcknowledgement(
+      userData,
+      second,
+      "reopened",
+      primary,
+      {
+        afterAtomicPublish: async () => {
+          announcePublished?.();
+          await publicationReleased;
+        },
+      },
+    );
+    await published;
+    const reader = waitForInstanceAcknowledgement(userData, second, {
+      timeoutMs: 500,
+      pollMs: 5,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    releasePublication?.();
+    await writer;
+    await expect(reader).resolves.toEqual({ ...second, status: "reopened" });
+  });
 });

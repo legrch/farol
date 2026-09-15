@@ -434,6 +434,7 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     ...extraArgs,
   ];
   const launchEnvironment = {
+    FAROL_NEXT_E2E: "1",
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -461,6 +462,75 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     launchArgs,
     launchEnvironment,
   };
+}
+
+async function proveSecondLaunchDuringStartup() {
+  const isolatedHome = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-e2e-home-"),
+  );
+  const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const windowMode = "hidden";
+  const launchArgs = [
+    ...launchPrefix,
+    `--user-data-dir=${userData}`,
+    `--preview-window-mode=${windowMode}`,
+    "--preview-startup-delay-ms=1500",
+  ];
+  const launchEnvironment = {
+    FAROL_NEXT_E2E: "1",
+    HOME: isolatedHome,
+    LANG: "en_US.UTF-8",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    TMPDIR: os.tmpdir(),
+  };
+  const application = await electron.launch({
+    executablePath: executable,
+    args: launchArgs,
+    env: launchEnvironment,
+    timeout: 15_000,
+  });
+  const instance = {
+    application,
+    window: null,
+    isolatedHome,
+    userData,
+    windowMode,
+    launchArgs,
+    launchEnvironment,
+  };
+  try {
+    const startedAt = Date.now();
+    const repeated = spawnSync(executable, launchArgs, {
+      cwd: root,
+      env: launchEnvironment,
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    assert.equal(
+      repeated.status,
+      0,
+      `E2E_STARTUP_SECOND_LAUNCH_FAILED:${repeated.stdout}${repeated.stderr}`,
+    );
+    assert.equal(
+      parseOwnerLaunchResult(`${repeated.stdout}${repeated.stderr}`),
+      "reopened",
+    );
+    assert.ok(Date.now() - startedAt >= 500, "E2E_STARTUP_REOPEN_DID_NOT_WAIT");
+    instance.window = await application.firstWindow({ timeout: 15_000 });
+    await instance.window
+      .locator("#task-tabs .task-tab")
+      .first()
+      .waitFor({ state: "visible" });
+    await waitForWindowPresentation(application, windowMode);
+    const bootstrap = await instance.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(bootstrap.runtimeState, "ready");
+    assert.equal(bootstrap.runtimeIdentity, "farol-next-preview-runtime");
+    assert.equal((await taskSurfaces(application)).length, 2);
+  } finally {
+    await close(instance);
+  }
 }
 
 function repeatLaunch(instance) {
@@ -1007,6 +1077,9 @@ async function completeSetup(instance, capture = false) {
   }
   await dialog.waitFor({ state: "hidden" });
 }
+
+await proveSecondLaunchDuringStartup();
+cases.push("second-launch-waits-for-complete-primary-startup");
 
 const normal = await launch([], "secondary-visible");
 try {

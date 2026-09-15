@@ -49,6 +49,10 @@ export type SecondInstanceDecision = Readonly<{
   status: InstanceAcknowledgement["status"];
 }>;
 
+export type AcknowledgementPublicationOptions = Readonly<{
+  afterAtomicPublish?: () => Promise<void>;
+}>;
+
 const ACK_DIRECTORY = "single-instance-acks";
 const MAX_MANIFEST_BYTES = 64 * 1024;
 const MAX_ACK_BYTES = 4 * 1024;
@@ -153,6 +157,7 @@ export async function writeInstanceAcknowledgement(
   candidate: unknown,
   status: InstanceAcknowledgement["status"],
   primary?: LaunchIdentity,
+  options: AcknowledgementPublicationOptions = {},
 ): Promise<void> {
   const request = parseRequest(candidate);
   if (!request) throw new Error("INSTANCE_REQUEST_INVALID");
@@ -166,8 +171,12 @@ export async function writeInstanceAcknowledgement(
     status,
   };
   const file = acknowledgementPath(userData, request.nonce);
+  const temporary = path.join(
+    acknowledgementDirectory(userData),
+    `.${request.nonce}.${randomBytes(8).toString("hex")}.tmp`,
+  );
   const handle = await fs.open(
-    file,
+    temporary,
     fsConstants.O_WRONLY |
       fsConstants.O_CREAT |
       fsConstants.O_EXCL |
@@ -180,6 +189,29 @@ export async function writeInstanceAcknowledgement(
     await handle.sync();
   } finally {
     await handle.close();
+  }
+  let temporaryExists = true;
+  try {
+    await fs.link(temporary, file);
+    await options.afterAtomicPublish?.();
+    await fs.unlink(temporary);
+    temporaryExists = false;
+    const directory = await fs.open(
+      acknowledgementDirectory(userData),
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        (fsConstants.O_NOFOLLOW ?? 0) |
+        CLOSE_ON_EXEC,
+    );
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } finally {
+    if (temporaryExists) {
+      await fs.unlink(temporary).catch(() => undefined);
+    }
   }
 }
 
@@ -203,7 +235,7 @@ async function readAcknowledgement(
     const effectiveUser = process.geteuid?.();
     if (
       !info.isFile() ||
-      info.nlink !== 1 ||
+      info.nlink > 2 ||
       info.size < 1 ||
       info.size > MAX_ACK_BYTES ||
       (effectiveUser !== undefined && info.uid !== effectiveUser) ||
@@ -211,6 +243,7 @@ async function readAcknowledgement(
     ) {
       throw new Error("INSTANCE_ACK_UNSAFE");
     }
+    if (info.nlink === 2) return null;
     const parsed = instanceAcknowledgementSchema.safeParse(
       JSON.parse(await handle.readFile("utf8")),
     );

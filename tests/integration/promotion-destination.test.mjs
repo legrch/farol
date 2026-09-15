@@ -64,4 +64,37 @@ describe("Farol Next promotion destination", () => {
       preparePromotionParent(home, path.join(home, "Applications")),
     ).rejects.toThrow("PROMOTION_PARENT_TYPE_INVALID");
   });
+
+  it("rejects a symlinked home before creating Applications", async () => {
+    const container = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-promotion-container-"),
+    );
+    roots.push(container);
+    const actualHome = path.join(container, "actual-home");
+    const linkedHome = path.join(container, "linked-home");
+    await fs.mkdir(actualHome, { mode: 0o700 });
+    await fs.symlink(actualHome, linkedHome);
+    await expect(
+      preparePromotionParent(linkedHome, path.join(linkedHome, "Applications")),
+    ).rejects.toThrow("PROMOTION_HOME_TYPE_INVALID");
+    await expect(
+      fs.lstat(path.join(actualHome, "Applications")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects a writable home before creating Applications", async () => {
+    const home = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-promotion-writable-home-"),
+    );
+    roots.push(home);
+    await fs.chmod(home, 0o777);
+    await expect(
+      preparePromotionParent(home, path.join(home, "Applications")),
+    ).rejects.toThrow("PROMOTION_HOME_TYPE_INVALID");
+    await expect(
+      fs.lstat(path.join(home, "Applications")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
 });

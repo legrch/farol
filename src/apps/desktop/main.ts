@@ -10,6 +10,7 @@ import {
   type UtilityProcess,
 } from "electron";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
@@ -32,6 +33,7 @@ import {
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
 } from "./window-placement";
+import { PrimaryStartup, previewStartupDelay } from "./primary-startup";
 
 const directory = __dirname;
 const productName = "Farol Next Preview";
@@ -39,6 +41,11 @@ const bundleId = "local.farol.next.preview";
 const launchIdentity = readBuildLaunchIdentity(directory);
 const instanceRequest = createInstanceRequest(launchIdentity);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
+const primaryStartup = new PrimaryStartup();
+const startupDelayMs = previewStartupDelay(
+  process.argv,
+  process.env.FAROL_NEXT_E2E === "1",
+);
 const windowMode = parsePreviewWindowMode(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
 const demoTasks = [
@@ -647,11 +654,16 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   if (!decision) return;
   let status = decision.status;
   if (status === "reopened") {
-    const outcome = await containWindowOpenFailure(
-      ensureWindow,
-      recoverWindowOpenFailure,
-    );
-    if (outcome === "failed") status = "reopen-failed";
+    try {
+      await primaryStartup.whenReady();
+      const outcome = await containWindowOpenFailure(
+        ensureWindow,
+        recoverWindowOpenFailure,
+      );
+      if (outcome === "failed") status = "reopen-failed";
+    } catch {
+      status = "reopen-failed";
+    }
   }
   try {
     await writeInstanceAcknowledgement(
@@ -682,6 +694,7 @@ async function main(): Promise<void> {
     },
   );
   await app.whenReady();
+  if (startupDelayMs > 0) await delay(startupDelayMs);
   installIpc();
   await startRuntime();
   await ensureWindow();
@@ -721,4 +734,12 @@ if (!app.requestSingleInstanceLock(instanceRequest)) {
       process.stderr.write(`${secondInstanceResultPrefix}unverified\n`);
       app.quit();
     });
-} else void main().catch(() => app.exit(1));
+} else {
+  const initialization = main();
+  primaryStartup.begin(initialization);
+  void initialization
+    .then(() => {
+      process.stderr.write(`${secondInstanceResultPrefix}primary-started\n`);
+    })
+    .catch(() => app.exit(1));
+}

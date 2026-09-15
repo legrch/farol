@@ -49,7 +49,11 @@ verified bytes. It never builds, installs, updates, or activates either product,
 it refuses a missing, dirty, stale, or digest-invalid package with the exact rebuild
 action. A second owner launch reopens the running app only after a nonce-bound
 acknowledgement proves that its source commit and tree digest match the exact
-candidate; a different or unverifiable running build is rejected.
+candidate; a different or unverifiable running build is rejected. The packaged
+process emits one mandatory bounded launch result only after either the primary
+startup is complete or the existing primary has answered. The owner launcher waits
+for closed output streams and fails on a missing, malformed, or duplicate result even
+when the child exits with status zero.
 `task next:preview` is the separate development lane; it builds development bytes and
 is not artifact evidence. See [`docs/owner-preview.md`](docs/owner-preview.md) for
 controls and lifecycle.
@@ -64,7 +68,8 @@ the immutable nested Electron runtime and helper identities, contained symlinks,
 type-bound tree digest, plist, fixed launcher and explicit unsigned status. E2E
 launches those packaged bytes under a throwaway home and explicit user-data root,
 checks the real UI and task views, rejects malformed and tampered artifacts, proves
-default-deny task egress, and exercises actual utility-process death.
+default-deny task egress, makes a second launch wait across an intentionally delayed
+primary startup, and exercises actual utility-process death.
 
 Both E2E lanes follow the non-interference contract in `docs/testing.md`. One
 native-visible interaction run is positioned on the non-primary built-in display
