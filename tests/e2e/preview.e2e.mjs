@@ -464,6 +464,54 @@ async function launch(extraArgs = [], windowMode = "hidden") {
   };
 }
 
+async function runBoundedProcess(command, arguments_, options) {
+  const child = spawn(command, arguments_, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const outputLimit = 64 * 1024;
+  let stdout = Buffer.alloc(0);
+  let stderr = Buffer.alloc(0);
+  let outputExceeded = false;
+  const append = (current, chunk) => {
+    const combined = Buffer.concat([current, Buffer.from(chunk)]);
+    if (combined.length <= outputLimit) return combined;
+    outputExceeded = true;
+    child.kill("SIGKILL");
+    return combined.subarray(0, outputLimit);
+  };
+  child.stdout.on("data", (chunk) => {
+    stdout = append(stdout, chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr = append(stderr, chunk);
+  });
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, options.timeoutMs);
+  try {
+    const [status, signal] = await Promise.race([
+      once(child, "close"),
+      once(child, "error").then(([error]) => {
+        throw error;
+      }),
+    ]);
+    if (timedOut) throw new Error("E2E_CHILD_TIMEOUT");
+    if (outputExceeded) throw new Error("E2E_CHILD_OUTPUT_LIMIT");
+    return {
+      status,
+      signal,
+      stdout: stdout.toString("utf8"),
+      stderr: stderr.toString("utf8"),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function proveSecondLaunchDuringStartup() {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
@@ -500,11 +548,10 @@ async function proveSecondLaunchDuringStartup() {
   };
   try {
     const startedAt = Date.now();
-    const repeated = spawnSync(executable, launchArgs, {
+    const repeated = await runBoundedProcess(executable, launchArgs, {
       cwd: root,
       env: launchEnvironment,
-      encoding: "utf8",
-      timeout: 15_000,
+      timeoutMs: 15_000,
     });
     assert.equal(
       repeated.status,
