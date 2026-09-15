@@ -4,6 +4,10 @@ import path from "node:path";
 
 export async function treeDigest(directory) {
   const hash = createHash("sha256");
+  const rootStat = await fs.lstat(directory);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+    throw new Error("ARTIFACT_ROOT_TYPE_INVALID");
+  }
   const root = await fs.realpath(directory);
 
   async function containedSymlink(target) {

@@ -5,6 +5,28 @@ import { describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 
 describe("packaged tree identity", () => {
+  it("requires the artifact root itself to be an ordinary directory", async () => {
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-digest-root-"),
+    );
+    try {
+      const realRoot = path.join(parent, "real");
+      const linkRoot = path.join(parent, "linked");
+      await fs.mkdir(realRoot);
+      await fs.writeFile(path.join(realRoot, "entry"), "payload");
+      await fs.symlink("real", linkRoot);
+
+      await expect(treeDigest(linkRoot)).rejects.toThrow(
+        "ARTIFACT_ROOT_TYPE_INVALID",
+      );
+      await expect(treeDigest(path.join(realRoot, "entry"))).rejects.toThrow(
+        "ARTIFACT_ROOT_TYPE_INVALID",
+      );
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+
   it("binds entry type as well as path, mode, and payload", async () => {
     const fileRoot = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-digest-file-"),
