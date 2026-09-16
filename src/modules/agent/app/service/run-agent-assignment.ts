@@ -245,6 +245,7 @@ export class RunAgentAssignment {
         assignment: completed.value,
         resultRef: waited.resultRef,
         parentDelivery: "pending" as const,
+        workspaceEnforcement: waited.workspaceEnforcement,
       };
       const persisted = await this.trySave(record);
       return success(this.receipt(record, persisted));
@@ -388,6 +389,7 @@ export class RunAgentAssignment {
       resultRef,
       parentDelivery:
         assignment.phase === "completed" ? "pending" : "not_applicable",
+      workspaceEnforcement: "not_applicable",
     };
   }
 

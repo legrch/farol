@@ -808,6 +808,9 @@ if (args.join(" ") === "app-server --stdio") {
   const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
   let agentChildPrompt = null;
   let agentAuthority = null;
+  let agentWorkspace = null;
+  let agentWorkspaceComplete = false;
+  let agentChildComplete = false;
   let agentComplete = false;
   const agentParentThreadId = "thread-e2e-agent-parent";
   const agentParentTurnId = "turn-e2e-agent-parent";
@@ -825,18 +828,27 @@ if (args.join(" ") === "app-server --stdio") {
       return;
     }
     if (message.method === "thread/start") {
-      const dynamicTool = message.params?.dynamicTools?.[0]?.name;
+      const dynamicTools = Array.isArray(message.params?.dynamicTools)
+        ? message.params.dynamicTools.map((tool) => tool?.name)
+        : [];
+      const agentThread = dynamicTools.includes("farol_agent_authority");
+      const validDynamicTools = agentThread
+        ? dynamicTools.length === 2 &&
+          dynamicTools[0] === "farol_agent_authority" &&
+          dynamicTools[1] === "farol_agent_workspace_probe"
+        : dynamicTools.length === 1 && dynamicTools[0] === "farol_next_ping";
       const valid = message.params?.model === "gpt-6-astra" &&
         message.params?.allowProviderModelFallback === false &&
         message.params?.sandbox === "read-only" &&
         message.params?.approvalPolicy === "never" &&
         Array.isArray(message.params?.runtimeWorkspaceRoots) &&
-        message.params.runtimeWorkspaceRoots.length === 0;
+        message.params.runtimeWorkspaceRoots.length === 0 &&
+        validDynamicTools;
       if (!valid) {
         send({ id: message.id, error: { code: -32000, message: "unsafe thread" } });
         return;
       }
-      const threadId = dynamicTool === "farol_agent_authority"
+      const threadId = agentThread
         ? agentParentThreadId
         : "thread-e2e-parent";
       send({ id: message.id, result: { model: "gpt-6-astra", thread: { id: threadId, parentThreadId: null } } });
@@ -853,13 +865,15 @@ if (args.join(" ") === "app-server --stdio") {
         const authorityId = /authorityId ([^,]+),/u.exec(text)?.[1];
         const participantId = /participantId ([^,]+),/u.exec(text)?.[1];
         const role = /role (agent|critic),/u.exec(text)?.[1];
-        const proof = /proof ([a-z0-9-]+)/u.exec(text)?.[1];
-        if (start < 0 || finish < 0 || !assignmentId || !authorityId || !participantId || !role || !proof) {
+        const proof = [...text.matchAll(/proof ([a-z0-9-]+)/gu)].at(-1)?.[1];
+        const workspaceProof = /workspace proof ([a-f0-9]{64})/u.exec(text)?.[1];
+        if (start < 0 || finish < 0 || !assignmentId || !authorityId || !participantId || !role || !proof || !workspaceProof) {
           send({ id: message.id, error: { code: -32001, message: "invalid agent prompt" } });
           return;
         }
         agentChildPrompt = text.slice(start + begin.length, finish);
         agentAuthority = { assignmentId, authorityId, participantId, role, proof };
+        agentWorkspace = { assignmentId, authorityId, participantId, proof: workspaceProof };
         send({ id: message.id, result: { turn: { id: agentParentTurnId, status: "inProgress", items: [] } } });
         setTimeout(() => {
           send({ method: "item/completed", params: { threadId: agentParentThreadId, turnId: agentParentTurnId, item: {
@@ -874,6 +888,15 @@ if (args.join(" ") === "app-server --stdio") {
             prompt: agentChildPrompt
           } } });
         }, 10);
+        setTimeout(() => {
+          send({ id: "tool-e2e-agent-workspace", method: "item/tool/call", params: {
+            threadId: agentChildThreadId,
+            turnId: agentChildTurnId,
+            callId: "call-e2e-agent-workspace",
+            tool: "farol_agent_workspace_probe",
+            arguments: agentWorkspace
+          } });
+        }, 50);
         setTimeout(() => {
           send({ method: "item/completed", params: { threadId: agentParentThreadId, turnId: agentParentTurnId, item: {
             id: "item-e2e-agent-wait",
@@ -903,13 +926,21 @@ if (args.join(" ") === "app-server --stdio") {
     }
     if (message.method === "thread/read") {
       if (message.params?.threadId === agentChildThreadId) {
+        const items = agentWorkspaceComplete ? [{
+          id: "item-e2e-agent-workspace",
+          type: "dynamicToolCall",
+          tool: "farol_agent_workspace_probe",
+          status: "completed",
+          success: true,
+          arguments: agentWorkspace
+        }] : [];
         send({ id: message.id, result: { thread: {
           id: agentChildThreadId,
           parentThreadId: agentParentThreadId,
           agentRole: "default",
           source: { subAgent: { thread_spawn: { parent_thread_id: agentParentThreadId, depth: 1, agent_role: "default" } } },
-          status: { type: agentComplete ? "idle" : "active" },
-          turns: [{ id: agentChildTurnId, status: agentComplete ? "completed" : "inProgress", items: [] }]
+          status: { type: agentChildComplete ? "idle" : "active" },
+          turns: [{ id: agentChildTurnId, status: agentChildComplete ? "completed" : "inProgress", items }]
         } } });
         return;
       }
@@ -963,7 +994,12 @@ if (args.join(" ") === "app-server --stdio") {
       send({ method: "turn/completed", params: { threadId: "thread-e2e-parent", turn: { id: "turn-e2e-parent", status: "completed", items: [] } } });
       return;
     }
-    if (message.id === "tool-e2e-agent-authority" && message.result?.success === true) {
+    if (message.id === "tool-e2e-agent-workspace" && message.result?.success === true) {
+      agentWorkspaceComplete = true;
+      agentChildComplete = true;
+      return;
+    }
+    if (message.id === "tool-e2e-agent-authority" && message.result?.success === true && agentWorkspaceComplete) {
       agentComplete = true;
       send({ method: "turn/completed", params: { threadId: agentParentThreadId, turn: { id: agentParentTurnId, status: "completed", items: [] } } });
     }
@@ -2163,14 +2199,14 @@ async function completeSetup(
       assert.equal(proof.resultRefProtocol, "codex-app-server");
       assert.equal(proof.resultRetention, "durable");
       assert.equal(proof.parentDelivery, "acknowledged");
-      assert.equal(proof.workspaceEnforcement, "not_verified");
+      assert.equal(proof.workspaceEnforcement, "verified");
       assert.equal(
         settings.setup.verify.verified.profile,
         "codex.native-agent.lineage/1",
       );
       assert.match(
         await instance.window.locator("#setup-live-summary").innerText(),
-        /workspace enforcement remains not verified/iu,
+        /verified native workspace enforcement/iu,
       );
       const serializedProof = JSON.stringify(proof);
       assert.doesNotMatch(
@@ -2179,6 +2215,7 @@ async function completeSetup(
       );
       cases.push(
         "native-codex-agent-lineage-verified",
+        "native-agent-workspace-enforcement-verified",
         "native-agent-bounded-rejoin",
         "native-agent-result-delivery-acknowledged",
         "native-agent-evidence-content-free",

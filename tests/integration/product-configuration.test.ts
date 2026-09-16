@@ -294,7 +294,7 @@ describe("Farol Next product configuration", () => {
     ).resolves.toMatchObject({ ok: false, error: "SETTINGS_INPUT_INVALID" });
   });
 
-  it("persists exact native Agent lineage evidence without claiming workspace enforcement", async () => {
+  it("persists exact native Agent lineage and workspace enforcement evidence", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(
       new ProductSettingsStore({ root }),
@@ -351,7 +351,7 @@ describe("Farol Next product configuration", () => {
       resultRefProtocol: "codex-app-server",
       resultRetention: "durable",
       parentDelivery: "acknowledged",
-      workspaceEnforcement: "not_verified",
+      workspaceEnforcement: "verified",
     });
 
     expect(recorded).toMatchObject({
@@ -371,7 +371,7 @@ describe("Farol Next product configuration", () => {
                 descendantCount: 0,
                 resultRetention: "durable",
                 parentDelivery: "acknowledged",
-                workspaceEnforcement: "not_verified",
+                workspaceEnforcement: "verified",
                 verifiedAt: "2026-09-16T10:00:00.000Z",
               },
             },

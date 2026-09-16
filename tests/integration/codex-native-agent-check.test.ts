@@ -151,6 +151,7 @@ function completingHost() {
             status: "completed" as const,
             correlation,
             resultRef: "codex-app-server://thread/child-thread-a/turn/turn-a",
+            workspaceEnforcement: "verified" as const,
           };
     }),
   };
@@ -198,7 +199,7 @@ describe("desktop native Agent lineage check", () => {
         resultRefProtocol: "codex-app-server",
         resultRetention: "durable",
         parentDelivery: "acknowledged",
-        workspaceEnforcement: "not_verified",
+        workspaceEnforcement: "verified",
       },
     });
     const spawn = native.request();

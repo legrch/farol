@@ -96,6 +96,7 @@ function preparedRecord() {
     assignment: createAssignment(command.identity, assignmentAuthority),
     resultRef: null,
     parentDelivery: "not_applicable" as const,
+    workspaceEnforcement: "not_applicable" as const,
   };
 }
 
@@ -106,6 +107,7 @@ function runningRecord() {
     assignment: running.value,
     resultRef: null,
     parentDelivery: "not_applicable" as const,
+    workspaceEnforcement: "not_applicable" as const,
   };
 }
 
@@ -131,6 +133,7 @@ class RejoinHost implements AgentHost {
       status: "completed",
       correlation,
       resultRef: "result-durable-a",
+      workspaceEnforcement: "verified",
     };
   }
 }
@@ -262,6 +265,7 @@ describe("private Agent assignment persistence", () => {
         assignment: completed.value,
         resultRef: "result-durable-a",
         parentDelivery: "pending",
+        workspaceEnforcement: "verified",
       }),
     ).rejects.toThrow("SYNTHETIC_ASSIGNMENT_RENAME_INTERRUPTION");
     await expect(stable.admit(preparedRecord())).resolves.toEqual({
@@ -340,12 +344,14 @@ describe("private Agent assignment persistence", () => {
       assignment: uncertain.value,
       resultRef: null,
       parentDelivery: "not_applicable",
+      workspaceEnforcement: "not_applicable",
     });
     await entered;
     const winner = competing.save({
       assignment: completed.value,
       resultRef: "result-durable-a",
       parentDelivery: "pending",
+      workspaceEnforcement: "verified",
     });
     const concurrentState = await Promise.race([
       competingEntered.then(() => "entered" as const),
@@ -415,6 +421,7 @@ describe("private Agent assignment persistence", () => {
       assignment: completed.value,
       resultRef: "result-durable-a",
       parentDelivery: "pending" as const,
+      workspaceEnforcement: "verified" as const,
     };
     await store.save(terminal);
     await expect(store.save(terminal)).resolves.toBeUndefined();
@@ -425,6 +432,7 @@ describe("private Agent assignment persistence", () => {
         assignment: uncertain.value,
         resultRef: null,
         parentDelivery: "not_applicable",
+        workspaceEnforcement: "not_applicable",
       }),
     ).rejects.toThrow("AGENT_ASSIGNMENT_TERMINAL_IMMUTABLE");
   });

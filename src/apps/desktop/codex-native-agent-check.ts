@@ -267,6 +267,7 @@ export async function runCodexNativeAgentCheck(
     if (
       (!boundedRunning && receipt.parentDelivery !== "acknowledged") ||
       receipt.resultRetention !== "durable" ||
+      receipt.workspaceEnforcement !== "verified" ||
       !receipt.resultRef ||
       !receipt.resultRef.startsWith("codex-app-server://") ||
       !assignment.parentThreadId ||
@@ -321,7 +322,7 @@ export async function runCodexNativeAgentCheck(
         resultRefProtocol: "codex-app-server",
         resultRetention: "durable",
         parentDelivery: "acknowledged",
-        workspaceEnforcement: "not_verified",
+        workspaceEnforcement: "verified",
       },
     };
   }

@@ -4,6 +4,7 @@ export type StoredAssignment = Readonly<{
   assignment: Assignment;
   resultRef: string | null;
   parentDelivery: "not_applicable" | "pending" | "acknowledged";
+  workspaceEnforcement?: "not_applicable" | "verified";
 }>;
 
 export type AssignmentAdmission =

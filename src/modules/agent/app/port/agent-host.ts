@@ -24,6 +24,7 @@ export type AgentWaitReceipt =
       status: "completed";
       correlation: ChildCorrelation;
       resultRef: string;
+      workspaceEnforcement: "verified";
     }>
   | Readonly<{
       status: "failed";

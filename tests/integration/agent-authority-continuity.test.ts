@@ -109,6 +109,7 @@ function host(): AgentHost & { spawn: ReturnType<typeof vi.fn> } {
       status: "completed" as const,
       correlation,
       resultRef: "result-a",
+      workspaceEnforcement: "verified" as const,
     })),
   };
 }

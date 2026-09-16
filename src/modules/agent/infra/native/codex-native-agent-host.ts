@@ -8,6 +8,7 @@ import type {
   AgentSpawnRequest,
   AgentWaitReceipt,
 } from "../../app/port/agent-host";
+import type { AgentWorkspaceProbe } from "../../app/port/workspace-probe";
 import type { ChildCorrelation } from "../../domain/assignment";
 
 export type CodexNativeAgentPeer = Readonly<{
@@ -113,6 +114,13 @@ const authorityArgumentsSchema = z.strictObject({
   proof: z.string().min(1).max(200),
 });
 
+const workspaceArgumentsSchema = z.strictObject({
+  assignmentId: boundedId,
+  authorityId: boundedId,
+  participantId: boundedId,
+  proof: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
 const authorityCallSchema = z.strictObject({
   threadId: boundedId,
   turnId: boundedId,
@@ -120,6 +128,15 @@ const authorityCallSchema = z.strictObject({
   namespace: z.string().nullable().optional(),
   tool: z.literal("farol_agent_authority"),
   arguments: authorityArgumentsSchema,
+});
+
+const workspaceCallSchema = z.strictObject({
+  threadId: boundedId,
+  turnId: boundedId,
+  callId: boundedId,
+  namespace: z.string().nullable().optional(),
+  tool: z.literal("farol_agent_workspace_probe"),
+  arguments: workspaceArgumentsSchema,
 });
 
 const dynamicToolItemSchema = z
@@ -133,7 +150,22 @@ const dynamicToolItemSchema = z
   })
   .passthrough();
 
-const historyItemSchema = z.union([collabItemSchema, dynamicToolItemSchema]);
+const workspaceDynamicToolItemSchema = z
+  .object({
+    id: boundedId,
+    type: z.literal("dynamicToolCall"),
+    tool: z.literal("farol_agent_workspace_probe"),
+    status: z.enum(["inProgress", "completed", "failed"]),
+    success: z.boolean().nullable().optional(),
+    arguments: workspaceArgumentsSchema,
+  })
+  .passthrough();
+
+const historyItemSchema = z.union([
+  collabItemSchema,
+  dynamicToolItemSchema,
+  workspaceDynamicToolItemSchema,
+]);
 
 const historyTurnSchema = z
   .object({
@@ -173,6 +205,7 @@ type ActiveOperation = {
   childPrompt: string;
   delegationDigest: string;
   authorityToolCalls: number;
+  workspaceToolCalls: number;
   fatalCode: string | null;
   resolveSpawn(childId: string): void;
   rejectSpawn(error: Error): void;
@@ -185,6 +218,23 @@ function error(code: string): Error {
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function workspaceProof(
+  input: Readonly<{
+    assignmentId: string;
+    authorityId: string;
+    participantId: string;
+  }>,
+): string {
+  return sha256(
+    JSON.stringify([
+      "farol-agent-workspace-probe-v1",
+      input.assignmentId,
+      input.authorityId,
+      input.participantId,
+    ]),
+  );
 }
 
 function childPrompt(request: AgentSpawnRequest): string {
@@ -240,7 +290,9 @@ function childPrompt(request: AgentSpawnRequest): string {
   return [
     "FAROL_NATIVE_AGENT_TASK_V1",
     JSON.stringify(envelope),
-    "Do not inspect files, run commands, use the web, or call tools.",
+    `Call farol_agent_workspace_probe exactly once with assignmentId ${identity.assignmentId}, authorityId ${authority.authorityId}, participantId ${authority.participantId}, and workspace proof ${workspaceProof({ assignmentId: identity.assignmentId, authorityId: authority.authorityId, participantId: authority.participantId })}.`,
+    "This fixed probe may list only the approved focus through Farol Computer and returns no file names or contents.",
+    "Do not inspect files directly, run commands, use the web, create descendants, or call any other tool.",
     "Reply only FAROL_NATIVE_AGENT_CHILD_OK.",
   ].join("\n");
 }
@@ -307,6 +359,7 @@ function compatible(
     "workspace.search",
   ]);
   const focusAllowed =
+    request.focus.initialPaths.length > 0 &&
     request.focus.initialPaths.length <= 256 &&
     new Set(request.focus.initialPaths).size ===
       request.focus.initialPaths.length &&
@@ -379,6 +432,7 @@ export class CodexNativeAgentHost implements AgentHost {
   constructor(
     private readonly peer: CodexNativeAgentPeer,
     private readonly options: CodexNativeAgentHostOptions,
+    private readonly workspaceProbe: AgentWorkspaceProbe,
   ) {
     if (
       !canonicalAbsolutePath(options.runtimeRoot) ||
@@ -418,6 +472,7 @@ export class CodexNativeAgentHost implements AgentHost {
       childPrompt: exactChildPrompt,
       delegationDigest: sha256(exactChildPrompt),
       authorityToolCalls: 0,
+      workspaceToolCalls: 0,
       fatalCode: null,
       resolveSpawn,
       rejectSpawn,
@@ -464,9 +519,31 @@ export class CodexNativeAgentHost implements AgentHost {
                 ],
               },
             },
+            {
+              type: "function",
+              name: "farol_agent_workspace_probe",
+              description:
+                "Run one fixed content-free Farol Computer workspace enforcement probe for the correlated native child.",
+              inputSchema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  assignmentId: { type: "string" },
+                  authorityId: { type: "string" },
+                  participantId: { type: "string" },
+                  proof: { type: "string" },
+                },
+                required: [
+                  "assignmentId",
+                  "authorityId",
+                  "participantId",
+                  "proof",
+                ],
+              },
+            },
           ],
           baseInstructions:
-            "This is a bounded Farol compatibility assignment. Neither parent nor child may inspect files, run commands, or use the web. A spawned child must not create descendants or call tools. Only the root thread may follow its turn instruction to spawn one child and later call farol_agent_authority.",
+            "This is a bounded Farol compatibility assignment. Neither parent nor child may inspect files directly, run commands, or use the web. A spawned child must not create descendants and may call only farol_agent_workspace_probe exactly once. Only the root thread may spawn one child and later call farol_agent_authority.",
         }),
       );
       if (
@@ -585,6 +662,7 @@ export class CodexNativeAgentHost implements AgentHost {
           status: "completed",
           correlation,
           resultRef: `codex-app-server://thread/${correlation.childId}/turn/${completedTurn.id}`,
+          workspaceEnforcement: "verified",
         };
       }
       if (observed === "failed") {
@@ -617,7 +695,7 @@ export class CodexNativeAgentHost implements AgentHost {
     this.handlersInstalled = true;
     this.removers.push(
       this.peer.handleServerRequest("item/tool/call", async (params) =>
-        this.handleAuthorityCall(params),
+        this.handleToolCall(params),
       ),
       this.peer.handleNotification("item/completed", (params) =>
         this.handleItemCompleted(params),
@@ -626,6 +704,18 @@ export class CodexNativeAgentHost implements AgentHost {
         this.handleTurnCompleted(params),
       ),
     );
+  }
+
+  private async handleToolCall(params: unknown): Promise<unknown> {
+    if (
+      params !== null &&
+      typeof params === "object" &&
+      "tool" in params &&
+      params.tool === "farol_agent_workspace_probe"
+    ) {
+      return this.handleWorkspaceCall(params);
+    }
+    return this.handleAuthorityCall(params);
   }
 
   private handleAuthorityCall(params: unknown): unknown {
@@ -654,6 +744,52 @@ export class CodexNativeAgentHost implements AgentHost {
     return {
       success: true,
       contentItems: [{ type: "inputText", text: "FAROL_AGENT_AUTHORITY_OK" }],
+    };
+  }
+
+  private async handleWorkspaceCall(params: unknown): Promise<unknown> {
+    const operation = this.active;
+    const parsed = workspaceCallSchema.safeParse(params);
+    if (!operation || !parsed.success || !operation.childId) {
+      throw this.fail("CODEX_AGENT_WORKSPACE_CORRELATION");
+    }
+    const call = parsed.data;
+    const authority = operation.request.authority;
+    const expectedProof = workspaceProof({
+      assignmentId: operation.request.identity.assignmentId,
+      authorityId: authority.authorityId,
+      participantId: authority.participantId,
+    });
+    if (
+      call.threadId !== operation.childId ||
+      operation.workspaceToolCalls !== 0 ||
+      call.arguments.assignmentId !== operation.request.identity.assignmentId ||
+      call.arguments.authorityId !== authority.authorityId ||
+      call.arguments.participantId !== authority.participantId ||
+      call.arguments.proof !== expectedProof
+    ) {
+      throw this.fail("CODEX_AGENT_WORKSPACE_CORRELATION");
+    }
+    operation.workspaceToolCalls += 1;
+    let receipt;
+    try {
+      receipt = await this.workspaceProbe.verify({
+        identity: operation.request.identity,
+        authority,
+        focusPath: operation.request.focus.initialPaths[0]!,
+        threadId: call.threadId,
+        turnId: call.turnId,
+        callId: call.callId,
+      });
+    } catch {
+      throw this.fail("CODEX_AGENT_WORKSPACE_PROBE_FAILED");
+    }
+    if (receipt.status !== "verified") {
+      throw this.fail("CODEX_AGENT_WORKSPACE_PROBE_FAILED");
+    }
+    return {
+      success: true,
+      contentItems: [{ type: "inputText", text: "FAROL_AGENT_WORKSPACE_OK" }],
     };
   }
 
@@ -772,7 +908,39 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return "invalid";
     }
-    if (child.turns.some((turn) => turn.items.length !== 0)) {
+    const childItems = child.turns.flatMap((turn) => turn.items);
+    const childWorkspaceCalls = childItems.flatMap((candidate) => {
+      const parsed = workspaceDynamicToolItemSchema.safeParse(candidate);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const forbiddenChildTool = childItems.some(
+      (candidate) =>
+        candidate !== null &&
+        typeof candidate === "object" &&
+        "type" in candidate &&
+        (candidate.type === "collabAgentToolCall" ||
+          (candidate.type === "dynamicToolCall" &&
+            (!("tool" in candidate) ||
+              candidate.tool !== "farol_agent_workspace_probe"))),
+    );
+    const expectedWorkspaceProof = workspaceProof({
+      assignmentId: correlation.assignmentId,
+      authorityId: correlation.authorityId,
+      participantId: correlation.participantId,
+    });
+    if (
+      forbiddenChildTool ||
+      childWorkspaceCalls.length > 1 ||
+      childWorkspaceCalls.some(
+        (item) =>
+          item.status !== "completed" ||
+          item.success !== true ||
+          item.arguments.assignmentId !== correlation.assignmentId ||
+          item.arguments.authorityId !== correlation.authorityId ||
+          item.arguments.participantId !== correlation.participantId ||
+          item.arguments.proof !== expectedWorkspaceProof,
+      )
+    ) {
       return "invalid";
     }
     const childFailed = child.turns.some(
@@ -832,6 +1000,7 @@ export class CodexNativeAgentHost implements AgentHost {
     const waitIndex = parentItems.indexOf(waitItems.at(-1)!);
     const authorityIndex = parentItems.indexOf(authorityCalls[0]!);
     return authorityCalls.length === 1 &&
+      childWorkspaceCalls.length === 1 &&
       spawnItems.length === 1 &&
       waitItems.length >= 1 &&
       spawnIndex >= 0 &&

@@ -60,7 +60,7 @@ export const CodexAgentVerificationFieldsSchema = z.strictObject({
   resultRefProtocol: z.literal("codex-app-server"),
   resultRetention: z.literal("durable"),
   parentDelivery: z.literal("acknowledged"),
-  workspaceEnforcement: z.literal("not_verified"),
+  workspaceEnforcement: z.enum(["not_verified", "verified"]),
 });
 
 const CodexAgentVerificationSchema = CodexAgentVerificationFieldsSchema.extend({

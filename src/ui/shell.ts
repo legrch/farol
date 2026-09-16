@@ -1370,7 +1370,7 @@ function renderSettings(): void {
       configured.status === "ready" &&
       configured.settings.computer.workspaces.length > 0
         ? configured.settings.nativeHosts.codex?.agentVerification
-          ? `${configured.settings.computer.workspaces.length} approved workspace(s) · Agent lineage verified · native workspace enforcement not verified`
+          ? `${configured.settings.computer.workspaces.length} approved workspace(s) · Agent lineage verified · native workspace enforcement ${configured.settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"}`
           : `${configured.settings.computer.workspaces.length} approved workspace(s) · Agent lineage not verified`
         : "No workspace approved · Agent lineage not verified",
     ],
@@ -1459,7 +1459,7 @@ function renderSettings(): void {
             ? `${readinessDetail(state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
             : label === "Native Agent" &&
                 settings.nativeHosts.codex?.agentVerification
-              ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement not verified · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
+              ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
               : readinessDetail(state);
       copy.append(title, detail);
       row.append(copy);
@@ -1614,7 +1614,9 @@ function renderSettings(): void {
         agent.disabled =
           agentProof !== null || agentState.outcomeUnknown || !agentCanRun;
         agent.title = agentProof
-          ? "Lineage and delivery are verified; native workspace enforcement remains not verified"
+          ? agentProof.workspaceEnforcement === "verified"
+            ? "Lineage, workspace enforcement, and delivery are verified"
+            : "Lineage and delivery are verified; native workspace enforcement remains not verified"
           : agentState.outcomeUnknown
             ? "Inspect the existing Codex task before deliberate recovery"
             : !agentCanRun
@@ -1692,7 +1694,7 @@ function renderSetup(): void {
           ? [
               `Delegation · ${configured.settings.nativeHosts.codex.agentVerification.delegationDigest.slice(0, 12)}`,
               `Parent ${configured.settings.nativeHosts.codex.agentVerification.parentThreadSha256.slice(0, 12)} · child ${configured.settings.nativeHosts.codex.agentVerification.childThreadSha256.slice(0, 12)}`,
-              "Native workspace enforcement · not verified",
+              `Native workspace enforcement · ${configured.settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"}`,
             ]
           : [];
   details.replaceChildren(
@@ -1850,7 +1852,9 @@ function renderSetup(): void {
     const needsRejoin =
       readiness.needsAction?.startsWith("Rejoin the same") === true;
     liveSummary.textContent = proof
-      ? `Main → Agent → Critic completed with one ${proof.model} turn and durable acknowledged delivery. Native workspace enforcement remains not verified.`
+      ? proof.workspaceEnforcement === "verified"
+        ? `Main → Agent → Critic completed with one ${proof.model} turn, verified native workspace enforcement, and durable acknowledged delivery.`
+        : `Main → Agent → Critic completed with one ${proof.model} turn and durable acknowledged delivery. Native workspace enforcement remains not verified.`
       : readiness.outcomeUnknown
         ? "The native Agent outcome is unknown. Inspect the existing Codex task before deliberate recovery."
         : needsRejoin

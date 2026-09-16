@@ -142,6 +142,7 @@ describe("Agent app service", () => {
         status: "completed",
         correlation: exactChild,
         resultRef: "result-preview-a",
+        workspaceEnforcement: "verified",
       },
     );
 
@@ -172,6 +173,7 @@ describe("Agent app service", () => {
         status: "completed",
         correlation: exactChild,
         resultRef: "result-preview-a",
+        workspaceEnforcement: "verified",
       },
     );
     const runner = createRunner(host);
@@ -194,6 +196,7 @@ describe("Agent app service", () => {
         status: "completed",
         correlation: exactChild,
         resultRef: "result-preview-a",
+        workspaceEnforcement: "verified",
       },
     );
     const runner = createRunner(host, repository);
@@ -243,6 +246,7 @@ describe("Agent app service", () => {
       status: "completed",
       correlation: exactChild,
       resultRef: "result-preview-rejoined",
+      workspaceEnforcement: "verified",
     });
     await expect(
       createRunner(runningHost, runningRepository).execute(command),
@@ -276,6 +280,7 @@ describe("Agent app service", () => {
               status: "completed",
               correlation,
               resultRef: "result-preview-rejoined",
+              workspaceEnforcement: "verified" as const,
             };
       },
     };
@@ -330,6 +335,7 @@ describe("Agent app service", () => {
         status: "completed",
         correlation: exactChild,
         resultRef: "result-preview-a",
+        workspaceEnforcement: "verified",
       },
     );
     await expect(
@@ -351,6 +357,7 @@ describe("Agent app service", () => {
         status: "completed",
         correlation: { ...exactChild, ownerId: "foreign-owner" },
         resultRef: "foreign-result",
+        workspaceEnforcement: "verified",
       },
     );
 

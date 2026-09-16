@@ -58,6 +58,9 @@ const storedAssignmentSchema = z.strictObject({
   assignment: assignmentSchema,
   resultRef: z.string().min(1).max(4_096).nullable(),
   parentDelivery: z.enum(["not_applicable", "pending", "acknowledged"]),
+  workspaceEnforcement: z
+    .enum(["not_applicable", "verified"])
+    .default("not_applicable"),
 });
 
 const envelopeSchema = z.strictObject({
@@ -237,7 +240,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.delegationDigest === null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
-        record.parentDelivery === "not_applicable") ||
+        record.parentDelivery === "not_applicable" &&
+        record.workspaceEnforcement === "not_applicable") ||
       (assignment.phase === "running" &&
         !assignment.terminal &&
         assignment.parentThreadId !== null &&
@@ -245,7 +249,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.delegationDigest !== null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
-        record.parentDelivery === "not_applicable") ||
+        record.parentDelivery === "not_applicable" &&
+        record.workspaceEnforcement === "not_applicable") ||
       (assignment.phase === "completed" &&
         assignment.terminal &&
         assignment.parentThreadId !== null &&
@@ -253,6 +258,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.delegationDigest !== null &&
         assignment.terminalReason === null &&
         record.resultRef !== null &&
+        record.workspaceEnforcement === "verified" &&
         (record.parentDelivery === "pending" ||
           record.parentDelivery === "acknowledged")) ||
       ((assignment.phase === "failed" ||
@@ -260,7 +266,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.terminal &&
         assignment.terminalReason !== null &&
         record.resultRef === null &&
-        record.parentDelivery === "not_applicable");
+        record.parentDelivery === "not_applicable" &&
+        record.workspaceEnforcement === "not_applicable");
     if (!valid) throw new Error(code);
     return structuredClone(record);
   }
@@ -287,6 +294,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         replacement.assignment.phase === "completed" &&
         sameValue(existing.assignment, replacement.assignment) &&
         existing.resultRef === replacement.resultRef &&
+        existing.workspaceEnforcement === replacement.workspaceEnforcement &&
         existing.parentDelivery === "pending" &&
         replacement.parentDelivery === "acknowledged"
       ) {

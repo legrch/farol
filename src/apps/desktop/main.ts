@@ -118,6 +118,7 @@ import { probeCodexHost } from "./codex-host-probe";
 import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
+import { CodexAgentWorkspaceProbe } from "./codex-agent-workspace-probe";
 import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
 
@@ -1191,15 +1192,21 @@ async function configureProduct(
               ? { codexHomePath: configuredCodexHome }
               : {}),
           });
-          const host = new CodexNativeAgentHost(client, {
-            model: "gpt-6-astra",
-            runtimeRoot,
-            spawnTimeoutMs: 120_000,
-            waitTimeoutMs: 250,
-            pollIntervalMs: 25,
-            nonce: randomUUID,
-            now: () => Date.now(),
-          });
+          const host = new CodexNativeAgentHost(
+            client,
+            {
+              model: "gpt-6-astra",
+              runtimeRoot,
+              spawnTimeoutMs: 120_000,
+              waitTimeoutMs: 250,
+              pollIntervalMs: 25,
+              nonce: randomUUID,
+              now: () => Date.now(),
+            },
+            new CodexAgentWorkspaceProbe(settings, nativeWorkspace, () =>
+              Date.now(),
+            ),
+          );
           session = {
             key: checkKey,
             client,
