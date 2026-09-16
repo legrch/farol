@@ -1099,6 +1099,17 @@ html[data-has-tasks="false"] .surface {
   background: var(--surface-raised);
 }
 
+.computer-access-group {
+  margin-top: 28px;
+}
+
+.settings-link-copy {
+  margin: 16px 0 0;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .settings-group > header,
 .settings-group-actions,
 .computer-name-field > span,

@@ -52,4 +52,24 @@ describe("Watch Rail product contract", () => {
     expect(main).toContain('publishShellAction("open-settings")');
     expect(main).toContain('accelerator: "CommandOrControl+,"');
   });
+
+  it("keeps workspace authority on Computer and links to it from Settings", async () => {
+    const html = await source("src/ui/shell.html");
+    const computer = html.slice(
+      html.indexOf('data-panel="computer"'),
+      html.indexOf('data-panel="activity"'),
+    );
+    const settings = html.slice(
+      html.indexOf('data-panel="settings"'),
+      html.indexOf('<dialog class="task-menu"'),
+    );
+
+    expect(computer).toContain('id="computer-name"');
+    expect(computer).toContain('id="computer-workspaces"');
+    expect(computer).toContain('id="add-workspace"');
+    expect(settings).toContain('id="open-computer-settings"');
+    expect(settings).not.toContain('id="computer-name"');
+    expect(settings).not.toContain('id="computer-workspaces"');
+    expect(settings).not.toContain('id="add-workspace"');
+  });
 });

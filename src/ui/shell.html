@@ -236,6 +236,7 @@
           <h1>Computer</h1>
           <span id="computer-summary">No request is waiting.</span>
         </div>
+        <p class="settings-feedback" id="computer-feedback" role="status"></p>
         <article class="permission-sheet">
           <div class="permission-icon" aria-hidden="true">⌁</div>
           <div>
@@ -257,17 +258,50 @@
         <dl class="scope-list">
           <div>
             <dt>Available</dt>
-            <dd>Fixture status · one bounded response</dd>
+            <dd id="computer-available">Workspace configuration</dd>
           </div>
           <div class="muted">
             <dt>Unavailable</dt>
-            <dd>Files · commands · screenshots · account state</dd>
+            <dd id="computer-unavailable">
+              File operations until a workspace is verified
+            </dd>
           </div>
           <div class="muted">
             <dt>Authority</dt>
-            <dd>Synthetic preview only · no host action</dd>
+            <dd id="computer-authority">No current verified grant</dd>
           </div>
         </dl>
+        <section
+          class="settings-group computer-access-group"
+          aria-labelledby="computer-access-title"
+        >
+          <header>
+            <div>
+              <p>This Mac</p>
+              <h2 id="computer-access-title">Workspaces and access</h2>
+            </div>
+            <span class="readiness-badge" id="computer-readiness"></span>
+          </header>
+          <label class="computer-name-field"
+            >Computer name
+            <span
+              ><input id="computer-name" maxlength="80" /><button
+                id="save-computer-name"
+                type="button"
+              >
+                Save
+              </button></span
+            >
+          </label>
+          <div class="workspace-list" id="computer-workspaces"></div>
+          <div class="settings-group-actions">
+            <span
+              >New folders begin read-only. Secrets stay denied by the native
+              helper.</span
+            >
+            <button id="add-workspace" type="button">Add folder…</button>
+          </div>
+        </section>
       </section>
 
       <section class="panel content-panel" data-panel="activity">
@@ -339,28 +373,22 @@
           <header>
             <div>
               <p>Computer</p>
-              <h2 id="settings-computer-title">This Mac and workspaces</h2>
+              <h2 id="settings-computer-title">This Mac readiness</h2>
             </div>
-            <span class="readiness-badge" id="computer-readiness"></span>
-          </header>
-          <label class="computer-name-field"
-            >Computer name
             <span
-              ><input id="computer-name" maxlength="80" /><button
-                id="save-computer-name"
-                type="button"
-              >
-                Save
-              </button></span
-            >
-          </label>
-          <div class="workspace-list" id="settings-workspaces"></div>
+              class="readiness-badge"
+              id="settings-computer-readiness"
+            ></span>
+          </header>
+          <p class="settings-link-copy" id="settings-computer-summary"></p>
           <div class="settings-group-actions">
             <span
-              >New folders begin read-only. Secrets stay denied by the native
-              helper.</span
+              >Workspace grants, exclusions and verification are managed by
+              Computer.</span
             >
-            <button id="add-workspace" type="button">Add folder…</button>
+            <button id="open-computer-settings" type="button">
+              Open Computer
+            </button>
           </div>
         </section>
 

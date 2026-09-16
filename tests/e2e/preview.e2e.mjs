@@ -2362,19 +2362,27 @@ try {
     normal.expectedTaskViewCount,
   );
   cases.push("chatgpt-readonly-task-incremental-result");
+  const settingsPanel = normal.window.locator('[data-panel="settings"]');
+  assert.equal(await settingsPanel.locator("#computer-name").count(), 0);
+  assert.equal(await settingsPanel.locator("#add-workspace").count(), 0);
+  await settingsPanel
+    .getByRole("button", { name: "Open Computer", exact: true })
+    .click();
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
+  cases.push("settings-links-to-computer-workspaces");
   await normal.window.locator("#computer-name").fill("Owner Test Mac");
   await normal.window.locator("#save-computer-name").click();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("Computer name saved.", { exact: true })
     .waitFor();
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByText(/not verified/u)
     .waitFor();
   assert.equal(
     await normal.window
-      .locator("#settings-workspaces")
+      .locator("#computer-workspaces")
       .getByRole("button", { name: "List root", exact: true })
       .isDisabled(),
     true,
@@ -2386,11 +2394,11 @@ try {
     true,
   );
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByRole("button", { name: "Verify", exact: true })
     .click();
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByText(/read-only · verified/u)
     .waitFor();
   await normal.window
@@ -2398,12 +2406,12 @@ try {
     .getByText("Farol Next workspace verification fixture", { exact: true })
     .waitFor();
   assert.match(
-    await normal.window.locator("#settings-feedback").innerText(),
+    await normal.window.locator("#computer-feedback").innerText(),
     /Read 42 bytes from README\.md\. Nothing from the file was persisted\./u,
   );
 
   const workspaceCard = normal.window
-    .locator("#settings-workspaces .workspace-card")
+    .locator("#computer-workspaces .workspace-card")
     .filter({ hasText: "approved-workspace" });
   const listRoot = workspaceCard.getByRole("button", {
     name: "List root",
@@ -2416,7 +2424,7 @@ try {
     .getByText("README.md", { exact: true })
     .waitFor();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("Listed 1 entry from the workspace root.", { exact: true })
     .waitFor();
 
@@ -2435,7 +2443,7 @@ try {
     .getByText("Farol Next workspace verification fixture", { exact: true })
     .waitFor();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText('Found 1 match for "verification".', { exact: true })
     .waitFor();
   cases.push("workspace-app-list-search");
@@ -2446,21 +2454,21 @@ try {
   );
   await exclusionInput.fill("README.md");
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByRole("button", { name: "Save exclusions", exact: true })
     .click();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("approved-workspace exclusions saved and read back.", {
       exact: true,
     })
     .waitFor();
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByRole("button", { name: "Verify", exact: true })
     .click();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("Not applied · WORKSPACE_PATH_REFUSED", { exact: true })
     .waitFor();
   assert.equal(
@@ -2471,23 +2479,25 @@ try {
     .getByLabel("Excluded paths for approved-workspace", { exact: true })
     .fill("");
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByRole("button", { name: "Save exclusions", exact: true })
     .click();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("approved-workspace exclusions saved and read back.", {
       exact: true,
     })
     .waitFor();
   await normal.window
-    .locator("#settings-workspaces")
+    .locator("#computer-workspaces")
     .getByRole("button", { name: "Verify", exact: true })
     .click();
   await normal.window
     .locator(".workspace-read-evidence")
     .getByText("Farol Next workspace verification fixture", { exact: true })
     .waitFor();
+  await invokeApplicationMenu(normal.application, "app.settings");
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
   await normal.window
     .locator("#setting-open-at-launch")
     .selectOption("settings");

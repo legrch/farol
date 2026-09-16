@@ -176,6 +176,7 @@ let windowState: WindowState = {
 let computerTargetTaskId: string | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
+let settingsFeedbackSurface: "computer" | "settings" = "settings";
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
@@ -191,7 +192,8 @@ let pendingChatGptPreview: Extract<
   { kind: "chatgpt.readonly-task-preview" }
 > | null = null;
 let contextPreviewBusy = false;
-let renderedSettingsRevision = -1;
+let renderedGeneralSettingsRevision = -1;
+let renderedComputerSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
 const activity: SafeActivity[] = [];
@@ -569,14 +571,46 @@ function renderComputer(): void {
     : "No selected request";
   required("#computer-title").textContent = waitingTask
     ? "Inspect synthetic fixture status"
-    : bootstrap.tasks.length === 0
-      ? "No Computer request"
-      : "Synthetic fixture only";
+    : "No task request";
   required("#computer-detail").textContent = waitingTask
     ? "Target: fixture workspace status. This admitted preview task exposes no path, file content, command, screenshot, or account state."
-    : bootstrap.tasks.length === 0
-      ? "Computer opens only from a correlated task request. Workspace approval alone never starts an action."
-      : "This demo cannot read files or run commands on your Mac.";
+    : "Task approvals appear here when an exact correlated action waits. Workspace access below never starts an action by itself.";
+
+  const configured = bootstrap.configuration;
+  const available = required("#computer-available");
+  const unavailable = required("#computer-unavailable");
+  const authority = required("#computer-authority");
+  if (configured.status === "error") {
+    available.textContent = "Configuration repair";
+    unavailable.textContent = "Workspace operations while settings are invalid";
+    authority.textContent = `Unavailable · ${configured.error}`;
+  } else {
+    const settings = configured.settings;
+    const verifiedWorkspace = settings.computer.workspaces.find(
+      (workspace) =>
+        settings.setup.computer.verified?.workspaceId ===
+          workspace.workspaceId &&
+        settings.setup.computer.verified.configRevision ===
+          settings.computer.generation,
+    );
+    if (verifiedWorkspace) {
+      available.textContent = `Read, list and search · ${verifiedWorkspace.label}`;
+      unavailable.textContent =
+        "Writes · commands · screenshots · account state";
+      authority.textContent = `${settings.computer.name} · read-only generation ${settings.computer.generation} · exclusions enforced`;
+    } else if (settings.computer.workspaces.length > 0) {
+      available.textContent = "Workspace configuration · verification required";
+      unavailable.textContent =
+        "File operations until the current workspace grant is verified";
+      authority.textContent = `${settings.computer.name} · no current verified grant`;
+    } else {
+      available.textContent = "Workspace configuration";
+      unavailable.textContent =
+        "File operations until a workspace is approved and verified";
+      authority.textContent = `${settings.computer.name} · no approved workspace`;
+    }
+  }
+  renderComputerConfiguration();
 }
 
 function renderActivity(): void {
@@ -656,10 +690,269 @@ function readinessDetail(readiness: Readiness): string {
   );
 }
 
+function renderConfigurationFeedback(
+  selector: string,
+  surface: "computer" | "settings",
+): void {
+  const configured = bootstrap.configuration;
+  const feedback = required<HTMLParagraphElement>(selector);
+  feedback.textContent =
+    configured.status === "error"
+      ? `Settings unavailable · ${configured.error}`
+      : settingsFeedbackSurface === surface
+        ? settingsFeedback
+        : "";
+  feedback.classList.toggle(
+    "error",
+    configured.status === "error" ||
+      (settingsFeedbackSurface === surface && settingsFeedbackError),
+  );
+}
+
+function renderComputerConfiguration(): void {
+  const configured = bootstrap.configuration;
+  const computerName = required<HTMLInputElement>("#computer-name");
+  const saveComputerName = required<HTMLButtonElement>("#save-computer-name");
+  const addWorkspace = required<HTMLButtonElement>("#add-workspace");
+  const workspaces = required<HTMLDivElement>("#computer-workspaces");
+  const computerReadiness = required<HTMLSpanElement>("#computer-readiness");
+  renderConfigurationFeedback("#computer-feedback", "computer");
+
+  if (configured.status === "error") {
+    computerName.disabled = true;
+    saveComputerName.disabled = true;
+    addWorkspace.disabled = true;
+    workspaces.textContent =
+      "Repair is required before Computer access can be changed.";
+    computerReadiness.textContent = "Unavailable";
+    computerReadiness.classList.remove("verified");
+    return;
+  }
+
+  const settings = configured.settings;
+  computerName.disabled = false;
+  saveComputerName.disabled = false;
+  addWorkspace.disabled = false;
+  if (
+    renderedComputerSettingsRevision !== settings.revision &&
+    document.activeElement !== computerName
+  ) {
+    computerName.value = settings.computer.name;
+    renderedComputerSettingsRevision = settings.revision;
+  }
+
+  const computerState = settings.setup.computer;
+  computerReadiness.textContent = readinessLabel(computerState);
+  computerReadiness.classList.toggle(
+    "verified",
+    computerState.verified !== null,
+  );
+  if (settings.computer.workspaces.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "connection-row";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    const detail = document.createElement("small");
+    title.textContent = "No approved folders";
+    detail.textContent =
+      "Add a folder to create a read-only Computer approval.";
+    copy.append(title, detail);
+    empty.append(copy);
+    workspaces.replaceChildren(empty);
+    return;
+  }
+
+  workspaces.replaceChildren(
+    ...settings.computer.workspaces.map((workspace) => {
+      const card = document.createElement("article");
+      card.className = "workspace-card";
+      const row = document.createElement("div");
+      row.className = "workspace-row";
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = workspace.label;
+      const detail = document.createElement("small");
+      const verified =
+        computerState.verified?.workspaceId === workspace.workspaceId &&
+        computerState.verified.configRevision === settings.computer.generation;
+      detail.textContent = `${workspace.root} · read-only · ${verified ? "verified" : "not verified"}`;
+      copy.append(title, detail);
+      const actions = document.createElement("span");
+      actions.className = "workspace-actions";
+      const verify = document.createElement("button");
+      verify.type = "button";
+      verify.textContent = verified ? "Recheck" : "Verify";
+      verify.addEventListener("click", () => {
+        void configureProduct(
+          {
+            kind: "computer.verify-workspace",
+            workspaceId: workspace.workspaceId,
+          },
+          `${workspace.label} read access verified.`,
+        );
+      });
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        void configureProduct(
+          {
+            kind: "computer.remove-workspace",
+            workspaceId: workspace.workspaceId,
+          },
+          `${workspace.label} approval removed.`,
+        );
+      });
+      actions.append(verify, remove);
+      row.append(copy, actions);
+
+      const policy = document.createElement("div");
+      policy.className = "workspace-policy";
+      const exclusionLabel = document.createElement("label");
+      exclusionLabel.textContent = "Excluded paths";
+      const exclusionInput = document.createElement("input");
+      exclusionInput.type = "text";
+      exclusionInput.placeholder = "private, build/secrets.txt";
+      exclusionInput.setAttribute(
+        "aria-label",
+        `Excluded paths for ${workspace.label}`,
+      );
+      const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
+      exclusionInput.value = workspace.excludedPaths
+        .flatMap((excluded) =>
+          excluded.startsWith(prefix) ? [excluded.slice(prefix.length)] : [],
+        )
+        .join(", ");
+      exclusionLabel.append(exclusionInput);
+      const saveExclusions = document.createElement("button");
+      saveExclusions.type = "button";
+      saveExclusions.textContent = "Save exclusions";
+      saveExclusions.addEventListener("click", () => {
+        const excludedPaths = exclusionInput.value
+          .split(/[\n,]/u)
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0);
+        const command = ProductConfigurationCommandSchema.safeParse({
+          kind: "computer.update-exclusions",
+          workspaceId: workspace.workspaceId,
+          excludedPaths,
+        });
+        if (!command.success) {
+          settingsFeedbackSurface = "computer";
+          settingsFeedback =
+            "Exclusions must be unique relative paths without dot segments.";
+          settingsFeedbackError = true;
+          render();
+          return;
+        }
+        void configureProduct(
+          command.data,
+          `${workspace.label} exclusions saved and read back.`,
+        );
+      });
+      policy.append(exclusionLabel, saveExclusions);
+      card.append(row, policy);
+
+      const query = document.createElement("div");
+      query.className = "workspace-query";
+      const listRoot = document.createElement("button");
+      listRoot.type = "button";
+      listRoot.textContent = "List root";
+      listRoot.disabled = !verified;
+      listRoot.title = verified
+        ? "List the visible entries at this workspace root"
+        : "Verify this workspace first";
+      listRoot.addEventListener("click", () => {
+        void configureProduct(
+          {
+            kind: "computer.list-workspace",
+            workspaceId: workspace.workspaceId,
+            relativePath: ".",
+          },
+          `${workspace.label} root listed.`,
+        );
+      });
+      const searchLabel = document.createElement("label");
+      searchLabel.textContent = "Search workspace";
+      const searchInput = document.createElement("input");
+      searchInput.type = "search";
+      searchInput.maxLength = 160;
+      searchInput.placeholder = "Exact text pattern";
+      searchInput.setAttribute("aria-label", `Search ${workspace.label}`);
+      searchInput.disabled = !verified;
+      searchLabel.append(searchInput);
+      const search = document.createElement("button");
+      search.type = "button";
+      search.textContent = "Search";
+      search.disabled = true;
+      searchInput.addEventListener("input", () => {
+        search.disabled = !verified || searchInput.value.trim().length === 0;
+      });
+      search.addEventListener("click", () => {
+        const command = ProductConfigurationCommandSchema.safeParse({
+          kind: "computer.search-workspace",
+          workspaceId: workspace.workspaceId,
+          relativePath: ".",
+          pattern: searchInput.value.trim(),
+        });
+        if (!command.success) return;
+        void configureProduct(
+          command.data,
+          `${workspace.label} search completed.`,
+        );
+      });
+      query.append(listRoot, searchLabel, search);
+      card.append(query);
+
+      if (workspaceEvidence?.workspaceId === workspace.workspaceId) {
+        const evidence = document.createElement("section");
+        evidence.className =
+          workspaceEvidence.kind === "computer.workspace-read"
+            ? "workspace-read-evidence"
+            : "workspace-query-evidence";
+        const heading = document.createElement("strong");
+        if (workspaceEvidence.kind === "computer.workspace-read") {
+          heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes${workspaceEvidence.truncated ? " · preview truncated" : ""}`;
+          const preview = document.createElement("pre");
+          preview.textContent = workspaceEvidence.text;
+          evidence.append(heading, preview);
+        } else if (workspaceEvidence.kind === "computer.workspace-list") {
+          heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.entries.length} visible ${workspaceEvidence.entries.length === 1 ? "entry" : "entries"}${workspaceEvidence.truncated ? " · result limited" : ""}`;
+          const entries = document.createElement("ul");
+          for (const entry of workspaceEvidence.entries) {
+            const item = document.createElement("li");
+            item.textContent = entry;
+            entries.append(item);
+          }
+          evidence.append(heading, entries);
+        } else {
+          heading.textContent = `Search · ${workspaceEvidence.matches.length} ${workspaceEvidence.matches.length === 1 ? "match" : "matches"}${workspaceEvidence.resultLimited || workspaceEvidence.scanLimited ? " · result limited" : ""}`;
+          const matches = document.createElement("ol");
+          for (const match of workspaceEvidence.matches) {
+            const item = document.createElement("li");
+            const location = document.createElement("code");
+            location.textContent = `${match.path}:${match.line}`;
+            const text = document.createElement("span");
+            text.textContent = match.text;
+            item.append(location, text);
+            matches.append(item);
+          }
+          evidence.append(heading, matches);
+        }
+        card.append(evidence);
+      }
+      return card;
+    }),
+  );
+}
+
 async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
 ): Promise<boolean> {
+  settingsFeedbackSurface = command.kind.startsWith("computer.")
+    ? "computer"
+    : "settings";
   if (
     command.kind === "computer.verify-workspace" ||
     command.kind === "computer.list-workspace" ||
@@ -690,7 +983,8 @@ async function configureProduct(
     return false;
   }
   bootstrap = { ...bootstrap, configuration: parsed.data.snapshot };
-  renderedSettingsRevision = -1;
+  renderedGeneralSettingsRevision = -1;
+  renderedComputerSettingsRevision = -1;
   if (!parsed.data.ok) {
     if (
       command.kind === "chatgpt.submit-readonly-task" ||
@@ -814,61 +1108,44 @@ function renderSettings(): void {
     }),
   );
 
-  const feedback = required<HTMLParagraphElement>("#settings-feedback");
-  feedback.textContent =
-    configured.status === "error"
-      ? `Settings unavailable · ${configured.error}`
-      : settingsFeedback;
-  feedback.classList.toggle(
-    "error",
-    configured.status === "error" || settingsFeedbackError,
-  );
-
+  renderConfigurationFeedback("#settings-feedback", "settings");
   const formControls = [
     required<HTMLSelectElement>("#setting-open-at-launch"),
     required<HTMLSelectElement>("#setting-sidebar-default"),
     required<HTMLSelectElement>("#setting-activity-detail"),
   ] as const;
-  const computerName = required<HTMLInputElement>("#computer-name");
   const applyGeneral = required<HTMLButtonElement>("#apply-general-settings");
-  const saveComputerName = required<HTMLButtonElement>("#save-computer-name");
-  const addWorkspace = required<HTMLButtonElement>("#add-workspace");
-  const workspaces = required<HTMLDivElement>("#settings-workspaces");
   const connections = required<HTMLDivElement>("#connection-readiness");
-  const computerReadiness = required<HTMLSpanElement>("#computer-readiness");
+  const computerReadiness = required<HTMLSpanElement>(
+    "#settings-computer-readiness",
+  );
+  const computerSummary = required<HTMLParagraphElement>(
+    "#settings-computer-summary",
+  );
 
   if (configured.status === "error") {
     for (const control of formControls) control.disabled = true;
-    computerName.disabled = true;
     applyGeneral.disabled = true;
-    saveComputerName.disabled = true;
-    addWorkspace.disabled = true;
-    workspaces.textContent =
-      "Repair is required before settings can be changed.";
     connections.textContent =
       "Readiness is unavailable while settings are invalid.";
     computerReadiness.textContent = "Unavailable";
     computerReadiness.classList.remove("verified");
+    computerSummary.textContent =
+      "Repair settings before changing workspace authority.";
     return;
   }
 
   const settings = configured.settings;
   for (const control of formControls) control.disabled = false;
-  computerName.disabled = false;
   applyGeneral.disabled = false;
-  saveComputerName.disabled = false;
-  addWorkspace.disabled = false;
   if (
-    renderedSettingsRevision !== settings.revision &&
-    ![...formControls, computerName].includes(
-      document.activeElement as HTMLInputElement & HTMLSelectElement,
-    )
+    renderedGeneralSettingsRevision !== settings.revision &&
+    !formControls.includes(document.activeElement as HTMLSelectElement)
   ) {
     formControls[0].value = settings.general.openAtLaunch;
     formControls[1].value = settings.general.sidebarDefault;
     formControls[2].value = settings.general.activityDetail;
-    computerName.value = settings.computer.name;
-    renderedSettingsRevision = settings.revision;
+    renderedGeneralSettingsRevision = settings.revision;
   }
 
   const computerState = settings.setup.computer;
@@ -877,202 +1154,8 @@ function renderSettings(): void {
     "verified",
     computerState.verified !== null,
   );
-  if (settings.computer.workspaces.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "connection-row";
-    const copy = document.createElement("div");
-    const title = document.createElement("strong");
-    const detail = document.createElement("small");
-    title.textContent = "No approved folders";
-    detail.textContent =
-      "Add a folder to create a read-only Computer approval.";
-    copy.append(title, detail);
-    empty.append(copy);
-    workspaces.replaceChildren(empty);
-  } else {
-    workspaces.replaceChildren(
-      ...settings.computer.workspaces.map((workspace) => {
-        const card = document.createElement("article");
-        card.className = "workspace-card";
-        const row = document.createElement("div");
-        row.className = "workspace-row";
-        const copy = document.createElement("div");
-        const title = document.createElement("strong");
-        title.textContent = workspace.label;
-        const detail = document.createElement("small");
-        const verified =
-          computerState.verified?.workspaceId === workspace.workspaceId &&
-          computerState.verified.configRevision ===
-            settings.computer.generation;
-        detail.textContent = `${workspace.root} · read-only · ${verified ? "verified" : "not verified"}`;
-        copy.append(title, detail);
-        const actions = document.createElement("span");
-        actions.className = "workspace-actions";
-        const verify = document.createElement("button");
-        verify.type = "button";
-        verify.textContent = verified ? "Recheck" : "Verify";
-        verify.addEventListener("click", () => {
-          void configureProduct(
-            {
-              kind: "computer.verify-workspace",
-              workspaceId: workspace.workspaceId,
-            },
-            `${workspace.label} read access verified.`,
-          );
-        });
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.textContent = "Remove";
-        remove.addEventListener("click", () => {
-          void configureProduct(
-            {
-              kind: "computer.remove-workspace",
-              workspaceId: workspace.workspaceId,
-            },
-            `${workspace.label} approval removed.`,
-          );
-        });
-        actions.append(verify, remove);
-        row.append(copy, actions);
-
-        const policy = document.createElement("div");
-        policy.className = "workspace-policy";
-        const exclusionLabel = document.createElement("label");
-        exclusionLabel.textContent = "Excluded paths";
-        const exclusionInput = document.createElement("input");
-        exclusionInput.type = "text";
-        exclusionInput.placeholder = "private, build/secrets.txt";
-        exclusionInput.setAttribute(
-          "aria-label",
-          `Excluded paths for ${workspace.label}`,
-        );
-        const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
-        exclusionInput.value = workspace.excludedPaths
-          .flatMap((excluded) =>
-            excluded.startsWith(prefix) ? [excluded.slice(prefix.length)] : [],
-          )
-          .join(", ");
-        exclusionLabel.append(exclusionInput);
-        const saveExclusions = document.createElement("button");
-        saveExclusions.type = "button";
-        saveExclusions.textContent = "Save exclusions";
-        saveExclusions.addEventListener("click", () => {
-          const excludedPaths = exclusionInput.value
-            .split(/[\n,]/u)
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.length > 0);
-          const command = ProductConfigurationCommandSchema.safeParse({
-            kind: "computer.update-exclusions",
-            workspaceId: workspace.workspaceId,
-            excludedPaths,
-          });
-          if (!command.success) {
-            settingsFeedback =
-              "Exclusions must be unique relative paths without dot segments.";
-            settingsFeedbackError = true;
-            render();
-            return;
-          }
-          void configureProduct(
-            command.data,
-            `${workspace.label} exclusions saved and read back.`,
-          );
-        });
-        policy.append(exclusionLabel, saveExclusions);
-        card.append(row, policy);
-
-        const query = document.createElement("div");
-        query.className = "workspace-query";
-        const listRoot = document.createElement("button");
-        listRoot.type = "button";
-        listRoot.textContent = "List root";
-        listRoot.disabled = !verified;
-        listRoot.title = verified
-          ? "List the visible entries at this workspace root"
-          : "Verify this workspace first";
-        listRoot.addEventListener("click", () => {
-          void configureProduct(
-            {
-              kind: "computer.list-workspace",
-              workspaceId: workspace.workspaceId,
-              relativePath: ".",
-            },
-            `${workspace.label} root listed.`,
-          );
-        });
-        const searchLabel = document.createElement("label");
-        searchLabel.textContent = "Search workspace";
-        const searchInput = document.createElement("input");
-        searchInput.type = "search";
-        searchInput.maxLength = 160;
-        searchInput.placeholder = "Exact text pattern";
-        searchInput.setAttribute("aria-label", `Search ${workspace.label}`);
-        searchInput.disabled = !verified;
-        searchLabel.append(searchInput);
-        const search = document.createElement("button");
-        search.type = "button";
-        search.textContent = "Search";
-        search.disabled = true;
-        searchInput.addEventListener("input", () => {
-          search.disabled = !verified || searchInput.value.trim().length === 0;
-        });
-        search.addEventListener("click", () => {
-          const command = ProductConfigurationCommandSchema.safeParse({
-            kind: "computer.search-workspace",
-            workspaceId: workspace.workspaceId,
-            relativePath: ".",
-            pattern: searchInput.value.trim(),
-          });
-          if (!command.success) return;
-          void configureProduct(
-            command.data,
-            `${workspace.label} search completed.`,
-          );
-        });
-        query.append(listRoot, searchLabel, search);
-        card.append(query);
-
-        if (workspaceEvidence?.workspaceId === workspace.workspaceId) {
-          const evidence = document.createElement("section");
-          evidence.className =
-            workspaceEvidence.kind === "computer.workspace-read"
-              ? "workspace-read-evidence"
-              : "workspace-query-evidence";
-          const heading = document.createElement("strong");
-          if (workspaceEvidence.kind === "computer.workspace-read") {
-            heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes${workspaceEvidence.truncated ? " · preview truncated" : ""}`;
-            const preview = document.createElement("pre");
-            preview.textContent = workspaceEvidence.text;
-            evidence.append(heading, preview);
-          } else if (workspaceEvidence.kind === "computer.workspace-list") {
-            heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.entries.length} visible ${workspaceEvidence.entries.length === 1 ? "entry" : "entries"}${workspaceEvidence.truncated ? " · result limited" : ""}`;
-            const entries = document.createElement("ul");
-            for (const entry of workspaceEvidence.entries) {
-              const item = document.createElement("li");
-              item.textContent = entry;
-              entries.append(item);
-            }
-            evidence.append(heading, entries);
-          } else {
-            heading.textContent = `Search · ${workspaceEvidence.matches.length} ${workspaceEvidence.matches.length === 1 ? "match" : "matches"}${workspaceEvidence.resultLimited || workspaceEvidence.scanLimited ? " · result limited" : ""}`;
-            const matches = document.createElement("ol");
-            for (const match of workspaceEvidence.matches) {
-              const item = document.createElement("li");
-              const location = document.createElement("code");
-              location.textContent = `${match.path}:${match.line}`;
-              const text = document.createElement("span");
-              text.textContent = match.text;
-              item.append(location, text);
-              matches.append(item);
-            }
-            evidence.append(heading, matches);
-          }
-          card.append(evidence);
-        }
-        return card;
-      }),
-    );
-  }
+  const workspaceCount = settings.computer.workspaces.length;
+  computerSummary.textContent = `${settings.computer.name} · ${workspaceCount} approved ${workspaceCount === 1 ? "workspace" : "workspaces"} · ${readinessDetail(computerState)}`;
 
   const connectionStates: readonly [string, Readiness][] = [
     ["ChatGPT", settings.setup.chatgpt],
@@ -1876,6 +1959,10 @@ async function start(): Promise<void> {
       void configureProduct(command.data, "General settings applied.");
     },
   );
+  required<HTMLButtonElement>("#open-computer-settings").addEventListener(
+    "click",
+    () => selectSection("computer"),
+  );
   required<HTMLButtonElement>("#save-computer-name").addEventListener(
     "click",
     () => {
@@ -1885,6 +1972,7 @@ async function start(): Promise<void> {
         name,
       });
       if (!command.success) {
+        settingsFeedbackSurface = "computer";
         settingsFeedback = "Computer name must contain 1–80 characters.";
         settingsFeedbackError = true;
         render();
