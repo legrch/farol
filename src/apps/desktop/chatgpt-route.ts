@@ -203,6 +203,7 @@ export class ChatGptRoute {
   private load: "failed" | "loaded" = "failed";
   private disposing = false;
   private taskInFlight = false;
+  private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
   private displayTitle: string;
 
@@ -221,6 +222,7 @@ export class ChatGptRoute {
   }
 
   async open(): Promise<ChatGptOpenResult> {
+    if (this.opening) return this.opening;
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
       if (this.routeWindow.isMinimized()) this.routeWindow.restore();
       this.routeWindow.show();
@@ -228,6 +230,16 @@ export class ChatGptRoute {
       return { status: this.load === "loaded" ? "opened" : "unreachable" };
     }
 
+    const opening = this.openRouteWindow();
+    this.opening = opening;
+    try {
+      return await opening;
+    } finally {
+      if (this.opening === opening) this.opening = null;
+    }
+  }
+
+  private async openRouteWindow(): Promise<ChatGptOpenResult> {
     const parent = this.options.parent();
     const restoreParent = parent?.isVisible() ?? false;
     const routeSession = session.fromPartition(CHATGPT_PARTITION, {
