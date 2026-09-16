@@ -36,10 +36,11 @@ import {
 } from "./setup-journey";
 
 const bootstrapSchema = z.strictObject({
-  schema: z.literal(2),
+  schema: z.literal(3),
   productName: z.literal("Farol Next Preview"),
   bundleId: z.literal("local.farol.next.preview"),
   build: BuildIdentitySchema,
+  demoMode: z.boolean(),
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   runtimeError: z.string().nullable(),
@@ -337,7 +338,13 @@ function renderBrowser(): void {
   const mark = required<HTMLElement>("#browser-state-mark");
   const surfaceFailed =
     taskSurfaceStatuses.get(selectedTaskId)?.state === "failed";
-  if (surfaceFailed) {
+  if (bootstrap.runtimeState === "ready" && bootstrap.tasks.length === 0) {
+    loading.dataset.state = "empty";
+    mark.className = "state-lamp unavailable";
+    title.textContent = "No tasks yet";
+    detail.textContent =
+      "Complete Setup and connect a supported route to create the first real task.";
+  } else if (surfaceFailed) {
     loading.dataset.state = "failed";
     mark.className = "state-lamp failed";
     title.textContent = "Selected task surface is unavailable";
@@ -474,6 +481,17 @@ function renderSignals(): void {
 
 function renderDossier(): void {
   const task = taskById(selectedTaskId);
+  const finish = required<HTMLButtonElement>("#finish-demo");
+  const route = required<HTMLButtonElement>("#dossier-route");
+  const taskMenuComputer = required<HTMLButtonElement>("#task-menu-computer");
+  if (!task) {
+    finish.hidden = true;
+    finish.disabled = true;
+    route.hidden = true;
+    route.disabled = true;
+    taskMenuComputer.disabled = true;
+    return;
+  }
   const state = taskState(selectedTaskId);
   const stateElement = required<HTMLDivElement>("#dossier-state");
   required<HTMLElement>("#dossier-state .state-lamp").className =
@@ -489,8 +507,6 @@ function renderDossier(): void {
         ? "No request"
         : "Unavailable";
 
-  const finish = required<HTMLButtonElement>("#finish-demo");
-  const route = required<HTMLButtonElement>("#dossier-route");
   const canFinish =
     state.tone === "running" &&
     bootstrap.runtimeState === "ready" &&
@@ -506,8 +522,7 @@ function renderDossier(): void {
         ? "Open Settings <span>›</span>"
         : "Open Activity <span>›</span>";
 
-  required<HTMLButtonElement>("#task-menu-computer").disabled =
-    !unresolvedComputerRequest(selectedTaskId);
+  taskMenuComputer.disabled = !unresolvedComputerRequest(selectedTaskId);
 }
 
 function pendingComputerTask(): PreviewTask | null {
@@ -537,10 +552,14 @@ function renderComputer(): void {
     : "No selected request";
   required("#computer-title").textContent = waitingTask
     ? "Inspect synthetic fixture status"
-    : "Synthetic fixture only";
+    : bootstrap.tasks.length === 0
+      ? "No Computer request"
+      : "Synthetic fixture only";
   required("#computer-detail").textContent = waitingTask
     ? "Target: fixture workspace status. This admitted preview task exposes no path, file content, command, screenshot, or account state."
-    : "This preview cannot read files or run commands on your Mac.";
+    : bootstrap.tasks.length === 0
+      ? "Computer opens only from a correlated task request. Workspace approval alone never starts an action."
+      : "This demo cannot read files or run commands on your Mac.";
 }
 
 function renderActivity(): void {
@@ -1096,7 +1115,16 @@ function renderOverlayState(): void {
 }
 
 function render(notify = true): void {
-  document.documentElement.dataset.section = section;
+  const root = document.documentElement;
+  root.dataset.section = section;
+  root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
+  required("#window-mode").textContent = bootstrap.demoMode
+    ? "Explicit demo · synthetic provider"
+    : "Local preview · no task route configured";
+  const newTask = required<HTMLButtonElement>("#new-task");
+  newTask.title = bootstrap.demoMode
+    ? "Unavailable in explicit demo mode"
+    : "Unavailable until a task route is configured";
   document.querySelectorAll<HTMLElement>(".nav-item").forEach((item) => {
     const active = item.dataset.section === section;
     item.classList.toggle("active", active);
@@ -1219,7 +1247,12 @@ function applyTaskSurfaceStatus(status: TaskSurfaceStatus): void {
 }
 
 function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {
-  if (!taskById(layout.taskId)) return;
+  if (
+    bootstrap.tasks.length === 0
+      ? layout.taskId !== ""
+      : !taskById(layout.taskId)
+  )
+    return;
   section = layout.section;
   selectedTaskId = layout.taskId;
   setupJourney = { ...setupJourney, open: layout.setupOpen };
@@ -1538,6 +1571,7 @@ async function start(): Promise<void> {
       if (next) selectSection(next);
     } else if (event.ctrlKey && event.key === "Tab") {
       event.preventDefault();
+      if (bootstrap.tasks.length === 0) return;
       const index = bootstrap.tasks.findIndex(
         (task) => task.taskId === selectedTaskId,
       );

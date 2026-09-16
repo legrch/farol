@@ -6,24 +6,22 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 
 ## What runs
 
-- one Electron shell with two real `WebContentsView` task surfaces;
+- one Electron shell that starts with no tasks on an ordinary launch;
 - one Electron utility process with an OS-allocated loopback HTTP/SSE endpoint,
   task-scoped read capabilities and a separate main-process control capability;
-- two independent scripted local-provider sessions;
-- one bounded typed `workspace.read` fixture round-trip that returns to the exact
-  owner/session/task/Turn/generation/call;
+- an explicit `--demo` mode with two independent scripted local-provider sessions,
+  two real `WebContentsView` surfaces and one bounded fixture Computer round-trip;
 - one mandatory five-step first-run Setup journey, available again from Settings,
   which reports every preview-only or unavailable integration explicitly;
 - the owner-selected Watch Rail shell with Iris selection/next-action accents,
   shape-and-text task signals, a 216 px sidebar / 72 px rail, and packaged Geist;
 - content-free Activity and explicit provider/runtime failure states.
 
-The provider and the Computer selected by the product preview are labelled local
-fixtures. Separately, the packaged `computer-mcp` entrypoint implements MCP v2 over
-stdio and exercises descriptor-relative read-only access against approved temporary
-workspace trees in both development and sealed-package E2E. It is not registered
-with a host or selected by the product UI, so this is native boundary evidence rather
-than a live native-Computer claim. A live provider, native Agent creation, writes,
+Ordinary Setup and Settings can select a real folder with the native picker, persist
+that approval privately, and verify a descriptor-relative read-only root listing
+through the packaged helper. This is local boundary verification, not a task action
+or a live native-Computer claim. The explicit demo provider and Computer are labelled
+fixtures. A live provider, Next-owned Computer route, native Agent creation, writes,
 commands and network authority remain unavailable.
 
 The N2 authority core now derives a task-bound `TaskGrant`, preserves it through
@@ -63,6 +61,13 @@ The canonical owner command is:
 
 ```bash
 task next:run
+```
+
+It opens the ordinary product shell with zero synthetic tasks. The retained fixture
+journey is explicit:
+
+```bash
+task next:run -- --demo
 ```
 
 The verified packaged candidate workflow copies the existing package into a private
@@ -107,6 +112,8 @@ Launch the exact built development preview through the pinned Electron runtime:
 ```bash
 npm --prefix vnext run preview
 ```
+
+Pass `-- --demo` only when deliberately exercising the development fixture.
 
 After `task next:package`, use only the canonical command above. Running the executable
 inside `dist/package` directly bypasses source, manifest, resource, and digest

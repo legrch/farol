@@ -8,6 +8,13 @@ From the repository root:
 task next:run
 ```
 
+An ordinary launch starts with no synthetic tasks. To exercise the retained fixture
+deliberately, use:
+
+```bash
+task next:run -- --demo
+```
+
 This command does not build. It verifies that the committed `vnext/` source identity
 matches `vnext/dist/package/artifact.json`, copies the candidate into a private unique
 temporary launch snapshot, verifies that final launch path, and launches only those
@@ -36,9 +43,12 @@ is not evidence about the packaged candidate.
 
 ## What the controls do
 
-- Setup states the current boundary: the local runtime and Browser fixture work;
-  live ChatGPT, native Computer, native Agent, and filesystem access do not.
-- Both task tabs are fixed synthetic demos. They are not an owner task registry.
+- Setup and Settings can persist an approved read-only folder and verify its root
+  listing through the packaged native helper. That verification is not a task action.
+- Ordinary launch has no task tabs. It does not manufacture activity or imply a live
+  provider, Computer route, Codex host, or Agent.
+- With the explicit `--demo` flag, both task tabs are fixed synthetic fixtures. They
+  are not an owner task registry.
 - `Allow once` releases one synthetic Computer response for whichever demo task is
   actually waiting. It cannot read a path or run a command.
 - `Finish demo response` lets the selected scripted response reach its terminal state.
@@ -60,8 +70,9 @@ build is refused instead of silently opening the already-running bytes. A launch
 arrives while the primary is still starting waits for the same initialization promise;
 it is acknowledged only after the runtime, task views, and streams are ready. ACK files
 are published complete through a private temporary file and an exclusive atomic link.
-`Command+Q` quits the application and its exact utility process. The demo state is in
-memory and is not promised across Quit.
+`Command+Q` quits the application and its exact utility process. Explicit demo task
+state is in memory and is not promised across Quit; product configuration is persisted
+and read back separately.
 
 ## Product boundary
 

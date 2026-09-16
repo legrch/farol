@@ -41,6 +41,14 @@ describe("primary startup coordination", () => {
       primaryStartupReady({
         runtimeState: "ready",
         windowReady: true,
+        taskViewCount: 0,
+        expectedTaskViewCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      primaryStartupReady({
+        runtimeState: "ready",
+        windowReady: true,
         taskViewCount: 2,
         expectedTaskViewCount: 2,
       }),

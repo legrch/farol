@@ -511,11 +511,15 @@ function assertVisibleWindowPlacement(presentation) {
   );
 }
 
-async function waitForWindowPresentation(application, windowMode) {
+async function waitForWindowPresentation(
+  application,
+  windowMode,
+  expectedTaskViewCount = 2,
+) {
   let last = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     last = await inspectWindowPresentation(application);
-    if (last.taskViewCount === 2) {
+    if (last.taskViewCount === expectedTaskViewCount) {
       if (windowMode === "hidden") {
         await new Promise((resolve) => setTimeout(resolve, 50));
         last = await inspectWindowPresentation(application);
@@ -537,7 +541,7 @@ async function waitForWindowPresentation(application, windowMode) {
   );
 }
 
-async function launch(extraArgs = [], windowMode = "hidden") {
+async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
@@ -552,6 +556,7 @@ async function launch(extraArgs = [], windowMode = "hidden") {
   );
   const launchArgs = [
     ...launchPrefix,
+    ...(mode === "demo" ? ["--demo"] : []),
     `--user-data-dir=${userData}`,
     `--preview-window-mode=${windowMode}`,
     ...extraArgs,
@@ -571,17 +576,29 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     timeout: 15_000,
   });
   const window = await application.firstWindow({ timeout: 15_000 });
+  await window.locator("#sidebar").waitFor({ state: "visible" });
   await window
-    .locator("#task-tabs .task-tab")
-    .first()
+    .locator('#runtime-pill[data-state="ready"]')
     .waitFor({ state: "visible" });
-  const presentation = await waitForWindowPresentation(application, windowMode);
+  if (mode === "demo") {
+    await window
+      .locator("#task-tabs .task-tab")
+      .first()
+      .waitFor({ state: "visible" });
+  }
+  const expectedTaskViewCount = mode === "demo" ? 2 : 0;
+  const presentation = await waitForWindowPresentation(
+    application,
+    windowMode,
+    expectedTaskViewCount,
+  );
   return {
     application,
     window,
     isolatedHome,
     userData,
     workspaceRoot,
+    expectedTaskViewCount,
     windowMode,
     presentation,
     launchArgs,
@@ -597,6 +614,7 @@ async function proveSecondLaunchDuringStartup() {
   const windowMode = "hidden";
   const launchArgs = [
     ...launchPrefix,
+    "--demo",
     `--user-data-dir=${userData}`,
     `--preview-window-mode=${windowMode}`,
     "--preview-startup-delay-ms=1500",
@@ -664,6 +682,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   const launchArgs = [
     ...launchPrefix,
+    "--demo",
     `--user-data-dir=${userData}`,
     "--preview-window-mode=hidden",
     "--preview-startup-delay-ms=500",
@@ -930,6 +949,7 @@ async function restart(instance) {
   instance.presentation = await waitForWindowPresentation(
     instance.application,
     instance.windowMode,
+    instance.expectedTaskViewCount,
   );
 }
 
@@ -942,6 +962,7 @@ async function proveStartupRuntimeDeath(stage) {
     executablePath: executable,
     args: [
       ...launchPrefix,
+      "--demo",
       `--user-data-dir=${userData}`,
       "--preview-window-mode=hidden",
     ],
@@ -1500,6 +1521,50 @@ cases.push("second-launch-waits-for-complete-primary-startup");
 await proveSecondLaunchRejectsFailedStartup();
 cases.push("second-launch-rejects-failed-primary-startup");
 
+const ordinary = await launch([], "hidden", "ordinary");
+try {
+  const ordinaryBootstrap = await ordinary.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(ordinaryBootstrap.demoMode, false);
+  assert.deepEqual(ordinaryBootstrap.tasks, []);
+  assert.equal((await taskSurfaces(ordinary.application)).length, 0);
+  const ordinarySnapshot = await ordinary.window.evaluate(() =>
+    window.farolNext.snapshot(),
+  );
+  assert.deepEqual(ordinarySnapshot.tasks, []);
+  assert.equal(
+    await ordinary.window.evaluate(
+      () => document.documentElement.dataset.hasTasks,
+    ),
+    "false",
+  );
+  assert.equal(
+    await ordinary.window.locator("#browser-state-title").innerText(),
+    "No tasks yet",
+  );
+  const emptyGeometry = await ordinary.window.evaluate(() =>
+    [".task-bar", ".dossier", ".surface"].map((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) throw new Error(`EMPTY_GEOMETRY_MISSING:${selector}`);
+      const bounds = element.getBoundingClientRect();
+      return {
+        selector,
+        y: Math.round(bounds.y),
+        height: Math.round(bounds.height),
+      };
+    }),
+  );
+  assert.deepEqual(emptyGeometry, [
+    { selector: ".task-bar", y: 0, height: 0 },
+    { selector: ".dossier", y: 0, height: 0 },
+    { selector: ".surface", y: 52, height: 708 },
+  ]);
+  cases.push("ordinary-launch-has-no-synthetic-tasks");
+} finally {
+  await close(ordinary);
+}
+
 const normal = await launch([], "secondary-visible");
 try {
   if (!development) {
@@ -1526,6 +1591,7 @@ try {
   const runningBootstrap = await normal.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
+  assert.equal(runningBootstrap.demoMode, true);
   assert.deepEqual(runningBootstrap.build, buildIdentity);
   assert.match(
     await normal.window.locator("#build-identity > span").innerText(),
@@ -1544,6 +1610,7 @@ try {
     new RegExp(`^${buildIdentity.buildId}`, "u"),
   );
   cases.push("running-build-version-and-time");
+  cases.push("explicit-demo-retains-synthetic-fixtures");
   const runtimeLabel = await normal.window.locator("#runtime-pill").innerText();
   if (!runtimeLabel.includes("Local runtime")) {
     await normal.window.locator('[data-section="settings"]').click();

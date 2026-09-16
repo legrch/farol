@@ -17,11 +17,15 @@ async function main(): Promise<void> {
   const parsedScenario = scenarioSchema.safeParse(
     process.env.FAROL_NEXT_PREVIEW_SCENARIO,
   );
+  const parsedMode = z
+    .enum(["empty", "demo"])
+    .safeParse(process.env.FAROL_NEXT_PREVIEW_MODE);
   if (parsedScenario.data === "startup-failure") {
     throw new Error("RUNTIME_START_FAILURE_FIXTURE");
   }
   const runtime = await startPreviewRuntime(
     parsedScenario.success ? parsedScenario.data : "normal",
+    parsedMode.success ? parsedMode.data : "empty",
   );
 
   runtimeParentPort.postMessage({

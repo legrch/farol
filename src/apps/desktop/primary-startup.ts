@@ -27,7 +27,8 @@ export function primaryStartupReady(state: {
   return (
     state.runtimeState === "ready" &&
     state.windowReady &&
-    state.expectedTaskViewCount > 0 &&
+    Number.isSafeInteger(state.expectedTaskViewCount) &&
+    state.expectedTaskViewCount >= 0 &&
     state.taskViewCount === state.expectedTaskViewCount
   );
 }

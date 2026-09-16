@@ -92,8 +92,24 @@ describe("actual loopback SSE runtime", () => {
     runtime = null;
   });
 
-  it("streams before completion and correlates the fixture Computer round-trip", async () => {
+  it("starts the ordinary runtime without synthetic demo tasks", async () => {
     runtime = await startPreviewRuntime("normal");
+    const base = `http://127.0.0.1:${runtime.port}`;
+    const headers = { authorization: `Bearer ${runtime.token}` };
+
+    expect(runtime.tasks).toEqual([]);
+    const manifest = await fetch(`${base}/manifest`, { headers });
+    await expect(manifest.json()).resolves.toMatchObject({
+      identity: "farol-next-preview-runtime",
+      mode: "empty",
+      tasks: [],
+    });
+    const snapshot = await fetch(`${base}/snapshot`, { headers });
+    await expect(snapshot.json()).resolves.toMatchObject({ tasks: [] });
+  });
+
+  it("streams before completion and correlates the fixture Computer round-trip", async () => {
+    runtime = await startPreviewRuntime("normal", "demo");
     const base = `http://127.0.0.1:${runtime.port}`;
     const headers = { authorization: `Bearer ${runtime.token}` };
 
@@ -220,7 +236,7 @@ describe("actual loopback SSE runtime", () => {
   });
 
   it("keeps the second task independent and makes controls one-shot", async () => {
-    runtime = await startPreviewRuntime("normal");
+    runtime = await startPreviewRuntime("normal", "demo");
     const base = `http://127.0.0.1:${runtime.port}`;
     const headers = { authorization: `Bearer ${runtime.token}` };
     const response = await fetch(`${base}/events/task-harbor`, {
@@ -260,7 +276,7 @@ describe("actual loopback SSE runtime", () => {
   });
 
   it("fails one task stream without stopping the other task or runtime", async () => {
-    runtime = await startPreviewRuntime("stream-failure" as never);
+    runtime = await startPreviewRuntime("stream-failure", "demo");
     const base = `http://127.0.0.1:${runtime.port}`;
     const headers = { authorization: `Bearer ${runtime.token}` };
     for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -315,7 +331,7 @@ describe("actual loopback SSE runtime", () => {
   });
 
   it("does not let one task read or control another task", async () => {
-    runtime = await startPreviewRuntime("normal");
+    runtime = await startPreviewRuntime("normal", "demo");
     const base = `http://127.0.0.1:${runtime.port}`;
     const taskAHeaders = taskHeaders(runtime, "task-atlantic");
 
@@ -337,7 +353,7 @@ describe("actual loopback SSE runtime", () => {
   });
 
   it("rejects a stale or incomplete Computer approval correlation", async () => {
-    runtime = await startPreviewRuntime("normal");
+    runtime = await startPreviewRuntime("normal", "demo");
     const base = `http://127.0.0.1:${runtime.port}`;
     const headers = {
       authorization: `Bearer ${runtime.token}`,
@@ -352,7 +368,7 @@ describe("actual loopback SSE runtime", () => {
   });
 
   it("cancels pending work during shutdown without converting it to approval", async () => {
-    runtime = await startPreviewRuntime("normal");
+    runtime = await startPreviewRuntime("normal", "demo");
     const base = `http://127.0.0.1:${runtime.port}`;
     const response = await fetch(`${base}/events/task-atlantic`, {
       headers: taskHeaders(runtime, "task-atlantic"),

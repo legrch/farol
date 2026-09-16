@@ -43,9 +43,13 @@ async function main() {
   if (process.env.FAROL_NEXT_OWNER_LAUNCH !== "1") {
     throw new Error("use the canonical owner command 'task next:run'");
   }
-  if (process.argv.length !== 2) {
+  const launchArguments = process.argv.slice(2);
+  if (
+    launchArguments.length > 1 ||
+    (launchArguments.length === 1 && launchArguments[0] !== "--demo")
+  ) {
     throw new Error(
-      "task next:run accepts no launch flags; use task next:preview for development",
+      "task next:run accepts only the explicit '--demo' launch flag",
     );
   }
 
@@ -115,7 +119,7 @@ async function main() {
 
     const resultCollector = createOwnerLaunchResultCollector();
     let protocolError = null;
-    const child = spawn(executable, [], {
+    const child = spawn(executable, launchArguments, {
       cwd: root,
       env: environment,
       stdio: ["inherit", "pipe", "pipe"],

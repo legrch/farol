@@ -82,6 +82,7 @@ const startupDelayMs = previewStartupDelay(
   process.argv,
   process.env.FAROL_NEXT_E2E === "1",
 );
+const demoMode = process.argv.includes("--demo");
 const windowMode = parsePreviewWindowMode(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
 const demoTasks = [
@@ -104,6 +105,7 @@ const demoTasks = [
     hasComputer: false,
   },
 ] as const;
+const expectedTasks = demoMode ? demoTasks : [];
 
 const readySchema = z.strictObject({
   kind: z.literal("runtime.ready"),
@@ -141,7 +143,7 @@ let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
 let runtimeError: string | null = null;
 let runtimeStopping = false;
 let section: SurfaceSection = "browser";
-let selectedTaskId: string = demoTasks[0].taskId;
+let selectedTaskId: string = expectedTasks[0]?.taskId ?? "";
 let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
@@ -161,10 +163,11 @@ function runtimeBase(): string | null {
 
 function bootstrap() {
   return {
-    schema: 2,
+    schema: 3,
     productName,
     bundleId,
     build: buildIdentity,
+    demoMode,
     configuration: configuration?.snapshot() ?? {
       status: "error",
       error: "SETTINGS_READ_FAILED",
@@ -174,7 +177,7 @@ function bootstrap() {
     runtimeIdentity: runtime?.identity ?? null,
     embeddedNode: runtime?.embeddedNode ?? null,
     embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
-    tasks: (runtime?.tasks ?? demoTasks).map(
+    tasks: (runtime?.tasks ?? expectedTasks).map(
       ({ ownerId: _ownerId, generation: _generation, ...task }) => {
         const { readToken: _readToken, ...safeTask } = task as typeof task & {
           readToken?: string;
@@ -377,7 +380,9 @@ function focusForLayout(): void {
     window.webContents.focus();
     return;
   }
-  taskViews.get(selectedTaskId)?.webContents.focus();
+  const selected = taskViews.get(selectedTaskId);
+  if (selected) selected.webContents.focus();
+  else window.webContents.focus();
 }
 
 function requestQuickSwitcher(): void {
@@ -553,6 +558,7 @@ async function startRuntime(): Promise<void> {
           : process.argv.includes("--preview-failure")
             ? "failure"
             : "normal",
+      FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
     },
     serviceName: "Farol Next Runtime",
     stdio: "ignore",
@@ -583,9 +589,9 @@ async function startRuntime(): Promise<void> {
         const parsed = readySchema.safeParse(message);
         if (!parsed.success || settled) return;
         const exactTasks =
-          parsed.data.tasks.length === demoTasks.length &&
+          parsed.data.tasks.length === expectedTasks.length &&
           parsed.data.tasks.every((task, index) => {
-            const expected = demoTasks[index];
+            const expected = expectedTasks[index];
             return (
               expected !== undefined &&
               task.ownerId === expected.ownerId &&
@@ -656,11 +662,13 @@ function handleShortcut(input: Input): boolean {
     closeShellOverlay();
     return true;
   }
-  const index = demoTasks.findIndex((task) => task.taskId === selectedTaskId);
   if (input.control && input.key === "Tab") {
+    const tasks = runtime?.tasks ?? expectedTasks;
+    if (tasks.length === 0) return false;
+    const index = tasks.findIndex((task) => task.taskId === selectedTaskId);
     const direction = input.shift ? -1 : 1;
-    const next = (index + direction + demoTasks.length) % demoTasks.length;
-    selectedTaskId = demoTasks[next]?.taskId ?? selectedTaskId;
+    const next = (index + direction + tasks.length) % tasks.length;
+    selectedTaskId = tasks[next]?.taskId ?? selectedTaskId;
     section = "browser";
     if (sidebarMode === "overlay") sidebarMode = "rail";
     shellOverlay = "none";
@@ -857,7 +865,7 @@ function installIpc(): void {
     const parsed = controlSchema.safeParse(value);
     if (
       !parsed.success ||
-      !demoTasks.some((task) => task.taskId === parsed.data.taskId)
+      !expectedTasks.some((task) => task.taskId === parsed.data.taskId)
     ) {
       return { error: "IPC_CONTROL_INVALID" };
     }
@@ -894,7 +902,9 @@ function installIpc(): void {
     const parsed = ShellLayoutSchema.safeParse(value);
     if (
       !parsed.success ||
-      !demoTasks.some((task) => task.taskId === parsed.data.taskId)
+      (expectedTasks.length === 0
+        ? parsed.data.taskId !== ""
+        : !expectedTasks.some((task) => task.taskId === parsed.data.taskId))
     )
       return;
     const focusTargetChanged =
@@ -1015,7 +1025,7 @@ function isPrimaryReady(): boolean {
     runtimeState,
     windowReady: window !== null && !window.isDestroyed(),
     taskViewCount: taskViews.size,
-    expectedTaskViewCount: demoTasks.length,
+    expectedTaskViewCount: expectedTasks.length,
   });
 }
 
