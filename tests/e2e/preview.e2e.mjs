@@ -1530,6 +1530,28 @@ try {
     await normal.window.evaluate(() => document.activeElement?.id),
     "command-search",
   );
+  const commandSearch = normal.window.locator("#command-search");
+  await commandSearch.press("ArrowDown");
+  assert.equal(
+    await normal.window
+      .locator("#command-results button.is-selected")
+      .getAttribute("data-command-id"),
+    "section:computer",
+  );
+  await commandSearch.fill("no command can match this phrase");
+  assert.equal(
+    await normal.window.locator("#command-results button").count(),
+    0,
+  );
+  await commandSearch.press("Enter");
+  await normal.window.locator("#command-dialog").waitFor({ state: "visible" });
+  await commandSearch.fill("");
+  assert.equal(
+    await normal.window
+      .locator("#command-results button.is-selected")
+      .getAttribute("data-command-id"),
+    "section:browser",
+  );
   await waitForTaskSurface(
     normal.application,
     "task-atlantic",
@@ -1857,6 +1879,7 @@ try {
     "sidebar-native-menu-and-shortcut",
     "compact-sidebar-overlay-hides-native-page",
     "task-menu-hides-native-page",
+    "quick-switcher-keyboard-navigation",
     "inactive-window-appearance",
     "geist-resource-loaded",
     "setup-hides-native-page",

@@ -683,6 +683,22 @@ function renderCommands(filter = ""): void {
   );
 }
 
+function moveCommandSelection(direction: -1 | 1): void {
+  const buttons = [
+    ...document.querySelectorAll<HTMLButtonElement>("#command-results button"),
+  ];
+  if (buttons.length === 0) return;
+  const selected = buttons.findIndex((button) =>
+    button.classList.contains("is-selected"),
+  );
+  const next =
+    (Math.max(selected, 0) + direction + buttons.length) % buttons.length;
+  buttons.forEach((button, index) =>
+    button.classList.toggle("is-selected", index === next),
+  );
+  buttons[next]?.scrollIntoView({ block: "nearest" });
+}
+
 function renderOverlayState(): void {
   const mode = sidebarMode();
   const root = document.documentElement;
@@ -987,9 +1003,16 @@ async function start(): Promise<void> {
   required<HTMLInputElement>("#command-search").addEventListener(
     "keydown",
     (event) => {
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        moveCommandSelection(event.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
       if (event.key !== "Enter") return;
       event.preventDefault();
-      required<HTMLButtonElement>("#command-results button").click();
+      document
+        .querySelector<HTMLButtonElement>("#command-results button.is-selected")
+        ?.click();
     },
   );
   required<HTMLButtonElement>("#approve-tool").addEventListener(
