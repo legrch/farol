@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -723,11 +723,43 @@ async function stopChatGptFixture(fixture) {
   });
 }
 
-async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
+async function launch(
+  extraArgs = [],
+  windowMode = "hidden",
+  mode = "demo",
+  options = {},
+) {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  let seededChatGptOperationId = null;
+  if (options.seedChatGptDispatchIntent === true) {
+    seededChatGptOperationId = randomUUID();
+    const stateRoot = path.join(userData, "farol-next-state");
+    const journalRoot = path.join(stateRoot, "chatgpt-task-journal");
+    await fs.mkdir(journalRoot, { recursive: true, mode: 0o700 });
+    await fs.chmod(stateRoot, 0o700);
+    await fs.chmod(journalRoot, 0o700);
+    const timestamp = new Date().toISOString();
+    await fs.writeFile(
+      path.join(journalRoot, "chatgpt-task-journal.json"),
+      `${JSON.stringify(
+        {
+          schema: 1,
+          operationId: seededChatGptOperationId,
+          kind: "readonly",
+          phase: "dispatch_intent",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          result: null,
+        },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+  }
   const workspacePath = path.join(isolatedHome, "approved-workspace");
   await fs.mkdir(workspacePath, { mode: 0o700 });
   const workspaceRoot = await fs.realpath(workspacePath);
@@ -817,7 +849,31 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     launchArgs,
     launchEnvironment,
     chatGptFixture,
+    seededChatGptOperationId,
   };
+}
+
+async function waitForChatGptJournalPhase(userData, phase) {
+  const journalPath = path.join(
+    userData,
+    "farol-next-state",
+    "chatgpt-task-journal",
+    "chatgpt-task-journal.json",
+  );
+  let last = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const serialized = await fs.readFile(journalPath, "utf8");
+      last = { serialized, record: JSON.parse(serialized) };
+      if (last.record.phase === phase) return { journalPath, ...last };
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `E2E_CHATGPT_JOURNAL_TIMEOUT:${phase}:${JSON.stringify(last?.record ?? null)}`,
+  );
 }
 
 async function proveSecondLaunchDuringStartup() {
@@ -1902,6 +1958,54 @@ try {
   await close(ordinary);
 }
 
+const interruptedChatGptTask = await launch([], "hidden", "ordinary", {
+  seedChatGptDispatchIntent: true,
+});
+try {
+  const recoveredJournal = await waitForChatGptJournalPhase(
+    interruptedChatGptTask.userData,
+    "delivery_acknowledged",
+  );
+  assert.equal(
+    recoveredJournal.record.operationId,
+    interruptedChatGptTask.seededChatGptOperationId,
+  );
+  assert.deepEqual(recoveredJournal.record.result, {
+    state: "outcome_unknown",
+    code: "CHATGPT_TASK_INTERRUPTED_AFTER_INTENT",
+    deltaCount: 0,
+    observedCharacters: 0,
+    attachmentCount: 0,
+    totalBytes: 0,
+    stagingCleanup: null,
+  });
+  await interruptedChatGptTask.window.waitForFunction(
+    () =>
+      document
+        .querySelector("#settings-feedback")
+        ?.textContent?.includes("Nothing was submitted again") === true,
+  );
+  const recoveredBootstrap = await interruptedChatGptTask.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(recoveredBootstrap.chatgptRecoveryPending, false);
+  assert.equal(
+    recoveredBootstrap.configuration.settings.setup.chatgpt.outcomeUnknown,
+    true,
+  );
+  assert.equal(
+    recoveredBootstrap.configuration.settings.setup.chatgpt.verified,
+    null,
+  );
+  await waitForWindowCount(interruptedChatGptTask.application, 1);
+  cases.push(
+    "chatgpt-dispatch-intent-restart-no-resubmit",
+    "chatgpt-recovered-result-delivery-acknowledged",
+  );
+} finally {
+  await close(interruptedChatGptTask);
+}
+
 const normal = await launch([], "secondary-visible");
 try {
   if (!development) {
@@ -2482,6 +2586,37 @@ try {
     ),
     [],
   );
+  const acknowledgedTaskJournal = await waitForChatGptJournalPhase(
+    normal.userData,
+    "delivery_acknowledged",
+  );
+  assert.deepEqual(acknowledgedTaskJournal.record.result, {
+    state: "completed",
+    code: null,
+    deltaCount: acknowledgedTaskJournal.record.result.deltaCount,
+    observedCharacters:
+      acknowledgedTaskJournal.record.result.observedCharacters,
+    attachmentCount: 2,
+    totalBytes:
+      (await fs.stat(normal.attachmentImage)).size +
+      (await fs.stat(normal.attachmentDocument)).size,
+    stagingCleanup: "removed",
+  });
+  assert.ok(acknowledgedTaskJournal.record.result.deltaCount >= 1);
+  assert.ok(acknowledgedTaskJournal.record.result.observedCharacters > 0);
+  assert.doesNotMatch(
+    acknowledgedTaskJournal.serialized,
+    /evidence\.png|notes\.md|README\.md|approved-workspace|attachment document fixture|workspace verification fixture|Bearer|cookie|secret|token/iu,
+  );
+  assert.equal(
+    (await fs.stat(path.dirname(acknowledgedTaskJournal.journalPath))).mode &
+      0o777,
+    0o700,
+  );
+  assert.equal(
+    (await fs.stat(acknowledgedTaskJournal.journalPath)).mode & 0o777,
+    0o600,
+  );
   await attachmentTaskPage.close();
   await waitForWindowCount(normal.application, 1);
   await waitForShellVisibility(
@@ -2492,6 +2627,8 @@ try {
   cases.push(
     "chatgpt-attachment-image-and-document",
     "chatgpt-attachment-staging-cleanup",
+    "chatgpt-task-result-delivery-acknowledged",
+    "chatgpt-task-journal-content-free",
   );
   const settingsPanel = normal.window.locator('[data-panel="settings"]');
   assert.equal(await settingsPanel.locator("#computer-name").count(), 0);

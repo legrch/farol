@@ -59,6 +59,7 @@ const bootstrapSchema = z.strictObject({
   ),
   partition: z.string(),
   chatgptPartition: z.literal("persist:farol-next-chatgpt"),
+  chatgptRecoveryPending: z.boolean(),
   updateChannel: z.literal("local-preview-only"),
   nativeFilesystem: z.literal(true),
   nativeAgent: z.literal(false),
@@ -1064,6 +1065,29 @@ function renderComputerConfiguration(): void {
   );
 }
 
+async function acknowledgeChatGptTaskResult(
+  operationId: string,
+): Promise<void> {
+  const parsed = ProductConfigurationResultSchema.safeParse(
+    await window.farolNext.configure({
+      kind: "chatgpt.ack-task-result",
+      operationId,
+    }),
+  );
+  if (!parsed.success || !parsed.data.ok) {
+    settingsFeedback =
+      "The task result is visible, but its delivery acknowledgement could not be saved. It will be redelivered after restart.";
+    settingsFeedbackError = true;
+    render();
+    return;
+  }
+  bootstrap = {
+    ...bootstrap,
+    configuration: parsed.data.snapshot,
+    chatgptRecoveryPending: false,
+  };
+}
+
 async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
@@ -1147,6 +1171,7 @@ async function configureProduct(
   }
   const evidence = parsed.data.evidence;
   let evidenceError = false;
+  let taskResultToAcknowledge: string | null = null;
   if (evidence?.kind === "computer.workspace-read") {
     workspaceEvidence = evidence;
     settingsFeedback = `Read ${evidence.bytes} bytes from ${evidence.relativePath}. Nothing from the file was persisted.`;
@@ -1191,24 +1216,43 @@ async function configureProduct(
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
-        ? `Read-only task completed from ${evidence.relativePath} after ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"}. File and answer text were not persisted.`
+        ? `Read-only task completed from ${evidence.relativePath} after ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"}. File and answer text were not persisted${evidence.redelivered ? "; result receipt redelivered" : ""}.`
         : evidence.state === "outcome_unknown"
           ? `Outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
           : evidence.state === "not_authenticated"
             ? "The isolated ChatGPT session needs sign-in before this task can start."
             : `Task not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
+    if (evidence.deliveryAckRequired) {
+      taskResultToAcknowledge = evidence.operationId;
+    }
   } else if (evidence?.kind === "chatgpt.attachment-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") shellOverlay = "none";
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
-        ? `${evidence.attachmentCount} attachment${evidence.attachmentCount === 1 ? "" : "s"} delivered intact · ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"} · staging ${evidence.stagingCleanup === "removed" ? "removed" : "awaiting startup cleanup"}.`
+        ? `${evidence.attachmentCount} attachment${evidence.attachmentCount === 1 ? "" : "s"} delivered intact · ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"} · staging ${evidence.stagingCleanup === "removed" ? "removed" : "awaiting startup cleanup"}${evidence.redelivered ? " · result receipt redelivered" : ""}.`
         : evidence.state === "outcome_unknown"
           ? `Attachment task outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
           : evidence.state === "not_authenticated"
             ? "The isolated ChatGPT session needs sign-in before attachments can be sent."
             : `Attachments not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
+    if (evidence.deliveryAckRequired) {
+      taskResultToAcknowledge = evidence.operationId;
+    }
+  } else if (evidence?.kind === "chatgpt.task-recovery") {
+    evidenceError = evidence.state !== "completed";
+    settingsFeedback =
+      evidence.state === "completed"
+        ? `Recovered the previous ${evidence.taskKind} task result · ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"}. Prompt, response, paths, and attachment contents were not persisted.`
+        : evidence.state === "outcome_unknown"
+          ? `Previous ChatGPT task outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Nothing was submitted again; inspect the isolated ChatGPT window before another task.`
+          : evidence.state === "not_authenticated"
+            ? "Recovered a task that stopped before sign-in. Nothing was submitted again."
+            : `Recovered a task that failed before submit · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Nothing was submitted again.`;
+    if (evidence.deliveryAckRequired) {
+      taskResultToAcknowledge = evidence.operationId;
+    }
   } else {
     settingsFeedback = successMessage;
   }
@@ -1231,6 +1275,11 @@ async function configureProduct(
     sidebarPreference = bootstrap.configuration.settings.general.sidebarDefault;
   }
   render();
+  if (taskResultToAcknowledge) {
+    queueMicrotask(() => {
+      void acknowledgeChatGptTaskResult(taskResultToAcknowledge);
+    });
+  }
   return true;
 }
 
@@ -2331,6 +2380,14 @@ async function start(): Promise<void> {
     applyHostLayout(layout);
   } else {
     render();
+  }
+  if (bootstrap.chatgptRecoveryPending) {
+    queueMicrotask(() => {
+      void configureProduct(
+        { kind: "chatgpt.recover-task-result" },
+        "Previous ChatGPT task result recovered.",
+      );
+    });
   }
 }
 

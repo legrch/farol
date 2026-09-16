@@ -200,6 +200,11 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
   z.strictObject({ kind: z.literal("support.export") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
+  z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
+  z.strictObject({
+    kind: z.literal("chatgpt.ack-task-result"),
+    operationId: IdentifierSchema,
+  }),
   z.strictObject({
     kind: z.literal("chatgpt.submit-attachment-task"),
     operationId: IdentifierSchema,
@@ -346,6 +351,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     contextTruncated: z.boolean(),
     deltaCount: z.number().int().nonnegative(),
     observedCharacters: z.number().int().nonnegative(),
+    redelivered: z.boolean(),
+    deliveryAckRequired: z.boolean(),
   }),
   z.strictObject({
     kind: z.literal("chatgpt.attachment-task-preview"),
@@ -392,6 +399,35 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     deltaCount: z.number().int().nonnegative(),
     observedCharacters: z.number().int().nonnegative(),
     stagingCleanup: z.enum(["removed", "pending_startup_cleanup"]),
+    redelivered: z.boolean(),
+    deliveryAckRequired: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.task-recovery"),
+    operationId: IdentifierSchema,
+    taskKind: z.enum(["readonly", "attachment"]),
+    state: z.enum([
+      "completed",
+      "not_authenticated",
+      "failed_before_submit",
+      "outcome_unknown",
+    ]),
+    code: z
+      .string()
+      .regex(/^[A-Z][A-Z0-9_]*$/u)
+      .max(120)
+      .nullable(),
+    deltaCount: z.number().int().nonnegative(),
+    observedCharacters: z.number().int().nonnegative(),
+    attachmentCount: z.number().int().min(0).max(4),
+    totalBytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(20 * 1_024 * 1_024),
+    stagingCleanup: z.enum(["removed", "pending_startup_cleanup"]).nullable(),
+    redelivered: z.boolean(),
+    deliveryAckRequired: z.boolean(),
   }),
   z.strictObject({
     kind: z.literal("computer.workspace-read"),
@@ -494,6 +530,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CHATGPT_TASK_PREVIEW_NOT_FOUND",
       "CHATGPT_TASK_PREVIEW_EXPIRED",
       "CHATGPT_TASK_REQUIRES_REVIEW",
+      "CHATGPT_TASK_JOURNAL_FAILED",
+      "CHATGPT_TASK_RESULT_NOT_FOUND",
       "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
       "CHATGPT_ATTACHMENT_SELECTION_INVALID",
       "CHATGPT_ATTACHMENT_TYPE_UNSUPPORTED",

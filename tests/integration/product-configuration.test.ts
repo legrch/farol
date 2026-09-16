@@ -656,6 +656,17 @@ describe("Farol Next product configuration", () => {
       }).success,
     ).toBe(true);
     expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "chatgpt.recover-task-result",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "chatgpt.ack-task-result",
+        operationId,
+      }).success,
+    ).toBe(true);
+    expect(
       ProductConfigurationEvidenceSchema.safeParse({
         kind: "chatgpt.readonly-task-preview",
         operationId,
@@ -684,6 +695,24 @@ describe("Farol Next product configuration", () => {
         contextTruncated: false,
         deltaCount: 2,
         observedCharacters: 84,
+        redelivered: false,
+        deliveryAckRequired: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "chatgpt.task-recovery",
+        operationId,
+        taskKind: "readonly",
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_INTERRUPTED_AFTER_INTENT",
+        deltaCount: 0,
+        observedCharacters: 0,
+        attachmentCount: 0,
+        totalBytes: 0,
+        stagingCleanup: null,
+        redelivered: true,
+        deliveryAckRequired: true,
       }).success,
     ).toBe(true);
     expect(
@@ -699,6 +728,8 @@ describe("Farol Next product configuration", () => {
         contextTruncated: false,
         deltaCount: 2,
         observedCharacters: 84,
+        redelivered: false,
+        deliveryAckRequired: true,
       }).success,
     ).toBe(false);
   });
