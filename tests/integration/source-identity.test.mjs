@@ -130,4 +130,42 @@ describe("source identity", () => {
       await fs.rm(repository, { recursive: true, force: true });
     }
   });
+
+  it("compares tracked files larger than Node's default spawn buffer", async () => {
+    const repository = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-source-identity-large-"),
+    );
+    try {
+      // A Retina comparison PNG exceeds the 1 MiB execFileSync default.
+      const evidence = Buffer.alloc(1_300_000);
+      for (let index = 0; index < evidence.length; index += 1) {
+        evidence[index] = (index * 7919) & 0xff;
+      }
+      await fs.mkdir(path.join(repository, "vnext/evidence"), {
+        recursive: true,
+      });
+      const target = path.join(repository, "vnext/evidence/overview.bin");
+      await fs.writeFile(target, evidence);
+      git(repository, "init", "-q");
+      git(repository, "add", "vnext");
+      git(
+        repository,
+        "-c",
+        "user.name=Farol Next Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "large evidence",
+      );
+
+      expect(sourceIdentity(repository, "vnext").dirty).toBe(false);
+
+      evidence[evidence.length - 1] ^= 0xff;
+      await fs.writeFile(target, evidence);
+      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
+    } finally {
+      await fs.rm(repository, { recursive: true, force: true });
+    }
+  });
 });

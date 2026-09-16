@@ -1,0 +1,488 @@
+{
+  "schema": 1,
+  "result": "passed",
+  "fixture": "synthetic-local-atlantic",
+  "directions": [
+    "studio-rail",
+    "operator-grid",
+    "beacon-field",
+    "keepers-slate",
+    "watch-rail"
+  ],
+  "comparisonCandidate": "watch-rail",
+  "recommendedDirection": "watch-rail",
+  "recommendationStatus": "owner-chosen-session-3",
+  "previousRecommendation": "keepers-slate",
+  "studiedChoices": {
+    "accent": ["iris", "cobalt", "orchid"],
+    "typeface": ["geist", "plex", "system"]
+  },
+  "ownerDecision": {
+    "direction": "watch-rail",
+    "accent": "iris",
+    "typeface": "geist",
+    "recordedOn": "2026-09-16",
+    "scope": "visual direction only; production integration not started"
+  },
+  "ownerApproval": true,
+  "sourceBoundary": "tracked-nonshipping-design-lab",
+  "visibleWindow": {
+    "visible": true,
+    "focused": false,
+    "bounds": {
+      "x": -1346,
+      "y": 585,
+      "width": 1180,
+      "height": 760
+    },
+    "display": {
+      "id": 1,
+      "internal": true,
+      "primary": false,
+      "selection": "non-primary-internal"
+    },
+    "primaryFallback": false
+  },
+  "prototypeSha256": "efec1a4f80dea98928e651a8bf60663ee8026d7d519e9972e6c93d6a9d3260ef",
+  "cases": [
+    "nonshipping-source-boundary",
+    "sandboxed-electron-runner",
+    "bounded-computer-approval",
+    "unknown-outcome-fail-closed",
+    "selected-task-menu-actions",
+    "keyboard-and-settings-navigation",
+    "setup-dialog-focus-return",
+    "quick-switcher-focus-return",
+    "activity-filtering",
+    "runtime-readiness-single-source",
+    "reduced-motion",
+    "compact-route-accessible-names",
+    "long-task-label-compact",
+    "slate-fused-task-plate",
+    "slate-shape-coded-lamps",
+    "slate-bounded-computer-approval",
+    "slate-anchored-task-menu",
+    "slate-anchored-fixture-menu",
+    "slate-keyboard-paths",
+    "slate-compact-plate",
+    "slate-title-bar-drag-region",
+    "slate-fixture-control-labelled",
+    "slate-dossier-tab-order",
+    "slate-title-row-resize-band",
+    "slate-focus-visible-evidence",
+    "slate-lamp-reduced-motion",
+    "five-directions-two-scenes-wide-and-compact-retina",
+    "recommended-surface-states",
+    "candidate-surface-states",
+    "watch-local-fonts-loaded",
+    "watch-sidebar-collapses-to-rail",
+    "watch-rail-keeps-watch",
+    "watch-title-bar-and-dossier-order",
+    "watch-bounded-approval-and-keyboard",
+    "watch-computer-names-the-waiting-task",
+    "watch-status-type-and-recovery-text",
+    "watch-appearance-study-controls",
+    "watch-accent-contrast",
+    "watch-compact-sidebar-overlay",
+    "watch-surface-and-appearance-evidence",
+    "exact-page-navigation-boundary",
+    "standard-density-evidence",
+    "rendered-comparison-gallery",
+    "visible-secondary-display-launch",
+    "no-external-network-or-render-errors"
+  ],
+  "screenshots": [
+    {
+      "file": "slate-task-menu-open-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-focus-visible-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "01-studio-rail-browser-running-wide@2x.png",
+      "direction": "native",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "01-studio-rail-browser-running-compact@2x.png",
+      "direction": "native",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "01-studio-rail-computer-waiting-wide@2x.png",
+      "direction": "native",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "01-studio-rail-computer-waiting-compact@2x.png",
+      "direction": "native",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "02-operator-grid-browser-running-wide@2x.png",
+      "direction": "dense",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "02-operator-grid-browser-running-compact@2x.png",
+      "direction": "dense",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "02-operator-grid-computer-waiting-wide@2x.png",
+      "direction": "dense",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "02-operator-grid-computer-waiting-compact@2x.png",
+      "direction": "dense",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "03-beacon-field-browser-running-wide@2x.png",
+      "direction": "beacon",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "03-beacon-field-browser-running-compact@2x.png",
+      "direction": "beacon",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "03-beacon-field-computer-waiting-wide@2x.png",
+      "direction": "beacon",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "03-beacon-field-computer-waiting-compact@2x.png",
+      "direction": "beacon",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "04-keepers-slate-browser-running-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "04-keepers-slate-browser-running-compact@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "04-keepers-slate-computer-waiting-wide@2x.png",
+      "direction": "slate",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "04-keepers-slate-computer-waiting-compact@2x.png",
+      "direction": "slate",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "05-watch-rail-browser-running-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "05-watch-rail-browser-running-compact@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "05-watch-rail-computer-waiting-wide@2x.png",
+      "direction": "watch",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "05-watch-rail-computer-waiting-compact@2x.png",
+      "direction": "watch",
+      "section": "computer",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "beacon-activity-unknown-wide@2x.png",
+      "direction": "beacon",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "beacon-settings-unavailable-compact@2x.png",
+      "direction": "beacon",
+      "section": "settings",
+      "state": "unavailable",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "beacon-setup-wide@2x.png",
+      "direction": "beacon",
+      "section": "setup",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-browser-waiting-wide@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-activity-unknown-wide@2x.png",
+      "direction": "slate",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-settings-unavailable-compact@2x.png",
+      "direction": "slate",
+      "section": "settings",
+      "state": "unavailable",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "slate-browser-unknown-compact@2x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "unknown",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "slate-setup-wide@2x.png",
+      "direction": "slate",
+      "section": "setup",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-settings-appearance-wide@2x.png",
+      "direction": "watch",
+      "section": "settings",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-compact-sidebar-overlay@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "watch-browser-waiting-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-rail-browser-waiting-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-activity-unknown-wide@2x.png",
+      "direction": "watch",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-settings-unavailable-compact@2x.png",
+      "direction": "watch",
+      "section": "settings",
+      "state": "unavailable",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "watch-accent-cobalt-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-accent-orchid-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-type-plex-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-type-system-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "running",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-setup-wide@2x.png",
+      "direction": "watch",
+      "section": "setup",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-rail-attention-wide@2x.png",
+      "direction": "watch",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-activity-unknown-compact@2x.png",
+      "direction": "watch",
+      "section": "activity",
+      "state": "unknown",
+      "viewport": "760x640",
+      "pixels": "1520x1280"
+    },
+    {
+      "file": "watch-browser-waiting-medium@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "940x700",
+      "pixels": "1880x1400"
+    },
+    {
+      "file": "watch-task-menu-open-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "watch-focus-visible-wide@2x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "2360x1520"
+    },
+    {
+      "file": "slate-browser-waiting-wide@1x.png",
+      "direction": "slate",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "1180x760"
+    },
+    {
+      "file": "watch-browser-waiting-wide@1x.png",
+      "direction": "watch",
+      "section": "browser",
+      "state": "waiting",
+      "viewport": "1180x760",
+      "pixels": "1180x760"
+    },
+    {
+      "file": "directions-overview@2x.png",
+      "direction": "comparison",
+      "section": "browser+computer",
+      "state": "running+waiting",
+      "viewport": "1440xfull-page",
+      "pixels": "2850x6420"
+    }
+  ]
+}

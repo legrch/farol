@@ -1,0 +1,960 @@
+<!doctype html>
+<html lang="en" data-direction="beacon" data-ready="false">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <meta
+      name="description"
+      content="Reversible local design lab for the Farol Next macOS application."
+    />
+    <title>Farol Next design lab</title>
+    <link rel="stylesheet" href="prototype.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to work surface</a>
+
+    <div class="app-shell" id="app-shell">
+      <header class="window-bar" aria-label="Prototype window bar">
+        <div class="traffic-lights" aria-hidden="true">
+          <i></i><i></i><i></i>
+        </div>
+        <button
+          class="icon-button sidebar-toggle"
+          id="sidebar-toggle"
+          type="button"
+          aria-controls="sidebar"
+          aria-expanded="true"
+          aria-label="Hide sidebar"
+          title="Hide sidebar (⌃⌘S)"
+          hidden
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <rect x="2.5" y="3.5" width="15" height="13" rx="2.6" />
+            <path d="M4.6 5.2h1.9v9.6H4.6z" fill="currentColor" stroke="none" />
+            <path d="M8.6 3.5v13" />
+          </svg>
+        </button>
+        <div class="window-identity">
+          <span class="window-mark" aria-hidden="true"><b></b></span>
+          <strong>Farol Next</strong>
+          <span class="lab-disclosure">Interactive lab · synthetic data</span>
+        </div>
+        <div class="window-tools">
+          <span class="model-readout" data-testid="model-readout">
+            <b>Local fixture</b><small>Reasoning · High</small>
+          </span>
+          <button
+            class="icon-button command-button"
+            id="command-button"
+            type="button"
+            aria-label="Open quick switcher"
+            title="Quick switcher (⌘K)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m8 4-5 6 5 6M12 4l5 6-5 6" />
+            </svg>
+            <kbd>⌘K</kbd>
+          </button>
+          <button
+            class="fixture-button"
+            id="fixture-button"
+            type="button"
+            popovertarget="fixture-menu"
+            aria-label="Choose synthetic fixture state"
+          >
+            <span class="state-dot waiting"></span>
+            <span data-testid="fixture-label">Waiting</span>
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="m4 6 4 4 4-4" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <aside class="sidebar" id="sidebar" aria-label="Farol sections">
+        <div class="brand-block">
+          <span class="brand-mark" aria-hidden="true"><b></b></span>
+          <div>
+            <strong>Farol</strong>
+            <small>Next preview</small>
+          </div>
+        </div>
+
+        <nav class="section-nav" id="section-nav">
+          <button
+            class="nav-item is-active"
+            data-section="browser"
+            type="button"
+            aria-label="Open Browser"
+            title="Browser (⌘1)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <rect x="2.5" y="3" width="15" height="14" rx="2" />
+              <path d="M2.5 7h15M7 7v10" />
+            </svg>
+            <span>Browser</span><kbd>⌘1</kbd
+            ><span class="nav-signal" id="nav-signal-browser" hidden
+              ><i aria-hidden="true"></i><b></b><small class="sr-only"></small
+            ></span>
+          </button>
+          <button
+            class="nav-item"
+            data-section="computer"
+            type="button"
+            aria-label="Open Computer"
+            title="Computer (⌘2)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path
+                d="M4 13.5V6.8A1.8 1.8 0 0 1 5.8 5h8.4A1.8 1.8 0 0 1 16 6.8v6.7"
+              />
+              <path d="M2.5 14h15M7.5 17h5" />
+            </svg>
+            <span>Computer</span><kbd>⌘2</kbd
+            ><span class="nav-signal" id="nav-signal-computer" hidden
+              ><i aria-hidden="true"></i><b></b><small class="sr-only"></small
+            ></span>
+          </button>
+          <button
+            class="nav-item"
+            data-section="activity"
+            type="button"
+            aria-label="Open Activity"
+            title="Activity (⌘3)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M3 5.5h9M3 10h14M3 14.5h11" />
+              <circle cx="15.5" cy="5.5" r="1.5" />
+            </svg>
+            <span>Activity</span><kbd>⌘3</kbd
+            ><span class="nav-signal" id="nav-signal-activity" hidden
+              ><i aria-hidden="true"></i><b></b><small class="sr-only"></small
+            ></span>
+          </button>
+          <button
+            class="nav-item"
+            data-section="settings"
+            type="button"
+            aria-label="Open Settings"
+            title="Settings (⌘4)"
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="3" />
+              <path
+                d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4"
+              />
+            </svg>
+            <span>Settings</span><kbd>⌘4</kbd
+            ><span class="nav-signal" id="nav-signal-settings" hidden
+              ><i aria-hidden="true"></i><b></b><small class="sr-only"></small
+            ></span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footer">
+          <span
+            class="runtime-status"
+            id="runtime-status"
+            data-testid="runtime-status"
+            ><i></i><b id="runtime-status-label">Local runtime ready</b></span
+          >
+          <small>No live provider</small>
+        </div>
+      </aside>
+
+      <header class="task-strip">
+        <div class="task-heading">
+          <span id="section-name" data-testid="section-name">Browser</span>
+          <small>Task-bound workspace</small>
+        </div>
+        <div
+          class="task-tabs"
+          id="task-tabs"
+          role="tablist"
+          aria-label="Synthetic task sessions"
+        ></div>
+        <button
+          class="new-task"
+          id="new-task"
+          type="button"
+          aria-label="New task is unavailable in this lab"
+          title="Unavailable in this design lab"
+          disabled
+        >
+          <svg viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M9 3v12M3 9h12" />
+          </svg>
+          <span>New task</span>
+          <small>Unavailable</small>
+        </button>
+      </header>
+
+      <main class="work-surface" id="main-content" tabindex="-1">
+        <section
+          class="workspace-panel is-active"
+          data-panel="browser"
+          aria-labelledby="browser-title"
+        >
+          <div class="browser-layout">
+            <article
+              class="browser-frame"
+              aria-label="Synthetic local Browser task surface"
+            >
+              <header class="browser-toolbar">
+                <div class="browser-controls" aria-hidden="true">
+                  <svg viewBox="0 0 16 16">
+                    <path d="m9.5 3.5-4.5 4.5 4.5 4.5" />
+                  </svg>
+                  <svg viewBox="0 0 16 16">
+                    <path d="m6.5 3.5 4.5 4.5-4.5 4.5" />
+                  </svg>
+                  <svg viewBox="0 0 16 16">
+                    <path d="M12 5a5 5 0 1 0 1 5M12 2v4H8" />
+                  </svg>
+                </div>
+                <div class="address-field">
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M5.5 7V5.5a2.5 2.5 0 0 1 5 0V7M4 7h8v6H4z" />
+                  </svg>
+                  <span>local.fixture / task-bound-preview</span>
+                </div>
+                <span class="synthetic-badge">Synthetic page</span>
+              </header>
+
+              <div class="browser-document" data-testid="browser-document">
+                <div class="document-meta">
+                  <span>Isolated local fixture</span>
+                  <span id="task-run-id" data-testid="task-run-id"
+                    >Run F-2048</span
+                  >
+                </div>
+                <h1 id="browser-title" data-testid="browser-title">
+                  Atlantic workspace check
+                </h1>
+                <p
+                  id="browser-lede"
+                  class="browser-lede"
+                  data-testid="browser-lede"
+                >
+                  Checking the synthetic workspace boundary without reading
+                  files, commands, screenshots, or account state.
+                </p>
+
+                <div class="progress-rail" aria-label="Task progress">
+                  <i class="is-done"></i><i class="is-done"></i
+                  ><i class="is-current"></i><i></i>
+                </div>
+
+                <div
+                  id="browser-state"
+                  class="browser-state"
+                  data-testid="browser-state"
+                >
+                  <span class="state-symbol" aria-hidden="true">
+                    <svg viewBox="0 0 24 24">
+                      <path d="M12 4v8l5 3" />
+                      <circle cx="12" cy="12" r="9" />
+                    </svg>
+                  </span>
+                  <div>
+                    <strong id="state-title" data-testid="state-title"
+                      >Computer approval needed</strong
+                    >
+                    <p id="state-detail" data-testid="state-detail">
+                      The task is paused before a bounded fixture-status check.
+                    </p>
+                  </div>
+                </div>
+
+                <footer class="document-footer">
+                  <span><i></i> No external network</span>
+                  <span>Last change <time>17:18</time></span>
+                </footer>
+              </div>
+            </article>
+
+            <aside class="task-inspector" aria-label="Selected task summary">
+              <header>
+                <span
+                  id="inspector-state"
+                  class="inspector-state"
+                  data-testid="inspector-state"
+                  >Waiting</span
+                >
+                <button
+                  class="more-button"
+                  id="task-menu-button"
+                  type="button"
+                  aria-label="Task menu"
+                  aria-controls="task-menu"
+                  popovertarget="task-menu"
+                  title="Task menu"
+                >
+                  <svg viewBox="0 0 18 18" aria-hidden="true">
+                    <circle cx="4" cy="9" r="1" />
+                    <circle cx="9" cy="9" r="1" />
+                    <circle cx="14" cy="9" r="1" />
+                  </svg>
+                </button>
+              </header>
+              <h2 id="inspector-title" data-testid="inspector-title">
+                Atlantic workspace check
+              </h2>
+              <p id="inspector-copy" data-testid="inspector-copy">
+                One explicit decision is holding this task. Nothing has been
+                submitted twice.
+              </p>
+
+              <dl class="task-facts">
+                <div>
+                  <dt>Model</dt>
+                  <dd>Local fixture</dd>
+                </div>
+                <div>
+                  <dt>Mode</dt>
+                  <dd>Reasoning · High</dd>
+                </div>
+                <div>
+                  <dt>Computer</dt>
+                  <dd id="computer-fact" data-testid="computer-fact">
+                    Approval required
+                  </dd>
+                </div>
+              </dl>
+
+              <button class="primary-action" id="primary-action" type="button">
+                <span id="primary-label" data-testid="primary-label"
+                  >Review Computer request</span
+                >
+                <svg viewBox="0 0 18 18" aria-hidden="true">
+                  <path d="m6 3 6 6-6 6" />
+                </svg>
+              </button>
+              <button class="text-action" id="view-activity" type="button">
+                Open Activity
+              </button>
+
+              <div class="truth-note">
+                <svg viewBox="0 0 18 18" aria-hidden="true">
+                  <circle cx="9" cy="9" r="7" />
+                  <path d="M9 8v4M9 5.5h.01" />
+                </svg>
+                <span>This lab does not connect to ChatGPT or your Mac.</span>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section
+          class="workspace-panel content-view"
+          data-panel="computer"
+          aria-labelledby="computer-title"
+        >
+          <header class="view-header">
+            <div>
+              <span class="view-context" id="computer-context"
+                >Selected task · Atlantic workspace check</span
+              >
+              <h1 id="computer-title">Computer</h1>
+              <p>Understand the request before anything reaches This Mac.</p>
+            </div>
+            <span class="status-label attention"><i></i>Approval required</span>
+          </header>
+
+          <div class="computer-layout">
+            <article class="permission-request">
+              <div class="request-heading">
+                <span class="computer-glyph" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path
+                      d="M5 16V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v8M3 17h18M9 20h6"
+                    />
+                  </svg>
+                </span>
+                <div>
+                  <small>Synthetic capability request</small>
+                  <h2>Inspect fixture workspace status</h2>
+                </div>
+              </div>
+              <p class="request-copy">
+                Return only whether the isolated fixture workspace is ready. No
+                path, file content, command, screenshot, or account state is
+                exposed.
+              </p>
+
+              <dl class="scope-list">
+                <div>
+                  <dt>Target</dt>
+                  <dd>Fixture workspace status</dd>
+                </div>
+                <div>
+                  <dt>Returns</dt>
+                  <dd>Ready or unavailable</dd>
+                </div>
+                <div>
+                  <dt>Duration</dt>
+                  <dd>One request · no persistence</dd>
+                </div>
+                <div>
+                  <dt>Authority</dt>
+                  <dd>Lab simulation only</dd>
+                </div>
+              </dl>
+
+              <div class="request-actions">
+                <button
+                  class="secondary-action"
+                  id="decline-request"
+                  type="button"
+                >
+                  Decline
+                </button>
+                <button class="primary-action" id="allow-request" type="button">
+                  Allow once
+                  <svg viewBox="0 0 18 18" aria-hidden="true">
+                    <path d="m6 3 6 6-6 6" />
+                  </svg>
+                </button>
+              </div>
+            </article>
+
+            <aside class="capability-list" aria-label="Computer capabilities">
+              <h2>Available to this task</h2>
+              <div class="capability-row is-available">
+                <span class="capability-icon"
+                  ><svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="m4 10 4 4 8-8" /></svg
+                ></span>
+                <div>
+                  <strong>Fixture status</strong
+                  ><small>One bounded response</small>
+                </div>
+                <span>Available</span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon"
+                  ><svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M4 5h5l2 2h5v9H4z" /></svg
+                ></span>
+                <div>
+                  <strong>Files and folders</strong
+                  ><small>No local paths exposed</small>
+                </div>
+                <span>Unavailable</span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon"
+                  ><svg viewBox="0 0 20 20" aria-hidden="true">
+                    <path d="M3 5h14v10H3zM6 8l2 2-2 2M10 12h4" /></svg
+                ></span>
+                <div>
+                  <strong>Commands</strong
+                  ><small>No shell or host action</small>
+                </div>
+                <span>Unavailable</span>
+              </div>
+              <div class="capability-row">
+                <span class="capability-icon"
+                  ><svg viewBox="0 0 20 20" aria-hidden="true">
+                    <rect x="3" y="4" width="14" height="12" rx="2" />
+                    <circle cx="10" cy="10" r="2.5" /></svg
+                ></span>
+                <div>
+                  <strong>Screen</strong><small>No capture or control</small>
+                </div>
+                <span>Unavailable</span>
+              </div>
+              <p class="capability-footnote">
+                Availability shown here is synthetic fixture state, not a live
+                entitlement.
+              </p>
+            </aside>
+          </div>
+        </section>
+
+        <section
+          class="workspace-panel content-view"
+          data-panel="activity"
+          aria-labelledby="activity-title"
+        >
+          <header class="view-header activity-header">
+            <div>
+              <span class="view-context">Human-readable audit</span>
+              <h1 id="activity-title">Activity</h1>
+              <p>
+                Lifecycle facts without prompts, answers, or raw tool payloads.
+              </p>
+            </div>
+            <div class="filter-group" role="group" aria-label="Activity filter">
+              <button
+                class="is-selected"
+                type="button"
+                data-filter="all"
+                aria-pressed="true"
+              >
+                All
+              </button>
+              <button
+                type="button"
+                data-filter="attention"
+                aria-pressed="false"
+              >
+                Needs attention
+              </button>
+              <button type="button" data-filter="complete" aria-pressed="false">
+                Complete
+              </button>
+            </div>
+          </header>
+
+          <div class="activity-layout">
+            <ol class="timeline" id="timeline">
+              <li data-tone="attention">
+                <span class="timeline-mark"></span>
+                <div>
+                  <strong>Computer approval requested</strong>
+                  <p>
+                    Atlantic workspace check paused before the fixture-status
+                    call.
+                  </p>
+                </div>
+                <time>17:18</time><span class="event-state">Waiting</span>
+              </li>
+              <li data-tone="running">
+                <span class="timeline-mark"></span>
+                <div>
+                  <strong>Response fragment received</strong>
+                  <p>
+                    Harbor research stream retained its selected task surface.
+                  </p>
+                </div>
+                <time>17:17</time><span class="event-state">Running</span>
+              </li>
+              <li data-tone="complete">
+                <span class="timeline-mark"></span>
+                <div>
+                  <strong>Turn finished</strong>
+                  <p>Release brief completed and retained its final result.</p>
+                </div>
+                <time>17:14</time><span class="event-state">Complete</span>
+              </li>
+              <li data-tone="neutral">
+                <span class="timeline-mark"></span>
+                <div>
+                  <strong>Task surface opened</strong>
+                  <p>Three isolated local fixtures became available.</p>
+                </div>
+                <time>17:11</time><span class="event-state">Prepared</span>
+              </li>
+            </ol>
+            <aside class="activity-explainer">
+              <h2>What Activity keeps</h2>
+              <p>Task label, lifecycle change, time, and recovery guidance.</p>
+              <dl>
+                <div>
+                  <dt>Never shown</dt>
+                  <dd>Prompt or answer content</dd>
+                </div>
+                <div>
+                  <dt>Unknown outcome</dt>
+                  <dd>Inspect before retrying</dd>
+                </div>
+                <div>
+                  <dt>Retention</dt>
+                  <dd>Local fixture session</dd>
+                </div>
+              </dl>
+            </aside>
+          </div>
+        </section>
+
+        <section
+          class="workspace-panel content-view"
+          data-panel="settings"
+          aria-labelledby="settings-title"
+        >
+          <header class="view-header">
+            <div>
+              <span class="view-context">Farol Next preview</span>
+              <h1 id="settings-title">Settings</h1>
+              <p>
+                Make identity, runtime boundaries, appearance, and shortcuts
+                understandable.
+              </p>
+            </div>
+            <button class="secondary-action" id="review-setup" type="button">
+              Review setup
+            </button>
+          </header>
+
+          <div class="settings-layout">
+            <nav class="settings-nav" aria-label="Settings categories">
+              <button class="is-selected" type="button" aria-pressed="true">
+                General
+              </button>
+              <button type="button" aria-pressed="false">Appearance</button>
+              <button type="button" aria-pressed="false">Keyboard</button>
+              <button type="button" aria-pressed="false">Privacy</button>
+            </nav>
+            <div class="settings-content">
+              <section
+                class="settings-group"
+                data-setting="General"
+                aria-labelledby="identity-setting"
+              >
+                <header>
+                  <h2 id="identity-setting">Application identity</h2>
+                  <p>Isolated from the installed Legacy product.</p>
+                </header>
+                <dl>
+                  <div>
+                    <dt>Application</dt>
+                    <dd>Farol Next Preview</dd>
+                  </div>
+                  <div>
+                    <dt>Bundle ID</dt>
+                    <dd>local.farol.next.preview</dd>
+                  </div>
+                  <div>
+                    <dt>Browser partition</dt>
+                    <dd>persist:farol-next-preview</dd>
+                  </div>
+                </dl>
+              </section>
+              <section
+                class="settings-group"
+                data-setting="General Privacy"
+                aria-labelledby="runtime-setting"
+              >
+                <header>
+                  <h2 id="runtime-setting">Runtime and providers</h2>
+                  <p>Only the controlled local fixture is represented here.</p>
+                </header>
+                <dl>
+                  <div>
+                    <dt>Local runtime</dt>
+                    <dd>
+                      <span
+                        class="inline-status"
+                        id="runtime-readiness"
+                        data-testid="runtime-readiness"
+                        ><i></i
+                        ><span id="runtime-readiness-label">Ready</span></span
+                      >
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Live ChatGPT</dt>
+                    <dd>Not connected</dd>
+                  </div>
+                  <div>
+                    <dt>Native hosts</dt>
+                    <dd>Not configured</dd>
+                  </div>
+                  <div>
+                    <dt>Filesystem</dt>
+                    <dd>Unavailable</dd>
+                  </div>
+                </dl>
+              </section>
+              <section
+                class="settings-group"
+                data-setting="Appearance"
+                aria-labelledby="appearance-setting"
+              >
+                <header>
+                  <h2 id="appearance-setting">Appearance</h2>
+                  <p>
+                    The lab follows Mac display and accessibility preferences.
+                  </p>
+                </header>
+                <dl>
+                  <div>
+                    <dt>Direction</dt>
+                    <dd id="direction-name" data-testid="direction-name">
+                      Beacon Field
+                    </dd>
+                  </div>
+                  <div id="appearance-accent" hidden>
+                    <dt id="accent-picker-label">Accent · lab study</dt>
+                    <dd>
+                      <span
+                        class="appearance-picker"
+                        id="accent-picker"
+                        role="radiogroup"
+                        aria-labelledby="accent-picker-label"
+                      >
+                        <button type="button" role="radio" data-value="iris">
+                          <i class="accent-swatch" aria-hidden="true"></i>Iris
+                        </button>
+                        <button type="button" role="radio" data-value="cobalt">
+                          <i class="accent-swatch" aria-hidden="true"></i>Cobalt
+                        </button>
+                        <button type="button" role="radio" data-value="orchid">
+                          <i class="accent-swatch" aria-hidden="true"></i>Orchid
+                        </button>
+                      </span>
+                    </dd>
+                  </div>
+                  <div id="appearance-type" hidden>
+                    <dt id="type-picker-label">Typeface · lab study</dt>
+                    <dd>
+                      <span
+                        class="appearance-picker"
+                        id="type-picker"
+                        role="radiogroup"
+                        aria-labelledby="type-picker-label"
+                      >
+                        <button type="button" role="radio" data-value="geist">
+                          <i class="type-sample" aria-hidden="true">Aa</i>Geist
+                        </button>
+                        <button type="button" role="radio" data-value="plex">
+                          <i class="type-sample" aria-hidden="true">Aa</i>IBM
+                          Plex
+                        </button>
+                        <button type="button" role="radio" data-value="system">
+                          <i class="type-sample" aria-hidden="true">Aa</i>SF Pro
+                        </button>
+                      </span>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Density</dt>
+                    <dd>Comfortable</dd>
+                  </div>
+                  <div>
+                    <dt>Motion</dt>
+                    <dd>Follow system setting</dd>
+                  </div>
+                  <div>
+                    <dt>Contrast</dt>
+                    <dd>Adaptive</dd>
+                  </div>
+                </dl>
+              </section>
+              <section
+                class="settings-group shortcut-group"
+                data-setting="Keyboard"
+                aria-labelledby="shortcut-setting"
+              >
+                <header>
+                  <h2 id="shortcut-setting">Keyboard</h2>
+                  <p>
+                    Frequent navigation remains reachable without a pointer.
+                  </p>
+                </header>
+                <dl>
+                  <div>
+                    <dt>Sections</dt>
+                    <dd><kbd>⌘1</kbd> – <kbd>⌘4</kbd></dd>
+                  </div>
+                  <div>
+                    <dt>Next task</dt>
+                    <dd><kbd>⌃Tab</kbd></dd>
+                  </div>
+                  <div>
+                    <dt>Quick switcher</dt>
+                    <dd><kbd>⌘K</kbd></dd>
+                  </div>
+                  <div id="keyboard-sidebar" hidden>
+                    <dt>Show or hide sidebar</dt>
+                    <dd><kbd>⌃⌘S</kbd></dd>
+                  </div>
+                </dl>
+              </section>
+              <section
+                class="settings-group"
+                data-setting="Privacy"
+                aria-labelledby="privacy-setting"
+              >
+                <header>
+                  <h2 id="privacy-setting">Privacy boundaries</h2>
+                  <p>
+                    Every capability remains explicit, bounded, and inspectable.
+                  </p>
+                </header>
+                <dl>
+                  <div>
+                    <dt>Computer access</dt>
+                    <dd>Ask for each request</dd>
+                  </div>
+                  <div>
+                    <dt>Fixture data</dt>
+                    <dd>Synthetic and local</dd>
+                  </div>
+                  <div>
+                    <dt>External requests</dt>
+                    <dd>Blocked in this lab</dd>
+                  </div>
+                  <div>
+                    <dt>Diagnostics</dt>
+                    <dd>Not collected</dd>
+                  </div>
+                </dl>
+              </section>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div
+      id="task-menu"
+      class="task-menu"
+      popover
+      aria-label="Selected task actions"
+    >
+      <header>
+        <strong id="task-menu-label">Atlantic workspace check</strong>
+        <small>Selected task</small>
+      </header>
+      <button id="task-menu-activity" type="button">
+        <span>Open Activity</span>
+        <small>Inspect lifecycle facts</small>
+      </button>
+      <button id="task-menu-computer" type="button">
+        <span>Review Computer request</span>
+        <small>Available only while waiting</small>
+      </button>
+      <button id="task-menu-setup" type="button">
+        <span>Review setup</span>
+        <small>Revisit capability boundaries</small>
+      </button>
+    </div>
+
+    <div
+      id="fixture-menu"
+      class="fixture-menu"
+      popover
+      aria-label="Synthetic fixture states"
+    >
+      <header>
+        <strong>Fixture state</strong><small>Lab-only control</small>
+      </header>
+      <button type="button" data-state="running">
+        <span class="state-dot running"></span
+        ><span><b>Running</b><small>Response is streaming</small></span>
+      </button>
+      <button type="button" data-state="waiting">
+        <span class="state-dot waiting"></span
+        ><span><b>Waiting</b><small>Computer approval needed</small></span>
+      </button>
+      <button type="button" data-state="complete">
+        <span class="state-dot complete"></span
+        ><span><b>Complete</b><small>Final result retained</small></span>
+      </button>
+      <button type="button" data-state="failed">
+        <span class="state-dot failed"></span
+        ><span><b>Failed</b><small>Stopped before completion</small></span>
+      </button>
+      <button type="button" data-state="unavailable">
+        <span class="state-dot unavailable"></span
+        ><span><b>Unavailable</b><small>Local runtime offline</small></span>
+      </button>
+      <button type="button" data-state="unknown">
+        <span class="state-dot unknown"></span
+        ><span
+          ><b>Outcome unknown</b><small>Inspect before retrying</small></span
+        >
+      </button>
+    </div>
+
+    <dialog
+      class="setup-dialog"
+      id="setup-dialog"
+      aria-labelledby="setup-title"
+      aria-describedby="setup-copy"
+    >
+      <div class="setup-shell">
+        <header class="setup-topbar">
+          <div class="setup-brand">
+            <span class="brand-mark"><b></b></span><strong>Farol Next</strong>
+          </div>
+          <button
+            class="icon-button"
+            id="setup-close"
+            type="button"
+            aria-label="Close setup"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="m4 4 10 10M14 4 4 14" />
+            </svg>
+          </button>
+        </header>
+        <div class="setup-body">
+          <ol
+            class="setup-progress"
+            id="setup-progress"
+            aria-label="Setup progress"
+          ></ol>
+          <section class="setup-content">
+            <span class="view-context" id="setup-context">ChatGPT</span>
+            <h1 id="setup-title">Keep the signed-in route separate</h1>
+            <p id="setup-copy">
+              Farol Next will use its own authenticated Browser route. This lab
+              never borrows or changes the installed provider profile.
+            </p>
+            <div class="setup-status" id="setup-status">
+              <i></i><strong>Not connected</strong>
+            </div>
+            <ul id="setup-details"></ul>
+          </section>
+        </div>
+        <footer class="setup-actions">
+          <span id="setup-counter">Step 1 of 5</span>
+          <div>
+            <button
+              class="secondary-action"
+              id="setup-back"
+              type="button"
+              disabled
+            >
+              Back
+            </button>
+            <button class="primary-action" id="setup-next" type="button">
+              Continue
+            </button>
+          </div>
+        </footer>
+      </div>
+    </dialog>
+
+    <dialog
+      class="command-dialog"
+      id="command-dialog"
+      aria-labelledby="command-title"
+    >
+      <form method="dialog">
+        <header>
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="8.5" cy="8.5" r="5.5" />
+            <path d="m13 13 4 4" />
+          </svg>
+          <label id="command-title" for="command-search">Quick switcher</label>
+          <input
+            id="command-search"
+            type="search"
+            autocomplete="off"
+            placeholder="Find a section or task"
+          />
+          <kbd>esc</kbd>
+        </header>
+        <div class="command-results" id="command-results"></div>
+      </form>
+    </dialog>
+
+    <div
+      class="toast"
+      id="toast"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
+
+    <script src="prototype.js"></script>
+  </body>
+</html>
