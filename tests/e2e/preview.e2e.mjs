@@ -1126,6 +1126,21 @@ async function activateForNativeFocusProof(application) {
   throw new Error(`E2E_NATIVE_WINDOW_FOCUS_TIMEOUT:${JSON.stringify(last)}`);
 }
 
+async function deactivateForInactiveAppearanceProof(application) {
+  await application.evaluate(({ BrowserWindow }) => {
+    const targetWindow = BrowserWindow.getAllWindows()[0];
+    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    targetWindow.blur();
+  });
+  let last = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    last = await nativeWindowChrome(application);
+    if (!last.focused) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`E2E_NATIVE_WINDOW_BLUR_TIMEOUT:${JSON.stringify(last)}`);
+}
+
 async function setWindowSize(application, width, height) {
   await application.evaluate(
     ({ BrowserWindow }, size) => {
@@ -1308,6 +1323,10 @@ try {
     );
   }
   await completeSetup(normal, true);
+  await deactivateForInactiveAppearanceProof(normal.application);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.windowActive === "false",
+  );
   const initialWatchGeometry = await watchRailGeometry(normal.window);
   assert.equal(initialWatchGeometry.sidebarMode, "full");
   assert.equal(initialWatchGeometry.windowActive, "false");
