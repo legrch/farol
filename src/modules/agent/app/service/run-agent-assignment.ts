@@ -27,7 +27,10 @@ import {
   type AssignmentIdentity,
 } from "../../domain/assignment";
 
-export type AgentRunReceipt = StoredAssignment;
+export type AgentRunReceipt = StoredAssignment &
+  Readonly<{
+    resultRetention: "not_applicable" | "durable" | "memory_only";
+  }>;
 
 export type AgentAssignmentCommand = Readonly<{
   identity: AssignmentIdentity;
@@ -143,10 +146,7 @@ export class RunAgentAssignment {
     const prepared = createAssignment(identity, assignmentAuthority);
     let admission: Awaited<ReturnType<AssignmentRepository["admit"]>>;
     try {
-      admission = await this.assignments.admit({
-        assignment: prepared,
-        resultRef: null,
-      });
+      admission = await this.assignments.admit(this.record(prepared, null));
     } catch {
       return failure("AGENT_ADMISSION_FAILED");
     }
@@ -168,7 +168,7 @@ export class RunAgentAssignment {
           childId,
         });
       }
-      return success(await this.tombstoneInterrupted(admission.record));
+      return success(await this.recoverInterrupted(admission.record));
     }
 
     let spawned: Awaited<ReturnType<AgentHost["spawn"]>>;
@@ -209,7 +209,7 @@ export class RunAgentAssignment {
 
     const started = startAssignment(prepared, spawned.correlation);
     if (!started.ok) return failure(started.error.code);
-    await this.bestEffortSave({ assignment: started.value, resultRef: null });
+    await this.trySave(this.record(started.value, null));
 
     return this.waitForChild(started.value, spawned.correlation);
   }
@@ -237,9 +237,10 @@ export class RunAgentAssignment {
       const record = {
         assignment: completed.value,
         resultRef: waited.resultRef,
+        parentDelivery: "pending" as const,
       };
-      await this.bestEffortSave(record);
-      return success(record);
+      const persisted = await this.trySave(record);
+      return success(this.receipt(record, persisted));
     }
     if (waited.status === "outcome_unknown") {
       return this.terminal(
@@ -320,15 +321,15 @@ export class RunAgentAssignment {
     result: Result<Assignment, AssignmentErrorCode>,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
     if (!result.ok) return failure(result.error.code);
-    const record = { assignment: result.value, resultRef: null };
-    await this.bestEffortSave(record);
-    return success(record);
+    const record = this.record(result.value, null);
+    const persisted = await this.trySave(record);
+    return success(this.receipt(record, persisted));
   }
 
-  private async tombstoneInterrupted(
+  private async recoverInterrupted(
     record: StoredAssignment,
-  ): Promise<StoredAssignment> {
-    if (record.assignment.terminal) return record;
+  ): Promise<AgentRunReceipt> {
+    if (record.assignment.terminal) return this.receipt(record, true);
     const result =
       record.assignment.phase === "prepared" || !record.assignment.childId
         ? markSpawnOutcomeUnknown(record.assignment, {
@@ -350,17 +351,46 @@ export class RunAgentAssignment {
               retry: "never",
             },
           );
-    if (!result.ok) return record;
-    const tombstone = { assignment: result.value, resultRef: null };
-    await this.bestEffortSave(tombstone);
-    return tombstone;
+    if (!result.ok) return this.receipt(record, true);
+    const tombstone = this.record(result.value, null);
+    const persisted = await this.trySave(tombstone);
+    return this.receipt(tombstone, persisted);
   }
 
-  private async bestEffortSave(record: StoredAssignment): Promise<void> {
+  private record(
+    assignment: Assignment,
+    resultRef: string | null,
+  ): StoredAssignment {
+    return {
+      assignment,
+      resultRef,
+      parentDelivery:
+        assignment.phase === "completed" ? "pending" : "not_applicable",
+    };
+  }
+
+  private receipt(
+    record: StoredAssignment,
+    persisted: boolean,
+  ): AgentRunReceipt {
+    return {
+      ...record,
+      resultRetention:
+        record.assignment.phase === "completed"
+          ? persisted
+            ? "durable"
+            : "memory_only"
+          : "not_applicable",
+    };
+  }
+
+  private async trySave(record: StoredAssignment): Promise<boolean> {
     try {
       await this.assignments.save(record);
+      return true;
     } catch {
       // The in-memory terminal decision still prevents a retry in this run.
+      return false;
     }
   }
 }

@@ -386,6 +386,7 @@ describe("Agent delegated-authority continuity", () => {
         mutationOwnership: "task",
       }),
       resultRef: null,
+      parentDelivery: "not_applicable",
     });
     const nativeHost = host();
     await expect(

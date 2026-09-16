@@ -53,6 +53,7 @@ const assignmentSchema = z.strictObject({
 const storedAssignmentSchema = z.strictObject({
   assignment: assignmentSchema,
   resultRef: z.string().min(1).max(4_096).nullable(),
+  parentDelivery: z.enum(["not_applicable", "pending", "acknowledged"]),
 });
 
 const envelopeSchema = z.strictObject({
@@ -98,6 +99,20 @@ function positiveInteger(value: number, code: string): number {
 
 function sameValue(left: unknown, right: unknown): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sameIdentity(
+  left: AssignmentIdentity,
+  right: AssignmentIdentity,
+): boolean {
+  return (
+    left.assignmentId === right.assignmentId &&
+    left.ownerId === right.ownerId &&
+    left.sessionId === right.sessionId &&
+    left.taskId === right.taskId &&
+    left.taskEpoch === right.taskEpoch &&
+    left.generation === right.generation
+  );
 }
 
 function phaseRank(phase: StoredAssignment["assignment"]["phase"]): number {
@@ -165,6 +180,11 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     await this.atomicWrite(target, validated);
   }
 
+  async load(identity: AssignmentIdentity): Promise<StoredAssignment | null> {
+    await this.ensureRoot();
+    return this.readRecord(this.recordFile(identity), identity);
+  }
+
   private validateRecord(candidate: unknown, code: string): StoredAssignment {
     const parsed = storedAssignmentSchema.safeParse(candidate);
     if (!parsed.success) throw new Error(code);
@@ -175,22 +195,27 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         !assignment.terminal &&
         assignment.childId === null &&
         assignment.terminalReason === null &&
-        record.resultRef === null) ||
+        record.resultRef === null &&
+        record.parentDelivery === "not_applicable") ||
       (assignment.phase === "running" &&
         !assignment.terminal &&
         assignment.childId !== null &&
         assignment.terminalReason === null &&
-        record.resultRef === null) ||
+        record.resultRef === null &&
+        record.parentDelivery === "not_applicable") ||
       (assignment.phase === "completed" &&
         assignment.terminal &&
         assignment.childId !== null &&
         assignment.terminalReason === null &&
-        record.resultRef !== null) ||
+        record.resultRef !== null &&
+        (record.parentDelivery === "pending" ||
+          record.parentDelivery === "acknowledged")) ||
       ((assignment.phase === "failed" ||
         assignment.phase === "outcome_unknown") &&
         assignment.terminal &&
         assignment.terminalReason !== null &&
-        record.resultRef === null);
+        record.resultRef === null &&
+        record.parentDelivery === "not_applicable");
     if (!valid) throw new Error(code);
     return structuredClone(record);
   }
@@ -212,6 +237,16 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       throw new Error("AGENT_ASSIGNMENT_BINDING_MISMATCH");
     }
     if (existing.assignment.terminal) {
+      if (
+        existing.assignment.phase === "completed" &&
+        replacement.assignment.phase === "completed" &&
+        sameValue(existing.assignment, replacement.assignment) &&
+        existing.resultRef === replacement.resultRef &&
+        existing.parentDelivery === "pending" &&
+        replacement.parentDelivery === "acknowledged"
+      ) {
+        return;
+      }
       throw new Error("AGENT_ASSIGNMENT_TERMINAL_IMMUTABLE");
     }
     if (
@@ -258,7 +293,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         parsed.data.record,
         "AGENT_ASSIGNMENT_STATE_CORRUPT",
       );
-      if (!sameValue(record.assignment.identity, identity)) {
+      if (!sameIdentity(record.assignment.identity, identity)) {
         throw new Error("AGENT_ASSIGNMENT_BINDING_MISMATCH");
       }
       return record;

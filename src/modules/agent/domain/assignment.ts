@@ -12,7 +12,9 @@ export type AssignmentErrorCode =
   | "AGENT_AUTHORITY_UNAVAILABLE"
   | "AGENT_ALREADY_STARTED"
   | "AGENT_TERMINAL"
-  | "AGENT_ADMISSION_FAILED";
+  | "AGENT_ADMISSION_FAILED"
+  | "AGENT_DELIVERY_CORRELATION"
+  | "AGENT_DELIVERY_UNAVAILABLE";
 
 export type AssignmentIdentity = Readonly<{
   assignmentId: string;

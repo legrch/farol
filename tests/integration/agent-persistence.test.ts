@@ -16,6 +16,7 @@ import {
   RunAgentAssignment,
   type AgentAssignmentCommand,
 } from "../../src/modules/agent/app/service/run-agent-assignment";
+import { AcknowledgeAgentResult } from "../../src/modules/agent/app/service/acknowledge-agent-result";
 import {
   completeAssignment,
   createAssignment,
@@ -90,13 +91,18 @@ function preparedRecord() {
   return {
     assignment: createAssignment(command.identity, assignmentAuthority),
     resultRef: null,
+    parentDelivery: "not_applicable" as const,
   };
 }
 
 function runningRecord() {
   const running = startAssignment(preparedRecord().assignment, child);
   if (!running.ok) throw new Error(running.error.code);
-  return { assignment: running.value, resultRef: null };
+  return {
+    assignment: running.value,
+    resultRef: null,
+    parentDelivery: "not_applicable" as const,
+  };
 }
 
 class AuthorityDouble implements AgentAuthorityPort {
@@ -199,6 +205,17 @@ describe("private Agent assignment persistence", () => {
     expect(host.spawnCalls).toBe(0);
     expect(host.waitCalls).toBe(1);
 
+    await expect(
+      new AcknowledgeAgentResult(new PrivateAssignmentStore({ root })).execute({
+        correlation: child,
+        parentParticipantId: assignmentAuthority.parentParticipantId,
+        resultRef: "result-durable-a",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { parentDelivery: "acknowledged" },
+    });
+
     const retainedHost = new RejoinHost();
     await expect(
       new RunAgentAssignment(
@@ -211,6 +228,8 @@ describe("private Agent assignment persistence", () => {
       value: {
         assignment: { phase: "completed", childId: child.childId },
         resultRef: "result-durable-a",
+        parentDelivery: "acknowledged",
+        resultRetention: "durable",
       },
     });
     expect(retainedHost.spawnCalls).toBe(0);
@@ -238,6 +257,7 @@ describe("private Agent assignment persistence", () => {
       interrupted.save({
         assignment: completed.value,
         resultRef: "result-durable-a",
+        parentDelivery: "pending",
       }),
     ).rejects.toThrow("SYNTHETIC_ASSIGNMENT_RENAME_INTERRUPTION");
     await expect(stable.admit(preparedRecord())).resolves.toEqual({
@@ -288,13 +308,18 @@ describe("private Agent assignment persistence", () => {
     const terminal = {
       assignment: completed.value,
       resultRef: "result-durable-a",
+      parentDelivery: "pending" as const,
     };
     await store.save(terminal);
     await expect(store.save(terminal)).resolves.toBeUndefined();
     const uncertain = markChildOutcomeUnknown(running.assignment, child);
     if (!uncertain.ok) throw new Error(uncertain.error.code);
     await expect(
-      store.save({ assignment: uncertain.value, resultRef: null }),
+      store.save({
+        assignment: uncertain.value,
+        resultRef: null,
+        parentDelivery: "not_applicable",
+      }),
     ).rejects.toThrow("AGENT_ASSIGNMENT_TERMINAL_IMMUTABLE");
   });
 

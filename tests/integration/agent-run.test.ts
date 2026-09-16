@@ -153,6 +153,8 @@ describe("Agent app service", () => {
           authority: assignmentAuthority,
         },
         resultRef: "result-preview-a",
+        parentDelivery: "pending",
+        resultRetention: "durable",
       },
     });
     expect(host.spawnCalls).toBe(1);
@@ -204,6 +206,7 @@ describe("Agent app service", () => {
     await preparedRepository.admit({
       assignment: createAssignment(command.identity, assignmentAuthority),
       resultRef: null,
+      parentDelivery: "not_applicable",
     });
     const preparedHost = new AgentHostDouble(new Error("must not spawn"), null);
     await expect(
@@ -230,6 +233,7 @@ describe("Agent app service", () => {
     await runningRepository.admit({
       assignment: running.value,
       resultRef: null,
+      parentDelivery: "not_applicable",
     });
     const runningHost = new AgentHostDouble(new Error("must not spawn"), {
       status: "completed",
@@ -257,6 +261,7 @@ describe("Agent app service", () => {
       admit: async () => {
         throw new Error("repository unavailable");
       },
+      load: async () => null,
       save: async () => undefined,
     };
     const host = new AgentHostDouble(new Error("must not spawn"), null);
@@ -287,7 +292,11 @@ describe("Agent app service", () => {
       createRunner(host, new FailingSaveAssignments()).execute(command),
     ).resolves.toMatchObject({
       ok: true,
-      value: { assignment: { phase: "completed" } },
+      value: {
+        assignment: { phase: "completed" },
+        parentDelivery: "pending",
+        resultRetention: "memory_only",
+      },
     });
   });
 
