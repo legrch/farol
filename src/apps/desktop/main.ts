@@ -385,6 +385,10 @@ function focusForLayout(): void {
   else window.webContents.focus();
 }
 
+function focusForLayoutAfterRendererCommit(): void {
+  setImmediate(focusForLayout);
+}
+
 function requestQuickSwitcher(): void {
   if (!window || setupOpen) return;
   shellOverlay = "quick-switcher";
@@ -918,7 +922,7 @@ function installIpc(): void {
     sidebarMode = parsed.data.sidebar;
     shellOverlay = parsed.data.overlay;
     applyLayout();
-    if (focusTargetChanged) focusForLayout();
+    if (focusTargetChanged) focusForLayoutAfterRendererCommit();
   });
 }
 
