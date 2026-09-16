@@ -1718,6 +1718,10 @@ try {
 
   await normal.window.keyboard.press("Meta+1");
   if (nativeWindowProofAvailable) {
+    await setWindowSize(normal.application, 1180, 760);
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "full",
+    );
     await activateForNativeFocusProof(normal.application);
     await normal.window.waitForFunction(
       () => document.documentElement.dataset.windowActive === "true",
