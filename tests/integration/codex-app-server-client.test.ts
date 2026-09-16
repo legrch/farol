@@ -141,6 +141,31 @@ describe("Codex App Server client", () => {
     await client.close();
   });
 
+  it("delivers bounded server notifications to an exact method handler", async () => {
+    const process = new FakeProcess();
+    const client = new CodexAppServerClient(process, {
+      requestTimeoutMs: 1_000,
+      clientInfo: { name: "farol-next", version: "0.1.0" },
+    });
+    const completed = new Promise<unknown>((resolve) => {
+      client.handleNotification("turn/completed", resolve);
+    });
+
+    send(process, {
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
+    });
+
+    await expect(completed).resolves.toEqual({
+      threadId: "thread-1",
+      turn: { id: "turn-1", status: "completed", items: [] },
+    });
+    await client.close();
+  });
+
   it("fails pending requests when the native host exits", async () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {
@@ -153,6 +178,28 @@ describe("Codex App Server client", () => {
     process.emit("exit", 7, null);
 
     await expect(pending).rejects.toThrow("CODEX_APP_SERVER_EXITED");
+  });
+
+  it("keeps native RPC error text out of application errors", async () => {
+    const process = new FakeProcess();
+    const client = new CodexAppServerClient(process, {
+      requestTimeoutMs: 1_000,
+      clientInfo: { name: "farol-next", version: "0.1.0" },
+    });
+
+    const pending = client.request("turn/start", {});
+    await nextLine(process.stdin);
+    send(process, {
+      id: 1,
+      error: {
+        code: -32000,
+        message: "sensitive provider response must not cross the boundary",
+      },
+    });
+
+    await expect(pending).rejects.toThrow("CODEX_APP_SERVER_RPC_-32000");
+    await expect(pending).rejects.not.toThrow("sensitive provider response");
+    await client.close();
   });
 
   it("keeps a buffered request correlated when the pipe applies backpressure", async () => {

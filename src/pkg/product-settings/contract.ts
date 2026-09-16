@@ -31,6 +31,15 @@ const CodexHostCapabilitiesSchema = z.strictObject({
   compaction: z.literal(true),
 });
 
+const CodexHostLiveVerificationSchema = z.strictObject({
+  model: z.literal("gpt-6-astra"),
+  executableSha256: Sha256Schema,
+  schemaSha256: Sha256Schema,
+  buildId: Sha256Schema,
+  dynamicTool: z.literal("farol_next_ping"),
+  verifiedAt: CanonicalTimestampSchema,
+});
+
 export const CodexHostSelectionSchema = z.strictObject({
   executablePath: CanonicalAbsolutePathSchema,
   executableSha256: Sha256Schema,
@@ -38,6 +47,7 @@ export const CodexHostSelectionSchema = z.strictObject({
   protocol: z.literal("codex-app-server/v2"),
   schemaSha256: Sha256Schema,
   verifiedAt: CanonicalTimestampSchema,
+  liveVerification: CodexHostLiveVerificationSchema.nullable().default(null),
 });
 
 const ProductRelativePathSchema = z.string().refine((value) => {
@@ -228,6 +238,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("host.select-codex") }),
   z.strictObject({ kind: z.literal("host.verify-codex") }),
   z.strictObject({ kind: z.literal("host.remove-codex") }),
+  z.strictObject({ kind: z.literal("host.run-codex-smoke") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
@@ -320,6 +331,14 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     executableSha256: Sha256Schema,
     schemaSha256: Sha256Schema,
     capabilities: CodexHostCapabilitiesSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("host.codex-live"),
+    model: z.literal("gpt-6-astra"),
+    threadState: z.literal("completed"),
+    dynamicToolCalls: z.literal(1),
+    executableSha256: Sha256Schema,
+    schemaSha256: Sha256Schema,
   }),
   z.strictObject({
     kind: z.literal("chatgpt.readiness"),
@@ -632,6 +651,11 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_HOST_EXECUTABLE_UNSAFE",
       "CODEX_HOST_INCOMPATIBLE",
       "CODEX_HOST_PROBE_FAILED",
+      "CODEX_HOST_RECHECK_REQUIRED",
+      "CODEX_HOST_TASK_IN_PROGRESS",
+      "CODEX_HOST_MODEL_UNAVAILABLE",
+      "CODEX_HOST_LIVE_FAILED",
+      "CODEX_HOST_LIVE_OUTCOME_UNKNOWN",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

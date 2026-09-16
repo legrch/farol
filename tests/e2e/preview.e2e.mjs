@@ -802,21 +802,62 @@ if (args.length === 1 && args[0] === "--version") {
   process.stdout.write("codex-cli 9.8.7-e2e\\n");
   process.exit(0);
 }
-if (args.slice(0, 4).join(" ") !== "app-server generate-json-schema --experimental --out" || !args[4]) {
+if (args.join(" ") === "app-server --stdio") {
+  const readline = require("node:readline");
+  const lines = readline.createInterface({ input: process.stdin });
+  const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+  lines.on("line", (line) => {
+    const message = JSON.parse(line);
+    if (message.method === "initialize") {
+      send({ id: message.id, result: { userAgent: "codex-e2e/9.8.7" } });
+      return;
+    }
+    if (message.method === "initialized") return;
+    if (message.method === "model/list") {
+      send({ id: message.id, result: { data: [{ id: "gpt-6-astra" }], nextCursor: null } });
+      return;
+    }
+    if (message.method === "thread/start") {
+      const valid = message.params?.model === "gpt-6-astra" &&
+        message.params?.allowProviderModelFallback === false &&
+        message.params?.sandbox === "read-only" &&
+        message.params?.approvalPolicy === "never" &&
+        Array.isArray(message.params?.runtimeWorkspaceRoots) &&
+        message.params.runtimeWorkspaceRoots.length === 0;
+      if (!valid) {
+        send({ id: message.id, error: { code: -32000, message: "unsafe thread" } });
+        return;
+      }
+      send({ id: message.id, result: { model: "gpt-6-astra", thread: { id: "thread-e2e-parent", parentThreadId: null } } });
+      return;
+    }
+    if (message.method === "turn/start") {
+      const text = message.params?.input?.[0]?.text ?? "";
+      const nonce = /nonce ([a-z0-9-]+)/u.exec(text)?.[1];
+      send({ id: message.id, result: { turn: { id: "turn-e2e-parent", status: "inProgress", items: [] } } });
+      send({ id: "tool-e2e", method: "item/tool/call", params: { threadId: "thread-e2e-parent", turnId: "turn-e2e-parent", callId: "call-e2e-ping", tool: "farol_next_ping", arguments: { nonce } } });
+      return;
+    }
+    if (message.id === "tool-e2e" && message.result?.success === true) {
+      send({ method: "turn/completed", params: { threadId: "thread-e2e-parent", turn: { id: "turn-e2e-parent", status: "completed", items: [] } } });
+    }
+  });
+} else if (args.slice(0, 4).join(" ") !== "app-server generate-json-schema --experimental --out" || !args[4]) {
   process.exit(64);
-}
-const root = args[4];
-fs.mkdirSync(path.join(root, "v2"), { recursive: true });
-const files = {
-  "v2/ThreadStartParams.json": { properties: { dynamicTools: { items: { $ref: "#/definitions/DynamicToolSpec" } } } },
-  "DynamicToolCallParams.json": { required: ["threadId", "turnId", "callId", "tool", "arguments"] },
-  "ServerRequest.json": { oneOf: [{ properties: { method: { enum: ["item/tool/call"] } } }] },
-  "ClientRequest.json": { oneOf: [{ properties: { method: { enum: ["thread/compact/start"] } } }] },
-  "v2/ThreadListParams.json": { properties: { parentThreadId: {}, ancestorThreadId: {} } },
-  "v2/ThreadReadResponse.json": { definitions: { Thread: { properties: { parentThreadId: {} } }, ThreadItem: { oneOf: [{ properties: { type: { enum: ["collabAgentToolCall"] } } }] } } }
-};
-for (const [name, value] of Object.entries(files)) {
-  fs.writeFileSync(path.join(root, name), JSON.stringify(value) + "\\n", { mode: 0o600 });
+} else {
+  const root = args[4];
+  fs.mkdirSync(path.join(root, "v2"), { recursive: true });
+  const files = {
+    "v2/ThreadStartParams.json": { properties: { dynamicTools: { items: { $ref: "#/definitions/DynamicToolSpec" } } } },
+    "DynamicToolCallParams.json": { required: ["threadId", "turnId", "callId", "tool", "arguments"] },
+    "ServerRequest.json": { oneOf: [{ properties: { method: { enum: ["item/tool/call"] } } }] },
+    "ClientRequest.json": { oneOf: [{ properties: { method: { enum: ["thread/compact/start"] } } }] },
+    "v2/ThreadListParams.json": { properties: { parentThreadId: {}, ancestorThreadId: {} } },
+    "v2/ThreadReadResponse.json": { definitions: { Thread: { properties: { parentThreadId: {} } }, ThreadItem: { oneOf: [{ properties: { type: { enum: ["collabAgentToolCall"] } } }] } } }
+  };
+  for (const [name, value] of Object.entries(files)) {
+    fs.writeFileSync(path.join(root, name), JSON.stringify(value) + "\\n", { mode: 0o600 });
+  }
 }
 `,
     { mode: 0o700 },
@@ -1922,9 +1963,9 @@ async function completeSetup(
       await instance.window.waitForFunction(
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
-            "Verified" &&
+            "Needs action" &&
           document.querySelector("#setup-live-primary")?.textContent ===
-            "Recheck host",
+            "Run live check",
       );
       let bootstrap = await instance.window.evaluate(() =>
         window.farolNext.bootstrap(),
@@ -1937,15 +1978,18 @@ async function completeSetup(
         bootstrap.configuration.settings.nativeHosts.codex.version,
         "9.8.7-e2e",
       );
+      assert.equal(bootstrap.configuration.settings.setup.hosts.verified, null);
       assert.equal(
-        bootstrap.configuration.settings.setup.hosts.verified.configRevision,
-        bootstrap.configuration.settings.nativeHosts.generation,
+        bootstrap.configuration.settings.nativeHosts.codex.liveVerification,
+        null,
       );
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(() =>
-        document
-          .querySelector("#settings-feedback")
-          ?.textContent?.includes("Codex 9.8.7-e2e verified"),
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+            "Verified" &&
+          document.querySelector("#setup-live-primary")?.textContent ===
+            "Run live check again",
       );
       bootstrap = await instance.window.evaluate(() =>
         window.farolNext.bootstrap(),
@@ -1953,6 +1997,11 @@ async function completeSetup(
       assert.equal(
         bootstrap.configuration.settings.setup.hosts.verified.configRevision,
         bootstrap.configuration.settings.nativeHosts.generation,
+      );
+      assert.equal(
+        bootstrap.configuration.settings.nativeHosts.codex.liveVerification
+          .model,
+        "gpt-6-astra",
       );
     }
     if (capture) {
@@ -2145,7 +2194,7 @@ try {
     );
   }
   await completeSetup(normal, true, true, true, true);
-  cases.push("native-codex-host-selected-and-rechecked");
+  cases.push("native-codex-host-live-tool-verified");
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
     () => document.documentElement.dataset.windowActive === "false",
@@ -3235,6 +3284,10 @@ try {
     normal.codexFixture,
   );
   assert.equal(restartedSettings.nativeHosts.codex.version, "9.8.7-e2e");
+  assert.equal(
+    restartedSettings.nativeHosts.codex.liveVerification.model,
+    "gpt-6-astra",
+  );
   assert.equal(
     restartedSettings.setup.hosts.verified.configRevision,
     restartedSettings.nativeHosts.generation,

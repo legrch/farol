@@ -77,6 +77,19 @@ const codexHostInputSchema = z.strictObject({
 
 const codexHostFailureSchema = z.enum(["unreachable", "unsupported"]);
 
+const codexHostLiveInputSchema = z.strictObject({
+  model: z.literal("gpt-6-astra"),
+  executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  schemaSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
+const codexHostLiveFailureSchema = z.enum([
+  "failed",
+  "model_unavailable",
+  "outcome_unknown",
+]);
+
 function settingsError(error: unknown): ProductConfigurationSnapshot {
   const message = error instanceof Error ? error.message : "";
   if (message === "SETTINGS_CORRUPT") {
@@ -667,8 +680,22 @@ export class ProductConfigurationService {
     const parsed = codexHostInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.mutate((settings) => {
-      const generation = settings.nativeHosts.generation + 1;
+      const previous = settings.nativeHosts.codex;
+      const sameContract =
+        previous?.executablePath === parsed.data.executablePath &&
+        previous.executableSha256 === parsed.data.executableSha256 &&
+        previous.version === parsed.data.version &&
+        previous.protocol === parsed.data.protocol &&
+        previous.schemaSha256 === parsed.data.schemaSha256;
+      const generation = sameContract
+        ? settings.nativeHosts.generation
+        : settings.nativeHosts.generation + 1;
       const verifiedAt = this.now();
+      const liveVerification =
+        sameContract &&
+        previous.liveVerification?.buildId === parsed.data.buildId
+          ? previous.liveVerification
+          : null;
       return {
         ...settings,
         revision: settings.revision + 1,
@@ -681,6 +708,70 @@ export class ProductConfigurationService {
             protocol: parsed.data.protocol,
             schemaSha256: parsed.data.schemaSha256,
             verifiedAt,
+            liveVerification,
+          },
+        },
+        setup: {
+          ...settings.setup,
+          hosts: {
+            ...settings.setup.hosts,
+            visited: true,
+            skipped: false,
+            configured: true,
+            reachable: "reachable",
+            verified: liveVerification
+              ? {
+                  profile: "codex.app-server.live/1",
+                  configRevision: generation,
+                  workspaceId: null,
+                  runtimeGeneration: parsed.data.executableSha256,
+                  buildId: liveVerification.buildId,
+                  protocol: parsed.data.protocol,
+                  verifiedAt: liveVerification.verifiedAt,
+                }
+              : null,
+            needsAction: liveVerification
+              ? null
+              : "Run the live Codex host check.",
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      };
+    });
+  }
+
+  async recordCodexHostLiveVerification(
+    input: unknown,
+  ): Promise<MutationResult> {
+    const parsed = codexHostLiveInputSchema.safeParse(input);
+    if (!parsed.success || this.current === null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    const selected = this.current.nativeHosts.codex;
+    if (
+      !selected ||
+      selected.executableSha256 !== parsed.data.executableSha256 ||
+      selected.schemaSha256 !== parsed.data.schemaSha256
+    ) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    return this.mutate((settings) => {
+      const host = settings.nativeHosts.codex;
+      if (!host) return settings;
+      const verifiedAt = this.now();
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        nativeHosts: {
+          ...settings.nativeHosts,
+          codex: {
+            ...host,
+            liveVerification: {
+              ...parsed.data,
+              dynamicTool: "farol_next_ping",
+              verifiedAt,
+            },
           },
         },
         setup: {
@@ -692,12 +783,12 @@ export class ProductConfigurationService {
             configured: true,
             reachable: "reachable",
             verified: {
-              profile: "codex.app-server/2",
-              configRevision: generation,
+              profile: "codex.app-server.live/1",
+              configRevision: settings.nativeHosts.generation,
               workspaceId: null,
               runtimeGeneration: parsed.data.executableSha256,
               buildId: parsed.data.buildId,
-              protocol: parsed.data.protocol,
+              protocol: host.protocol,
               verifiedAt,
             },
             needsAction: null,
@@ -709,34 +800,89 @@ export class ProductConfigurationService {
     });
   }
 
+  async recordCodexHostLiveFailure(input: unknown): Promise<MutationResult> {
+    const parsed = codexHostLiveFailureSchema.safeParse(input);
+    if (!parsed.success || this.current?.nativeHosts.codex == null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    return this.mutate((settings) => {
+      const host = settings.nativeHosts.codex;
+      if (!host) return settings;
+      const outcomeUnknown = parsed.data === "outcome_unknown";
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        nativeHosts: {
+          ...settings.nativeHosts,
+          codex: { ...host, liveVerification: null },
+        },
+        setup: {
+          ...settings.setup,
+          hosts: {
+            ...settings.setup.hosts,
+            visited: true,
+            skipped: false,
+            configured: true,
+            reachable:
+              parsed.data === "model_unavailable"
+                ? "reachable"
+                : outcomeUnknown
+                  ? "unknown"
+                  : "unreachable",
+            verified: null,
+            needsAction: outcomeUnknown
+              ? "Inspect the Codex host before deliberately running another live check."
+              : parsed.data === "failed"
+                ? "Recheck the selected Codex executable, then run the live check again."
+                : null,
+            unavailable:
+              parsed.data === "model_unavailable"
+                ? "The selected host does not offer gpt-6-astra without provider fallback."
+                : null,
+            outcomeUnknown,
+          },
+        },
+      };
+    });
+  }
+
   async recordCodexHostFailure(input: unknown): Promise<MutationResult> {
     const parsed = codexHostFailureSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      setup: {
-        ...settings.setup,
-        hosts: {
-          ...settings.setup.hosts,
-          visited: true,
-          skipped: false,
-          configured: settings.nativeHosts.codex !== null,
-          reachable:
-            parsed.data === "unreachable" ? "unreachable" : "reachable",
-          verified: null,
-          needsAction:
-            parsed.data === "unreachable"
-              ? "Choose the Codex executable again or restore it, then recheck."
-              : null,
-          unavailable:
-            parsed.data === "unsupported"
-              ? "This Codex build does not expose the required bounded App Server contract."
-              : null,
-          outcomeUnknown: false,
+    return this.mutate((settings) => {
+      const selected = settings.nativeHosts.codex;
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        nativeHosts: selected
+          ? {
+              generation: settings.nativeHosts.generation + 1,
+              codex: { ...selected, liveVerification: null },
+            }
+          : settings.nativeHosts,
+        setup: {
+          ...settings.setup,
+          hosts: {
+            ...settings.setup.hosts,
+            visited: true,
+            skipped: false,
+            configured: selected !== null,
+            reachable:
+              parsed.data === "unreachable" ? "unreachable" : "reachable",
+            verified: null,
+            needsAction:
+              parsed.data === "unreachable"
+                ? "Choose the Codex executable again or restore it, then recheck."
+                : null,
+            unavailable:
+              parsed.data === "unsupported"
+                ? "This Codex build does not expose the required bounded App Server contract."
+                : null,
+            outcomeUnknown: false,
+          },
         },
-      },
-    }));
+      };
+    });
   }
 
   async clearCodexHost(): Promise<MutationResult> {

@@ -13,7 +13,7 @@ import {
   type SaveDialogOptions,
   type UtilityProcess,
 } from "electron";
-import { lstat, realpath } from "node:fs/promises";
+import { chmod, lstat, mkdir, realpath } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -115,6 +115,8 @@ import {
   type ChatGptConversationRecord,
 } from "./chatgpt-conversation-store";
 import { probeCodexHost } from "./codex-host-probe";
+import { launchCodexAppServer } from "./codex-app-server-process";
+import { runCodexHostSmoke } from "./codex-host-smoke";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -243,6 +245,7 @@ type PendingWorkspaceEdit = Readonly<{
 }>;
 let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
 let workspaceMutationAdmission = false;
+let codexHostTaskAdmission = false;
 
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
@@ -515,6 +518,26 @@ function codexHostProbeRoot(): string {
     "farol-next-state",
     "codex-host-probe",
   );
+}
+
+async function codexHostRuntimeRoot(): Promise<string> {
+  const root = path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "codex-host-runtime",
+  );
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const info = await lstat(root);
+  const effectiveUser = process.geteuid?.();
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    (effectiveUser !== undefined && info.uid !== effectiveUser)
+  ) {
+    throw new Error("CODEX_HOST_RUNTIME_UNSAFE");
+  }
+  if ((info.mode & 0o077) !== 0) await chmod(root, 0o700);
+  return root;
 }
 
 function chatGptConversationState():
@@ -913,6 +936,117 @@ async function configureProduct(
       return verifyCodexExecutable(
         snapshot.settings.nativeHosts.codex.executablePath,
       );
+    }
+    case "host.run-codex-smoke": {
+      if (codexHostTaskAdmission) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+      const snapshot = configuration.snapshot();
+      const selected =
+        snapshot.status === "ready"
+          ? snapshot.settings.nativeHosts.codex
+          : null;
+      if (!selected) {
+        return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
+      }
+      codexHostTaskAdmission = true;
+      let client: Awaited<ReturnType<typeof launchCodexAppServer>> | null =
+        null;
+      try {
+        const probe = await probeCodexHost({
+          executablePath: selected.executablePath,
+          scratchRoot: codexHostProbeRoot(),
+        });
+        const sameContract =
+          probe.executableSha256 === selected.executableSha256 &&
+          probe.schemaSha256 === selected.schemaSha256 &&
+          probe.version === selected.version &&
+          probe.protocol === selected.protocol;
+        const recordedContract = await configuration.recordCodexHost({
+          executablePath: probe.executablePath,
+          executableSha256: probe.executableSha256,
+          version: probe.version,
+          protocol: probe.protocol,
+          schemaSha256: probe.schemaSha256,
+          buildId: buildIdentity.buildId,
+        });
+        if (!recordedContract.ok) {
+          return ProductConfigurationResultSchema.parse(recordedContract);
+        }
+        if (!sameContract) {
+          return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
+        }
+        const runtimeRoot = await codexHostRuntimeRoot();
+        const configuredCodexHome = process.env.CODEX_HOME;
+        client = await launchCodexAppServer({
+          executablePath: selected.executablePath,
+          cwd: runtimeRoot,
+          homePath: app.getPath("home"),
+          tempPath: app.getPath("temp"),
+          clientVersion: buildIdentity.version,
+          ...(configuredCodexHome &&
+          path.isAbsolute(configuredCodexHome) &&
+          !configuredCodexHome.includes("\0")
+            ? { codexHomePath: configuredCodexHome }
+            : {}),
+        });
+        const live = await runCodexHostSmoke(client, {
+          model: "gpt-6-astra",
+          cwd: runtimeRoot,
+          nonce: randomUUID(),
+          timeoutMs: 120_000,
+        });
+        const recorded = await configuration.recordCodexHostLiveVerification({
+          model: live.model,
+          executableSha256: probe.executableSha256,
+          schemaSha256: probe.schemaSha256,
+          buildId: buildIdentity.buildId,
+        });
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        return ProductConfigurationResultSchema.parse({
+          ...recorded,
+          evidence: {
+            kind: "host.codex-live",
+            ...live,
+            executableSha256: probe.executableSha256,
+            schemaSha256: probe.schemaSha256,
+          },
+        });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "";
+        const outcomeUnknown = new Set([
+          "CODEX_APP_SERVER_EXITED",
+          "CODEX_APP_SERVER_FAILED",
+          "CODEX_APP_SERVER_REQUEST_TIMEOUT",
+          "CODEX_HOST_SMOKE_CORRELATION",
+          "CODEX_HOST_SMOKE_OUTCOME_UNKNOWN",
+          "CODEX_HOST_SMOKE_TIMEOUT",
+        ]).has(code);
+        const failureState =
+          code === "CODEX_HOST_MODEL_UNAVAILABLE"
+            ? "model_unavailable"
+            : outcomeUnknown
+              ? "outcome_unknown"
+              : "failed";
+        const recorded =
+          await configuration.recordCodexHostLiveFailure(failureState);
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        if (code === "CODEX_HOST_MODEL_UNAVAILABLE") {
+          return configurationFailure("CODEX_HOST_MODEL_UNAVAILABLE");
+        }
+        return configurationFailure(
+          outcomeUnknown
+            ? "CODEX_HOST_LIVE_OUTCOME_UNKNOWN"
+            : "CODEX_HOST_LIVE_FAILED",
+        );
+      } finally {
+        await client?.close().catch(() => undefined);
+        codexHostTaskAdmission = false;
+      }
     }
     case "host.remove-codex":
       return ProductConfigurationResultSchema.parse(

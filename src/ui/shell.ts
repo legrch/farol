@@ -1118,29 +1118,32 @@ async function configureProduct(
       : command.kind === "host.select-codex" ||
           command.kind === "host.verify-codex"
         ? "Verifying the selected Codex executable and bounded App Server contract…"
-        : command.kind === "host.remove-codex"
-          ? "Removing the saved Codex host selection…"
-          : command.kind === "chatgpt.prepare-attachment-task"
-            ? "Validating and privately staging the selected attachments…"
-            : command.kind === "chatgpt.submit-attachment-task"
-              ? "Uploading the reviewed attachments and submitting once…"
-              : command.kind === "chatgpt.cancel-attachment-task"
-                ? "Removing the private attachment staging…"
-                : command.kind === "chatgpt.prepare-readonly-task"
-                  ? "Reading the selected file for review…"
-                  : command.kind === "chatgpt.submit-readonly-task"
-                    ? "Submitting once and waiting for one ChatGPT result…"
-                    : command.kind === "chatgpt.cancel-readonly-task"
-                      ? "Discarding the prepared context…"
-                      : command.kind === "chatgpt.reset-conversation"
-                        ? "Clearing the retained conversation binding…"
-                        : command.kind === "computer.prepare-workspace-edit"
-                          ? "Reading the selected file and preparing a content-free edit review…"
-                          : command.kind === "computer.apply-workspace-edit"
-                            ? "Applying this guarded edit once…"
-                            : command.kind === "computer.cancel-workspace-edit"
-                              ? "Discarding the prepared edit…"
-                              : "Saving and reading back…";
+        : command.kind === "host.run-codex-smoke"
+          ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
+          : command.kind === "host.remove-codex"
+            ? "Removing the saved Codex host selection…"
+            : command.kind === "chatgpt.prepare-attachment-task"
+              ? "Validating and privately staging the selected attachments…"
+              : command.kind === "chatgpt.submit-attachment-task"
+                ? "Uploading the reviewed attachments and submitting once…"
+                : command.kind === "chatgpt.cancel-attachment-task"
+                  ? "Removing the private attachment staging…"
+                  : command.kind === "chatgpt.prepare-readonly-task"
+                    ? "Reading the selected file for review…"
+                    : command.kind === "chatgpt.submit-readonly-task"
+                      ? "Submitting once and waiting for one ChatGPT result…"
+                      : command.kind === "chatgpt.cancel-readonly-task"
+                        ? "Discarding the prepared context…"
+                        : command.kind === "chatgpt.reset-conversation"
+                          ? "Clearing the retained conversation binding…"
+                          : command.kind === "computer.prepare-workspace-edit"
+                            ? "Reading the selected file and preparing a content-free edit review…"
+                            : command.kind === "computer.apply-workspace-edit"
+                              ? "Applying this guarded edit once…"
+                              : command.kind ===
+                                  "computer.cancel-workspace-edit"
+                                ? "Discarding the prepared edit…"
+                                : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1218,7 +1221,9 @@ async function configureProduct(
   } else if (evidence?.kind === "support.exported") {
     settingsFeedback = `Saved ${evidence.fileName} · ${evidence.bytes} bytes · ${evidence.sha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.codex-probe") {
-    settingsFeedback = `Codex ${evidence.version} verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
+    settingsFeedback = `Codex ${evidence.version} contract verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "host.codex-live") {
+    settingsFeedback = `${evidence.model} host turn completed with ${evidence.dynamicToolCalls} correlated Farol Next tool call · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
@@ -1348,7 +1353,7 @@ function renderSettings(): void {
     [
       "Native Codex host",
       configured.status === "ready" && configured.settings.nativeHosts.codex
-        ? `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol} · verified ${configured.settings.nativeHosts.codex.verifiedAt}`
+        ? `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol} · contract ${configured.settings.nativeHosts.codex.verifiedAt} · live ${configured.settings.nativeHosts.codex.liveVerification?.verifiedAt ?? "not run"}`
         : "Not selected",
     ],
     [
@@ -1547,7 +1552,7 @@ function renderSettings(): void {
         choose.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.select-codex" },
-            "Codex host selected and verified.",
+            "Codex host selected and contract verified.",
           );
         });
         const verify = document.createElement("button");
@@ -1560,6 +1565,21 @@ function renderSettings(): void {
             "Codex host rechecked.",
           );
         });
+        const live = document.createElement("button");
+        live.type = "button";
+        live.textContent = selected?.liveVerification
+          ? "Run live check again"
+          : "Run live check";
+        live.disabled = selected === null || state.outcomeUnknown;
+        live.title = state.outcomeUnknown
+          ? "Recheck the host contract before deliberately running another live turn"
+          : "Run one gpt-6-astra turn with the bounded Farol Next ping tool";
+        live.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.run-codex-smoke" },
+            "Live Codex host check completed.",
+          );
+        });
         const remove = document.createElement("button");
         remove.type = "button";
         remove.textContent = "Remove";
@@ -1570,7 +1590,7 @@ function renderSettings(): void {
             "Codex host selection removed.",
           );
         });
-        actions.append(choose, verify, remove);
+        actions.append(choose, verify, live, remove);
         row.append(actions);
       }
       return row;
@@ -1730,15 +1750,31 @@ function renderSetup(): void {
     };
   } else if (step.id === "hosts") {
     const host = configured.settings.nativeHosts.codex;
+    const readiness = configured.settings.setup.hosts;
     liveSummary.textContent = host
-      ? `${readinessDetail(configured.settings.setup.hosts)} Codex ${host.version} is selected; rechecking recalculates both digests.`
+      ? `${readinessDetail(readiness)} Codex ${host.version} is selected; a live check uses gpt-6-astra without provider fallback and stores no prompt or response.`
       : "Choose the exact Codex executable. Farol Next will not search your shell PATH or infer a host from configuration files.";
-    livePrimary.textContent = host ? "Recheck host" : "Choose executable…";
+    livePrimary.textContent = !host
+      ? "Choose executable…"
+      : readiness.outcomeUnknown
+        ? "Recheck contract"
+        : host.liveVerification
+          ? "Run live check again"
+          : "Run live check";
     livePrimary.disabled = false;
     setupPrimaryAction = async () => {
+      const kind = !host
+        ? "host.select-codex"
+        : readiness.outcomeUnknown
+          ? "host.verify-codex"
+          : "host.run-codex-smoke";
       await configureProduct(
-        { kind: host ? "host.verify-codex" : "host.select-codex" },
-        host ? "Codex host rechecked." : "Codex host selected and verified.",
+        { kind },
+        !host
+          ? "Codex host selected and contract verified."
+          : kind === "host.verify-codex"
+            ? "Codex host contract rechecked."
+            : "Live Codex host check completed.",
       );
     };
   } else {

@@ -18,7 +18,7 @@ export type CodexAppServerProcess = Readonly<{
   stdin: Writable;
   stdout: Readable;
   stderr: Readable;
-  pid?: number;
+  pid?: number | undefined;
   kill(signal?: NodeJS.Signals): boolean;
   on(
     event: "exit",
@@ -34,6 +34,7 @@ export type CodexAppServerClientOptions = Readonly<{
 }>;
 
 type ServerRequestHandler = (params: unknown) => Promise<unknown>;
+type ServerNotificationHandler = (params: unknown) => void;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_FRAME_BYTES = 2 * 1_024 * 1_024;
@@ -61,6 +62,10 @@ function rpcError(value: unknown): value is JsonRpcError {
 export class CodexAppServerClient {
   private readonly pending = new Map<RequestId, PendingRequest>();
   private readonly handlers = new Map<string, ServerRequestHandler>();
+  private readonly notificationHandlers = new Map<
+    string,
+    ServerNotificationHandler
+  >();
   private readonly requestTimeoutMs: number;
   private readonly maxFrameBytes: number;
   private nextId = 1;
@@ -154,6 +159,21 @@ export class CodexAppServerClient {
     };
   }
 
+  handleNotification(
+    method: string,
+    handler: ServerNotificationHandler,
+  ): () => void {
+    if (method.length === 0 || this.notificationHandlers.has(method)) {
+      throw protocolError("CODEX_APP_SERVER_NOTIFICATION_HANDLER_INVALID");
+    }
+    this.notificationHandlers.set(method, handler);
+    return () => {
+      if (this.notificationHandlers.get(method) === handler) {
+        this.notificationHandlers.delete(method);
+      }
+    };
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -213,9 +233,7 @@ export class CodexAppServerClient {
       if ("error" in message) {
         pending.reject(
           rpcError(message.error)
-            ? protocolError(
-                `CODEX_APP_SERVER_RPC_${message.error.code}:${message.error.message}`,
-              )
+            ? protocolError(`CODEX_APP_SERVER_RPC_${message.error.code}`)
             : protocolError("CODEX_APP_SERVER_RPC_ERROR_INVALID"),
         );
       } else if ("result" in message) {
@@ -225,7 +243,16 @@ export class CodexAppServerClient {
       }
       return;
     }
-    if (typeof message.method === "string") return;
+    if (typeof message.method === "string") {
+      const handler = this.notificationHandlers.get(message.method);
+      if (!handler) return;
+      try {
+        handler(message.params);
+      } catch {
+        this.fail("CODEX_APP_SERVER_NOTIFICATION_FAILED", true);
+      }
+      return;
+    }
     this.fail("CODEX_APP_SERVER_MESSAGE_INVALID", true);
   }
 

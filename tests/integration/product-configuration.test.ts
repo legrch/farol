@@ -196,6 +196,70 @@ describe("Farol Next product configuration", () => {
               protocol: "codex-app-server/v2",
               schemaSha256: "b".repeat(64),
               verifiedAt: "2026-09-16T10:00:00.000Z",
+              liveVerification: null,
+            },
+          },
+          setup: {
+            hosts: {
+              configured: true,
+              reachable: "reachable",
+              needsAction: "Run the live Codex host check.",
+              unavailable: null,
+              outcomeUnknown: false,
+              verified: null,
+            },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(recorded.snapshot);
+  });
+
+  it("records live Codex readiness only for the exact selected contract", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    const live = await service.recordCodexHostLiveVerification({
+      model: "gpt-6-astra",
+      executableSha256: "a".repeat(64),
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    expect(live).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          nativeHosts: {
+            generation: 2,
+            codex: {
+              liveVerification: {
+                model: "gpt-6-astra",
+                executableSha256: "a".repeat(64),
+                schemaSha256: "b".repeat(64),
+                buildId: "c".repeat(64),
+                dynamicTool: "farol_next_ping",
+                verifiedAt: "2026-09-16T10:00:00.000Z",
+              },
             },
           },
           setup: {
@@ -206,7 +270,7 @@ describe("Farol Next product configuration", () => {
               unavailable: null,
               outcomeUnknown: false,
               verified: {
-                profile: "codex.app-server/2",
+                profile: "codex.app-server.live/1",
                 configRevision: 2,
                 workspaceId: null,
                 runtimeGeneration: "a".repeat(64),
@@ -220,12 +284,59 @@ describe("Farol Next product configuration", () => {
       },
     });
 
-    const restarted = new ProductConfigurationService(
+    await expect(
+      service.recordCodexHostLiveVerification({
+        model: "gpt-6-astra",
+        executableSha256: "d".repeat(64),
+        schemaSha256: "b".repeat(64),
+        buildId: "c".repeat(64),
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "SETTINGS_INPUT_INVALID" });
+  });
+
+  it("retains an outcome-unknown live host turn without permitting a blind green retry", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
       new ProductSettingsStore({ root }),
       dependencies(),
     );
-    await restarted.initialize();
-    expect(restarted.snapshot()).toEqual(recorded.snapshot);
+    await service.initialize();
+    await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+    await service.recordCodexHostLiveVerification({
+      model: "gpt-6-astra",
+      executableSha256: "a".repeat(64),
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    const failed = await service.recordCodexHostLiveFailure("outcome_unknown");
+
+    expect(failed).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          nativeHosts: { codex: { liveVerification: null } },
+          setup: {
+            hosts: {
+              configured: true,
+              reachable: "unknown",
+              verified: null,
+              outcomeUnknown: true,
+              needsAction:
+                "Inspect the Codex host before deliberately running another live check.",
+            },
+          },
+        },
+      },
+    });
   });
 
   it("clears a selected Codex host and invalidates host readiness", async () => {
@@ -867,6 +978,11 @@ describe("Farol Next product configuration", () => {
       }).success,
     ).toBe(true);
     expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "host.run-codex-smoke",
+      }).success,
+    ).toBe(true);
+    expect(
       ProductConfigurationEvidenceSchema.safeParse({
         kind: "host.codex-probe",
         version: "0.153.4",
@@ -899,5 +1015,15 @@ describe("Farol Next product configuration", () => {
         },
       }).success,
     ).toBe(false);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "host.codex-live",
+        model: "gpt-6-astra",
+        threadState: "completed",
+        dynamicToolCalls: 1,
+        executableSha256: "a".repeat(64),
+        schemaSha256: "b".repeat(64),
+      }).success,
+    ).toBe(true);
   });
 });
