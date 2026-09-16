@@ -39,6 +39,37 @@ const checkpointContentSchema = z.strictObject({
   nextSafeStep: boundedText,
 });
 
+const bindingSchema = z.strictObject({
+  ownerId: z.string().min(1).max(160),
+  taskId: z.string().min(1).max(160),
+  hostThreadId: z.string().min(1).max(160),
+  sessionId: z.string().min(1).max(160),
+  providerProfileId: z.string().min(1).max(160),
+  modelId: z.string().min(1).max(160),
+  mode: z.string().min(1).max(160),
+});
+
+const checkpointEnvelopeSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  checkpointId: z.string().min(1).max(160),
+  operationId: z.string().min(1).max(160),
+  providerOperationId: z.string().min(1).max(160),
+  binding: bindingSchema,
+  epoch: z.number().int().positive(),
+  source: z.enum(["retained_agent", "canonical_history"]),
+  sourceBoundary: z.string().min(1).max(160),
+  sourceCursor: z.string().min(1).max(512),
+  parentCheckpointId: z.string().min(1).max(160).nullable(),
+  provider: z.strictObject({
+    profileId: z.string().min(1).max(160),
+    modelId: z.string().min(1).max(160),
+    mode: z.string().min(1).max(160),
+  }),
+  createdAt: z.number().finite().nonnegative(),
+  validation: z.literal("validated"),
+  content: checkpointContentSchema,
+});
+
 export type CheckpointContent = Readonly<
   z.infer<typeof checkpointContentSchema>
 >;
@@ -65,7 +96,10 @@ export type CheckpointEnvelope = Readonly<{
 }>;
 
 export type CheckpointErrorCode =
-  "CHECKPOINT_CONTENT_INVALID" | "CHECKPOINT_CONTENT_OVERSIZED";
+  | "CHECKPOINT_CONTENT_INVALID"
+  | "CHECKPOINT_CONTENT_OVERSIZED"
+  | "CHECKPOINT_ENVELOPE_INVALID"
+  | "CHECKPOINT_PROVIDER_BINDING_MISMATCH";
 
 export function validateCheckpointContent(
   candidate: unknown,
@@ -87,6 +121,32 @@ export function validateCheckpointContent(
   const parsed = checkpointContentSchema.safeParse(candidate);
   if (!parsed.success) return failure("CHECKPOINT_CONTENT_INVALID");
   return success(structuredClone(parsed.data));
+}
+
+export function validateCheckpointEnvelope(
+  candidate: unknown,
+  maximumContentBytes: number,
+): Result<CheckpointEnvelope, CheckpointErrorCode> {
+  const parsed = checkpointEnvelopeSchema.safeParse(candidate);
+  if (!parsed.success) return failure("CHECKPOINT_ENVELOPE_INVALID");
+  const content = validateCheckpointContent(
+    parsed.data.content,
+    maximumContentBytes,
+  );
+  if (!content.ok) return content;
+  if (
+    parsed.data.provider.profileId !== parsed.data.binding.providerProfileId ||
+    parsed.data.provider.modelId !== parsed.data.binding.modelId ||
+    parsed.data.provider.mode !== parsed.data.binding.mode
+  ) {
+    return failure("CHECKPOINT_PROVIDER_BINDING_MISMATCH");
+  }
+  return success(
+    structuredClone({
+      ...parsed.data,
+      content: content.value,
+    }) as CheckpointEnvelope,
+  );
 }
 
 export function createCheckpointEnvelope(

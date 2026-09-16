@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { CheckpointStore } from "../../app/port/checkpoint-store";
 import type { ContextRepository } from "../../app/port/context-repository";
 import {
-  validateCheckpointContent,
+  validateCheckpointEnvelope,
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 import {
@@ -62,31 +62,10 @@ const sessionRecordSchema = z.strictObject({
   session: sessionSchema,
 });
 
-const checkpointEnvelopeSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  checkpointId: z.string().min(1).max(160),
-  operationId: z.string().min(1).max(160),
-  providerOperationId: z.string().min(1).max(160),
-  binding: bindingSchema,
-  epoch: z.number().int().positive(),
-  source: z.enum(["retained_agent", "canonical_history"]),
-  sourceBoundary: z.string().min(1).max(160),
-  sourceCursor: z.string().min(1).max(512),
-  parentCheckpointId: z.string().min(1).max(160).nullable(),
-  provider: z.strictObject({
-    profileId: z.string().min(1).max(160),
-    modelId: z.string().min(1).max(160),
-    mode: z.string().min(1).max(160),
-  }),
-  createdAt: z.number().finite().nonnegative(),
-  validation: z.literal("validated"),
-  content: z.unknown(),
-});
-
 const checkpointRecordSchema = z.strictObject({
   schemaVersion: z.literal(1),
   kind: z.literal("context_checkpoint"),
-  checkpoint: checkpointEnvelopeSchema,
+  checkpoint: z.unknown(),
 });
 
 const CLOSE_ON_EXEC =
@@ -264,25 +243,12 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   private validateCheckpoint(candidate: unknown): CheckpointEnvelope {
-    const parsed = checkpointEnvelopeSchema.safeParse(candidate);
-    if (!parsed.success) throw new Error("CHECKPOINT_STATE_INVALID");
-    const content = validateCheckpointContent(
-      parsed.data.content,
+    const parsed = validateCheckpointEnvelope(
+      candidate,
       this.maximumCheckpointContentBytes,
     );
-    if (!content.ok) throw new Error(content.error.code);
-    const checkpoint = {
-      ...parsed.data,
-      content: content.value,
-    } as CheckpointEnvelope;
-    if (
-      checkpoint.provider.profileId !== checkpoint.binding.providerProfileId ||
-      checkpoint.provider.modelId !== checkpoint.binding.modelId ||
-      checkpoint.provider.mode !== checkpoint.binding.mode
-    ) {
-      throw new Error("CHECKPOINT_PROVIDER_BINDING_MISMATCH");
-    }
-    return structuredClone(checkpoint);
+    if (!parsed.ok) throw new Error(parsed.error.code);
+    return parsed.value;
   }
 
   private async readCheckpointFile(
