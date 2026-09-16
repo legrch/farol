@@ -3131,6 +3131,8 @@ try {
     await normal.window.waitForFunction(
       () => document.documentElement.dataset.sidebar === "full",
     );
+    await activateForNativeFocusProof(normal.application);
+    assert.equal((await nativeWindowChrome(normal.application)).focused, true);
 
     await sendShortcutFromTask(normal.application, "task-atlantic");
     await normal.window
