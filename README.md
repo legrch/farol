@@ -31,7 +31,13 @@ main -> Agent -> Critic delegation, retains explicit owner narrowing including
 do-not-inspect paths, and intersects every Computer action with current Computer
 policy. Negative results retain exact request correlation and distinguish a known
 refusal from an outcome-unknown transport. Agent lifecycle tests still use an
-in-memory host double; they do not prove native child admission.
+in-memory host double; they do not prove native child admission. The Agent app
+seam now persists assignment correlation in a private atomic store, rejoins an
+already-known running child after restart without another spawn, distinguishes a
+durably retained result from a memory-only result, and records an exact
+parent/child/result delivery acknowledgement. That persistence path is exercised
+with real temporary files, but is not yet composed with a native host or the product
+UI.
 
 ## Reproduce
 

@@ -116,6 +116,11 @@ carried into the native read-only deny list. A delegate still cannot exceed the
 TaskGrant, underlying Computer approval, native host-task authority, or an explicit
 narrower owner instruction. Prompt text is never authority. Native Agent admission
 and permitted verification-command execution remain separate unproved boundaries.
+The Agent app seam persists assignment/child correlation in a private atomic store,
+rejoins only the same known running child after restart, and records result retention
+separately from an exact parent-delivery acknowledgement. Its host remains an
+in-memory test double and the seam is not selected by the product runtime, so this is
+durable orchestration evidence rather than native Agent proof.
 
 The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
 events already acknowledged by the receiving client. If the unacknowledged window
