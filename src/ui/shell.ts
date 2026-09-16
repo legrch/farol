@@ -623,6 +623,7 @@ function readinessLabel(readiness: Readiness): string {
   if (readiness.verified) return "Verified";
   if (readiness.outcomeUnknown) return "Outcome unknown";
   if (readiness.unavailable) return "Unavailable";
+  if (readiness.needsAction) return "Needs action";
   if (readiness.reachable === "reachable") return "Reachable · verify";
   if (readiness.reachable === "unreachable") return "Unreachable";
   if (readiness.configured) return "Configured · verify";
