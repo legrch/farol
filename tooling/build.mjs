@@ -13,6 +13,11 @@ import {
   verifyGeistBuild,
   verifyGeistSources,
 } from "./font-contract.mjs";
+import {
+  assertNativeHelperBytes,
+  NATIVE_SAFE_OPEN_HELPER,
+  verifyNativeHelper,
+} from "./native-helper-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
 
 const root = process.cwd();
@@ -152,6 +157,14 @@ await Promise.all([
     assertResourceManifest(JSON.parse(bytes.toString("utf8")));
     return fs.writeFile("dist/app/resource-manifest.json", bytes);
   }),
+  readBuildInput(NATIVE_SAFE_OPEN_HELPER.source).then(async (bytes) => {
+    assertNativeHelperBytes(bytes);
+    const destination = path.join(output, NATIVE_SAFE_OPEN_HELPER.output);
+    await fs.writeFile(destination, bytes, {
+      mode: NATIVE_SAFE_OPEN_HELPER.mode,
+    });
+    await fs.chmod(destination, NATIVE_SAFE_OPEN_HELPER.mode);
+  }),
   ...GEIST_RESOURCES.map((resource) =>
     readBuildInput(resource.source).then((bytes) =>
       fs.writeFile(path.join(output, resource.output), bytes),
@@ -159,6 +172,7 @@ await Promise.all([
   ),
 ]);
 await verifyGeistBuild(output);
+await verifyNativeHelper(path.join(output, NATIVE_SAFE_OPEN_HELPER.output));
 await verifyAbsentIntegrations(output);
 
 const current = sourceSnapshot(repositoryRoot, scope);

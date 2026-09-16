@@ -6,6 +6,10 @@ import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
+  NATIVE_SAFE_OPEN_HELPER,
+  verifyNativeHelper,
+} from "./native-helper-contract.mjs";
+import {
   assertCanonicalArtifactPath,
   candidatePaths,
 } from "./candidate-contract.mjs";
@@ -203,6 +207,7 @@ requireValue(
 );
 await verifyBuildEntries(resources, embedded.entrySha256);
 await verifyGeistBuild(resources);
+await verifyNativeHelper(path.join(resources, NATIVE_SAFE_OPEN_HELPER.output));
 const embeddedPackage = JSON.parse(
   await fs.readFile(path.join(resources, "package.json"), "utf8"),
 );

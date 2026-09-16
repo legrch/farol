@@ -124,6 +124,13 @@ export type AuthorityAction = Readonly<{
   operation: AuthorityOperation;
 }>;
 
+export type TaskAuthorityIdentity = Readonly<{
+  ownerId: string;
+  sessionId: string;
+  taskId: string;
+  taskEpoch: number;
+}>;
+
 export type NativeHostAuthority = Readonly<{
   hostTaskId: string;
   ownerId: string;
@@ -471,16 +478,8 @@ export function authorizeTaskAction(
 ): AuthorityResult<AuthorityAction> {
   const grant = participant.grant;
   const operation = action.operation;
-  if (grant.ownerId !== action.ownerId) {
-    return failure("AUTHORITY_OWNER_MISMATCH", "task-grant");
-  }
-  if (
-    grant.sessionId !== action.sessionId ||
-    grant.taskId !== action.taskId ||
-    grant.taskEpoch !== action.taskEpoch
-  ) {
-    return failure("AUTHORITY_TASK_MISMATCH", "task-grant");
-  }
+  const identity = authorizeTaskIdentity(participant, action);
+  if (!identity.ok) return identity;
   if (
     operation.kind === "workspace.write" &&
     participant.mutationOwnership !== "task"
@@ -513,6 +512,24 @@ export function authorizeTaskAction(
     return failure("AUTHORITY_PATH_DENIED", "owner-restriction");
   }
   return result;
+}
+
+export function authorizeTaskIdentity(
+  participant: ParticipantAuthority,
+  identity: TaskAuthorityIdentity,
+): AuthorityResult<TaskAuthorityIdentity> {
+  const grant = participant.grant;
+  if (grant.ownerId !== identity.ownerId) {
+    return failure("AUTHORITY_OWNER_MISMATCH", "task-grant");
+  }
+  if (
+    grant.sessionId !== identity.sessionId ||
+    grant.taskId !== identity.taskId ||
+    grant.taskEpoch !== identity.taskEpoch
+  ) {
+    return failure("AUTHORITY_TASK_MISMATCH", "task-grant");
+  }
+  return success(identity);
 }
 
 export function authorizeComputerAction(
