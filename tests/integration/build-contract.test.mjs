@@ -61,6 +61,7 @@ describe("build entry contract", () => {
     "registerSchemesAsPrivileged",
     "codex-chatgpt-web",
     "secure-mcp-tunnel",
+    "synthetic://workspace/status",
   ])("rejects the forbidden built capability token %s", async (token) => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-absence-contract-"),

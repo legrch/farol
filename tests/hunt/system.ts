@@ -11,9 +11,13 @@ import {
   type Turn,
 } from "../../src/modules/chat/domain/turn";
 import {
-  authorizeComputerRequest,
-  type ComputerRequest,
-} from "../../src/modules/computer/domain/access";
+  authorizeComputerAction,
+  createParticipantAuthority,
+  deriveTaskGrant,
+  type ComputerApproval,
+  type ParticipantAuthority,
+  type TaskAdmission,
+} from "../../src/modules/computer/domain/execution-authority";
 import {
   admitWork,
   createReleaseState,
@@ -52,16 +56,53 @@ export type SystemState = Readonly<{
   visibleDeltaCount: number;
 }>;
 
-const GRANT = {
+const FIXTURE_ROOT = "/farol-next-hunt/fixture";
+const COMPUTER_APPROVAL: ComputerApproval = {
+  ownerId: HUNT_IDENTITY.ownerId,
+  computerId: "hunt-computer",
+  generation: 1,
+  workspaces: [
+    { workspaceId: "hunt-fixture", root: FIXTURE_ROOT, access: "read" },
+  ],
+  capabilities: ["workspace.read"],
+  network: "none",
+  commands: "none",
+  expiresAt: 2_000,
+};
+const TASK_ADMISSION: TaskAdmission = {
+  authorityId: "hunt-authority",
   ownerId: HUNT_IDENTITY.ownerId,
   sessionId: HUNT_IDENTITY.sessionId,
   taskId: HUNT_IDENTITY.taskId,
-  generation: HUNT_IDENTITY.generation,
-  capability: "fixture.inspect",
+  taskEpoch: HUNT_IDENTITY.generation,
+  computerId: COMPUTER_APPROVAL.computerId,
+  computerGeneration: COMPUTER_APPROVAL.generation,
+  workspaces: [
+    {
+      workspaceId: "hunt-fixture",
+      mode: "subtree",
+      root: FIXTURE_ROOT,
+      access: "read",
+    },
+  ],
+  capabilities: ["workspace.read"],
+  network: "none",
+  commands: "none",
   expiresAt: 2_000,
-} as const;
+};
 
 const FIXED_NOW = 1_000;
+const taskGrant = deriveTaskGrant(COMPUTER_APPROVAL, TASK_ADMISSION, FIXED_NOW);
+if (!taskGrant.ok) throw new Error("HUNT_TASK_GRANT_INVALID");
+const participantAuthority = createParticipantAuthority(taskGrant.value, {
+  participantId: "hunt-main",
+  role: "main",
+  mutationOwnership: "none",
+});
+if (!participantAuthority.ok) {
+  throw new Error("HUNT_PARTICIPANT_AUTHORITY_INVALID");
+}
+const PARTICIPANT: ParticipantAuthority = participantAuthority.value;
 
 function accepted(): StepResult {
   return { outcome: "accepted", code: null };
@@ -89,29 +130,38 @@ function applyComputer(
   command: Extract<SemanticCommand, { kind: "computer.authorize" }>,
   defect: DefectId | undefined,
 ): Readonly<{ state: SystemState; result: StepResult }> {
-  const request: ComputerRequest = {
+  const action = {
     ownerId: command.ownerId,
     sessionId: command.sessionId,
     taskId: command.taskId,
-    turnId: command.turnId,
-    generation: command.generation,
-    callId: command.callId,
-    operation: "fixture.inspect",
-    target:
-      command.target === "fixture-status"
-        ? "synthetic://workspace/status"
-        : "synthetic://other-target",
+    taskEpoch: command.generation,
+    operation: {
+      kind: "workspace.read" as const,
+      workspaceId: "hunt-fixture",
+      path:
+        command.target === "fixture-status"
+          ? `${FIXTURE_ROOT}/status.txt`
+          : "/farol-next-hunt/outside.txt",
+    },
   };
 
-  let result = authorizeComputerRequest(GRANT, request, FIXED_NOW);
-  if (defect === "permit_foreign_owner" && command.ownerId !== GRANT.ownerId) {
-    result = { ok: true, value: request };
+  let result = authorizeComputerAction(
+    PARTICIPANT,
+    COMPUTER_APPROVAL,
+    action,
+    FIXED_NOW,
+  );
+  if (
+    defect === "permit_foreign_owner" &&
+    command.ownerId !== PARTICIPANT.grant.ownerId
+  ) {
+    result = { ok: true, value: action };
   }
   if (
     defect === "accept_stale_generation" &&
-    command.generation !== GRANT.generation
+    command.generation !== PARTICIPANT.grant.taskEpoch
   ) {
-    result = { ok: true, value: request };
+    result = { ok: true, value: action };
   }
 
   if (!result.ok) return { state, result: toStepResult(result) };

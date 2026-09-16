@@ -231,22 +231,20 @@ function applyComputer(
   command: Extract<SemanticCommand, { kind: "computer.authorize" }>,
 ): Readonly<{ state: ModelState; result: StepResult }> {
   if (command.ownerId !== FIXTURE_GRANT.ownerId) {
-    return { state, result: rejected("COMPUTER_OWNER_MISMATCH") };
+    return { state, result: rejected("AUTHORITY_OWNER_MISMATCH") };
   }
-  if (command.sessionId !== FIXTURE_GRANT.sessionId) {
-    return { state, result: rejected("COMPUTER_SESSION_MISMATCH") };
-  }
-  if (command.taskId !== FIXTURE_GRANT.taskId) {
-    return { state, result: rejected("COMPUTER_TASK_MISMATCH") };
-  }
-  if (command.generation !== FIXTURE_GRANT.generation) {
-    return { state, result: rejected("COMPUTER_STALE_GENERATION") };
+  if (
+    command.sessionId !== FIXTURE_GRANT.sessionId ||
+    command.taskId !== FIXTURE_GRANT.taskId ||
+    command.generation !== FIXTURE_GRANT.generation
+  ) {
+    return { state, result: rejected("AUTHORITY_TASK_MISMATCH") };
   }
   if (FIXED_NOW > FIXTURE_GRANT.expiresAt) {
-    return { state, result: rejected("COMPUTER_GRANT_EXPIRED") };
+    return { state, result: rejected("AUTHORITY_EXPIRED") };
   }
   if (command.target !== "fixture-status") {
-    return { state, result: rejected("COMPUTER_TARGET_DENIED") };
+    return { state, result: rejected("AUTHORITY_PATH_DENIED") };
   }
   return {
     state: { ...state, computerExecutions: state.computerExecutions + 1 },

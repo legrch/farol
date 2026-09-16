@@ -1,5 +1,8 @@
 import type { Result } from "../../../../pkg/kernel/domain/result";
-import type { ChatComputerOutput } from "./computer-capability";
+import type {
+  ChatComputerOperation,
+  ChatComputerOutput,
+} from "./computer-capability";
 
 export type ProviderRequest = Readonly<{
   ownerId: string;
@@ -17,8 +20,8 @@ export type ProviderEvent =
   | Readonly<{
       kind: "computer_call";
       callId: string;
-      operation: "inspect_fixture";
-      target: "synthetic://workspace/status";
+      workspaceId: string;
+      operation: ChatComputerOperation;
     }>
   | Readonly<{ kind: "completed" }>
   | Readonly<{ kind: "failed"; code: string }>;

@@ -170,6 +170,7 @@ export class RunTurn {
       "computer_requested",
       null,
       dispatched,
+      event.operation.kind,
     );
     if (changed.terminal) return changed;
     await this.deliver(changed, {
@@ -177,13 +178,13 @@ export class RunTurn {
       at: this.clock.now(),
       kind: "computer.requested",
       callId: event.callId,
-      operation: event.operation,
+      operation: event.operation.kind,
     });
     const result = await computer.execute({
       ...changed.identity,
       callId: event.callId,
+      workspaceId: event.workspaceId,
       operation: event.operation,
-      target: event.target,
     });
     if (!result.ok) {
       const unknown = markOutcomeUnknown(changed, result.error.code);
@@ -238,6 +239,8 @@ export class RunTurn {
       | "terminal",
     sequence: number | null = null,
     dispatched = false,
+    capability:
+      "workspace.read" | "workspace.list" | "workspace.search" | null = null,
   ): Promise<Turn> {
     if (!result.ok) {
       const failed = dispatched
@@ -251,7 +254,7 @@ export class RunTurn {
       await this.bestEffortSaveAndReport(result.value, "terminal");
       return result.value;
     }
-    await this.saveAndReport(result.value, activityKind, sequence);
+    await this.saveAndReport(result.value, activityKind, sequence, capability);
     return result.value;
   }
 
@@ -264,6 +267,8 @@ export class RunTurn {
       | "computer_completed"
       | "terminal",
     sequence: number | null = null,
+    capability:
+      "workspace.read" | "workspace.list" | "workspace.search" | null = null,
   ): Promise<void> {
     await this.turns.save(turn);
     try {
@@ -275,7 +280,7 @@ export class RunTurn {
         kind,
         phase: turn.phase,
         sequence,
-        capability: kind === "computer_requested" ? "inspect_fixture" : null,
+        capability: kind === "computer_requested" ? capability : null,
       });
     } catch {
       // Activity is evidence; its sink cannot rewrite a provider decision.

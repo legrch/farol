@@ -16,7 +16,7 @@ export type ClientEvent =
       Readonly<{
         kind: "computer.requested";
         callId: string;
-        operation: "inspect_fixture";
+        operation: "workspace.read" | "workspace.list" | "workspace.search";
       }>)
   | (EventBase & Readonly<{ kind: "computer.completed"; callId: string }>)
   | (EventBase &

@@ -1,4 +1,4 @@
-import { ComputerPeer } from "../modules/chat/infra/peer/computer-peer";
+import { ReadonlyComputerPeer } from "../modules/chat/infra/peer/readonly-computer-peer";
 import {
   startPreviewRuntime as startChatPreviewRuntime,
   type PreviewRuntime,
@@ -20,10 +20,14 @@ export function startPreviewRuntime(
 ): Promise<PreviewRuntime> {
   return startChatPreviewRuntime(scenario, {
     createClock: () => new SystemClock(),
-    createComputer: (task, approval) =>
-      new ComputerPeer(
-        createFixtureComputerContract(task, approval, new SystemClock()),
-      ),
+    createComputer: (task, approval) => {
+      const fixture = createFixtureComputerContract(
+        task,
+        approval,
+        new SystemClock(),
+      );
+      return new ReadonlyComputerPeer(fixture.contract, fixture.binding);
+    },
     renderTaskPage: taskPage,
   });
 }

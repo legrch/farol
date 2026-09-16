@@ -31,6 +31,7 @@ const FORBIDDEN_INTEGRATION_TOKENS = Object.freeze([
   "registerSchemesAsPrivileged",
   "codex-chatgpt-web",
   "secure-mcp-tunnel",
+  "synthetic://workspace/status",
 ]);
 
 async function digestFile(file) {

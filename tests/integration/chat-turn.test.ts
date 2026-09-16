@@ -45,8 +45,11 @@ describe("the complete local Chat application slice", () => {
         yield {
           kind: "computer_call",
           callId: "call-a",
-          operation: "inspect_fixture",
-          target: "synthetic://workspace/status",
+          workspaceId: "preview-fixture",
+          operation: {
+            kind: "workspace.read",
+            relativePath: "status.txt",
+          },
         };
         yield { kind: "delta", sequence: 2, text: " Tool result returned." };
         await beforeCompletion.promise;
@@ -69,14 +72,17 @@ describe("the complete local Chat application slice", () => {
             ownerId: "owner-preview",
             sessionId: "session-a",
             taskId: "task-a",
+            taskEpoch: 0,
+            participantId: "task-a:main",
             turnId: "turn-a",
             generation: 1,
             callId: "call-a",
+            workspaceId: "preview-fixture",
+            relativePath: "status.txt",
             output: {
-              kind: "synthetic-status",
-              label: "Fixture workspace",
-              state: "ready",
-              receipt: "call-a",
+              kind: "workspace.text",
+              text: "Fixture workspace is ready.\n",
+              bytes: 28,
             },
           },
         }),
@@ -151,8 +157,11 @@ describe("the complete local Chat application slice", () => {
         yield {
           kind: "computer_call",
           callId: "call-a",
-          operation: "inspect_fixture",
-          target: "synthetic://workspace/status",
+          workspaceId: "preview-fixture",
+          operation: {
+            kind: "workspace.read",
+            relativePath: "status.txt",
+          },
         };
       },
       submitComputerResult: vi.fn().mockResolvedValue({
@@ -169,14 +178,17 @@ describe("the complete local Chat application slice", () => {
             ownerId: "owner-preview",
             sessionId: "session-a",
             taskId: "task-a",
+            taskEpoch: 0,
+            participantId: "task-a:main",
             turnId: "turn-a",
             generation: 1,
             callId: "call-a",
+            workspaceId: "preview-fixture",
+            relativePath: "status.txt",
             output: {
-              kind: "synthetic-status",
-              label: "Fixture",
-              state: "ready",
-              receipt: "call-a",
+              kind: "workspace.text",
+              text: "Fixture workspace is ready.\n",
+              bytes: 28,
             },
           },
         }),

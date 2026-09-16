@@ -16,7 +16,7 @@ export type ActivityRecord = Readonly<{
     | "terminal";
   phase: TurnPhase;
   sequence: number | null;
-  capability: "inspect_fixture" | null;
+  capability: "workspace.read" | "workspace.list" | "workspace.search" | null;
 }>;
 
 export interface ActivityRecorder {

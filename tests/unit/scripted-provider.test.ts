@@ -16,14 +16,17 @@ function output(ownerId: string = request.ownerId) {
     ownerId,
     sessionId: request.sessionId,
     taskId: request.taskId,
+    taskEpoch: 0,
+    participantId: "task-a:main",
     turnId: request.turnId,
     generation: request.generation,
     callId: "turn-a-computer-1",
+    workspaceId: "preview-fixture",
+    relativePath: "status.txt",
     output: {
-      kind: "synthetic-status" as const,
-      label: "Fixture",
-      state: "ready" as const,
-      receipt: "turn-a-computer-1",
+      kind: "workspace.text" as const,
+      text: "Fixture workspace is ready.\n",
+      bytes: 28,
     },
   };
 }
@@ -91,7 +94,7 @@ describe("scripted preview provider", () => {
     expect(events).toContainEqual({
       kind: "delta",
       sequence: 2,
-      text: " Fixture result Fixture is bound to turn-a-computer-1.",
+      text: " Fixture read returned 28 bytes bound to turn-a-computer-1.",
     });
     expect(events.at(-1)).toEqual({ kind: "completed" });
   });

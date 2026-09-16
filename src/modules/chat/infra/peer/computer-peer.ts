@@ -1,17 +1,15 @@
 import { failure } from "../../../../pkg/kernel/domain/result";
-import type {
-  ChatComputerRequest,
-  ComputerCapability,
-} from "../../app/port/computer-capability";
 import {
   ComputerCallResponseSchema,
+  type ComputerCallRequest,
   type ComputerContract,
 } from "../../../computer/contract/computer-contract";
 
-export class ComputerPeer implements ComputerCapability {
+/** @deprecated Fixture-only compatibility peer. Product composition uses ReadonlyComputerPeer. */
+export class ComputerPeer {
   constructor(private readonly contract: ComputerContract) {}
 
-  async execute(request: ChatComputerRequest) {
+  async execute(request: ComputerCallRequest) {
     const raw = await this.contract.execute({ ...request });
     const parsed = ComputerCallResponseSchema.safeParse(raw);
     if (!parsed.success) return failure("COMPUTER_CONTRACT_INVALID");

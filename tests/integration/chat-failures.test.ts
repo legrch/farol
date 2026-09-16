@@ -39,14 +39,17 @@ const exactComputerResult: Result<ChatComputerOutput, string> = success({
   ownerId: command.ownerId,
   sessionId: command.sessionId,
   taskId: command.taskId,
+  taskEpoch: 0,
+  participantId: "task-a:main",
   turnId: command.turnId,
   generation: command.generation,
   callId: "call-a",
+  workspaceId: "preview-fixture",
+  relativePath: "status.txt",
   output: {
-    kind: "synthetic-status" as const,
-    label: "Fixture",
-    state: "ready" as const,
-    receipt: "call-a",
+    kind: "workspace.text" as const,
+    text: "Fixture workspace is ready.\n",
+    bytes: 28,
   },
 });
 
@@ -219,8 +222,11 @@ describe("Chat failure semantics", () => {
           yield {
             kind: "computer_call",
             callId: "call-a",
-            operation: "inspect_fixture",
-            target: "synthetic://workspace/status",
+            workspaceId: "preview-fixture",
+            operation: {
+              kind: "workspace.read",
+              relativePath: "status.txt",
+            },
           } as const;
         },
         submitComputerResult: submitted,
@@ -254,8 +260,11 @@ describe("Chat failure semantics", () => {
           yield {
             kind: "computer_call",
             callId: "call-a",
-            operation: "inspect_fixture",
-            target: "synthetic://workspace/status",
+            workspaceId: "preview-fixture",
+            operation: {
+              kind: "workspace.read",
+              relativePath: "status.txt",
+            },
           } as const;
         },
         submitComputerResult: submitted,
@@ -290,8 +299,11 @@ describe("Chat failure semantics", () => {
           yield {
             kind: "computer_call",
             callId: "",
-            operation: "inspect_fixture",
-            target: "synthetic://workspace/status",
+            workspaceId: "preview-fixture",
+            operation: {
+              kind: "workspace.read",
+              relativePath: "status.txt",
+            },
           } as const;
         },
         submitComputerResult: submitted,
@@ -372,8 +384,11 @@ describe("Chat failure semantics", () => {
           yield {
             kind: "computer_call",
             callId: "call-a",
-            operation: "inspect_fixture",
-            target: "synthetic://workspace/status",
+            workspaceId: "preview-fixture",
+            operation: {
+              kind: "workspace.read",
+              relativePath: "status.txt",
+            },
           } as const;
           yield { kind: "delta", sequence: 1, text: "Only once" } as const;
           yield { kind: "completed" } as const;
@@ -406,8 +421,11 @@ describe("Chat failure semantics", () => {
             yield {
               kind: "computer_call",
               callId: "call-a",
-              operation: "inspect_fixture",
-              target: "synthetic://workspace/status",
+              workspaceId: "preview-fixture",
+              operation: {
+                kind: "workspace.read",
+                relativePath: "status.txt",
+              },
             } as const;
           },
           submitComputerResult: submitted,
