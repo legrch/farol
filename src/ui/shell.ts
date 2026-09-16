@@ -60,6 +60,12 @@ const bootstrapSchema = z.strictObject({
   partition: z.string(),
   chatgptPartition: z.literal("persist:farol-next-chatgpt"),
   chatgptRecoveryPending: z.boolean(),
+  chatgptConversationState: z.enum([
+    "new",
+    "retained",
+    "review_required",
+    "unavailable",
+  ]),
   updateChannel: z.literal("local-preview-only"),
   nativeFilesystem: z.literal(true),
   nativeAgent: z.literal(false),
@@ -1121,13 +1127,15 @@ async function configureProduct(
                 ? "Submitting once and waiting for one ChatGPT result…"
                 : command.kind === "chatgpt.cancel-readonly-task"
                   ? "Discarding the prepared context…"
-                  : command.kind === "computer.prepare-workspace-edit"
-                    ? "Reading the selected file and preparing a content-free edit review…"
-                    : command.kind === "computer.apply-workspace-edit"
-                      ? "Applying this guarded edit once…"
-                      : command.kind === "computer.cancel-workspace-edit"
-                        ? "Discarding the prepared edit…"
-                        : "Saving and reading back…";
+                  : command.kind === "chatgpt.reset-conversation"
+                    ? "Clearing the retained conversation binding…"
+                    : command.kind === "computer.prepare-workspace-edit"
+                      ? "Reading the selected file and preparing a content-free edit review…"
+                      : command.kind === "computer.apply-workspace-edit"
+                        ? "Applying this guarded edit once…"
+                        : command.kind === "computer.cancel-workspace-edit"
+                          ? "Discarding the prepared edit…"
+                          : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1216,7 +1224,7 @@ async function configureProduct(
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
-        ? `Read-only task completed from ${evidence.relativePath} after ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"}. File and answer text were not persisted${evidence.redelivered ? "; result receipt redelivered" : ""}.`
+        ? `Read-only task completed from ${evidence.relativePath} after ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"}. File and answer text were not persisted${evidence.redelivered ? "; result receipt redelivered" : ""}. Conversation continuity: ${evidence.conversationContinuity.replace("_", " ")}.`
         : evidence.state === "outcome_unknown"
           ? `Outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
           : evidence.state === "not_authenticated"
@@ -1225,13 +1233,20 @@ async function configureProduct(
     if (evidence.deliveryAckRequired) {
       taskResultToAcknowledge = evidence.operationId;
     }
+    bootstrap = {
+      ...bootstrap,
+      chatgptConversationState:
+        evidence.conversationContinuity === "not_observed"
+          ? bootstrap.chatgptConversationState
+          : evidence.conversationContinuity,
+    };
   } else if (evidence?.kind === "chatgpt.attachment-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") shellOverlay = "none";
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
-        ? `${evidence.attachmentCount} attachment${evidence.attachmentCount === 1 ? "" : "s"} delivered intact · ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"} · staging ${evidence.stagingCleanup === "removed" ? "removed" : "awaiting startup cleanup"}${evidence.redelivered ? " · result receipt redelivered" : ""}.`
+        ? `${evidence.attachmentCount} attachment${evidence.attachmentCount === 1 ? "" : "s"} delivered intact · ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"} · staging ${evidence.stagingCleanup === "removed" ? "removed" : "awaiting startup cleanup"}${evidence.redelivered ? " · result receipt redelivered" : ""} · conversation ${evidence.conversationContinuity.replace("_", " ")}.`
         : evidence.state === "outcome_unknown"
           ? `Attachment task outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
           : evidence.state === "not_authenticated"
@@ -1240,6 +1255,13 @@ async function configureProduct(
     if (evidence.deliveryAckRequired) {
       taskResultToAcknowledge = evidence.operationId;
     }
+    bootstrap = {
+      ...bootstrap,
+      chatgptConversationState:
+        evidence.conversationContinuity === "not_observed"
+          ? bootstrap.chatgptConversationState
+          : evidence.conversationContinuity,
+    };
   } else if (evidence?.kind === "chatgpt.task-recovery") {
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
@@ -1253,6 +1275,17 @@ async function configureProduct(
     if (evidence.deliveryAckRequired) {
       taskResultToAcknowledge = evidence.operationId;
     }
+    bootstrap = {
+      ...bootstrap,
+      chatgptConversationState:
+        evidence.conversationContinuity === "not_observed"
+          ? bootstrap.chatgptConversationState
+          : evidence.conversationContinuity,
+    };
+  } else if (evidence?.kind === "chatgpt.conversation-reset") {
+    bootstrap = { ...bootstrap, chatgptConversationState: "new" };
+    settingsFeedback =
+      "Retained conversation binding cleared. The next task starts a fresh isolated ChatGPT conversation.";
   } else {
     settingsFeedback = successMessage;
   }
@@ -1392,7 +1425,10 @@ function renderSettings(): void {
       const title = document.createElement("strong");
       title.textContent = `${label} · ${readinessLabel(state)}`;
       const detail = document.createElement("small");
-      detail.textContent = readinessDetail(state);
+      detail.textContent =
+        label === "ChatGPT"
+          ? `${readinessDetail(state)} · Conversation: ${bootstrap.chatgptConversationState.replace("_", " ")}`
+          : readinessDetail(state);
       copy.append(title, detail);
       row.append(copy);
       if (label === "ChatGPT") {
@@ -1420,15 +1456,23 @@ function renderSettings(): void {
         task.type = "button";
         task.textContent = "Review read-only task…";
         const workspaceId = settings.setup.computer.verified?.workspaceId;
+        const conversationUnavailable =
+          bootstrap.chatgptConversationState === "review_required" ||
+          bootstrap.chatgptConversationState === "unavailable";
         task.disabled =
-          !state.verified || workspaceId == null || state.outcomeUnknown;
+          !state.verified ||
+          workspaceId == null ||
+          state.outcomeUnknown ||
+          conversationUnavailable;
         task.title = state.outcomeUnknown
           ? "Inspect the existing ChatGPT outcome before another task"
-          : !state.verified
-            ? "Verify ChatGPT first"
-            : workspaceId == null
-              ? "Verify a read-only workspace first"
-              : "Choose one approved text file and summarize it in ChatGPT";
+          : conversationUnavailable
+            ? "Review or reset the retained ChatGPT conversation first"
+            : !state.verified
+              ? "Verify ChatGPT first"
+              : workspaceId == null
+                ? "Verify a read-only workspace first"
+                : "Choose one approved text file and summarize it in ChatGPT";
         task.addEventListener("click", () => {
           if (workspaceId == null) return;
           void configureProduct(
@@ -1439,19 +1483,42 @@ function renderSettings(): void {
         const attachments = document.createElement("button");
         attachments.type = "button";
         attachments.textContent = "Review attachments…";
-        attachments.disabled = !state.verified || state.outcomeUnknown;
+        attachments.disabled =
+          !state.verified || state.outcomeUnknown || conversationUnavailable;
         attachments.title = state.outcomeUnknown
           ? "Inspect the existing ChatGPT outcome before another task"
-          : !state.verified
-            ? "Verify ChatGPT first"
-            : "Choose up to four bounded images or documents";
+          : conversationUnavailable
+            ? "Review or reset the retained ChatGPT conversation first"
+            : !state.verified
+              ? "Verify ChatGPT first"
+              : "Choose up to four bounded images or documents";
         attachments.addEventListener("click", () => {
           void configureProduct(
             { kind: "chatgpt.prepare-attachment-task" },
             "ChatGPT attachments prepared.",
           );
         });
-        actions.append(open, verify, task, attachments);
+        const reset = document.createElement("button");
+        reset.type = "button";
+        reset.textContent = "Start fresh chat";
+        reset.disabled =
+          state.outcomeUnknown ||
+          bootstrap.chatgptConversationState === "new" ||
+          bootstrap.chatgptConversationState === "unavailable";
+        reset.title = state.outcomeUnknown
+          ? "Inspect the unknown ChatGPT outcome before clearing its binding"
+          : bootstrap.chatgptConversationState === "new"
+            ? "No retained conversation exists"
+            : bootstrap.chatgptConversationState === "unavailable"
+              ? "Conversation state is unavailable"
+              : "Clear only the private conversation identifier; sign-in remains isolated";
+        reset.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "chatgpt.reset-conversation" },
+            "Retained ChatGPT conversation cleared.",
+          );
+        });
+        actions.append(open, verify, task, attachments, reset);
         row.append(actions);
       }
       return row;

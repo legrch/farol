@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   CHATGPT_PARTITION,
   allowedChatGptPageUrl,
+  canonicalChatGptConversationUrl,
   classifyChatGptPage,
   type ChatGptPageObservation,
 } from "./chatgpt-page-policy";
@@ -157,6 +158,7 @@ function taskProbeScript(baselineAssistantCount: number): string {
 }
 
 export type ChatGptRouteOptions = Readonly<{
+  homeUrl: string;
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
@@ -199,12 +201,16 @@ export class ChatGptRoute {
   private load: "failed" | "loaded" = "failed";
   private disposing = false;
   private taskInFlight = false;
+  private entryUrl: string;
 
   constructor(private readonly options: ChatGptRouteOptions) {
+    this.entryUrl = options.initialUrl;
     if (
+      !allowedChatGptPageUrl(options.homeUrl, options.e2eOrigin) ||
       !allowedChatGptPageUrl(options.initialUrl, options.e2eOrigin) ||
       (options.e2eOrigin !== null &&
-        new URL(options.initialUrl).origin !== options.e2eOrigin)
+        (new URL(options.initialUrl).origin !== options.e2eOrigin ||
+          new URL(options.homeUrl).origin !== options.e2eOrigin))
     ) {
       throw new Error("CHATGPT_INITIAL_URL_INVALID");
     }
@@ -256,7 +262,7 @@ export class ChatGptRoute {
     });
 
     try {
-      await candidate.loadURL(this.options.initialUrl);
+      await candidate.loadURL(this.entryUrl);
       this.load = "loaded";
       candidate.show();
       candidate.focus();
@@ -498,6 +504,34 @@ export class ChatGptRoute {
     }
   }
 
+  currentConversationUrl(): string | null {
+    const candidate = this.routeWindow;
+    if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
+      return null;
+    }
+    const canonical = canonicalChatGptConversationUrl(
+      candidate.webContents.getURL(),
+      this.options.e2eOrigin,
+    );
+    if (canonical !== null) this.entryUrl = canonical;
+    return canonical;
+  }
+
+  resetConversation(): void {
+    this.entryUrl = this.options.homeUrl;
+    this.disposing = true;
+    for (const popup of this.popupWindows) {
+      if (!popup.isDestroyed()) popup.destroy();
+    }
+    this.popupWindows.clear();
+    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
+      this.routeWindow.destroy();
+    }
+    this.routeWindow = null;
+    this.load = "failed";
+    this.disposing = false;
+  }
+
   dispose(): void {
     this.disposing = true;
     for (const popup of this.popupWindows) {
@@ -534,8 +568,9 @@ export class ChatGptRoute {
     if (tracksRouteReadiness) {
       contents.on(
         "did-start-navigation",
-        (_event, _url, _inPlace, isMainFrame) => {
-          if (isMainFrame) this.load = "failed";
+        (_event, url, inPlace, isMainFrame) => {
+          if (!isMainFrame) return;
+          this.load = inPlace && allowed(url) ? "loaded" : "failed";
         },
       );
       contents.on(

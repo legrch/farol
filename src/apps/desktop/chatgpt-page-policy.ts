@@ -55,6 +55,33 @@ export function allowedChatGptPageUrl(
   );
 }
 
+export function canonicalChatGptConversationUrl(
+  value: string,
+  e2eOrigin: string | null,
+): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return null;
+  }
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  const fixtureOrigin = normalizedOrigin(e2eOrigin);
+  const productionConversation =
+    parsed.protocol === "https:" &&
+    parsed.origin === "https://chatgpt.com" &&
+    /^\/c\/[A-Za-z0-9-]{8,128}\/?$/u.test(parsed.pathname);
+  const fixtureConversation =
+    fixtureOrigin !== null &&
+    parsed.origin === fixtureOrigin &&
+    /^\/chatgpt\/c\/[A-Za-z0-9-]{8,128}\/?$/u.test(parsed.pathname);
+  if (!productionConversation && !fixtureConversation) return null;
+  const pathname = parsed.pathname.endsWith("/")
+    ? parsed.pathname.slice(0, -1)
+    : parsed.pathname;
+  return `${parsed.origin}${pathname}`;
+}
+
 export type ChatGptPageSignals = Readonly<{
   load: "failed" | "loaded";
   composerVisible: boolean;

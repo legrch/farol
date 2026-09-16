@@ -70,7 +70,11 @@ import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
-import { CHATGPT_HOME, CHATGPT_PARTITION } from "./chatgpt-page-policy";
+import {
+  CHATGPT_HOME,
+  CHATGPT_PARTITION,
+  canonicalChatGptConversationUrl,
+} from "./chatgpt-page-policy";
 import {
   MAX_CHATGPT_CONTEXT_CHARACTERS,
   buildChatGptAttachmentTaskPrompt,
@@ -106,6 +110,10 @@ import {
   type ChatGptTaskJournalRecord,
   type ChatGptTaskJournalResult,
 } from "./chatgpt-task-journal";
+import {
+  PrivateChatGptConversationStore,
+  type ChatGptConversationRecord,
+} from "./chatgpt-conversation-store";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -221,6 +229,8 @@ let attachmentStagingReady = true;
 let chatGptTaskJournal: PrivateChatGptTaskJournal | null = null;
 let recoverableChatGptTask: ChatGptTaskJournalRecord | null = null;
 let recoverableChatGptObservationPersisted = false;
+let chatGptConversationStore: PrivateChatGptConversationStore | null = null;
+let chatGptConversation: ChatGptConversationRecord | null = null;
 type PendingWorkspaceEdit = Readonly<{
   operationId: string;
   workspaceId: string;
@@ -410,6 +420,7 @@ function bootstrap() {
     partition: "persist:farol-next-preview",
     chatgptPartition: CHATGPT_PARTITION,
     chatgptRecoveryPending: recoverableChatGptTask !== null,
+    chatgptConversationState: chatGptConversationState(),
     updateChannel: buildIdentity.updateChannel,
     nativeFilesystem: true,
     nativeAgent: false,
@@ -487,6 +498,70 @@ function chatGptTaskJournalRoot(): string {
     "farol-next-state",
     "chatgpt-task-journal",
   );
+}
+
+function chatGptConversationStoreRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "chatgpt-conversation",
+  );
+}
+
+function chatGptConversationState():
+  "new" | "retained" | "review_required" | "unavailable" {
+  if (!chatGptConversationStore) return "unavailable";
+  if (chatGptConversation?.state === "retained") return "retained";
+  if (chatGptConversation?.state === "unresolved") return "review_required";
+  return "new";
+}
+
+function chatGptConversationAdmissionFailure(): ProductConfigurationResult | null {
+  if (!chatGptConversationStore) {
+    return configurationFailure("CHATGPT_CONVERSATION_STATE_FAILED");
+  }
+  if (chatGptConversation?.state === "unresolved") {
+    return configurationFailure("CHATGPT_CONVERSATION_REVIEW_REQUIRED");
+  }
+  return null;
+}
+
+function chatGptConversationContinuity():
+  "retained" | "not_observed" | "review_required" | "unavailable" {
+  const state = chatGptConversationState();
+  return state === "new" ? "not_observed" : state;
+}
+
+async function retainChatGptConversation(
+  operationId: string,
+  taskState:
+    | "completed"
+    | "not_authenticated"
+    | "failed_before_submit"
+    | "outcome_unknown",
+): Promise<"retained" | "not_observed" | "review_required" | "unavailable"> {
+  if (
+    taskState === "not_authenticated" ||
+    taskState === "failed_before_submit"
+  ) {
+    return chatGptConversationContinuity();
+  }
+  if (!chatGptConversationStore || !chatGptRoute) return "unavailable";
+  const conversationUrl = chatGptRoute.currentConversationUrl();
+  try {
+    if (conversationUrl === null) {
+      await chatGptConversationStore.markUnresolved(operationId);
+      chatGptConversation = await chatGptConversationStore.load();
+      return "review_required";
+    }
+    await chatGptConversationStore.retain({ operationId, conversationUrl });
+    chatGptConversation = await chatGptConversationStore.load();
+    return "retained";
+  } catch {
+    chatGptConversationStore = null;
+    chatGptConversation = null;
+    return "unavailable";
+  }
 }
 
 function chatGptJournalObservation(result: ChatGptTaskJournalResult) {
@@ -791,9 +866,40 @@ async function configureProduct(
           operationId: retained.operationId,
           taskKind: retained.kind,
           ...retained.result,
+          conversationContinuity: chatGptConversationContinuity(),
           redelivered: true,
           deliveryAckRequired: true,
         },
+      });
+    }
+    case "chatgpt.reset-conversation": {
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      if (pendingChatGptReadonlyTask || pendingChatGptAttachmentTask) {
+        return configurationFailure("CHATGPT_TASK_PREVIEW_PENDING");
+      }
+      const snapshot = configuration.snapshot();
+      if (
+        snapshot.status === "ready" &&
+        snapshot.settings.setup.chatgpt.outcomeUnknown
+      ) {
+        return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+      }
+      if (!chatGptConversationStore || !chatGptRoute) {
+        return configurationFailure("CHATGPT_CONVERSATION_STATE_FAILED");
+      }
+      try {
+        await chatGptConversationStore.clear();
+        chatGptConversation = null;
+        chatGptRoute.resetConversation();
+      } catch {
+        return configurationFailure("CHATGPT_CONVERSATION_STATE_FAILED");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: { kind: "chatgpt.conversation-reset", state: "new" },
       });
     }
     case "chatgpt.ack-task-result": {
@@ -884,6 +990,8 @@ async function configureProduct(
       if (chatGptTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
+      const conversationFailure = chatGptConversationAdmissionFailure();
+      if (conversationFailure) return conversationFailure;
       if (!attachmentStagingReady) {
         return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
       }
@@ -1098,6 +1206,10 @@ async function configureProduct(
         ),
         stagingCleanup,
       } as const;
+      const conversationContinuity = await retainChatGptConversation(
+        pending.operationId,
+        task.state,
+      );
       try {
         await chatGptTaskJournal.retainResult(
           pending.operationId,
@@ -1124,6 +1236,7 @@ async function configureProduct(
             attachmentCount: journalResult.attachmentCount,
             totalBytes: journalResult.totalBytes,
             stagingCleanup,
+            conversationContinuity,
             redelivered: false,
             deliveryAckRequired: false,
           },
@@ -1164,6 +1277,7 @@ async function configureProduct(
           deltaCount: task.deltaCount,
           observedCharacters: task.observedCharacters,
           stagingCleanup,
+          conversationContinuity,
           redelivered: false,
           deliveryAckRequired: true,
         },
@@ -1202,6 +1316,8 @@ async function configureProduct(
       if (chatGptTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
       }
+      const conversationFailure = chatGptConversationAdmissionFailure();
+      if (conversationFailure) return conversationFailure;
       if (pendingChatGptAttachmentTask) {
         return configurationFailure("CHATGPT_TASK_PREVIEW_PENDING");
       }
@@ -1411,6 +1527,10 @@ async function configureProduct(
         deltaCount: task.deltaCount,
         observedCharacters: task.observedCharacters,
       } as const;
+      const conversationContinuity = await retainChatGptConversation(
+        pending.operationId,
+        task.state,
+      );
       try {
         await chatGptTaskJournal.retainResult(
           pending.operationId,
@@ -1437,6 +1557,7 @@ async function configureProduct(
             attachmentCount: 0,
             totalBytes: 0,
             stagingCleanup: null,
+            conversationContinuity,
             redelivered: false,
             deliveryAckRequired: false,
           },
@@ -1479,6 +1600,7 @@ async function configureProduct(
           contextTruncated: pending.contextTruncated,
           deltaCount: task.deltaCount,
           observedCharacters: task.observedCharacters,
+          conversationContinuity,
           redelivered: false,
           deliveryAckRequired: true,
         },
@@ -2686,8 +2808,33 @@ async function main(): Promise<void> {
     chatGptUrl = parsed.href;
     e2eChatGptOrigin = parsed.origin;
   }
+  let chatGptInitialUrl = chatGptUrl;
+  try {
+    chatGptConversationStore = new PrivateChatGptConversationStore({
+      root: chatGptConversationStoreRoot(),
+    });
+    chatGptConversation = await chatGptConversationStore.load();
+    if (chatGptConversation?.state === "retained") {
+      const conversationUrl = chatGptConversation.conversationUrl;
+      if (conversationUrl === null) {
+        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
+      }
+      const canonical = canonicalChatGptConversationUrl(
+        conversationUrl,
+        e2eChatGptOrigin,
+      );
+      if (canonical !== conversationUrl) {
+        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
+      }
+      chatGptInitialUrl = canonical;
+    }
+  } catch {
+    chatGptConversationStore = null;
+    chatGptConversation = null;
+  }
   chatGptRoute = new ChatGptRoute({
-    initialUrl: chatGptUrl,
+    homeUrl: chatGptUrl,
+    initialUrl: chatGptInitialUrl,
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
     ...(process.env.FAROL_NEXT_E2E === "1"

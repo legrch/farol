@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CHATGPT_PARTITION,
   allowedChatGptPageUrl,
+  canonicalChatGptConversationUrl,
   classifyChatGptPage,
 } from "../../src/apps/desktop/chatgpt-page-policy";
 
@@ -42,6 +43,32 @@ describe("Farol Next ChatGPT page policy", () => {
     expect(
       allowedChatGptPageUrl("http://localhost:43123/chatgpt", fixture),
     ).toBe(false);
+  });
+
+  it("retains only canonical content-free conversation URLs", () => {
+    const fixture = "http://127.0.0.1:43123";
+    expect(
+      canonicalChatGptConversationUrl(
+        "https://chatgpt.com/c/12345678-abcd-4abc-8abc-123456789012?model=auto#tail",
+        null,
+      ),
+    ).toBe("https://chatgpt.com/c/12345678-abcd-4abc-8abc-123456789012");
+    expect(
+      canonicalChatGptConversationUrl(
+        "http://127.0.0.1:43123/chatgpt/c/farol-next-e2e",
+        fixture,
+      ),
+    ).toBe("http://127.0.0.1:43123/chatgpt/c/farol-next-e2e");
+    for (const refused of [
+      "https://chatgpt.com/",
+      "https://chatgpt.com/share/12345678",
+      "https://chatgpt.com/c/short",
+      "https://chatgpt.com.evil.test/c/12345678",
+      "https://accounts.openai.com/c/12345678",
+      "http://127.0.0.1:43124/chatgpt/c/farol-next-e2e",
+    ]) {
+      expect(canonicalChatGptConversationUrl(refused, fixture)).toBeNull();
+    }
   });
 
   it("classifies only content-free readiness signals", () => {

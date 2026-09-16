@@ -567,7 +567,8 @@ async function waitForShellVisibility(
 
 async function startChatGptFixture() {
   const fixture = createServer((request, response) => {
-    if (request.url === "/chatgpt-popup") {
+    const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    if (pathname === "/chatgpt-popup") {
       response.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
@@ -580,7 +581,7 @@ async function startChatGptFixture() {
         <body><p data-testid="popup-ready">Secure popup ready</p></body></html>`);
       return;
     }
-    if (request.url !== "/chatgpt") {
+    if (pathname !== "/chatgpt" && pathname !== "/chatgpt/c/farol-next-e2e") {
       response.writeHead(404, { "content-type": "text/plain" });
       response.end("not found\n");
       return;
@@ -671,6 +672,9 @@ async function startChatGptFixture() {
           send.addEventListener('click', () => {
             if (send.disabled) return;
             window.__farolSubmitCount += 1;
+            if (location.pathname === '/chatgpt') {
+              history.replaceState(null, '', '/chatgpt/c/farol-next-e2e');
+            }
             send.disabled = true;
             send.hidden = true;
             const user = document.createElement('article');
@@ -2468,6 +2472,7 @@ try {
   const reviewReadOnlyTask = normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Review read-only task…", exact: true });
+  const retainedConversationUrl = `${normal.chatGptFixture.url}/c/farol-next-e2e`;
   await reviewReadOnlyTask.click();
   const contextPreview = normal.window.locator("#context-preview");
   await contextPreview.waitFor({ state: "visible" });
@@ -2510,6 +2515,7 @@ try {
       /Read-only task completed from README\.md after \d+ incremental updates/u,
     )
     .waitFor({ timeout: 10_000 });
+  await readOnlyTaskPage.waitForURL(retainedConversationUrl);
   const taskProgress = await readOnlyTaskPage.evaluate(
     () => window.__farolTaskProgress,
   );
@@ -2550,7 +2556,7 @@ try {
     .getByRole("button", { name: "Send once", exact: true })
     .click();
   const attachmentTaskPage = await attachmentTaskWindow;
-  await attachmentTaskPage.waitForURL(normal.chatGptFixture.url);
+  await attachmentTaskPage.waitForURL(retainedConversationUrl);
   await normal.window
     .locator("#settings-feedback")
     .getByText(/2 attachments delivered intact · \d+ incremental updates/u)
@@ -2617,6 +2623,25 @@ try {
     (await fs.stat(acknowledgedTaskJournal.journalPath)).mode & 0o777,
     0o600,
   );
+  const conversationPath = path.join(
+    normal.userData,
+    "farol-next-state",
+    "chatgpt-conversation",
+    "chatgpt-conversation.json",
+  );
+  const savedConversationText = await fs.readFile(conversationPath, "utf8");
+  const savedConversation = JSON.parse(savedConversationText);
+  assert.equal(savedConversation.state, "retained");
+  assert.equal(savedConversation.conversationUrl, retainedConversationUrl);
+  assert.doesNotMatch(
+    savedConversationText,
+    /evidence\.png|notes\.md|README\.md|approved-workspace|attachment document fixture|workspace verification fixture|Bearer|cookie|secret|token/iu,
+  );
+  assert.equal(
+    (await fs.stat(path.dirname(conversationPath))).mode & 0o777,
+    0o700,
+  );
+  assert.equal((await fs.stat(conversationPath)).mode & 0o777, 0o600);
   await attachmentTaskPage.close();
   await waitForWindowCount(normal.application, 1);
   await waitForShellVisibility(
@@ -2629,6 +2654,8 @@ try {
     "chatgpt-attachment-staging-cleanup",
     "chatgpt-task-result-delivery-acknowledged",
     "chatgpt-task-journal-content-free",
+    "chatgpt-same-conversation-after-window-close",
+    "chatgpt-conversation-binding-content-free",
   );
   const settingsPanel = normal.window.locator('[data-panel="settings"]');
   assert.equal(await settingsPanel.locator("#computer-name").count(), 0);
@@ -3090,6 +3117,7 @@ try {
     window.farolNext.bootstrap(),
   );
   assert.equal(restartedBootstrap.configuration.status, "ready");
+  assert.equal(restartedBootstrap.chatgptConversationState, "retained");
   const restartedSettings = restartedBootstrap.configuration.settings;
   assert.equal(restartedSettings.computer.name, "Owner Test Mac");
   assert.deepEqual(restartedSettings.general, {
@@ -3131,7 +3159,7 @@ try {
     .getByRole("button", { name: "Open sign-in…", exact: true })
     .click();
   const restartedChatGptPage = await restartedChatGptWindow;
-  await restartedChatGptPage.waitForURL(normal.chatGptFixture.url);
+  await restartedChatGptPage.waitForURL(retainedConversationUrl);
   await waitForWindowCount(normal.application, 2);
   await restartedChatGptPage.locator("#prompt-textarea").waitFor({
     state: "visible",
@@ -3162,6 +3190,33 @@ try {
     normal.application,
     normal.windowMode === "secondary-visible",
     normal.expectedTaskViewCount,
+  );
+  await normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Start fresh chat", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText(
+      "Retained conversation binding cleared. The next task starts a fresh isolated ChatGPT conversation.",
+      { exact: true },
+    )
+    .waitFor();
+  await assert.rejects(fs.stat(conversationPath), { code: "ENOENT" });
+  const resetChatGptWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Open sign-in…", exact: true })
+    .click();
+  const resetChatGptPage = await resetChatGptWindow;
+  await resetChatGptPage.waitForURL(normal.chatGptFixture.url);
+  await resetChatGptPage.close();
+  await waitForWindowCount(normal.application, 1);
+  cases.push(
+    "chatgpt-same-conversation-after-process-restart",
+    "chatgpt-explicit-conversation-reset",
   );
   assert.deepEqual(restartedSettings.setup.journey, {
     currentStep: "verify",
