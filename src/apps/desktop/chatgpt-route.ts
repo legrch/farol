@@ -91,7 +91,6 @@ export class ChatGptRoute {
       minHeight: 560,
       backgroundColor: "#111216",
       show: false,
-      ...(parent ? { parent } : {}),
       webPreferences: this.remoteWebPreferences(),
     });
     this.routeWindow = candidate;
@@ -99,10 +98,17 @@ export class ChatGptRoute {
     this.hardenContents(candidate.webContents, true);
     candidate.on("closed", () => {
       if (this.routeWindow === candidate) this.routeWindow = null;
-      if (!this.disposing && restoreParent && parent && !parent.isDestroyed()) {
-        parent.show();
-        parent.focus();
-      }
+      setTimeout(() => {
+        if (
+          !this.disposing &&
+          restoreParent &&
+          parent &&
+          !parent.isDestroyed()
+        ) {
+          parent.show();
+          parent.focus();
+        }
+      }, 100);
     });
 
     try {

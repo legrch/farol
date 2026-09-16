@@ -443,7 +443,10 @@ if (development) {
 
 async function inspectWindowPresentation(application) {
   return application.evaluate(({ BrowserWindow, screen }) => {
-    const targetWindow = BrowserWindow.getAllWindows()[0];
+    const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return url.startsWith("file:") && url.endsWith("/shell.html");
+    });
     if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
     const bounds = targetWindow.getBounds();
     const primary = screen.getPrimaryDisplay();
@@ -1540,14 +1543,15 @@ async function completeSetup(
         await instance.window.locator("#setup-live-primary").innerText(),
         "Open sign-in…",
       );
+      const chatGptWindow = instance.application.waitForEvent("window", {
+        timeout: 15_000,
+      });
       await instance.window.locator("#setup-live-primary").click();
+      const chatGptPage = await chatGptWindow;
+      await chatGptPage.waitForURL(instance.chatGptFixture.url);
       await waitForWindowCount(instance.application, 2);
-      const chatGptPage = instance.application
-        .windows()
-        .find((page) => page.url() === instance.chatGptFixture.url);
-      assert.ok(chatGptPage, "CHATGPT_FIXTURE_WINDOW_MISSING");
       const security = await instance.application.evaluate(
-        ({ webContents }, expectedUrl) => {
+        ({ session, webContents }, expectedUrl) => {
           const contents = webContents
             .getAllWebContents()
             .find((candidate) => candidate.getURL() === expectedUrl);
@@ -1557,7 +1561,9 @@ async function completeSetup(
             sandbox: preferences.sandbox,
             contextIsolation: preferences.contextIsolation,
             nodeIntegration: preferences.nodeIntegration,
-            partition: preferences.partition,
+            isolatedSession:
+              contents.session ===
+              session.fromPartition("persist:farol-next-chatgpt"),
           };
         },
         instance.chatGptFixture.url,
@@ -1566,17 +1572,18 @@ async function completeSetup(
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
-        partition: "persist:farol-next-chatgpt",
+        isolatedSession: true,
+      });
+      const popupWindow = instance.application.waitForEvent("window", {
+        timeout: 15_000,
       });
       await chatGptPage.locator('[data-testid="popup-button"]').click();
+      const popupPage = await popupWindow;
+      await popupPage.waitForURL(/\/chatgpt-popup$/u);
       await waitForWindowCount(instance.application, 3);
-      const popupPage = instance.application
-        .windows()
-        .find((page) => page.url().endsWith("/chatgpt-popup"));
-      assert.ok(popupPage, "CHATGPT_POPUP_WINDOW_MISSING");
       await popupPage.locator('[data-testid="popup-ready"]').waitFor();
       const popupSecurity = await instance.application.evaluate(
-        ({ webContents }, popupUrl) => {
+        ({ session, webContents }, popupUrl) => {
           const contents = webContents
             .getAllWebContents()
             .find((candidate) => candidate.getURL() === popupUrl);
@@ -1586,7 +1593,9 @@ async function completeSetup(
             sandbox: preferences.sandbox,
             contextIsolation: preferences.contextIsolation,
             nodeIntegration: preferences.nodeIntegration,
-            partition: preferences.partition,
+            isolatedSession:
+              contents.session ===
+              session.fromPartition("persist:farol-next-chatgpt"),
           };
         },
         `${new URL(instance.chatGptFixture.url).origin}/chatgpt-popup`,
@@ -1643,9 +1652,10 @@ async function completeSetup(
       );
       await chatGptPage.close();
       await waitForWindowCount(instance.application, 1);
-      assert.equal(
-        (await inspectWindowPresentation(instance.application)).visible,
-        instance.windowMode === "secondary-visible",
+      await waitForWindowPresentation(
+        instance.application,
+        instance.windowMode,
+        instance.expectedTaskViewCount,
       );
     }
     if (stepId === "computer" && configureComputer) {
@@ -2570,12 +2580,17 @@ try {
   await normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Open sign-in…", exact: true })
+    .waitFor();
+  const restartedChatGptWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Open sign-in…", exact: true })
     .click();
+  const restartedChatGptPage = await restartedChatGptWindow;
+  await restartedChatGptPage.waitForURL(normal.chatGptFixture.url);
   await waitForWindowCount(normal.application, 2);
-  const restartedChatGptPage = normal.application
-    .windows()
-    .find((page) => page.url() === normal.chatGptFixture.url);
-  assert.ok(restartedChatGptPage, "RESTARTED_CHATGPT_WINDOW_MISSING");
   await restartedChatGptPage.locator("#prompt-textarea").waitFor({
     state: "visible",
   });
@@ -2601,9 +2616,10 @@ try {
     .waitFor();
   await restartedChatGptPage.close();
   await waitForWindowCount(normal.application, 1);
-  assert.equal(
-    (await inspectWindowPresentation(normal.application)).visible,
-    normal.windowMode === "secondary-visible",
+  await waitForWindowPresentation(
+    normal.application,
+    normal.windowMode,
+    normal.expectedTaskViewCount,
   );
   assert.deepEqual(restartedSettings.setup.journey, {
     currentStep: "verify",
