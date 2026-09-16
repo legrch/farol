@@ -1073,9 +1073,13 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
 async function activateForNativeFocusProof(application) {
   let last = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    last = await application.evaluate(({ app, BrowserWindow }) => {
+    last = await application.evaluate(async ({ app, BrowserWindow }) => {
       const targetWindow = BrowserWindow.getAllWindows()[0];
       if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+      if (process.platform === "darwin") {
+        app.setActivationPolicy("regular");
+        await app.dock.show();
+      }
       targetWindow.setFocusable(true);
       targetWindow.show();
       targetWindow.moveTop();
