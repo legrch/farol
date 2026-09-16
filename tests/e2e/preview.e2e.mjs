@@ -1643,6 +1643,10 @@ async function completeSetup(
       );
       await chatGptPage.close();
       await waitForWindowCount(instance.application, 1);
+      assert.equal(
+        (await inspectWindowPresentation(instance.application)).visible,
+        instance.windowMode === "secondary-visible",
+      );
     }
     if (stepId === "computer" && configureComputer) {
       await instance.window.locator("#setup-live-primary").click();
@@ -2597,6 +2601,10 @@ try {
     .waitFor();
   await restartedChatGptPage.close();
   await waitForWindowCount(normal.application, 1);
+  assert.equal(
+    (await inspectWindowPresentation(normal.application)).visible,
+    normal.windowMode === "secondary-visible",
+  );
   assert.deepEqual(restartedSettings.setup.journey, {
     currentStep: "verify",
     dismissed: true,

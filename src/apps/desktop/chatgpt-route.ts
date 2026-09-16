@@ -54,6 +54,7 @@ export class ChatGptRoute {
   private readonly popupWindows = new Set<BrowserWindow>();
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
+  private disposing = false;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     if (
@@ -74,6 +75,7 @@ export class ChatGptRoute {
     }
 
     const parent = this.options.parent();
+    const restoreParent = parent?.isVisible() ?? false;
     const routeSession = session.fromPartition(CHATGPT_PARTITION, {
       cache: true,
     });
@@ -93,9 +95,14 @@ export class ChatGptRoute {
       webPreferences: this.remoteWebPreferences(),
     });
     this.routeWindow = candidate;
+    this.disposing = false;
     this.hardenContents(candidate.webContents, true);
     candidate.on("closed", () => {
       if (this.routeWindow === candidate) this.routeWindow = null;
+      if (!this.disposing && restoreParent && parent && !parent.isDestroyed()) {
+        parent.show();
+        parent.focus();
+      }
     });
 
     try {
@@ -138,6 +145,7 @@ export class ChatGptRoute {
   }
 
   dispose(): void {
+    this.disposing = true;
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
