@@ -2,15 +2,19 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import path from "node:path";
 import process from "node:process";
 
+import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
 import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
 import { createReadonlyComputerMcpServer } from "../../modules/computer/infra/mcp/create-readonly-computer-mcp";
+import { MutableComputerContractHandler } from "../../modules/computer/infra/mutable-contract-handler";
 import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
+import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/native/sha256-workspace-mutation-digester";
 import { ReadonlyComputerContractHandler } from "../../modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
+import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
 import {
   loadReadonlyComputerLaunchContract,
   materializeReadonlyComputerLaunch,
@@ -41,16 +45,32 @@ async function main(): Promise<void> {
     await loadReadonlyComputerLaunchContract(launchFile, workspace),
     Date.now(),
   );
+  const authorities = new InMemoryAuthorityRepository(launch.participants);
+  const approvals = new InMemoryComputerApprovalRepository([launch.approval]);
   const contract = new ReadonlyComputerContractHandler(
-    new RunReadonlyComputerAction(
-      new InMemoryAuthorityRepository(launch.participants),
-      new InMemoryComputerApprovalRepository([launch.approval]),
-      workspace,
-      { now: () => Date.now() },
-    ),
+    new RunReadonlyComputerAction(authorities, approvals, workspace, {
+      now: () => Date.now(),
+    }),
   );
+  const mutableContract = launch.mutationEnabled
+    ? new MutableComputerContractHandler(
+        new RunMutableComputerAction(
+          authorities,
+          approvals,
+          new PrivateWorkspaceMutationStore({ root: path.dirname(launchFile) }),
+          new Sha256WorkspaceMutationDigester(),
+          workspace,
+          { now: () => Date.now() },
+        ),
+      )
+    : undefined;
   const handle = serveStdio(
-    () => createReadonlyComputerMcpServer(contract, launch.binding),
+    () =>
+      createReadonlyComputerMcpServer(
+        contract,
+        launch.binding,
+        mutableContract,
+      ),
     {
       legacy: "serve",
       onerror: () => {

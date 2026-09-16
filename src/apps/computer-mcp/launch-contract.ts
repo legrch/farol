@@ -19,12 +19,17 @@ export const READONLY_COMPUTER_LAUNCH_BASENAME = "computer-launch.json";
 
 const IdentifierSchema = z.string().min(1).max(120);
 const OwnerIdentifierSchema = z.string().min(1).max(80);
-const CapabilitySchema = z.enum([
+const ReadonlyCapabilitySchema = z.enum([
   "workspace.list",
   "workspace.read",
   "workspace.search",
 ]);
-const AccessSchema = z.literal("read");
+const MutableCapabilitySchema = z.enum([
+  "workspace.list",
+  "workspace.read",
+  "workspace.search",
+  "workspace.write",
+]);
 
 function canonicalAbsolutePath(value: string): boolean {
   return (
@@ -48,44 +53,66 @@ function canonicalAbsolutePath(value: string): boolean {
 }
 
 const AbsolutePathSchema = z.string().refine(canonicalAbsolutePath);
-const ApprovedWorkspaceSchema = z.strictObject({
+const ReadonlyApprovedWorkspaceSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   root: AbsolutePathSchema,
-  access: AccessSchema,
+  access: z.literal("read"),
 });
-const SubtreeScopeSchema = z.strictObject({
+const ReadonlySubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   mode: z.literal("subtree"),
   root: AbsolutePathSchema,
-  access: AccessSchema,
+  access: z.literal("read"),
 });
-const ExactScopeSchema = z.strictObject({
+const ReadonlyExactScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   mode: z.literal("exact"),
   root: AbsolutePathSchema,
   paths: z.array(AbsolutePathSchema).min(1).max(500),
-  access: AccessSchema,
+  access: z.literal("read"),
 });
-const WorkspaceScopeSchema = z.discriminatedUnion("mode", [
-  SubtreeScopeSchema,
-  ExactScopeSchema,
+const ReadonlyWorkspaceScopeSchema = z.discriminatedUnion("mode", [
+  ReadonlySubtreeScopeSchema,
+  ReadonlyExactScopeSchema,
+]);
+const MutableApprovedWorkspaceSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  root: AbsolutePathSchema,
+  access: z.enum(["read", "write"]),
+});
+const MutableSubtreeScopeSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  mode: z.literal("subtree"),
+  root: AbsolutePathSchema,
+  access: z.enum(["read", "write"]),
+});
+const MutableExactScopeSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  mode: z.literal("exact"),
+  root: AbsolutePathSchema,
+  paths: z.array(AbsolutePathSchema).min(1).max(500),
+  access: z.enum(["read", "write"]),
+});
+const MutableWorkspaceScopeSchema = z.discriminatedUnion("mode", [
+  MutableSubtreeScopeSchema,
+  MutableExactScopeSchema,
 ]);
 const WorkspaceExclusionSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   path: AbsolutePathSchema,
 });
-const ComputerApprovalSchema = z.strictObject({
+const ReadonlyComputerApprovalSchema = z.strictObject({
   ownerId: OwnerIdentifierSchema,
   computerId: IdentifierSchema,
   generation: z.number().int().nonnegative(),
-  workspaces: z.array(ApprovedWorkspaceSchema).min(1).max(32),
+  workspaces: z.array(ReadonlyApprovedWorkspaceSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(CapabilitySchema).min(1).max(5),
+  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
   commands: z.literal("none"),
   expiresAt: z.number().int().positive().safe(),
 });
-const TaskAdmissionSchema = z.strictObject({
+const ReadonlyTaskAdmissionSchema = z.strictObject({
   authorityId: IdentifierSchema,
   ownerId: OwnerIdentifierSchema,
   sessionId: IdentifierSchema,
@@ -93,25 +120,64 @@ const TaskAdmissionSchema = z.strictObject({
   taskEpoch: z.number().int().nonnegative(),
   computerId: IdentifierSchema,
   computerGeneration: z.number().int().nonnegative(),
-  workspaces: z.array(WorkspaceScopeSchema).min(1).max(32),
+  workspaces: z.array(ReadonlyWorkspaceScopeSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(CapabilitySchema).min(1).max(5),
+  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
   commands: z.literal("none"),
   expiresAt: z.number().int().positive().safe(),
 });
-const AuthorityNarrowingSchema = z.strictObject({
-  workspaces: z.array(WorkspaceScopeSchema).min(1).max(32),
+const ReadonlyAuthorityNarrowingSchema = z.strictObject({
+  workspaces: z.array(ReadonlyWorkspaceScopeSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(CapabilitySchema).min(1).max(5),
+  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
   commands: z.literal("none"),
 });
-const ParticipantSchema = z.strictObject({
+const ReadonlyParticipantSchema = z.strictObject({
   participantId: IdentifierSchema,
   role: z.enum(["main", "agent", "critic"]),
   mutationOwnership: z.literal("none"),
-  narrowing: AuthorityNarrowingSchema.optional(),
+  narrowing: ReadonlyAuthorityNarrowingSchema.optional(),
+});
+const MutableComputerApprovalSchema = z.strictObject({
+  ownerId: OwnerIdentifierSchema,
+  computerId: IdentifierSchema,
+  generation: z.number().int().nonnegative(),
+  workspaces: z.array(MutableApprovedWorkspaceSchema).min(1).max(32),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
+  capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
+  network: z.literal("none"),
+  commands: z.literal("none"),
+  expiresAt: z.number().int().positive().safe(),
+});
+const MutableTaskAdmissionSchema = z.strictObject({
+  authorityId: IdentifierSchema,
+  ownerId: OwnerIdentifierSchema,
+  sessionId: IdentifierSchema,
+  taskId: IdentifierSchema,
+  taskEpoch: z.number().int().nonnegative(),
+  computerId: IdentifierSchema,
+  computerGeneration: z.number().int().nonnegative(),
+  workspaces: z.array(MutableWorkspaceScopeSchema).min(1).max(32),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
+  capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
+  network: z.literal("none"),
+  commands: z.literal("none"),
+  expiresAt: z.number().int().positive().safe(),
+});
+const MutableAuthorityNarrowingSchema = z.strictObject({
+  workspaces: z.array(MutableWorkspaceScopeSchema).min(1).max(32),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
+  capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
+  network: z.literal("none"),
+  commands: z.literal("none"),
+});
+const MutableParticipantSchema = z.strictObject({
+  participantId: IdentifierSchema,
+  role: z.enum(["main", "agent", "critic"]),
+  mutationOwnership: z.enum(["none", "task"]),
+  narrowing: MutableAuthorityNarrowingSchema.optional(),
 });
 const BindingSchema = z.strictObject({
   participantId: IdentifierSchema,
@@ -119,43 +185,70 @@ const BindingSchema = z.strictObject({
   generation: z.number().int().nonnegative(),
 });
 
-export const ReadonlyComputerLaunchContractSchema = z
+function validateChain(
+  value: Readonly<{
+    delegationChain: readonly Readonly<{
+      participantId: string;
+      role: "agent" | "critic" | "main";
+      narrowing?: unknown;
+    }>[];
+    binding: Readonly<{ participantId: string }>;
+  }>,
+  context: z.RefinementCtx,
+): void {
+  const first = value.delegationChain[0];
+  const last = value.delegationChain.at(-1);
+  if (first?.role !== "main" || first.narrowing !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["delegationChain", 0],
+      message:
+        "The delegation chain must begin with an unrestricted main participant.",
+    });
+  }
+  if (last?.participantId !== value.binding.participantId) {
+    context.addIssue({
+      code: "custom",
+      path: ["binding", "participantId"],
+      message: "The MCP binding must target the final delegated participant.",
+    });
+  }
+  const participants = value.delegationChain.map(
+    (participant) => participant.participantId,
+  );
+  if (new Set(participants).size !== participants.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["delegationChain"],
+      message: "Participant identifiers must be unique.",
+    });
+  }
+}
+
+const ReadonlyLaunchContractSchema = z
   .strictObject({
     schema: z.literal(1),
-    approval: ComputerApprovalSchema,
-    admission: TaskAdmissionSchema,
-    delegationChain: z.array(ParticipantSchema).min(1).max(16),
+    approval: ReadonlyComputerApprovalSchema,
+    admission: ReadonlyTaskAdmissionSchema,
+    delegationChain: z.array(ReadonlyParticipantSchema).min(1).max(16),
     binding: BindingSchema,
   })
-  .superRefine((value, context) => {
-    const first = value.delegationChain[0];
-    const last = value.delegationChain.at(-1);
-    if (first?.role !== "main" || first.narrowing !== undefined) {
-      context.addIssue({
-        code: "custom",
-        path: ["delegationChain", 0],
-        message:
-          "The delegation chain must begin with an unrestricted main participant.",
-      });
-    }
-    if (last?.participantId !== value.binding.participantId) {
-      context.addIssue({
-        code: "custom",
-        path: ["binding", "participantId"],
-        message: "The MCP binding must target the final delegated participant.",
-      });
-    }
-    const participants = value.delegationChain.map(
-      (participant) => participant.participantId,
-    );
-    if (new Set(participants).size !== participants.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["delegationChain"],
-        message: "Participant identifiers must be unique.",
-      });
-    }
-  });
+  .superRefine(validateChain);
+
+const MutableLaunchContractSchema = z
+  .strictObject({
+    schema: z.literal(2),
+    approval: MutableComputerApprovalSchema,
+    admission: MutableTaskAdmissionSchema,
+    delegationChain: z.array(MutableParticipantSchema).min(1).max(16),
+    binding: BindingSchema,
+  })
+  .superRefine(validateChain);
+
+export const ReadonlyComputerLaunchContractSchema = z.union([
+  ReadonlyLaunchContractSchema,
+  MutableLaunchContractSchema,
+]);
 
 export type ReadonlyComputerLaunchContract = z.infer<
   typeof ReadonlyComputerLaunchContractSchema
@@ -274,6 +367,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   approval: ComputerApproval;
   participants: readonly ParticipantAuthority[];
   binding: ReadonlyComputerMcpBinding;
+  mutationEnabled: boolean;
 }>;
 
 export function materializeReadonlyComputerLaunch(
@@ -318,6 +412,11 @@ export function materializeReadonlyComputerLaunch(
   return {
     approval,
     participants,
+    mutationEnabled:
+      launch.schema === 2 &&
+      approval.capabilities.includes("workspace.write") &&
+      parent.mutationOwnership === "task" &&
+      parent.grant.workspaces.some((workspace) => workspace.access === "write"),
     binding: {
       ownerId: admission.ownerId,
       sessionId: admission.sessionId,

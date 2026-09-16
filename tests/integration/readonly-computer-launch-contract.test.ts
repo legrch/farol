@@ -77,6 +77,67 @@ function launchContract(): ReadonlyComputerLaunchContract {
   };
 }
 
+function mutableLaunchContract(): ReadonlyComputerLaunchContract {
+  return {
+    schema: 2,
+    approval: {
+      ownerId: "owner-a",
+      computerId: "computer-a",
+      generation: 3,
+      workspaces: [
+        { workspaceId: "workspace-a", root: workspaceRoot, access: "write" },
+      ],
+      capabilities: ["workspace.read", "workspace.write"],
+      network: "none",
+      commands: "none",
+      expiresAt: 20_000,
+    },
+    admission: {
+      authorityId: "authority-a",
+      ownerId: "owner-a",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 2,
+      computerId: "computer-a",
+      computerGeneration: 3,
+      workspaces: [
+        {
+          workspaceId: "workspace-a",
+          mode: "subtree",
+          root: workspaceRoot,
+          access: "write",
+        },
+      ],
+      capabilities: ["workspace.read", "workspace.write"],
+      network: "none",
+      commands: "none",
+      expiresAt: 10_000,
+    },
+    delegationChain: [
+      {
+        participantId: "main-a",
+        role: "main",
+        mutationOwnership: "task",
+      },
+      {
+        participantId: "agent-a",
+        role: "agent",
+        mutationOwnership: "task",
+      },
+      {
+        participantId: "critic-a",
+        role: "critic",
+        mutationOwnership: "task",
+      },
+    ],
+    binding: {
+      participantId: "critic-a",
+      turnId: "turn-a",
+      generation: 4,
+    },
+  };
+}
+
 afterEach(async () => {
   if (temporaryRoot) {
     await fs.rm(temporaryRoot, { recursive: true, force: true });
@@ -85,6 +146,26 @@ afterEach(async () => {
 });
 
 describe("read-only Computer launch contract", () => {
+  it("uses explicit schema v2 to carry applicable write authority through Critic", () => {
+    const launch = mutableLaunchContract();
+    expect(
+      parseReadonlyComputerLaunchContract(
+        serializeReadonlyComputerLaunchContract(launch),
+      ),
+    ).toEqual(launch);
+
+    const materialized = materializeReadonlyComputerLaunch(launch, 1_000);
+    expect(materialized.mutationEnabled).toBe(true);
+    expect(materialized.participants[2]).toMatchObject({
+      role: "critic",
+      mutationOwnership: "task",
+      grant: {
+        capabilities: ["workspace.read", "workspace.write"],
+        workspaces: [{ access: "write" }],
+      },
+    });
+  });
+
   it("preserves the task workspace through main to agent to critic", () => {
     const materialized = materializeReadonlyComputerLaunch(
       launchContract(),
@@ -110,6 +191,7 @@ describe("read-only Computer launch contract", () => {
       taskId: "task-a",
       participantId: "critic-a",
     });
+    expect(materialized.mutationEnabled).toBe(false);
   });
 
   it("applies explicit narrowing without changing the parent's grant", () => {
