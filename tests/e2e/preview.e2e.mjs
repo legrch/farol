@@ -881,12 +881,15 @@ async function taskSurfaces(application) {
       webContents
         .getAllWebContents()
         .filter((contents) => contents.getURL().includes("/task/"))
-        .map(async (contents) => ({
-          url: contents.getURL(),
-          hostVisible: viewByContentsId.get(contents.id)?.getVisible() ?? null,
-          focused: contents.isFocused(),
-          state: await contents.executeJavaScript(
-            `({
+        .map(async (contents) => {
+          const hostView = viewByContentsId.get(contents.id);
+          return {
+            url: contents.getURL(),
+            hostVisible: hostView?.getVisible() ?? null,
+            hostBounds: hostView?.getBounds() ?? null,
+            focused: contents.isFocused(),
+            state: await contents.executeJavaScript(
+              `({
               taskId: document.body.dataset.taskId,
               deltaCount: Number(document.body.dataset.deltaCount),
               terminal: document.body.dataset.terminal === "true",
@@ -897,10 +900,22 @@ async function taskSurfaces(application) {
               recovery: document.getElementById("recovery")?.textContent ?? "",
               offline: document.body.dataset.offline === "true"
             })`,
-          ),
-        })),
+            ),
+          };
+        }),
     );
   });
+}
+
+async function waitForTaskSurface(application, taskId, predicate, message) {
+  let last = [];
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    last = await taskSurfaces(application);
+    const surface = last.find((candidate) => candidate.state.taskId === taskId);
+    if (surface && predicate(surface)) return surface;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`E2E_SURFACE_TIMEOUT:${message}:${JSON.stringify(last)}`);
 }
 
 async function waitForTask(application, taskId, predicate, message) {
@@ -1021,7 +1036,7 @@ async function proveTaskCapabilityIsolation(application) {
   });
 }
 
-async function sendShortcutFromTask(application, taskId, reverse = false) {
+async function sendKeyFromTask(application, taskId, keyCode, modifiers) {
   await application.evaluate(
     ({ webContents }, input) => {
       const contents = webContents
@@ -1033,16 +1048,25 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
       contents.focus();
       contents.sendInputEvent({
         type: "keyDown",
-        keyCode: "Tab",
-        modifiers: input.reverse ? ["control", "shift"] : ["control"],
+        keyCode: input.keyCode,
+        modifiers: input.modifiers,
       });
       contents.sendInputEvent({
         type: "keyUp",
-        keyCode: "Tab",
-        modifiers: input.reverse ? ["control", "shift"] : ["control"],
+        keyCode: input.keyCode,
+        modifiers: input.modifiers,
       });
     },
-    { taskId, reverse },
+    { taskId, keyCode, modifiers },
+  );
+}
+
+async function sendShortcutFromTask(application, taskId, reverse = false) {
+  await sendKeyFromTask(
+    application,
+    taskId,
+    "Tab",
+    reverse ? ["control", "shift"] : ["control"],
   );
 }
 
@@ -1050,10 +1074,11 @@ async function activateForNativeFocusProof(application) {
   await application.evaluate(({ app, BrowserWindow }) => {
     const targetWindow = BrowserWindow.getAllWindows()[0];
     if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    targetWindow.show();
     app.focus({ steal: true });
     targetWindow.focus();
   });
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
     const focused = await application.evaluate(
       ({ BrowserWindow }) =>
         BrowserWindow.getAllWindows()[0]?.isFocused() ?? false,
@@ -1090,6 +1115,87 @@ async function shellGeometry(window) {
   );
 }
 
+async function watchRailGeometry(window) {
+  return window.evaluate(() => {
+    const bounds = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) throw new Error(`GEOMETRY_ELEMENT_MISSING:${selector}`);
+      const rect = element.getBoundingClientRect();
+      return {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    };
+    return {
+      sidebarMode: document.documentElement.dataset.sidebar,
+      windowActive: document.documentElement.dataset.windowActive,
+      fullScreen: document.documentElement.dataset.fullScreen,
+      sidebar: bounds("#sidebar"),
+      toggle: bounds("#sidebar-toggle"),
+      taskBar: bounds(".task-bar"),
+      dossier: bounds(".dossier"),
+      surface: bounds(".surface"),
+    };
+  });
+}
+
+async function applicationMenuState(application) {
+  return application.evaluate(({ Menu }) => {
+    const menu = Menu.getApplicationMenu();
+    const sidebar = menu?.getMenuItemById("view.toggle-sidebar");
+    const switcher = menu?.getMenuItemById("view.quick-switcher");
+    return {
+      sidebar: sidebar
+        ? { label: sidebar.label, accelerator: sidebar.accelerator }
+        : null,
+      switcher: switcher
+        ? { label: switcher.label, accelerator: switcher.accelerator }
+        : null,
+    };
+  });
+}
+
+async function invokeApplicationMenu(application, id) {
+  await application.evaluate(({ BrowserWindow, Menu }, itemId) => {
+    const item = Menu.getApplicationMenu()?.getMenuItemById(itemId);
+    const targetWindow = BrowserWindow.getAllWindows()[0];
+    if (!item?.click || !targetWindow)
+      throw new Error(`E2E_MENU_MISSING:${itemId}`);
+    item.click(item, targetWindow, { triggeredByAccelerator: false });
+  }, id);
+}
+
+async function nativeWindowChrome(application) {
+  return application.evaluate(({ BrowserWindow }) => {
+    const targetWindow = BrowserWindow.getAllWindows()[0];
+    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    return {
+      focused: targetWindow.isFocused(),
+      fullScreen: targetWindow.isFullScreen(),
+      trafficLightPosition:
+        process.platform === "darwin"
+          ? targetWindow.getWindowButtonPosition()
+          : null,
+    };
+  });
+}
+
+async function setFullScreen(application, value) {
+  await application.evaluate(async ({ BrowserWindow }, nextValue) => {
+    const targetWindow = BrowserWindow.getAllWindows()[0];
+    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    if (targetWindow.isFullScreen() === nextValue) return;
+    const event = nextValue ? "enter-full-screen" : "leave-full-screen";
+    const transitioned = new Promise((resolve) =>
+      targetWindow.once(event, resolve),
+    );
+    targetWindow.setFullScreen(nextValue);
+    await transitioned;
+  }, value);
+}
+
 const setupScreens = [
   ["chatgpt", "setup-1-chatgpt-wide.png"],
   ["computer", "setup-2-computer-wide.png"],
@@ -1101,6 +1207,12 @@ const setupScreens = [
 async function completeSetup(instance, capture = false) {
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
+  assert.equal(
+    (await taskSurfaces(instance.application)).some(
+      (surface) => surface.hostVisible,
+    ),
+    false,
+  );
   assert.equal(await dialog.getAttribute("data-mode"), "first-run");
   assert.equal(
     await instance.window.evaluate(() => document.activeElement?.id),
@@ -1159,6 +1271,104 @@ try {
     );
   }
   await completeSetup(normal, true);
+  const initialWatchGeometry = await watchRailGeometry(normal.window);
+  assert.equal(initialWatchGeometry.sidebarMode, "full");
+  assert.equal(initialWatchGeometry.windowActive, "false");
+  assert.deepEqual(initialWatchGeometry.sidebar, {
+    x: 0,
+    y: 0,
+    width: 216,
+    height: 760,
+  });
+  assert.deepEqual(initialWatchGeometry.taskBar, {
+    x: 216,
+    y: 52,
+    width: 964,
+    height: 54,
+  });
+  assert.deepEqual(initialWatchGeometry.dossier, {
+    x: 216,
+    y: 106,
+    width: 964,
+    height: 72,
+  });
+  assert.deepEqual(initialWatchGeometry.surface, {
+    x: 216,
+    y: 178,
+    width: 964,
+    height: 582,
+  });
+  const initialNativeSurface = await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === true,
+    "selected Browser surface becomes visible after Setup",
+  );
+  assert.deepEqual(initialNativeSurface.hostBounds, {
+    x: 216,
+    y: 178,
+    width: 964,
+    height: 582,
+  });
+  const fontState = await normal.window.evaluate(async () => {
+    await document.fonts.ready;
+    return {
+      geist: document.fonts.check('12px "Farol Geist"'),
+      geistMono: document.fonts.check('12px "Farol Geist Mono"'),
+      bodyFamily: getComputedStyle(document.body).fontFamily,
+    };
+  });
+  assert.equal(fontState.geist, true);
+  assert.equal(fontState.geistMono, true);
+  assert.match(fontState.bodyFamily, /Farol Geist/u);
+  assert.deepEqual(await applicationMenuState(normal.application), {
+    sidebar: {
+      label: "Show/Hide Sidebar",
+      accelerator: "Control+Command+S",
+    },
+    switcher: {
+      label: "Quick Switcher",
+      accelerator: "CommandOrControl+K",
+    },
+  });
+  const initialChrome = await nativeWindowChrome(normal.application);
+  assert.equal(initialChrome.focused, false);
+  assert.equal(initialChrome.fullScreen, false);
+  if (process.platform === "darwin") {
+    assert.deepEqual(initialChrome.trafficLightPosition, { x: 14, y: 18 });
+    assert.equal(initialWatchGeometry.toggle.x, 75);
+  }
+
+  await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  const menuRailSurface = await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostBounds?.x === 72 && surface.hostVisible === true,
+    "View menu collapses native surface to rail",
+  );
+  assert.equal(menuRailSurface.hostBounds.width, 1_108);
+  await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
+
+  await sendKeyFromTask(normal.application, "task-atlantic", "S", [
+    "control",
+    "meta",
+  ]);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  await sendKeyFromTask(normal.application, "task-atlantic", "S", [
+    "control",
+    "meta",
+  ]);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
   const resourceIdentity = await normal.application.evaluate(
     ({ app, session }) => ({
       userData: app.getPath("userData"),
@@ -1199,13 +1409,107 @@ try {
   );
   const wideBrowserGeometry = await shellGeometry(normal.window);
   await setWindowSize(normal.application, 700, 600);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  const compactSurface = await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) =>
+      surface.hostVisible === true &&
+      surface.hostBounds?.x === 72 &&
+      surface.hostBounds?.y === 178,
+    "compact Browser surface uses auto rail",
+  );
+  assert.deepEqual(compactSurface.hostBounds, {
+    x: 72,
+    y: 178,
+    width: 628,
+    height: 422,
+  });
   await captureTask(
     normal.application,
     "task-atlantic",
     "running-browser-compact.png",
   );
+  await normal.window.locator("#sidebar-toggle").click();
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "overlay",
+  );
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === false,
+    "compact sidebar overlay hides native Browser surface",
+  );
+  assert.equal(
+    await normal.window
+      .locator("#sidebar")
+      .evaluate((element) => Math.round(element.getBoundingClientRect().width)),
+    216,
+  );
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "watch-sidebar-overlay-compact.png"),
+  });
+  await normal.window.keyboard.press("Escape");
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === true,
+    "Escape restores Browser surface after sidebar overlay",
+  );
   await setWindowSize(normal.application, 1180, 760);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
   assert.deepEqual(await shellGeometry(normal.window), wideBrowserGeometry);
+
+  await normal.window.locator("#task-menu-button").click();
+  await normal.window.locator("#task-menu").waitFor({ state: "visible" });
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === false,
+    "task menu hides native Browser surface",
+  );
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "watch-task-menu-wide.png"),
+  });
+  await normal.window.keyboard.press("Escape");
+  await normal.window.locator("#task-menu").waitFor({ state: "hidden" });
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === true,
+    "Escape restores Browser surface after task menu",
+  );
+
+  await sendKeyFromTask(normal.application, "task-atlantic", "K", ["meta"]);
+  await normal.window.locator("#command-dialog").waitFor({ state: "visible" });
+  assert.equal(
+    await normal.window.evaluate(() => document.activeElement?.id),
+    "command-search",
+  );
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === false,
+    "quick switcher from native page hides Browser surface",
+  );
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "watch-quick-switcher-wide.png"),
+  });
+  await normal.window.keyboard.press("Escape");
+  await normal.window.locator("#command-dialog").waitFor({ state: "hidden" });
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === true,
+    "Escape restores Browser surface after quick switcher",
+  );
 
   await normal.window.locator('[data-section="computer"]').click();
   const approve = normal.window.locator("#approve-tool");
@@ -1336,6 +1640,73 @@ try {
 
   await normal.window.keyboard.press("Meta+1");
   await activateForNativeFocusProof(normal.application);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.windowActive === "true",
+  );
+  assert.equal((await nativeWindowChrome(normal.application)).focused, true);
+
+  await sendKeyFromTask(normal.application, "task-atlantic", "K", ["meta"]);
+  await normal.window.locator("#command-dialog").waitFor({ state: "visible" });
+  assert.equal(
+    await normal.application.evaluate(
+      ({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.webContents.isFocused() ?? false,
+    ),
+    true,
+  );
+  let focusTransfer = await taskSurfaces(normal.application);
+  assert.equal(
+    focusTransfer.find((surface) => surface.state.taskId === "task-atlantic")
+      ?.hostVisible,
+    false,
+  );
+  await normal.window.keyboard.press("Escape");
+  await normal.window.locator("#command-dialog").waitFor({ state: "hidden" });
+  await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === true && surface.focused === true,
+    "Escape transfers focus from quick switcher to native Browser",
+  );
+
+  await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  await setFullScreen(normal.application, true);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.fullScreen === "true",
+  );
+  const fullScreenGeometry = await watchRailGeometry(normal.window);
+  assert.equal(fullScreenGeometry.sidebar.width, 72);
+  if (process.platform === "darwin")
+    assert.equal(fullScreenGeometry.toggle.x, 14);
+  const fullScreenSurface = await waitForTaskSurface(
+    normal.application,
+    "task-atlantic",
+    (surface) => surface.hostVisible === true && surface.hostBounds?.x === 72,
+    "fullscreen rail keeps native Browser aligned",
+  );
+  assert.equal(fullScreenSurface.hostBounds.y, 178);
+  await normal.window.screenshot({
+    path: path.join(evidenceRoot, "watch-fullscreen-rail.png"),
+  });
+  await setFullScreen(normal.application, false);
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.fullScreen === "false",
+  );
+  if (process.platform === "darwin") {
+    assert.equal((await watchRailGeometry(normal.window)).toggle.x, 75);
+    assert.deepEqual(
+      (await nativeWindowChrome(normal.application)).trafficLightPosition,
+      { x: 14, y: 18 },
+    );
+  }
+  await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
+
   await sendShortcutFromTask(normal.application, "task-atlantic");
   await normal.window
     .locator('[data-task-id="task-harbor"][aria-selected="true"]')
@@ -1363,6 +1734,13 @@ try {
   assert.equal(
     focused.find((surface) => surface.state.taskId === "task-harbor")?.focused,
     false,
+  );
+
+  focusTransfer = await taskSurfaces(normal.application);
+  assert.equal(
+    focusTransfer.find((surface) => surface.state.taskId === "task-atlantic")
+      ?.hostVisible,
+    true,
   );
 
   const runtimeBeforeWindowClose = await runtimeProcessId(normal.application);
@@ -1411,6 +1789,15 @@ try {
     "incremental-before-terminal",
     "computer-exact-correlation",
     "keyboard-focus",
+    "watch-rail-native-geometry",
+    "sidebar-native-menu-and-shortcut",
+    "compact-sidebar-overlay-hides-native-page",
+    "task-menu-hides-native-page",
+    "quick-switcher-native-focus-transfer",
+    "traffic-light-and-fullscreen-geometry",
+    "inactive-window-appearance",
+    "geist-resource-loaded",
+    "setup-hides-native-page",
     "activity-redaction",
     "compact-layout",
     "stable-layout-geometry",
@@ -1641,6 +2028,10 @@ const report = {
   screenshots: [
     "running-browser-view.png",
     "running-browser-compact.png",
+    "watch-sidebar-overlay-compact.png",
+    "watch-task-menu-wide.png",
+    "watch-quick-switcher-wide.png",
+    "watch-fullscreen-rail.png",
     "tool-wait-wide.png",
     "tool-wait-compact.png",
     "complete-wide.png",

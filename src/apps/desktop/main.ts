@@ -238,6 +238,7 @@ function requestSidebarToggle(): void {
 
 function closeShellOverlay(): void {
   if (shellOverlay === "none") return;
+  if (sidebarMode === "overlay") sidebarMode = "rail";
   shellOverlay = "none";
   applyLayout();
   publishShellAction("close-overlay");
@@ -265,11 +266,13 @@ function installApplicationMenu(): void {
       label: "View",
       submenu: [
         {
+          id: "view.toggle-sidebar",
           label: "Show/Hide Sidebar",
           accelerator: "Control+Command+S",
           click: requestSidebarToggle,
         },
         {
+          id: "view.quick-switcher",
           label: "Quick Switcher",
           accelerator: "CommandOrControl+K",
           click: requestQuickSwitcher,
@@ -456,6 +459,7 @@ function handleShortcut(input: Input): boolean {
     const next = (index + direction + demoTasks.length) % demoTasks.length;
     selectedTaskId = demoTasks[next]?.taskId ?? selectedTaskId;
     section = "browser";
+    if (sidebarMode === "overlay") sidebarMode = "rail";
     shellOverlay = "none";
     applyLayout();
     publishLayout();
@@ -466,6 +470,7 @@ function handleShortcut(input: Input): boolean {
     section = ["browser", "computer", "activity", "settings"][
       Number(input.key) - 1
     ] as SurfaceSection;
+    if (sidebarMode === "overlay") sidebarMode = "rail";
     shellOverlay = "none";
     applyLayout();
     publishLayout();
