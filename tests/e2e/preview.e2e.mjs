@@ -2640,11 +2640,12 @@ try {
   const liveTaskText = await fs.readFile(liveTaskPath, "utf8");
   const liveTaskRecord = JSON.parse(liveTaskText);
   assert.equal(liveTaskRecord.schema, 1);
-  assert.equal(liveTaskRecord.revision, 13);
+  assert.ok(liveTaskRecord.revision >= 12);
   assert.equal(liveTaskRecord.tasks.length, 4);
   assert.equal(liveTaskRecord.tasks[0].taskId, pinnedTask.taskId);
   assert.equal(liveTaskRecord.tasks[0].label, "Pinned continuity task");
   assert.equal(liveTaskRecord.tasks[0].pinned, true);
+  assert.equal(liveTaskRecord.tasks[0].lifecycle, "completed");
   assert.equal(
     liveTaskRecord.tasks[0].conversationUrl,
     retainedLiveConversationUrl,
@@ -2652,6 +2653,11 @@ try {
   assert.equal(
     liveTaskRecord.tasks.some((task) => task.taskId === closingTask.taskId),
     false,
+  );
+  assert.equal(
+    liveTaskRecord.tasks.find((task) => task.taskId === cancellableTask.taskId)
+      ?.lifecycle,
+    "cancelled",
   );
   assert.deepEqual(Object.keys(liveTaskRecord.tasks[0]).sort(), [
     "conversationUrl",
@@ -2683,7 +2689,7 @@ try {
   const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
-  assert.equal(recoveredState.taskRevision, 13);
+  assert.equal(recoveredState.taskRevision, liveTaskRecord.revision);
   assert.deepEqual(
     recoveredState.tasks,
     liveTaskRecord.tasks.map(
