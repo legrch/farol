@@ -24,6 +24,12 @@ export type AgentWorkspaceScope =
 
 export type AgentAuthorityNarrowing = Readonly<{
   workspaces: readonly AgentWorkspaceScope[];
+  excludedPaths?:
+    | readonly Readonly<{
+        workspaceId: string;
+        path: string;
+      }>[]
+    | undefined;
   capabilities: readonly AgentAuthorityCapability[];
   network: "none" | "approved";
   commands: "none" | "verification";
@@ -51,6 +57,10 @@ export type DelegatedAgentAuthority = Readonly<{
   computerId: string;
   computerGeneration: number;
   workspaces: readonly AgentWorkspaceScope[];
+  excludedPaths: readonly Readonly<{
+    workspaceId: string;
+    path: string;
+  }>[];
   capabilities: readonly AgentAuthorityCapability[];
   network: "none" | "approved";
   commands: "none" | "verification";

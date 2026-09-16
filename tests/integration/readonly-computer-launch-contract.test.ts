@@ -150,6 +150,36 @@ describe("read-only Computer launch contract", () => {
     ]);
   });
 
+  it("preserves an explicit do-not-inspect subtree across the launch chain", () => {
+    const launch = launchContract();
+    const agent = launch.delegationChain[1];
+    if (agent === undefined) throw new Error("TEST_CHAIN_INVALID");
+    launch.delegationChain[1] = {
+      ...agent,
+      narrowing: {
+        workspaces: launch.admission.workspaces,
+        excludedPaths: [
+          {
+            workspaceId: "workspace-a",
+            path: `${workspaceRoot}/private`,
+          },
+        ],
+        capabilities: launch.admission.capabilities,
+        network: "none",
+        commands: "none",
+      },
+    };
+
+    const materialized = materializeReadonlyComputerLaunch(launch, 1_000);
+    expect(materialized.participants[2]?.grant.excludedPaths).toEqual([
+      {
+        workspaceId: "workspace-a",
+        path: `${workspaceRoot}/private`,
+        restrictionSource: "owner-restriction",
+      },
+    ]);
+  });
+
   it("denies delegated authority inflation", () => {
     const launch = launchContract();
     const critic = launch.delegationChain[2];

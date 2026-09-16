@@ -70,11 +70,16 @@ const WorkspaceScopeSchema = z.discriminatedUnion("mode", [
   SubtreeScopeSchema,
   ExactScopeSchema,
 ]);
+const WorkspaceExclusionSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  path: AbsolutePathSchema,
+});
 const ComputerApprovalSchema = z.strictObject({
   ownerId: OwnerIdentifierSchema,
   computerId: IdentifierSchema,
   generation: z.number().int().nonnegative(),
   workspaces: z.array(ApprovedWorkspaceSchema).min(1).max(32),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(CapabilitySchema).min(1).max(5),
   network: z.literal("none"),
   commands: z.literal("none"),
@@ -89,6 +94,7 @@ const TaskAdmissionSchema = z.strictObject({
   computerId: IdentifierSchema,
   computerGeneration: z.number().int().nonnegative(),
   workspaces: z.array(WorkspaceScopeSchema).min(1).max(32),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(CapabilitySchema).min(1).max(5),
   network: z.literal("none"),
   commands: z.literal("none"),
@@ -96,6 +102,7 @@ const TaskAdmissionSchema = z.strictObject({
 });
 const AuthorityNarrowingSchema = z.strictObject({
   workspaces: z.array(WorkspaceScopeSchema).min(1).max(32),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(CapabilitySchema).min(1).max(5),
   network: z.literal("none"),
   commands: z.literal("none"),

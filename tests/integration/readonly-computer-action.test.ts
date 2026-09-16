@@ -11,6 +11,7 @@ import {
   createParticipantAuthority,
   delegateParticipantAuthority,
   deriveTaskGrant,
+  type AuthorityNarrowing,
   type ComputerApproval,
   type ParticipantAuthority,
   type TaskAdmission,
@@ -284,6 +285,72 @@ describe("real read-only Computer action", () => {
             relativePath: "src/unknown-beforehand.ts",
           },
           "critic-narrow",
+        ),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "AUTHORITY_PATH_DENIED",
+        source: "owner-restriction",
+        retry: "never",
+      },
+    });
+  });
+
+  it("DAC-06 hides an explicitly excluded subtree from delegated search and read", async () => {
+    await fs.mkdir(path.join(root, "private"), { mode: 0o700 });
+    await fs.writeFile(
+      path.join(root, "private", "secret.txt"),
+      "owner-excluded-marker\n",
+      { mode: 0o600 },
+    );
+    const chain = participants();
+    const narrowing: AuthorityNarrowing = {
+      workspaces: admission().workspaces,
+      capabilities: admission().capabilities,
+      network: "none",
+      commands: "none",
+      excludedPaths: [
+        {
+          workspaceId: "farol",
+          path: `${root}/private`,
+        },
+      ],
+    };
+    const narrowed = delegateParticipantAuthority(chain.agent, {
+      participantId: "critic-excluded",
+      role: "critic",
+      mutationOwnership: "none",
+      narrowing,
+    });
+    if (!narrowed.ok) throw new Error(narrowed.error.code);
+    const computer = contract(
+      [...Object.values(chain), narrowed.value],
+      approval(),
+    );
+
+    await expect(
+      computer.execute(
+        request(
+          {
+            kind: "workspace.search",
+            relativePath: ".",
+            pattern: "owner-excluded-marker",
+          },
+          "critic-excluded",
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        output: { kind: "workspace.matches", matches: [] },
+      },
+    });
+    await expect(
+      computer.execute(
+        request(
+          { kind: "workspace.read", relativePath: "private/secret.txt" },
+          "critic-excluded",
         ),
       ),
     ).resolves.toEqual({

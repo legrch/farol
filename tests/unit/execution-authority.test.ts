@@ -7,6 +7,7 @@ import {
   delegateParticipantAuthority,
   deriveTaskGrant,
   type AuthorityAction,
+  type AuthorityNarrowing,
   type ComputerApproval,
   type NativeHostAuthority,
   type ParticipantAuthority,
@@ -280,6 +281,94 @@ describe("delegated execution authority", () => {
         1_000,
       ),
     ).toMatchObject({ ok: false });
+  });
+
+  it("DAC-06 preserves an explicit do-not-inspect exclusion through later delegation", () => {
+    const narrowing: AuthorityNarrowing = {
+      workspaces: admission.workspaces,
+      capabilities: admission.capabilities,
+      network: "none",
+      commands: "verification",
+      excludedPaths: [
+        {
+          workspaceId: "farol",
+          path: "/workspace/farol/private",
+        },
+      ],
+    };
+    const agent = delegateParticipantAuthority(mainParticipant(), {
+      participantId: "agent-excluded",
+      role: "agent",
+      mutationOwnership: "task",
+      narrowing,
+    });
+    if (!agent.ok) throw new Error(agent.error.code);
+    const critic = delegateParticipantAuthority(agent.value, {
+      participantId: "critic-excluded",
+      role: "critic",
+      mutationOwnership: "none",
+      narrowing: {
+        workspaces: admission.workspaces,
+        capabilities: admission.capabilities,
+        network: "none",
+        commands: "verification",
+      },
+    });
+    if (!critic.ok) throw new Error(critic.error.code);
+
+    expect(critic.value.grant).toMatchObject({
+      excludedPaths: [
+        {
+          workspaceId: "farol",
+          path: "/workspace/farol/private",
+          restrictionSource: "owner-restriction",
+        },
+      ],
+    });
+    expect(
+      authorizeTaskAction(
+        critic.value,
+        action({
+          kind: "workspace.read",
+          workspaceId: "farol",
+          path: "/workspace/farol/private/secret.txt",
+        }),
+        1_000,
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: "AUTHORITY_PATH_DENIED",
+        source: "owner-restriction",
+        retry: "never",
+      },
+    });
+    expect(
+      authorizeTaskAction(
+        critic.value,
+        action({
+          kind: "workspace.read",
+          workspaceId: "farol",
+          path: "/workspace/farol/public.txt",
+        }),
+        1_000,
+      ),
+    ).toMatchObject({ ok: true });
+
+    expect(
+      delegateParticipantAuthority(mainParticipant(), {
+        participantId: "agent-invalid-exclusion",
+        role: "agent",
+        mutationOwnership: "task",
+        narrowing: {
+          ...narrowing,
+          excludedPaths: [{ workspaceId: "farol", path: "/workspace/outside" }],
+        },
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_INFLATION_DENIED" },
+    });
   });
 
   it("DAC-07 intersects native host authority instead of upgrading it to Computer authority", () => {

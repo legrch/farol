@@ -59,6 +59,7 @@ const delegatedAuthority: DelegatedAgentAuthority = {
       access: "write",
     },
   ],
+  excludedPaths: [],
   capabilities: [
     "workspace.read",
     "workspace.search",

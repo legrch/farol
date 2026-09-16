@@ -80,7 +80,12 @@ function focusAllowed(
       authority.workspaces.some(
         (scope) =>
           within(scope.root, initialPath) &&
-          (scope.mode === "subtree" || scope.paths.includes(initialPath)),
+          (scope.mode === "subtree" || scope.paths.includes(initialPath)) &&
+          !authority.excludedPaths.some(
+            (exclusion) =>
+              exclusion.workspaceId === scope.workspaceId &&
+              within(exclusion.path, initialPath),
+          ),
       ),
   );
 }

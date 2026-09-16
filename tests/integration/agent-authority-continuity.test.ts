@@ -60,6 +60,7 @@ const authority: DelegatedAgentAuthority = {
       access: "read",
     },
   ],
+  excludedPaths: [],
   capabilities: [
     "workspace.list",
     "workspace.read",
@@ -270,24 +271,27 @@ describe("Agent delegated-authority continuity", () => {
   it.each([
     ["outside the delegated workspace", "/workspace/private/notes.md"],
     ["with a non-canonical segment", "/workspace/farol/../private.md"],
-  ])("refuses focus %s before native-host spawn", async (_case, initialPath) => {
-    const nativeHost = host();
+  ])(
+    "refuses focus %s before native-host spawn",
+    async (_case, initialPath) => {
+      const nativeHost = host();
 
-    await expect(
-      new RunAgentAssignment(
-        nativeHost,
-        new InMemoryAssignments(),
-        authorityPort(),
-      ).execute({
-        ...command,
-        focus: { initialPaths: [initialPath] },
-      }),
-    ).resolves.toEqual({
-      ok: false,
-      error: { code: "AGENT_FOCUS_DENIED", retry: "never" },
-    });
-    expect(nativeHost.spawn).not.toHaveBeenCalled();
-  });
+      await expect(
+        new RunAgentAssignment(
+          nativeHost,
+          new InMemoryAssignments(),
+          authorityPort(),
+        ).execute({
+          ...command,
+          focus: { initialPaths: [initialPath] },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: { code: "AGENT_FOCUS_DENIED", retry: "never" },
+      });
+      expect(nativeHost.spawn).not.toHaveBeenCalled();
+    },
+  );
 
   it("refuses focus outside an exact delegated file scope", async () => {
     const nativeHost = host();
@@ -315,6 +319,34 @@ describe("Agent delegated-authority continuity", () => {
       ).execute({
         ...command,
         focus: { initialPaths: ["/workspace/farol/package.json"] },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_FOCUS_DENIED" },
+    });
+    expect(nativeHost.spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses focus inside an explicitly excluded delegated subtree", async () => {
+    const nativeHost = host();
+    const excluded = authorityPort({
+      ok: true,
+      value: {
+        ...authority,
+        excludedPaths: [
+          { workspaceId: "farol", path: "/workspace/farol/private" },
+        ],
+      },
+    });
+
+    await expect(
+      new RunAgentAssignment(
+        nativeHost,
+        new InMemoryAssignments(),
+        excluded,
+      ).execute({
+        ...command,
+        focus: { initialPaths: ["/workspace/farol/private/secret.txt"] },
       }),
     ).resolves.toMatchObject({
       ok: false,

@@ -101,6 +101,19 @@ function absoluteTarget(root: string, relativePath: string): string | null {
   return root === "/" ? `/${relativePath}` : `${root}/${relativePath}`;
 }
 
+function relativeExcludedPaths(
+  root: string,
+  workspaceId: string,
+  exclusions: readonly Readonly<{ workspaceId: string; path: string }>[],
+): readonly string[] {
+  const prefix = root === "/" ? "/" : `${root}/`;
+  return exclusions.flatMap((exclusion) =>
+    exclusion.workspaceId === workspaceId && exclusion.path.startsWith(prefix)
+      ? [exclusion.path.slice(prefix.length)]
+      : [],
+  );
+}
+
 export class RunReadonlyComputerAction {
   constructor(
     private readonly authorities: AuthorityRepository,
@@ -170,7 +183,11 @@ export class RunReadonlyComputerAction {
         workspace: {
           workspaceId: request.workspaceId,
           root: scope.root,
-          deniedPaths: [],
+          deniedPaths: relativeExcludedPaths(
+            scope.root,
+            request.workspaceId,
+            participant.grant.excludedPaths,
+          ),
         },
         operation: request.operation,
       });

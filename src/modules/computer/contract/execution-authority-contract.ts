@@ -24,8 +24,14 @@ const WorkspaceScopeSchema = z.discriminatedUnion("mode", [
   }),
 ]);
 
+const WorkspaceExclusionSchema = z.strictObject({
+  workspaceId: z.string().min(1).max(120),
+  path: z.string().min(1).max(4_096),
+});
+
 const AuthorityNarrowingSchema = z.strictObject({
   workspaces: z.array(WorkspaceScopeSchema).max(64),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(AuthorityCapabilitySchema).max(16),
   network: z.enum(["none", "approved"]),
   commands: z.enum(["none", "verification"]),
@@ -56,6 +62,7 @@ const DelegatedAuthoritySchema = z.strictObject({
   computerId: z.string().min(1).max(120),
   computerGeneration: z.number().int().nonnegative(),
   workspaces: z.array(WorkspaceScopeSchema).max(64),
+  excludedPaths: z.array(WorkspaceExclusionSchema).max(32),
   capabilities: z.array(AuthorityCapabilitySchema).max(16),
   network: z.enum(["none", "approved"]),
   commands: z.enum(["none", "verification"]),

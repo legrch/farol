@@ -17,6 +17,11 @@ export type ApprovedWorkspace = Readonly<{
   access: WorkspaceAccess;
 }>;
 
+export type WorkspaceExclusion = Readonly<{
+  workspaceId: string;
+  path: string;
+}>;
+
 export type SubtreeWorkspaceScope = Readonly<{
   workspaceId: string;
   mode: "subtree";
@@ -37,11 +42,17 @@ export type WorkspaceScope = SubtreeWorkspaceScope | ExactWorkspaceScope;
 type GrantedWorkspaceScope = WorkspaceScope &
   Readonly<{ restrictionSource: "task-grant" | "owner-restriction" }>;
 
+export type GrantedWorkspaceExclusion = WorkspaceExclusion &
+  Readonly<{
+    restrictionSource: "computer-approval" | "task-grant" | "owner-restriction";
+  }>;
+
 export type ComputerApproval = Readonly<{
   ownerId: string;
   computerId: string;
   generation: number;
   workspaces: readonly ApprovedWorkspace[];
+  excludedPaths?: readonly WorkspaceExclusion[] | undefined;
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
@@ -57,6 +68,7 @@ export type TaskAdmission = Readonly<{
   computerId: string;
   computerGeneration: number;
   workspaces: readonly WorkspaceScope[];
+  excludedPaths?: readonly WorkspaceExclusion[] | undefined;
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
@@ -72,6 +84,7 @@ export type TaskGrant = Readonly<{
   computerId: string;
   computerGeneration: number;
   workspaces: readonly GrantedWorkspaceScope[];
+  excludedPaths: readonly GrantedWorkspaceExclusion[];
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
@@ -88,6 +101,7 @@ export type ParticipantAuthority = Readonly<{
 
 export type AuthorityNarrowing = Readonly<{
   workspaces: readonly WorkspaceScope[];
+  excludedPaths?: readonly WorkspaceExclusion[] | undefined;
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
@@ -137,6 +151,7 @@ export type NativeHostAuthority = Readonly<{
   taskId: string;
   taskEpoch: number;
   workspaces: readonly WorkspaceScope[];
+  excludedPaths?: readonly WorkspaceExclusion[] | undefined;
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
@@ -284,6 +299,84 @@ function scopesAreSubset(
   });
 }
 
+function exclusionKey(exclusion: WorkspaceExclusion): string {
+  return `${exclusion.workspaceId}\0${exclusion.path}`;
+}
+
+function exclusionsAreValid(
+  scopes: readonly (WorkspaceScope | ApprovedWorkspace)[],
+  exclusions: readonly WorkspaceExclusion[],
+): boolean {
+  if (exclusions.length > 32) return false;
+  const keys = new Set<string>();
+  return exclusions.every((exclusion) => {
+    const key = exclusionKey(exclusion);
+    if (keys.has(key) || !isCanonicalAbsolutePath(exclusion.path)) {
+      return false;
+    }
+    keys.add(key);
+    return scopes.some(
+      (scope) =>
+        scope.workspaceId === exclusion.workspaceId &&
+        scopeContainsPath(
+          "mode" in scope ? scope : { ...scope, mode: "subtree" as const },
+          exclusion.path,
+        ),
+    );
+  });
+}
+
+function exclusionAffectsScope(
+  exclusion: WorkspaceExclusion,
+  scope: WorkspaceScope,
+): boolean {
+  if (exclusion.workspaceId !== scope.workspaceId) return false;
+  if (scope.mode === "subtree") {
+    return (
+      isWithin(scope.root, exclusion.path) ||
+      isWithin(exclusion.path, scope.root)
+    );
+  }
+  return scope.paths.some((path) => isWithin(exclusion.path, path));
+}
+
+function relevantExclusions(
+  scopes: readonly WorkspaceScope[],
+  exclusions: readonly WorkspaceExclusion[],
+  restrictionSource: GrantedWorkspaceExclusion["restrictionSource"],
+): readonly GrantedWorkspaceExclusion[] {
+  return exclusions
+    .filter((exclusion) =>
+      scopes.some((scope) => exclusionAffectsScope(exclusion, scope)),
+    )
+    .map((exclusion) => ({ ...exclusion, restrictionSource }));
+}
+
+function mergeExclusions(
+  ...groups: readonly (readonly GrantedWorkspaceExclusion[])[]
+): readonly GrantedWorkspaceExclusion[] {
+  const merged = new Map<string, GrantedWorkspaceExclusion>();
+  for (const group of groups) {
+    for (const exclusion of group) {
+      merged.set(exclusionKey(exclusion), { ...exclusion });
+    }
+  }
+  return [...merged.values()];
+}
+
+function deniedBy<Exclusion extends WorkspaceExclusion>(
+  exclusions: readonly Exclusion[],
+  workspaceId: string,
+  path: string,
+): Exclusion | null {
+  return (
+    exclusions.find(
+      (exclusion) =>
+        exclusion.workspaceId === workspaceId && isWithin(exclusion.path, path),
+    ) ?? null
+  );
+}
+
 function cloneScope(
   scope: WorkspaceScope,
   restrictionSource: "task-grant" | "owner-restriction",
@@ -306,6 +399,8 @@ export function deriveTaskGrant(
   admission: TaskAdmission,
   now: number,
 ): AuthorityResult<TaskGrant> {
+  const approvalExclusions = approval.excludedPaths ?? [];
+  const admissionExclusions = admission.excludedPaths ?? [];
   if (approval.ownerId !== admission.ownerId) {
     return failure("AUTHORITY_OWNER_MISMATCH", "computer-approval");
   }
@@ -318,13 +413,29 @@ export function deriveTaskGrant(
   if (now > approval.expiresAt || now > admission.expiresAt) {
     return failure("AUTHORITY_EXPIRED", "task-admission");
   }
+  if (!exclusionsAreValid(approval.workspaces, approvalExclusions)) {
+    return failure("AUTHORITY_INFLATION_DENIED", "computer-approval");
+  }
   if (
     admission.expiresAt > approval.expiresAt ||
     !capabilitySetIncludes(approval.capabilities, admission.capabilities) ||
     !networkIncludes(approval.network, admission.network) ||
     !commandsInclude(approval.commands, admission.commands) ||
-    !scopesAreSubset(approval.workspaces, admission.workspaces)
+    !scopesAreSubset(approval.workspaces, admission.workspaces) ||
+    !exclusionsAreValid(admission.workspaces, admissionExclusions)
   ) {
+    return failure("AUTHORITY_INFLATION_DENIED", "task-admission");
+  }
+
+  const excludedPaths = mergeExclusions(
+    relevantExclusions(
+      admission.workspaces,
+      approvalExclusions,
+      "computer-approval",
+    ),
+    relevantExclusions(admission.workspaces, admissionExclusions, "task-grant"),
+  );
+  if (excludedPaths.length > 32) {
     return failure("AUTHORITY_INFLATION_DENIED", "task-admission");
   }
 
@@ -339,6 +450,7 @@ export function deriveTaskGrant(
     workspaces: admission.workspaces.map((scope) =>
       cloneScope(scope, "task-grant"),
     ),
+    excludedPaths,
     capabilities: [...admission.capabilities],
     network: admission.network,
     commands: admission.commands,
@@ -369,12 +481,29 @@ function narrowTaskGrant(
   grant: TaskGrant,
   narrowing: AuthorityNarrowing,
 ): AuthorityResult<TaskGrant> {
+  const requestedExclusions = narrowing.excludedPaths ?? [];
   if (
     !capabilitySetIncludes(grant.capabilities, narrowing.capabilities) ||
     !networkIncludes(grant.network, narrowing.network) ||
     !commandsInclude(grant.commands, narrowing.commands) ||
-    !scopesAreSubset(publicScopes(grant.workspaces), narrowing.workspaces)
+    !scopesAreSubset(publicScopes(grant.workspaces), narrowing.workspaces) ||
+    !exclusionsAreValid(narrowing.workspaces, requestedExclusions)
   ) {
+    return failure("AUTHORITY_INFLATION_DENIED", "owner-restriction");
+  }
+  const excludedPaths = mergeExclusions(
+    grant.excludedPaths.filter((exclusion) =>
+      narrowing.workspaces.some((scope) =>
+        exclusionAffectsScope(exclusion, scope),
+      ),
+    ),
+    relevantExclusions(
+      narrowing.workspaces,
+      requestedExclusions,
+      "owner-restriction",
+    ),
+  );
+  if (excludedPaths.length > 32) {
     return failure("AUTHORITY_INFLATION_DENIED", "owner-restriction");
   }
   return success({
@@ -382,6 +511,7 @@ function narrowTaskGrant(
     workspaces: narrowing.workspaces.map((scope) =>
       cloneScope(scope, "owner-restriction"),
     ),
+    excludedPaths,
     capabilities: [...narrowing.capabilities],
     network: narrowing.network,
     commands: narrowing.commands,
@@ -425,6 +555,7 @@ function requiredCapability(
 
 type ActionPolicy = Readonly<{
   workspaces: readonly WorkspaceScope[];
+  excludedPaths?: readonly WorkspaceExclusion[] | undefined;
   capabilities: readonly AuthorityCapability[];
   network: NetworkAuthority;
   commands: CommandAuthority;
@@ -457,6 +588,11 @@ function authorizeAgainstPolicy(
   ) {
     return failure("AUTHORITY_COMMAND_DENIED", source);
   }
+  if (
+    deniedBy(policy.excludedPaths ?? [], operation.workspaceId, operation.path)
+  ) {
+    return failure("AUTHORITY_PATH_DENIED", source);
+  }
 
   const matching = policy.workspaces.filter(
     (scope) => scope.workspaceId === operation.workspaceId,
@@ -487,9 +623,25 @@ export function authorizeTaskAction(
     return failure("AUTHORITY_MUTATION_OWNERSHIP_DENIED", "role");
   }
 
+  const exclusion =
+    operation.kind === "network.use"
+      ? null
+      : deniedBy(grant.excludedPaths, operation.workspaceId, operation.path);
+  if (exclusion) {
+    return failure(
+      "AUTHORITY_PATH_DENIED",
+      exclusion.restrictionSource === "owner-restriction"
+        ? "owner-restriction"
+        : exclusion.restrictionSource === "computer-approval"
+          ? "computer-approval"
+          : "task-grant",
+    );
+  }
+
   const result = authorizeAgainstPolicy(
     {
       workspaces: publicScopes(grant.workspaces),
+      excludedPaths: grant.excludedPaths,
       capabilities: grant.capabilities,
       network: grant.network,
       commands: grant.commands,
@@ -556,6 +708,7 @@ export function authorizeComputerAction(
         ...workspace,
         mode: "subtree" as const,
       })),
+      excludedPaths: approval.excludedPaths,
       capabilities: approval.capabilities,
       network: approval.network,
       commands: approval.commands,

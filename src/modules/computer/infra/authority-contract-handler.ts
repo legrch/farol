@@ -66,6 +66,11 @@ export class ExecutionAuthorityContractHandler implements ExecutionAuthorityCont
                 access: scope.access,
               },
         ),
+        excludedPaths: authority.grant.excludedPaths.map(
+          ({ restrictionSource: _restrictionSource, ...exclusion }) => ({
+            ...exclusion,
+          }),
+        ),
         capabilities: [...authority.grant.capabilities],
         network: authority.grant.network,
         commands: authority.grant.commands,
