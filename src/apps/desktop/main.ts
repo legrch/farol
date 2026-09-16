@@ -48,11 +48,13 @@ import {
   primaryStartupReady,
   previewStartupDelay,
 } from "./primary-startup";
+import { readRuntimeBuildIdentity } from "./build-identity";
 import { deriveSurfaceLayout } from "./surface-layout";
 
 const directory = __dirname;
-const productName = "Farol Next Preview";
-const bundleId = "local.farol.next.preview";
+const buildIdentity = readRuntimeBuildIdentity(directory);
+const productName = buildIdentity.product;
+const bundleId = buildIdentity.bundleId;
 const launchIdentity = readBuildLaunchIdentity(directory);
 const instanceRequest = createInstanceRequest(launchIdentity);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
@@ -139,9 +141,10 @@ function runtimeBase(): string | null {
 
 function bootstrap() {
   return {
-    schema: 1,
+    schema: 2,
     productName,
     bundleId,
+    build: buildIdentity,
     runtimeState,
     runtimeError,
     runtimeIdentity: runtime?.identity ?? null,
@@ -156,7 +159,7 @@ function bootstrap() {
       },
     ),
     partition: "persist:farol-next-preview",
-    updateChannel: "local-preview-only",
+    updateChannel: buildIdentity.updateChannel,
     nativeFilesystem: false,
     nativeAgent: false,
     liveProvider: false,

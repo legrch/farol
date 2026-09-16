@@ -7,6 +7,10 @@ import {
   snapshotBuildEntries,
   verifyAbsentIntegrations,
 } from "./build-contract.mjs";
+import {
+  assertBuildIdentity,
+  createBuildIdentity,
+} from "./build-identity-contract.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
 import {
   GEIST_RESOURCES,
@@ -99,6 +103,9 @@ const attestInputs = {
 await fs.rm(output, { recursive: true, force: true });
 await fs.mkdir(output, { recursive: true });
 await verifyGeistSources(root);
+const packageDocument = JSON.parse(
+  (await readBuildInput("package.json")).toString("utf8"),
+);
 
 const common = {
   bundle: true,
@@ -200,14 +207,34 @@ const inputExact =
 const inputLedger = [...inputRecords.values()].sort((left, right) =>
   left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 );
+const buildIdentity = createBuildIdentity({
+  version: packageDocument.version,
+  builtAt: new Date().toISOString(),
+  sourceCommit: initial.commit,
+  sourceTreeDigest: initial.treeDigest,
+  sourceDirty: initial.dirty || current.dirty || !inputExact,
+});
+await fs.writeFile(
+  path.join(output, "build-identity.json"),
+  `${JSON.stringify(buildIdentity, null, 2)}\n`,
+  { mode: 0o600 },
+);
+assertBuildIdentity(
+  JSON.parse(
+    await fs.readFile(path.join(output, "build-identity.json"), "utf8"),
+  ),
+);
 const manifest = {
-  schema: 2,
+  schema: 3,
   product: "Farol Next Preview",
   bundleId: "local.farol.next.preview",
+  version: buildIdentity.version,
+  buildId: buildIdentity.buildId,
+  builtAt: buildIdentity.builtAt,
   sourceMode: "head-exact",
   sourceCommit: initial.commit,
   sourceTreeDigest: initial.treeDigest,
-  dirty: initial.dirty || current.dirty || !inputExact,
+  dirty: buildIdentity.sourceDirty,
   inputExact,
   inputLedgerSha256: sha256(JSON.stringify(inputLedger)),
   sourceInputCount: sourceInputs.length,

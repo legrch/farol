@@ -6,6 +6,7 @@ export const BUILD_ENTRIES = Object.freeze([
   "Geist-OFL.txt",
   "Geist-Variable.woff2",
   "GeistMono-Variable.woff2",
+  "build-identity.json",
   "computer-mcp.cjs",
   "computer-safe-open.py",
   "main.cjs",

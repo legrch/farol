@@ -389,9 +389,11 @@ if (
   throw new Error("HUNT_REPLAY_FIXTURE_INVALID");
 }
 if (
-  build.schema !== 2 ||
+  build.schema !== 3 ||
   build.sourceMode !== "head-exact" ||
   build.product !== "Farol Next Preview" ||
+  !/^[a-f0-9]{64}$/u.test(build.buildId) ||
+  typeof build.builtAt !== "string" ||
   !/^[a-f0-9]{40}$/u.test(build.sourceCommit) ||
   !/^[a-f0-9]{64}$/u.test(build.sourceTreeDigest)
 ) {
@@ -400,6 +402,7 @@ if (
 
 const buildIdentity = [
   "farol-next",
+  build.buildId,
   build.sourceCommit,
   build.sourceTreeDigest,
   build.dirty ? "dirty" : "clean",

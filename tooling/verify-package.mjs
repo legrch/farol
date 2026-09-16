@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
   NATIVE_SAFE_OPEN_HELPER,
@@ -68,7 +69,7 @@ function requireValue(condition, code) {
   if (!condition) throw new Error(code);
 }
 
-requireValue(artifact.schema === 3, "PACKAGE_MANIFEST_SCHEMA_INVALID");
+requireValue(artifact.schema === 4, "PACKAGE_MANIFEST_SCHEMA_INVALID");
 requireValue(
   artifact.product === "Farol Next Preview",
   "PACKAGE_PRODUCT_INVALID",
@@ -88,6 +89,11 @@ requireValue(
 requireValue(
   /^[a-f0-9]{64}$/u.test(artifact.sourceTreeDigest),
   "PACKAGE_SOURCE_DIGEST_INVALID",
+);
+requireValue(
+  /^[a-f0-9]{64}$/u.test(artifact.buildId ?? "") &&
+    typeof artifact.builtAt === "string",
+  "PACKAGE_BUILD_IDENTITY_INVALID",
 );
 requireValue(
   /^[a-f0-9]{64}$/u.test(artifact.artifactSha256),
@@ -172,7 +178,7 @@ requireValue(
 const embedded = JSON.parse(
   await fs.readFile(path.join(resources, "build-manifest.json"), "utf8"),
 );
-requireValue(embedded.schema === 2, "PACKAGE_EMBEDDED_MANIFEST_INVALID");
+requireValue(embedded.schema === 3, "PACKAGE_EMBEDDED_MANIFEST_INVALID");
 requireValue(
   embedded.sourceMode === "head-exact" &&
     embedded.inputExact === true &&
@@ -206,6 +212,26 @@ requireValue(
   "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
 );
 await verifyBuildEntries(resources, embedded.entrySha256);
+const buildIdentity = assertBuildIdentity(
+  JSON.parse(
+    await fs.readFile(path.join(resources, "build-identity.json"), "utf8"),
+  ),
+);
+requireValue(
+  buildIdentity.product === artifact.product &&
+    buildIdentity.version === artifact.version &&
+    buildIdentity.bundleId === artifact.bundleId &&
+    buildIdentity.updateChannel === artifact.updateChannel &&
+    buildIdentity.buildId === artifact.buildId &&
+    buildIdentity.builtAt === artifact.builtAt &&
+    buildIdentity.sourceCommit === artifact.sourceCommit &&
+    buildIdentity.sourceTreeDigest === artifact.sourceTreeDigest &&
+    buildIdentity.sourceDirty === artifact.sourceDirty &&
+    embedded.version === buildIdentity.version &&
+    embedded.buildId === buildIdentity.buildId &&
+    embedded.builtAt === buildIdentity.builtAt,
+  "PACKAGE_BUILD_IDENTITY_MISMATCH",
+);
 await verifyGeistBuild(resources);
 await verifyNativeHelper(path.join(resources, NATIVE_SAFE_OPEN_HELPER.output));
 const embeddedPackage = JSON.parse(

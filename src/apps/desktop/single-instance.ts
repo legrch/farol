@@ -16,7 +16,7 @@ const sourceTreeDigest = z.string().regex(/^[a-f0-9]{64}$/u);
 const nonce = z.string().regex(/^[a-f0-9]{32}$/u);
 
 const buildIdentitySchema = z.object({
-  schema: z.literal(2),
+  schema: z.literal(3),
   sourceCommit,
   sourceTreeDigest,
   dirty: z.literal(false),

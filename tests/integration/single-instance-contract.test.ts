@@ -56,7 +56,7 @@ describe("Farol Next single-instance identity", () => {
     await fs.writeFile(
       path.join(root, "build-manifest.json"),
       `${JSON.stringify({
-        schema: 2,
+        schema: 3,
         sourceCommit: primary.sourceCommit,
         sourceTreeDigest: primary.sourceTreeDigest,
         dirty: false,
@@ -67,7 +67,7 @@ describe("Farol Next single-instance identity", () => {
     await fs.writeFile(
       path.join(root, "build-manifest.json"),
       `${JSON.stringify({
-        schema: 2,
+        schema: 3,
         sourceCommit: primary.sourceCommit,
         sourceTreeDigest: primary.sourceTreeDigest,
         dirty: true,

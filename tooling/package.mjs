@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { GEIST_RESOURCES, GEIST_VERSION } from "./font-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
@@ -72,7 +73,7 @@ const manifest = JSON.parse(
   await fs.readFile(path.join(builtRoot, "build-manifest.json"), "utf8"),
 );
 if (
-  manifest.schema !== 2 ||
+  manifest.schema !== 3 ||
   manifest.sourceMode !== "head-exact" ||
   manifest.inputExact !== true ||
   !/^[a-f0-9]{64}$/u.test(manifest.inputLedgerSha256 ?? "")
@@ -87,6 +88,23 @@ if (
   throw new Error("BUILD_ENTRY_SET_INVALID");
 }
 await verifyBuildEntries(builtRoot, manifest.entrySha256);
+const buildIdentity = assertBuildIdentity(
+  JSON.parse(
+    await fs.readFile(path.join(builtRoot, "build-identity.json"), "utf8"),
+  ),
+);
+if (
+  buildIdentity.product !== manifest.product ||
+  buildIdentity.bundleId !== manifest.bundleId ||
+  buildIdentity.version !== previewVersion ||
+  buildIdentity.buildId !== manifest.buildId ||
+  buildIdentity.builtAt !== manifest.builtAt ||
+  buildIdentity.sourceCommit !== manifest.sourceCommit ||
+  buildIdentity.sourceTreeDigest !== manifest.sourceTreeDigest ||
+  buildIdentity.sourceDirty !== manifest.dirty
+) {
+  throw new Error("BUILD_IDENTITY_MISMATCH");
+}
 const currentSource = sourceIdentity(repositoryRoot, scope);
 if (
   manifest.dirty ||
@@ -174,10 +192,12 @@ if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
 const artifact = {
-  schema: 3,
+  schema: 4,
   product: "Farol Next Preview",
   version: previewVersion,
   bundleId: "local.farol.next.preview",
+  buildId: buildIdentity.buildId,
+  builtAt: buildIdentity.builtAt,
   sourceCommit: manifest.sourceCommit,
   sourceTreeDigest: manifest.sourceTreeDigest,
   sourceDirty: manifest.dirty,

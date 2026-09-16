@@ -7,6 +7,7 @@ import {
   RuntimeStatusSchema,
   type RuntimeStatus,
 } from "../pkg/ipc/runtime-status";
+import { BuildIdentitySchema } from "../pkg/build-info/identity";
 import {
   ShellActionSchema,
   ShellLayoutSchema,
@@ -29,9 +30,10 @@ import {
 } from "./setup-journey";
 
 const bootstrapSchema = z.strictObject({
-  schema: z.literal(1),
+  schema: z.literal(2),
   productName: z.literal("Farol Next Preview"),
   bundleId: z.literal("local.farol.next.preview"),
+  build: BuildIdentitySchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   runtimeError: z.string().nullable(),
   runtimeIdentity: z.string().nullable(),
@@ -293,6 +295,24 @@ function renderRuntime(): void {
       : bootstrap.runtimeState;
 }
 
+function renderBuildIdentity(): void {
+  const container = required<HTMLElement>("#build-identity");
+  const primary = required<HTMLElement>("#build-identity > span");
+  const secondary = required<HTMLElement>("#build-identity > small");
+  const builtAt = new Date(bootstrap.build.builtAt);
+  const formatted = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(builtAt);
+  primary.textContent = `v${bootstrap.build.version} · ${bootstrap.build.sourceCommit.slice(0, 8)}${bootstrap.build.sourceDirty ? " · dirty" : ""}`;
+  secondary.textContent = `Built ${formatted}`;
+  container.title = `${bootstrap.build.buildId}\nBuilt ${bootstrap.build.builtAt}`;
+  container.setAttribute(
+    "aria-label",
+    `Farol Next ${bootstrap.build.version}, build ${bootstrap.build.sourceCommit.slice(0, 8)}, built ${formatted}`,
+  );
+}
+
 function renderBrowser(): void {
   const loading = required<HTMLDivElement>("#browser-loading");
   const title = required<HTMLElement>("#browser-state-title");
@@ -550,6 +570,10 @@ function renderSettings(): void {
   const values = [
     ["Application", `${bootstrap.productName} · ${bootstrap.bundleId}`],
     [
+      "Build",
+      `${bootstrap.build.version} · ${bootstrap.build.sourceCommit.slice(0, 12)} · ${bootstrap.build.builtAt}`,
+    ],
+    [
       "Runtime",
       `${bootstrap.runtimeState} · ${bootstrap.runtimeIdentity ?? "not started"}${bootstrap.runtimeError ? ` · ${bootstrap.runtimeError}` : ""}`,
     ],
@@ -763,6 +787,7 @@ function render(notify = true): void {
     panel.classList.toggle("active", panel.dataset.panel === section);
   });
   renderWindowState();
+  renderBuildIdentity();
   renderRuntime();
   renderBrowser();
   renderTabs();

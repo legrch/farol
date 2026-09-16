@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -7,6 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import {
+  assertBuildIdentity,
+  createBuildIdentity,
+} from "../../tooling/build-identity-contract.mjs";
 import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { runBoundedProcess } from "./bounded-process.mjs";
@@ -43,6 +48,7 @@ function verifyArtifact(candidateMetadataPath, candidateAppPath = null) {
 const expectedSource = sourceIdentity(path.resolve(root, ".."), "vnext");
 assert.equal(expectedSource.dirty, false, "E2E_SOURCE_NOT_HEAD_EXACT");
 let artifact;
+let buildIdentity;
 let appPath;
 let executable;
 let launchPrefix = [];
@@ -51,6 +57,12 @@ if (development) {
   const build = JSON.parse(
     await fs.readFile(path.join(buildRoot, "build-manifest.json"), "utf8"),
   );
+  buildIdentity = assertBuildIdentity(
+    JSON.parse(
+      await fs.readFile(path.join(buildRoot, "build-identity.json"), "utf8"),
+    ),
+  );
+  assert.equal(build.schema, 3);
   assert.equal(build.dirty, false, "E2E_DIRTY_DEVELOPMENT_BUILD");
   assert.equal(build.inputExact, true, "E2E_DEVELOPMENT_INPUTS_NOT_EXACT");
   assert.equal(build.sourceCommit, expectedSource.commit);
@@ -60,6 +72,8 @@ if (development) {
     sourceCommit: build.sourceCommit,
     sourceTreeDigest: build.sourceTreeDigest,
     sourceDirty: build.dirty,
+    buildId: buildIdentity.buildId,
+    builtAt: buildIdentity.builtAt,
   };
   appPath = path.join(root, "node_modules/electron/dist/Electron.app");
   executable = path.join(appPath, "Contents/MacOS/Electron");
@@ -77,6 +91,16 @@ if (development) {
   assert.equal(artifact.sourceTreeDigest, expectedSource.treeDigest);
   assert.equal(artifact.artifactPath, canonicalPackagePath);
   appPath = canonicalPackagePath;
+  buildIdentity = assertBuildIdentity(
+    JSON.parse(
+      await fs.readFile(
+        path.join(appPath, "Contents/Resources/app/build-identity.json"),
+        "utf8",
+      ),
+    ),
+  );
+  assert.equal(artifact.buildId, buildIdentity.buildId);
+  assert.equal(artifact.builtAt, buildIdentity.builtAt);
   executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 }
 await fs.rm(evidenceRoot, { recursive: true, force: true });
@@ -128,6 +152,81 @@ if (development) {
     const copied = verifyArtifact(metadataPath, tamperedApp);
     assert.equal(copied.status, 0, `${copied.stdout}${copied.stderr}`);
     cases.push("copied-destination-verified");
+
+    const rewrittenIdentityRoot = path.join(
+      corruptRoot,
+      "rewritten-build-identity",
+    );
+    await fs.mkdir(rewrittenIdentityRoot);
+    const rewrittenIdentityApp = path.join(
+      rewrittenIdentityRoot,
+      "Farol Next Preview.app",
+    );
+    const identityClone = spawnSync(
+      "/bin/cp",
+      ["-cR", appPath, rewrittenIdentityApp],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      identityClone.status,
+      0,
+      `${identityClone.stdout}${identityClone.stderr}`,
+    );
+    const rewrittenResources = path.join(
+      rewrittenIdentityApp,
+      "Contents/Resources/app",
+    );
+    const rewrittenIdentity = createBuildIdentity({
+      ...buildIdentity,
+      builtAt: new Date(
+        Date.parse(buildIdentity.builtAt) + 60_000,
+      ).toISOString(),
+    });
+    const rewrittenIdentityBytes = Buffer.from(
+      `${JSON.stringify(rewrittenIdentity, null, 2)}\n`,
+    );
+    await fs.writeFile(
+      path.join(rewrittenResources, "build-identity.json"),
+      rewrittenIdentityBytes,
+    );
+    const rewrittenManifestPath = path.join(
+      rewrittenResources,
+      "build-manifest.json",
+    );
+    const rewrittenManifest = JSON.parse(
+      await fs.readFile(rewrittenManifestPath, "utf8"),
+    );
+    rewrittenManifest.buildId = rewrittenIdentity.buildId;
+    rewrittenManifest.builtAt = rewrittenIdentity.builtAt;
+    rewrittenManifest.entrySha256["build-identity.json"] = createHash("sha256")
+      .update(rewrittenIdentityBytes)
+      .digest("hex");
+    await fs.writeFile(
+      rewrittenManifestPath,
+      `${JSON.stringify(rewrittenManifest, null, 2)}\n`,
+    );
+    const rewrittenIdentityMetadata = path.join(
+      corruptRoot,
+      "rewritten-build-identity-artifact.json",
+    );
+    await fs.writeFile(
+      rewrittenIdentityMetadata,
+      `${JSON.stringify({
+        ...artifact,
+        artifactSha256: await treeDigest(rewrittenIdentityApp),
+      })}\n`,
+    );
+    const rewrittenIdentityResult = verifyArtifact(
+      rewrittenIdentityMetadata,
+      rewrittenIdentityApp,
+    );
+    assert.notEqual(rewrittenIdentityResult.status, 0);
+    assert.match(
+      `${rewrittenIdentityResult.stdout}${rewrittenIdentityResult.stderr}`,
+      /PACKAGE_BUILD_IDENTITY_MISMATCH/u,
+    );
+    cases.push("rewritten-build-identity-rejected");
+
     const redirectedMetadata = path.join(
       corruptRoot,
       "redirected-artifact.json",
@@ -1336,6 +1435,27 @@ try {
     cases.push("packaged-launcher-identity");
   }
   assert.equal(await normal.window.locator("#task-tabs .task-tab").count(), 2);
+  const runningBootstrap = await normal.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.deepEqual(runningBootstrap.build, buildIdentity);
+  assert.match(
+    await normal.window.locator("#build-identity > span").innerText(),
+    new RegExp(
+      `${buildIdentity.version}.*${buildIdentity.sourceCommit.slice(0, 8)}`,
+      "u",
+    ),
+  );
+  assert.match(
+    await normal.window.locator("#build-identity > small").innerText(),
+    /^Built /u,
+  );
+  assert.match(
+    (await normal.window.locator("#build-identity").getAttribute("title")) ??
+      "",
+    new RegExp(`^${buildIdentity.buildId}`, "u"),
+  );
+  cases.push("running-build-version-and-time");
   const runtimeLabel = await normal.window.locator("#runtime-pill").innerText();
   if (!runtimeLabel.includes("Local runtime")) {
     await normal.window.locator('[data-section="settings"]').click();

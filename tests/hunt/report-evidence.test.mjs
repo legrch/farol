@@ -119,9 +119,11 @@ async function createFixtureRoot() {
     writeFile(
       path.join(root, "dist/app/build-manifest.json"),
       `${JSON.stringify({
-        schema: 2,
+        schema: 3,
         sourceMode: "head-exact",
         product: "Farol Next Preview",
+        buildId: "c".repeat(64),
+        builtAt: "2026-09-16T10:00:00.000Z",
         sourceCommit: "a".repeat(40),
         sourceTreeDigest: "b".repeat(64),
         dirty: false,
