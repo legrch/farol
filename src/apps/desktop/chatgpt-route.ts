@@ -304,6 +304,7 @@ export class ChatGptRoute {
     this.routeWindow = candidate;
     this.disposing = false;
     this.hardenContents(candidate.webContents, true);
+    let closingConversationObserved = false;
     let closingConversationUrl: string | null = null;
     let closingTaskRunning = false;
     candidate.on("page-title-updated", (event) => {
@@ -311,6 +312,7 @@ export class ChatGptRoute {
       candidate.setTitle(this.displayTitle);
     });
     candidate.on("close", () => {
+      closingConversationObserved = true;
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
       );
@@ -321,7 +323,13 @@ export class ChatGptRoute {
       this.stopTaskActivityWatch();
       if (this.routeWindow === candidate) this.routeWindow = null;
       if (!this.disposing) {
-        this.options.onClosed?.(closingConversationUrl, closingTaskRunning);
+        const retainedConversationUrl = closingConversationObserved
+          ? closingConversationUrl
+          : canonicalChatGptConversationUrl(
+              this.entryUrl,
+              this.options.e2eOrigin,
+            );
+        this.options.onClosed?.(retainedConversationUrl, closingTaskRunning);
       }
       setTimeout(() => {
         if (
@@ -803,6 +811,7 @@ export class ChatGptRoute {
         this.load === "loaded" &&
         observed.success
       ) {
+        this.reportConversationUrl(contents);
         this.recordTaskActivity(observed.data.running);
       }
     } catch {
