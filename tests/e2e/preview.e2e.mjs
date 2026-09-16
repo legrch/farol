@@ -1242,6 +1242,19 @@ async function nativeWindowChrome(application) {
   });
 }
 
+async function waitForShellFocus(application, reason) {
+  let focused = false;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    focused = await application.evaluate(
+      ({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.webContents.isFocused() ?? false,
+    );
+    if (focused) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`E2E_SHELL_FOCUS_TIMEOUT:${reason}:${focused}`);
+}
+
 async function setFullScreen(application, value) {
   await application.evaluate(async ({ BrowserWindow }, nextValue) => {
     const targetWindow = BrowserWindow.getAllWindows()[0];
@@ -1761,12 +1774,9 @@ try {
     await normal.window
       .locator("#command-dialog")
       .waitFor({ state: "visible" });
-    assert.equal(
-      await normal.application.evaluate(
-        ({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows()[0]?.webContents.isFocused() ?? false,
-      ),
-      true,
+    await waitForShellFocus(
+      normal.application,
+      "quick switcher receives native focus",
     );
     let focusTransfer = await taskSurfaces(normal.application);
     assert.equal(
