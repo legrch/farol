@@ -2585,6 +2585,11 @@ try {
   await ordinaryLiveTasks.window
     .locator("#task-menu")
     .waitFor({ state: "visible" });
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-cancel")?.hasAttribute("disabled") ===
+      false,
+  );
   assert.equal(
     await ordinaryLiveTasks.window.locator("#task-menu-cancel").isEnabled(),
     true,
