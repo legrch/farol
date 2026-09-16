@@ -73,6 +73,7 @@ import {
 import { CHATGPT_HOME, CHATGPT_PARTITION } from "./chatgpt-page-policy";
 import {
   MAX_CHATGPT_CONTEXT_CHARACTERS,
+  buildChatGptAttachmentTaskPrompt,
   buildChatGptReadonlyTaskPrompt,
 } from "./chatgpt-readonly-task";
 import { ChatGptRoute } from "./chatgpt-route";
@@ -93,6 +94,13 @@ import {
   writeSupportExport,
   type SupportRuntimeErrorCode,
 } from "./support-export";
+import {
+  cleanupChatGptAttachmentStaging,
+  discardChatGptAttachments,
+  stageChatGptAttachments,
+  verifyStagedChatGptAttachments,
+  type StagedChatGptAttachments,
+} from "./chatgpt-attachment-staging";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -196,6 +204,15 @@ type PendingChatGptReadonlyTask = Readonly<{
   expiresAt: number;
 }>;
 let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
+type PendingChatGptAttachmentTask = Readonly<{
+  operationId: string;
+  attachments: StagedChatGptAttachments;
+  prompt: string;
+  chatGptVerification: ChatGptVerification;
+  expiresAt: number;
+}>;
+let pendingChatGptAttachmentTask: PendingChatGptAttachmentTask | null = null;
+let attachmentStagingReady = true;
 type PendingWorkspaceEdit = Readonly<{
   operationId: string;
   workspaceId: string;
@@ -222,6 +239,23 @@ function chatGptReadonlyTaskPreview(
     contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
     contextTruncated: pending.contextTruncated,
     excludedPaths: pending.excludedPaths,
+    expiresAt: new Date(pending.expiresAt).toISOString(),
+  };
+}
+
+function chatGptAttachmentTaskPreview(
+  pending: PendingChatGptAttachmentTask,
+): Readonly<Record<string, unknown>> {
+  return {
+    kind: "chatgpt.attachment-task-preview",
+    operationId: pending.operationId,
+    attachments: pending.attachments.attachments.map(
+      ({ stagedPath: _stagedPath, ...attachment }) => attachment,
+    ),
+    totalBytes: pending.attachments.attachments.reduce(
+      (total, attachment) => total + attachment.bytes,
+      0,
+    ),
     expiresAt: new Date(pending.expiresAt).toISOString(),
   };
 }
@@ -428,6 +462,82 @@ async function selectedSupportExportTarget(): Promise<string | null> {
     ? await dialog.showSaveDialog(window, options)
     : await dialog.showSaveDialog(options);
   return selected.canceled || !selected.filePath ? null : selected.filePath;
+}
+
+function chatGptAttachmentStagingRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "attachment-staging",
+  );
+}
+
+async function selectedChatGptAttachmentPaths(): Promise<
+  readonly string[] | "cancelled" | "invalid"
+> {
+  if (process.env.FAROL_NEXT_E2E === "1") {
+    try {
+      const parsed = z
+        .array(z.string().refine((value) => path.isAbsolute(value)))
+        .min(1)
+        .max(4)
+        .safeParse(
+          JSON.parse(
+            process.env.FAROL_NEXT_E2E_ATTACHMENTS ?? "null",
+          ) as unknown,
+        );
+      return parsed.success ? parsed.data : "invalid";
+    } catch {
+      return "invalid";
+    }
+  }
+  if (!window) return "invalid";
+  const selected = await dialog.showOpenDialog(window, {
+    title: "Choose up to four attachments",
+    buttonLabel: "Review Attachments",
+    properties: ["openFile", "multiSelections"],
+    filters: [
+      {
+        name: "Supported images and documents",
+        extensions: ["png", "jpg", "jpeg", "webp", "pdf", "txt", "md"],
+      },
+    ],
+    securityScopedBookmarks: false,
+  });
+  if (selected.canceled) return "cancelled";
+  if (selected.filePaths.length < 1 || selected.filePaths.length > 4) {
+    return "invalid";
+  }
+  return selected.filePaths;
+}
+
+function attachmentStagingFailure(error: unknown): ProductConfigurationResult {
+  const code = error instanceof Error ? error.message : "";
+  if (code === "ATTACHMENT_TYPE_UNSUPPORTED") {
+    return configurationFailure("CHATGPT_ATTACHMENT_TYPE_UNSUPPORTED");
+  }
+  if (
+    code === "ATTACHMENT_TOO_LARGE" ||
+    code === "ATTACHMENT_TOTAL_TOO_LARGE"
+  ) {
+    return configurationFailure("CHATGPT_ATTACHMENT_TOO_LARGE");
+  }
+  if (
+    code === "ATTACHMENT_SOURCE_MISSING" ||
+    code === "ATTACHMENT_REFERENCE_MISSING" ||
+    code === "ATTACHMENT_REFERENCE_CHANGED"
+  ) {
+    return configurationFailure("CHATGPT_ATTACHMENT_REFERENCE_MISSING");
+  }
+  if (
+    code === "ATTACHMENT_SELECTION_INVALID" ||
+    code === "ATTACHMENT_DUPLICATE_NAME" ||
+    code === "ATTACHMENT_EMPTY" ||
+    code === "ATTACHMENT_SOURCE_UNSAFE"
+  ) {
+    return configurationFailure("CHATGPT_ATTACHMENT_SELECTION_INVALID");
+  }
+  return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
 }
 
 async function selectedWorkspace(): Promise<
@@ -668,12 +778,231 @@ async function configureProduct(
         evidence: { kind: "chatgpt.readiness", ...observed },
       });
     }
+    case "chatgpt.prepare-attachment-task": {
+      if (!chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      if (!attachmentStagingReady) {
+        return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
+      }
+      if (pendingChatGptReadonlyTask) {
+        return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_PENDING");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
+        return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+      }
+      const verification = snapshot.settings.setup.chatgpt.verified;
+      if (!verification) {
+        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+      }
+      const existing = pendingChatGptAttachmentTask;
+      if (existing) {
+        const current =
+          Date.now() < existing.expiresAt &&
+          isDeepStrictEqual(existing.chatGptVerification, verification);
+        if (current) {
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot,
+            evidence: chatGptAttachmentTaskPreview(existing),
+          });
+        }
+        pendingChatGptAttachmentTask = null;
+        try {
+          await discardChatGptAttachments(
+            chatGptAttachmentStagingRoot(),
+            existing.operationId,
+          );
+        } catch {
+          attachmentStagingReady = false;
+          return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
+        }
+      }
+      const selected = await selectedChatGptAttachmentPaths();
+      if (selected === "cancelled") {
+        return configurationFailure("CHATGPT_ATTACHMENT_PICKER_CANCELLED");
+      }
+      if (selected === "invalid") {
+        return configurationFailure("CHATGPT_ATTACHMENT_SELECTION_INVALID");
+      }
+      const operationId = randomUUID();
+      let attachments: StagedChatGptAttachments;
+      try {
+        attachments = await stageChatGptAttachments({
+          root: chatGptAttachmentStagingRoot(),
+          operationId,
+          paths: selected,
+        });
+      } catch (error) {
+        return attachmentStagingFailure(error);
+      }
+      const prompt = buildChatGptAttachmentTaskPrompt({
+        attachments: attachments.attachments,
+      });
+      pendingChatGptAttachmentTask = {
+        operationId,
+        attachments,
+        prompt: prompt.text,
+        chatGptVerification: verification,
+        expiresAt: Date.now() + 10 * 60_000,
+      };
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot,
+        evidence: chatGptAttachmentTaskPreview(pendingChatGptAttachmentTask),
+      });
+    }
+    case "chatgpt.submit-attachment-task": {
+      if (!chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      const pending = pendingChatGptAttachmentTask;
+      if (!pending || pending.operationId !== command.operationId) {
+        return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND");
+      }
+      if (Date.now() >= pending.expiresAt) {
+        pendingChatGptAttachmentTask = null;
+        await discardChatGptAttachments(
+          chatGptAttachmentStagingRoot(),
+          pending.operationId,
+        ).catch(() => {
+          attachmentStagingReady = false;
+        });
+        return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_EXPIRED");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
+        return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+      }
+      if (
+        !isDeepStrictEqual(
+          snapshot.settings.setup.chatgpt.verified,
+          pending.chatGptVerification,
+        )
+      ) {
+        pendingChatGptAttachmentTask = null;
+        await discardChatGptAttachments(
+          chatGptAttachmentStagingRoot(),
+          pending.operationId,
+        ).catch(() => {
+          attachmentStagingReady = false;
+        });
+        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+      }
+      pendingChatGptAttachmentTask = null;
+      try {
+        await verifyStagedChatGptAttachments(pending.attachments);
+      } catch (error) {
+        await discardChatGptAttachments(
+          chatGptAttachmentStagingRoot(),
+          pending.operationId,
+        ).catch(() => {
+          attachmentStagingReady = false;
+        });
+        return attachmentStagingFailure(error);
+      }
+      chatGptTaskAdmission = true;
+      let task: Awaited<ReturnType<ChatGptRoute["runReadonlyTask"]>>;
+      let stagingCleanup: "removed" | "pending_startup_cleanup" = "removed";
+      try {
+        task = await chatGptRoute.runReadonlyTask(
+          pending.prompt,
+          pending.attachments.attachments,
+        );
+      } finally {
+        try {
+          await discardChatGptAttachments(
+            chatGptAttachmentStagingRoot(),
+            pending.operationId,
+          );
+        } catch {
+          attachmentStagingReady = false;
+          stagingCleanup = "pending_startup_cleanup";
+        }
+        chatGptTaskAdmission = false;
+      }
+      const observation =
+        task.state === "completed"
+          ? {
+              state: "authenticated" as const,
+              profile: "chatgpt.next-partition/1",
+              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              buildId: buildIdentity.buildId,
+              protocol: "chatgpt-page-attachment-task/1",
+            }
+          : task.state === "not_authenticated"
+            ? { state: "signed_out" as const }
+            : task.state === "outcome_unknown"
+              ? { state: "outcome_unknown" as const }
+              : task.code === "CHATGPT_PAGE_UNREACHABLE"
+                ? { state: "unreachable" as const }
+                : { state: "unsupported" as const };
+      const recorded =
+        await configuration.recordChatGptObservation(observation);
+      if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+      return ProductConfigurationResultSchema.parse({
+        ...recorded,
+        evidence: {
+          kind: "chatgpt.attachment-task",
+          operationId: pending.operationId,
+          state: task.state,
+          code: task.code,
+          attachmentCount: pending.attachments.attachments.length,
+          totalBytes: pending.attachments.attachments.reduce(
+            (total, attachment) => total + attachment.bytes,
+            0,
+          ),
+          deltaCount: task.deltaCount,
+          observedCharacters: task.observedCharacters,
+          stagingCleanup,
+        },
+      });
+    }
+    case "chatgpt.cancel-attachment-task": {
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      const pending = pendingChatGptAttachmentTask;
+      if (!pending || pending.operationId !== command.operationId) {
+        return configurationFailure("CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND");
+      }
+      pendingChatGptAttachmentTask = null;
+      try {
+        await discardChatGptAttachments(
+          chatGptAttachmentStagingRoot(),
+          pending.operationId,
+        );
+      } catch {
+        attachmentStagingReady = false;
+        return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+      });
+    }
     case "chatgpt.prepare-readonly-task": {
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
       if (chatGptTaskAdmission) {
         return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      if (pendingChatGptAttachmentTask) {
+        return configurationFailure("CHATGPT_TASK_PREVIEW_PENDING");
       }
       chatGptTaskAdmission = true;
       try {
@@ -2021,6 +2350,11 @@ async function main(): Promise<void> {
     },
   );
   await app.whenReady();
+  try {
+    await cleanupChatGptAttachmentStaging(chatGptAttachmentStagingRoot());
+  } catch {
+    attachmentStagingReady = false;
+  }
   configuration = new ProductConfigurationService(
     new ProductSettingsStore({
       root: path.join(app.getPath("userData"), "farol-next-state"),
@@ -2062,6 +2396,14 @@ async function main(): Promise<void> {
   await ensureWindow();
   app.on("activate", reopenWindow);
   app.on("before-quit", () => {
+    const attachmentTask = pendingChatGptAttachmentTask;
+    pendingChatGptAttachmentTask = null;
+    if (attachmentTask) {
+      void discardChatGptAttachments(
+        chatGptAttachmentStagingRoot(),
+        attachmentTask.operationId,
+      );
+    }
     chatGptRoute?.dispose();
     stopRuntime();
   });

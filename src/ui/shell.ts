@@ -191,7 +191,9 @@ let workspaceEvidence: Extract<
 > | null = null;
 let pendingChatGptPreview: Extract<
   ProductConfigurationEvidence,
-  { kind: "chatgpt.readonly-task-preview" }
+  {
+    kind: "chatgpt.readonly-task-preview" | "chatgpt.attachment-task-preview";
+  }
 > | null = null;
 let contextPreviewBusy = false;
 let renderedGeneralSettingsRevision = -1;
@@ -1083,19 +1085,25 @@ async function configureProduct(
   settingsFeedback =
     command.kind === "support.export"
       ? "Preparing a content-free support export…"
-      : command.kind === "chatgpt.prepare-readonly-task"
-        ? "Reading the selected file for review…"
-        : command.kind === "chatgpt.submit-readonly-task"
-          ? "Submitting once and waiting for one ChatGPT result…"
-          : command.kind === "chatgpt.cancel-readonly-task"
-            ? "Discarding the prepared context…"
-            : command.kind === "computer.prepare-workspace-edit"
-              ? "Reading the selected file and preparing a content-free edit review…"
-              : command.kind === "computer.apply-workspace-edit"
-                ? "Applying this guarded edit once…"
-                : command.kind === "computer.cancel-workspace-edit"
-                  ? "Discarding the prepared edit…"
-                  : "Saving and reading back…";
+      : command.kind === "chatgpt.prepare-attachment-task"
+        ? "Validating and privately staging the selected attachments…"
+        : command.kind === "chatgpt.submit-attachment-task"
+          ? "Uploading the reviewed attachments and submitting once…"
+          : command.kind === "chatgpt.cancel-attachment-task"
+            ? "Removing the private attachment staging…"
+            : command.kind === "chatgpt.prepare-readonly-task"
+              ? "Reading the selected file for review…"
+              : command.kind === "chatgpt.submit-readonly-task"
+                ? "Submitting once and waiting for one ChatGPT result…"
+                : command.kind === "chatgpt.cancel-readonly-task"
+                  ? "Discarding the prepared context…"
+                  : command.kind === "computer.prepare-workspace-edit"
+                    ? "Reading the selected file and preparing a content-free edit review…"
+                    : command.kind === "computer.apply-workspace-edit"
+                      ? "Applying this guarded edit once…"
+                      : command.kind === "computer.cancel-workspace-edit"
+                        ? "Discarding the prepared edit…"
+                        : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1114,7 +1122,9 @@ async function configureProduct(
   if (!parsed.data.ok) {
     if (
       command.kind === "chatgpt.submit-readonly-task" ||
-      command.kind === "chatgpt.cancel-readonly-task"
+      command.kind === "chatgpt.cancel-readonly-task" ||
+      command.kind === "chatgpt.submit-attachment-task" ||
+      command.kind === "chatgpt.cancel-attachment-task"
     ) {
       pendingChatGptPreview = null;
       if (shellOverlay === "context-preview") shellOverlay = "none";
@@ -1122,12 +1132,14 @@ async function configureProduct(
     settingsFeedback =
       parsed.data.error === "WORKSPACE_PICKER_CANCELLED" ||
       parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED" ||
+      parsed.data.error === "CHATGPT_ATTACHMENT_PICKER_CANCELLED" ||
       parsed.data.error === "SUPPORT_EXPORT_CANCELLED"
         ? "No selection was made."
         : `Not applied · ${parsed.data.error}`;
     settingsFeedbackError = ![
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_FILE_PICKER_CANCELLED",
+      "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
       "SUPPORT_EXPORT_CANCELLED",
     ].includes(parsed.data.error);
     render();
@@ -1169,6 +1181,10 @@ async function configureProduct(
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
     settingsFeedback = `Review ${evidence.relativePath} before sending it once.`;
+  } else if (evidence?.kind === "chatgpt.attachment-task-preview") {
+    pendingChatGptPreview = evidence;
+    shellOverlay = "context-preview";
+    settingsFeedback = `Review ${evidence.attachments.length} staged attachment${evidence.attachments.length === 1 ? "" : "s"} before sending once.`;
   } else if (evidence?.kind === "chatgpt.readonly-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") shellOverlay = "none";
@@ -1181,10 +1197,26 @@ async function configureProduct(
           : evidence.state === "not_authenticated"
             ? "The isolated ChatGPT session needs sign-in before this task can start."
             : `Task not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
+  } else if (evidence?.kind === "chatgpt.attachment-task") {
+    pendingChatGptPreview = null;
+    if (shellOverlay === "context-preview") shellOverlay = "none";
+    evidenceError = evidence.state !== "completed";
+    settingsFeedback =
+      evidence.state === "completed"
+        ? `${evidence.attachmentCount} attachment${evidence.attachmentCount === 1 ? "" : "s"} delivered intact · ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"} · staging ${evidence.stagingCleanup === "removed" ? "removed" : "awaiting startup cleanup"}.`
+        : evidence.state === "outcome_unknown"
+          ? `Attachment task outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
+          : evidence.state === "not_authenticated"
+            ? "The isolated ChatGPT session needs sign-in before attachments can be sent."
+            : `Attachments not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
   } else {
     settingsFeedback = successMessage;
   }
   if (command.kind === "chatgpt.cancel-readonly-task") {
+    pendingChatGptPreview = null;
+    if (shellOverlay === "context-preview") shellOverlay = "none";
+  }
+  if (command.kind === "chatgpt.cancel-attachment-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") shellOverlay = "none";
   }
@@ -1355,7 +1387,22 @@ function renderSettings(): void {
             "Read-only ChatGPT context prepared.",
           );
         });
-        actions.append(open, verify, task);
+        const attachments = document.createElement("button");
+        attachments.type = "button";
+        attachments.textContent = "Review attachments…";
+        attachments.disabled = !state.verified || state.outcomeUnknown;
+        attachments.title = state.outcomeUnknown
+          ? "Inspect the existing ChatGPT outcome before another task"
+          : !state.verified
+            ? "Verify ChatGPT first"
+            : "Choose up to four bounded images or documents";
+        attachments.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "chatgpt.prepare-attachment-task" },
+            "ChatGPT attachments prepared.",
+          );
+        });
+        actions.append(open, verify, task, attachments);
         row.append(actions);
       }
       return row;
@@ -1627,12 +1674,57 @@ function renderOverlayState(): void {
   }
   if (shellOverlay === "context-preview" && pendingChatGptPreview) {
     const preview = pendingChatGptPreview;
-    required("#context-preview-file").textContent =
-      `${preview.workspaceLabel} / ${preview.relativePath}`;
-    required("#context-preview-scope").textContent =
-      `Read-only · one file · ${preview.bytes} bytes`;
-    required("#context-preview-budget").textContent =
-      `${preview.contextCharacters.toLocaleString()} of ${preview.contextLimit.toLocaleString()} characters${preview.contextTruncated ? " · truncated" : ""}`;
+    const exclusions = required<HTMLUListElement>(
+      "#context-preview-exclusions",
+    );
+    if (preview.kind === "chatgpt.readonly-task-preview") {
+      required("#context-preview-boundaries").textContent = "Custom exclusions";
+      required("#context-preview-file").textContent =
+        `${preview.workspaceLabel} / ${preview.relativePath}`;
+      required("#context-preview-scope").textContent =
+        `Read-only · one file · ${preview.bytes} bytes`;
+      required("#context-preview-budget").textContent =
+        `${preview.contextCharacters.toLocaleString()} of ${preview.contextLimit.toLocaleString()} characters${preview.contextTruncated ? " · truncated" : ""}`;
+      const items =
+        preview.excludedPaths.length > 0
+          ? preview.excludedPaths.map((excluded) => `Excluded · ${excluded}`)
+          : ["No custom exclusions · credential defaults remain denied"];
+      exclusions.replaceChildren(
+        ...items.map((text) => {
+          const item = document.createElement("li");
+          item.textContent = text;
+          return item;
+        }),
+      );
+      required("#context-preview-note").textContent =
+        "File contents stay in main-process memory for this preview and are not shown or saved here. Send once has no automatic retry after a possible submission.";
+    } else {
+      required("#context-preview-boundaries").textContent =
+        "Attachment boundary";
+      required("#context-preview-file").textContent = preview.attachments
+        .map((attachment) => attachment.name)
+        .join(", ");
+      required("#context-preview-scope").textContent =
+        `Owner-selected · ${preview.attachments.length} attachment${preview.attachments.length === 1 ? "" : "s"} · ${preview.totalBytes} bytes`;
+      required("#context-preview-budget").textContent = preview.attachments
+        .map(
+          (attachment) =>
+            `${attachment.mimeType} · ${attachment.sha256.slice(0, 12)}`,
+        )
+        .join("; ");
+      exclusions.replaceChildren(
+        ...[
+          "Only exact private staged copies will be uploaded",
+          "Staging is removed after send or cancel",
+        ].map((text) => {
+          const item = document.createElement("li");
+          item.textContent = text;
+          return item;
+        }),
+      );
+      required("#context-preview-note").textContent =
+        "Attachment contents are not rendered in Farol or added to diagnostics. Send once waits for visible upload completion and has no automatic retry after a possible submission.";
+    }
     required("#context-preview-expiry").textContent = new Intl.DateTimeFormat(
       undefined,
       {
@@ -1640,20 +1732,6 @@ function renderOverlayState(): void {
         timeStyle: "short",
       },
     ).format(new Date(preview.expiresAt));
-    const exclusions = required<HTMLUListElement>(
-      "#context-preview-exclusions",
-    );
-    const items =
-      preview.excludedPaths.length > 0
-        ? preview.excludedPaths.map((excluded) => `Excluded · ${excluded}`)
-        : ["No custom exclusions · credential defaults remain denied"];
-    exclusions.replaceChildren(
-      ...items.map((text) => {
-        const item = document.createElement("li");
-        item.textContent = text;
-        return item;
-      }),
-    );
     if (!contextPreview.open) contextPreview.showModal();
   } else if (contextPreview.open) {
     contextPreview.close();
@@ -1740,11 +1818,18 @@ async function cancelContextPreview(): Promise<void> {
   render();
   try {
     await configureProduct(
-      {
-        kind: "chatgpt.cancel-readonly-task",
-        operationId: preview.operationId,
-      },
-      "Context preview cancelled. Nothing was submitted.",
+      preview.kind === "chatgpt.attachment-task-preview"
+        ? {
+            kind: "chatgpt.cancel-attachment-task",
+            operationId: preview.operationId,
+          }
+        : {
+            kind: "chatgpt.cancel-readonly-task",
+            operationId: preview.operationId,
+          },
+      preview.kind === "chatgpt.attachment-task-preview"
+        ? "Attachment staging removed. Nothing was submitted."
+        : "Context preview cancelled. Nothing was submitted.",
     );
   } finally {
     contextPreviewBusy = false;
@@ -1761,11 +1846,18 @@ async function submitContextPreview(): Promise<void> {
   render();
   try {
     await configureProduct(
-      {
-        kind: "chatgpt.submit-readonly-task",
-        operationId: preview.operationId,
-      },
-      "Read-only ChatGPT task finished.",
+      preview.kind === "chatgpt.attachment-task-preview"
+        ? {
+            kind: "chatgpt.submit-attachment-task",
+            operationId: preview.operationId,
+          }
+        : {
+            kind: "chatgpt.submit-readonly-task",
+            operationId: preview.operationId,
+          },
+      preview.kind === "chatgpt.attachment-task-preview"
+        ? "Attachment ChatGPT task finished."
+        : "Read-only ChatGPT task finished.",
     );
   } finally {
     contextPreviewBusy = false;

@@ -593,12 +593,15 @@ async function startChatGptFixture() {
     });
     response.end(`<!doctype html>
       <html><head><meta charset="utf-8"><title>ChatGPT readiness fixture</title>
-      <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}button,#prompt-textarea{min-width:280px;min-height:44px}.message{white-space:pre-wrap;margin:18px 0}</style></head>
+      <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}button,#prompt-textarea{min-width:280px;min-height:44px}.message{white-space:pre-wrap;margin:18px 0}.attachment-chip{display:inline-block;margin:8px;padding:6px 10px;border:1px solid #555;border-radius:8px}</style></head>
       <body>
         <button data-testid="login-button" type="button">Log in</button>
         <button data-testid="popup-button" type="button">Open login popup</button>
         <button data-testid="expire-button" type="button" hidden>Expire session</button>
         <div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message" hidden></div>
+        <input data-testid="attachment-input" type="file" multiple hidden />
+        <div id="attachment-chips"></div>
+        <p data-testid="attachment-upload-error" hidden>Failed to upload attachment</p>
         <button data-testid="send-button" type="button" disabled hidden>Send</button>
         <button data-testid="stop-button" type="button" hidden>Stop</button>
         <section id="conversation"></section>
@@ -607,11 +610,19 @@ async function startChatGptFixture() {
           const popup = document.querySelector('[data-testid="popup-button"]');
           const expire = document.querySelector('[data-testid="expire-button"]');
           const composer = document.querySelector('#prompt-textarea');
+          const attachmentInput = document.querySelector('[data-testid="attachment-input"]');
+          const attachmentChips = document.querySelector('#attachment-chips');
+          const attachmentError = document.querySelector('[data-testid="attachment-upload-error"]');
           const send = document.querySelector('[data-testid="send-button"]');
           const stop = document.querySelector('[data-testid="stop-button"]');
           const conversation = document.querySelector('#conversation');
           window.__farolTaskProgress = [];
           window.__farolSubmitCount = 0;
+          window.__farolAttachmentProof = [];
+          let attachmentLoading = false;
+          const updateSend = () => {
+            send.disabled = composer.textContent.trim().length === 0 || attachmentLoading;
+          };
           const render = () => {
             const authenticated = localStorage.getItem('farol-next-e2e-authenticated') === '1';
             login.hidden = authenticated;
@@ -621,7 +632,33 @@ async function startChatGptFixture() {
           };
           popup.addEventListener('click', () => window.open('/chatgpt-popup', 'chatgpt-auth'));
           composer.addEventListener('input', () => {
-            send.disabled = composer.textContent.trim().length === 0;
+            updateSend();
+          });
+          attachmentInput.addEventListener('change', async () => {
+            attachmentLoading = true;
+            attachmentError.hidden = true;
+            attachmentChips.replaceChildren();
+            window.__farolAttachmentProof = [];
+            updateSend();
+            const files = [...(attachmentInput.files || [])];
+            for (const file of files) {
+              const bytes = new Uint8Array(await file.arrayBuffer());
+              let binary = '';
+              for (const byte of bytes) binary += String.fromCharCode(byte);
+              window.__farolAttachmentProof.push({
+                name: file.name,
+                type: file.type,
+                size: file.size,
+                base64: btoa(binary)
+              });
+              const chip = document.createElement('span');
+              chip.className = 'attachment-chip';
+              chip.dataset.testid = 'attachment-chip';
+              chip.textContent = file.name;
+              attachmentChips.append(chip);
+            }
+            attachmentLoading = false;
+            updateSend();
           });
           login.addEventListener('click', () => {
             localStorage.setItem('farol-next-e2e-authenticated', '1');
@@ -645,6 +682,8 @@ async function startChatGptFixture() {
             assistant.dataset.messageAuthorRole = 'assistant';
             conversation.append(user, assistant);
             composer.textContent = '';
+            attachmentInput.value = '';
+            attachmentChips.replaceChildren();
             stop.hidden = false;
             const chunks = [
               'The selected file reports a bounded workspace verification. ',
@@ -694,10 +733,27 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
   const workspaceRoot = await fs.realpath(workspacePath);
   const workspaceFile = path.join(workspaceRoot, "README.md");
   const supportExport = path.join(isolatedHome, "Farol-Next-Support.json");
+  const attachmentImage = path.join(isolatedHome, "evidence.png");
+  const attachmentDocument = path.join(isolatedHome, "notes.md");
   await fs.writeFile(
     workspaceFile,
     "Farol Next workspace verification fixture\n",
     { mode: 0o600 },
+  );
+  await fs.writeFile(
+    attachmentImage,
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+      "base64",
+    ),
+    { mode: 0o600 },
+  );
+  await fs.writeFile(
+    attachmentDocument,
+    "Farol attachment document fixture\n",
+    {
+      mode: 0o600,
+    },
   );
   const chatGptFixture = await startChatGptFixture();
   const launchArgs = [
@@ -712,6 +768,10 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
     FAROL_NEXT_E2E_SUPPORT_EXPORT: supportExport,
+    FAROL_NEXT_E2E_ATTACHMENTS: JSON.stringify([
+      attachmentImage,
+      attachmentDocument,
+    ]),
     FAROL_NEXT_E2E_CHATGPT_URL: chatGptFixture.url,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
@@ -749,6 +809,8 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     workspaceFile,
     workspaceRoot,
     supportExport,
+    attachmentImage,
+    attachmentDocument,
     expectedTaskViewCount,
     windowMode,
     presentation,
@@ -2365,6 +2427,72 @@ try {
     normal.expectedTaskViewCount,
   );
   cases.push("chatgpt-readonly-task-incremental-result");
+  const reviewAttachments = normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Review attachments…", exact: true });
+  await reviewAttachments.click();
+  await contextPreview.waitFor({ state: "visible" });
+  const attachmentPreview = await contextPreview.innerText();
+  assert.match(attachmentPreview, /evidence\.png, notes\.md/u);
+  assert.match(attachmentPreview, /Owner-selected · 2 attachments/u);
+  assert.match(attachmentPreview, /image\/png/u);
+  assert.match(attachmentPreview, /text\/markdown/u);
+  assert.match(attachmentPreview, /Only exact private staged copies/u);
+  assert.doesNotMatch(attachmentPreview, /attachment document fixture/u);
+  const attachmentTaskWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await contextPreview
+    .getByRole("button", { name: "Send once", exact: true })
+    .click();
+  const attachmentTaskPage = await attachmentTaskWindow;
+  await attachmentTaskPage.waitForURL(normal.chatGptFixture.url);
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText(/2 attachments delivered intact · \d+ incremental updates/u)
+    .waitFor({ timeout: 10_000 });
+  const attachmentProof = await attachmentTaskPage.evaluate(
+    () => window.__farolAttachmentProof,
+  );
+  assert.deepEqual(
+    attachmentProof,
+    await Promise.all(
+      [normal.attachmentImage, normal.attachmentDocument].map(
+        async (attachmentPath) => {
+          const bytes = await fs.readFile(attachmentPath);
+          return {
+            name: path.basename(attachmentPath),
+            type: attachmentPath.endsWith(".png")
+              ? "image/png"
+              : "text/markdown",
+            size: bytes.byteLength,
+            base64: bytes.toString("base64"),
+          };
+        },
+      ),
+    ),
+  );
+  assert.equal(
+    await attachmentTaskPage.evaluate(() => window.__farolSubmitCount),
+    1,
+  );
+  assert.deepEqual(
+    await fs.readdir(
+      path.join(normal.userData, "farol-next-state", "attachment-staging"),
+    ),
+    [],
+  );
+  await attachmentTaskPage.close();
+  await waitForWindowCount(normal.application, 1);
+  await waitForShellVisibility(
+    normal.application,
+    normal.windowMode === "secondary-visible",
+    normal.expectedTaskViewCount,
+  );
+  cases.push(
+    "chatgpt-attachment-image-and-document",
+    "chatgpt-attachment-staging-cleanup",
+  );
   const settingsPanel = normal.window.locator('[data-panel="settings"]');
   assert.equal(await settingsPanel.locator("#computer-name").count(), 0);
   assert.equal(await settingsPanel.locator("#add-workspace").count(), 0);

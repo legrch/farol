@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_CHATGPT_CONTEXT_CHARACTERS,
+  buildChatGptAttachmentTaskPrompt,
   buildChatGptReadonlyTaskPrompt,
 } from "../../src/apps/desktop/chatgpt-readonly-task";
 
@@ -32,5 +33,22 @@ describe("Farol Next ChatGPT read-only task", () => {
     expect(prompt.contextTruncated).toBe(true);
     expect(prompt.text).toContain("Context truncated by Farol Next: yes");
     expect(prompt.text).not.toContain(source);
+  });
+
+  it("builds an attachment prompt without embedding bytes or local paths", () => {
+    const prompt = buildChatGptAttachmentTaskPrompt({
+      attachments: [
+        { name: "evidence.png", mimeType: "image/png", bytes: 68 },
+        { name: "notes.md", mimeType: "text/markdown", bytes: 27 },
+      ],
+    });
+
+    expect(prompt.text).toContain("two owner-selected attachments");
+    expect(prompt.text).toContain("evidence.png · image/png · 68 bytes");
+    expect(prompt.text).toContain("notes.md · text/markdown · 27 bytes");
+    expect(prompt.text).toContain("state that the attachment is unavailable");
+    expect(prompt.text).not.toContain("/private/");
+    expect(prompt.attachmentCount).toBe(2);
+    expect(prompt.totalBytes).toBe(95);
   });
 });

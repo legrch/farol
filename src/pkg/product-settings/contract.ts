@@ -71,6 +71,30 @@ const ProductWorkspaceEntrySchema = z
     );
   });
 
+const ChatGptAttachmentMimeTypeSchema = z.enum([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+]);
+
+const ChatGptAttachmentMetadataSchema = z.strictObject({
+  name: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine((value) => !value.includes("/") && !value.includes("\\")),
+  mimeType: ChatGptAttachmentMimeTypeSchema,
+  bytes: z
+    .number()
+    .int()
+    .positive()
+    .max(10 * 1_024 * 1_024),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
 export const ProductGeneralSettingsSchema = z.strictObject({
   openAtLaunch: z.enum(["browser", "activity", "settings"]),
   sidebarDefault: z.enum(["full", "rail"]),
@@ -175,6 +199,15 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
   z.strictObject({ kind: z.literal("support.export") }),
+  z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
+  z.strictObject({
+    kind: z.literal("chatgpt.submit-attachment-task"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.cancel-attachment-task"),
+    operationId: IdentifierSchema,
+  }),
   z.strictObject({
     kind: z.literal("chatgpt.prepare-readonly-task"),
     workspaceId: IdentifierSchema,
@@ -315,6 +348,52 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     observedCharacters: z.number().int().nonnegative(),
   }),
   z.strictObject({
+    kind: z.literal("chatgpt.attachment-task-preview"),
+    operationId: IdentifierSchema,
+    attachments: z.array(ChatGptAttachmentMetadataSchema).min(1).max(4),
+    totalBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1_024 * 1_024),
+    expiresAt: CanonicalTimestampSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.attachment-task"),
+    operationId: IdentifierSchema,
+    state: z.enum([
+      "completed",
+      "not_authenticated",
+      "failed_before_submit",
+      "outcome_unknown",
+    ]),
+    code: z
+      .enum([
+        "CHATGPT_TASK_IN_PROGRESS",
+        "CHATGPT_PAGE_UNREACHABLE",
+        "CHATGPT_SIGN_IN_REQUIRED",
+        "CHATGPT_UI_UNRECOGNIZED",
+        "CHATGPT_COMPOSER_UNAVAILABLE",
+        "CHATGPT_SUBMIT_UNAVAILABLE",
+        "CHATGPT_TASK_PAGE_LOST",
+        "CHATGPT_TASK_ERROR",
+        "CHATGPT_TASK_TIMEOUT",
+        "CHATGPT_ATTACHMENT_CONTROL_UNAVAILABLE",
+        "CHATGPT_ATTACHMENT_UPLOAD_FAILED",
+        "CHATGPT_ATTACHMENT_UPLOAD_TIMEOUT",
+      ])
+      .nullable(),
+    attachmentCount: z.number().int().min(1).max(4),
+    totalBytes: z
+      .number()
+      .int()
+      .positive()
+      .max(20 * 1_024 * 1_024),
+    deltaCount: z.number().int().nonnegative(),
+    observedCharacters: z.number().int().nonnegative(),
+    stagingCleanup: z.enum(["removed", "pending_startup_cleanup"]),
+  }),
+  z.strictObject({
     kind: z.literal("computer.workspace-read"),
     workspaceId: IdentifierSchema,
     relativePath: ProductRelativePathSchema,
@@ -415,6 +494,15 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CHATGPT_TASK_PREVIEW_NOT_FOUND",
       "CHATGPT_TASK_PREVIEW_EXPIRED",
       "CHATGPT_TASK_REQUIRES_REVIEW",
+      "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
+      "CHATGPT_ATTACHMENT_SELECTION_INVALID",
+      "CHATGPT_ATTACHMENT_TYPE_UNSUPPORTED",
+      "CHATGPT_ATTACHMENT_TOO_LARGE",
+      "CHATGPT_ATTACHMENT_STAGING_FAILED",
+      "CHATGPT_ATTACHMENT_REFERENCE_MISSING",
+      "CHATGPT_ATTACHMENT_PREVIEW_PENDING",
+      "CHATGPT_ATTACHMENT_PREVIEW_NOT_FOUND",
+      "CHATGPT_ATTACHMENT_PREVIEW_EXPIRED",
       "WORKSPACE_NOT_FOUND",
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_SELECTION_INVALID",

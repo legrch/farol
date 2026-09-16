@@ -12,6 +12,8 @@ import {
   classifyChatGptPage,
   type ChatGptPageObservation,
 } from "./chatgpt-page-policy";
+import type { StagedChatGptAttachment } from "./chatgpt-attachment-staging";
+import { uploadChatGptAttachments } from "./chatgpt-attachment-upload";
 
 const probeSchema = z.strictObject({
   composerVisible: z.boolean(),
@@ -182,6 +184,9 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_TASK_PAGE_LOST"
     | "CHATGPT_TASK_ERROR"
     | "CHATGPT_TASK_TIMEOUT"
+    | "CHATGPT_ATTACHMENT_CONTROL_UNAVAILABLE"
+    | "CHATGPT_ATTACHMENT_UPLOAD_FAILED"
+    | "CHATGPT_ATTACHMENT_UPLOAD_TIMEOUT"
     | null;
   deltaCount: number;
   observedCharacters: number;
@@ -289,7 +294,10 @@ export class ChatGptRoute {
     }
   }
 
-  async runReadonlyTask(prompt: string): Promise<ChatGptReadonlyTaskResult> {
+  async runReadonlyTask(
+    prompt: string,
+    attachments: readonly StagedChatGptAttachment[] = [],
+  ): Promise<ChatGptReadonlyTaskResult> {
     if (this.taskInFlight) {
       return {
         state: "failed_before_submit",
@@ -354,6 +362,20 @@ export class ChatGptRoute {
           deltaCount,
           observedCharacters,
         };
+      }
+      if (attachments.length > 0) {
+        const uploaded = await uploadChatGptAttachments(
+          candidate.webContents,
+          attachments,
+        );
+        if (uploaded.status === "failed") {
+          return {
+            state: "failed_before_submit",
+            code: uploaded.code,
+            deltaCount,
+            observedCharacters,
+          };
+        }
       }
       const submitDeadline = Date.now() + 5_000;
       while (Date.now() < submitDeadline) {
