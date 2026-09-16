@@ -199,7 +199,7 @@ describe("Agent app service", () => {
     expect(host.waitCalls).toBe(1);
   });
 
-  it("tombstones prepared and running records recovered without an in-flight owner", async () => {
+  it("tombstones a prepared record recovered without a known child", async () => {
     const preparedRepository = new InMemoryAssignments();
     await preparedRepository.admit({
       assignment: createAssignment(command.identity, assignmentAuthority),
@@ -218,7 +218,9 @@ describe("Agent app service", () => {
       },
     });
     expect(preparedHost.spawnCalls).toBe(0);
+  });
 
+  it("rejoins the exact running child after restart without spawning again", async () => {
     const runningRepository = new InMemoryAssignments();
     const running = startAssignment(
       createAssignment(command.identity, assignmentAuthority),
@@ -229,20 +231,25 @@ describe("Agent app service", () => {
       assignment: running.value,
       resultRef: null,
     });
-    const runningHost = new AgentHostDouble(new Error("must not spawn"), null);
+    const runningHost = new AgentHostDouble(new Error("must not spawn"), {
+      status: "completed",
+      correlation: exactChild,
+      resultRef: "result-preview-rejoined",
+    });
     await expect(
       createRunner(runningHost, runningRepository).execute(command),
     ).resolves.toMatchObject({
       ok: true,
       value: {
         assignment: {
-          phase: "outcome_unknown",
+          phase: "completed",
           terminal: true,
-          terminalReason: { source: "recovery" },
         },
+        resultRef: "result-preview-rejoined",
       },
     });
     expect(runningHost.spawnCalls).toBe(0);
+    expect(runningHost.waitCalls).toBe(1);
   });
 
   it("fails closed before spawn when assignment admission is unavailable", async () => {

@@ -154,6 +154,20 @@ export class RunAgentAssignment {
       if (!this.matchesStoredAuthority(admission.record, authority)) {
         return failure("AGENT_AUTHORITY_CORRELATION");
       }
+      const recovered = admission.record.assignment;
+      if (
+        !recovered.terminal &&
+        recovered.phase === "running" &&
+        recovered.childId
+      ) {
+        const childId = recovered.childId;
+        return this.waitForChild(recovered, {
+          ...recovered.identity,
+          authorityId: recovered.authority.authorityId,
+          participantId: recovered.authority.participantId,
+          childId,
+        });
+      }
       return success(await this.tombstoneInterrupted(admission.record));
     }
 
@@ -197,12 +211,19 @@ export class RunAgentAssignment {
     if (!started.ok) return failure(started.error.code);
     await this.bestEffortSave({ assignment: started.value, resultRef: null });
 
+    return this.waitForChild(started.value, spawned.correlation);
+  }
+
+  private async waitForChild(
+    assignment: Assignment,
+    correlation: Parameters<AgentHost["wait"]>[0],
+  ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
     let waited: Awaited<ReturnType<AgentHost["wait"]>>;
     try {
-      waited = await this.host.wait(spawned.correlation);
+      waited = await this.host.wait(correlation);
     } catch {
       return this.terminal(
-        markChildOutcomeUnknown(started.value, spawned.correlation, {
+        markChildOutcomeUnknown(assignment, correlation, {
           code: "AGENT_WAIT_TRANSPORT_UNKNOWN",
           source: "native-host-transport",
           retry: "never",
@@ -211,7 +232,7 @@ export class RunAgentAssignment {
     }
 
     if (waited.status === "completed") {
-      const completed = completeAssignment(started.value, waited.correlation);
+      const completed = completeAssignment(assignment, waited.correlation);
       if (!completed.ok) return failure(completed.error.code);
       const record = {
         assignment: completed.value,
@@ -222,7 +243,7 @@ export class RunAgentAssignment {
     }
     if (waited.status === "outcome_unknown") {
       return this.terminal(
-        markChildOutcomeUnknown(started.value, waited.correlation, {
+        markChildOutcomeUnknown(assignment, waited.correlation, {
           code: waited.code,
           source: "native-host-transport",
           retry: "never",
@@ -230,7 +251,7 @@ export class RunAgentAssignment {
       );
     }
     return this.terminal(
-      failChildAssignment(started.value, waited.correlation, {
+      failChildAssignment(assignment, waited.correlation, {
         code: waited.code,
         source: "native-host",
         retry: "never",
