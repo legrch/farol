@@ -600,7 +600,7 @@ function createLiveChatGptRoute(
     title: `${label} · Farol Next`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
-      if (taskRunning) recordTaskActivity("outcome_unknown");
+      recordTaskActivity(taskRunning ? "outcome_unknown" : "idle");
     },
     onConversationChanged: recordConversationUrl,
     onTaskActivityChanged: recordTaskActivity,
