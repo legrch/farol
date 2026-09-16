@@ -265,7 +265,7 @@ export async function runCodexNativeAgentCheck(
       return failure("failed", "AGENT_STATE_INVALID");
     }
     if (
-      !boundedRunning ||
+      (!boundedRunning && receipt.parentDelivery !== "acknowledged") ||
       receipt.resultRetention !== "durable" ||
       !receipt.resultRef ||
       !receipt.resultRef.startsWith("codex-app-server://") ||

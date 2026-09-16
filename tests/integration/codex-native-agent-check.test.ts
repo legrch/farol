@@ -242,6 +242,33 @@ describe("desktop native Agent lineage check", () => {
       resultRef: "codex-app-server://thread/child-thread-a/turn/turn-a",
       parentDelivery: "acknowledged",
     });
+
+    const redeliveryHost: AgentHost = {
+      spawn: vi.fn(async () => {
+        throw new Error("must not spawn");
+      }),
+      wait: vi.fn(async () => {
+        throw new Error("must not wait");
+      }),
+    };
+    const redelivered = await runCodexNativeAgentCheck({
+      host: redeliveryHost,
+      assignments,
+      settings: settings(),
+      workspaceId: selectedWorkspaceId,
+      executableSha256,
+      schemaSha256,
+      buildId,
+      now: () => 1_000,
+      pause: async () => undefined,
+      maximumWaitCycles: 1,
+    });
+    expect(redelivered).toMatchObject({
+      status: "completed",
+      evidence: { boundedRunning: true, parentDelivery: "acknowledged" },
+    });
+    expect(redeliveryHost.spawn).not.toHaveBeenCalled();
+    expect(redeliveryHost.wait).not.toHaveBeenCalled();
   });
 
   it("retains one running child for bounded same-assignment rejoin", async () => {

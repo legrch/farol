@@ -1120,30 +1120,32 @@ async function configureProduct(
         ? "Verifying the selected Codex executable and bounded App Server contract…"
         : command.kind === "host.run-codex-smoke"
           ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
-          : command.kind === "host.remove-codex"
-            ? "Removing the saved Codex host selection…"
-            : command.kind === "chatgpt.prepare-attachment-task"
-              ? "Validating and privately staging the selected attachments…"
-              : command.kind === "chatgpt.submit-attachment-task"
-                ? "Uploading the reviewed attachments and submitting once…"
-                : command.kind === "chatgpt.cancel-attachment-task"
-                  ? "Removing the private attachment staging…"
-                  : command.kind === "chatgpt.prepare-readonly-task"
-                    ? "Reading the selected file for review…"
-                    : command.kind === "chatgpt.submit-readonly-task"
-                      ? "Submitting once and waiting for one ChatGPT result…"
-                      : command.kind === "chatgpt.cancel-readonly-task"
-                        ? "Discarding the prepared context…"
-                        : command.kind === "chatgpt.reset-conversation"
-                          ? "Clearing the retained conversation binding…"
-                          : command.kind === "computer.prepare-workspace-edit"
-                            ? "Reading the selected file and preparing a content-free edit review…"
-                            : command.kind === "computer.apply-workspace-edit"
-                              ? "Applying this guarded edit once…"
-                              : command.kind ===
-                                  "computer.cancel-workspace-edit"
-                                ? "Discarding the prepared edit…"
-                                : "Saving and reading back…";
+          : command.kind === "host.run-codex-agent-check"
+            ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
+            : command.kind === "host.remove-codex"
+              ? "Removing the saved Codex host selection…"
+              : command.kind === "chatgpt.prepare-attachment-task"
+                ? "Validating and privately staging the selected attachments…"
+                : command.kind === "chatgpt.submit-attachment-task"
+                  ? "Uploading the reviewed attachments and submitting once…"
+                  : command.kind === "chatgpt.cancel-attachment-task"
+                    ? "Removing the private attachment staging…"
+                    : command.kind === "chatgpt.prepare-readonly-task"
+                      ? "Reading the selected file for review…"
+                      : command.kind === "chatgpt.submit-readonly-task"
+                        ? "Submitting once and waiting for one ChatGPT result…"
+                        : command.kind === "chatgpt.cancel-readonly-task"
+                          ? "Discarding the prepared context…"
+                          : command.kind === "chatgpt.reset-conversation"
+                            ? "Clearing the retained conversation binding…"
+                            : command.kind === "computer.prepare-workspace-edit"
+                              ? "Reading the selected file and preparing a content-free edit review…"
+                              : command.kind === "computer.apply-workspace-edit"
+                                ? "Applying this guarded edit once…"
+                                : command.kind ===
+                                    "computer.cancel-workspace-edit"
+                                  ? "Discarding the prepared edit…"
+                                  : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1169,21 +1171,22 @@ async function configureProduct(
       pendingChatGptPreview = null;
       if (shellOverlay === "context-preview") shellOverlay = "none";
     }
-    settingsFeedback =
-      parsed.data.error === "WORKSPACE_PICKER_CANCELLED" ||
-      parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED" ||
-      parsed.data.error === "CHATGPT_ATTACHMENT_PICKER_CANCELLED" ||
-      parsed.data.error === "CODEX_HOST_PICKER_CANCELLED" ||
-      parsed.data.error === "SUPPORT_EXPORT_CANCELLED"
-        ? "No selection was made."
-        : `Not applied · ${parsed.data.error}`;
-    settingsFeedbackError = ![
+    const cancellation = [
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_FILE_PICKER_CANCELLED",
       "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
       "CODEX_HOST_PICKER_CANCELLED",
       "SUPPORT_EXPORT_CANCELLED",
     ].includes(parsed.data.error);
+    settingsFeedback = cancellation
+      ? "No selection was made."
+      : parsed.data.error === "CODEX_AGENT_STILL_RUNNING"
+        ? "The same native Agent child is still running. Use Rejoin Agent to collect its result; no second child will be created."
+        : parsed.data.error === "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
+          ? "Native Agent outcome unknown. Inspect the existing Codex task before any deliberate recovery."
+          : `Not applied · ${parsed.data.error}`;
+    settingsFeedbackError =
+      !cancellation && parsed.data.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
     return false;
   }
@@ -1224,6 +1227,8 @@ async function configureProduct(
     settingsFeedback = `Codex ${evidence.version} contract verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.codex-live") {
     settingsFeedback = `${evidence.model} host turn completed with ${evidence.dynamicToolCalls} correlated Farol Next tool call · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "host.codex-agent-lineage") {
+    settingsFeedback = `Main → Agent → Critic verified on ${evidence.model} · one model turn · same-child bounded rejoin · durable delivery acknowledged · workspace enforcement ${evidence.workspaceEnforcement.replace("_", " ")}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
@@ -1353,7 +1358,7 @@ function renderSettings(): void {
     [
       "Native Codex host",
       configured.status === "ready" && configured.settings.nativeHosts.codex
-        ? `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol} · contract ${configured.settings.nativeHosts.codex.verifiedAt} · live ${configured.settings.nativeHosts.codex.liveVerification?.verifiedAt ?? "not run"}`
+        ? `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol} · contract ${configured.settings.nativeHosts.codex.verifiedAt} · live ${configured.settings.nativeHosts.codex.liveVerification?.verifiedAt ?? "not run"} · Agent ${configured.settings.nativeHosts.codex.agentVerification?.verifiedAt ?? "not verified"}`
         : "Not selected",
     ],
     [
@@ -1364,8 +1369,10 @@ function renderSettings(): void {
       "Native access",
       configured.status === "ready" &&
       configured.settings.computer.workspaces.length > 0
-        ? `${configured.settings.computer.workspaces.length} read-only workspace approval(s) · live provider and Agent still unverified`
-        : "No workspace approved · live provider and Agent still unverified",
+        ? configured.settings.nativeHosts.codex?.agentVerification
+          ? `${configured.settings.computer.workspaces.length} approved workspace(s) · Agent lineage verified · native workspace enforcement not verified`
+          : `${configured.settings.computer.workspaces.length} approved workspace(s) · Agent lineage not verified`
+        : "No workspace approved · Agent lineage not verified",
     ],
   ];
   const list = required<HTMLDListElement>("#settings-list");
@@ -1435,7 +1442,7 @@ function renderSettings(): void {
     ["Computer", settings.setup.computer],
     ["Connection", settings.setup.connect],
     ["Native hosts", settings.setup.hosts],
-    ["Verification", settings.setup.verify],
+    ["Native Agent", settings.setup.verify],
   ];
   connections.replaceChildren(
     ...connectionStates.map(([label, state]) => {
@@ -1450,7 +1457,10 @@ function renderSettings(): void {
           ? `${readinessDetail(state)} · Conversation: ${bootstrap.chatgptConversationState.replace("_", " ")}`
           : label === "Native hosts" && settings.nativeHosts.codex
             ? `${readinessDetail(state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
-            : readinessDetail(state);
+            : label === "Native Agent" &&
+                settings.nativeHosts.codex?.agentVerification
+              ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement not verified · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
+              : readinessDetail(state);
       copy.append(title, detail);
       row.append(copy);
       if (label === "ChatGPT") {
@@ -1580,6 +1590,44 @@ function renderSettings(): void {
             "Live Codex host check completed.",
           );
         });
+        const agentState = settings.setup.verify;
+        const agentProof = selected?.agentVerification ?? null;
+        const verifiedWorkspaceId =
+          settings.setup.computer.verified?.workspaceId;
+        const verifiedWorkspace = settings.computer.workspaces.find(
+          (workspace) => workspace.workspaceId === verifiedWorkspaceId,
+        );
+        const agentCanRun =
+          selected?.liveVerification != null &&
+          verifiedWorkspace?.access === "read" &&
+          settings.setup.computer.reachable === "reachable" &&
+          !settings.setup.computer.outcomeUnknown;
+        const agentNeedsRejoin =
+          agentState.needsAction?.startsWith("Rejoin the same") === true;
+        const agent = document.createElement("button");
+        agent.type = "button";
+        agent.textContent = agentProof
+          ? "Agent verified"
+          : agentNeedsRejoin
+            ? "Rejoin Agent"
+            : "Verify Agent";
+        agent.disabled =
+          agentProof !== null || agentState.outcomeUnknown || !agentCanRun;
+        agent.title = agentProof
+          ? "Lineage and delivery are verified; native workspace enforcement remains not verified"
+          : agentState.outcomeUnknown
+            ? "Inspect the existing Codex task before deliberate recovery"
+            : !agentCanRun
+              ? "Run the live Codex host check and verify one read-only workspace first"
+              : agentNeedsRejoin
+                ? "Rejoin the same child without another model turn"
+                : "Verify Main to Agent to Critic continuity with one bounded gpt-6-astra turn";
+        agent.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.run-codex-agent-check" },
+            "Native Agent lineage and delivery verified.",
+          );
+        });
         const remove = document.createElement("button");
         remove.type = "button";
         remove.textContent = "Remove";
@@ -1590,7 +1638,7 @@ function renderSettings(): void {
             "Codex host selection removed.",
           );
         });
-        actions.append(choose, verify, live, remove);
+        actions.append(choose, verify, live, agent, remove);
         row.append(actions);
       }
       return row;
@@ -1638,7 +1686,15 @@ function renderSetup(): void {
             `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol}`,
             `Executable · ${configured.settings.nativeHosts.codex.executablePath}`,
           ]
-        : [];
+        : configured.status === "ready" &&
+            step.id === "verify" &&
+            configured.settings.nativeHosts.codex?.agentVerification
+          ? [
+              `Delegation · ${configured.settings.nativeHosts.codex.agentVerification.delegationDigest.slice(0, 12)}`,
+              `Parent ${configured.settings.nativeHosts.codex.agentVerification.parentThreadSha256.slice(0, 12)} · child ${configured.settings.nativeHosts.codex.agentVerification.childThreadSha256.slice(0, 12)}`,
+              "Native workspace enforcement · not verified",
+            ]
+          : [];
   details.replaceChildren(
     ...[...step.details, ...liveDetails].map((detail) => {
       const item = document.createElement("li");
@@ -1775,6 +1831,44 @@ function renderSetup(): void {
           : kind === "host.verify-codex"
             ? "Codex host contract rechecked."
             : "Live Codex host check completed.",
+      );
+    };
+  } else if (step.id === "verify") {
+    const settings = configured.settings;
+    const host = settings.nativeHosts.codex;
+    const readiness = settings.setup.verify;
+    const proof = host?.agentVerification ?? null;
+    const verifiedWorkspaceId = settings.setup.computer.verified?.workspaceId;
+    const workspace = settings.computer.workspaces.find(
+      (candidate) => candidate.workspaceId === verifiedWorkspaceId,
+    );
+    const prerequisitesReady =
+      host?.liveVerification != null &&
+      workspace?.access === "read" &&
+      settings.setup.computer.reachable === "reachable" &&
+      !settings.setup.computer.outcomeUnknown;
+    const needsRejoin =
+      readiness.needsAction?.startsWith("Rejoin the same") === true;
+    liveSummary.textContent = proof
+      ? `Main → Agent → Critic completed with one ${proof.model} turn and durable acknowledged delivery. Native workspace enforcement remains not verified.`
+      : readiness.outcomeUnknown
+        ? "The native Agent outcome is unknown. Inspect the existing Codex task before deliberate recovery."
+        : needsRejoin
+          ? "The same native child is still running. Rejoin it without creating another child or model turn."
+          : prerequisitesReady
+            ? "Ready to verify lineage, unchanged TaskGrant transport, bounded same-child rejoin and durable parent delivery."
+            : "Run the live Codex host check and verify one read-only workspace first.";
+    livePrimary.textContent = proof
+      ? "Agent verified"
+      : needsRejoin
+        ? "Rejoin Agent"
+        : "Verify Agent";
+    livePrimary.disabled =
+      proof !== null || readiness.outcomeUnknown || !prerequisitesReady;
+    setupPrimaryAction = async () => {
+      await configureProduct(
+        { kind: "host.run-codex-agent-check" },
+        "Native Agent lineage and delivery verified.",
       );
     };
   } else {

@@ -806,6 +806,13 @@ if (args.join(" ") === "app-server --stdio") {
   const readline = require("node:readline");
   const lines = readline.createInterface({ input: process.stdin });
   const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+  let agentChildPrompt = null;
+  let agentAuthority = null;
+  let agentComplete = false;
+  const agentParentThreadId = "thread-e2e-agent-parent";
+  const agentParentTurnId = "turn-e2e-agent-parent";
+  const agentChildThreadId = "thread-e2e-agent-child";
+  const agentChildTurnId = "turn-e2e-agent-child";
   lines.on("line", (line) => {
     const message = JSON.parse(line);
     if (message.method === "initialize") {
@@ -818,6 +825,7 @@ if (args.join(" ") === "app-server --stdio") {
       return;
     }
     if (message.method === "thread/start") {
+      const dynamicTool = message.params?.dynamicTools?.[0]?.name;
       const valid = message.params?.model === "gpt-6-astra" &&
         message.params?.allowProviderModelFallback === false &&
         message.params?.sandbox === "read-only" &&
@@ -828,18 +836,136 @@ if (args.join(" ") === "app-server --stdio") {
         send({ id: message.id, error: { code: -32000, message: "unsafe thread" } });
         return;
       }
-      send({ id: message.id, result: { model: "gpt-6-astra", thread: { id: "thread-e2e-parent", parentThreadId: null } } });
+      const threadId = dynamicTool === "farol_agent_authority"
+        ? agentParentThreadId
+        : "thread-e2e-parent";
+      send({ id: message.id, result: { model: "gpt-6-astra", thread: { id: threadId, parentThreadId: null } } });
       return;
     }
     if (message.method === "turn/start") {
       const text = message.params?.input?.[0]?.text ?? "";
+      if (message.params?.threadId === agentParentThreadId) {
+        const begin = "FAROL_CHILD_PROMPT_BEGIN\\n";
+        const end = "\\nFAROL_CHILD_PROMPT_END";
+        const start = text.indexOf(begin);
+        const finish = text.indexOf(end, start + begin.length);
+        const assignmentId = /assignmentId ([^,]+),/u.exec(text)?.[1];
+        const authorityId = /authorityId ([^,]+),/u.exec(text)?.[1];
+        const participantId = /participantId ([^,]+),/u.exec(text)?.[1];
+        const role = /role (agent|critic),/u.exec(text)?.[1];
+        const proof = /proof ([a-z0-9-]+)/u.exec(text)?.[1];
+        if (start < 0 || finish < 0 || !assignmentId || !authorityId || !participantId || !role || !proof) {
+          send({ id: message.id, error: { code: -32001, message: "invalid agent prompt" } });
+          return;
+        }
+        agentChildPrompt = text.slice(start + begin.length, finish);
+        agentAuthority = { assignmentId, authorityId, participantId, role, proof };
+        send({ id: message.id, result: { turn: { id: agentParentTurnId, status: "inProgress", items: [] } } });
+        setTimeout(() => {
+          send({ method: "item/completed", params: { threadId: agentParentThreadId, turnId: agentParentTurnId, item: {
+            id: "item-e2e-agent-spawn",
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            status: "completed",
+            senderThreadId: agentParentThreadId,
+            receiverThreadIds: [agentChildThreadId],
+            agentsStates: {},
+            model: "gpt-6-astra",
+            prompt: agentChildPrompt
+          } } });
+        }, 10);
+        setTimeout(() => {
+          send({ method: "item/completed", params: { threadId: agentParentThreadId, turnId: agentParentTurnId, item: {
+            id: "item-e2e-agent-wait",
+            type: "collabAgentToolCall",
+            tool: "wait",
+            status: "completed",
+            senderThreadId: agentParentThreadId,
+            receiverThreadIds: [agentChildThreadId],
+            agentsStates: {},
+            model: null,
+            prompt: null
+          } } });
+          send({ id: "tool-e2e-agent-authority", method: "item/tool/call", params: {
+            threadId: agentParentThreadId,
+            turnId: agentParentTurnId,
+            callId: "call-e2e-agent-authority",
+            tool: "farol_agent_authority",
+            arguments: agentAuthority
+          } });
+        }, 400);
+        return;
+      }
       const nonce = /nonce ([a-z0-9-]+)/u.exec(text)?.[1];
       send({ id: message.id, result: { turn: { id: "turn-e2e-parent", status: "inProgress", items: [] } } });
       send({ id: "tool-e2e", method: "item/tool/call", params: { threadId: "thread-e2e-parent", turnId: "turn-e2e-parent", callId: "call-e2e-ping", tool: "farol_next_ping", arguments: { nonce } } });
       return;
     }
+    if (message.method === "thread/read") {
+      if (message.params?.threadId === agentChildThreadId) {
+        send({ id: message.id, result: { thread: {
+          id: agentChildThreadId,
+          parentThreadId: agentParentThreadId,
+          agentRole: "default",
+          source: { subAgent: { thread_spawn: { parent_thread_id: agentParentThreadId, depth: 1, agent_role: "default" } } },
+          status: { type: agentComplete ? "idle" : "active" },
+          turns: [{ id: agentChildTurnId, status: agentComplete ? "completed" : "inProgress", items: [] }]
+        } } });
+        return;
+      }
+      if (message.params?.threadId === agentParentThreadId) {
+        const items = agentChildPrompt === null ? [] : [{
+          id: "item-e2e-agent-spawn",
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "completed",
+          senderThreadId: agentParentThreadId,
+          receiverThreadIds: [agentChildThreadId],
+          agentsStates: {},
+          model: "gpt-6-astra",
+          prompt: agentChildPrompt
+        }];
+        if (agentComplete) {
+          items.push({
+            id: "item-e2e-agent-wait",
+            type: "collabAgentToolCall",
+            tool: "wait",
+            status: "completed",
+            senderThreadId: agentParentThreadId,
+            receiverThreadIds: [agentChildThreadId],
+            agentsStates: {},
+            model: null,
+            prompt: null
+          });
+          items.push({
+            id: "item-e2e-agent-authority",
+            type: "dynamicToolCall",
+            tool: "farol_agent_authority",
+            status: "completed",
+            success: true,
+            arguments: agentAuthority
+          });
+        }
+        send({ id: message.id, result: { thread: {
+          id: agentParentThreadId,
+          parentThreadId: null,
+          agentRole: null,
+          source: { appServer: true },
+          status: { type: agentComplete ? "idle" : "active" },
+          turns: [{ id: agentParentTurnId, status: agentComplete ? "completed" : "inProgress", items }]
+        } } });
+        return;
+      }
+      send({ id: message.id, error: { code: -32002, message: "thread missing" } });
+      return;
+    }
     if (message.id === "tool-e2e" && message.result?.success === true) {
       send({ method: "turn/completed", params: { threadId: "thread-e2e-parent", turn: { id: "turn-e2e-parent", status: "completed", items: [] } } });
+      return;
+    }
+    if (message.id === "tool-e2e-agent-authority" && message.result?.success === true) {
+      agentComplete = true;
+      send({ method: "turn/completed", params: { threadId: agentParentThreadId, turn: { id: agentParentTurnId, status: "completed", items: [] } } });
     }
   });
 } else if (args.slice(0, 4).join(" ") !== "app-server generate-json-schema --experimental --out" || !args[4]) {
@@ -2004,6 +2130,60 @@ async function completeSetup(
         "gpt-6-astra",
       );
     }
+    if (stepId === "verify" && configureComputer && configureHost) {
+      assert.equal(
+        await instance.window.locator("#setup-live-primary").innerText(),
+        "Verify Agent",
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+            "Verified" &&
+          document.querySelector("#setup-live-primary")?.textContent ===
+            "Agent verified",
+      );
+      const bootstrap = await instance.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      const settings = bootstrap.configuration.settings;
+      const proof = settings.nativeHosts.codex.agentVerification;
+      assert.equal(proof.model, "gpt-6-astra");
+      assert.equal(
+        proof.workspaceId,
+        settings.setup.computer.verified.workspaceId,
+      );
+      assert.equal(proof.computerGeneration, settings.computer.generation);
+      assert.equal(proof.authorityRole, "critic");
+      assert.equal(proof.hostRole, "default");
+      assert.equal(proof.boundedRunning, true);
+      assert.equal(proof.modelTurnsSubmitted, 1);
+      assert.equal(proof.fallbackAllowed, false);
+      assert.equal(proof.descendantCount, 0);
+      assert.equal(proof.resultRefProtocol, "codex-app-server");
+      assert.equal(proof.resultRetention, "durable");
+      assert.equal(proof.parentDelivery, "acknowledged");
+      assert.equal(proof.workspaceEnforcement, "not_verified");
+      assert.equal(
+        settings.setup.verify.verified.profile,
+        "codex.native-agent.lineage/1",
+      );
+      assert.match(
+        await instance.window.locator("#setup-live-summary").innerText(),
+        /workspace enforcement remains not verified/iu,
+      );
+      const serializedProof = JSON.stringify(proof);
+      assert.doesNotMatch(
+        serializedProof,
+        /thread-e2e|assignment-|owner-desktop|native-agent-session/iu,
+      );
+      cases.push(
+        "native-codex-agent-lineage-verified",
+        "native-agent-bounded-rejoin",
+        "native-agent-result-delivery-acknowledged",
+        "native-agent-evidence-content-free",
+      );
+    }
     if (capture) {
       await instance.window.screenshot({
         path: path.join(evidenceRoot, screenshot),
@@ -2025,6 +2205,12 @@ async function completeSetup(
       assert.equal(
         await instance.window
           .locator('[data-setup-progress="hosts"].complete')
+          .count(),
+        configureHost ? 1 : 0,
+      );
+      assert.equal(
+        await instance.window
+          .locator('[data-setup-progress="verify"].complete')
           .count(),
         configureHost ? 1 : 0,
       );
@@ -2802,6 +2988,19 @@ try {
     .locator("#computer-feedback")
     .getByText("Computer name saved.", { exact: true })
     .waitFor();
+  const renamedConfiguration = await normal.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(
+    renamedConfiguration.configuration.settings.nativeHosts.codex
+      .agentVerification,
+    null,
+  );
+  assert.equal(
+    renamedConfiguration.configuration.settings.setup.verify.verified,
+    null,
+  );
+  cases.push("native-agent-proof-invalidated-by-computer-generation");
   await normal.window
     .locator("#computer-workspaces")
     .getByText(/not verified/u)

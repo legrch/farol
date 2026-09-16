@@ -50,17 +50,17 @@ export const setupSteps: readonly SetupStep[] = [
     copy: "Select the exact Codex executable Farol Next may start. The app first records the bounded version and App Server contract, then verifies readiness with one explicit gpt-6-astra turn and correlated Farol Next tool call.",
     details: [
       "The live host check disables provider fallback and persists only content-free verification evidence.",
-      "Native Agent creation and a real Consult have not been exercised.",
+      "Native Agent lineage is verified separately after one read-only workspace is ready.",
     ],
   },
   {
     id: "verify",
     eyeline: "Verify",
     title: "Know exactly what is ready",
-    copy: "Readiness is recorded per capability. A workspace counts only after the native read-only check; live ChatGPT, Computer routing, and native hosts remain separate gates.",
+    copy: "Run one bounded native Agent lineage check through Main → Agent → Critic. Farol preserves the applicable TaskGrant, rejoins the same child, and stores content-free delivery evidence.",
     details: [
-      "Ready when shown: local shell runtime and explicitly verified workspace boundary.",
-      "Still separate: live Consult, Next-owned Computer route, and native Agent.",
+      "The check uses exactly one gpt-6-astra model turn with provider fallback disabled.",
+      "Lineage and authority continuity can be verified here; native workspace enforcement and a real Consult remain separate gates.",
     ],
   },
 ];
