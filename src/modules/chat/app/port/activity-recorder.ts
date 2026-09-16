@@ -10,6 +10,7 @@ export type ActivityRecord = Readonly<{
     | "delta_observed"
     | "computer_requested"
     | "computer_completed"
+    | "terminal_persistence_failed"
     | "client_delivery_acknowledged"
     | "client_delivery_failed"
     | "terminal";

@@ -506,6 +506,7 @@ def run(request):
         destination_identity = identity(os.fstat(destination_fd))
         copy_tree(source_fd, destination_fd, {"entries": 0, "bytes": 0})
         os.fchmod(destination_fd, 0o755)
+        destination_identity = identity(os.fstat(destination_fd))
         if digest_tree(destination_fd) != request["artifactSha256"]:
             refuse(EXIT_DIGEST)
         os.fsync(destination_fd)

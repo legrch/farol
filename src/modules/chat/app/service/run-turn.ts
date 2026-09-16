@@ -26,6 +26,7 @@ export type RunTurnCommand = TurnIdentity & Readonly<{ prompt: string }>;
 
 export class RunTurn {
   private readonly inFlight = new Map<string, Promise<Turn>>();
+  private readonly knownTerminals = new Map<string, Turn>();
 
   constructor(
     private readonly provider: ChatProvider,
@@ -44,11 +45,18 @@ export class RunTurn {
       command.turnId,
       command.generation,
     ]);
+    const knownTerminal = this.knownTerminals.get(key);
+    if (knownTerminal) return Promise.resolve(knownTerminal);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
-    const execution = this.executeAdmitted(command).finally(() => {
-      this.inFlight.delete(key);
-    });
+    const execution = this.executeAdmitted(command)
+      .then((turn) => {
+        if (turn.terminal) this.knownTerminals.set(key, turn);
+        return turn;
+      })
+      .finally(() => {
+        this.inFlight.delete(key);
+      });
     this.inFlight.set(key, execution);
     return execution;
   }
@@ -236,8 +244,12 @@ export class RunTurn {
         ? markOutcomeUnknown(previous, result.error.code)
         : failTurn(previous, result.error.code);
       if (!failed.ok) return previous;
-      await this.saveAndReport(failed.value, "terminal");
+      await this.bestEffortSaveAndReport(failed.value, "terminal");
       return failed.value;
+    }
+    if (result.value.terminal) {
+      await this.bestEffortSaveAndReport(result.value, "terminal");
+      return result.value;
     }
     await this.saveAndReport(result.value, activityKind, sequence);
     return result.value;
@@ -289,10 +301,28 @@ export class RunTurn {
     turn: Turn,
     kind: "terminal",
   ): Promise<void> {
+    let persistenceFailed = false;
     try {
       await this.turns.save(turn);
     } catch {
+      persistenceFailed = true;
       // The caller still receives the conservative terminal state in memory.
+    }
+    if (persistenceFailed) {
+      try {
+        await this.activity.record({
+          taskId: turn.identity.taskId,
+          turnId: turn.identity.turnId,
+          generation: turn.identity.generation,
+          at: this.clock.now(),
+          kind: "terminal_persistence_failed",
+          phase: turn.phase,
+          sequence: null,
+          capability: null,
+        });
+      } catch {
+        // Persistence evidence is best effort and cannot alter a known result.
+      }
     }
     try {
       await this.activity.record({

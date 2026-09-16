@@ -5,6 +5,7 @@ import {
   type Result,
 } from "../../src/pkg/kernel/domain/result";
 import type { ChatComputerOutput } from "../../src/modules/chat/app/port/computer-capability";
+import type { ActivityRecord } from "../../src/modules/chat/app/port/activity-recorder";
 import type { ClientEvent } from "../../src/modules/chat/app/port/event-publisher";
 import type {
   ChatProvider,
@@ -488,5 +489,65 @@ describe("Chat failure semantics", () => {
       terminalReason: "provider_outcome_unknown",
     });
     expect(test.prepare).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a known completion when only terminal persistence fails", async () => {
+    const activity: ActivityRecord[] = [];
+    let persisted: Turn | null = null;
+    const turns: TurnRepository = {
+      admit: vi
+        .fn()
+        .mockImplementation(async (turn: Turn) =>
+          persisted
+            ? { status: "existing" as const, turn: persisted }
+            : { status: "admitted" as const, turn },
+        ),
+      save: vi.fn().mockImplementation(async (turn: Turn) => {
+        if (turn.phase === "completed") {
+          throw new Error("terminal persistence unavailable");
+        }
+        persisted = turn;
+      }),
+      get: vi.fn().mockImplementation(async () => persisted),
+    };
+    const provider: ChatProvider = {
+      prepare: vi.fn().mockResolvedValue(
+        sessionFrom(async function* () {
+          yield { kind: "submit_activated" };
+          yield { kind: "accepted" };
+          yield { kind: "delta", sequence: 1, text: "Known result" };
+          yield { kind: "completed" };
+        }),
+      ),
+    };
+    const run = new RunTurn(
+      provider,
+      { execute: vi.fn().mockResolvedValue(exactComputerResult) },
+      turns,
+      { publish: async () => undefined },
+      { record: async (record) => void activity.push(record) },
+      { now: () => 1_000 },
+    );
+
+    await expect(run.execute(command)).resolves.toMatchObject({
+      phase: "completed",
+      terminal: true,
+      terminalReason: "completed",
+    });
+    await expect(run.execute(command)).resolves.toMatchObject({
+      phase: "completed",
+      terminal: true,
+      terminalReason: "completed",
+    });
+    expect(provider.prepare).toHaveBeenCalledTimes(1);
+    expect(activity).toContainEqual(
+      expect.objectContaining({
+        kind: "terminal_persistence_failed",
+        phase: "completed",
+      }),
+    );
+    expect(activity).toContainEqual(
+      expect.objectContaining({ kind: "terminal", phase: "completed" }),
+    );
   });
 });

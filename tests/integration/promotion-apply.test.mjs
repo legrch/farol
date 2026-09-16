@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,58 @@ async function fixture() {
   await fs.mkdir(applications, { recursive: true, mode: 0o755 });
   await fs.chmod(home, 0o700);
   return { root, source, home, applications };
+}
+
+async function runWithReceiptFailure({ home, source, artifactSha256 }) {
+  const helperPath = path.join(process.cwd(), "tooling", "promotion-apply.py");
+  const program = `
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("farol_promotion_apply", sys.argv[1])
+helper = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(helper)
+
+def fail_receipt(_parent_fd, _payload):
+    helper.refuse(helper.EXIT_RECEIPT)
+
+helper.write_receipt = fail_receipt
+request = {
+    "home": sys.argv[2],
+    "source": sys.argv[3],
+    "artifactSha256": sys.argv[4],
+    "receiptBytes": b'{"operation":"applied"}\\n',
+    "testHook": False,
+}
+try:
+    helper.run(request)
+except helper.Refusal as error:
+    raise SystemExit(error.status)
+raise SystemExit(0)
+`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "/usr/bin/python3",
+      [
+        "-I",
+        "-S",
+        "-B",
+        "-c",
+        program,
+        helperPath,
+        home,
+        source,
+        artifactSha256,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const stderr = [];
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      resolve({ code, signal, stderr: Buffer.concat(stderr).toString("utf8") });
+    });
+  });
 }
 
 describe("descriptor-bound promotion apply", () => {
@@ -82,6 +135,42 @@ describe("descriptor-bound promotion apply", () => {
     await expect(
       fs.readFile(path.join(destination, "sentinel"), "utf8"),
     ).resolves.toBe("keep");
+  });
+
+  it("removes its destination after a post-copy digest refusal", async () => {
+    const { source, home, applications } = await fixture();
+    const destination = path.join(applications, "Farol Next Preview.app");
+    const receipt = `${destination}.receipt.json`;
+
+    await expect(
+      runPromotionApply({
+        home,
+        source,
+        artifactSha256: "0".repeat(64),
+        receiptText: '{"operation":"applied"}\n',
+      }),
+    ).rejects.toThrow("PROMOTION_APPLY_REFUSED");
+    await expect(fs.lstat(destination)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("removes its destination after receipt publication fails", async () => {
+    const { source, home, applications } = await fixture();
+    const destination = path.join(applications, "Farol Next Preview.app");
+    const receipt = `${destination}.receipt.json`;
+    const outcome = await runWithReceiptFailure({
+      home,
+      source,
+      artifactSha256: await treeDigest(source),
+    });
+
+    expect(outcome).toEqual({ code: 75, signal: null, stderr: "" });
+    await expect(fs.lstat(destination)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.lstat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("attests the helper before it can mutate Applications", async () => {

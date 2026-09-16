@@ -19,6 +19,7 @@ import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
   containWindowOpenFailure,
   presentationAction,
+  WindowOpenCoordinator,
   windowAllClosedAction,
 } from "./lifecycle-policy";
 import {
@@ -118,7 +119,7 @@ let runtimeStopping = false;
 let section: Section = "browser";
 let selectedTaskId: string = demoTasks[0].taskId;
 let setupOpen = true;
-let windowOpening: Promise<void> | null = null;
+const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
 const taskSurfaceFailures = new Map<string, string>();
@@ -630,15 +631,11 @@ function revealWindow(): void {
 }
 
 function ensureWindow(): Promise<void> {
-  if (window && !window.isDestroyed()) {
-    revealWindow();
-    return Promise.resolve();
-  }
-  if (windowOpening) return windowOpening;
-  windowOpening = createWindow().finally(() => {
-    windowOpening = null;
+  return windowOpenCoordinator.ensure({
+    hasWindow: () => window !== null && !window.isDestroyed(),
+    reveal: revealWindow,
+    open: createWindow,
   });
-  return windowOpening;
 }
 
 function recoverWindowOpenFailure(): void {

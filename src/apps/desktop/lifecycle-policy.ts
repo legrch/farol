@@ -5,6 +5,30 @@ export type PresentationAction =
   "show-and-focus" | "show-inactive" | "remain-hidden";
 export type WindowOpenOutcome = "opened" | "failed";
 
+type WindowOpenOptions = Readonly<{
+  hasWindow: () => boolean;
+  reveal: () => void;
+  open: () => Promise<void>;
+}>;
+
+export class WindowOpenCoordinator {
+  private opening: Promise<void> | null = null;
+
+  ensure(options: WindowOpenOptions): Promise<void> {
+    if (this.opening) return this.opening;
+    if (options.hasWindow()) {
+      options.reveal();
+      return Promise.resolve();
+    }
+    const opening = Promise.resolve().then(options.open);
+    const tracked = opening.finally(() => {
+      if (this.opening === tracked) this.opening = null;
+    });
+    this.opening = tracked;
+    return tracked;
+  }
+}
+
 export function windowAllClosedAction(
   platform: NodeJS.Platform,
 ): WindowAllClosedAction {
