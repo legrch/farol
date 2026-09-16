@@ -371,6 +371,74 @@ describe("delegated execution authority", () => {
     });
   });
 
+  it("DAC-06 keeps an ancestor exclusion when delegation narrows to an exact descendant", () => {
+    const agent = delegateParticipantAuthority(mainParticipant(), {
+      participantId: "agent-excluded-parent",
+      role: "agent",
+      mutationOwnership: "task",
+      narrowing: {
+        workspaces: admission.workspaces,
+        capabilities: admission.capabilities,
+        network: "none",
+        commands: "verification",
+        excludedPaths: [
+          {
+            workspaceId: "farol",
+            path: "/workspace/farol/private",
+          },
+        ],
+      },
+    });
+    if (!agent.ok) throw new Error(agent.error.code);
+
+    const critic = delegateParticipantAuthority(agent.value, {
+      participantId: "critic-excluded-descendant",
+      role: "critic",
+      mutationOwnership: "none",
+      narrowing: {
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "exact",
+            root: "/workspace/farol",
+            paths: ["/workspace/farol/private/secret.txt"],
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.read"],
+        network: "none",
+        commands: "none",
+      },
+    });
+    if (!critic.ok) throw new Error(critic.error.code);
+
+    expect(critic.value.grant.excludedPaths).toEqual([
+      {
+        workspaceId: "farol",
+        path: "/workspace/farol/private",
+        restrictionSource: "owner-restriction",
+      },
+    ]);
+    expect(
+      authorizeTaskAction(
+        critic.value,
+        action({
+          kind: "workspace.read",
+          workspaceId: "farol",
+          path: "/workspace/farol/private/secret.txt",
+        }),
+        1_000,
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: "AUTHORITY_PATH_DENIED",
+        source: "owner-restriction",
+        retry: "never",
+      },
+    });
+  });
+
   it("DAC-07 intersects native host authority instead of upgrading it to Computer authority", () => {
     const nativeHost: NativeHostAuthority = {
       hostTaskId: "host-task-a",
