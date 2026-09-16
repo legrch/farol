@@ -1594,14 +1594,14 @@ try {
     (state) =>
       state.deltaCount === 2 &&
       state.answer.includes(
-        "Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1",
+        "Fixture read returned 28 bytes bound to turn-atlantic-1-computer-1",
       ) &&
       !state.terminal,
     "tool result resumed exact turn",
   );
   assert.match(
     resumed.answer,
-    /Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1/u,
+    /Fixture read returned 28 bytes bound to turn-atlantic-1-computer-1/u,
   );
 
   await normal.window.locator('[data-section="browser"]').click();
@@ -1644,7 +1644,7 @@ try {
   );
   assert.match(
     retained.answer,
-    /Fixture result Fixture workspace is bound to turn-atlantic-1-computer-1/u,
+    /Fixture read returned 28 bytes bound to turn-atlantic-1-computer-1/u,
   );
   await normal.window.locator("#finish-demo").click();
   await waitForTask(
@@ -1661,7 +1661,7 @@ try {
     .innerText();
   assert.doesNotMatch(activityText, /Synthetic local preview fixture/u);
   assert.doesNotMatch(activityText, /Checking the isolated fixture/u);
-  assert.doesNotMatch(activityText, /Fixture result|computer-1/u);
+  assert.doesNotMatch(activityText, /Fixture result|Fixture read|computer-1/u);
   assert.doesNotMatch(activityText, /Bearer|token|\/private\//u);
   assert.doesNotMatch(activityText, /task-atlantic|turn-atlantic/u);
   await normal.window
