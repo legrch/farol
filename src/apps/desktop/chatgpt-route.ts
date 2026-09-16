@@ -4,6 +4,7 @@ import {
   type Session,
   type WebContents,
 } from "electron";
+import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import {
   CHATGPT_PARTITION,
@@ -15,6 +16,24 @@ import {
 const probeSchema = z.strictObject({
   composerVisible: z.boolean(),
   signInVisible: z.boolean(),
+});
+
+const preparedTaskSchema = z.strictObject({
+  ready: z.boolean(),
+  baselineAssistantCount: z.number().int().nonnegative(),
+  baselineUserCount: z.number().int().nonnegative(),
+});
+
+const activatedTaskSchema = z.strictObject({ activated: z.boolean() });
+
+const taskProbeSchema = z.strictObject({
+  assistantCount: z.number().int().nonnegative(),
+  assistantCharacters: z.number().int().nonnegative(),
+  userCount: z.number().int().nonnegative(),
+  busy: z.boolean(),
+  sendVisible: z.boolean(),
+  signInVisible: z.boolean(),
+  errorVisible: z.boolean(),
 });
 
 const readinessProbe = `(() => {
@@ -39,14 +58,133 @@ const readinessProbe = `(() => {
   return { composerVisible: composer, signInVisible: explicitSignIn || labelledSignIn };
 })()`;
 
+function prepareTaskScript(prompt: string): string {
+  return `(() => {
+    const prompt = ${JSON.stringify(prompt)};
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+    };
+    const composer = [
+      document.querySelector("#prompt-textarea"),
+      document.querySelector('[data-testid="prompt-textarea"]'),
+      document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+    ].find(visible);
+    const baselineAssistantCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
+    const baselineUserCount = document.querySelectorAll('[data-message-author-role="user"]').length;
+    if (!(composer instanceof HTMLElement)) {
+      return { ready: false, baselineAssistantCount, baselineUserCount };
+    }
+    composer.focus();
+    if (composer instanceof HTMLTextAreaElement) {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+      if (!setter) return { ready: false, baselineAssistantCount, baselineUserCount };
+      setter.call(composer, prompt);
+    } else {
+      composer.replaceChildren(document.createTextNode(prompt));
+    }
+    composer.dispatchEvent(new InputEvent("input", {
+      bubbles: true,
+      data: prompt,
+      inputType: "insertText"
+    }));
+    return { ready: true, baselineAssistantCount, baselineUserCount };
+  })()`;
+}
+
+const activateTaskScript = `(() => {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+  };
+  const send = [
+    document.querySelector('[data-testid="send-button"]'),
+    document.querySelector('button[aria-label="Send prompt"]'),
+    document.querySelector('button[aria-label="Send message"]')
+  ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
+  if (!(send instanceof HTMLButtonElement)) return { activated: false };
+  send.click();
+  return { activated: true };
+})()`;
+
+function taskProbeScript(baselineAssistantCount: number): string {
+  return `(() => {
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+    };
+    const assistants = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
+    const current = assistants.slice(${baselineAssistantCount}).at(-1);
+    const explicitSignIn = [
+      document.querySelector('[data-testid="login-button"]'),
+      document.querySelector('a[href*="/auth/login"]'),
+      document.querySelector('button[name="login"]')
+    ].some(visible);
+    const labelledSignIn = [...document.querySelectorAll("a,button")]
+      .some((element) => visible(element) && /^(log in|sign in|sign up)$/iu.test((element.textContent || "").trim()));
+    const busy = [
+      document.querySelector('[data-testid="stop-button"]'),
+      document.querySelector('button[aria-label="Stop generating"]'),
+      document.querySelector('button[aria-label="Stop"]')
+    ].some(visible);
+    const sendVisible = [
+      document.querySelector('[data-testid="send-button"]'),
+      document.querySelector('button[aria-label="Send prompt"]'),
+      document.querySelector('button[aria-label="Send message"]')
+    ].some(visible);
+    const errorVisible = [
+      document.querySelector('[data-testid="conversation-turn-error"]'),
+      document.querySelector('[data-testid="network-error"]')
+    ].some(visible);
+    return {
+      assistantCount: assistants.length,
+      assistantCharacters: current instanceof HTMLElement ? current.innerText.length : 0,
+      userCount: document.querySelectorAll('[data-message-author-role="user"]').length,
+      busy,
+      sendVisible,
+      signInVisible: explicitSignIn || labelledSignIn,
+      errorVisible
+    };
+  })()`;
+}
+
 export type ChatGptRouteOptions = Readonly<{
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
+  taskTimeoutMs?: number;
+  taskPollMs?: number;
 }>;
 
 export type ChatGptOpenResult = Readonly<{
   status: "opened" | "unreachable";
+}>;
+
+export type ChatGptReadonlyTaskResult = Readonly<{
+  state:
+    | "completed"
+    | "not_authenticated"
+    | "failed_before_submit"
+    | "outcome_unknown";
+  code:
+    | "CHATGPT_TASK_IN_PROGRESS"
+    | "CHATGPT_PAGE_UNREACHABLE"
+    | "CHATGPT_SIGN_IN_REQUIRED"
+    | "CHATGPT_UI_UNRECOGNIZED"
+    | "CHATGPT_COMPOSER_UNAVAILABLE"
+    | "CHATGPT_SUBMIT_UNAVAILABLE"
+    | "CHATGPT_TASK_PAGE_LOST"
+    | "CHATGPT_TASK_ERROR"
+    | "CHATGPT_TASK_TIMEOUT"
+    | null;
+  deltaCount: number;
+  observedCharacters: number;
 }>;
 
 export class ChatGptRoute {
@@ -55,6 +193,7 @@ export class ChatGptRoute {
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
   private disposing = false;
+  private taskInFlight = false;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     if (
@@ -147,6 +286,193 @@ export class ChatGptRoute {
       return classifyChatGptPage({ load: "loaded", ...parsed.data });
     } catch {
       return { state: "unsupported", code: "CHATGPT_UI_UNRECOGNIZED" };
+    }
+  }
+
+  async runReadonlyTask(prompt: string): Promise<ChatGptReadonlyTaskResult> {
+    if (this.taskInFlight) {
+      return {
+        state: "failed_before_submit",
+        code: "CHATGPT_TASK_IN_PROGRESS",
+        deltaCount: 0,
+        observedCharacters: 0,
+      };
+    }
+    this.taskInFlight = true;
+    let submitted = false;
+    let deltaCount = 0;
+    let observedCharacters = 0;
+    try {
+      const opened = await this.open();
+      if (opened.status !== "opened") {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_PAGE_UNREACHABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+      const readiness = await this.observe();
+      if (readiness.state === "signed_out") {
+        return {
+          state: "not_authenticated",
+          code: "CHATGPT_SIGN_IN_REQUIRED",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+      if (readiness.state !== "authenticated") {
+        return {
+          state: "failed_before_submit",
+          code:
+            readiness.code === "CHATGPT_PAGE_UNREACHABLE"
+              ? "CHATGPT_PAGE_UNREACHABLE"
+              : "CHATGPT_UI_UNRECOGNIZED",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+      const candidate = this.routeWindow;
+      if (!candidate || candidate.isDestroyed()) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_COMPOSER_UNAVAILABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+      const prepared = preparedTaskSchema.safeParse(
+        await candidate.webContents.executeJavaScript(
+          prepareTaskScript(prompt),
+          true,
+        ),
+      );
+      if (!prepared.success || !prepared.data.ready) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_COMPOSER_UNAVAILABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+      const submitDeadline = Date.now() + 5_000;
+      while (Date.now() < submitDeadline) {
+        const activated = activatedTaskSchema.safeParse(
+          await candidate.webContents.executeJavaScript(
+            activateTaskScript,
+            true,
+          ),
+        );
+        if (activated.success && activated.data.activated) {
+          submitted = true;
+          break;
+        }
+        await delay(100);
+      }
+      if (!submitted) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_SUBMIT_UNAVAILABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+
+      let accepted = false;
+      let stablePolls = 0;
+      const pollMs = this.options.taskPollMs ?? 250;
+      const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+      while (Date.now() < deadline) {
+        const active = this.routeWindow;
+        if (!active || active !== candidate || active.isDestroyed()) {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_PAGE_LOST",
+            deltaCount,
+            observedCharacters,
+          };
+        }
+        const currentUrl = active.webContents.getURL();
+        if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_PAGE_LOST",
+            deltaCount,
+            observedCharacters,
+          };
+        }
+        const probe = taskProbeSchema.safeParse(
+          await active.webContents.executeJavaScript(
+            taskProbeScript(prepared.data.baselineAssistantCount),
+            true,
+          ),
+        );
+        if (!probe.success) {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_ERROR",
+            deltaCount,
+            observedCharacters,
+          };
+        }
+        if (probe.data.signInVisible || probe.data.errorVisible) {
+          return {
+            state: "outcome_unknown",
+            code: probe.data.signInVisible
+              ? "CHATGPT_TASK_PAGE_LOST"
+              : "CHATGPT_TASK_ERROR",
+            deltaCount,
+            observedCharacters,
+          };
+        }
+        accepted ||=
+          probe.data.userCount > prepared.data.baselineUserCount ||
+          probe.data.assistantCount > prepared.data.baselineAssistantCount ||
+          probe.data.busy;
+        if (probe.data.assistantCharacters > observedCharacters) {
+          observedCharacters = probe.data.assistantCharacters;
+          deltaCount += 1;
+          stablePolls = 0;
+        } else if (
+          accepted &&
+          observedCharacters > 0 &&
+          !probe.data.busy &&
+          probe.data.sendVisible
+        ) {
+          stablePolls += 1;
+        } else {
+          stablePolls = 0;
+        }
+        if (
+          accepted &&
+          observedCharacters > 0 &&
+          probe.data.sendVisible &&
+          stablePolls >= 3
+        ) {
+          return {
+            state: "completed",
+            code: null,
+            deltaCount,
+            observedCharacters,
+          };
+        }
+        await delay(pollMs);
+      }
+      return {
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+        deltaCount,
+        observedCharacters,
+      };
+    } catch {
+      return {
+        state: submitted ? "outcome_unknown" : "failed_before_submit",
+        code: submitted ? "CHATGPT_TASK_ERROR" : "CHATGPT_SUBMIT_UNAVAILABLE",
+        deltaCount,
+        observedCharacters,
+      };
+    } finally {
+      this.taskInFlight = false;
     }
   }
 

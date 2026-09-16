@@ -63,6 +63,7 @@ const chatGptObservationSchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("signed_out") }),
   z.strictObject({ state: z.literal("unreachable") }),
   z.strictObject({ state: z.literal("unsupported") }),
+  z.strictObject({ state: z.literal("outcome_unknown") }),
 ]);
 
 function settingsError(error: unknown): ProductConfigurationSnapshot {
@@ -558,6 +559,18 @@ export class ProductConfigurationService {
             needsAction: null,
             unavailable:
               "The ChatGPT page loaded, but this build could not verify its composer.",
+          };
+          break;
+        case "outcome_unknown":
+          chatgpt = {
+            ...common,
+            configured: true,
+            reachable: "unknown",
+            verified: null,
+            needsAction:
+              "Inspect the isolated ChatGPT window before starting another task.",
+            unavailable: null,
+            outcomeUnknown: true,
           };
           break;
       }

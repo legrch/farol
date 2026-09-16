@@ -67,6 +67,7 @@ import {
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
 import { CHATGPT_HOME, CHATGPT_PARTITION } from "./chatgpt-page-policy";
+import { buildChatGptReadonlyTaskPrompt } from "./chatgpt-readonly-task";
 import { ChatGptRoute } from "./chatgpt-route";
 
 const directory = __dirname;
@@ -152,6 +153,7 @@ let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
 let chatGptRoute: ChatGptRoute | null = null;
+let chatGptTaskAdmission = false;
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
@@ -256,6 +258,10 @@ function workspaceDeniedPaths(
 
 async function selectedWorkspaceFile(
   workspace: ApprovedProductWorkspace,
+  labels: Readonly<{ title: string; buttonLabel: string }> = {
+    title: "Choose a harmless text file to verify",
+    buttonLabel: "Verify Read Access",
+  },
 ): Promise<string | "cancelled" | "invalid"> {
   let selected: string | undefined;
   const testFile =
@@ -267,8 +273,8 @@ async function selectedWorkspaceFile(
   } else {
     if (!window) return "invalid";
     const result = await dialog.showOpenDialog(window, {
-      title: "Choose a harmless text file to verify",
-      buttonLabel: "Verify Read Access",
+      title: labels.title,
+      buttonLabel: labels.buttonLabel,
       defaultPath: workspace.root,
       properties: ["openFile"],
       securityScopedBookmarks: false,
@@ -359,6 +365,107 @@ async function configureProduct(
         ...recorded,
         evidence: { kind: "chatgpt.readiness", ...observed },
       });
+    }
+    case "chatgpt.run-readonly-task": {
+      if (!chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      chatGptTaskAdmission = true;
+      try {
+        const snapshot = configuration.snapshot();
+        if (snapshot.status !== "ready") {
+          return configurationFailure("SETTINGS_UNAVAILABLE");
+        }
+        if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
+          return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+        }
+        const workspace = snapshot.settings.computer.workspaces.find(
+          (candidate) => candidate.workspaceId === command.workspaceId,
+        );
+        const computerVerification = snapshot.settings.setup.computer.verified;
+        if (
+          !workspace ||
+          computerVerification?.workspaceId !== workspace.workspaceId ||
+          computerVerification.configRevision !==
+            snapshot.settings.computer.generation
+        ) {
+          return configurationFailure("WORKSPACE_NOT_FOUND");
+        }
+        const relativePath = await selectedWorkspaceFile(workspace, {
+          title: "Choose a text file for the read-only ChatGPT task",
+          buttonLabel: "Use Selected File",
+        });
+        if (relativePath === "cancelled") {
+          return configurationFailure("WORKSPACE_FILE_PICKER_CANCELLED");
+        }
+        if (relativePath === "invalid") {
+          return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
+        }
+        const workspaceResult = await nativeWorkspace.execute({
+          workspace: {
+            workspaceId: workspace.workspaceId,
+            root: workspace.root,
+            deniedPaths: workspaceDeniedPaths(workspace),
+          },
+          operation: { kind: "workspace.read", relativePath },
+        });
+        if (!workspaceResult.ok) {
+          return workspaceReadFailure(workspaceResult.error.code);
+        }
+        if (workspaceResult.value.kind !== "workspace.text") {
+          return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+        }
+        const prompt = buildChatGptReadonlyTaskPrompt({
+          workspaceLabel: workspace.label,
+          relativePath,
+          text: workspaceResult.value.text,
+        });
+        const task = await chatGptRoute.runReadonlyTask(prompt.text);
+        if (task.code === "CHATGPT_TASK_IN_PROGRESS") {
+          return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+        }
+        const observation =
+          task.state === "completed"
+            ? {
+                state: "authenticated" as const,
+                profile: "chatgpt.next-partition/1",
+                runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+                buildId: buildIdentity.buildId,
+                protocol: "chatgpt-page-readonly-task/1",
+              }
+            : task.state === "not_authenticated"
+              ? { state: "signed_out" as const }
+              : task.state === "outcome_unknown"
+                ? { state: "outcome_unknown" as const }
+                : task.code === "CHATGPT_PAGE_UNREACHABLE"
+                  ? { state: "unreachable" as const }
+                  : { state: "unsupported" as const };
+        const recorded =
+          await configuration.recordChatGptObservation(observation);
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        return ProductConfigurationResultSchema.parse({
+          ...recorded,
+          evidence: {
+            kind: "chatgpt.readonly-task",
+            state: task.state,
+            code: task.code,
+            workspaceId: workspace.workspaceId,
+            relativePath,
+            bytes: workspaceResult.value.bytes,
+            contextCharacters: prompt.contextCharacters,
+            contextTruncated: prompt.contextTruncated,
+            deltaCount: task.deltaCount,
+            observedCharacters: task.observedCharacters,
+          },
+        });
+      } finally {
+        chatGptTaskAdmission = false;
+      }
     }
     case "general.update":
       return ProductConfigurationResultSchema.parse(
@@ -1262,6 +1369,9 @@ async function main(): Promise<void> {
     initialUrl: chatGptUrl,
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
+    ...(process.env.FAROL_NEXT_E2E === "1"
+      ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
+      : {}),
   });
   const configured = configuration.snapshot();
   if (configured.status === "ready") {

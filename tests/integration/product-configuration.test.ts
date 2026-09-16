@@ -356,4 +356,43 @@ describe("Farol Next product configuration", () => {
     });
     expect(saved).not.toMatch(/cookie|token|conversation|prompt|answer/iu);
   });
+
+  it("persists an outcome-unknown ChatGPT task without permitting a blind green retry", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+
+    const result = await service.recordChatGptObservation({
+      state: "outcome_unknown",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          setup: {
+            chatgpt: {
+              configured: true,
+              reachable: "unknown",
+              verified: null,
+              outcomeUnknown: true,
+              needsAction:
+                "Inspect the isolated ChatGPT window before starting another task.",
+            },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject(result.snapshot);
+  });
 });

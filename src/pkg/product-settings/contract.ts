@@ -144,6 +144,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
   z.strictObject({
+    kind: z.literal("chatgpt.run-readonly-task"),
+    workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
     kind: z.literal("computer.rename"),
     name: z.string().trim().min(1).max(80),
   }),
@@ -189,6 +193,39 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
       .nullable(),
   }),
   z.strictObject({
+    kind: z.literal("chatgpt.readonly-task"),
+    state: z.enum([
+      "completed",
+      "not_authenticated",
+      "failed_before_submit",
+      "outcome_unknown",
+    ]),
+    code: z
+      .enum([
+        "CHATGPT_TASK_IN_PROGRESS",
+        "CHATGPT_PAGE_UNREACHABLE",
+        "CHATGPT_SIGN_IN_REQUIRED",
+        "CHATGPT_UI_UNRECOGNIZED",
+        "CHATGPT_COMPOSER_UNAVAILABLE",
+        "CHATGPT_SUBMIT_UNAVAILABLE",
+        "CHATGPT_TASK_PAGE_LOST",
+        "CHATGPT_TASK_ERROR",
+        "CHATGPT_TASK_TIMEOUT",
+      ])
+      .nullable(),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductRelativePathSchema,
+    bytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(256 * 1_024),
+    contextCharacters: z.number().int().nonnegative().max(24_000),
+    contextTruncated: z.boolean(),
+    deltaCount: z.number().int().nonnegative(),
+    observedCharacters: z.number().int().nonnegative(),
+  }),
+  z.strictObject({
     kind: z.literal("computer.workspace-read"),
     workspaceId: IdentifierSchema,
     relativePath: ProductRelativePathSchema,
@@ -215,6 +252,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
       "CHATGPT_ROUTE_UNAVAILABLE",
+      "CHATGPT_TASK_IN_PROGRESS",
+      "CHATGPT_TASK_REQUIRES_REVIEW",
       "WORKSPACE_NOT_FOUND",
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_SELECTION_INVALID",

@@ -657,7 +657,10 @@ async function configureProduct(
   ) {
     workspaceEvidence = null;
   }
-  settingsFeedback = "Saving and reading back…";
+  settingsFeedback =
+    command.kind === "chatgpt.run-readonly-task"
+      ? "Reading the selected file and waiting for one ChatGPT result…"
+      : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -686,6 +689,7 @@ async function configureProduct(
     return false;
   }
   const evidence = parsed.data.evidence;
+  let evidenceError = false;
   if (evidence?.kind === "computer.workspace-read") {
     workspaceEvidence = evidence;
     settingsFeedback = `Read ${evidence.bytes} bytes from ${evidence.relativePath}. Nothing from the file was persisted.`;
@@ -698,10 +702,20 @@ async function configureProduct(
           : evidence.state === "unreachable"
             ? "The isolated ChatGPT page could not be reached."
             : "ChatGPT loaded, but its composer could not be verified.";
+  } else if (evidence?.kind === "chatgpt.readonly-task") {
+    evidenceError = evidence.state !== "completed";
+    settingsFeedback =
+      evidence.state === "completed"
+        ? `Read-only task completed from ${evidence.relativePath} after ${evidence.deltaCount} incremental update${evidence.deltaCount === 1 ? "" : "s"}. File and answer text were not persisted.`
+        : evidence.state === "outcome_unknown"
+          ? `Outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
+          : evidence.state === "not_authenticated"
+            ? "The isolated ChatGPT session needs sign-in before this task can start."
+            : `Task not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
   } else {
     settingsFeedback = successMessage;
   }
-  settingsFeedbackError = false;
+  settingsFeedbackError = evidenceError;
   if (
     command.kind === "general.update" &&
     bootstrap.configuration.status === "ready"
@@ -978,7 +992,27 @@ function renderSettings(): void {
             "ChatGPT connection checked.",
           );
         });
-        actions.append(open, verify);
+        const task = document.createElement("button");
+        task.type = "button";
+        task.textContent = "Run read-only task…";
+        const workspaceId = settings.setup.computer.verified?.workspaceId;
+        task.disabled =
+          !state.verified || workspaceId == null || state.outcomeUnknown;
+        task.title = state.outcomeUnknown
+          ? "Inspect the existing ChatGPT outcome before another task"
+          : !state.verified
+            ? "Verify ChatGPT first"
+            : workspaceId == null
+              ? "Verify a read-only workspace first"
+              : "Choose one approved text file and summarize it in ChatGPT";
+        task.addEventListener("click", () => {
+          if (workspaceId == null) return;
+          void configureProduct(
+            { kind: "chatgpt.run-readonly-task", workspaceId },
+            "Read-only ChatGPT task finished.",
+          );
+        });
+        actions.append(open, verify, task);
         row.append(actions);
       }
       return row;

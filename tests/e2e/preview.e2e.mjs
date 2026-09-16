@@ -593,24 +593,36 @@ async function startChatGptFixture() {
     });
     response.end(`<!doctype html>
       <html><head><meta charset="utf-8"><title>ChatGPT readiness fixture</title>
-      <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}button,#prompt-textarea{min-width:280px;min-height:44px}</style></head>
+      <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}button,#prompt-textarea{min-width:280px;min-height:44px}.message{white-space:pre-wrap;margin:18px 0}</style></head>
       <body>
         <button data-testid="login-button" type="button">Log in</button>
         <button data-testid="popup-button" type="button">Open login popup</button>
         <button data-testid="expire-button" type="button" hidden>Expire session</button>
         <div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message" hidden></div>
+        <button data-testid="send-button" type="button" disabled hidden>Send</button>
+        <button data-testid="stop-button" type="button" hidden>Stop</button>
+        <section id="conversation"></section>
         <script>
           const login = document.querySelector('[data-testid="login-button"]');
           const popup = document.querySelector('[data-testid="popup-button"]');
           const expire = document.querySelector('[data-testid="expire-button"]');
           const composer = document.querySelector('#prompt-textarea');
+          const send = document.querySelector('[data-testid="send-button"]');
+          const stop = document.querySelector('[data-testid="stop-button"]');
+          const conversation = document.querySelector('#conversation');
+          window.__farolTaskProgress = [];
+          window.__farolSubmitCount = 0;
           const render = () => {
             const authenticated = localStorage.getItem('farol-next-e2e-authenticated') === '1';
             login.hidden = authenticated;
             expire.hidden = !authenticated;
             composer.hidden = !authenticated;
+            send.hidden = !authenticated;
           };
           popup.addEventListener('click', () => window.open('/chatgpt-popup', 'chatgpt-auth'));
+          composer.addEventListener('input', () => {
+            send.disabled = composer.textContent.trim().length === 0;
+          });
           login.addEventListener('click', () => {
             localStorage.setItem('farol-next-e2e-authenticated', '1');
             render();
@@ -618,6 +630,38 @@ async function startChatGptFixture() {
           expire.addEventListener('click', () => {
             localStorage.removeItem('farol-next-e2e-authenticated');
             render();
+          });
+          send.addEventListener('click', () => {
+            if (send.disabled) return;
+            window.__farolSubmitCount += 1;
+            send.disabled = true;
+            send.hidden = true;
+            const user = document.createElement('article');
+            user.className = 'message';
+            user.dataset.messageAuthorRole = 'user';
+            user.textContent = composer.textContent;
+            const assistant = document.createElement('article');
+            assistant.className = 'message';
+            assistant.dataset.messageAuthorRole = 'assistant';
+            conversation.append(user, assistant);
+            composer.textContent = '';
+            stop.hidden = false;
+            const chunks = [
+              'The selected file reports a bounded workspace verification. ',
+              'It contains one concrete status line. ',
+              'Action: keep the read-only boundary in place.'
+            ];
+            chunks.forEach((chunk, index) => {
+              setTimeout(() => {
+                assistant.textContent += chunk;
+                window.__farolTaskProgress.push(assistant.textContent.length);
+                if (index === chunks.length - 1) {
+                  stop.hidden = true;
+                  send.hidden = false;
+                  send.disabled = false;
+                }
+              }, 150 * (index + 1));
+            });
           });
           render();
         </script>
@@ -2252,6 +2296,45 @@ try {
     await normal.window.locator("#settings-list").innerText(),
     /local\.farol\.next\.preview/u,
   );
+  const readOnlyTaskWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Run read-only task…", exact: true })
+    .evaluate((button) => {
+      button.click();
+      button.click();
+    });
+  const readOnlyTaskPage = await readOnlyTaskWindow;
+  await readOnlyTaskPage.waitForURL(normal.chatGptFixture.url);
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText(
+      /Read-only task completed from README\.md after \d+ incremental updates/u,
+    )
+    .waitFor({ timeout: 10_000 });
+  const taskProgress = await readOnlyTaskPage.evaluate(
+    () => window.__farolTaskProgress,
+  );
+  assert.ok(Array.isArray(taskProgress) && taskProgress.length >= 2);
+  assert.ok(
+    taskProgress.every(
+      (value, index) => index === 0 || value > taskProgress[index - 1],
+    ),
+  );
+  assert.equal(
+    await readOnlyTaskPage.evaluate(() => window.__farolSubmitCount),
+    1,
+  );
+  await readOnlyTaskPage.close();
+  await waitForWindowCount(normal.application, 1);
+  await waitForShellVisibility(
+    normal.application,
+    normal.windowMode === "secondary-visible",
+    normal.expectedTaskViewCount,
+  );
+  cases.push("chatgpt-readonly-task-incremental-result");
   await normal.window.locator("#computer-name").fill("Owner Test Mac");
   await normal.window.locator("#save-computer-name").click();
   await normal.window
