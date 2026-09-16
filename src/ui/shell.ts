@@ -560,11 +560,11 @@ function renderSettings(): void {
     ["Typeface", "Geist 1.7.2 · SIL OFL 1.1 · system fallback"],
     [
       "Task authority",
-      "Fixture-only · delegated TaskGrant continuity is an N2 contract, not an active capability",
+      "Contract-tested · Main Turn → Agent → Critic continuity with explicit owner narrowing",
     ],
     [
       "Native access",
-      "Filesystem unavailable · Agent unavailable · live provider unavailable",
+      "Product runtime uses a fixture · read-only MCP verified separately · Agent and live provider unavailable",
     ],
   ];
   const list = required<HTMLDListElement>("#settings-list");

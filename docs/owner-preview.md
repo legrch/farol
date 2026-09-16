@@ -49,8 +49,9 @@ is not evidence about the packaged candidate.
   Rail sidebar and its 72 px rail; below 980 px it opens the full sidebar as an
   overlay. `Command+K` opens the quick switcher. Native task pages are hidden while a
   shell overlay or Setup is open so the overlay receives clicks, Escape, and focus.
-- The Settings authority row is a forward contract only: delegated TaskGrant
-  continuity belongs to N2 and is not an implemented native Computer or Agent claim.
+- The Settings authority row reports the contract-tested TaskGrant continuity core.
+  It is not a claim that this product preview selected the native Computer boundary
+  or admitted a native Agent.
 
 On macOS, closing the window leaves this preview application and its in-memory local
 runtime running. Launching the same exact build again or clicking its Dock icon

@@ -10,7 +10,7 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 - one Electron utility process with an OS-allocated loopback HTTP/SSE endpoint,
   task-scoped read capabilities and a separate main-process control capability;
 - two independent scripted local-provider sessions;
-- one bounded `fixture.inspect` Computer round-trip that returns to the exact
+- one bounded typed `workspace.read` fixture round-trip that returns to the exact
   owner/session/task/Turn/generation/call;
 - one mandatory five-step first-run Setup journey, available again from Settings,
   which reports every preview-only or unavailable integration explicitly;
@@ -18,11 +18,20 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
   shape-and-text task signals, a 216 px sidebar / 72 px rail, and packaged Geist;
 - content-free Activity and explicit provider/runtime failure states.
 
-The provider and Computer executor are labelled local fixtures. Native filesystem
-access, a live provider, MCP/host registration and native Agent creation are not
-implemented or claimed. Agent app/domain one-child semantics are covered with an
-in-memory host double, not a native child. Delegated TaskGrant continuity is an N2
-architecture contract and is explicitly not claimed by this fixture preview.
+The provider and the Computer selected by the product preview are labelled local
+fixtures. Separately, the packaged `computer-mcp` entrypoint implements MCP v2 over
+stdio and exercises descriptor-relative read-only access against approved temporary
+workspace trees in both development and sealed-package E2E. It is not registered
+with a host or selected by the product UI, so this is native boundary evidence rather
+than a live native-Computer claim. A live provider, native Agent creation, writes,
+commands and network authority remain unavailable.
+
+The N2 authority core now derives a task-bound `TaskGrant`, preserves it through
+main -> Agent -> Critic delegation, retains explicit owner narrowing including
+do-not-inspect paths, and intersects every Computer action with current Computer
+policy. Negative results retain exact request correlation and distinguish a known
+refusal from an outcome-unknown transport. Agent lifecycle tests still use an
+in-memory host double; they do not prove native child admission.
 
 ## Reproduce
 
@@ -36,8 +45,10 @@ From the repository root:
 npm ci --prefix vnext
 task next:ci
 task next:test:e2e:dev
+npm --prefix vnext run test:e2e:computer
 task next:package
 task next:test:e2e
+npm --prefix vnext run test:e2e:computer:package
 ```
 
 The canonical owner command is:

@@ -100,17 +100,22 @@ are allocated by the OS on loopback and protected with per-run bearer values. No
 tunnel, provider slot, global MCP registration, launch agent, legacy state path, or
 installed browser profile is used.
 
-The local provider and Computer capability are controlled fixtures. They prove the
-module/IPC/SSE/tool loop, not ChatGPT readiness, native Codex ownership, Mac
-filesystem containment, or Farol Agent admission.
+The local provider and the Computer capability selected by the product preview are
+controlled fixtures. They prove the module/IPC/SSE/tool loop, not ChatGPT readiness,
+native Codex ownership or Farol Agent admission. The separate `computer-mcp`
+entrypoint and its development/sealed-package E2E prove descriptor-relative
+read-only containment on temporary Mac workspace trees; that boundary is not yet
+registered with a host or selected by the product runtime.
 
-The N2 authority target is also not implemented by this preview. Computer will own a
-runtime-derived task-applicable `TaskGrant` / `ExecutionAuthority`. Permitted
-delegation from a main Turn through Agent and Critic must preserve that authority for
-ordinary relevant discovery inside its approved workspace, without treating the
-assignment packet's initial filenames as the security boundary. A delegate still
-cannot exceed the TaskGrant, underlying Computer approval, native host-task
-authority, or an explicit narrower owner instruction. Prompt text is never authority.
+The N2 authority core is implemented as a runtime-derived task-applicable `TaskGrant`
+/ `ExecutionAuthority`. Permitted delegation from a main Turn through Agent and
+Critic preserves that authority for ordinary relevant discovery inside its approved
+workspace, without treating the assignment packet's initial filenames as the
+security boundary. Explicit owner narrowing, including do-not-inspect paths, is
+carried into the native read-only deny list. A delegate still cannot exceed the
+TaskGrant, underlying Computer approval, native host-task authority, or an explicit
+narrower owner instruction. Prompt text is never authority. Native Agent admission
+and permitted verification-command execution remain separate unproved boundaries.
 
 The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
 events already acknowledged by the receiving client. If the unacknowledged window
@@ -119,6 +124,6 @@ closed and late subscribers receive a conflict response. No other task or the
 runtime process is stopped by that local failure.
 
 The tracked machine-readable ownership table is `resources.json` and the build copies
-it to `Contents/Resources/app/resource-manifest.json`. Unimplemented tunnel, MCP,
-provider registration, native Computer/Agent, updater, and login-item identities remain
-explicitly absent rather than reserving global resources.
+it to `Contents/Resources/app/resource-manifest.json`. Tunnel, global MCP/provider
+registration, native Computer/Agent ownership, updater, and login-item identities
+remain explicitly absent rather than reserving global resources.
