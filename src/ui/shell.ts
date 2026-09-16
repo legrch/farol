@@ -221,6 +221,24 @@ function taskLabel(task: PreviewTask | undefined): string {
   return task?.label.replace(/^Demo · /u, "") ?? "Unknown task";
 }
 
+function renderCapability(
+  selector: "#dossier-model" | "#dossier-mode",
+  requested: string | null,
+  observed: string | null,
+): void {
+  const element = required<HTMLElement>(selector);
+  const compact = (value: string) =>
+    value === "Account default" ? "Default" : value;
+  element.textContent = observed
+    ? compact(observed)
+    : requested
+      ? `${compact(requested)} · unknown`
+      : "Not selected";
+  const detail = `Requested: ${requested ?? "Not selected"} · Observed: ${observed ?? "Not observed"}`;
+  element.title = detail;
+  element.setAttribute("aria-label", detail);
+}
+
 function taskById(taskId: string): PreviewTask | undefined {
   return bootstrap.tasks.find((task) => task.taskId === taskId);
 }
@@ -562,10 +580,8 @@ function renderDossier(): void {
     state.label.toLocaleUpperCase();
   stateElement.dataset.tone = state.tone;
   required<HTMLElement>("#dossier-title").textContent = taskLabel(task);
-  required<HTMLElement>("#dossier-model").textContent =
-    `Requested: ${task.requestedModel ?? "Not selected"} · Observed: ${task.observedModel ?? "Not observed"}`;
-  required<HTMLElement>("#dossier-mode").textContent =
-    `Requested: ${task.requestedMode ?? "Not selected"} · Observed: ${task.observedMode ?? "Not observed"}`;
+  renderCapability("#dossier-model", task.requestedModel, task.observedModel);
+  renderCapability("#dossier-mode", task.requestedMode, task.observedMode);
   required<HTMLElement>("#dossier-computer").textContent =
     unresolvedComputerRequest(selectedTaskId)
       ? "Approval required"

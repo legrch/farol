@@ -765,8 +765,11 @@ html[data-window-active="false"] .task-tab.active::before {
 }
 
 .dossier-facts dd {
+  max-width: 112px;
+  overflow: hidden;
   color: var(--text-soft);
   font-weight: 570;
+  text-overflow: ellipsis;
 }
 
 .more-button {

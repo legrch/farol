@@ -2373,7 +2373,9 @@ try {
     5,
   );
   assert.match(
-    await ordinaryLiveTasks.window.locator("#dossier-model").innerText(),
+    (await ordinaryLiveTasks.window
+      .locator("#dossier-model")
+      .getAttribute("title")) ?? "",
     /Requested: Account default · Observed: Not observed/u,
   );
   assert.match(
