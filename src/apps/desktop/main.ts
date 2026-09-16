@@ -89,6 +89,11 @@ import {
   buildChatGptReadonlyTaskPrompt,
 } from "./chatgpt-readonly-task";
 import { ChatGptRoute } from "./chatgpt-route";
+import {
+  PrivateLiveTaskStore,
+  type LiveTaskStoreRecord,
+  type StoredLiveTask,
+} from "./live-task-store";
 import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
 import {
   createParticipantAuthority,
@@ -215,7 +220,10 @@ let configuration: ProductConfigurationService | null = null;
 let chatGptRoute: ChatGptRoute | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
-let primaryChatGptTaskId: string | null = null;
+const liveTaskConversationUrls = new Map<string, string | null>();
+let liveTaskStore: PrivateLiveTaskStore | null = null;
+let liveTaskPersistence: Promise<void> = Promise.resolve();
+let taskMutationInFlight = false;
 let chatGptHomeUrl = CHATGPT_HOME;
 let chatGptE2eOrigin: string | null = null;
 let chatGptTaskAdmission = false;
@@ -498,7 +506,7 @@ function taskFailure(
   });
 }
 
-function taskSuccess(taskId: string): ProductTaskCommandResult {
+function taskSuccess(taskId: string | null): ProductTaskCommandResult {
   return ProductTaskCommandResultSchema.parse({
     ok: true,
     state: liveTaskRegistry.snapshot(),
@@ -510,8 +518,10 @@ function setLiveTaskLifecycle(
   taskId: string,
   lifecycle: ProductTask["lifecycle"],
 ): void {
+  if (liveTaskRegistry.get(taskId)?.lifecycle === lifecycle) return;
   if (!liveTaskRegistry.setLifecycle(taskId, lifecycle)) return;
   publishTasksState();
+  void persistLiveTaskState().catch(() => undefined);
 }
 
 function chatGptTaskAdmissionReady(): boolean {
@@ -526,18 +536,136 @@ function chatGptTaskAdmissionReady(): boolean {
   );
 }
 
-function createLiveChatGptRoute(taskId: string, label: string): ChatGptRoute {
+function storedLiveTaskState(): Readonly<{
+  revision: number;
+  tasks: StoredLiveTask[];
+}> {
+  const snapshot = liveTaskRegistry.snapshot();
+  return {
+    revision: snapshot.revision,
+    tasks: snapshot.tasks.map((task) => ({
+      ...task,
+      provider: "chatgpt" as const,
+      conversationUrl: liveTaskConversationUrls.get(task.taskId) ?? null,
+    })),
+  };
+}
+
+function persistLiveTaskState(): Promise<void> {
+  const store = liveTaskStore;
+  if (!store) return Promise.reject(new Error("LIVE_TASK_STATE_UNAVAILABLE"));
+  const state = storedLiveTaskState();
+  const write = liveTaskPersistence.then(() => store.save(state));
+  liveTaskPersistence = write.catch(() => undefined);
+  return write;
+}
+
+function createLiveChatGptRoute(
+  taskId: string,
+  label: string,
+  initialUrl = chatGptHomeUrl,
+): ChatGptRoute {
+  let routeInitialUrl = initialUrl;
+  if (chatGptE2eOrigin !== null && initialUrl === chatGptHomeUrl) {
+    const fixtureUrl = new URL(initialUrl);
+    fixtureUrl.searchParams.set("farol-e2e-task", taskId);
+    routeInitialUrl = fixtureUrl.href;
+  }
+  const recordConversationUrl = (conversationUrl: string | null) => {
+    if (!liveTaskRegistry.get(taskId)) return;
+    if (liveTaskConversationUrls.get(taskId) === conversationUrl) return;
+    liveTaskConversationUrls.set(taskId, conversationUrl);
+    void persistLiveTaskState().catch(() => undefined);
+  };
+  const recordTaskActivity = (
+    state: "idle" | "running" | "outcome_unknown",
+  ) => {
+    const task = liveTaskRegistry.get(taskId);
+    if (!task) return;
+    const lifecycle =
+      state === "running"
+        ? "running"
+        : state === "outcome_unknown"
+          ? "outcome_unknown"
+          : task.lifecycle === "running"
+            ? "completed"
+            : task.lifecycle;
+    setLiveTaskLifecycle(taskId, lifecycle);
+  };
   return new ChatGptRoute({
     homeUrl: chatGptHomeUrl,
-    initialUrl: chatGptHomeUrl,
+    initialUrl: routeInitialUrl,
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
     title: `${label} · Farol Next`,
-    onClosed: () => setLiveTaskLifecycle(taskId, "idle"),
+    onClosed: (conversationUrl, taskRunning) => {
+      recordConversationUrl(conversationUrl);
+      if (taskRunning) recordTaskActivity("outcome_unknown");
+    },
+    onConversationChanged: recordConversationUrl,
+    onTaskActivityChanged: recordTaskActivity,
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
+}
+
+async function initializeLiveTaskState(): Promise<void> {
+  const store = new PrivateLiveTaskStore({ root: liveTaskStoreRoot() });
+  const stagedRoutes = new Map<string, ChatGptRoute>();
+  const stagedConversationUrls = new Map<string, string | null>();
+  let record: LiveTaskStoreRecord | null;
+  try {
+    record = await store.load();
+  } catch {
+    liveTaskStore = null;
+    return;
+  }
+  liveTaskStore = store;
+  if (!record) return;
+
+  let reconciled = false;
+  try {
+    const tasks = record.tasks.map(({ conversationUrl, ...task }) => {
+      stagedConversationUrls.set(task.taskId, conversationUrl);
+      const lifecycle =
+        task.lifecycle === "running" ? "outcome_unknown" : task.lifecycle;
+      reconciled ||= lifecycle !== task.lifecycle;
+      stagedRoutes.set(
+        task.taskId,
+        createLiveChatGptRoute(
+          task.taskId,
+          task.label,
+          conversationUrl ?? chatGptHomeUrl,
+        ),
+      );
+      return { ...task, lifecycle };
+    });
+    liveTaskRegistry.restore({
+      revision: record.revision + (reconciled ? 1 : 0),
+      tasks,
+    });
+    for (const [taskId, route] of stagedRoutes) {
+      liveTaskRoutes.set(taskId, route);
+    }
+    for (const [taskId, conversationUrl] of stagedConversationUrls) {
+      liveTaskConversationUrls.set(taskId, conversationUrl);
+    }
+    selectedTaskId = tasks[0]?.taskId ?? "";
+  } catch {
+    for (const route of stagedRoutes.values()) route.dispose();
+    liveTaskStore = null;
+    liveTaskConversationUrls.clear();
+    return;
+  }
+
+  if (reconciled) {
+    try {
+      await persistLiveTaskState();
+    } catch {
+      liveTaskStore = null;
+    }
+  }
 }
 
 async function openLiveTaskSurface(taskId: string): Promise<boolean> {
@@ -568,66 +696,157 @@ async function runProductTaskCommand(
   if (demoMode || runtimeState !== "ready") {
     return taskFailure("TASKS_UNAVAILABLE");
   }
+  if (taskMutationInFlight) return taskFailure("TASK_OPERATION_IN_PROGRESS");
   if (command.data.kind === "task.activate") {
-    if (!liveTaskRegistry.get(command.data.taskId)) {
-      return taskFailure("TASK_NOT_FOUND");
+    taskMutationInFlight = true;
+    try {
+      if (!liveTaskRegistry.get(command.data.taskId)) {
+        return taskFailure("TASK_NOT_FOUND");
+      }
+      selectedTaskId = command.data.taskId;
+      section = "browser";
+      shellOverlay = "none";
+      applyLayout();
+      publishLayout();
+      return (await openLiveTaskSurface(command.data.taskId))
+        ? taskSuccess(command.data.taskId)
+        : taskFailure("TASK_SURFACE_UNREACHABLE");
+    } finally {
+      taskMutationInFlight = false;
     }
-    selectedTaskId = command.data.taskId;
+  }
+  if (!liveTaskStore) return taskFailure("TASK_STATE_UNAVAILABLE");
+  taskMutationInFlight = true;
+  const before = liveTaskRegistry.snapshot();
+  try {
+    if (command.data.kind === "task.rename") {
+      if (!liveTaskRegistry.rename(command.data.taskId, command.data.label)) {
+        return taskFailure("TASK_NOT_FOUND");
+      }
+      try {
+        await persistLiveTaskState();
+      } catch {
+        liveTaskRegistry.rollback(before);
+        return taskFailure("TASK_STATE_UNAVAILABLE");
+      }
+      liveTaskRoutes
+        .get(command.data.taskId)
+        ?.setTitle(`${command.data.label.trim()} · Farol Next`);
+      publishTasksState();
+      return taskSuccess(command.data.taskId);
+    }
+    if (command.data.kind === "task.pin") {
+      if (
+        !liveTaskRegistry.setPinned(command.data.taskId, command.data.pinned)
+      ) {
+        return taskFailure("TASK_NOT_FOUND");
+      }
+      try {
+        await persistLiveTaskState();
+      } catch {
+        liveTaskRegistry.rollback(before);
+        return taskFailure("TASK_STATE_UNAVAILABLE");
+      }
+      publishTasksState();
+      return taskSuccess(command.data.taskId);
+    }
+    if (command.data.kind === "task.close") {
+      const removed = liveTaskRegistry.remove(command.data.taskId);
+      if (!removed) return taskFailure("TASK_NOT_FOUND");
+      try {
+        await persistLiveTaskState();
+      } catch {
+        liveTaskRegistry.rollback(before);
+        return taskFailure("TASK_STATE_UNAVAILABLE");
+      }
+      const route = liveTaskRoutes.get(command.data.taskId);
+      liveTaskRoutes.delete(command.data.taskId);
+      liveTaskConversationUrls.delete(command.data.taskId);
+      route?.dispose();
+      const tasks = liveTaskRegistry.snapshot().tasks;
+      selectedTaskId =
+        selectedTaskId === command.data.taskId
+          ? (tasks[0]?.taskId ?? "")
+          : selectedTaskId;
+      publishTasksState();
+      publishLayout();
+      return taskSuccess(selectedTaskId || null);
+    }
+    if (command.data.kind === "task.cancel") {
+      const task = liveTaskRegistry.get(command.data.taskId);
+      if (!task) return taskFailure("TASK_NOT_FOUND");
+      const route = liveTaskRoutes.get(command.data.taskId);
+      if (!route) return taskFailure("TASK_NOT_FOUND");
+      const result = await route.cancelActiveTask();
+      if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
+      const lifecycle =
+        result === "cancelled" ? "cancelled" : "outcome_unknown";
+      liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
+      publishTasksState();
+      try {
+        await persistLiveTaskState();
+      } catch {
+        liveTaskStore = null;
+      }
+      return result === "cancelled"
+        ? taskSuccess(command.data.taskId)
+        : taskFailure("TASK_CANCEL_FAILED");
+    }
+    if (!chatGptTaskAdmissionReady()) {
+      return taskFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+    }
+    if (!chatGptRoute) return taskFailure("TASK_ROUTE_UNAVAILABLE");
+
+    const labels = new Set(
+      liveTaskRegistry.snapshot().tasks.map((candidate) => candidate.label),
+    );
+    let ordinal = 1;
+    while (labels.has(`ChatGPT task ${ordinal}`)) ordinal += 1;
+    const task: ProductTask = {
+      taskId: randomUUID(),
+      sessionId: randomUUID(),
+      turnId: randomUUID(),
+      label: `ChatGPT task ${ordinal}`,
+      provider: "chatgpt",
+      requestedModel: "Account default",
+      observedModel: null,
+      requestedMode: "Account default",
+      observedMode: null,
+      hasComputer: false,
+      pinned: false,
+      lifecycle: "idle",
+    };
+    const admitted = liveTaskRegistry.admit(task);
+    if (admitted.status === "capacity") {
+      return taskFailure("TASK_CAPACITY_REACHED");
+    }
+    if (admitted.status !== "admitted") {
+      return taskFailure("TASK_ROUTE_UNAVAILABLE");
+    }
+    const route = createLiveChatGptRoute(task.taskId, task.label);
+    liveTaskConversationUrls.set(task.taskId, null);
+    try {
+      await persistLiveTaskState();
+    } catch {
+      liveTaskRegistry.rollback(before);
+      liveTaskConversationUrls.delete(task.taskId);
+      route.dispose();
+      return taskFailure("TASK_STATE_UNAVAILABLE");
+    }
+    liveTaskRoutes.set(task.taskId, route);
+    selectedTaskId = task.taskId;
     section = "browser";
+    setupOpen = false;
     shellOverlay = "none";
-    applyLayout();
+    publishTasksState();
     publishLayout();
-    return (await openLiveTaskSurface(command.data.taskId))
-      ? taskSuccess(command.data.taskId)
-      : taskFailure("TASK_SURFACE_UNREACHABLE");
+    if (!(await openLiveTaskSurface(task.taskId))) {
+      return taskFailure("TASK_SURFACE_UNREACHABLE");
+    }
+    return taskSuccess(task.taskId);
+  } finally {
+    taskMutationInFlight = false;
   }
-  if (!chatGptTaskAdmissionReady()) {
-    return taskFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
-  }
-  if (!chatGptRoute) return taskFailure("TASK_ROUTE_UNAVAILABLE");
-
-  const ordinal = liveTaskRegistry.snapshot().tasks.length + 1;
-  const task: ProductTask = {
-    taskId: randomUUID(),
-    sessionId: randomUUID(),
-    turnId: randomUUID(),
-    label: `ChatGPT task ${ordinal}`,
-    provider: "chatgpt",
-    requestedModel: "Account default",
-    observedModel: null,
-    requestedMode: "Account default",
-    observedMode: null,
-    hasComputer: false,
-    pinned: false,
-    lifecycle: "idle",
-  };
-  const admitted = liveTaskRegistry.admit(task);
-  if (admitted.status === "capacity") {
-    return taskFailure("TASK_CAPACITY_REACHED");
-  }
-  if (admitted.status !== "admitted") {
-    return taskFailure("TASK_ROUTE_UNAVAILABLE");
-  }
-
-  const route =
-    primaryChatGptTaskId === null
-      ? chatGptRoute
-      : createLiveChatGptRoute(task.taskId, task.label);
-  if (primaryChatGptTaskId === null) {
-    primaryChatGptTaskId = task.taskId;
-    route.setTitle(`${task.label} · Farol Next`);
-  }
-  liveTaskRoutes.set(task.taskId, route);
-  selectedTaskId = task.taskId;
-  section = "browser";
-  setupOpen = false;
-  shellOverlay = "none";
-  publishTasksState();
-  publishLayout();
-  if (!(await openLiveTaskSurface(task.taskId))) {
-    return taskFailure("TASK_SURFACE_UNREACHABLE");
-  }
-  return taskSuccess(task.taskId);
 }
 
 function configurationFailure(
@@ -707,6 +926,10 @@ function chatGptConversationStoreRoot(): string {
     "farol-next-state",
     "chatgpt-conversation",
   );
+}
+
+function liveTaskStoreRoot(): string {
+  return path.join(app.getPath("userData"), "farol-next-state", "live-tasks");
 }
 
 function codexHostProbeRoot(): string {
@@ -3290,15 +3513,6 @@ function installIpc(): void {
     shellOverlay = parsed.data.overlay;
     applyLayout();
     if (focusTargetChanged) focusForLayoutAfterRendererCommit();
-    if (
-      !demoMode &&
-      parsed.data.section === "browser" &&
-      !parsed.data.setupOpen &&
-      parsed.data.overlay === "none" &&
-      parsed.data.taskId !== ""
-    ) {
-      void openLiveTaskSurface(parsed.data.taskId);
-    }
   });
 }
 
@@ -3535,15 +3749,11 @@ async function main(): Promise<void> {
     initialUrl: chatGptInitialUrl,
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
-    onClosed: () => {
-      if (primaryChatGptTaskId !== null) {
-        setLiveTaskLifecycle(primaryChatGptTaskId, "idle");
-      }
-    },
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
+  await initializeLiveTaskState();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
     section = configured.settings.general.openAtLaunch;

@@ -44,6 +44,71 @@ export class LiveTaskRegistry {
     return task ? { ...task } : null;
   }
 
+  restore(state: ProductTasksState): void {
+    if (this.tasks.length !== 0 || this.revision !== 0) {
+      throw new Error("LIVE_TASK_REGISTRY_NOT_EMPTY");
+    }
+    this.replace(state);
+  }
+
+  rollback(state: ProductTasksState): void {
+    this.replace(state);
+  }
+
+  private replace(state: ProductTasksState): void {
+    const parsed = ProductTasksStateSchema.parse(state);
+    const identities = new Set<string>();
+    for (const task of parsed.tasks) {
+      for (const identity of [task.taskId, task.sessionId, task.turnId]) {
+        if (identities.has(identity)) {
+          throw new Error("LIVE_TASK_IDENTITY_DUPLICATE");
+        }
+        identities.add(identity);
+      }
+    }
+    this.tasks.splice(0, this.tasks.length, ...parsed.tasks);
+    this.revision = parsed.revision;
+  }
+
+  rename(taskId: string, label: string): boolean {
+    const index = this.tasks.findIndex(
+      (candidate) => candidate.taskId === taskId,
+    );
+    const current = this.tasks[index];
+    if (!current) return false;
+    const renamed = ProductTaskSchema.parse({ ...current, label });
+    if (renamed.label === current.label) return true;
+    this.tasks[index] = renamed;
+    this.revision += 1;
+    return true;
+  }
+
+  setPinned(taskId: string, pinned: boolean): boolean {
+    const index = this.tasks.findIndex(
+      (candidate) => candidate.taskId === taskId,
+    );
+    const current = this.tasks[index];
+    if (!current) return false;
+    if (current.pinned === pinned) return true;
+    this.tasks[index] = { ...current, pinned };
+    this.tasks.sort(
+      (left, right) => Number(right.pinned) - Number(left.pinned),
+    );
+    this.revision += 1;
+    return true;
+  }
+
+  remove(taskId: string): ProductTask | null {
+    const index = this.tasks.findIndex(
+      (candidate) => candidate.taskId === taskId,
+    );
+    if (index < 0) return null;
+    const [removed] = this.tasks.splice(index, 1);
+    if (!removed) return null;
+    this.revision += 1;
+    return { ...removed };
+  }
+
   setLifecycle(taskId: string, lifecycle: ProductTaskLifecycle): boolean {
     const parsed = ProductTaskLifecycleSchema.parse(lifecycle);
     const index = this.tasks.findIndex(

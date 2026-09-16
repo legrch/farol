@@ -39,6 +39,40 @@ const taskProbeSchema = z.strictObject({
   errorVisible: z.boolean(),
 });
 
+const activityProbeSchema = z.strictObject({ running: z.boolean() });
+
+const activityProbe = `(() => {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+  };
+  const running = [
+    document.querySelector('[data-testid="stop-button"]'),
+    document.querySelector('button[aria-label="Stop generating"]'),
+    document.querySelector('button[aria-label="Stop"]')
+  ].some(visible);
+  return { running };
+})()`;
+
+const cancelTaskScript = `(() => {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+  };
+  const stop = [
+    document.querySelector('[data-testid="stop-button"]'),
+    document.querySelector('button[aria-label="Stop generating"]'),
+    document.querySelector('button[aria-label="Stop"]')
+  ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
+  if (!(stop instanceof HTMLButtonElement)) return { activated: false };
+  stop.click();
+  return { activated: true };
+})()`;
+
 const readinessProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -163,7 +197,11 @@ export type ChatGptRouteOptions = Readonly<{
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
   title?: string;
-  onClosed?: () => void;
+  onClosed?: (conversationUrl: string | null, taskRunning: boolean) => void;
+  onConversationChanged?: (conversationUrl: string | null) => void;
+  onTaskActivityChanged?: (
+    state: "idle" | "running" | "outcome_unknown",
+  ) => void;
   taskTimeoutMs?: number;
   taskPollMs?: number;
 }>;
@@ -206,6 +244,9 @@ export class ChatGptRoute {
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
   private displayTitle: string;
+  private activityTimer: ReturnType<typeof setInterval> | null = null;
+  private activityPollInFlight = false;
+  private observedTaskRunning: boolean | null = null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.entryUrl = options.initialUrl;
@@ -262,16 +303,24 @@ export class ChatGptRoute {
     this.routeWindow = candidate;
     this.disposing = false;
     this.hardenContents(candidate.webContents, true);
+    let closingConversationUrl: string | null = null;
+    let closingTaskRunning = false;
     candidate.on("page-title-updated", (event) => {
       event.preventDefault();
       candidate.setTitle(this.displayTitle);
     });
     candidate.on("close", () => {
-      this.captureConversationUrl(candidate.webContents);
+      closingConversationUrl = this.captureConversationUrl(
+        candidate.webContents,
+      );
+      closingTaskRunning = this.observedTaskRunning === true;
     });
     candidate.on("closed", () => {
+      this.stopTaskActivityWatch();
       if (this.routeWindow === candidate) this.routeWindow = null;
-      if (!this.disposing) this.options.onClosed?.();
+      if (!this.disposing) {
+        this.options.onClosed?.(closingConversationUrl, closingTaskRunning);
+      }
       setTimeout(() => {
         if (
           !this.disposing &&
@@ -288,6 +337,9 @@ export class ChatGptRoute {
     try {
       await candidate.loadURL(this.entryUrl);
       this.load = "loaded";
+      if (this.options.onTaskActivityChanged) {
+        this.startTaskActivityWatch(candidate.webContents);
+      }
       candidate.show();
       candidate.focus();
       return { status: "opened" };
@@ -536,6 +588,38 @@ export class ChatGptRoute {
     return this.captureConversationUrl(candidate.webContents);
   }
 
+  async cancelActiveTask(): Promise<
+    "cancelled" | "not_running" | "outcome_unknown"
+  > {
+    const candidate = this.routeWindow;
+    if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
+      return "not_running";
+    }
+    try {
+      const activated = activatedTaskSchema.safeParse(
+        await candidate.webContents.executeJavaScript(cancelTaskScript, true),
+      );
+      if (!activated.success || !activated.data.activated) {
+        return "not_running";
+      }
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await delay(100);
+        if (candidate.isDestroyed()) return "outcome_unknown";
+        const observed = activityProbeSchema.safeParse(
+          await candidate.webContents.executeJavaScript(activityProbe, true),
+        );
+        if (!observed.success) return "outcome_unknown";
+        if (!observed.data.running) {
+          this.recordTaskActivity(false);
+          return "cancelled";
+        }
+      }
+      return "outcome_unknown";
+    } catch {
+      return "outcome_unknown";
+    }
+  }
+
   setTitle(title: string): void {
     this.displayTitle = title;
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
@@ -546,6 +630,7 @@ export class ChatGptRoute {
   resetConversation(): void {
     this.entryUrl = this.options.homeUrl;
     this.disposing = true;
+    this.stopTaskActivityWatch();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -560,6 +645,7 @@ export class ChatGptRoute {
 
   dispose(): void {
     this.disposing = true;
+    this.stopTaskActivityWatch();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -617,8 +703,16 @@ export class ChatGptRoute {
       );
       contents.on("did-finish-load", () => {
         this.load = "loaded";
+        this.reportConversationUrl(contents);
+      });
+      contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
+        if (isMainFrame) this.reportConversationUrl(contents);
       });
       contents.on("render-process-gone", () => {
+        if (this.observedTaskRunning === true) {
+          this.options.onTaskActivityChanged?.("outcome_unknown");
+        }
+        this.stopTaskActivityWatch();
         this.load = "failed";
       });
     }
@@ -640,6 +734,71 @@ export class ChatGptRoute {
       this.hardenContents(popup.webContents, false);
       popup.on("closed", () => this.popupWindows.delete(popup));
     });
+  }
+
+  private reportConversationUrl(contents: WebContents): void {
+    if (!this.options.onConversationChanged) return;
+    const canonical = this.captureConversationUrl(contents);
+    if (canonical !== null) {
+      this.options.onConversationChanged(canonical);
+      return;
+    }
+    try {
+      const current = new URL(contents.getURL());
+      const home = new URL(this.options.homeUrl);
+      const currentPath = current.pathname.replace(/\/$/u, "") || "/";
+      const homePath = home.pathname.replace(/\/$/u, "") || "/";
+      if (current.origin === home.origin && currentPath === homePath) {
+        this.entryUrl = this.options.homeUrl;
+        this.options.onConversationChanged(null);
+      }
+    } catch {
+      // Navigation policy owns malformed or unsupported URLs. They never alter
+      // a retained conversation binding.
+    }
+  }
+
+  private startTaskActivityWatch(contents: WebContents): void {
+    this.stopTaskActivityWatch();
+    const poll = () => void this.pollTaskActivity(contents);
+    poll();
+    this.activityTimer = setInterval(poll, 250);
+    this.activityTimer.unref?.();
+  }
+
+  private stopTaskActivityWatch(): void {
+    if (this.activityTimer) clearInterval(this.activityTimer);
+    this.activityTimer = null;
+    this.activityPollInFlight = false;
+    this.observedTaskRunning = null;
+  }
+
+  private async pollTaskActivity(contents: WebContents): Promise<void> {
+    if (
+      this.activityPollInFlight ||
+      contents.isDestroyed() ||
+      this.load !== "loaded"
+    ) {
+      return;
+    }
+    this.activityPollInFlight = true;
+    try {
+      const observed = activityProbeSchema.safeParse(
+        await contents.executeJavaScript(activityProbe, true),
+      );
+      if (observed.success) this.recordTaskActivity(observed.data.running);
+    } catch {
+      // A navigation can invalidate an in-flight probe. Navigation lifecycle
+      // events own readiness and the next bounded poll remeasures activity.
+    } finally {
+      this.activityPollInFlight = false;
+    }
+  }
+
+  private recordTaskActivity(running: boolean): void {
+    if (this.observedTaskRunning === running) return;
+    this.observedTaskRunning = running;
+    this.options.onTaskActivityChanged?.(running ? "running" : "idle");
   }
 
   private remoteWebPreferences(): Electron.WebPreferences {

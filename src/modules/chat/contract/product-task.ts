@@ -7,6 +7,7 @@ export const ProductTaskLifecycleSchema = z.enum([
   "event_driven",
   "idle",
   "running",
+  "cancelled",
   "completed",
   "failed",
   "outcome_unknown",
@@ -38,13 +39,31 @@ export const ProductTaskCommandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("task.activate"),
     taskId: ProductTaskIdentifierSchema,
   }),
+  z.strictObject({
+    kind: z.literal("task.rename"),
+    taskId: ProductTaskIdentifierSchema,
+    label: z.string().trim().min(1).max(80),
+  }),
+  z.strictObject({
+    kind: z.literal("task.pin"),
+    taskId: ProductTaskIdentifierSchema,
+    pinned: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("task.close"),
+    taskId: ProductTaskIdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("task.cancel"),
+    taskId: ProductTaskIdentifierSchema,
+  }),
 ]);
 
 export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
     state: ProductTasksStateSchema,
-    selectedTaskId: ProductTaskIdentifierSchema,
+    selectedTaskId: ProductTaskIdentifierSchema.nullable(),
   }),
   z.strictObject({
     ok: z.literal(false),
@@ -56,6 +75,10 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
       "TASK_ROUTE_UNAVAILABLE",
       "TASK_NOT_FOUND",
       "TASK_SURFACE_UNREACHABLE",
+      "TASK_OPERATION_IN_PROGRESS",
+      "TASK_STATE_UNAVAILABLE",
+      "TASK_NOT_RUNNING",
+      "TASK_CANCEL_FAILED",
     ]),
     state: ProductTasksStateSchema,
   }),

@@ -7,6 +7,7 @@ import {
   ProductTaskCommandResultSchema,
   ProductTaskSchema,
   ProductTasksStateSchema,
+  type ProductTaskCommand,
   type ProductTasksState,
 } from "../modules/chat/contract/product-task";
 import {
@@ -186,6 +187,9 @@ let settingsFeedback = "";
 let settingsFeedbackError = false;
 let settingsFeedbackSurface: "computer" | "settings" = "settings";
 let taskAdmissionFeedback = "";
+let taskMenuFeedback = "";
+let taskMenuFeedbackError = false;
+let taskMenuBusy = false;
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
@@ -278,6 +282,9 @@ function taskState(taskId: string): TaskState {
     }
     if (task.lifecycle === "completed") {
       return { tone: "complete", label: "Complete", attention: false };
+    }
+    if (task.lifecycle === "cancelled") {
+      return { tone: "complete", label: "Cancelled", attention: false };
     }
     if (task.lifecycle === "outcome_unknown") {
       return { tone: "unknown", label: "Outcome unknown", attention: true };
@@ -608,6 +615,39 @@ function renderDossier(): void {
           : "Open Activity <span>›</span>";
 
   taskMenuComputer.disabled = !unresolvedComputerRequest(selectedTaskId);
+}
+
+function renderTaskMenu(): void {
+  const task = taskById(selectedTaskId);
+  const live = task?.provider === "chatgpt";
+  required<HTMLElement>("#task-menu-live").hidden = !live;
+  required<HTMLElement>("#task-menu-fixture").hidden = live;
+  if (!live || !task) return;
+
+  const name = required<HTMLInputElement>("#task-menu-name");
+  const rename = required<HTMLButtonElement>("#task-menu-rename");
+  const pin = required<HTMLButtonElement>("#task-menu-pin");
+  const cancel = required<HTMLButtonElement>("#task-menu-cancel");
+  const close = required<HTMLButtonElement>("#task-menu-close-task");
+  name.disabled = taskMenuBusy;
+  rename.disabled = taskMenuBusy;
+  pin.disabled = taskMenuBusy;
+  cancel.disabled = taskMenuBusy || task.lifecycle !== "running";
+  close.disabled = taskMenuBusy;
+  pin.querySelector("span")!.textContent = task.pinned
+    ? "Unpin task"
+    : "Pin task";
+  pin.querySelector("small")!.textContent = task.pinned
+    ? "Use task order"
+    : "Keep first";
+
+  const note = required<HTMLElement>("#task-menu-note");
+  note.dataset.error = String(taskMenuFeedbackError);
+  note.textContent =
+    taskMenuFeedback ||
+    (task.lifecycle === "running"
+      ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
+      : "Close removes this local task and its window. It does not cancel provider work.");
 }
 
 function pendingComputerTask(): PreviewTask | null {
@@ -2116,9 +2156,14 @@ function renderOverlayState(): void {
         document.querySelector<HTMLButtonElement>(".nav-item.active")?.focus(),
       );
     } else if (shellOverlay === "task-menu") {
-      queueMicrotask(() =>
-        required<HTMLButtonElement>("#task-menu-activity").focus(),
-      );
+      queueMicrotask(() => {
+        const task = taskById(selectedTaskId);
+        if (task?.provider === "chatgpt") {
+          required<HTMLInputElement>("#task-menu-name").focus();
+          return;
+        }
+        required<HTMLButtonElement>("#task-menu-activity").focus();
+      });
     } else if (shellOverlay === "quick-switcher") {
       queueMicrotask(() =>
         required<HTMLInputElement>("#command-search").focus(),
@@ -2184,6 +2229,7 @@ function render(notify = true): void {
   renderTabs();
   renderSignals();
   renderDossier();
+  renderTaskMenu();
   renderComputer();
   renderActivity();
   renderSettings();
@@ -2276,9 +2322,84 @@ function toggleSidebar(): void {
 }
 
 function openTaskMenu(): void {
+  const task = taskById(selectedTaskId);
+  taskMenuFeedback = "";
+  taskMenuFeedbackError = false;
+  if (task?.provider === "chatgpt") {
+    required<HTMLInputElement>("#task-menu-name").value = task.label;
+  }
   sidebarOverlayOpen = false;
   shellOverlay = "task-menu";
   render();
+}
+
+function taskMenuErrorMessage(
+  error: Extract<
+    ReturnType<typeof ProductTaskCommandResultSchema.parse>,
+    { ok: false }
+  >["error"],
+): string {
+  if (error === "TASK_OPERATION_IN_PROGRESS") {
+    return "Another task operation is still finishing.";
+  }
+  if (error === "TASK_STATE_UNAVAILABLE") {
+    return "Durable task state is unavailable. No change was applied.";
+  }
+  if (error === "TASK_NOT_FOUND") return "This task no longer exists.";
+  if (error === "TASK_NOT_RUNNING") {
+    return "This task is not observed as running. Nothing was cancelled.";
+  }
+  if (error === "TASK_CANCEL_FAILED") {
+    return "Farol could not confirm a provider stop. Check the task before retrying.";
+  }
+  if (error === "TASK_COMMAND_INVALID") {
+    return "Enter a task name between 1 and 80 characters.";
+  }
+  return "The task operation is unavailable.";
+}
+
+async function runTaskMenuCommand(
+  command: ProductTaskCommand,
+  successMessage: string,
+  closeAfterSuccess = false,
+): Promise<void> {
+  if (taskMenuBusy) return;
+  taskMenuBusy = true;
+  taskMenuFeedback = "";
+  taskMenuFeedbackError = false;
+  render();
+  try {
+    const parsed = ProductTaskCommandResultSchema.safeParse(
+      await window.farolNext.task(command),
+    );
+    if (!parsed.success) {
+      taskMenuFeedback = "The task route returned an invalid result.";
+      taskMenuFeedbackError = true;
+      return;
+    }
+    applyTasksState(parsed.data.state);
+    if (!parsed.data.ok) {
+      taskMenuFeedback = taskMenuErrorMessage(parsed.data.error);
+      taskMenuFeedbackError = true;
+      return;
+    }
+    selectedTaskId = parsed.data.selectedTaskId ?? "";
+    taskMenuFeedback = successMessage;
+    if (closeAfterSuccess) {
+      shellOverlay = "none";
+      return;
+    }
+    const task = taskById(selectedTaskId);
+    if (task?.provider === "chatgpt") {
+      required<HTMLInputElement>("#task-menu-name").value = task.label;
+    }
+  } catch {
+    taskMenuFeedback = "The task operation could not be completed.";
+    taskMenuFeedbackError = true;
+  } finally {
+    taskMenuBusy = false;
+    render();
+  }
 }
 
 function openCommands(): void {
@@ -2294,12 +2415,16 @@ function executeCommand(item: CommandItem): void {
 }
 
 function selectTask(taskId: string): void {
-  if (!taskById(taskId)) return;
+  const task = taskById(taskId);
+  if (!task) return;
   selectedTaskId = taskId;
   section = "browser";
   sidebarOverlayOpen = false;
   shellOverlay = "none";
   render();
+  if (task.provider === "chatgpt") {
+    void window.farolNext.task({ kind: "task.activate", taskId });
+  }
 }
 
 function selectSection(next: SurfaceSection): void {
@@ -2520,6 +2645,11 @@ async function start(): Promise<void> {
         render();
         return;
       }
+      if (parsed.data.selectedTaskId === null) {
+        taskAdmissionFeedback = "The task route omitted its selected task.";
+        render();
+        return;
+      }
       selectedTaskId = parsed.data.selectedTaskId;
       section = "browser";
       shellOverlay = "none";
@@ -2548,6 +2678,61 @@ async function start(): Promise<void> {
       shellOverlay = "none";
       setupJourney = reopenSetup(setupJourney);
       render();
+    },
+  );
+  const renameLiveTask = () => {
+    const task = taskById(selectedTaskId);
+    if (task?.provider !== "chatgpt") return;
+    const label = required<HTMLInputElement>("#task-menu-name").value.trim();
+    void runTaskMenuCommand(
+      { kind: "task.rename", taskId: task.taskId, label },
+      "Task renamed.",
+    );
+  };
+  required<HTMLButtonElement>("#task-menu-rename").addEventListener(
+    "click",
+    renameLiveTask,
+  );
+  required<HTMLInputElement>("#task-menu-name").addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      renameLiveTask();
+    },
+  );
+  required<HTMLButtonElement>("#task-menu-pin").addEventListener(
+    "click",
+    () => {
+      const task = taskById(selectedTaskId);
+      if (task?.provider !== "chatgpt") return;
+      void runTaskMenuCommand(
+        { kind: "task.pin", taskId: task.taskId, pinned: !task.pinned },
+        task.pinned ? "Task unpinned." : "Task pinned.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#task-menu-cancel").addEventListener(
+    "click",
+    () => {
+      const task = taskById(selectedTaskId);
+      if (task?.provider !== "chatgpt") return;
+      void runTaskMenuCommand(
+        { kind: "task.cancel", taskId: task.taskId },
+        "Provider stop confirmed.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#task-menu-close-task").addEventListener(
+    "click",
+    () => {
+      const task = taskById(selectedTaskId);
+      if (task?.provider !== "chatgpt") return;
+      void runTaskMenuCommand(
+        { kind: "task.close", taskId: task.taskId },
+        "Task closed.",
+        true,
+      );
     },
   );
   required<HTMLDialogElement>("#task-menu").addEventListener(

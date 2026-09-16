@@ -1574,7 +1574,8 @@ dialog::backdrop {
   cursor: pointer;
 }
 
-.task-menu > button:not(header button) {
+.task-menu-fixture > button,
+.task-menu-action {
   width: 100%;
   min-height: 38px;
   display: flex;
@@ -1590,27 +1591,91 @@ dialog::backdrop {
   font-size: 12px;
 }
 
-.task-menu > button:hover:not(:disabled) {
+.task-menu-fixture > button:hover:not(:disabled),
+.task-menu-action:hover:not(:disabled) {
   background: var(--iris-soft);
 }
 
-.task-menu > button:disabled {
+.task-menu-fixture > button:disabled,
+.task-menu-action:disabled {
   color: var(--text-faint);
 }
 
-.task-menu > button span {
+.task-menu-fixture > button span {
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 9px;
 }
 
-.task-menu p {
+.task-menu-fixture p,
+.task-menu-live p {
   margin: 8px 8px 4px;
   padding-top: 9px;
   border-top: 1px solid var(--line);
   color: var(--text-faint);
   font-size: 10px;
   line-height: 1.45;
+}
+
+.task-menu-live {
+  display: grid;
+  gap: 3px;
+}
+
+.task-menu-live > label {
+  padding: 2px 8px 3px;
+  color: var(--text-soft);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.task-menu-rename-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  margin: 0 4px 6px;
+}
+
+.task-menu-rename-row input {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.task-menu-rename-row button {
+  height: 34px;
+  border: 1px solid rgba(120, 103, 255, 0.42);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: var(--iris-soft);
+  color: var(--iris-bright);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.task-menu-rename-row button:disabled,
+.task-menu-rename-row input:disabled {
+  cursor: default;
+  opacity: 0.52;
+}
+
+.task-menu-action small {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.task-menu-action.danger:not(:disabled) {
+  color: var(--failed);
+}
+
+.task-menu-live p[data-error="true"] {
+  color: var(--failed);
 }
 
 .command-dialog {

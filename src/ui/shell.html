@@ -452,16 +452,47 @@
           ×
         </button>
       </header>
-      <button id="task-menu-computer" type="button">
-        Review Computer request <span>⌘2</span>
-      </button>
-      <button id="task-menu-activity" type="button">
-        Open Activity <span>⌘3</span>
-      </button>
-      <button id="task-menu-setup" type="button">
-        Review setup <span>Settings</span>
-      </button>
-      <p>Destructive task actions are unavailable in this synthetic preview.</p>
+      <section class="task-menu-live" id="task-menu-live" hidden>
+        <label for="task-menu-name">Task name</label>
+        <div class="task-menu-rename-row">
+          <input
+            id="task-menu-name"
+            type="text"
+            maxlength="80"
+            autocomplete="off"
+            aria-describedby="task-menu-note"
+          />
+          <button id="task-menu-rename" type="button">Rename</button>
+        </div>
+        <button class="task-menu-action" id="task-menu-pin" type="button">
+          <span>Pin task</span><small>Keep first</small>
+        </button>
+        <button class="task-menu-action" id="task-menu-cancel" type="button">
+          <span>Cancel running task</span><small>Provider stop</small>
+        </button>
+        <button
+          class="task-menu-action danger"
+          id="task-menu-close-task"
+          type="button"
+        >
+          <span>Close task</span><small>Remove locally</small>
+        </button>
+        <p id="task-menu-note" role="status" aria-live="polite"></p>
+      </section>
+      <div class="task-menu-fixture" id="task-menu-fixture">
+        <button id="task-menu-computer" type="button">
+          Review Computer request <span>⌘2</span>
+        </button>
+        <button id="task-menu-activity" type="button">
+          Open Activity <span>⌘3</span>
+        </button>
+        <button id="task-menu-setup" type="button">
+          Review setup <span>Settings</span>
+        </button>
+        <p>
+          Destructive task actions are unavailable in this synthetic preview.
+        </p>
+      </div>
     </dialog>
 
     <dialog

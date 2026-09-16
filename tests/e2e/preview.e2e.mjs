@@ -581,7 +581,10 @@ async function startChatGptFixture() {
         <body><p data-testid="popup-ready">Secure popup ready</p></body></html>`);
       return;
     }
-    if (pathname !== "/chatgpt" && pathname !== "/chatgpt/c/farol-next-e2e") {
+    if (
+      pathname !== "/chatgpt" &&
+      !/^\/chatgpt\/c\/[A-Za-z0-9-]{8,128}\/?$/u.test(pathname)
+    ) {
       response.writeHead(404, { "content-type": "text/plain" });
       response.end("not found\n");
       return;
@@ -617,10 +620,16 @@ async function startChatGptFixture() {
           const send = document.querySelector('[data-testid="send-button"]');
           const stop = document.querySelector('[data-testid="stop-button"]');
           const conversation = document.querySelector('#conversation');
+          const requestedTask = new URLSearchParams(location.search).get('farol-e2e-task');
+          const existingConversation = location.pathname.match(/^\/chatgpt\/c\/([A-Za-z0-9-]{8,128})\/?$/);
+          const conversationId = existingConversation?.[1] || requestedTask || 'farol-next-e2e';
+          const conversationPath = '/chatgpt/c/' + conversationId;
+          const conversationStorageKey = 'farol-next-e2e-conversation:' + conversationPath;
           window.__farolTaskProgress = [];
           window.__farolSubmitCount = 0;
           window.__farolAttachmentProof = [];
           let attachmentLoading = false;
+          let responseGeneration = 0;
           const updateSend = () => {
             send.disabled = composer.textContent.trim().length === 0 || attachmentLoading;
           };
@@ -630,6 +639,24 @@ async function startChatGptFixture() {
             expire.hidden = !authenticated;
             composer.hidden = !authenticated;
             send.hidden = !authenticated;
+          };
+          const restoreConversation = () => {
+            if (location.pathname !== conversationPath) return;
+            try {
+              const saved = JSON.parse(localStorage.getItem(conversationStorageKey) || 'null');
+              if (!saved || typeof saved.user !== 'string' || typeof saved.assistant !== 'string') return;
+              const user = document.createElement('article');
+              user.className = 'message';
+              user.dataset.messageAuthorRole = 'user';
+              user.textContent = saved.user;
+              const assistant = document.createElement('article');
+              assistant.className = 'message';
+              assistant.dataset.messageAuthorRole = 'assistant';
+              assistant.textContent = saved.assistant;
+              conversation.append(user, assistant);
+            } catch {
+              localStorage.removeItem(conversationStorageKey);
+            }
           };
           popup.addEventListener('click', () => window.open('/chatgpt-popup', 'chatgpt-auth'));
           composer.addEventListener('input', () => {
@@ -669,18 +696,26 @@ async function startChatGptFixture() {
             localStorage.removeItem('farol-next-e2e-authenticated');
             render();
           });
+          stop.addEventListener('click', () => {
+            responseGeneration += 1;
+            stop.hidden = true;
+            send.hidden = false;
+            send.disabled = true;
+          });
           send.addEventListener('click', () => {
             if (send.disabled) return;
+            const activeGeneration = ++responseGeneration;
             window.__farolSubmitCount += 1;
             if (location.pathname === '/chatgpt') {
-              history.replaceState(null, '', '/chatgpt/c/farol-next-e2e');
+              history.replaceState(null, '', conversationPath);
             }
             send.disabled = true;
             send.hidden = true;
+            const userText = composer.textContent;
             const user = document.createElement('article');
             user.className = 'message';
             user.dataset.messageAuthorRole = 'user';
-            user.textContent = composer.textContent;
+            user.textContent = userText;
             const assistant = document.createElement('article');
             assistant.className = 'message';
             assistant.dataset.messageAuthorRole = 'assistant';
@@ -694,8 +729,14 @@ async function startChatGptFixture() {
               'It contains one concrete status line. ',
               'Action: keep the read-only boundary in place.'
             ];
+            localStorage.setItem(conversationStorageKey, JSON.stringify({
+              user: userText,
+              assistant: chunks.join('')
+            }));
+            const chunkDelay = userText.includes('cancellation canary') ? 1000 : 150;
             chunks.forEach((chunk, index) => {
               setTimeout(() => {
+                if (activeGeneration !== responseGeneration) return;
                 assistant.textContent += chunk;
                 window.__farolTaskProgress.push(assistant.textContent.length);
                 if (index === chunks.length - 1) {
@@ -703,9 +744,10 @@ async function startChatGptFixture() {
                   send.hidden = false;
                   send.disabled = false;
                 }
-              }, 150 * (index + 1));
+              }, chunkDelay * (index + 1));
             });
           });
+          restoreConversation();
           render();
         </script>
       </body></html>`);
@@ -2421,11 +2463,256 @@ try {
         proof.isolatedSession === true,
     ),
   );
+
+  const admittedState = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  const pinnedTask = admittedState.tasks[4];
+  const cancellableTask = admittedState.tasks[2];
+  const closingTask = admittedState.tasks[3];
+  assert.ok(pinnedTask && cancellableTask && closingTask);
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  await ordinaryLiveTasks.window
+    .locator("#task-menu-name")
+    .fill("Pinned continuity task");
+  await ordinaryLiveTasks.window.locator("#task-menu-rename").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent ===
+      "Task renamed.",
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-pin").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent === "Task pinned.",
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-cancel").isDisabled(),
+    true,
+  );
+  const managedState = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(managedState.tasks[0].taskId, pinnedTask.taskId);
+  assert.equal(managedState.tasks[0].label, "Pinned continuity task");
+  assert.equal(managedState.tasks[0].pinned, true);
+  assert.equal(managedState.taskRevision, 7);
+  assert.equal(
+    await ordinaryLiveTasks.application.evaluate(
+      ({ BrowserWindow }, title) =>
+        BrowserWindow.getAllWindows().some(
+          (candidate) => candidate.getTitle() === title,
+        ),
+      "Pinned continuity task · Farol Next",
+    ),
+    true,
+  );
+  const idleCancel = await ordinaryLiveTasks.window.evaluate(
+    (taskId) => window.farolNext.task({ kind: "task.cancel", taskId }),
+    pinnedTask.taskId,
+  );
+  assert.deepEqual(idleCancel, {
+    ok: false,
+    error: "TASK_NOT_RUNNING",
+    state: idleCancel.state,
+  });
+  assert.equal(idleCancel.state.revision, 7);
+  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+
+  const continuityPrompt = "Farol live task continuity canary";
+  const continuityPage = taskPages[4];
+  await continuityPage.locator("#prompt-textarea").fill(continuityPrompt);
+  await continuityPage.waitForFunction(
+    () =>
+      document.querySelector('[data-testid="send-button"]')?.disabled === false,
+  );
+  await continuityPage.locator('[data-testid="send-button"]').click();
+  await continuityPage.waitForURL(/\/chatgpt\/c\/[A-Za-z0-9-]{8,128}$/u);
+  const retainedLiveConversationUrl = continuityPage.url();
+  await continuityPage.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-message-author-role="assistant"]')
+        ?.textContent?.includes("keep the read-only boundary in place") ===
+      true,
+  );
+  await ordinaryLiveTasks.window.waitForFunction(
+    async (taskId) =>
+      (await window.farolNext.bootstrap()).tasks.find(
+        (task) => task.taskId === taskId,
+      )?.lifecycle === "completed",
+    pinnedTask.taskId,
+  );
+  await continuityPage.close();
+  await waitForWindowCount(ordinaryLiveTasks.application, 5);
+
+  await ordinaryLiveTasks.window
+    .locator(`#task-tabs .task-tab[data-task-id="${cancellableTask.taskId}"]`)
+    .click();
+  const cancellablePage = taskPages[2];
+  await cancellablePage
+    .locator("#prompt-textarea")
+    .fill("Farol live cancellation canary");
+  await cancellablePage.waitForFunction(
+    () =>
+      document.querySelector('[data-testid="send-button"]')?.disabled === false,
+  );
+  await cancellablePage.locator('[data-testid="send-button"]').click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    async (taskId) =>
+      (await window.farolNext.bootstrap()).tasks.find(
+        (task) => task.taskId === taskId,
+      )?.lifecycle === "running",
+    cancellableTask.taskId,
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-cancel").isEnabled(),
+    true,
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent ===
+      "Provider stop confirmed.",
+  );
+  const cancelledState = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(
+    cancelledState.tasks.find((task) => task.taskId === cancellableTask.taskId)
+      ?.lifecycle,
+    "cancelled",
+  );
+  assert.equal(
+    await cancellablePage.locator('[data-testid="stop-button"]').isHidden(),
+    true,
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+
+  await ordinaryLiveTasks.window
+    .locator(`#task-tabs .task-tab[data-task-id="${closingTask.taskId}"]`)
+    .click();
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  await ordinaryLiveTasks.window.locator("#task-menu-close-task").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    (taskId) =>
+      !document.querySelector(`#task-tabs .task-tab[data-task-id="${taskId}"]`),
+    closingTask.taskId,
+  );
+  await waitForWindowCount(ordinaryLiveTasks.application, 4);
+  assert.equal(await newTask.isEnabled(), true);
+  assert.equal(await newTask.locator("small").innerText(), "4 / 5");
+
+  const liveTaskRoot = path.join(
+    ordinaryLiveTasks.userData,
+    "farol-next-state",
+    "live-tasks",
+  );
+  const liveTaskPath = path.join(liveTaskRoot, "live-tasks.json");
+  const liveTaskText = await fs.readFile(liveTaskPath, "utf8");
+  const liveTaskRecord = JSON.parse(liveTaskText);
+  assert.equal(liveTaskRecord.schema, 1);
+  assert.equal(liveTaskRecord.revision, 13);
+  assert.equal(liveTaskRecord.tasks.length, 4);
+  assert.equal(liveTaskRecord.tasks[0].taskId, pinnedTask.taskId);
+  assert.equal(liveTaskRecord.tasks[0].label, "Pinned continuity task");
+  assert.equal(liveTaskRecord.tasks[0].pinned, true);
+  assert.equal(
+    liveTaskRecord.tasks[0].conversationUrl,
+    retainedLiveConversationUrl,
+  );
+  assert.equal(
+    liveTaskRecord.tasks.some((task) => task.taskId === closingTask.taskId),
+    false,
+  );
+  assert.deepEqual(Object.keys(liveTaskRecord.tasks[0]).sort(), [
+    "conversationUrl",
+    "hasComputer",
+    "label",
+    "lifecycle",
+    "observedMode",
+    "observedModel",
+    "pinned",
+    "provider",
+    "requestedMode",
+    "requestedModel",
+    "sessionId",
+    "taskId",
+    "turnId",
+  ]);
+  assert.doesNotMatch(
+    liveTaskText,
+    /continuity canary|cancellation canary|bounded workspace verification/iu,
+  );
+  assert.equal((await fs.stat(liveTaskRoot)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
+
+  await restart(ordinaryLiveTasks);
+  await ordinaryLiveTasks.window.waitForFunction(
+    () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
+  );
+  await waitForWindowCount(ordinaryLiveTasks.application, 1);
+  const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(recoveredState.taskRevision, 13);
+  assert.deepEqual(
+    recoveredState.tasks,
+    liveTaskRecord.tasks.map(
+      ({ conversationUrl: _conversationUrl, ...task }) => task,
+    ),
+  );
+  const recoveredNewTask = ordinaryLiveTasks.window.locator("#new-task");
+  assert.equal(await recoveredNewTask.isEnabled(), true);
+  assert.equal(await recoveredNewTask.locator("small").innerText(), "4 / 5");
+  const reopened = ordinaryLiveTasks.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await ordinaryLiveTasks.window.locator("#dossier-route").click();
+  const reopenedContinuityPage = await reopened;
+  await reopenedContinuityPage.waitForURL(retainedLiveConversationUrl);
+  assert.equal(
+    await reopenedContinuityPage
+      .locator('[data-message-author-role="user"]')
+      .innerText(),
+    continuityPrompt,
+  );
+  assert.match(
+    await reopenedContinuityPage
+      .locator('[data-message-author-role="assistant"]')
+      .innerText(),
+    /keep the read-only boundary in place/u,
+  );
+  assert.equal(
+    await ordinaryLiveTasks.application.evaluate(
+      ({ BrowserWindow }, expectedUrl) =>
+        BrowserWindow.getAllWindows()
+          .find((candidate) => candidate.webContents.getURL() === expectedUrl)
+          ?.getTitle() ?? null,
+      retainedLiveConversationUrl,
+    ),
+    "Pinned continuity task · Farol Next",
+  );
   cases.push(
     "ordinary-new-task-opens-actual-chatgpt-surface",
     "five-live-chatgpt-task-capacity",
     "sixth-live-task-refused-without-replacement",
     "live-task-requested-observed-state-truthful",
+    "live-task-rename-pin-close-and-capacity-recovery",
+    "live-task-registry-private-content-free-persistence",
+    "live-task-same-conversation-after-process-restart",
+    "idle-live-task-cancel-refused-truthfully",
+    "running-live-task-cancel-confirmed-once",
   );
 } finally {
   await close(ordinaryLiveTasks);

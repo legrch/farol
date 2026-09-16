@@ -72,4 +72,35 @@ describe("live task registry", () => {
       tasks: [{ ...candidate(1), lifecycle: "running" }],
     });
   });
+
+  it("renames, pins, and closes tasks without changing their identities", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    registry.admit(candidate(2));
+
+    expect(registry.rename("task-1", "Owner review")).toBe(true);
+    expect(registry.setPinned("task-2", true)).toBe(true);
+    expect(registry.snapshot().tasks).toEqual([
+      { ...candidate(2), pinned: true },
+      { ...candidate(1), label: "Owner review" },
+    ]);
+    expect(registry.remove("task-2")).toEqual({
+      ...candidate(2),
+      pinned: true,
+    });
+    expect(registry.get("task-2")).toBeNull();
+  });
+
+  it("restores a validated durable snapshot exactly once", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.restore({ revision: 9, tasks: [candidate(1), candidate(2)] });
+
+    expect(registry.snapshot()).toEqual({
+      revision: 9,
+      tasks: [candidate(1), candidate(2)],
+    });
+    expect(() =>
+      registry.restore({ revision: 10, tasks: [candidate(3)] }),
+    ).toThrow("LIVE_TASK_REGISTRY_NOT_EMPTY");
+  });
 });
