@@ -197,6 +197,7 @@ function defaultSettings(id: () => string): ProductSettings {
       computerId: id(),
       generation: 1,
       name: "This Mac",
+      commands: "none",
       workspaces: [],
     },
     nativeHosts: { generation: 1, codex: null },
@@ -593,6 +594,41 @@ export class ProductConfigurationService {
         },
       },
     }));
+  }
+
+  async updateComputerCommands(input: unknown): Promise<MutationResult> {
+    const parsed = z.enum(["none", "verification"]).safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    if (this.current.computer.commands === parsed.data) {
+      return { ok: true, snapshot: this.snapshot() };
+    }
+    return this.mutate((settings) => {
+      const configured = settings.computer.workspaces.length > 0;
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        computer: {
+          ...settings.computer,
+          generation: settings.computer.generation + 1,
+          commands: parsed.data,
+        },
+        setup: {
+          ...settings.setup,
+          computer: {
+            ...settings.setup.computer,
+            configured,
+            reachable: "unknown" as const,
+            verified: null,
+            needsAction: configured
+              ? "Verify workspace access after changing command authority."
+              : "Add a read-only workspace.",
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      };
+    });
   }
 
   async recordComputerVerification(

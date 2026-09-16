@@ -216,6 +216,7 @@ export const ProductSettingsSchema = z.strictObject({
     computerId: IdentifierSchema,
     generation: z.number().int().positive(),
     name: z.string().trim().min(1).max(80),
+    commands: z.enum(["none", "verification"]).default("none"),
     workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
   }),
   nativeHosts: z
@@ -317,6 +318,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     access: z.enum(["read", "write"]),
   }),
   z.strictObject({
+    kind: z.literal("computer.update-commands"),
+    commands: z.enum(["none", "verification"]),
+  }),
+  z.strictObject({
     kind: z.literal("computer.verify-workspace"),
     workspaceId: IdentifierSchema,
   }),
@@ -330,6 +335,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
     relativePath: ProductScopeRelativePathSchema,
     pattern: ProductSearchPatternSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.run-git-status"),
+    workspaceId: IdentifierSchema,
   }),
   z.strictObject({
     kind: z.literal("computer.prepare-workspace-edit"),
@@ -577,6 +586,20 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     scanLimited: z.boolean(),
   }),
   z.strictObject({
+    kind: z.literal("computer.workspace-command"),
+    workspaceId: IdentifierSchema,
+    command: z.literal("git.status"),
+    exitCode: z.literal(0),
+    stdout: z.string().max(64 * 1_024),
+    stderr: z.literal(""),
+    outputBytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(64 * 1_024),
+    network: z.literal("none"),
+  }),
+  z.strictObject({
     kind: z.literal("computer.workspace-edit-preview"),
     operationId: IdentifierSchema,
     workspaceId: IdentifierSchema,
@@ -666,6 +689,11 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_SEARCH_TIMEOUT",
       "WORKSPACE_VERIFICATION_REQUIRED",
       "WORKSPACE_READ_FAILED",
+      "WORKSPACE_COMMAND_APPROVAL_REQUIRED",
+      "WORKSPACE_COMMAND_UNAVAILABLE",
+      "WORKSPACE_COMMAND_TIMEOUT",
+      "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+      "WORKSPACE_COMMAND_FAILED",
       "WORKSPACE_WRITE_APPROVAL_REQUIRED",
       "WORKSPACE_MUTATION_IN_PROGRESS",
       "WORKSPACE_MUTATION_PREVIEW_NOT_FOUND",

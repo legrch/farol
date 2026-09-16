@@ -822,6 +822,40 @@ async function launch(
     "Farol Next workspace verification fixture\n",
     { mode: 0o600 },
   );
+  const gitLookup = spawnSync("/usr/bin/xcrun", ["--find", "git"], {
+    encoding: "utf8",
+  });
+  assert.equal(gitLookup.status, 0, gitLookup.stderr);
+  const gitFixture = gitLookup.stdout.trim();
+  const gitInit = spawnSync(
+    gitFixture,
+    ["init", "--quiet", "--initial-branch=main", workspaceRoot],
+    { encoding: "utf8" },
+  );
+  assert.equal(gitInit.status, 0, gitInit.stderr);
+  const gitAdd = spawnSync(
+    gitFixture,
+    ["-C", workspaceRoot, "add", "README.md"],
+    { encoding: "utf8" },
+  );
+  assert.equal(gitAdd.status, 0, gitAdd.stderr);
+  const gitCommit = spawnSync(
+    gitFixture,
+    [
+      "-C",
+      workspaceRoot,
+      "-c",
+      "user.name=Farol E2E",
+      "-c",
+      "user.email=farol-e2e@invalid.example",
+      "commit",
+      "--quiet",
+      "-m",
+      "fixture",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(gitCommit.status, 0, gitCommit.stderr);
   await fs.writeFile(
     attachmentImage,
     Buffer.from(
@@ -3537,6 +3571,83 @@ try {
     .waitFor();
   cases.push("workspace-app-list-search");
 
+  const workspaceId =
+    renamedConfiguration.configuration.settings.computer.workspaces[0]
+      .workspaceId;
+  const deniedCommand = await normal.window.evaluate(
+    async ({ selectedWorkspaceId }) =>
+      window.farolNext.configure({
+        kind: "computer.run-git-status",
+        workspaceId: selectedWorkspaceId,
+      }),
+    { selectedWorkspaceId: workspaceId },
+  );
+  assert.equal(deniedCommand.ok, false);
+  assert.equal(deniedCommand.error, "WORKSPACE_COMMAND_APPROVAL_REQUIRED");
+  const commandPolicy = normal.window.locator("#computer-command-policy");
+  await commandPolicy
+    .getByText("Off · no command authority is granted", { exact: true })
+    .waitFor();
+  assert.equal(
+    await workspaceCard
+      .getByRole("button", { name: "Git status", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await commandPolicy
+    .getByRole("button", { name: "Enable", exact: true })
+    .click();
+  await normal.window
+    .locator("#computer-feedback")
+    .getByText(
+      "Fixed no-network Git status enabled. Verify the workspace again before use.",
+      { exact: true },
+    )
+    .waitFor();
+  await workspaceCard.getByText(/read-only · not verified/u).waitFor();
+  assert.equal(
+    await workspaceCard
+      .getByRole("button", { name: "Git status", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await workspaceCard
+    .getByRole("button", { name: "Verify", exact: true })
+    .click();
+  await workspaceCard.getByText(/read-only · verified/u).waitFor();
+  const gitStatus = workspaceCard.getByRole("button", {
+    name: "Git status",
+    exact: true,
+  });
+  assert.equal(await gitStatus.isEnabled(), true);
+  await gitStatus.click();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/Git status · exit 0 · \d+ bytes · network none/u)
+    .waitFor();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/## main/u)
+    .waitFor();
+  await normal.window
+    .locator("#computer-feedback")
+    .getByText(
+      /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
+    )
+    .waitFor();
+  const commandConfiguration = await normal.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(
+    commandConfiguration.configuration.settings.computer.commands,
+    "verification",
+  );
+  cases.push(
+    "workspace-command-disabled-by-default",
+    "workspace-command-authority-explicit",
+    "workspace-command-fixed-no-network",
+  );
+
   const exclusionInput = normal.window.getByLabel(
     "Excluded paths for approved-workspace",
     { exact: true },
@@ -3626,9 +3737,17 @@ try {
     await fs.readFile(normal.workspaceFile, "utf8"),
     "Farol Next guarded workspace mutation fixture\n",
   );
+  await workspaceCard
+    .getByRole("button", { name: "Git status", exact: true })
+    .click();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/README\.md/u)
+    .waitFor();
   cases.push(
     "workspace-write-access-explicit",
     "workspace-guarded-edit-atomic",
+    "workspace-command-observes-real-change",
   );
 
   await invokeApplicationMenu(normal.application, "app.settings");
@@ -3962,6 +4081,28 @@ try {
     restartedSettings.setup.hosts.verified.configRevision,
     restartedSettings.nativeHosts.generation,
   );
+  assert.equal(restartedSettings.computer.commands, "verification");
+  await normal.window
+    .locator('[data-panel="settings"]')
+    .getByRole("button", { name: "Open Computer", exact: true })
+    .click();
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
+  const restartedWorkspaceCard = normal.window
+    .locator("#computer-workspaces .workspace-card")
+    .filter({ hasText: "approved-workspace" });
+  const restartedGitStatus = restartedWorkspaceCard.getByRole("button", {
+    name: "Git status",
+    exact: true,
+  });
+  assert.equal(await restartedGitStatus.isEnabled(), true);
+  await restartedGitStatus.click();
+  await restartedWorkspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/README\.md/u)
+    .waitFor();
+  await invokeApplicationMenu(normal.application, "app.settings");
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
+  cases.push("workspace-command-persists-and-runs-after-restart");
   await normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Open sign-in…", exact: true })
@@ -4042,6 +4183,7 @@ try {
   assert.equal((await fs.stat(settingsRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(settingsPath)).mode & 0o777, 0o600);
   const savedSettings = await fs.readFile(settingsPath, "utf8");
+  assert.match(savedSettings, /"commands": "verification"/u);
   assert.doesNotMatch(savedSettings, /workspace verification fixture/u);
   assert.doesNotMatch(savedSettings, /Bearer|token|cookie|secret/u);
   const mutationRoot = path.join(settingsRoot, "workspace-mutations");

@@ -95,6 +95,7 @@ import {
   type StoredLiveTask,
 } from "./live-task-store";
 import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
+import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
 import {
   createParticipantAuthority,
   deriveTaskGrant,
@@ -277,6 +278,7 @@ const agentCheckConfigurationMutations = new Set<string>([
   "computer.remove-workspace",
   "computer.update-exclusions",
   "computer.update-access",
+  "computer.update-commands",
   "computer.verify-workspace",
 ]);
 type ActiveCodexAgentCheck = Readonly<{
@@ -419,6 +421,88 @@ function mutableWorkspaceAction(
       ),
     }),
     new Sha256WorkspaceMutationDigester(),
+    nativeWorkspace,
+    { now: () => Date.now() },
+  );
+}
+
+function verificationWorkspaceAction(
+  settings: ProductSettings,
+  workspace: ApprovedProductWorkspace,
+  expiresAt: number,
+): RunReadonlyComputerAction | null {
+  if (settings.computer.commands !== "verification") return null;
+  const ownerId = "owner-desktop";
+  const sessionId = "desktop-command-session";
+  const taskId = "desktop-command-task";
+  const participantId = "desktop-command-main";
+  const approvalCapabilities: AuthorityCapability[] = [
+    "workspace.list",
+    "workspace.read",
+    "workspace.search",
+    "verification.run",
+    ...(settings.computer.workspaces.some(
+      (candidate) => candidate.access === "write",
+    )
+      ? (["workspace.write"] as const)
+      : []),
+  ];
+  const approval: ComputerApproval = {
+    ownerId,
+    computerId: settings.computer.computerId,
+    generation: settings.computer.generation,
+    workspaces: settings.computer.workspaces.map((candidate) => ({
+      workspaceId: candidate.workspaceId,
+      root: candidate.root,
+      access: candidate.access,
+    })),
+    excludedPaths: settings.computer.workspaces.flatMap((candidate) =>
+      candidate.excludedPaths.map((excluded) => ({
+        workspaceId: candidate.workspaceId,
+        path: excluded,
+      })),
+    ),
+    capabilities: approvalCapabilities,
+    network: "none",
+    commands: "verification",
+    expiresAt,
+  };
+  const admission: TaskAdmission = {
+    authorityId: `desktop-command-authority-${settings.computer.generation}`,
+    ownerId,
+    sessionId,
+    taskId,
+    taskEpoch: settings.computer.generation,
+    computerId: settings.computer.computerId,
+    computerGeneration: settings.computer.generation,
+    workspaces: [
+      {
+        workspaceId: workspace.workspaceId,
+        mode: "subtree",
+        root: workspace.root,
+        access: "read",
+      },
+    ],
+    excludedPaths: workspace.excludedPaths.map((excluded) => ({
+      workspaceId: workspace.workspaceId,
+      path: excluded,
+    })),
+    capabilities: ["verification.run"],
+    network: "none",
+    commands: "verification",
+    expiresAt,
+  };
+  const grant = deriveTaskGrant(approval, admission, Date.now());
+  if (!grant.ok) return null;
+  const participant = createParticipantAuthority(grant.value, {
+    participantId,
+    role: "main",
+    mutationOwnership: "none",
+  });
+  if (!participant.ok) return null;
+  return new RunReadonlyComputerAction(
+    new InMemoryAuthorityRepository([participant.value]),
+    new InMemoryComputerApprovalRepository([approval]),
     nativeWorkspace,
     { now: () => Date.now() },
   );
@@ -1312,6 +1396,25 @@ function workspaceReadFailure(code: string): ProductConfigurationResult {
       return configurationFailure(code);
     default:
       return configurationFailure("WORKSPACE_READ_FAILED");
+  }
+}
+
+function workspaceCommandFailure(code: string): ProductConfigurationResult {
+  switch (code) {
+    case "AUTHORITY_CAPABILITY_DENIED":
+    case "AUTHORITY_COMMAND_DENIED":
+    case "AUTHORITY_PATH_DENIED":
+      return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
+    case "WORKSPACE_COMMAND_UNSUPPORTED":
+    case "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE":
+    case "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED":
+      return configurationFailure("WORKSPACE_COMMAND_UNAVAILABLE");
+    case "WORKSPACE_COMMAND_TIMEOUT":
+      return configurationFailure("WORKSPACE_COMMAND_TIMEOUT");
+    case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
+      return configurationFailure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE");
+    default:
+      return configurationFailure("WORKSPACE_COMMAND_FAILED");
   }
 }
 
@@ -2579,6 +2682,10 @@ async function configureProduct(
           command.access,
         ),
       );
+    case "computer.update-commands":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.updateComputerCommands(command.commands),
+      );
     case "computer.verify-workspace": {
       const snapshot = configuration.snapshot();
       const workspace =
@@ -2703,6 +2810,64 @@ async function configureProduct(
           matches: result.value.matches,
           resultLimited: result.value.resultLimited,
           scanLimited: result.value.scanLimited,
+        },
+      });
+    }
+    case "computer.run-git-status": {
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      if (snapshot.settings.computer.commands !== "verification") {
+        return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
+      }
+      const selected = verifiedProductWorkspace(command.workspaceId);
+      if (selected.status === "not_found") {
+        return configurationFailure("WORKSPACE_NOT_FOUND");
+      }
+      if (selected.status === "not_verified") {
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      const action = verificationWorkspaceAction(
+        snapshot.settings,
+        selected.workspace,
+        Date.now() + 30_000,
+      );
+      if (!action) {
+        return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
+      }
+      const result = await action.execute({
+        ownerId: "owner-desktop",
+        sessionId: "desktop-command-session",
+        taskId: "desktop-command-task",
+        taskEpoch: snapshot.settings.computer.generation,
+        participantId: "desktop-command-main",
+        turnId: `desktop-command-${snapshot.settings.computer.generation}`,
+        generation: snapshot.settings.computer.generation,
+        callId: randomUUID(),
+        workspaceId: selected.workspace.workspaceId,
+        operation: {
+          kind: "verification.run",
+          command: "git.status",
+          relativePath: ".",
+        },
+      });
+      if (!result.ok) return workspaceCommandFailure(result.error.code);
+      if (result.value.output.kind !== "workspace.command") {
+        return configurationFailure("WORKSPACE_COMMAND_FAILED");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: {
+          kind: "computer.workspace-command",
+          workspaceId: selected.workspace.workspaceId,
+          command: result.value.output.command,
+          exitCode: result.value.output.exitCode,
+          stdout: result.value.output.stdout,
+          stderr: result.value.output.stderr,
+          outputBytes: result.value.output.outputBytes,
+          network: result.value.output.network,
         },
       });
     }

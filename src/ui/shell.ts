@@ -198,6 +198,7 @@ let workspaceEvidence: Extract<
       | "computer.workspace-read"
       | "computer.workspace-list"
       | "computer.workspace-search"
+      | "computer.workspace-command"
       | "computer.workspace-edit-preview"
       | "computer.workspace-mutation";
   }
@@ -822,6 +823,7 @@ function renderComputerConfiguration(): void {
   const computerName = required<HTMLInputElement>("#computer-name");
   const saveComputerName = required<HTMLButtonElement>("#save-computer-name");
   const addWorkspace = required<HTMLButtonElement>("#add-workspace");
+  const commandPolicy = required<HTMLDivElement>("#computer-command-policy");
   const workspaces = required<HTMLDivElement>("#computer-workspaces");
   const computerReadiness = required<HTMLSpanElement>("#computer-readiness");
   renderConfigurationFeedback("#computer-feedback", "computer");
@@ -830,6 +832,8 @@ function renderComputerConfiguration(): void {
     computerName.disabled = true;
     saveComputerName.disabled = true;
     addWorkspace.disabled = true;
+    commandPolicy.textContent =
+      "Command settings are unavailable until product settings are repaired.";
     workspaces.textContent =
       "Repair is required before Computer access can be changed.";
     computerReadiness.textContent = "Unavailable";
@@ -848,6 +852,34 @@ function renderComputerConfiguration(): void {
     computerName.value = settings.computer.name;
     renderedComputerSettingsRevision = settings.revision;
   }
+
+  const commandRow = document.createElement("div");
+  commandRow.className = "connection-row command-policy-row";
+  const commandCopy = document.createElement("div");
+  const commandTitle = document.createElement("strong");
+  const commandDetail = document.createElement("small");
+  commandTitle.textContent = "Verified commands";
+  commandDetail.textContent =
+    settings.computer.commands === "verification"
+      ? "Fixed Git status only · Apple Git · no network · bounded output"
+      : "Off · no command authority is granted";
+  commandCopy.append(commandTitle, commandDetail);
+  const updateCommands = document.createElement("button");
+  updateCommands.type = "button";
+  updateCommands.textContent =
+    settings.computer.commands === "verification" ? "Turn off" : "Enable";
+  updateCommands.addEventListener("click", () => {
+    const commands =
+      settings.computer.commands === "verification" ? "none" : "verification";
+    void configureProduct(
+      { kind: "computer.update-commands", commands },
+      commands === "verification"
+        ? "Fixed no-network Git status enabled. Verify the workspace again before use."
+        : "Command authority removed.",
+    );
+  });
+  commandRow.append(commandCopy, updateCommands);
+  commandPolicy.replaceChildren(commandRow);
 
   const computerState = settings.setup.computer;
   computerReadiness.textContent = readinessLabel(computerState);
@@ -1029,6 +1061,27 @@ function renderComputerConfiguration(): void {
         );
       });
       query.append(listRoot, searchLabel, search);
+      const gitStatus = document.createElement("button");
+      gitStatus.type = "button";
+      gitStatus.textContent = "Git status";
+      gitStatus.disabled =
+        !verified || settings.computer.commands !== "verification";
+      gitStatus.title =
+        settings.computer.commands !== "verification"
+          ? "Enable Verified commands above"
+          : verified
+            ? "Run the fixed no-network Git status verifier at this workspace root"
+            : "Verify this workspace again first";
+      gitStatus.addEventListener("click", () => {
+        void configureProduct(
+          {
+            kind: "computer.run-git-status",
+            workspaceId: workspace.workspaceId,
+          },
+          `${workspace.label} Git status completed without network access.`,
+        );
+      });
+      query.append(gitStatus);
       if (workspace.access === "write") {
         const edit = document.createElement("button");
         edit.type = "button";
@@ -1087,6 +1140,14 @@ function renderComputerConfiguration(): void {
             matches.append(item);
           }
           evidence.append(heading, matches);
+        } else if (workspaceEvidence.kind === "computer.workspace-command") {
+          heading.textContent = `Git status · exit ${workspaceEvidence.exitCode} · ${workspaceEvidence.outputBytes} bytes · network ${workspaceEvidence.network}`;
+          const output = document.createElement("pre");
+          output.textContent =
+            workspaceEvidence.stdout === ""
+              ? "Clean working tree"
+              : workspaceEvidence.stdout;
+          evidence.append(heading, output);
         } else if (
           workspaceEvidence.kind === "computer.workspace-edit-preview"
         ) {
@@ -1200,8 +1261,10 @@ async function configureProduct(
     command.kind === "computer.verify-workspace" ||
     command.kind === "computer.list-workspace" ||
     command.kind === "computer.search-workspace" ||
+    command.kind === "computer.run-git-status" ||
     command.kind === "computer.prepare-workspace-edit" ||
     command.kind === "computer.update-access" ||
+    command.kind === "computer.update-commands" ||
     command.kind === "computer.update-exclusions" ||
     command.kind === "computer.remove-workspace"
   ) {
@@ -1235,12 +1298,15 @@ async function configureProduct(
                             ? "Clearing the retained conversation binding…"
                             : command.kind === "computer.prepare-workspace-edit"
                               ? "Reading the selected file and preparing a content-free edit review…"
-                              : command.kind === "computer.apply-workspace-edit"
-                                ? "Applying this guarded edit once…"
+                              : command.kind === "computer.run-git-status"
+                                ? "Running fixed Apple Git status with no network access…"
                                 : command.kind ===
-                                    "computer.cancel-workspace-edit"
-                                  ? "Discarding the prepared edit…"
-                                  : "Saving and reading back…";
+                                    "computer.apply-workspace-edit"
+                                  ? "Applying this guarded edit once…"
+                                  : command.kind ===
+                                      "computer.cancel-workspace-edit"
+                                    ? "Discarding the prepared edit…"
+                                    : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1301,6 +1367,9 @@ async function configureProduct(
   } else if (evidence?.kind === "computer.workspace-search") {
     workspaceEvidence = evidence;
     settingsFeedback = `Found ${evidence.matches.length} ${evidence.matches.length === 1 ? "match" : "matches"} for "${evidence.pattern}"${evidence.resultLimited || evidence.scanLimited ? " (result limited)" : ""}.`;
+  } else if (evidence?.kind === "computer.workspace-command") {
+    workspaceEvidence = evidence;
+    settingsFeedback = `Fixed Git status completed · exit ${evidence.exitCode} · ${evidence.outputBytes} bytes · network ${evidence.network}.`;
   } else if (evidence?.kind === "computer.workspace-edit-preview") {
     workspaceEvidence = evidence;
     settingsFeedback = `Review one exact replacement in ${evidence.relativePath}. Nothing has been changed.`;

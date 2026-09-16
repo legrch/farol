@@ -1227,6 +1227,10 @@ html[data-has-tasks="false"] .surface {
   margin-top: 14px;
 }
 
+#computer-command-policy {
+  margin-top: 14px;
+}
+
 .workspace-card {
   min-width: 0;
   border-top: 1px solid var(--line-soft);
@@ -1291,7 +1295,7 @@ html[data-has-tasks="false"] .surface {
 
 .workspace-query {
   display: grid;
-  grid-template-columns: auto minmax(160px, 1fr) auto auto;
+  grid-template-columns: auto minmax(160px, 1fr) repeat(3, auto);
   align-items: end;
   gap: 8px;
   padding: 0 0 12px;
@@ -1391,7 +1395,8 @@ html[data-has-tasks="false"] .surface {
   gap: 8px;
 }
 
-.workspace-read-evidence pre {
+.workspace-read-evidence pre,
+.workspace-query-evidence pre {
   max-height: 180px;
   margin: 0;
   overflow: auto;

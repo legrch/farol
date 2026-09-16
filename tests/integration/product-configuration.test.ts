@@ -94,6 +94,43 @@ describe("Farol Next product configuration", () => {
     });
   });
 
+  it("defaults commands to none and persists explicit verification authority across restart", async () => {
+    const root = await stateRoot();
+    const first = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await first.initialize();
+    expect(first.snapshot()).toMatchObject({
+      status: "ready",
+      settings: { computer: { commands: "none", generation: 1 } },
+    });
+
+    const updated = await first.updateComputerCommands("verification");
+    expect(updated).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          computer: { commands: "verification", generation: 2 },
+          setup: {
+            computer: {
+              verified: null,
+              needsAction: "Add a read-only workspace.",
+            },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject(updated.snapshot);
+  });
+
   it("keeps the last verified state when an atomic save fails", async () => {
     const root = await stateRoot();
     const baseline = new ProductConfigurationService(
@@ -975,6 +1012,38 @@ describe("Farol Next product configuration", () => {
         truncated: false,
       }).success,
     ).toBe(false);
+
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.update-commands",
+        commands: "verification",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.run-git-status",
+        workspaceId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.run-git-status",
+        workspaceId,
+        command: "sh -c whoami",
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-command",
+        workspaceId,
+        command: "git.status",
+        exitCode: 0,
+        stdout: "## main\n",
+        stderr: "",
+        outputBytes: 8,
+        network: "none",
+      }).success,
+    ).toBe(true);
   });
 
   it("admits a reviewed guarded edit and content-free mutation receipt", () => {
