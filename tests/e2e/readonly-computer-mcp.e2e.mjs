@@ -11,7 +11,33 @@ const root = await fs.realpath(
 const launchRoot = path.join(root, "launch");
 const workspaceRoot = path.join(root, "workspace");
 const launchFile = path.join(launchRoot, "computer-launch.json");
-const entry = path.resolve("dist/app/computer-mcp.cjs");
+const arguments_ = process.argv.slice(2);
+if (
+  arguments_.length > 1 ||
+  (arguments_.length === 1 && arguments_[0] !== "--packaged")
+) {
+  throw new Error("READONLY_COMPUTER_MCP_E2E_ARGUMENTS_INVALID");
+}
+const packaged = arguments_[0] === "--packaged";
+const packageRoot = path.resolve("dist/package/Farol Next Preview.app");
+const entry = packaged
+  ? path.join(packageRoot, "Contents/Resources/app/computer-mcp.cjs")
+  : path.resolve("dist/app/computer-mcp.cjs");
+const command = packaged
+  ? path.join(
+      packageRoot,
+      "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+    )
+  : process.execPath;
+
+function packagedEnvironment() {
+  const environment = { ELECTRON_RUN_AS_NODE: "1" };
+  for (const name of ["HOME", "PATH", "TMPDIR"]) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  return environment;
+}
 
 function canonical(value) {
   if (Array.isArray(value)) {
@@ -103,10 +129,11 @@ await fs.writeFile(launchFile, `${canonical(launch)}\n`, {
 });
 
 const transport = new StdioClientTransport({
-  command: process.execPath,
+  command,
   args: [entry, "--launch-contract", launchFile],
   cwd: process.cwd(),
   stderr: "pipe",
+  ...(packaged ? { env: packagedEnvironment() } : {}),
 });
 let stderr = "";
 transport.stderr?.on("data", (chunk) => {
@@ -174,7 +201,7 @@ try {
   });
   assert.equal(stderr, "");
   process.stdout.write(
-    `${JSON.stringify({ tools: tools.tools.length, participant: "critic-e2e", transport: "stdio" })}\n`,
+    `${JSON.stringify({ tools: tools.tools.length, participant: "critic-e2e", transport: "stdio", runtime: packaged ? "sealed-package" : "development" })}\n`,
   );
 } catch (error) {
   throw new Error(
