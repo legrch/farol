@@ -2176,6 +2176,12 @@ try {
     await normal.window
       .locator('[data-task-id="task-harbor"][aria-selected="true"]')
       .waitFor();
+    await waitForTaskSurface(
+      normal.application,
+      "task-harbor",
+      (surface) => surface.hostVisible === true && surface.focused === true,
+      "Control+Tab transfers focus to the next native Browser",
+    );
     let focused = await taskSurfaces(normal.application);
     assert.equal(
       focused.find((surface) => surface.state.taskId === "task-harbor")
@@ -2191,6 +2197,12 @@ try {
     await normal.window
       .locator('[data-task-id="task-atlantic"][aria-selected="true"]')
       .waitFor();
+    await waitForTaskSurface(
+      normal.application,
+      "task-atlantic",
+      (surface) => surface.hostVisible === true && surface.focused === true,
+      "reverse Control+Tab transfers focus to the previous native Browser",
+    );
     focused = await taskSurfaces(normal.application);
     assert.equal(
       focused.find((surface) => surface.state.taskId === "task-atlantic")
