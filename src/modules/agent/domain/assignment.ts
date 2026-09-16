@@ -6,6 +6,7 @@ import {
 
 export type AssignmentErrorCode =
   | "AGENT_CORRELATION"
+  | "AGENT_FOCUS_DENIED"
   | "AGENT_AUTHORITY_CORRELATION"
   | "AGENT_AUTHORITY_DENIED"
   | "AGENT_AUTHORITY_UNAVAILABLE"
@@ -38,6 +39,7 @@ export type ChildCorrelation = Readonly<{
   taskEpoch: number;
   generation: number;
   authorityId: string;
+  participantId: string;
   childId: string;
 }>;
 
@@ -81,7 +83,8 @@ function matches(
     assignment.identity.taskId === correlation.taskId &&
     assignment.identity.taskEpoch === correlation.taskEpoch &&
     assignment.identity.generation === correlation.generation &&
-    assignment.authority.authorityId === correlation.authorityId
+    assignment.authority.authorityId === correlation.authorityId &&
+    assignment.authority.participantId === correlation.participantId
   );
 }
 

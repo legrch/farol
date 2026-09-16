@@ -32,6 +32,7 @@ const authority: AssignmentAuthority = {
 const child: ChildCorrelation = {
   ...identity,
   authorityId: authority.authorityId,
+  participantId: authority.participantId,
   childId: "child-a",
 };
 
@@ -64,6 +65,15 @@ describe("Agent assignment policy", () => {
       startAssignment(prepared(), {
         ...child,
         authorityId: "foreign-authority",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CORRELATION" },
+    });
+    expect(
+      startAssignment(prepared(), {
+        ...child,
+        participantId: "critic-a",
       }),
     ).toMatchObject({
       ok: false,

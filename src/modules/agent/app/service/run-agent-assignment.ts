@@ -41,6 +41,50 @@ export type AgentAssignmentCommand = Readonly<{
   focus: Readonly<{ initialPaths: readonly string[] }>;
 }>;
 
+function canonicalAbsolutePath(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.length > 4_096 ||
+    !value.startsWith("/") ||
+    value.includes("\0") ||
+    (value.length > 1 && value.endsWith("/"))
+  ) {
+    return false;
+  }
+  return value.split("/").every((part, index) => {
+    if (index === 0) return part === "";
+    return part !== "" && part !== "." && part !== "..";
+  });
+}
+
+function within(root: string, candidate: string): boolean {
+  if (!canonicalAbsolutePath(root) || !canonicalAbsolutePath(candidate)) {
+    return false;
+  }
+  return root === "/" || candidate === root || candidate.startsWith(`${root}/`);
+}
+
+function focusAllowed(
+  initialPaths: readonly string[],
+  authority: DelegatedAgentAuthority,
+): boolean {
+  if (
+    initialPaths.length > 256 ||
+    new Set(initialPaths).size !== initialPaths.length
+  ) {
+    return false;
+  }
+  return initialPaths.every(
+    (initialPath) =>
+      canonicalAbsolutePath(initialPath) &&
+      authority.workspaces.some(
+        (scope) =>
+          within(scope.root, initialPath) &&
+          (scope.mode === "subtree" || scope.paths.includes(initialPath)),
+      ),
+  );
+}
+
 export class RunAgentAssignment {
   private readonly inFlight = new Map<
     string,
@@ -81,6 +125,9 @@ export class RunAgentAssignment {
     if (!delegated.ok) return delegated;
     const identity = command.identity;
     const authority = delegated.value;
+    if (!focusAllowed(command.focus.initialPaths, authority)) {
+      return failure("AGENT_FOCUS_DENIED");
+    }
     const assignmentAuthority: AssignmentAuthority = {
       authorityId: authority.authorityId,
       participantId: authority.participantId,
@@ -268,6 +315,7 @@ export class RunAgentAssignment {
             {
               ...record.assignment.identity,
               authorityId: record.assignment.authority.authorityId,
+              participantId: record.assignment.authority.participantId,
               childId: record.assignment.childId,
             },
             {

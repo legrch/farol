@@ -81,6 +81,7 @@ const assignmentAuthority = {
 const exactChild: ChildCorrelation = {
   ...command.identity,
   authorityId: delegatedAuthority.authorityId,
+  participantId: delegatedAuthority.participantId,
   childId: "child-preview-a",
 };
 

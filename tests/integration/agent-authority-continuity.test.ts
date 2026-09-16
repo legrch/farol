@@ -96,6 +96,7 @@ function host(): AgentHost & { spawn: ReturnType<typeof vi.fn> } {
       correlation: {
         ...request.identity,
         authorityId: request.authority.authorityId,
+        participantId: request.authority.participantId,
         childId: "child-a",
       },
     })),
@@ -264,6 +265,62 @@ describe("Agent delegated-authority continuity", () => {
       mutationOwnership: "none",
       narrowing: narrowed.delegation.narrowing,
     });
+  });
+
+  it.each([
+    ["outside the delegated workspace", "/workspace/private/notes.md"],
+    ["with a non-canonical segment", "/workspace/farol/../private.md"],
+  ])("refuses focus %s before native-host spawn", async (_case, initialPath) => {
+    const nativeHost = host();
+
+    await expect(
+      new RunAgentAssignment(
+        nativeHost,
+        new InMemoryAssignments(),
+        authorityPort(),
+      ).execute({
+        ...command,
+        focus: { initialPaths: [initialPath] },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "AGENT_FOCUS_DENIED", retry: "never" },
+    });
+    expect(nativeHost.spawn).not.toHaveBeenCalled();
+  });
+
+  it("refuses focus outside an exact delegated file scope", async () => {
+    const nativeHost = host();
+    const exact = authorityPort({
+      ok: true,
+      value: {
+        ...authority,
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "exact",
+            root: "/workspace/farol",
+            paths: ["/workspace/farol/vnext/README.md"],
+            access: "read",
+          },
+        ],
+      },
+    });
+
+    await expect(
+      new RunAgentAssignment(
+        nativeHost,
+        new InMemoryAssignments(),
+        exact,
+      ).execute({
+        ...command,
+        focus: { initialPaths: ["/workspace/farol/package.json"] },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_FOCUS_DENIED" },
+    });
+    expect(nativeHost.spawn).not.toHaveBeenCalled();
   });
 
   it("fails before spawn when authority resolution is unavailable", async () => {
