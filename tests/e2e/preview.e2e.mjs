@@ -83,7 +83,22 @@ await fs.rm(evidenceRoot, { recursive: true, force: true });
 await fs.mkdir(evidenceRoot, { recursive: true });
 
 const cases = [];
+const skippedCases = [];
 let quitProofs = 0;
+
+function detectMacHostLockState() {
+  if (process.platform !== "darwin") return "not-applicable";
+  const probe = spawnSync("/usr/sbin/ioreg", ["-n", "Root", "-d1"], {
+    encoding: "utf8",
+  });
+  assert.equal(probe.status, 0, `${probe.stdout}${probe.stderr}`);
+  if (/"IOConsoleLocked" = Yes/u.test(probe.stdout)) return "locked";
+  if (/"IOConsoleLocked" = No/u.test(probe.stdout)) return "unlocked";
+  throw new Error("E2E_MAC_HOST_LOCK_STATE_UNKNOWN");
+}
+
+const macHostLockState = detectMacHostLockState();
+const nativeWindowProofAvailable = macHostLockState !== "locked";
 
 if (development) {
   cases.push("development-build-identity");
@@ -1661,109 +1676,137 @@ try {
   await reviewedSetup.waitFor({ state: "hidden" });
 
   await normal.window.keyboard.press("Meta+1");
-  await activateForNativeFocusProof(normal.application);
-  await normal.window.waitForFunction(
-    () => document.documentElement.dataset.windowActive === "true",
-  );
-  assert.equal((await nativeWindowChrome(normal.application)).focused, true);
+  if (nativeWindowProofAvailable) {
+    await activateForNativeFocusProof(normal.application);
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.windowActive === "true",
+    );
+    assert.equal((await nativeWindowChrome(normal.application)).focused, true);
 
-  await sendKeyFromTask(normal.application, "task-atlantic", "K", ["meta"]);
-  await normal.window.locator("#command-dialog").waitFor({ state: "visible" });
-  assert.equal(
-    await normal.application.evaluate(
-      ({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.webContents.isFocused() ?? false,
-    ),
-    true,
-  );
-  let focusTransfer = await taskSurfaces(normal.application);
-  assert.equal(
-    focusTransfer.find((surface) => surface.state.taskId === "task-atlantic")
-      ?.hostVisible,
-    false,
-  );
-  await normal.window.keyboard.press("Escape");
-  await normal.window.locator("#command-dialog").waitFor({ state: "hidden" });
-  await waitForTaskSurface(
-    normal.application,
-    "task-atlantic",
-    (surface) => surface.hostVisible === true && surface.focused === true,
-    "Escape transfers focus from quick switcher to native Browser",
-  );
+    await sendKeyFromTask(normal.application, "task-atlantic", "K", ["meta"]);
+    await normal.window
+      .locator("#command-dialog")
+      .waitFor({ state: "visible" });
+    assert.equal(
+      await normal.application.evaluate(
+        ({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0]?.webContents.isFocused() ?? false,
+      ),
+      true,
+    );
+    let focusTransfer = await taskSurfaces(normal.application);
+    assert.equal(
+      focusTransfer.find((surface) => surface.state.taskId === "task-atlantic")
+        ?.hostVisible,
+      false,
+    );
+    await normal.window.keyboard.press("Escape");
+    await normal.window.locator("#command-dialog").waitFor({ state: "hidden" });
+    await waitForTaskSurface(
+      normal.application,
+      "task-atlantic",
+      (surface) => surface.hostVisible === true && surface.focused === true,
+      "Escape transfers focus from quick switcher to native Browser",
+    );
 
-  await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
-  await normal.window.waitForFunction(
-    () => document.documentElement.dataset.sidebar === "rail",
-  );
-  await setFullScreen(normal.application, true);
-  await normal.window.waitForFunction(
-    () => document.documentElement.dataset.fullScreen === "true",
-  );
-  const fullScreenGeometry = await watchRailGeometry(normal.window);
-  assert.equal(fullScreenGeometry.sidebar.width, 72);
-  if (process.platform === "darwin")
-    assert.equal(fullScreenGeometry.toggle.x, 14);
-  const fullScreenSurface = await waitForTaskSurface(
-    normal.application,
-    "task-atlantic",
-    (surface) => surface.hostVisible === true && surface.hostBounds?.x === 72,
-    "fullscreen rail keeps native Browser aligned",
-  );
-  assert.equal(fullScreenSurface.hostBounds.y, 178);
-  await normal.window.screenshot({
-    path: path.join(evidenceRoot, "watch-fullscreen-rail.png"),
-  });
-  await setFullScreen(normal.application, false);
-  await normal.window.waitForFunction(
-    () => document.documentElement.dataset.fullScreen === "false",
-  );
-  if (process.platform === "darwin") {
-    assert.equal((await watchRailGeometry(normal.window)).toggle.x, 75);
-    assert.deepEqual(
-      (await nativeWindowChrome(normal.application)).trafficLightPosition,
-      { x: 14, y: 18 },
+    await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "rail",
+    );
+    await setFullScreen(normal.application, true);
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.fullScreen === "true",
+    );
+    const fullScreenGeometry = await watchRailGeometry(normal.window);
+    assert.equal(fullScreenGeometry.sidebar.width, 72);
+    if (process.platform === "darwin")
+      assert.equal(fullScreenGeometry.toggle.x, 14);
+    const fullScreenSurface = await waitForTaskSurface(
+      normal.application,
+      "task-atlantic",
+      (surface) => surface.hostVisible === true && surface.hostBounds?.x === 72,
+      "fullscreen rail keeps native Browser aligned",
+    );
+    assert.equal(fullScreenSurface.hostBounds.y, 178);
+    await normal.window.screenshot({
+      path: path.join(evidenceRoot, "watch-fullscreen-rail.png"),
+    });
+    await setFullScreen(normal.application, false);
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.fullScreen === "false",
+    );
+    if (process.platform === "darwin") {
+      assert.equal((await watchRailGeometry(normal.window)).toggle.x, 75);
+      assert.deepEqual(
+        (await nativeWindowChrome(normal.application)).trafficLightPosition,
+        { x: 14, y: 18 },
+      );
+    }
+    await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "full",
+    );
+
+    await sendShortcutFromTask(normal.application, "task-atlantic");
+    await normal.window
+      .locator('[data-task-id="task-harbor"][aria-selected="true"]')
+      .waitFor();
+    let focused = await taskSurfaces(normal.application);
+    assert.equal(
+      focused.find((surface) => surface.state.taskId === "task-harbor")
+        ?.focused,
+      true,
+    );
+    assert.equal(
+      focused.find((surface) => surface.state.taskId === "task-atlantic")
+        ?.focused,
+      false,
+    );
+    await sendShortcutFromTask(normal.application, "task-harbor", true);
+    await normal.window
+      .locator('[data-task-id="task-atlantic"][aria-selected="true"]')
+      .waitFor();
+    focused = await taskSurfaces(normal.application);
+    assert.equal(
+      focused.find((surface) => surface.state.taskId === "task-atlantic")
+        ?.focused,
+      true,
+    );
+    assert.equal(
+      focused.find((surface) => surface.state.taskId === "task-harbor")
+        ?.focused,
+      false,
+    );
+
+    focusTransfer = await taskSurfaces(normal.application);
+    assert.equal(
+      focusTransfer.find((surface) => surface.state.taskId === "task-atlantic")
+        ?.hostVisible,
+      true,
+    );
+    cases.push(
+      "keyboard-focus",
+      "quick-switcher-native-focus-transfer",
+      "traffic-light-and-fullscreen-geometry",
+    );
+  } else {
+    assert.equal(process.platform, "darwin");
+    assert.equal((await nativeWindowChrome(normal.application)).focused, false);
+    skippedCases.push(
+      {
+        name: "keyboard-focus",
+        reason: "macOS host is locked",
+      },
+      {
+        name: "quick-switcher-native-focus-transfer",
+        reason: "macOS host is locked",
+      },
+      {
+        name: "traffic-light-and-fullscreen-geometry",
+        reason: "macOS host is locked",
+      },
     );
   }
-  await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
-  await normal.window.waitForFunction(
-    () => document.documentElement.dataset.sidebar === "full",
-  );
-
-  await sendShortcutFromTask(normal.application, "task-atlantic");
-  await normal.window
-    .locator('[data-task-id="task-harbor"][aria-selected="true"]')
-    .waitFor();
-  let focused = await taskSurfaces(normal.application);
-  assert.equal(
-    focused.find((surface) => surface.state.taskId === "task-harbor")?.focused,
-    true,
-  );
-  assert.equal(
-    focused.find((surface) => surface.state.taskId === "task-atlantic")
-      ?.focused,
-    false,
-  );
-  await sendShortcutFromTask(normal.application, "task-harbor", true);
-  await normal.window
-    .locator('[data-task-id="task-atlantic"][aria-selected="true"]')
-    .waitFor();
-  focused = await taskSurfaces(normal.application);
-  assert.equal(
-    focused.find((surface) => surface.state.taskId === "task-atlantic")
-      ?.focused,
-    true,
-  );
-  assert.equal(
-    focused.find((surface) => surface.state.taskId === "task-harbor")?.focused,
-    false,
-  );
-
-  focusTransfer = await taskSurfaces(normal.application);
-  assert.equal(
-    focusTransfer.find((surface) => surface.state.taskId === "task-atlantic")
-      ?.hostVisible,
-    true,
-  );
 
   const runtimeBeforeWindowClose = await runtimeProcessId(normal.application);
   await normal.window.close();
@@ -1810,13 +1853,10 @@ try {
     "two-tabs-independent",
     "incremental-before-terminal",
     "computer-exact-correlation",
-    "keyboard-focus",
     "watch-rail-native-geometry",
     "sidebar-native-menu-and-shortcut",
     "compact-sidebar-overlay-hides-native-page",
     "task-menu-hides-native-page",
-    "quick-switcher-native-focus-transfer",
-    "traffic-light-and-fullscreen-geometry",
     "inactive-window-appearance",
     "geist-resource-loaded",
     "setup-hides-native-page",
@@ -2035,7 +2075,10 @@ const report = {
       displayCount: normal.presentation.displays.length,
       bounds: normal.presentation.bounds,
       workArea: normal.presentation.display.workArea,
-      nativeFocusProof: "bounded-final-active-phase",
+      nativeFocusProof: nativeWindowProofAvailable
+        ? "bounded-final-active-phase"
+        : "skipped-host-locked",
+      macHostLockState,
     },
     hiddenRuns: [
       "provider-failure",
@@ -2047,13 +2090,14 @@ const report = {
     ],
   },
   cases,
+  skippedCases,
   screenshots: [
     "running-browser-view.png",
     "running-browser-compact.png",
     "watch-sidebar-overlay-compact.png",
     "watch-task-menu-wide.png",
     "watch-quick-switcher-wide.png",
-    "watch-fullscreen-rail.png",
+    ...(nativeWindowProofAvailable ? ["watch-fullscreen-rail.png"] : []),
     "tool-wait-wide.png",
     "tool-wait-compact.png",
     "complete-wide.png",
