@@ -544,6 +544,27 @@ async function waitForWindowPresentation(
   );
 }
 
+async function waitForShellVisibility(
+  application,
+  expectedVisible,
+  expectedTaskViewCount,
+) {
+  let last = null;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    last = await inspectWindowPresentation(application);
+    if (
+      last.visible === expectedVisible &&
+      last.taskViewCount === expectedTaskViewCount
+    ) {
+      return last;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(
+    `E2E_SHELL_VISIBILITY_TIMEOUT:${expectedVisible}:${JSON.stringify(last)}`,
+  );
+}
+
 async function startChatGptFixture() {
   const fixture = createServer((request, response) => {
     if (request.url === "/chatgpt-popup") {
@@ -1652,9 +1673,9 @@ async function completeSetup(
       );
       await chatGptPage.close();
       await waitForWindowCount(instance.application, 1);
-      await waitForWindowPresentation(
+      await waitForShellVisibility(
         instance.application,
-        instance.windowMode,
+        instance.windowMode === "secondary-visible",
         instance.expectedTaskViewCount,
       );
     }
@@ -2616,9 +2637,9 @@ try {
     .waitFor();
   await restartedChatGptPage.close();
   await waitForWindowCount(normal.application, 1);
-  await waitForWindowPresentation(
+  await waitForShellVisibility(
     normal.application,
-    normal.windowMode,
+    normal.windowMode === "secondary-visible",
     normal.expectedTaskViewCount,
   );
   assert.deepEqual(restartedSettings.setup.journey, {
