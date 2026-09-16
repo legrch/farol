@@ -401,6 +401,58 @@ export class ProductConfigurationService {
     });
   }
 
+  async updateWorkspaceExclusions(
+    workspaceId: string,
+    input: unknown,
+  ): Promise<MutationResult> {
+    const parsed = z.array(z.string()).max(32).safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    if (
+      !this.current.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === workspaceId,
+      )
+    ) {
+      return this.failure("WORKSPACE_NOT_FOUND");
+    }
+    return this.mutate((settings) => {
+      const current = settings.computer.workspaces.find(
+        (workspace) => workspace.workspaceId === workspaceId,
+      );
+      if (
+        current &&
+        JSON.stringify(current.excludedPaths) === JSON.stringify(parsed.data)
+      ) {
+        return settings;
+      }
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        computer: {
+          ...settings.computer,
+          generation: settings.computer.generation + 1,
+          workspaces: settings.computer.workspaces.map((workspace) =>
+            workspace.workspaceId === workspaceId
+              ? { ...workspace, excludedPaths: parsed.data }
+              : workspace,
+          ),
+        },
+        setup: {
+          ...settings.setup,
+          computer: {
+            ...settings.setup.computer,
+            configured: true,
+            reachable: "unknown" as const,
+            verified: null,
+            needsAction: "Verify read access after changing exclusions.",
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      };
+    });
+  }
+
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,

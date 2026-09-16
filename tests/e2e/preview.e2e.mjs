@@ -549,8 +549,9 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
   const workspacePath = path.join(isolatedHome, "approved-workspace");
   await fs.mkdir(workspacePath, { mode: 0o700 });
   const workspaceRoot = await fs.realpath(workspacePath);
+  const workspaceFile = path.join(workspaceRoot, "README.md");
   await fs.writeFile(
-    path.join(workspaceRoot, "README.md"),
+    workspaceFile,
     "Farol Next workspace verification fixture\n",
     { mode: 0o600 },
   );
@@ -563,6 +564,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
   ];
   const launchEnvironment = {
     FAROL_NEXT_E2E: "1",
+    FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
@@ -597,6 +599,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     window,
     isolatedHome,
     userData,
+    workspaceFile,
     workspaceRoot,
     expectedTaskViewCount,
     windowMode,
@@ -2043,6 +2046,63 @@ try {
     .getByText(/read-only · verified/u)
     .waitFor();
   await normal.window
+    .locator(".workspace-read-evidence")
+    .getByText("Farol Next workspace verification fixture", { exact: true })
+    .waitFor();
+  assert.match(
+    await normal.window.locator("#settings-feedback").innerText(),
+    /Read 42 bytes from README\.md\. Nothing from the file was persisted\./u,
+  );
+
+  const exclusionInput = normal.window.getByLabel(
+    "Excluded paths for approved-workspace",
+    { exact: true },
+  );
+  await exclusionInput.fill("README.md");
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByRole("button", { name: "Save exclusions", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("approved-workspace exclusions saved and read back.", {
+      exact: true,
+    })
+    .waitFor();
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByRole("button", { name: "Verify", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("Not applied · WORKSPACE_PATH_REFUSED", { exact: true })
+    .waitFor();
+  assert.equal(
+    await normal.window.locator(".workspace-read-evidence").count(),
+    0,
+  );
+  await normal.window
+    .getByLabel("Excluded paths for approved-workspace", { exact: true })
+    .fill("");
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByRole("button", { name: "Save exclusions", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("approved-workspace exclusions saved and read back.", {
+      exact: true,
+    })
+    .waitFor();
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByRole("button", { name: "Verify", exact: true })
+    .click();
+  await normal.window
+    .locator(".workspace-read-evidence")
+    .getByText("Farol Next workspace verification fixture", { exact: true })
+    .waitFor();
+  await normal.window
     .locator("#setting-open-at-launch")
     .selectOption("settings");
   await normal.window.locator("#setting-sidebar-default").selectOption("rail");
@@ -2348,6 +2408,8 @@ try {
     "settings-setup-reentry",
     "native-workspace-picker-save-readback",
     "workspace-native-verification",
+    "workspace-read-preview-not-persisted",
+    "workspace-exclusion-effective",
     "settings-controls-persist-after-restart",
     "setup-position-and-dismissal-persist",
     "mismatched-build-second-launch-rejected",

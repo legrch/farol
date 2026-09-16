@@ -1214,9 +1214,17 @@ html[data-has-tasks="false"] .surface {
   margin-top: 14px;
 }
 
+.workspace-card {
+  min-width: 0;
+  border-top: 1px solid var(--line-soft);
+}
+
 .workspace-row,
 .connection-row {
   min-height: 54px;
+}
+
+.connection-row {
   border-top: 1px solid var(--line-soft);
 }
 
@@ -1248,7 +1256,64 @@ html[data-has-tasks="false"] .surface {
 
 .workspace-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+}
+
+.workspace-policy {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+  padding: 0 0 12px;
+}
+
+.workspace-policy label {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.workspace-policy input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+}
+
+.workspace-read-evidence {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
+}
+
+.workspace-read-evidence strong {
+  color: var(--text-soft);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.workspace-read-evidence pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .readiness-badge {

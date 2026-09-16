@@ -214,4 +214,71 @@ describe("Farol Next product configuration", () => {
       verified: null,
     });
   });
+
+  it("persists workspace exclusions and invalidates stale verification", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    await service.recordComputerVerification(workspaceId, {
+      profile: "computer.local.readonly/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "a".repeat(64),
+      protocol: "readonly-workspace/1",
+    });
+
+    const updated = await service.updateWorkspaceExclusions(workspaceId, [
+      "/Users/example/project/private",
+      "/Users/example/project/status.txt",
+    ]);
+
+    expect(updated.ok).toBe(true);
+    expect(updated.snapshot.status).toBe("ready");
+    if (updated.snapshot.status !== "ready")
+      throw new Error("settings missing");
+    expect(
+      updated.snapshot.settings.computer.workspaces[0]?.excludedPaths,
+    ).toEqual([
+      "/Users/example/project/private",
+      "/Users/example/project/status.txt",
+    ]);
+    expect(updated.snapshot.settings.setup.computer).toMatchObject({
+      configured: true,
+      reachable: "unknown",
+      verified: null,
+      needsAction: "Verify read access after changing exclusions.",
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        computer: {
+          workspaces: [
+            {
+              workspaceId,
+              excludedPaths: [
+                "/Users/example/project/private",
+                "/Users/example/project/status.txt",
+              ],
+            },
+          ],
+        },
+      },
+    });
+  });
 });

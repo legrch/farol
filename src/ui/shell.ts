@@ -26,6 +26,7 @@ import {
   ProductConfigurationResultSchema,
   ProductConfigurationSnapshotSchema,
   type ProductConfigurationCommand,
+  type ProductConfigurationEvidence,
 } from "../pkg/product-settings/contract";
 import {
   advanceSetup,
@@ -174,6 +175,7 @@ let windowState: WindowState = {
 let computerTargetTaskId: string | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
+let workspaceEvidence: ProductConfigurationEvidence | null = null;
 let renderedSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
@@ -642,6 +644,13 @@ async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
 ): Promise<boolean> {
+  if (
+    command.kind === "computer.verify-workspace" ||
+    command.kind === "computer.update-exclusions" ||
+    command.kind === "computer.remove-workspace"
+  ) {
+    workspaceEvidence = null;
+  }
   settingsFeedback = "Saving and reading back…";
   settingsFeedbackError = false;
   render();
@@ -659,14 +668,21 @@ async function configureProduct(
   renderedSettingsRevision = -1;
   if (!parsed.data.ok) {
     settingsFeedback =
-      parsed.data.error === "WORKSPACE_PICKER_CANCELLED"
-        ? "No folder was selected."
+      parsed.data.error === "WORKSPACE_PICKER_CANCELLED" ||
+      parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED"
+        ? "No selection was made."
         : `Not applied · ${parsed.data.error}`;
-    settingsFeedbackError = parsed.data.error !== "WORKSPACE_PICKER_CANCELLED";
+    settingsFeedbackError = ![
+      "WORKSPACE_PICKER_CANCELLED",
+      "WORKSPACE_FILE_PICKER_CANCELLED",
+    ].includes(parsed.data.error);
     render();
     return false;
   }
-  settingsFeedback = successMessage;
+  workspaceEvidence = parsed.data.evidence ?? workspaceEvidence;
+  settingsFeedback = parsed.data.evidence
+    ? `Read ${parsed.data.evidence.bytes} bytes from ${parsed.data.evidence.relativePath}. Nothing from the file was persisted.`
+    : successMessage;
   settingsFeedbackError = false;
   if (
     command.kind === "general.update" &&
@@ -800,6 +816,8 @@ function renderSettings(): void {
   } else {
     workspaces.replaceChildren(
       ...settings.computer.workspaces.map((workspace) => {
+        const card = document.createElement("article");
+        card.className = "workspace-card";
         const row = document.createElement("div");
         row.className = "workspace-row";
         const copy = document.createElement("div");
@@ -840,7 +858,64 @@ function renderSettings(): void {
         });
         actions.append(verify, remove);
         row.append(copy, actions);
-        return row;
+
+        const policy = document.createElement("div");
+        policy.className = "workspace-policy";
+        const exclusionLabel = document.createElement("label");
+        exclusionLabel.textContent = "Excluded paths";
+        const exclusionInput = document.createElement("input");
+        exclusionInput.type = "text";
+        exclusionInput.placeholder = "private, build/secrets.txt";
+        exclusionInput.setAttribute(
+          "aria-label",
+          `Excluded paths for ${workspace.label}`,
+        );
+        const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
+        exclusionInput.value = workspace.excludedPaths
+          .flatMap((excluded) =>
+            excluded.startsWith(prefix) ? [excluded.slice(prefix.length)] : [],
+          )
+          .join(", ");
+        exclusionLabel.append(exclusionInput);
+        const saveExclusions = document.createElement("button");
+        saveExclusions.type = "button";
+        saveExclusions.textContent = "Save exclusions";
+        saveExclusions.addEventListener("click", () => {
+          const excludedPaths = exclusionInput.value
+            .split(/[\n,]/u)
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0);
+          const command = ProductConfigurationCommandSchema.safeParse({
+            kind: "computer.update-exclusions",
+            workspaceId: workspace.workspaceId,
+            excludedPaths,
+          });
+          if (!command.success) {
+            settingsFeedback =
+              "Exclusions must be unique relative paths without dot segments.";
+            settingsFeedbackError = true;
+            render();
+            return;
+          }
+          void configureProduct(
+            command.data,
+            `${workspace.label} exclusions saved and read back.`,
+          );
+        });
+        policy.append(exclusionLabel, saveExclusions);
+        card.append(row, policy);
+
+        if (workspaceEvidence?.workspaceId === workspace.workspaceId) {
+          const evidence = document.createElement("section");
+          evidence.className = "workspace-read-evidence";
+          const heading = document.createElement("strong");
+          heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes${workspaceEvidence.truncated ? " · preview truncated" : ""}`;
+          const preview = document.createElement("pre");
+          preview.textContent = workspaceEvidence.text;
+          evidence.append(heading, preview);
+          card.append(evidence);
+        }
+        return card;
       }),
     );
   }

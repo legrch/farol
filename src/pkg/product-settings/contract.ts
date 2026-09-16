@@ -21,6 +21,25 @@ const IdentifierSchema = z
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
   );
 
+const ProductRelativePathSchema = z.string().refine((value) => {
+  if (
+    value.length === 0 ||
+    value.length > 4_096 ||
+    value.startsWith("/") ||
+    value.endsWith("/") ||
+    value.includes("\\")
+  ) {
+    return false;
+  }
+  return value.split("/").every((part) => {
+    if (part === "" || part === "." || part === "..") return false;
+    return [...part].every((character) => {
+      const code = character.codePointAt(0);
+      return code !== undefined && code >= 32 && code !== 127;
+    });
+  });
+});
+
 export const ProductGeneralSettingsSchema = z.strictObject({
   openAtLaunch: z.enum(["browser", "activity", "settings"]),
   sidebarDefault: z.enum(["full", "rail"]),
@@ -132,6 +151,14 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
   }),
   z.strictObject({
+    kind: z.literal("computer.update-exclusions"),
+    workspaceId: IdentifierSchema,
+    excludedPaths: z
+      .array(ProductRelativePathSchema)
+      .max(32)
+      .refine((paths) => paths.length === new Set(paths).size),
+  }),
+  z.strictObject({
     kind: z.literal("computer.verify-workspace"),
     workspaceId: IdentifierSchema,
   }),
@@ -142,10 +169,26 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("computer.workspace-read"),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductRelativePathSchema,
+    bytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(256 * 1_024),
+    text: z.string().max(32_768),
+    truncated: z.boolean(),
+  }),
+]);
+
 export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
     snapshot: ProductConfigurationSnapshotSchema,
+    evidence: ProductConfigurationEvidenceSchema.optional(),
   }),
   z.strictObject({
     ok: z.literal(false),
@@ -157,6 +200,13 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_SELECTION_INVALID",
       "WORKSPACE_VERIFICATION_FAILED",
+      "WORKSPACE_FILE_PICKER_CANCELLED",
+      "WORKSPACE_FILE_SELECTION_INVALID",
+      "WORKSPACE_PATH_REFUSED",
+      "WORKSPACE_NOT_A_FILE",
+      "WORKSPACE_FILE_TOO_LARGE",
+      "WORKSPACE_NOT_TEXT",
+      "WORKSPACE_READ_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),
@@ -175,6 +225,9 @@ export type ProductConfigurationSnapshot = z.infer<
 >;
 export type ProductConfigurationCommand = z.infer<
   typeof ProductConfigurationCommandSchema
+>;
+export type ProductConfigurationEvidence = z.infer<
+  typeof ProductConfigurationEvidenceSchema
 >;
 export type ProductConfigurationResult = z.infer<
   typeof ProductConfigurationResultSchema

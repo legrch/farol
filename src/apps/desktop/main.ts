@@ -23,6 +23,7 @@ import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
   ProductConfigurationCommandSchema,
   ProductConfigurationResultSchema,
+  type ApprovedProductWorkspace,
   type ProductConfigurationResult,
 } from "../../pkg/product-settings/contract";
 import {
@@ -240,6 +241,63 @@ async function selectedWorkspace(): Promise<
   }
 }
 
+function workspaceDeniedPaths(
+  workspace: ApprovedProductWorkspace,
+): readonly string[] {
+  const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
+  return workspace.excludedPaths.flatMap((excluded) =>
+    excluded.startsWith(prefix) ? [excluded.slice(prefix.length)] : [],
+  );
+}
+
+async function selectedWorkspaceFile(
+  workspace: ApprovedProductWorkspace,
+): Promise<string | "cancelled" | "invalid"> {
+  let selected: string | undefined;
+  const testFile =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_WORKSPACE_FILE
+      : undefined;
+  if (testFile) {
+    selected = testFile;
+  } else {
+    if (!window) return "invalid";
+    const result = await dialog.showOpenDialog(window, {
+      title: "Choose a harmless text file to verify",
+      buttonLabel: "Verify Read Access",
+      defaultPath: workspace.root,
+      properties: ["openFile"],
+      securityScopedBookmarks: false,
+    });
+    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
+    selected = result.filePaths[0];
+  }
+  if (!selected || !path.isAbsolute(selected)) return "invalid";
+  const relative = path.relative(workspace.root, selected);
+  if (
+    relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    return "invalid";
+  }
+  return relative.split(path.sep).join("/");
+}
+
+function workspaceReadFailure(code: string): ProductConfigurationResult {
+  switch (code) {
+    case "WORKSPACE_PATH_REFUSED":
+    case "WORKSPACE_NOT_FOUND":
+    case "WORKSPACE_NOT_A_FILE":
+    case "WORKSPACE_FILE_TOO_LARGE":
+    case "WORKSPACE_NOT_TEXT":
+      return configurationFailure(code);
+    default:
+      return configurationFailure("WORKSPACE_READ_FAILED");
+  }
+}
+
 async function configureProduct(
   value: unknown,
 ): Promise<ProductConfigurationResult> {
@@ -276,6 +334,24 @@ async function configureProduct(
       return ProductConfigurationResultSchema.parse(
         await configuration.removeWorkspace(command.workspaceId),
       );
+    case "computer.update-exclusions": {
+      const snapshot = configuration.snapshot();
+      const workspace =
+        snapshot.status === "ready"
+          ? snapshot.settings.computer.workspaces.find(
+              (candidate) => candidate.workspaceId === command.workspaceId,
+            )
+          : undefined;
+      if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
+      return ProductConfigurationResultSchema.parse(
+        await configuration.updateWorkspaceExclusions(
+          workspace.workspaceId,
+          command.excludedPaths.map((relative) =>
+            path.join(workspace.root, ...relative.split("/")),
+          ),
+        ),
+      );
+    }
     case "computer.verify-workspace": {
       const snapshot = configuration.snapshot();
       const workspace =
@@ -285,30 +361,47 @@ async function configureProduct(
             )
           : undefined;
       if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
+      const relativePath = await selectedWorkspaceFile(workspace);
+      if (relativePath === "cancelled") {
+        return configurationFailure("WORKSPACE_FILE_PICKER_CANCELLED");
+      }
+      if (relativePath === "invalid") {
+        return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
+      }
       const result = await nativeWorkspace.execute({
         workspace: {
           workspaceId: workspace.workspaceId,
           root: workspace.root,
-          deniedPaths: workspace.excludedPaths.flatMap((excluded) => {
-            const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
-            return excluded.startsWith(prefix)
-              ? [excluded.slice(prefix.length)]
-              : [];
-          }),
+          deniedPaths: workspaceDeniedPaths(workspace),
         },
-        operation: { kind: "workspace.list", relativePath: "." },
+        operation: { kind: "workspace.read", relativePath },
       });
-      if (!result.ok || result.value.kind !== "workspace.entries") {
+      if (!result.ok) return workspaceReadFailure(result.error.code);
+      if (result.value.kind !== "workspace.text") {
         return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
       }
-      return ProductConfigurationResultSchema.parse(
-        await configuration.recordComputerVerification(workspace.workspaceId, {
+      const recorded = await configuration.recordComputerVerification(
+        workspace.workspaceId,
+        {
           profile: "computer.local.readonly/1",
           runtimeGeneration: `${runtime?.identity ?? "runtime-offline"}:${buildIdentity.buildId}`,
           buildId: buildIdentity.buildId,
           protocol: "readonly-workspace/1",
-        }),
+        },
       );
+      if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+      const text = result.value.text.slice(0, 32_768);
+      return ProductConfigurationResultSchema.parse({
+        ...recorded,
+        evidence: {
+          kind: "computer.workspace-read",
+          workspaceId: workspace.workspaceId,
+          relativePath,
+          bytes: result.value.bytes,
+          text,
+          truncated: text.length < result.value.text.length,
+        },
+      });
     }
     case "setup.progress":
       return ProductConfigurationResultSchema.parse(
