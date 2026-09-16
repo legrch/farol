@@ -9,9 +9,11 @@ sanitized evidence trail, and Settings reports isolation and unavailable live
 integrations without pretending they are configured.
 
 The first launch opens a required five-step Setup journey for ChatGPT, Computer,
-Connect, Hosts, and Verify. It records no credentials and makes no live connection;
-each step states the exact preview boundary. Settings can reopen the same journey so
-the boundary remains inspectable after dismissal.
+Connect, Hosts, and Verify. Visiting a step changes no readiness claim. Owner actions
+open the isolated ChatGPT sign-in surface, persist Computer approval, attest a selected
+Codex host, and run bounded host/Agent checks without reading or storing credentials.
+Unavailable connector work remains explicit. Settings can reopen the same journey so
+the boundary and current evidence remain inspectable after dismissal.
 
 ## Owner-selected visual direction: Watch Rail
 
@@ -60,8 +62,9 @@ layout enums; renderer-supplied pixels are never trusted.
 - Test-only window presentation is closed and explicit: hidden for ordinary fault and
   recovery evidence, or inactive on a non-primary display for the one visual/focus
   run. Normal owner launches retain the product's ordinary foreground behavior.
-- The Computer action names the synthetic operation and target before approval.
-  Unsupported native access is explicitly disabled.
+- Demo Computer approval names its synthetic operation and target. Ordinary Computer
+  controls name the selected workspace and operation, show read evidence only on
+  demand, and require an explicit access change plus review before a guarded edit.
 - The terminal demo action is labelled `Finish demo response`; it cannot be mistaken
   for publishing, installing, or completing a product release.
 - Activity is an allowlisted projection: task label, phase, event kind, synthetic

@@ -43,11 +43,61 @@ describe("content-free support export", () => {
     );
     await configuration.initialize();
     await configuration.renameComputer("OWNER-TOKEN-CANARY");
-    await configuration.addReadonlyWorkspace({
+    const added = await configuration.addReadonlyWorkspace({
       root: "/Users/private/WORKSPACE-CANARY",
       label: "LABEL-CANARY",
     });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspace = added.snapshot.settings.computer.workspaces[0];
+    if (!workspace) throw new Error("workspace missing");
+    const computerGeneration = added.snapshot.settings.computer.generation;
+    await configuration.recordComputerVerification(workspace.workspaceId, {
+      profile: "computer.local.readonly/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    });
+    await configuration.recordCodexHost({
+      executablePath: "/Users/private/CODEX-CANARY",
+      executableSha256: "d".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "e".repeat(64),
+      buildId: "c".repeat(64),
+    });
+    await configuration.recordCodexHostLiveVerification({
+      model: "gpt-6-astra",
+      executableSha256: "d".repeat(64),
+      schemaSha256: "e".repeat(64),
+      buildId: "c".repeat(64),
+    });
+    await configuration.recordCodexAgentVerification({
+      model: "gpt-6-astra",
+      executableSha256: "d".repeat(64),
+      schemaSha256: "e".repeat(64),
+      buildId: "c".repeat(64),
+      workspaceId: workspace.workspaceId,
+      computerGeneration,
+      transport: "codex-native-agent/spawn-prompt-sha256-v1",
+      authorityRole: "critic",
+      hostRole: "HOST-ROLE-CANARY",
+      delegationDigest: "f".repeat(64),
+      parentThreadSha256: "1".repeat(64),
+      childThreadSha256: "2".repeat(64),
+      boundedRunning: true,
+      modelTurnsSubmitted: 1,
+      fallbackAllowed: false,
+      descendantCount: 0,
+      resultRefProtocol: "codex-app-server",
+      resultRetention: "durable",
+      parentDelivery: "acknowledged",
+      workspaceEnforcement: "verified",
+    });
 
+    const configurationSnapshot = configuration.snapshot();
+    if (configurationSnapshot.status !== "ready") {
+      throw new Error("settings missing");
+    }
     const report = createSupportExport({
       generatedAt: "2026-09-16T11:00:00.000Z",
       build: {
@@ -62,7 +112,7 @@ describe("content-free support export", () => {
         sourceDirty: false,
         buildId: "c".repeat(64),
       },
-      configuration: configuration.snapshot(),
+      configuration: configurationSnapshot,
       runtime: {
         state: "ready",
         errorCode: null,
@@ -77,7 +127,7 @@ describe("content-free support export", () => {
     });
 
     expect(report).toMatchObject({
-      schema: 1,
+      schema: 2,
       kind: "farol_next_support",
       build: {
         buildId: "c".repeat(64),
@@ -85,7 +135,7 @@ describe("content-free support export", () => {
       },
       configuration: {
         status: "ready",
-        revision: 3,
+        revision: configurationSnapshot.settings.revision,
         computer: {
           workspaceCount: 1,
           readWorkspaceCount: 1,
@@ -93,10 +143,26 @@ describe("content-free support export", () => {
           exclusionCount: 0,
         },
       },
+      nativeAgentVerification: {
+        status: "verified",
+        evidence: {
+          model: "gpt-6-astra",
+          authorityRole: "critic",
+          lineage: "verified",
+          taskGrantContinuity: "verified",
+          boundedRunning: true,
+          modelTurnsSubmitted: 1,
+          fallbackAllowed: false,
+          descendantCount: 0,
+          resultRetention: "durable",
+          parentDelivery: "acknowledged",
+          workspaceEnforcement: "verified",
+        },
+      },
     });
     const serialized = JSON.stringify(report);
     expect(serialized).not.toMatch(
-      /OWNER-TOKEN-CANARY|WORKSPACE-CANARY|LABEL-CANARY|00000000-0000-4000/u,
+      /OWNER-TOKEN-CANARY|WORKSPACE-CANARY|LABEL-CANARY|CODEX-CANARY|HOST-ROLE-CANARY|00000000-0000-4000/u,
     );
 
     const target = path.join(root, "Farol-Next-Support.json");

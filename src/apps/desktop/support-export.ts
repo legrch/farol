@@ -56,6 +56,49 @@ function setupReadiness(
   } as const;
 }
 
+function nativeAgentVerification(configuration: ProductConfigurationSnapshot) {
+  if (configuration.status === "error") {
+    return { status: "settings_unavailable" as const, evidence: null };
+  }
+  const settings = configuration.settings;
+  const readiness = settings.setup.verify;
+  const proof = settings.nativeHosts.codex?.agentVerification ?? null;
+  const status = proof
+    ? proof.workspaceEnforcement === "verified" &&
+      proof.parentDelivery === "acknowledged" &&
+      proof.resultRetention === "durable"
+      ? ("verified" as const)
+      : ("partial" as const)
+    : readiness.outcomeUnknown
+      ? ("outcome_unknown" as const)
+      : readiness.unavailable !== null
+        ? ("unavailable" as const)
+        : readiness.needsAction !== null
+          ? ("needs_action" as const)
+          : ("not_configured" as const);
+  return {
+    status,
+    evidence: proof
+      ? {
+          model: proof.model,
+          transport: proof.transport,
+          authorityRole: proof.authorityRole,
+          lineage: "verified" as const,
+          taskGrantContinuity: "verified" as const,
+          boundedRunning: proof.boundedRunning,
+          modelTurnsSubmitted: proof.modelTurnsSubmitted,
+          fallbackAllowed: proof.fallbackAllowed,
+          descendantCount: proof.descendantCount,
+          resultRefProtocol: proof.resultRefProtocol,
+          resultRetention: proof.resultRetention,
+          parentDelivery: proof.parentDelivery,
+          workspaceEnforcement: proof.workspaceEnforcement,
+          verifiedAt: proof.verifiedAt,
+        }
+      : null,
+  };
+}
+
 export function createSupportExport(input: SupportExportInput) {
   const configuration =
     input.configuration.status === "error"
@@ -97,13 +140,14 @@ export function createSupportExport(input: SupportExportInput) {
         };
 
   return {
-    schema: 1 as const,
+    schema: 2 as const,
     kind: "farol_next_support" as const,
     generatedAt: input.generatedAt,
     build: input.build,
     runtime: input.runtime,
     capabilities: input.capabilities,
     configuration,
+    nativeAgentVerification: nativeAgentVerification(input.configuration),
     tasks: input.tasks,
   };
 }

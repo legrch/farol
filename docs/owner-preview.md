@@ -43,10 +43,13 @@ is not evidence about the packaged candidate.
 
 ## What the controls do
 
-- Setup and Settings can persist an approved read-only folder and verify its root
-  listing through the packaged native helper. That verification is not a task action.
-- Ordinary launch has no task tabs. It does not manufacture activity or imply a live
-  provider, Computer route, Codex host, or Agent.
+- Setup and Settings can open the isolated ChatGPT sign-in surface, persist approved
+  workspaces and exclusions, verify native read access, select and attest a Codex
+  executable, and run the bounded host and Agent checks. Visiting or skipping a step
+  never marks it verified.
+- Ordinary launch has no synthetic task tabs. Real read-only or attachment tasks are
+  created only after context preview and an explicit submit; provider, delivery, and
+  outcome-unknown states remain distinct.
 - With the explicit `--demo` flag, both task tabs are fixed synthetic fixtures. They
   are not an owner task registry.
 - `Allow once` releases one synthetic Computer response for whichever demo task is
@@ -55,13 +58,23 @@ is not evidence about the packaged candidate.
   It does not publish, install, release, or update anything.
 - Activity contains only allowlisted lifecycle facts. It omits prompts, answers,
   tool payloads, paths, and bearer values.
+- Computer owns workspace list/search/read plus explicit access and exclusion changes.
+  A guarded edit requires preview and confirmation, checks the expected digest, and
+  stores a content-free mutation receipt. Bounded commands are not yet available.
+- The Codex Agent verification creates one actual native child for a fixed read-only
+  compatibility assignment. A green result means lineage, unchanged TaskGrant,
+  workspace enforcement, bounded same-child rejoin, durable retention, and parent
+  delivery were all observed for that assignment. It is not a generic Agent launcher.
+- Export support writes schema 2 build/configuration/readiness metadata plus a
+  content-free current native-Agent summary. It contains no workspace path or ID,
+  prompt, answer, file content, token, cookie, or child/thread identifier.
 - `Control+Command+S` or View -> Show/Hide Sidebar switches between the full Watch
   Rail sidebar and its 72 px rail; below 980 px it opens the full sidebar as an
   overlay. `Command+K` opens the quick switcher. Native task pages are hidden while a
   shell overlay or Setup is open so the overlay receives clicks, Escape, and focus.
-- The Settings authority row reports the contract-tested TaskGrant continuity core.
-  It is not a claim that this product preview selected the native Computer boundary
-  or admitted a native Agent.
+- The Settings authority row reports the contract-tested TaskGrant continuity core;
+  the separate Native Agent row reports whether the current selected host actually
+  completed the bounded check. Changing Computer policy invalidates that proof.
 
 On macOS, closing the window leaves this preview application and its in-memory local
 runtime running. Launching the same exact build again or clicking its Dock icon

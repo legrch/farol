@@ -3248,13 +3248,15 @@ try {
     .waitFor();
   const supportExportText = await fs.readFile(normal.supportExport, "utf8");
   const supportExport = JSON.parse(supportExportText);
-  assert.equal(supportExport.schema, 1);
+  assert.equal(supportExport.schema, 2);
   assert.equal(supportExport.kind, "farol_next_support");
   assert.equal(supportExport.build.buildId, buildIdentity.buildId);
   assert.equal(supportExport.build.sourceCommit, buildIdentity.sourceCommit);
   assert.equal(supportExport.configuration.status, "ready");
   assert.equal(supportExport.configuration.computer.workspaceCount, 1);
   assert.equal(supportExport.configuration.computer.writeWorkspaceCount, 1);
+  assert.equal(supportExport.nativeAgentVerification.status, "needs_action");
+  assert.equal(supportExport.nativeAgentVerification.evidence, null);
   assert.equal(supportExport.tasks.total, 2);
   assert.equal((await fs.stat(normal.supportExport)).mode & 0o777, 0o600);
   assert.doesNotMatch(
@@ -3267,7 +3269,10 @@ try {
   );
   assert.doesNotMatch(supportExportText, new RegExp(normal.workspaceRoot, "u"));
   assert.doesNotMatch(supportExportText, new RegExp(normal.codexFixture, "u"));
-  cases.push("support-export-content-free");
+  cases.push(
+    "support-export-content-free",
+    "support-export-native-agent-state-current",
+  );
   await normal.window.keyboard.press("Meta+3");
   await normal.window.locator('[data-panel="activity"].active').waitFor();
   await normal.window

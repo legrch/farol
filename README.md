@@ -12,32 +12,43 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 - an explicit `--demo` mode with two independent scripted local-provider sessions,
   two real `WebContentsView` surfaces and one bounded fixture Computer round-trip;
 - one mandatory five-step first-run Setup journey, available again from Settings,
-  which reports every preview-only or unavailable integration explicitly;
+  with real ChatGPT, Computer, Codex-host, and bounded Agent verification actions;
 - the owner-selected Watch Rail shell with Iris selection/next-action accents,
   shape-and-text task signals, a 216 px sidebar / 72 px rail, and packaged Geist;
-- content-free Activity and explicit provider/runtime failure states.
+- content-free Activity, a content-free support export, and explicit
+  provider/runtime failure states.
 
-Ordinary Setup and Settings can select a real folder with the native picker, persist
-that approval privately, and verify a descriptor-relative read-only root listing
-through the packaged helper. This is local boundary verification, not a task action
-or a live native-Computer claim. The explicit demo provider and Computer are labelled
-fixtures. A live provider, Next-owned Computer route, native Agent creation, writes,
-commands and network authority remain unavailable.
+Ordinary Setup and Settings can open the isolated Next ChatGPT partition, observe and
+verify its readiness, select real folders with the native picker, persist Computer
+approval and exclusions privately, and exercise descriptor-relative list/read/search
+through the product. An explicit access change enables guarded conflict-aware edits
+with durable content-free receipts. The Browser flow previews selected text, image, or
+document context before one submission, retains conversation and delivery state, and
+recovers a completed or outcome-unknown task after restart without blind resubmission.
+The deterministic E2E site remains a fixture; its green report does not claim that the
+owner's authenticated ChatGPT account completed a live call.
 
-The N2 authority core now derives a task-bound `TaskGrant`, preserves it through
+Setup can also select and attest a Codex executable, run one bounded live App Server
+tool turn, and run one narrow native-Agent compatibility assignment. That assignment
+creates one genuine child, preserves the complete applicable read-only TaskGrant
+through Main -> Agent -> Critic, performs one content-free workspace enforcement
+probe through the current Computer policy, observes bounded running before rejoining
+the same child, retains the result, and acknowledges parent delivery. This proves the
+verification assignment only. General native Agent task admission, the
+ChatGPT-to-Computer connector, bounded commands, ordinary compaction continuity,
+network authority, and release readiness remain open.
+
+The N2 authority core derives a task-bound `TaskGrant`, preserves it through
 main -> Agent -> Critic delegation, retains explicit owner narrowing including
 do-not-inspect paths, and intersects every Computer action with current Computer
 policy. Results retain exact request and operation correlation; only a validated,
 correlated refusal is reported as known, while malformed or rebound responses are
-outcome-unknown. Agent lifecycle tests still use an
-in-memory host double; they do not prove native child admission. The Agent app
-seam now persists assignment correlation in a private atomic store with exclusive
-first publication and serialized monotonic updates, rejoins an
-already-known running child after restart without another spawn, distinguishes a
-durably retained result from a memory-only result, and records an exact
-parent/child/result delivery acknowledgement. That persistence path is exercised
-with real temporary files, but is not yet composed with a native host or the product
-UI.
+outcome-unknown. The Agent app seam persists assignment correlation in a private
+atomic store with exclusive first publication and serialized monotonic updates,
+rejoins an already-known running child without another spawn, distinguishes a durable
+result from a memory-only result, and records exact parent delivery. The selected
+native Codex host and product UI now exercise this seam for the bounded compatibility
+check described above; broader Agent work remains a separate acceptance boundary.
 
 ## Reproduce
 
@@ -137,7 +148,9 @@ independent-recipient, update/rollback, live-provider or release-readiness evide
   schedule, mutation proof and exact build identity.
 
 The E2E reports also record the visible run's selected-display class, work area,
-window bounds, initial focus state, and the scenarios proved while hidden.
+window bounds, initial focus state, and the scenarios proved while hidden. Native
+Agent rows identify lineage, TaskGrant workspace enforcement, bounded same-child
+rejoin, durable result delivery, and content-free persisted evidence separately.
 
 These directories are ignored because they are reproducible local evidence, not
 source inputs.

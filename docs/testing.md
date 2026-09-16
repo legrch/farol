@@ -36,6 +36,13 @@ before and after Next in isolated homes, and a Next utility-process failure must
 its synthetic read endpoint available. The startup-race case additionally proves that
 the reopened window already has both task views and live runtime bootstrap state.
 
+The ordinary-product E2E fixture also implements the installed Codex App Server
+contract closely enough to exercise the product's two dynamic tools on their required
+threads. It proves one child workspace probe, one parent authority receipt, a bounded
+nonterminal wait, same-child completion, durable delivery, and invalidation after the
+Computer generation changes. Its model is synthetic; exact host selection and live
+model execution remain separately classified evidence.
+
 The final owner journey is separate from automation: `task next:run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector
 read is repeated around it, and the application is quit by its exact instance. This

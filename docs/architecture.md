@@ -100,12 +100,13 @@ are allocated by the OS on loopback and protected with per-run bearer values. No
 tunnel, provider slot, global MCP registration, launch agent, legacy state path, or
 installed browser profile is used.
 
-The local provider and the Computer capability selected by the product preview are
-controlled fixtures. They prove the module/IPC/SSE/tool loop, not ChatGPT readiness,
-native Codex ownership or Farol Agent admission. The separate `computer-mcp`
-entrypoint and its development/sealed-package E2E prove descriptor-relative
-read-only containment on temporary Mac workspace trees; that boundary is not yet
-registered with a host or selected by the product runtime.
+The explicit demo provider and Computer remain controlled fixtures. Ordinary product
+composition is separate: `ChatGptRoute` owns the isolated Next partition and bounded
+submission lifecycle, while `NativeReadonlyWorkspace` supplies descriptor-relative
+list/read/search and guarded edit operations under persisted Computer approval. The
+development and sealed-package E2E routes use a synthetic provider site and temporary
+Mac workspace trees, so they prove product composition and containment without
+claiming the owner's authenticated provider account was exercised.
 
 The N2 authority core is implemented as a runtime-derived task-applicable `TaskGrant`
 / `ExecutionAuthority`. Permitted delegation from a main Turn through Agent and
@@ -114,17 +115,24 @@ workspace, without treating the assignment packet's initial filenames as the
 security boundary. Explicit owner narrowing, including do-not-inspect paths, is
 carried into the native read-only deny list. A delegate still cannot exceed the
 TaskGrant, underlying Computer approval, native host-task authority, or an explicit
-narrower owner instruction. Prompt text is never authority. Native Agent admission
-and permitted verification-command execution remain separate unproved boundaries.
+narrower owner instruction. Prompt text is never authority. A selected and attested
+Codex App Server can run one bounded compatibility assignment: the root spawns one
+correlated child, the child invokes one fixed content-free workspace probe through
+the current Computer policy, the root waits and reports exact authority evidence,
+and the product rejoins the same child before durable result acknowledgement. The
+probe exercises an allowed focus plus denied foreign scope and configured exclusions;
+it returns no workspace names or contents to the child.
 The read-only Computer response contract binds the full operation semantics, not
 only task/call/path identity; malformed or rebound responses remain terminal
 outcome-unknown rather than being mislabeled as a known refusal. The Agent app seam
 persists assignment/child correlation in a private atomic store with exclusive first
 publication and process-serialized monotonic updates, rejoins only the same known
 running child after restart, and records result retention separately from an exact
-parent-delivery acknowledgement. Its host remains an
-in-memory test double and the seam is not selected by the product runtime, so this is
-durable orchestration evidence rather than native Agent proof.
+parent-delivery acknowledgement. The in-memory host remains for exhaustive negative
+tests, and the product runtime also selects the seam through the bounded native Codex
+compatibility check. That check is native Agent proof for its exact assignment, not a
+claim that arbitrary product Agent tasks, commands, network access, or live provider
+work are complete.
 
 The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
 events already acknowledged by the receiving client. If the unacknowledged window
