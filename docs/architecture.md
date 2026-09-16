@@ -36,6 +36,18 @@ outer bundle owns the Farol Next product and launch identity; the nested Electro
 bundle remains a verified runtime dependency rather than rewritten, stripped, or
 newly signed executable code.
 
+## Native surface composition
+
+The Browser task page is a native `WebContentsView`; the Watch Rail, task tabs,
+dossier, Computer, Activity, Settings, and modal UI belong to the sandboxed shell
+renderer. Electron always composites a child view above renderer HTML. Main therefore
+owns a closed `SurfaceSection` / `SidebarMode` / `ShellOverlay` layout contract and
+hides the selected task view whenever Setup or a shell overlay is active. It never
+accepts renderer-provided bounds. This hide-while-overlay strategy preserves the full
+Browser viewport during normal work and guarantees that sidebar, task-menu, quick
+switcher, Escape, and focus handling are reachable without weakening preload, IPC,
+navigation, permission, partition, or network fences.
+
 The canonical owner launcher copies that package into a private per-invocation
 snapshot and verifies the snapshot before execution. Product-controlled package
 replacement therefore cannot change the bytes between verification and launch or
@@ -91,6 +103,14 @@ installed browser profile is used.
 The local provider and Computer capability are controlled fixtures. They prove the
 module/IPC/SSE/tool loop, not ChatGPT readiness, native Codex ownership, Mac
 filesystem containment, or Farol Agent admission.
+
+The N2 authority target is also not implemented by this preview. Computer will own a
+runtime-derived task-applicable `TaskGrant` / `ExecutionAuthority`. Permitted
+delegation from a main Turn through Agent and Critic must preserve that authority for
+ordinary relevant discovery inside its approved workspace, without treating the
+assignment packet's initial filenames as the security boundary. A delegate still
+cannot exceed the TaskGrant, underlying Computer approval, native host-task
+authority, or an explicit narrower owner instruction. Prompt text is never authority.
 
 The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
 events already acknowledged by the receiving client. If the unacknowledged window

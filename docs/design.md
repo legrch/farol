@@ -13,29 +13,46 @@ Connect, Hosts, and Verify. It records no credentials and makes no live connecti
 each step states the exact preview boundary. Settings can reopen the same journey so
 the boundary remains inspectable after dismissal.
 
-## Visual direction: Atlantic lighthouse
+## Owner-selected visual direction: Watch Rail
 
-- Atlantic Midnight `#0d1821` and Harbor Slate `#172733` form the calm shell.
-- Fog `#dde8e6` is the high-contrast text/surface neutral.
-- Sea Glass `#54b5a5` marks healthy streaming and focus.
-- Beacon Amber `#e9b45d` marks an active task or owner decision.
-- Fault Coral `#e37369` is reserved for terminal failures.
-- Avenir Next is the UI face on macOS; system sans-serif is the portable fallback.
-  SF Mono is used only for technical identities.
+The five reversible design-lab directions and their 49 reference screenshots remain
+unchanged under `design-lab/`. The owner selected Watch Rail with the Iris accent and
+Geist typeface. Production uses the same graphite hierarchy:
 
-The one emphatic element is a narrow beacon beside the active task. The rest stays
-flat and restrained: no decorative gradients, generic card grid, all-caps eyebrow
-labels, or neon-on-black developer dashboard. Wide mode uses a 176 px navigation
-rail; compact mode reduces it to 64 px while retaining labels for assistive
-technology. Content geometry is stable across running, tool-wait, complete, failure,
-and offline states.
+- a 216 px full-height sidebar that collapses to a 72 px watching rail;
+- automatic rail mode below 980 px, with the full sidebar available as an overlay;
+- task tabs above a 72 px dossier row, followed by the task-bound Browser page;
+- shape-and-text lifecycle lamps for running, Computer wait, complete, failed,
+  outcome unknown, and unavailable states;
+- Iris only for selection, keyboard focus, and the next action. Iris never encodes a
+  lifecycle state.
+
+Geist 1.7.2 and Geist Mono are shipped from the design-lab's pinned SIL OFL sources.
+Their SHA-256 values stay in `design-lab/fonts/PROVENANCE.md`, the OFL text is a
+digest-bound packaged resource, and the packaged third-party notice names the version,
+license, and hashes. Coverage outside the verified Latin set falls back to SF Pro or
+the system sans-serif; no broader script coverage is claimed.
+
+### Native Browser overlay decision
+
+The task page is a native `WebContentsView`, which is composited above renderer HTML.
+Farol therefore hides the selected native page while a shell-owned overlay is open:
+compact sidebar, task menu, quick switcher, or Setup. The page is shown again only
+after the overlay closes and focus is explicitly returned. This keeps the Browser
+viewport full width in ordinary use, avoids an additional transparent native view,
+and makes click/Escape routing deterministic. Main derives all bounds from closed
+layout enums; renderer-supplied pixels are never trusted.
 
 ## Interaction contract
 
 - `Command+1…4` selects Browser, Computer, Activity, or Settings.
+- `Control+Command+S`, the View menu item, and the button beside the macOS traffic
+  lights show or hide the sidebar. At compact widths the same control opens the full
+  sidebar over the rail.
+- `Command+K` opens the quick switcher from either shell HTML or the native task page.
 - `Control+Tab` and `Control+Shift+Tab` move between task tabs without cancelling the
   hidden task. Keyboard focus moves to the newly visible task surface.
-- Visible controls have a two-pixel Sea Glass focus ring and a minimum 40 px target.
+- Visible controls have a two-pixel Iris focus ring and an appropriate Mac target.
 - Switching views does not recreate WebContentsView instances. The selected browser
   view alone is visible; hidden views keep running with background throttling off.
 - Reduced-motion preference removes transforms and transition duration.
@@ -52,10 +69,12 @@ and offline states.
   text, tool arguments/results, bearer values, paths, cookies, and provider payloads
   never enter it.
 
-## Review checklist before implementation
+## Review checklist
 
 The direction was checked against the programme before UI code: Browser remains the
 home surface; tabs and status are calm; the active beacon is specific to Farol; the
 layout avoids generic dashboard patterns; compact behavior, focus, reduced motion,
 failure/offline states, and honest unavailable capabilities are part of acceptance.
-Owner visual sign-off is not implied by this internal review.
+The owner choice is recorded by the design-lab report. Production acceptance still
+requires built-app interaction, focus, inactive-window, fullscreen, compact overlay,
+and visual evidence rather than inheriting proof from synthetic lab screenshots.

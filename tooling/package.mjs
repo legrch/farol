@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import { GEIST_RESOURCES, GEIST_VERSION } from "./font-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
@@ -148,9 +149,16 @@ const zodLicense = await fs.readFile(
   path.join(root, "node_modules/zod/LICENSE"),
   "utf8",
 );
+const geistLicense = await fs.readFile(
+  path.join(builtRoot, "Geist-OFL.txt"),
+  "utf8",
+);
+const geistHashes = GEIST_RESOURCES.map(
+  (resource) => `${resource.output} SHA-256 ${resource.sha256}`,
+).join("\n");
 await fs.writeFile(
   path.join(appResources, "THIRD_PARTY_NOTICES.txt"),
-  `Farol Next Preview direct runtime notice\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
+  `Farol Next Preview direct runtime notice\n\nGeist ${GEIST_VERSION} (SIL Open Font License 1.1)\n${geistHashes}\n\n${geistLicense}\n\nZod 4.6.5 (MIT)\n${zodLicense}\n\nElectron's own license and Chromium notices are retained in Contents/Resources.\n`,
 );
 if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
   throw new Error("PACKAGE_RUNTIME_COPY_MISMATCH");

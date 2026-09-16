@@ -8,6 +8,11 @@ import {
   verifyAbsentIntegrations,
 } from "./build-contract.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
+import {
+  GEIST_RESOURCES,
+  verifyGeistBuild,
+  verifyGeistSources,
+} from "./font-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
 
 const root = process.cwd();
@@ -88,6 +93,7 @@ const attestInputs = {
 
 await fs.rm(output, { recursive: true, force: true });
 await fs.mkdir(output, { recursive: true });
+await verifyGeistSources(root);
 
 const common = {
   bundle: true,
@@ -146,7 +152,13 @@ await Promise.all([
     assertResourceManifest(JSON.parse(bytes.toString("utf8")));
     return fs.writeFile("dist/app/resource-manifest.json", bytes);
   }),
+  ...GEIST_RESOURCES.map((resource) =>
+    readBuildInput(resource.source).then((bytes) =>
+      fs.writeFile(path.join(output, resource.output), bytes),
+    ),
+  ),
 ]);
+await verifyGeistBuild(output);
 await verifyAbsentIntegrations(output);
 
 const current = sourceSnapshot(repositoryRoot, scope);

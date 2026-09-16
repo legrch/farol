@@ -2,11 +2,13 @@ import {
   app,
   BrowserWindow,
   ipcMain,
+  Menu,
   screen,
   session,
   utilityProcess,
   WebContentsView,
   type Input,
+  type MenuItemConstructorOptions,
   type UtilityProcess,
 } from "electron";
 import path from "node:path";
@@ -16,6 +18,13 @@ import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
+import {
+  ShellLayoutSchema,
+  type ShellOverlay,
+  type SidebarMode,
+  type SurfaceSection,
+  type WindowState,
+} from "../../pkg/ipc/shell-state";
 import {
   containWindowOpenFailure,
   presentationAction,
@@ -39,6 +48,7 @@ import {
   primaryStartupReady,
   previewStartupDelay,
 } from "./primary-startup";
+import { deriveSurfaceLayout } from "./surface-layout";
 
 const directory = __dirname;
 const productName = "Farol Next Preview";
@@ -94,19 +104,12 @@ const readySchema = z.strictObject({
   embeddedNode: z.string(),
   embeddedElectron: z.string(),
 });
-const layoutSchema = z.strictObject({
-  section: z.enum(["browser", "computer", "activity", "settings"]),
-  taskId: z.string(),
-  setupOpen: z.boolean(),
-});
 const controlSchema = z.strictObject({
   taskId: z.string(),
   action: z.enum(["release-tool", "finish-demo"]),
 });
 
 type RuntimeReady = z.infer<typeof readySchema>;
-type Section = z.infer<typeof layoutSchema>["section"];
-
 app.setName(productName);
 if (process.platform === "win32") app.setAppUserModelId(bundleId);
 
@@ -116,9 +119,11 @@ let runtime: RuntimeReady | null = null;
 let runtimeState: "starting" | "ready" | "offline" | "failed" = "starting";
 let runtimeError: string | null = null;
 let runtimeStopping = false;
-let section: Section = "browser";
+let section: SurfaceSection = "browser";
 let selectedTaskId: string = demoTasks[0].taskId;
 let setupOpen = true;
+let sidebarMode: SidebarMode = "full";
+let shellOverlay: ShellOverlay = "none";
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
@@ -155,6 +160,7 @@ function bootstrap() {
     nativeFilesystem: false,
     nativeAgent: false,
     liveProvider: false,
+    windowState: currentWindowState(),
   };
 }
 
@@ -170,6 +176,111 @@ function currentRuntimeStatus(): RuntimeStatus {
 
 function publishRuntimeStatus(): void {
   window?.webContents.send(channels.runtimeState, currentRuntimeStatus());
+}
+
+function currentWindowState(): WindowState {
+  let trafficLightPosition: WindowState["trafficLightPosition"] = null;
+  if (window && !window.isDestroyed() && process.platform === "darwin") {
+    try {
+      trafficLightPosition = window.getWindowButtonPosition();
+    } catch {
+      trafficLightPosition = null;
+    }
+  }
+  return {
+    focused: window?.isFocused() ?? false,
+    fullScreen: window?.isFullScreen() ?? false,
+    trafficLightPosition,
+  };
+}
+
+function publishWindowState(): void {
+  window?.webContents.send(channels.windowState, currentWindowState());
+}
+
+function publishLayout(): void {
+  window?.webContents.send(channels.layout, {
+    section,
+    taskId: selectedTaskId,
+    setupOpen,
+    sidebar: sidebarMode,
+    overlay: shellOverlay,
+  });
+}
+
+function publishShellAction(
+  action: "toggle-sidebar" | "open-quick-switcher" | "close-overlay",
+): void {
+  window?.webContents.send(channels.shellAction, { action });
+}
+
+function focusForLayout(): void {
+  if (!window || window.isDestroyed()) return;
+  if (setupOpen || shellOverlay !== "none" || section !== "browser") {
+    window.webContents.focus();
+    return;
+  }
+  taskViews.get(selectedTaskId)?.webContents.focus();
+}
+
+function requestQuickSwitcher(): void {
+  if (!window || setupOpen) return;
+  shellOverlay = "quick-switcher";
+  applyLayout();
+  publishShellAction("open-quick-switcher");
+  window.webContents.focus();
+}
+
+function requestSidebarToggle(): void {
+  if (!window || setupOpen) return;
+  publishShellAction("toggle-sidebar");
+}
+
+function closeShellOverlay(): void {
+  if (shellOverlay === "none") return;
+  shellOverlay = "none";
+  applyLayout();
+  publishShellAction("close-overlay");
+  focusForLayout();
+}
+
+function installApplicationMenu(): void {
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin"
+      ? ([{ role: "appMenu" }] satisfies MenuItemConstructorOptions[])
+      : []),
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+        { role: "selectAll" },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        {
+          label: "Show/Hide Sidebar",
+          accelerator: "Control+Command+S",
+          click: requestSidebarToggle,
+        },
+        {
+          label: "Quick Switcher",
+          accelerator: "CommandOrControl+K",
+          click: requestQuickSwitcher,
+        },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function disposeTaskView(taskId: string, view: WebContentsView): void {
@@ -326,31 +437,39 @@ function installNetworkFence(): Electron.Session | null {
 
 function handleShortcut(input: Input): boolean {
   if (setupOpen) return false;
+  const key = input.key.toLowerCase();
+  if (input.control && input.meta && key === "s") {
+    requestSidebarToggle();
+    return true;
+  }
+  if (input.meta && key === "k") {
+    requestQuickSwitcher();
+    return true;
+  }
+  if (input.key === "Escape" && shellOverlay !== "none") {
+    closeShellOverlay();
+    return true;
+  }
   const index = demoTasks.findIndex((task) => task.taskId === selectedTaskId);
   if (input.control && input.key === "Tab") {
     const direction = input.shift ? -1 : 1;
     const next = (index + direction + demoTasks.length) % demoTasks.length;
     selectedTaskId = demoTasks[next]?.taskId ?? selectedTaskId;
     section = "browser";
+    shellOverlay = "none";
     applyLayout();
-    window?.webContents.send(channels.layout, {
-      section,
-      taskId: selectedTaskId,
-      setupOpen,
-    });
-    taskViews.get(selectedTaskId)?.webContents.focus();
+    publishLayout();
+    focusForLayout();
     return true;
   }
   if (input.meta && /^[1-4]$/u.test(input.key)) {
     section = ["browser", "computer", "activity", "settings"][
       Number(input.key) - 1
-    ] as Section;
+    ] as SurfaceSection;
+    shellOverlay = "none";
     applyLayout();
-    window?.webContents.send(channels.layout, {
-      section,
-      taskId: selectedTaskId,
-      setupOpen,
-    });
+    publishLayout();
+    focusForLayout();
     return true;
   }
   return false;
@@ -358,23 +477,21 @@ function handleShortcut(input: Input): boolean {
 
 function applyLayout(): void {
   if (!window) return;
-  const size = window.getContentSize();
-  const width = size[0] ?? 1;
-  const height = size[1] ?? 1;
-  const rail = width < 760 ? 64 : 176;
+  const [width = 1, height = 1] = window.getContentSize();
+  const layout = deriveSurfaceLayout({
+    width,
+    height,
+    sidebar: sidebarMode,
+    overlay: shellOverlay,
+    section,
+    setupOpen,
+    runtimeReady: runtimeState === "ready",
+    selectedTaskPresent: taskViews.has(selectedTaskId),
+  });
   for (const [taskId, view] of taskViews) {
-    const visible =
-      runtimeState === "ready" &&
-      !setupOpen &&
-      section === "browser" &&
-      taskId === selectedTaskId;
+    const visible = layout.pageVisible && taskId === selectedTaskId;
     view.setVisible(visible);
-    view.setBounds({
-      x: rail,
-      y: 72,
-      width: Math.max(1, width - rail),
-      height: Math.max(1, height - 72),
-    });
+    view.setBounds(layout.pageBounds);
   }
 }
 
@@ -560,16 +677,24 @@ function installIpc(): void {
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
     if (event.sender !== window?.webContents) return;
-    const parsed = layoutSchema.safeParse(value);
+    const parsed = ShellLayoutSchema.safeParse(value);
     if (
       !parsed.success ||
       !demoTasks.some((task) => task.taskId === parsed.data.taskId)
     )
       return;
+    const focusTargetChanged =
+      section !== parsed.data.section ||
+      selectedTaskId !== parsed.data.taskId ||
+      setupOpen !== parsed.data.setupOpen ||
+      shellOverlay !== parsed.data.overlay;
     section = parsed.data.section;
     selectedTaskId = parsed.data.taskId;
     setupOpen = parsed.data.setupOpen;
+    sidebarMode = parsed.data.sidebar;
+    shellOverlay = parsed.data.overlay;
     applyLayout();
+    if (focusTargetChanged) focusForLayout();
   });
 }
 
@@ -589,7 +714,11 @@ async function createWindow(): Promise<void> {
     ...(testPlacement?.bounds ?? {}),
     minWidth: Math.min(640, testPlacement?.bounds.width ?? 640),
     minHeight: Math.min(520, testPlacement?.bounds.height ?? 520),
-    backgroundColor: "#0d1821",
+    backgroundColor: "#111216",
+    titleBarStyle: "hiddenInset",
+    ...(process.platform === "darwin"
+      ? { trafficLightPosition: { x: 14, y: 18 } }
+      : {}),
     show: false,
     webPreferences: {
       preload: path.join(directory, "preload.cjs"),
@@ -603,7 +732,20 @@ async function createWindow(): Promise<void> {
   window.webContents.on("before-input-event", (event, input) => {
     if (handleShortcut(input)) event.preventDefault();
   });
-  window.on("resize", applyLayout);
+  window.on("resize", () => {
+    applyLayout();
+    publishWindowState();
+  });
+  window.on("focus", publishWindowState);
+  window.on("blur", publishWindowState);
+  window.on("enter-full-screen", () => {
+    applyLayout();
+    publishWindowState();
+  });
+  window.on("leave-full-screen", () => {
+    applyLayout();
+    publishWindowState();
+  });
   window.on("closed", () => {
     stopStreams();
     disposeTaskViews();
@@ -611,6 +753,7 @@ async function createWindow(): Promise<void> {
     window = null;
   });
   await window.loadFile(path.join(directory, "shell.html"));
+  publishWindowState();
   await createTaskViews();
   for (const task of runtime?.tasks ?? []) {
     void consumeSse(task).catch((error: unknown) => {
@@ -711,6 +854,7 @@ async function main(): Promise<void> {
   await app.whenReady();
   if (startupDelayMs > 0) await delay(startupDelayMs);
   installIpc();
+  installApplicationMenu();
   await startRuntime();
   await ensureWindow();
   app.on("activate", reopenWindow);

@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 export const BUILD_ENTRIES = Object.freeze([
+  "Geist-OFL.txt",
+  "Geist-Variable.woff2",
+  "GeistMono-Variable.woff2",
   "main.cjs",
   "preload.cjs",
   "resource-manifest.json",

@@ -14,12 +14,15 @@ Farol product. It also does not use the installed `codex-chatgpt-web` profile.
   owner/session/task/Turn/generation/call;
 - one mandatory five-step first-run Setup journey, available again from Settings,
   which reports every preview-only or unavailable integration explicitly;
+- the owner-selected Watch Rail shell with Iris selection/next-action accents,
+  shape-and-text task signals, a 216 px sidebar / 72 px rail, and packaged Geist;
 - content-free Activity and explicit provider/runtime failure states.
 
 The provider and Computer executor are labelled local fixtures. Native filesystem
 access, a live provider, MCP/host registration and native Agent creation are not
 implemented or claimed. Agent app/domain one-child semantics are covered with an
-in-memory host double, not a native child.
+in-memory host double, not a native child. Delegated TaskGrant continuity is an N2
+architecture contract and is explicitly not claimed by this fixture preview.
 
 ## Reproduce
 

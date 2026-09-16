@@ -39,12 +39,18 @@ is not evidence about the packaged candidate.
 - Setup states the current boundary: the local runtime and Browser fixture work;
   live ChatGPT, native Computer, native Agent, and filesystem access do not.
 - Both task tabs are fixed synthetic demos. They are not an owner task registry.
-- `Allow fixture check` releases one synthetic Computer response for the selected
-  demo task. It cannot read a path or run a command.
+- `Allow once` releases one synthetic Computer response for whichever demo task is
+  actually waiting. It cannot read a path or run a command.
 - `Finish demo response` lets the selected scripted response reach its terminal state.
   It does not publish, install, release, or update anything.
 - Activity contains only allowlisted lifecycle facts. It omits prompts, answers,
   tool payloads, paths, and bearer values.
+- `Control+Command+S` or View -> Show/Hide Sidebar switches between the full Watch
+  Rail sidebar and its 72 px rail; below 980 px it opens the full sidebar as an
+  overlay. `Command+K` opens the quick switcher. Native task pages are hidden while a
+  shell overlay or Setup is open so the overlay receives clicks, Escape, and focus.
+- The Settings authority row is a forward contract only: delegated TaskGrant
+  continuity belongs to N2 and is not an implemented native Computer or Agent claim.
 
 On macOS, closing the window leaves this preview application and its in-memory local
 runtime running. Launching the same exact build again or clicking its Dock icon

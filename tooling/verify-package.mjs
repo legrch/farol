@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
   assertCanonicalArtifactPath,
   candidatePaths,
@@ -201,6 +202,7 @@ requireValue(
   "PACKAGE_EMBEDDED_ENTRY_SET_INVALID",
 );
 await verifyBuildEntries(resources, embedded.entrySha256);
+await verifyGeistBuild(resources);
 const embeddedPackage = JSON.parse(
   await fs.readFile(path.join(resources, "package.json"), "utf8"),
 );
@@ -246,6 +248,16 @@ requireValue(
 );
 await fs.access(path.join(appPath, "Contents/MacOS/Farol Next Preview"));
 await fs.access(path.join(resources, "THIRD_PARTY_NOTICES.txt"));
+const notices = await fs.readFile(
+  path.join(resources, "THIRD_PARTY_NOTICES.txt"),
+  "utf8",
+);
+requireValue(
+  notices.includes(`Geist ${GEIST_VERSION} (SIL Open Font License 1.1)`) &&
+    notices.includes("Geist-Variable.woff2 SHA-256") &&
+    notices.includes("GeistMono-Variable.woff2 SHA-256"),
+  "PACKAGE_GEIST_NOTICE_INVALID",
+);
 
 const launcherPath = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 const launcherStat = await fs.lstat(launcherPath);

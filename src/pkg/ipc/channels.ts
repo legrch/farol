@@ -6,4 +6,6 @@ export const channels = Object.freeze({
   runtimeEvent: "farol-next:runtime-event",
   runtimeState: "farol-next:runtime-state",
   taskSurfaceState: "farol-next:task-surface-state",
+  shellAction: "farol-next:shell-action",
+  windowState: "farol-next:window-state",
 });
