@@ -179,6 +179,16 @@ describe("read-only Computer MCP adapter", () => {
       expect((read.structuredContent as { callId?: unknown }).callId).toEqual(
         expect.any(String),
       );
+
+      const spoofed = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: {
+          workspaceId: "farol",
+          relativePath: "src/discovered.ts",
+          ownerId: "owner-attacker",
+        },
+      });
+      expect(spoofed.isError).toBe(true);
     } finally {
       await client.close();
       await server.close();

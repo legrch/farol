@@ -263,6 +263,11 @@ requireValue(
     notices.includes("GeistMono-Variable.woff2 SHA-256"),
   "PACKAGE_GEIST_NOTICE_INVALID",
 );
+requireValue(
+  notices.includes("@modelcontextprotocol/server 2.0.0 (MIT)") &&
+    notices.includes("@modelcontextprotocol/core 2.0.0 (MIT)"),
+  "PACKAGE_MCP_NOTICE_INVALID",
+);
 
 const launcherPath = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 const launcherStat = await fs.lstat(launcherPath);

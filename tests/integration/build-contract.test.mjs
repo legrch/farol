@@ -67,7 +67,13 @@ describe("build entry contract", () => {
     );
     try {
       await Promise.all(
-        ["main.cjs", "preload.cjs", "runtime.cjs", "shell.js"].map((entry) =>
+        [
+          "computer-mcp.cjs",
+          "main.cjs",
+          "preload.cjs",
+          "runtime.cjs",
+          "shell.js",
+        ].map((entry) =>
           fs.writeFile(path.join(root, entry), `safe:${entry}\n`),
         ),
       );

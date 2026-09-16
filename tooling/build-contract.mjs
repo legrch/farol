@@ -6,6 +6,7 @@ export const BUILD_ENTRIES = Object.freeze([
   "Geist-OFL.txt",
   "Geist-Variable.woff2",
   "GeistMono-Variable.woff2",
+  "computer-mcp.cjs",
   "computer-safe-open.py",
   "main.cjs",
   "preload.cjs",
@@ -17,6 +18,7 @@ export const BUILD_ENTRIES = Object.freeze([
 ]);
 
 const CAPABILITY_BOUNDARY_ENTRIES = Object.freeze([
+  "computer-mcp.cjs",
   "main.cjs",
   "preload.cjs",
   "runtime.cjs",

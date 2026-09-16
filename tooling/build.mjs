@@ -127,6 +127,13 @@ await Promise.all([
   }),
   build({
     ...common,
+    entryPoints: ["src/apps/computer-mcp/main.ts"],
+    outfile: "dist/app/computer-mcp.cjs",
+    platform: "node",
+    format: "cjs",
+  }),
+  build({
+    ...common,
     entryPoints: ["src/apps/desktop/preload.ts"],
     outfile: "dist/app/preload.cjs",
     platform: "node",
