@@ -1071,22 +1071,28 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
 }
 
 async function activateForNativeFocusProof(application) {
-  await application.evaluate(({ app, BrowserWindow }) => {
-    const targetWindow = BrowserWindow.getAllWindows()[0];
-    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
-    targetWindow.show();
-    app.focus({ steal: true });
-    targetWindow.focus();
-  });
-  for (let attempt = 0; attempt < 500; attempt += 1) {
-    const focused = await application.evaluate(
-      ({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.isFocused() ?? false,
-    );
-    if (focused) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  let last = null;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    last = await application.evaluate(({ app, BrowserWindow }) => {
+      const targetWindow = BrowserWindow.getAllWindows()[0];
+      if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+      targetWindow.setFocusable(true);
+      targetWindow.show();
+      targetWindow.moveTop();
+      app.focus({ steal: true });
+      targetWindow.focus();
+      return {
+        focused: targetWindow.isFocused(),
+        visible: targetWindow.isVisible(),
+        minimized: targetWindow.isMinimized(),
+        fullScreen: targetWindow.isFullScreen(),
+        shellFocused: targetWindow.webContents.isFocused(),
+      };
+    });
+    if (last.focused) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error("E2E_NATIVE_WINDOW_FOCUS_TIMEOUT");
+  throw new Error(`E2E_NATIVE_WINDOW_FOCUS_TIMEOUT:${JSON.stringify(last)}`);
 }
 
 async function setWindowSize(application, width, height) {
