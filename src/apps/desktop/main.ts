@@ -516,6 +516,7 @@ async function createTaskViews(): Promise<void> {
         backgroundThrottling: false,
       },
     });
+    view.setVisible(false);
     taskViews.set(task.taskId, view);
     window.contentView.addChildView(view);
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
