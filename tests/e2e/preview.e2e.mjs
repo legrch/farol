@@ -2375,7 +2375,13 @@ try {
     });
     await newTask.click();
     const providerPage = await opened;
-    await providerPage.waitForURL(ordinaryLiveTasks.chatGptFixture.url);
+    const fixtureUrl = new URL(ordinaryLiveTasks.chatGptFixture.url);
+    await providerPage.waitForURL(
+      (candidate) =>
+        candidate.origin === fixtureUrl.origin &&
+        candidate.pathname === fixtureUrl.pathname &&
+        candidate.searchParams.has("farol-e2e-task"),
+    );
     taskPages.push(providerPage);
     await ordinaryLiveTasks.window.waitForFunction(
       (count) =>
@@ -2398,6 +2404,10 @@ try {
     assert.equal(task.requestedMode, "Account default");
     assert.equal(task.observedMode, null);
     assert.equal(task.lifecycle, "idle");
+    assert.equal(
+      new URL(providerPage.url()).searchParams.get("farol-e2e-task"),
+      task.taskId,
+    );
     assert.equal(await newTask.locator("small").innerText(), `${index} / 5`);
   }
 
