@@ -1,5 +1,22 @@
 import type { CheckpointStore } from "../../app/port/checkpoint-store";
 import type { CheckpointEnvelope } from "../../domain/checkpoint";
+import {
+  sameContextBinding,
+  type ContextBinding,
+} from "../../domain/context-continuity";
+
+function key(binding: ContextBinding, checkpointId: string): string {
+  return JSON.stringify([
+    binding.ownerId,
+    binding.taskId,
+    binding.hostThreadId,
+    binding.sessionId,
+    binding.providerProfileId,
+    binding.modelId,
+    binding.mode,
+    checkpointId,
+  ]);
+}
 
 export class InMemoryCheckpoints implements CheckpointStore {
   private readonly checkpoints = new Map<string, CheckpointEnvelope>();
@@ -15,22 +32,26 @@ export class InMemoryCheckpoints implements CheckpointStore {
       this.nextPutFailure = null;
       throw new Error(code);
     }
-    const existing = this.checkpoints.get(checkpoint.checkpointId);
+    const checkpointKey = key(checkpoint.binding, checkpoint.checkpointId);
+    const existing = this.checkpoints.get(checkpointKey);
     if (existing && JSON.stringify(existing) !== JSON.stringify(checkpoint)) {
       throw new Error("CHECKPOINT_ID_CONFLICT");
     }
-    this.checkpoints.set(checkpoint.checkpointId, structuredClone(checkpoint));
+    this.checkpoints.set(checkpointKey, structuredClone(checkpoint));
   }
 
-  async get(checkpointId: string): Promise<CheckpointEnvelope | null> {
-    const checkpoint = this.checkpoints.get(checkpointId);
+  async get(
+    binding: ContextBinding,
+    checkpointId: string,
+  ): Promise<CheckpointEnvelope | null> {
+    const checkpoint = this.checkpoints.get(key(binding, checkpointId));
     return checkpoint ? structuredClone(checkpoint) : null;
   }
 
-  async deleteTask(taskId: string): Promise<void> {
-    for (const [checkpointId, checkpoint] of this.checkpoints) {
-      if (checkpoint.binding.taskId === taskId) {
-        this.checkpoints.delete(checkpointId);
+  async deleteTask(binding: ContextBinding): Promise<void> {
+    for (const [checkpointKey, checkpoint] of this.checkpoints) {
+      if (sameContextBinding(checkpoint.binding, binding)) {
+        this.checkpoints.delete(checkpointKey);
       }
     }
   }

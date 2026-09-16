@@ -114,7 +114,10 @@ export class CompactContext {
       session.phase === "active" &&
       session.lastCompletedOperationId === command.operationId
     ) {
-      const checkpoint = await this.loadCheckpoint(session.lastCheckpointId);
+      const checkpoint = await this.loadCheckpoint(
+        session.binding,
+        session.lastCheckpointId,
+      );
       if (!checkpoint.ok) return checkpoint;
       return success({ session, checkpoint: checkpoint.value });
     }
@@ -393,7 +396,10 @@ export class CompactContext {
       if (!(await this.persist(session))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
-      const checkpoint = await this.loadCheckpoint(session.lastCheckpointId);
+      const checkpoint = await this.loadCheckpoint(
+        session.binding,
+        session.lastCheckpointId,
+      );
       if (!checkpoint.ok) return checkpoint;
       return success({ session, checkpoint: checkpoint.value });
     }
@@ -428,15 +434,19 @@ export class CompactContext {
   private async requiredCheckpoint(
     session: ContextSession,
   ): Promise<Result<CheckpointEnvelope, CompactContextErrorCode>> {
-    return this.loadCheckpoint(session.operation?.checkpointId ?? null);
+    return this.loadCheckpoint(
+      session.binding,
+      session.operation?.checkpointId ?? null,
+    );
   }
 
   private async loadCheckpoint(
+    binding: ContextBinding,
     checkpointId: string | null,
   ): Promise<Result<CheckpointEnvelope, CompactContextErrorCode>> {
     if (!checkpointId) return failure("CHECKPOINT_MISSING");
     try {
-      const checkpoint = await this.checkpoints.get(checkpointId);
+      const checkpoint = await this.checkpoints.get(binding, checkpointId);
       return checkpoint ? success(checkpoint) : failure("CHECKPOINT_MISSING");
     } catch {
       return failure("CHECKPOINT_STORE_FAILED");

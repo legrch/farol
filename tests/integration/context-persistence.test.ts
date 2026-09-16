@@ -1,0 +1,263 @@
+import { afterEach, describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  beginCompaction,
+  createContextSession,
+  requestCheckpoint,
+  type ContextBinding,
+  type ContextSession,
+} from "../../src/modules/chat/domain/context-continuity";
+import {
+  createCheckpointEnvelope,
+  type CheckpointContent,
+  type CheckpointEnvelope,
+} from "../../src/modules/chat/domain/checkpoint";
+import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
+
+const binding: ContextBinding = {
+  ownerId: "owner-preview",
+  taskId: "task-atlantic",
+  hostThreadId: "thread-atlantic",
+  sessionId: "session-atlantic",
+  providerProfileId: "profile-isolated-next",
+  modelId: "chatgpt-web/high",
+  mode: "high",
+};
+
+const content: CheckpointContent = {
+  goal: "Continue the exact Farol Next task.",
+  activeConstraints: ["Do not repeat an outcome-unknown write."],
+  latestCorrections: ["Use Watch Rail."],
+  keyDecisions: ["Persist before retiring the old epoch."],
+  completedWork: [
+    {
+      description: "Continuity core committed.",
+      evidenceRefs: ["git:abe551a"],
+    },
+  ],
+  unfinishedWork: ["Wire the host bridge."],
+  unresolvedQuestions: ["Whether the retained source is still available."],
+  unknownOutcomes: [
+    { operationRef: "write-17", description: "Acknowledgement was lost." },
+  ],
+  artifactRefs: [
+    { reference: "vnext/src/modules/chat", availability: "available" },
+  ],
+  attachmentRefs: [{ reference: "owner-image-1", availability: "unavailable" }],
+  nextSafeStep: "Observe write-17 before another mutation.",
+};
+
+function value<T>(result: {
+  ok: boolean;
+  value?: T;
+  error?: { code: string };
+}): T {
+  if (!result.ok || result.value === undefined) {
+    throw new Error(result.error?.code ?? "EXPECTED_SUCCESS");
+  }
+  return result.value;
+}
+
+function requestedSession(
+  selectedBinding = binding,
+  operationId = "compact-atlantic-1",
+): ContextSession {
+  return value(
+    requestCheckpoint(
+      value(
+        beginCompaction(createContextSession(selectedBinding), {
+          operationId,
+          source: "retained_agent",
+          sourceBoundary: `message-${operationId}`,
+        }),
+      ),
+    ),
+  );
+}
+
+function checkpoint(
+  checkpointId: string,
+  createdAt: number,
+  selectedBinding = binding,
+): CheckpointEnvelope {
+  const requested = requestedSession(
+    selectedBinding,
+    `operation-${checkpointId}`,
+  );
+  return createCheckpointEnvelope(requested, content, {
+    checkpointId,
+    providerOperationId: `provider-${checkpointId}`,
+    parentCheckpointId: null,
+    sourceCursor: `cursor-${checkpointId}`,
+    createdAt,
+  });
+}
+
+async function descendants(root: string): Promise<string[]> {
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const target = path.join(root, entry.name);
+      if (!entry.isDirectory()) return [target];
+      return [target, ...(await descendants(target))];
+    }),
+  );
+  return nested.flat();
+}
+
+describe("private context persistence", () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      roots
+        .splice(0)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
+  });
+
+  async function root(): Promise<string> {
+    const created = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-context-"),
+    );
+    roots.push(created);
+    return created;
+  }
+
+  it("survives a new store instance with exact binding and private modes", async () => {
+    const stateRoot = await root();
+    const first = new PrivateContextStore({ root: stateRoot });
+    const session = requestedSession();
+    const savedCheckpoint = checkpoint("checkpoint-1", 1_000);
+    await first.save(session);
+    await first.put(savedCheckpoint);
+
+    const restarted = new PrivateContextStore({ root: stateRoot });
+    await expect(restarted.load(binding)).resolves.toEqual(session);
+    await expect(
+      restarted.get(binding, savedCheckpoint.checkpointId),
+    ).resolves.toEqual(savedCheckpoint);
+    await expect(
+      restarted.load({ ...binding, taskId: "task-harbor" }),
+    ).resolves.toBeNull();
+    await expect(
+      restarted.get(
+        { ...binding, taskId: "task-harbor" },
+        savedCheckpoint.checkpointId,
+      ),
+    ).resolves.toBeNull();
+
+    const paths = [stateRoot, ...(await descendants(stateRoot))];
+    for (const target of paths) {
+      const stat = await fs.lstat(target);
+      expect(stat.mode & 0o077).toBe(0);
+      expect(stat.mode & 0o700).toBe(stat.isDirectory() ? 0o700 : 0o600);
+    }
+  });
+
+  it("keeps the previous durable session when replacement is interrupted", async () => {
+    const stateRoot = await root();
+    const stable = new PrivateContextStore({ root: stateRoot });
+    const active = createContextSession(binding);
+    await stable.save(active);
+    const interrupted = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        beforeCommit: async (target) => {
+          if (target.endsWith("session.json")) {
+            throw new Error("SYNTHETIC_RENAME_INTERRUPTION");
+          }
+        },
+      },
+    );
+
+    await expect(interrupted.save(requestedSession())).rejects.toThrow(
+      "SYNTHETIC_RENAME_INTERRUPTION",
+    );
+    await expect(stable.load(binding)).resolves.toEqual(active);
+    expect(
+      (await descendants(stateRoot)).some((target) =>
+        path.basename(target).includes(".tmp-"),
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects corrupt and unsupported state without using it", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({ root: stateRoot });
+    await store.save(createContextSession(binding));
+    const sessionFile = (await descendants(stateRoot)).find((target) =>
+      target.endsWith("session.json"),
+    );
+    if (!sessionFile) throw new Error("SESSION_FILE_MISSING");
+
+    await fs.writeFile(sessionFile, "{not-json", { mode: 0o600 });
+    await expect(store.load(binding)).rejects.toThrow("CONTEXT_STATE_CORRUPT");
+
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({ schemaVersion: 99, kind: "context_session" }),
+      { mode: 0o600 },
+    );
+    await expect(store.load(binding)).rejects.toThrow(
+      "CONTEXT_STATE_UNSUPPORTED",
+    );
+  });
+
+  it("bounds checkpoint retention and deletes only the exact task", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({
+      root: stateRoot,
+      maxCheckpointsPerTask: 2,
+    });
+    await store.save(createContextSession(binding));
+    await store.put(checkpoint("checkpoint-1", 1_000));
+    await store.put(checkpoint("checkpoint-2", 2_000));
+    await store.put(checkpoint("checkpoint-3", 3_000));
+    await expect(store.get(binding, "checkpoint-1")).resolves.toBeNull();
+    await expect(store.get(binding, "checkpoint-2")).resolves.toMatchObject({
+      checkpointId: "checkpoint-2",
+    });
+
+    const otherBinding = {
+      ...binding,
+      taskId: "task-harbor",
+      sessionId: "session-harbor",
+    };
+    await store.save(createContextSession(otherBinding));
+    await store.put(checkpoint("checkpoint-harbor", 4_000, otherBinding));
+    await store.deleteTask(binding);
+    await expect(store.load(binding)).resolves.toBeNull();
+    await expect(store.get(binding, "checkpoint-3")).resolves.toBeNull();
+    await expect(store.load(otherBinding)).resolves.toMatchObject({
+      binding: otherBinding,
+    });
+    await expect(
+      store.get(otherBinding, "checkpoint-harbor"),
+    ).resolves.toMatchObject({ checkpointId: "checkpoint-harbor" });
+  });
+
+  it("rejects conflicting or over-budget checkpoint replacement", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({
+      root: stateRoot,
+      maximumCheckpointContentBytes: 2_048,
+    });
+    const original = checkpoint("checkpoint-1", 1_000);
+    await store.put(original);
+    await expect(
+      store.put({
+        ...original,
+        content: { ...original.content, goal: "Different goal" },
+      }),
+    ).rejects.toThrow("CHECKPOINT_ID_CONFLICT");
+    await expect(
+      store.put({
+        ...checkpoint("checkpoint-large", 2_000),
+        content: { ...content, goal: "x".repeat(4_096) },
+      }),
+    ).rejects.toThrow("CHECKPOINT_CONTENT_OVERSIZED");
+  });
+});
