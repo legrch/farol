@@ -1289,7 +1289,7 @@ html[data-has-tasks="false"] .surface {
 
 .workspace-query {
   display: grid;
-  grid-template-columns: auto minmax(160px, 1fr) auto;
+  grid-template-columns: auto minmax(160px, 1fr) auto auto;
   align-items: end;
   gap: 8px;
   padding: 0 0 12px;
@@ -1335,7 +1335,8 @@ html[data-has-tasks="false"] .surface {
 }
 
 .workspace-read-evidence,
-.workspace-query-evidence {
+.workspace-query-evidence,
+.workspace-mutation-evidence {
   display: grid;
   gap: 8px;
   margin: 0 0 12px;
@@ -1346,10 +1347,46 @@ html[data-has-tasks="false"] .surface {
 }
 
 .workspace-read-evidence strong,
-.workspace-query-evidence strong {
+.workspace-query-evidence strong,
+.workspace-mutation-evidence strong {
   color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 9px;
+}
+
+.workspace-mutation-evidence p {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.workspace-mutation-evidence label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.workspace-mutation-evidence textarea {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 9px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.workspace-mutation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .workspace-read-evidence pre {

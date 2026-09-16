@@ -60,7 +60,7 @@ const bootstrapSchema = z.strictObject({
   partition: z.string(),
   chatgptPartition: z.literal("persist:farol-next-chatgpt"),
   updateChannel: z.literal("local-preview-only"),
-  nativeFilesystem: z.literal(false),
+  nativeFilesystem: z.literal(true),
   nativeAgent: z.literal(false),
   liveProvider: z.literal(false),
   windowState: WindowStateSchema,
@@ -184,7 +184,9 @@ let workspaceEvidence: Extract<
     kind:
       | "computer.workspace-read"
       | "computer.workspace-list"
-      | "computer.workspace-search";
+      | "computer.workspace-search"
+      | "computer.workspace-edit-preview"
+      | "computer.workspace-mutation";
   }
 > | null = null;
 let pendingChatGptPreview: Extract<
@@ -594,10 +596,12 @@ function renderComputer(): void {
           settings.computer.generation,
     );
     if (verifiedWorkspace) {
-      available.textContent = `Read, list and search · ${verifiedWorkspace.label}`;
+      available.textContent = `${verifiedWorkspace.access === "write" ? "Read, list, search and guarded edits" : "Read, list and search"} · ${verifiedWorkspace.label}`;
       unavailable.textContent =
-        "Writes · commands · screenshots · account state";
-      authority.textContent = `${settings.computer.name} · read-only generation ${settings.computer.generation} · exclusions enforced`;
+        verifiedWorkspace.access === "write"
+          ? "Commands · screenshots · account state"
+          : "Writes · commands · screenshots · account state";
+      authority.textContent = `${settings.computer.name} · ${verifiedWorkspace.access} generation ${settings.computer.generation} · exclusions enforced`;
     } else if (settings.computer.workspaces.length > 0) {
       available.textContent = "Workspace configuration · verification required";
       unavailable.textContent =
@@ -775,7 +779,7 @@ function renderComputerConfiguration(): void {
       const verified =
         computerState.verified?.workspaceId === workspace.workspaceId &&
         computerState.verified.configRevision === settings.computer.generation;
-      detail.textContent = `${workspace.root} · read-only · ${verified ? "verified" : "not verified"}`;
+      detail.textContent = `${workspace.root} · ${workspace.access === "write" ? "guarded edits" : "read-only"} · ${verified ? "verified" : "not verified"}`;
       copy.append(title, detail);
       const actions = document.createElement("span");
       actions.className = "workspace-actions";
@@ -788,7 +792,26 @@ function renderComputerConfiguration(): void {
             kind: "computer.verify-workspace",
             workspaceId: workspace.workspaceId,
           },
-          `${workspace.label} read access verified.`,
+          `${workspace.label} ${workspace.access} access verified.`,
+        );
+      });
+      const updateAccess = document.createElement("button");
+      updateAccess.type = "button";
+      updateAccess.textContent =
+        workspace.access === "read" ? "Enable edits" : "Use read-only";
+      updateAccess.title =
+        workspace.access === "read"
+          ? "Require a fresh verification before guarded edits are available"
+          : "Remove write authority and require a fresh read verification";
+      updateAccess.addEventListener("click", () => {
+        const access = workspace.access === "read" ? "write" : "read";
+        void configureProduct(
+          {
+            kind: "computer.update-access",
+            workspaceId: workspace.workspaceId,
+            access,
+          },
+          `${workspace.label} now requires ${access} verification.`,
         );
       });
       const remove = document.createElement("button");
@@ -803,7 +826,7 @@ function renderComputerConfiguration(): void {
           `${workspace.label} approval removed.`,
         );
       });
-      actions.append(verify, remove);
+      actions.append(verify, updateAccess, remove);
       row.append(copy, actions);
 
       const policy = document.createElement("div");
@@ -902,6 +925,25 @@ function renderComputerConfiguration(): void {
         );
       });
       query.append(listRoot, searchLabel, search);
+      if (workspace.access === "write") {
+        const edit = document.createElement("button");
+        edit.type = "button";
+        edit.textContent = "Edit file…";
+        edit.disabled = !verified;
+        edit.title = verified
+          ? "Choose a text file, review an exact replacement, then apply it once"
+          : "Verify guarded edit access first";
+        edit.addEventListener("click", () => {
+          void configureProduct(
+            {
+              kind: "computer.prepare-workspace-edit",
+              workspaceId: workspace.workspaceId,
+            },
+            `Review an edit in ${workspace.label}.`,
+          );
+        });
+        query.append(edit);
+      }
       card.append(query);
 
       if (workspaceEvidence?.workspaceId === workspace.workspaceId) {
@@ -909,7 +951,10 @@ function renderComputerConfiguration(): void {
         evidence.className =
           workspaceEvidence.kind === "computer.workspace-read"
             ? "workspace-read-evidence"
-            : "workspace-query-evidence";
+            : workspaceEvidence.kind === "computer.workspace-edit-preview" ||
+                workspaceEvidence.kind === "computer.workspace-mutation"
+              ? "workspace-mutation-evidence"
+              : "workspace-query-evidence";
         const heading = document.createElement("strong");
         if (workspaceEvidence.kind === "computer.workspace-read") {
           heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes${workspaceEvidence.truncated ? " · preview truncated" : ""}`;
@@ -925,7 +970,7 @@ function renderComputerConfiguration(): void {
             entries.append(item);
           }
           evidence.append(heading, entries);
-        } else {
+        } else if (workspaceEvidence.kind === "computer.workspace-search") {
           heading.textContent = `Search · ${workspaceEvidence.matches.length} ${workspaceEvidence.matches.length === 1 ? "match" : "matches"}${workspaceEvidence.resultLimited || workspaceEvidence.scanLimited ? " · result limited" : ""}`;
           const matches = document.createElement("ol");
           for (const match of workspaceEvidence.matches) {
@@ -938,6 +983,77 @@ function renderComputerConfiguration(): void {
             matches.append(item);
           }
           evidence.append(heading, matches);
+        } else if (
+          workspaceEvidence.kind === "computer.workspace-edit-preview"
+        ) {
+          const editPreview = workspaceEvidence;
+          heading.textContent = `${editPreview.relativePath} · ${editPreview.bytes} bytes · source ${editPreview.beforeSha256.slice(0, 12)}`;
+          const note = document.createElement("p");
+          note.textContent =
+            "Enter one exact match and its replacement. The source digest is checked again before one atomic edit; file contents are not retained.";
+          const oldLabel = document.createElement("label");
+          oldLabel.textContent = "Find exact text";
+          const oldText = document.createElement("textarea");
+          oldText.maxLength = 32_768;
+          oldText.setAttribute(
+            "aria-label",
+            `Find exact text in ${workspace.label}`,
+          );
+          oldLabel.append(oldText);
+          const newLabel = document.createElement("label");
+          newLabel.textContent = "Replace with";
+          const newText = document.createElement("textarea");
+          newText.maxLength = 32_768;
+          newText.setAttribute(
+            "aria-label",
+            `Replacement text for ${workspace.label}`,
+          );
+          newLabel.append(newText);
+          const controls = document.createElement("div");
+          controls.className = "workspace-mutation-actions";
+          const cancel = document.createElement("button");
+          cancel.type = "button";
+          cancel.textContent = "Cancel";
+          cancel.addEventListener("click", () => {
+            void configureProduct(
+              {
+                kind: "computer.cancel-workspace-edit",
+                operationId: editPreview.operationId,
+              },
+              "Guarded edit cancelled.",
+            );
+          });
+          const apply = document.createElement("button");
+          apply.type = "button";
+          apply.className = "primary-action";
+          apply.textContent = "Apply guarded edit";
+          apply.disabled = true;
+          const updateApplyState = () => {
+            apply.disabled =
+              oldText.value.length === 0 || oldText.value === newText.value;
+          };
+          oldText.addEventListener("input", updateApplyState);
+          newText.addEventListener("input", updateApplyState);
+          apply.addEventListener("click", () => {
+            const command = ProductConfigurationCommandSchema.safeParse({
+              kind: "computer.apply-workspace-edit",
+              operationId: editPreview.operationId,
+              oldText: oldText.value,
+              newText: newText.value,
+            });
+            if (!command.success) return;
+            void configureProduct(
+              command.data,
+              `${workspace.label} edit applied.`,
+            );
+          });
+          controls.append(cancel, apply);
+          evidence.append(heading, note, oldLabel, newLabel, controls);
+        } else {
+          heading.textContent = `${workspaceEvidence.operation === "edit" ? "Edited" : "Wrote"} ${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes`;
+          const receipt = document.createElement("p");
+          receipt.textContent = `${workspaceEvidence.replacements} exact replacement${workspaceEvidence.replacements === 1 ? "" : "s"} · ${workspaceEvidence.beforeSha256?.slice(0, 12) ?? "new file"} → ${workspaceEvidence.afterSha256.slice(0, 12)} · ${workspaceEvidence.resultRetention}${workspaceEvidence.redelivered ? " · redelivered" : ""}`;
+          evidence.append(heading, receipt);
         }
         card.append(evidence);
       }
@@ -957,6 +1073,8 @@ async function configureProduct(
     command.kind === "computer.verify-workspace" ||
     command.kind === "computer.list-workspace" ||
     command.kind === "computer.search-workspace" ||
+    command.kind === "computer.prepare-workspace-edit" ||
+    command.kind === "computer.update-access" ||
     command.kind === "computer.update-exclusions" ||
     command.kind === "computer.remove-workspace"
   ) {
@@ -969,7 +1087,13 @@ async function configureProduct(
         ? "Submitting once and waiting for one ChatGPT result…"
         : command.kind === "chatgpt.cancel-readonly-task"
           ? "Discarding the prepared context…"
-          : "Saving and reading back…";
+          : command.kind === "computer.prepare-workspace-edit"
+            ? "Reading the selected file and preparing a content-free edit review…"
+            : command.kind === "computer.apply-workspace-edit"
+              ? "Applying this guarded edit once…"
+              : command.kind === "computer.cancel-workspace-edit"
+                ? "Discarding the prepared edit…"
+                : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1020,6 +1144,12 @@ async function configureProduct(
   } else if (evidence?.kind === "computer.workspace-search") {
     workspaceEvidence = evidence;
     settingsFeedback = `Found ${evidence.matches.length} ${evidence.matches.length === 1 ? "match" : "matches"} for "${evidence.pattern}"${evidence.resultLimited || evidence.scanLimited ? " (result limited)" : ""}.`;
+  } else if (evidence?.kind === "computer.workspace-edit-preview") {
+    workspaceEvidence = evidence;
+    settingsFeedback = `Review one exact replacement in ${evidence.relativePath}. Nothing has been changed.`;
+  } else if (evidence?.kind === "computer.workspace-mutation") {
+    workspaceEvidence = evidence;
+    settingsFeedback = `${evidence.operation === "edit" ? "Edited" : "Wrote"} ${evidence.relativePath} once · ${evidence.resultRetention}${evidence.redelivered ? " · result redelivered" : ""}.`;
   } else if (evidence?.kind === "chatgpt.readiness") {
     settingsFeedback =
       evidence.state === "authenticated"
@@ -1051,6 +1181,9 @@ async function configureProduct(
   if (command.kind === "chatgpt.cancel-readonly-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") shellOverlay = "none";
+  }
+  if (command.kind === "computer.cancel-workspace-edit") {
+    workspaceEvidence = null;
   }
   settingsFeedbackError = evidenceError;
   if (

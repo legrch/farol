@@ -461,6 +461,45 @@ export class ProductConfigurationService {
     });
   }
 
+  async updateWorkspaceAccess(
+    workspaceId: string,
+    access: "read" | "write",
+  ): Promise<MutationResult> {
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    const current = this.current.computer.workspaces.find(
+      (workspace) => workspace.workspaceId === workspaceId,
+    );
+    if (!current) return this.failure("WORKSPACE_NOT_FOUND");
+    if (current.access === access) {
+      return { ok: true, snapshot: this.snapshot() };
+    }
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      computer: {
+        ...settings.computer,
+        generation: settings.computer.generation + 1,
+        workspaces: settings.computer.workspaces.map((workspace) =>
+          workspace.workspaceId === workspaceId
+            ? { ...workspace, access }
+            : workspace,
+        ),
+      },
+      setup: {
+        ...settings.setup,
+        computer: {
+          ...settings.setup.computer,
+          configured: true,
+          reachable: "unknown",
+          verified: null,
+          needsAction: `Verify ${access} access after changing workspace access.`,
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+      },
+    }));
+  }
+
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
@@ -493,6 +532,36 @@ export class ProductConfigurationService {
           needsAction: null,
           unavailable: null,
           outcomeUnknown: false,
+        },
+      },
+    }));
+  }
+
+  async recordComputerMutationOutcomeUnknown(
+    workspaceId: string,
+  ): Promise<MutationResult> {
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    if (
+      !this.current.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === workspaceId,
+      )
+    ) {
+      return this.failure("WORKSPACE_NOT_FOUND");
+    }
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      setup: {
+        ...settings.setup,
+        computer: {
+          ...settings.setup.computer,
+          configured: true,
+          reachable: "unknown",
+          verified: null,
+          needsAction:
+            "Inspect the selected file, then verify workspace access again.",
+          unavailable: null,
+          outcomeUnknown: true,
         },
       },
     }));

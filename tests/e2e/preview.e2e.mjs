@@ -2496,6 +2496,52 @@ try {
     .locator(".workspace-read-evidence")
     .getByText("Farol Next workspace verification fixture", { exact: true })
     .waitFor();
+
+  await workspaceCard
+    .getByRole("button", { name: "Enable edits", exact: true })
+    .click();
+  await workspaceCard.getByText(/guarded edits · not verified/u).waitFor();
+  assert.equal(
+    await workspaceCard
+      .getByRole("button", { name: "Edit file…", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await workspaceCard
+    .getByRole("button", { name: "Verify", exact: true })
+    .click();
+  await workspaceCard.getByText(/guarded edits · verified/u).waitFor();
+  await workspaceCard
+    .getByRole("button", { name: "Edit file…", exact: true })
+    .click();
+  const mutationReview = workspaceCard.locator(".workspace-mutation-evidence");
+  await mutationReview.getByText(/README\.md · 42 bytes · source/u).waitFor();
+  await mutationReview
+    .getByLabel("Find exact text in approved-workspace", { exact: true })
+    .fill("workspace verification");
+  await mutationReview
+    .getByLabel("Replacement text for approved-workspace", { exact: true })
+    .fill("guarded workspace mutation");
+  await mutationReview
+    .getByRole("button", { name: "Apply guarded edit", exact: true })
+    .click();
+  await workspaceCard
+    .locator(".workspace-mutation-evidence")
+    .getByText(/Edited README\.md · 46 bytes/u)
+    .waitFor();
+  await normal.window
+    .locator("#computer-feedback")
+    .getByText("Edited README.md once · durable.", { exact: true })
+    .waitFor();
+  assert.equal(
+    await fs.readFile(normal.workspaceFile, "utf8"),
+    "Farol Next guarded workspace mutation fixture\n",
+  );
+  cases.push(
+    "workspace-write-access-explicit",
+    "workspace-guarded-edit-atomic",
+  );
+
   await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
   await normal.window
@@ -2757,6 +2803,7 @@ try {
     restartedSettings.computer.workspaces[0].root,
     normal.workspaceRoot,
   );
+  assert.equal(restartedSettings.computer.workspaces[0].access, "write");
   assert.equal(
     restartedSettings.setup.computer.verified.workspaceId,
     restartedSettings.computer.workspaces[0].workspaceId,
@@ -2764,6 +2811,10 @@ try {
   assert.equal(
     restartedSettings.setup.computer.verified.configRevision,
     restartedSettings.computer.generation,
+  );
+  assert.equal(
+    restartedSettings.setup.computer.verified.profile,
+    "computer.local.write/1",
   );
   assert.equal(
     restartedSettings.setup.chatgpt.verified.profile,
@@ -2824,6 +2875,17 @@ try {
   const savedSettings = await fs.readFile(settingsPath, "utf8");
   assert.doesNotMatch(savedSettings, /workspace verification fixture/u);
   assert.doesNotMatch(savedSettings, /Bearer|token|cookie|secret/u);
+  const mutationRoot = path.join(settingsRoot, "workspace-mutations");
+  const mutationFiles = await fs.readdir(path.join(mutationRoot, "mutations"));
+  assert.equal(mutationFiles.length, 1);
+  const savedMutation = await fs.readFile(
+    path.join(mutationRoot, "mutations", mutationFiles[0]),
+    "utf8",
+  );
+  assert.doesNotMatch(
+    savedMutation,
+    /workspace verification|guarded workspace mutation/u,
+  );
   cases.push(
     "visible-window-secondary-display",
     "visible-window-show-inactive",

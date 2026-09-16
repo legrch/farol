@@ -286,6 +286,116 @@ describe("Farol Next product configuration", () => {
     });
   });
 
+  it("persists explicit write access and invalidates stale verification", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    await service.recordComputerVerification(workspaceId, {
+      profile: "computer.local.readonly/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "a".repeat(64),
+      protocol: "readonly-workspace/1",
+    });
+    const before = service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    const beforeGeneration = before.settings.computer.generation;
+
+    const updated = await service.updateWorkspaceAccess(workspaceId, "write");
+
+    expect(updated.ok).toBe(true);
+    expect(updated.snapshot.status).toBe("ready");
+    if (updated.snapshot.status !== "ready")
+      throw new Error("settings missing");
+    expect(updated.snapshot.settings.computer.generation).toBe(
+      beforeGeneration + 1,
+    );
+    expect(updated.snapshot.settings.computer.workspaces[0]?.access).toBe(
+      "write",
+    );
+    expect(updated.snapshot.settings.setup.computer).toMatchObject({
+      configured: true,
+      reachable: "unknown",
+      verified: null,
+      needsAction: "Verify write access after changing workspace access.",
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        computer: {
+          workspaces: [{ workspaceId, access: "write" }],
+        },
+      },
+    });
+  });
+
+  it("persists an unknown workspace mutation outcome until reverification", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    await service.updateWorkspaceAccess(workspaceId, "write");
+    await service.recordComputerVerification(workspaceId, {
+      profile: "computer.local.write/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "a".repeat(64),
+      protocol: "mutable-workspace/1",
+    });
+
+    const unknown =
+      await service.recordComputerMutationOutcomeUnknown(workspaceId);
+
+    expect(unknown).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          setup: {
+            computer: {
+              reachable: "unknown",
+              verified: null,
+              outcomeUnknown: true,
+              needsAction:
+                "Inspect the selected file, then verify workspace access again.",
+            },
+          },
+        },
+      },
+    });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject(unknown.snapshot);
+  });
+
   it("persists truthful ChatGPT readiness without credentials or page content", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(
@@ -469,6 +579,58 @@ describe("Farol Next product configuration", () => {
         truncated: false,
       }).success,
     ).toBe(false);
+  });
+
+  it("admits a reviewed guarded edit and content-free mutation receipt", () => {
+    const workspaceId = "00000000-0000-4000-8000-000000000001";
+    const operationId = "00000000-0000-4000-8000-000000000002";
+
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.prepare-workspace-edit",
+        workspaceId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.apply-workspace-edit",
+        operationId,
+        oldText: "before",
+        newText: "after",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.cancel-workspace-edit",
+        operationId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-edit-preview",
+        operationId,
+        workspaceId,
+        relativePath: "README.md",
+        bytes: 7,
+        beforeSha256: "a".repeat(64),
+        expiresAt: "2026-09-16T10:10:00.000Z",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-mutation",
+        operationId,
+        workspaceId,
+        relativePath: "README.md",
+        operation: "edit",
+        bytes: 6,
+        replacements: 1,
+        beforeSha256: "a".repeat(64),
+        afterSha256: "b".repeat(64),
+        resultRetention: "durable",
+        redelivered: false,
+      }).success,
+    ).toBe(true);
   });
 
   it("separates ChatGPT context preparation from one-shot submission", () => {

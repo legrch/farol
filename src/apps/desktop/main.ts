@@ -13,7 +13,7 @@ import {
   type UtilityProcess,
 } from "electron";
 import { lstat, realpath } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
@@ -75,6 +75,18 @@ import {
   buildChatGptReadonlyTaskPrompt,
 } from "./chatgpt-readonly-task";
 import { ChatGptRoute } from "./chatgpt-route";
+import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
+import {
+  createParticipantAuthority,
+  deriveTaskGrant,
+  type AuthorityCapability,
+  type ComputerApproval,
+  type TaskAdmission,
+} from "../../modules/computer/domain/execution-authority";
+import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/native/sha256-workspace-mutation-digester";
+import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
+import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
+import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -178,6 +190,17 @@ type PendingChatGptReadonlyTask = Readonly<{
   expiresAt: number;
 }>;
 let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
+type PendingWorkspaceEdit = Readonly<{
+  operationId: string;
+  workspaceId: string;
+  computerGeneration: number;
+  relativePath: string;
+  bytes: number;
+  beforeSha256: string;
+  expiresAt: number;
+}>;
+let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
+let workspaceMutationAdmission = false;
 
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
@@ -195,6 +218,108 @@ function chatGptReadonlyTaskPreview(
     excludedPaths: pending.excludedPaths,
     expiresAt: new Date(pending.expiresAt).toISOString(),
   };
+}
+
+function workspaceEditPreview(
+  pending: PendingWorkspaceEdit,
+): Readonly<Record<string, unknown>> {
+  return {
+    kind: "computer.workspace-edit-preview",
+    operationId: pending.operationId,
+    workspaceId: pending.workspaceId,
+    relativePath: pending.relativePath,
+    bytes: pending.bytes,
+    beforeSha256: pending.beforeSha256,
+    expiresAt: new Date(pending.expiresAt).toISOString(),
+  };
+}
+
+function mutableWorkspaceAction(
+  settings: ProductSettings,
+  workspace: ApprovedProductWorkspace,
+  expiresAt: number,
+): RunMutableComputerAction | null {
+  const ownerId = "owner-desktop";
+  const sessionId = "desktop-computer-session";
+  const taskId = "desktop-computer-task";
+  const participantId = "desktop-main";
+  const approvalCapabilities: AuthorityCapability[] = [
+    "workspace.list",
+    "workspace.read",
+    "workspace.search",
+    ...(settings.computer.workspaces.some(
+      (candidate) => candidate.access === "write",
+    )
+      ? (["workspace.write"] as const)
+      : []),
+  ];
+  const approval: ComputerApproval = {
+    ownerId,
+    computerId: settings.computer.computerId,
+    generation: settings.computer.generation,
+    workspaces: settings.computer.workspaces.map((candidate) => ({
+      workspaceId: candidate.workspaceId,
+      root: candidate.root,
+      access: candidate.access,
+    })),
+    excludedPaths: settings.computer.workspaces.flatMap((candidate) =>
+      candidate.excludedPaths.map((excluded) => ({
+        workspaceId: candidate.workspaceId,
+        path: excluded,
+      })),
+    ),
+    capabilities: approvalCapabilities,
+    network: "none",
+    commands: "none",
+    expiresAt,
+  };
+  const admission: TaskAdmission = {
+    authorityId: `desktop-authority-${settings.computer.generation}`,
+    ownerId,
+    sessionId,
+    taskId,
+    taskEpoch: settings.computer.generation,
+    computerId: settings.computer.computerId,
+    computerGeneration: settings.computer.generation,
+    workspaces: [
+      {
+        workspaceId: workspace.workspaceId,
+        mode: "subtree",
+        root: workspace.root,
+        access: "write",
+      },
+    ],
+    excludedPaths: workspace.excludedPaths.map((excluded) => ({
+      workspaceId: workspace.workspaceId,
+      path: excluded,
+    })),
+    capabilities: ["workspace.read", "workspace.write"],
+    network: "none",
+    commands: "none",
+    expiresAt,
+  };
+  const grant = deriveTaskGrant(approval, admission, Date.now());
+  if (!grant.ok) return null;
+  const participant = createParticipantAuthority(grant.value, {
+    participantId,
+    role: "main",
+    mutationOwnership: "task",
+  });
+  if (!participant.ok) return null;
+  return new RunMutableComputerAction(
+    new InMemoryAuthorityRepository([participant.value]),
+    new InMemoryComputerApprovalRepository([approval]),
+    new PrivateWorkspaceMutationStore({
+      root: path.join(
+        app.getPath("userData"),
+        "farol-next-state",
+        "workspace-mutations",
+      ),
+    }),
+    new Sha256WorkspaceMutationDigester(),
+    nativeWorkspace,
+    { now: () => Date.now() },
+  );
 }
 
 const windowOpenCoordinator = new WindowOpenCoordinator();
@@ -237,7 +362,7 @@ function bootstrap() {
     partition: "persist:farol-next-preview",
     chatgptPartition: CHATGPT_PARTITION,
     updateChannel: buildIdentity.updateChannel,
-    nativeFilesystem: false,
+    nativeFilesystem: true,
     nativeAgent: false,
     liveProvider: false,
     windowState: currentWindowState(),
@@ -371,6 +496,29 @@ function workspaceReadFailure(code: string): ProductConfigurationResult {
       return configurationFailure(code);
     default:
       return configurationFailure("WORKSPACE_READ_FAILED");
+  }
+}
+
+function workspaceMutationFailure(code: string): ProductConfigurationResult {
+  switch (code) {
+    case "WORKSPACE_PATH_REFUSED":
+    case "WORKSPACE_NOT_FOUND":
+    case "WORKSPACE_NOT_A_FILE":
+    case "WORKSPACE_FILE_TOO_LARGE":
+    case "WORKSPACE_NOT_TEXT":
+    case "WORKSPACE_MUTATION_CONFLICT":
+    case "WORKSPACE_EDIT_NO_MATCH":
+    case "WORKSPACE_EDIT_NOT_UNIQUE":
+    case "WORKSPACE_MUTATION_OUTCOME_UNKNOWN":
+      return configurationFailure(code);
+    case "COMPUTER_MUTATION_OPERATION_CONFLICT":
+      return configurationFailure("WORKSPACE_MUTATION_CONFLICT");
+    case "AUTHORITY_CAPABILITY_DENIED":
+    case "AUTHORITY_MUTATION_OWNERSHIP_DENIED":
+    case "AUTHORITY_PATH_DENIED":
+      return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
+    default:
+      return configurationFailure("WORKSPACE_MUTATION_FAILED");
   }
 }
 
@@ -694,6 +842,13 @@ async function configureProduct(
         ),
       );
     }
+    case "computer.update-access":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.updateWorkspaceAccess(
+          command.workspaceId,
+          command.access,
+        ),
+      );
     case "computer.verify-workspace": {
       const snapshot = configuration.snapshot();
       const workspace =
@@ -725,10 +880,13 @@ async function configureProduct(
       const recorded = await configuration.recordComputerVerification(
         workspace.workspaceId,
         {
-          profile: "computer.local.readonly/1",
+          profile: `computer.local.${workspace.access}/1`,
           runtimeGeneration: `${runtime?.identity ?? "runtime-offline"}:${buildIdentity.buildId}`,
           buildId: buildIdentity.buildId,
-          protocol: "readonly-workspace/1",
+          protocol:
+            workspace.access === "write"
+              ? "mutable-workspace/1"
+              : "readonly-workspace/1",
         },
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
@@ -818,6 +976,182 @@ async function configureProduct(
         },
       });
     }
+    case "computer.prepare-workspace-edit": {
+      if (workspaceMutationAdmission) {
+        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const selected = verifiedProductWorkspace(command.workspaceId);
+      if (selected.status === "not_found") {
+        return configurationFailure("WORKSPACE_NOT_FOUND");
+      }
+      if (selected.status === "not_verified") {
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      if (selected.workspace.access !== "write") {
+        return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
+      }
+      const pending = pendingWorkspaceEdit;
+      if (pending) {
+        const pendingStillCurrent =
+          Date.now() < pending.expiresAt &&
+          pending.computerGeneration === snapshot.settings.computer.generation;
+        if (pendingStillCurrent) {
+          if (pending.workspaceId !== selected.workspace.workspaceId) {
+            return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
+          }
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot,
+            evidence: workspaceEditPreview(pending),
+          });
+        }
+        pendingWorkspaceEdit = null;
+      }
+      const relativePath = await selectedWorkspaceFile(selected.workspace, {
+        title: "Choose a text file for a guarded edit",
+        buttonLabel: "Review Edit",
+      });
+      if (relativePath === "cancelled") {
+        return configurationFailure("WORKSPACE_FILE_PICKER_CANCELLED");
+      }
+      if (relativePath === "invalid") {
+        return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
+      }
+      const read = await nativeWorkspace.execute({
+        workspace: {
+          workspaceId: selected.workspace.workspaceId,
+          root: selected.workspace.root,
+          deniedPaths: workspaceDeniedPaths(selected.workspace),
+        },
+        operation: { kind: "workspace.read", relativePath },
+      });
+      if (!read.ok) return workspaceReadFailure(read.error.code);
+      if (read.value.kind !== "workspace.text") {
+        return configurationFailure("WORKSPACE_READ_FAILED");
+      }
+      pendingWorkspaceEdit = {
+        operationId: randomUUID(),
+        workspaceId: selected.workspace.workspaceId,
+        computerGeneration: snapshot.settings.computer.generation,
+        relativePath,
+        bytes: read.value.bytes,
+        beforeSha256: createHash("sha256")
+          .update(read.value.text, "utf8")
+          .digest("hex"),
+        expiresAt: Date.now() + 10 * 60_000,
+      };
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot,
+        evidence: workspaceEditPreview(pendingWorkspaceEdit),
+      });
+    }
+    case "computer.apply-workspace-edit": {
+      if (workspaceMutationAdmission) {
+        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
+      }
+      const pending = pendingWorkspaceEdit;
+      if (!pending || pending.operationId !== command.operationId) {
+        return configurationFailure("WORKSPACE_MUTATION_PREVIEW_NOT_FOUND");
+      }
+      if (Date.now() >= pending.expiresAt) {
+        pendingWorkspaceEdit = null;
+        return configurationFailure("WORKSPACE_MUTATION_PREVIEW_EXPIRED");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        pendingWorkspaceEdit = null;
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const workspace = snapshot.settings.computer.workspaces.find(
+        (candidate) => candidate.workspaceId === pending.workspaceId,
+      );
+      const verification = snapshot.settings.setup.computer.verified;
+      if (
+        !workspace ||
+        workspace.access !== "write" ||
+        snapshot.settings.computer.generation !== pending.computerGeneration ||
+        verification?.workspaceId !== pending.workspaceId ||
+        verification.configRevision !== pending.computerGeneration
+      ) {
+        pendingWorkspaceEdit = null;
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      const action = mutableWorkspaceAction(
+        snapshot.settings,
+        workspace,
+        pending.expiresAt,
+      );
+      if (!action) {
+        pendingWorkspaceEdit = null;
+        return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
+      }
+      workspaceMutationAdmission = true;
+      pendingWorkspaceEdit = null;
+      try {
+        const result = await action.execute({
+          operationId: pending.operationId,
+          ownerId: "owner-desktop",
+          sessionId: "desktop-computer-session",
+          taskId: "desktop-computer-task",
+          taskEpoch: pending.computerGeneration,
+          participantId: "desktop-main",
+          turnId: pending.operationId,
+          generation: pending.computerGeneration,
+          callId: pending.operationId,
+          workspaceId: pending.workspaceId,
+          operation: {
+            kind: "workspace.edit",
+            relativePath: pending.relativePath,
+            edits: [{ oldText: command.oldText, newText: command.newText }],
+            expectedSha256: pending.beforeSha256,
+          },
+        });
+        if (!result.ok) {
+          if (result.error.code === "WORKSPACE_MUTATION_OUTCOME_UNKNOWN") {
+            await configuration.recordComputerMutationOutcomeUnknown(
+              pending.workspaceId,
+            );
+          }
+          return workspaceMutationFailure(result.error.code);
+        }
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "computer.workspace-mutation",
+            operationId: result.value.operationId,
+            workspaceId: result.value.workspaceId,
+            relativePath: result.value.relativePath,
+            operation: result.value.operation,
+            bytes: result.value.receipt.bytes,
+            replacements: result.value.receipt.replacements,
+            beforeSha256: result.value.receipt.beforeSha256,
+            afterSha256: result.value.receipt.afterSha256,
+            resultRetention: result.value.resultRetention,
+            redelivered: result.value.redelivered,
+          },
+        });
+      } finally {
+        workspaceMutationAdmission = false;
+      }
+    }
+    case "computer.cancel-workspace-edit":
+      if (
+        !pendingWorkspaceEdit ||
+        pendingWorkspaceEdit.operationId !== command.operationId
+      ) {
+        return configurationFailure("WORKSPACE_MUTATION_PREVIEW_NOT_FOUND");
+      }
+      pendingWorkspaceEdit = null;
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+      });
     case "setup.progress":
       return ProductConfigurationResultSchema.parse(
         await configuration.setSetupJourney({

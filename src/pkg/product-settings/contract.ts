@@ -82,7 +82,7 @@ export const ApprovedProductWorkspaceSchema = z
     workspaceId: IdentifierSchema,
     root: CanonicalAbsolutePathSchema,
     label: z.string().trim().min(1).max(120),
-    access: z.literal("read"),
+    access: z.enum(["read", "write"]),
     excludedPaths: z.array(CanonicalAbsolutePathSchema).max(32),
   })
   .superRefine((workspace, context) => {
@@ -204,6 +204,11 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
       .refine((paths) => paths.length === new Set(paths).size),
   }),
   z.strictObject({
+    kind: z.literal("computer.update-access"),
+    workspaceId: IdentifierSchema,
+    access: z.enum(["read", "write"]),
+  }),
+  z.strictObject({
     kind: z.literal("computer.verify-workspace"),
     workspaceId: IdentifierSchema,
   }),
@@ -217,6 +222,20 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
     relativePath: ProductScopeRelativePathSchema,
     pattern: ProductSearchPatternSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.prepare-workspace-edit"),
+    workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.apply-workspace-edit"),
+    operationId: IdentifierSchema,
+    oldText: z.string().min(1).max(32_768),
+    newText: z.string().max(32_768),
+  }),
+  z.strictObject({
+    kind: z.literal("computer.cancel-workspace-edit"),
+    operationId: IdentifierSchema,
   }),
   z.strictObject({
     kind: z.literal("setup.progress"),
@@ -331,6 +350,39 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     resultLimited: z.boolean(),
     scanLimited: z.boolean(),
   }),
+  z.strictObject({
+    kind: z.literal("computer.workspace-edit-preview"),
+    operationId: IdentifierSchema,
+    workspaceId: IdentifierSchema,
+    relativePath: ProductRelativePathSchema,
+    bytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(256 * 1_024),
+    beforeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    expiresAt: CanonicalTimestampSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.workspace-mutation"),
+    operationId: IdentifierSchema,
+    workspaceId: IdentifierSchema,
+    relativePath: ProductRelativePathSchema,
+    operation: z.enum(["edit", "write"]),
+    bytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(256 * 1_024),
+    replacements: z.number().int().nonnegative(),
+    beforeSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/u)
+      .nullable(),
+    afterSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    resultRetention: z.enum(["durable", "memory_only"]),
+    redelivered: z.boolean(),
+  }),
 ]);
 
 export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
@@ -365,6 +417,15 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_SEARCH_TIMEOUT",
       "WORKSPACE_VERIFICATION_REQUIRED",
       "WORKSPACE_READ_FAILED",
+      "WORKSPACE_WRITE_APPROVAL_REQUIRED",
+      "WORKSPACE_MUTATION_IN_PROGRESS",
+      "WORKSPACE_MUTATION_PREVIEW_NOT_FOUND",
+      "WORKSPACE_MUTATION_PREVIEW_EXPIRED",
+      "WORKSPACE_MUTATION_CONFLICT",
+      "WORKSPACE_EDIT_NO_MATCH",
+      "WORKSPACE_EDIT_NOT_UNIQUE",
+      "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+      "WORKSPACE_MUTATION_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),
