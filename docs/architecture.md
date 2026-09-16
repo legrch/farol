@@ -103,7 +103,18 @@ installed browser profile is used.
 The explicit demo provider and Computer remain controlled fixtures. Ordinary product
 composition is separate: `ChatGptRoute` owns the isolated Next partition and bounded
 submission lifecycle, while `NativeReadonlyWorkspace` supplies descriptor-relative
-list/read/search and guarded edit operations under persisted Computer approval. The
+list/read/search, guarded edit operations, and one explicitly enabled fixed
+`git status` verifier under persisted Computer approval. Generic file tools deny
+`.git`. The verifier rechecks `verification.run` plus `commands=verification`
+against both the task grant and current Computer approval, attests the owner-safe
+workspace and signed Apple Git chain, then executes an exact argument vector inside
+an Apple Seatbelt profile with network denied, optional locks and repository
+file-system monitors disabled, fixed environment, timeout, and output limits. The
+caller cannot select an executable, argument, environment, working subpath, or
+network policy. Enabling or disabling command authority advances the Computer
+generation, invalidates stale verification and native-Agent proof, and requires a
+fresh workspace verification. Symlinked or external Git metadata is refused rather
+than followed. The
 development and sealed-package E2E routes use a synthetic provider site and temporary
 Mac workspace trees, so they prove product composition and containment without
 claiming the owner's authenticated provider account was exercised.

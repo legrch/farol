@@ -22,9 +22,13 @@ Ordinary Setup and Settings can open the isolated Next ChatGPT partition, observ
 verify its readiness, select real folders with the native picker, persist Computer
 approval and exclusions privately, and exercise descriptor-relative list/read/search
 through the product. An explicit access change enables guarded conflict-aware edits
-with durable content-free receipts. The Browser flow previews selected text, image, or
-document context before one submission, retains conversation and delivery state, and
-recovers a completed or outcome-unknown task after restart without blind resubmission.
+with durable content-free receipts. An independently persisted, off-by-default
+`Verified commands` setting enables only fixed no-network Apple Git status at a
+freshly verified workspace root; no arbitrary command, argument, environment, or
+working path is accepted, and command output is not retained. The Browser flow
+previews selected text, image, or document context before one submission, retains
+conversation and delivery state, and recovers a completed or outcome-unknown task
+after restart without blind resubmission.
 The deterministic E2E site remains a fixture; its green report does not claim that the
 owner's authenticated ChatGPT account completed a live call.
 
@@ -35,8 +39,9 @@ through Main -> Agent -> Critic, performs one content-free workspace enforcement
 probe through the current Computer policy, observes bounded running before rejoining
 the same child, retains the result, and acknowledges parent delivery. This proves the
 verification assignment only. General native Agent task admission, the
-ChatGPT-to-Computer connector, bounded commands, ordinary compaction continuity,
-network authority, and release readiness remain open.
+ChatGPT-to-Computer connector, commands beyond the fixed Git status verifier,
+ordinary compaction continuity, network authority, and release readiness remain
+open.
 
 The N2 authority core derives a task-bound `TaskGrant`, preserves it through
 main -> Agent -> Critic delegation, retains explicit owner narrowing including

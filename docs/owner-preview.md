@@ -60,7 +60,12 @@ is not evidence about the packaged candidate.
   tool payloads, paths, and bearer values.
 - Computer owns workspace list/search/read plus explicit access and exclusion changes.
   A guarded edit requires preview and confirmation, checks the expected digest, and
-  stores a content-free mutation receipt. Bounded commands are not yet available.
+  stores a content-free mutation receipt. `Verified commands` is off by default. When
+  explicitly enabled and the workspace is verified again, `Git status` runs one fixed
+  Apple Git operation at that workspace root with no caller-supplied executable,
+  arguments, environment, path, or network access. Output and runtime are bounded and
+  the output is not persisted. Generic file tools hide `.git`; a linked or external
+  Git worktree metadata path fails closed as unavailable.
 - The Codex Agent verification creates one actual native child for a fixed read-only
   compatibility assignment. A green result means lineage, unchanged TaskGrant,
   workspace enforcement, bounded same-child rejoin, durable retention, and parent
