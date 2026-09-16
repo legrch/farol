@@ -38,7 +38,8 @@ function matchesIdentity(
     assignment.authority.parentParticipantId === command.parentParticipantId &&
     assignment.parentThreadId === correlation.parentThreadId &&
     assignment.childId === correlation.childId &&
-    assignment.hostRole === correlation.hostRole
+    assignment.hostRole === correlation.hostRole &&
+    assignment.delegationDigest === correlation.delegationDigest
   );
 }
 

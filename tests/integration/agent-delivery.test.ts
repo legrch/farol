@@ -39,6 +39,7 @@ const child: ChildCorrelation = {
   parentThreadId: "parent-thread-a",
   childId: "child-a",
   hostRole: "agent",
+  delegationDigest: "a".repeat(64),
 };
 
 const acknowledgement: AgentResultDeliveryAcknowledgement = {
@@ -81,6 +82,10 @@ describe("Agent result delivery acknowledgement", () => {
       {
         ...acknowledgement,
         correlation: { ...child, childId: "foreign-child" },
+      },
+      {
+        ...acknowledgement,
+        correlation: { ...child, delegationDigest: "b".repeat(64) },
       },
       { ...acknowledgement, resultRef: "foreign-result" },
     ]) {

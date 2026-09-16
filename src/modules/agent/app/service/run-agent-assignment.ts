@@ -160,7 +160,8 @@ export class RunAgentAssignment {
         !recovered.terminal &&
         recovered.phase === "running" &&
         recovered.parentThreadId &&
-        recovered.childId
+        recovered.childId &&
+        recovered.delegationDigest
       ) {
         const childId = recovered.childId;
         return this.waitForChild(recovered, {
@@ -171,6 +172,7 @@ export class RunAgentAssignment {
           parentThreadId: recovered.parentThreadId,
           childId,
           hostRole: recovered.hostRole,
+          delegationDigest: recovered.delegationDigest,
         });
       }
       return success(await this.recoverInterrupted(admission.record));
@@ -346,7 +348,8 @@ export class RunAgentAssignment {
     const result =
       record.assignment.phase === "prepared" ||
       !record.assignment.parentThreadId ||
-      !record.assignment.childId
+      !record.assignment.childId ||
+      !record.assignment.delegationDigest
         ? markSpawnOutcomeUnknown(record.assignment, {
             code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
             source: "recovery",
@@ -362,6 +365,7 @@ export class RunAgentAssignment {
               parentThreadId: record.assignment.parentThreadId,
               childId: record.assignment.childId,
               hostRole: record.assignment.hostRole,
+              delegationDigest: record.assignment.delegationDigest,
             },
             {
               code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",

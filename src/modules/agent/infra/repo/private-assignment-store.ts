@@ -11,6 +11,7 @@ import type {
 import type { AssignmentIdentity } from "../../domain/assignment";
 
 const boundedId = z.string().min(1).max(160);
+const sha256Digest = z.string().regex(/^[a-f0-9]{64}$/u);
 
 const identitySchema = z.strictObject({
   assignmentId: boundedId,
@@ -48,6 +49,7 @@ const assignmentSchema = z.strictObject({
   parentThreadId: boundedId.nullable().default(null),
   childId: boundedId.nullable(),
   hostRole: boundedId.nullable().default(null),
+  delegationDigest: sha256Digest.nullable().default(null),
   terminal: z.boolean(),
   terminalReason: terminalReasonSchema.nullable(),
 });
@@ -232,6 +234,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.parentThreadId === null &&
         assignment.childId === null &&
         assignment.hostRole === null &&
+        assignment.delegationDigest === null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
         record.parentDelivery === "not_applicable") ||
@@ -239,6 +242,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         !assignment.terminal &&
         assignment.parentThreadId !== null &&
         assignment.childId !== null &&
+        assignment.delegationDigest !== null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
         record.parentDelivery === "not_applicable") ||
@@ -246,6 +250,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.terminal &&
         assignment.parentThreadId !== null &&
         assignment.childId !== null &&
+        assignment.delegationDigest !== null &&
         assignment.terminalReason === null &&
         record.resultRef !== null &&
         (record.parentDelivery === "pending" ||
@@ -300,7 +305,9 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       (replacement.assignment.childId !== existing.assignment.childId ||
         replacement.assignment.parentThreadId !==
           existing.assignment.parentThreadId ||
-        replacement.assignment.hostRole !== existing.assignment.hostRole)
+        replacement.assignment.hostRole !== existing.assignment.hostRole ||
+        replacement.assignment.delegationDigest !==
+          existing.assignment.delegationDigest)
     ) {
       throw new Error("AGENT_ASSIGNMENT_CHILD_MISMATCH");
     }

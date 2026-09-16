@@ -88,6 +88,7 @@ const child: ChildCorrelation = {
   parentThreadId: "parent-thread-durable-a",
   childId: "child-durable-a",
   hostRole: "agent",
+  delegationDigest: "a".repeat(64),
 };
 
 function preparedRecord() {
@@ -395,6 +396,15 @@ describe("private Agent assignment persistence", () => {
         assignment: {
           ...running.assignment,
           childId: "foreign-child",
+        },
+      }),
+    ).rejects.toThrow("AGENT_ASSIGNMENT_CHILD_MISMATCH");
+    await expect(
+      store.save({
+        ...running,
+        assignment: {
+          ...running.assignment,
+          delegationDigest: "b".repeat(64),
         },
       }),
     ).rejects.toThrow("AGENT_ASSIGNMENT_CHILD_MISMATCH");

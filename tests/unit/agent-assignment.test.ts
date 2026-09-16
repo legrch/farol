@@ -37,6 +37,7 @@ const child: ChildCorrelation = {
   parentThreadId: "parent-thread-a",
   childId: "child-a",
   hostRole: "agent",
+  delegationDigest: "a".repeat(64),
 };
 
 function prepared() {
@@ -59,6 +60,12 @@ describe("Agent assignment policy", () => {
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
     expect(
       completeAssignment(started.value, { ...child, role: "critic" }),
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
+    expect(
+      completeAssignment(started.value, {
+        ...child,
+        delegationDigest: "b".repeat(64),
+      }),
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
     expect(completeAssignment(started.value, child)).toMatchObject({
       ok: true,

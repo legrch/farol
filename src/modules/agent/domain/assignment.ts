@@ -46,6 +46,7 @@ export type ChildCorrelation = Readonly<{
   parentThreadId: string;
   childId: string;
   hostRole: string | null;
+  delegationDigest: string;
 }>;
 
 export type AssignmentTerminalReason = Readonly<{
@@ -61,6 +62,7 @@ export type Assignment = Readonly<{
   parentThreadId: string | null;
   childId: string | null;
   hostRole: string | null;
+  delegationDigest: string | null;
   terminal: boolean;
   terminalReason: AssignmentTerminalReason | null;
 }>;
@@ -76,6 +78,7 @@ export function createAssignment(
     parentThreadId: null,
     childId: null,
     hostRole: null,
+    delegationDigest: null,
     terminal: false,
     terminalReason: null,
   };
@@ -97,7 +100,8 @@ export function matchesChildCorrelation(
     assignment.authority.role === correlation.role &&
     assignment.parentThreadId === correlation.parentThreadId &&
     assignment.childId === correlation.childId &&
-    assignment.hostRole === correlation.hostRole
+    assignment.hostRole === correlation.hostRole &&
+    assignment.delegationDigest === correlation.delegationDigest
   );
 }
 
@@ -123,7 +127,8 @@ export function startAssignment(
     assignment.phase !== "prepared" ||
     assignment.parentThreadId !== null ||
     assignment.childId !== null ||
-    assignment.hostRole !== null
+    assignment.hostRole !== null ||
+    assignment.delegationDigest !== null
   ) {
     return failure("AGENT_ALREADY_STARTED");
   }
@@ -133,6 +138,7 @@ export function startAssignment(
     parentThreadId: correlation.parentThreadId,
     childId: correlation.childId,
     hostRole: correlation.hostRole,
+    delegationDigest: correlation.delegationDigest,
   });
 }
 

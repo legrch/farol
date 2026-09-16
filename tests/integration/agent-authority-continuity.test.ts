@@ -102,6 +102,7 @@ function host(): AgentHost & { spawn: ReturnType<typeof vi.fn> } {
         parentThreadId: "parent-thread-a",
         childId: "child-a",
         hostRole: request.authority.role,
+        delegationDigest: "a".repeat(64),
       },
     })),
     wait: vi.fn(async (correlation) => ({

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import type { AgentSpawnRequest } from "../../src/modules/agent/app/port/agent-host";
@@ -71,6 +72,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
   failed = false;
   authorityCompleted = false;
   waitCompleted = false;
+  childSpawnedDescendant = false;
+  childPrompt = "";
   private nonce = "";
 
   constructor(private readonly emitSpawnOnTurnStart = true) {}
@@ -90,6 +93,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
     if (method === "thread/start") {
       const input = params as {
         dynamicTools?: readonly { name?: string }[];
+        baseInstructions?: string;
       };
       expect(input).toMatchObject({
         model: "gpt-6-astra",
@@ -104,6 +108,9 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
       expect(input.dynamicTools).toEqual([
         expect.objectContaining({ name: "farol_agent_authority" }),
       ]);
+      expect(input.baseInstructions).not.toContain(
+        "must use exactly one native child",
+      );
       return {
         model: "gpt-6-astra",
         thread: { id: "parent-thread-a", parentThreadId: null },
@@ -113,6 +120,10 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
       const text = (params as { input?: readonly { text?: string }[] })
         .input?.[0]?.text;
       this.nonce = /proof ([a-z0-9-]+)/u.exec(text ?? "")?.[1] ?? "";
+      this.childPrompt =
+        /FAROL_CHILD_PROMPT_BEGIN\n([\s\S]*?)\nFAROL_CHILD_PROMPT_END/u.exec(
+          text ?? "",
+        )?.[1] ?? "";
       if (this.emitSpawnOnTurnStart) queueMicrotask(() => this.emitSpawn());
       return {
         turn: { id: "parent-turn-a", status: "inProgress", items: [] },
@@ -132,8 +143,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
     const handler = this.handlers.get("item/tool/call");
     if (!handler) throw new Error("AUTHORITY_HANDLER_MISSING");
     const result = await handler({
-      threadId: "child-thread-a",
-      turnId: "child-turn-a",
+      threadId: "parent-thread-a",
+      turnId: "parent-turn-a",
       callId: "authority-call-a",
       tool: "farol_agent_authority",
       arguments: {
@@ -156,12 +167,6 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
       failed?: boolean;
     }> = {},
   ): Promise<void> {
-    if (options.authority !== false) {
-      await expect(this.callAuthority()).resolves.toEqual({
-        success: true,
-        contentItems: [{ type: "inputText", text: "FAROL_AGENT_AUTHORITY_OK" }],
-      });
-    }
     this.completed = true;
     this.failed = options.failed ?? false;
     this.waitCompleted = options.wait ?? true;
@@ -183,6 +188,12 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
             },
           },
         },
+      });
+    }
+    if (options.authority !== false) {
+      await expect(this.callAuthority()).resolves.toEqual({
+        success: true,
+        contentItems: [{ type: "inputText", text: "FAROL_AGENT_AUTHORITY_OK" }],
       });
     }
     this.notifications.get("turn/completed")?.({
@@ -230,6 +241,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         receiverThreadIds: ["child-thread-a"],
         agentsStates: { "child-thread-a": { status: "running" } },
         model: "gpt-6-astra",
+        prompt: this.childPrompt,
       },
     });
   }
@@ -258,7 +270,20 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
               : this.completed
                 ? "completed"
                 : "inProgress",
-            items: this.authorityCompleted ? [this.authorityItem()] : [],
+            items: this.childSpawnedDescendant
+              ? [
+                  {
+                    id: "nested-spawn-a",
+                    type: "collabAgentToolCall",
+                    tool: "spawnAgent",
+                    status: "completed",
+                    senderThreadId: "child-thread-a",
+                    receiverThreadIds: ["grandchild-thread-a"],
+                    agentsStates: {},
+                    prompt: "unauthorized nested assignment",
+                  },
+                ]
+              : [],
           },
         ],
       },
@@ -287,6 +312,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
                     senderThreadId: "parent-thread-a",
                     receiverThreadIds: ["child-thread-a"],
                     agentsStates: {},
+                    prompt: this.childPrompt,
                   },
                   ...(this.waitCompleted
                     ? [
@@ -301,6 +327,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
                         },
                       ]
                     : []),
+                  ...(this.authorityCompleted ? [this.authorityItem()] : []),
                 ]
               : [],
           },
@@ -325,6 +352,13 @@ describe("native Codex Agent host", () => {
 
     const spawned = await host.spawn(request);
 
+    const carriedGrant = JSON.parse(peer.childPrompt.split("\n")[1]!) as {
+      authority: typeof authority;
+      focus: typeof request.focus;
+    };
+    expect(carriedGrant.authority).toEqual(authority);
+    expect(carriedGrant.focus).toEqual(request.focus);
+
     expect(spawned).toEqual({
       status: "started",
       correlation: {
@@ -335,6 +369,9 @@ describe("native Codex Agent host", () => {
         parentThreadId: "parent-thread-a",
         childId: "child-thread-a",
         hostRole: "critic",
+        delegationDigest: createHash("sha256")
+          .update(peer.childPrompt)
+          .digest("hex"),
       },
     });
     if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
@@ -429,6 +466,52 @@ describe("native Codex Agent host", () => {
     });
   });
 
+  it("rejects terminal history when the durable child prompt was changed", async () => {
+    const peer = new NativeAgentPeer();
+    const host = new CodexNativeAgentHost(peer, {
+      model: "gpt-6-astra",
+      runtimeRoot: "/private/tmp/farol-agent-runtime",
+      spawnTimeoutMs: 1_000,
+      waitTimeoutMs: 5,
+      pollIntervalMs: 1,
+      nonce: () => "proof-a",
+      now: () => 1,
+    });
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.childPrompt = `${peer.childPrompt}\nworkspace.write`;
+    await peer.finish();
+
+    await expect(host.wait(spawned.correlation)).resolves.toEqual({
+      status: "outcome_unknown",
+      correlation: spawned.correlation,
+      code: "AGENT_WAIT_ACK_LOST",
+    });
+  });
+
+  it("rejects a child that delegated to an unauthorized descendant", async () => {
+    const peer = new NativeAgentPeer();
+    const host = new CodexNativeAgentHost(peer, {
+      model: "gpt-6-astra",
+      runtimeRoot: "/private/tmp/farol-agent-runtime",
+      spawnTimeoutMs: 1_000,
+      waitTimeoutMs: 5,
+      pollIntervalMs: 1,
+      nonce: () => "proof-a",
+      now: () => 1,
+    });
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.childSpawnedDescendant = true;
+    await peer.finish();
+
+    await expect(host.wait(spawned.correlation)).resolves.toEqual({
+      status: "outcome_unknown",
+      correlation: spawned.correlation,
+      code: "AGENT_WAIT_ACK_LOST",
+    });
+  });
+
   it("reports an exact child failure without retrying the assignment", async () => {
     const peer = new NativeAgentPeer();
     const host = new CodexNativeAgentHost(peer, {
@@ -454,7 +537,7 @@ describe("native Codex Agent host", () => {
     ).toHaveLength(1);
   });
 
-  it("fails closed when a foreign child calls the authority tool", async () => {
+  it("fails closed when the child calls the parent authority tool", async () => {
     const peer = new NativeAgentPeer();
     const host = new CodexNativeAgentHost(peer, {
       model: "gpt-6-astra",
@@ -469,7 +552,7 @@ describe("native Codex Agent host", () => {
     if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
 
     await expect(
-      peer.callAuthority({ threadId: "foreign-child" }),
+      peer.callAuthority({ threadId: "child-thread-a" }),
     ).rejects.toThrow("CODEX_AGENT_AUTHORITY_CORRELATION");
     await expect(host.wait(spawned.correlation)).resolves.toEqual({
       status: "outcome_unknown",

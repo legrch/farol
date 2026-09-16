@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
 
@@ -76,6 +77,11 @@ const collabItemSchema = z
     receiverThreadIds: z.array(boundedId).max(16),
     agentsStates: z.record(z.string(), z.unknown()),
     model: z.string().nullable().optional(),
+    prompt: z
+      .string()
+      .max(128 * 1_024)
+      .nullable()
+      .optional(),
   })
   .passthrough();
 
@@ -164,7 +170,8 @@ type ActiveOperation = {
   parentThreadId: string | null;
   parentTurnId: string | null;
   childId: string | null;
-  authorityToolChildId: string | null;
+  childPrompt: string;
+  delegationDigest: string;
   authorityToolCalls: number;
   fatalCode: string | null;
   resolveSpawn(childId: string): void;
@@ -174,6 +181,68 @@ type ActiveOperation = {
 
 function error(code: string): Error {
   return new Error(code);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function childPrompt(request: AgentSpawnRequest): string {
+  const identity = request.identity;
+  const authority = request.authority;
+  const envelope = {
+    schema: 1,
+    kind: "farol_task_grant",
+    assignment: {
+      assignmentId: identity.assignmentId,
+      ownerId: identity.ownerId,
+      sessionId: identity.sessionId,
+      taskId: identity.taskId,
+      taskEpoch: identity.taskEpoch,
+      generation: identity.generation,
+    },
+    authority: {
+      authorityId: authority.authorityId,
+      participantId: authority.participantId,
+      parentParticipantId: authority.parentParticipantId,
+      role: authority.role,
+      mutationOwnership: authority.mutationOwnership,
+      ownerId: authority.ownerId,
+      sessionId: authority.sessionId,
+      taskId: authority.taskId,
+      taskEpoch: authority.taskEpoch,
+      computerId: authority.computerId,
+      computerGeneration: authority.computerGeneration,
+      workspaces: authority.workspaces.map((workspace) =>
+        workspace.mode === "subtree"
+          ? {
+              workspaceId: workspace.workspaceId,
+              mode: workspace.mode,
+              root: workspace.root,
+              access: workspace.access,
+            }
+          : {
+              workspaceId: workspace.workspaceId,
+              mode: workspace.mode,
+              root: workspace.root,
+              paths: [...workspace.paths],
+              access: workspace.access,
+            },
+      ),
+      excludedPaths: authority.excludedPaths.map((entry) => ({ ...entry })),
+      capabilities: [...authority.capabilities],
+      network: authority.network,
+      commands: authority.commands,
+      expiresAt: authority.expiresAt,
+    },
+    focus: { initialPaths: [...request.focus.initialPaths] },
+  };
+  return [
+    "FAROL_NATIVE_AGENT_TASK_V1",
+    JSON.stringify(envelope),
+    "Do not inspect files, run commands, use the web, or call tools.",
+    "Reply only FAROL_NATIVE_AGENT_CHILD_OK.",
+  ].join("\n");
 }
 
 function validDuration(value: number): boolean {
@@ -339,13 +408,15 @@ export class CodexNativeAgentHost implements AgentHost {
       resolveSpawn = resolve;
       rejectSpawn = reject;
     });
+    const exactChildPrompt = childPrompt(request);
     const operation: ActiveOperation = {
       request,
       proof,
       parentThreadId: null,
       parentTurnId: null,
       childId: null,
-      authorityToolChildId: null,
+      childPrompt: exactChildPrompt,
+      delegationDigest: sha256(exactChildPrompt),
       authorityToolCalls: 0,
       fatalCode: null,
       resolveSpawn,
@@ -373,7 +444,7 @@ export class CodexNativeAgentHost implements AgentHost {
               type: "function",
               name: "farol_agent_authority",
               description:
-                "Confirm the exact Farol assignment authority carried by this child without reading workspace content.",
+                "Confirm the exact Farol assignment authority after the parent waited for the correlated native child.",
               inputSchema: {
                 type: "object",
                 additionalProperties: false,
@@ -395,7 +466,7 @@ export class CodexNativeAgentHost implements AgentHost {
             },
           ],
           baseInstructions:
-            "This Farol compatibility assignment must use exactly one native child. Neither parent nor child may inspect files, run commands, use the web, or call any dynamic tool except the child's one farol_agent_authority call.",
+            "This is a bounded Farol compatibility assignment. Neither parent nor child may inspect files, run commands, or use the web. A spawned child must not create descendants or call tools. Only the root thread may follow its turn instruction to spawn one child and later call farol_agent_authority.",
         }),
       );
       if (
@@ -415,7 +486,7 @@ export class CodexNativeAgentHost implements AgentHost {
           input: [
             {
               type: "text",
-              text: this.parentPrompt(request, proof),
+              text: this.parentPrompt(request, proof, operation.childPrompt),
             },
           ],
         }),
@@ -441,6 +512,7 @@ export class CodexNativeAgentHost implements AgentHost {
         parentThreadId: operation.parentThreadId,
         childId,
         hostRole: child.agentRole ?? null,
+        delegationDigest: operation.delegationDigest,
       };
       return { status: "started", correlation };
     } catch (cause) {
@@ -463,6 +535,7 @@ export class CodexNativeAgentHost implements AgentHost {
         parentThreadId: this.active.parentThreadId ?? "",
         childId: this.active.childId ?? "",
         hostRole: correlation.hostRole,
+        delegationDigest: this.active.delegationDigest,
       };
       if (!sameCorrelation(activeCorrelation, correlation)) {
         return {
@@ -564,10 +637,10 @@ export class CodexNativeAgentHost implements AgentHost {
     const call = parsed.data;
     const authority = operation.request.authority;
     if (
-      call.threadId === operation.parentThreadId ||
-      (operation.childId !== null && call.threadId !== operation.childId) ||
-      (operation.authorityToolChildId !== null &&
-        call.threadId !== operation.authorityToolChildId) ||
+      call.threadId !== operation.parentThreadId ||
+      operation.parentTurnId === null ||
+      call.turnId !== operation.parentTurnId ||
+      operation.childId === null ||
       operation.authorityToolCalls !== 0 ||
       call.arguments.assignmentId !== operation.request.identity.assignmentId ||
       call.arguments.authorityId !== authority.authorityId ||
@@ -577,7 +650,6 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       throw this.fail("CODEX_AGENT_AUTHORITY_CORRELATION");
     }
-    operation.authorityToolChildId = call.threadId;
     operation.authorityToolCalls += 1;
     return {
       success: true,
@@ -604,7 +676,9 @@ export class CodexNativeAgentHost implements AgentHost {
       if (
         item.status !== "completed" ||
         item.receiverThreadIds.length !== 1 ||
-        (item.model != null && item.model !== this.options.model)
+        (item.model != null && item.model !== this.options.model) ||
+        item.prompt !== operation.childPrompt ||
+        sha256(item.prompt) !== operation.delegationDigest
       ) {
         this.fail("CODEX_AGENT_SPAWN_CORRELATION");
         return;
@@ -612,9 +686,7 @@ export class CodexNativeAgentHost implements AgentHost {
       const [childId] = item.receiverThreadIds;
       if (
         !childId ||
-        (operation.childId !== null && operation.childId !== childId) ||
-        (operation.authorityToolChildId !== null &&
-          operation.authorityToolChildId !== childId)
+        (operation.childId !== null && operation.childId !== childId)
       ) {
         this.fail("CODEX_AGENT_SPAWN_CORRELATION");
         return;
@@ -700,6 +772,9 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return "invalid";
     }
+    if (child.turns.some((turn) => turn.items.length !== 0)) {
+      return "invalid";
+    }
     const childFailed = child.turns.some(
       (turn) => turn.status === "failed" || turn.status === "interrupted",
     );
@@ -720,20 +795,18 @@ export class CodexNativeAgentHost implements AgentHost {
     const parentCompleted = parent.turns.some(
       (turn) => turn.status === "completed",
     );
-    const authorityCalls = child.turns
-      .flatMap(parseHistoryItems)
-      .filter(
-        (item) =>
-          item.type === "dynamicToolCall" &&
-          item.tool === "farol_agent_authority" &&
-          item.status === "completed" &&
-          item.success === true &&
-          item.arguments.assignmentId === correlation.assignmentId &&
-          item.arguments.authorityId === correlation.authorityId &&
-          item.arguments.participantId === correlation.participantId &&
-          item.arguments.role === correlation.role,
-      );
     const parentItems = parent.turns.flatMap(parseHistoryItems);
+    const authorityCalls = parentItems.filter(
+      (item) =>
+        item.type === "dynamicToolCall" &&
+        item.tool === "farol_agent_authority" &&
+        item.status === "completed" &&
+        item.success === true &&
+        item.arguments.assignmentId === correlation.assignmentId &&
+        item.arguments.authorityId === correlation.authorityId &&
+        item.arguments.participantId === correlation.participantId &&
+        item.arguments.role === correlation.role,
+    );
     const spawnItems = parentItems.filter(
       (item) =>
         item.type === "collabAgentToolCall" &&
@@ -741,7 +814,9 @@ export class CodexNativeAgentHost implements AgentHost {
         item.status === "completed" &&
         item.senderThreadId === correlation.parentThreadId &&
         item.receiverThreadIds.length === 1 &&
-        item.receiverThreadIds[0] === correlation.childId,
+        item.receiverThreadIds[0] === correlation.childId &&
+        typeof item.prompt === "string" &&
+        sha256(item.prompt) === correlation.delegationDigest,
     );
     const waitItems = parentItems.filter(
       (item) =>
@@ -753,21 +828,34 @@ export class CodexNativeAgentHost implements AgentHost {
         item.receiverThreadIds[0] === correlation.childId,
     );
     if (!childCompleted || !parentCompleted) return "running";
+    const spawnIndex = parentItems.indexOf(spawnItems[0]!);
+    const waitIndex = parentItems.indexOf(waitItems.at(-1)!);
+    const authorityIndex = parentItems.indexOf(authorityCalls[0]!);
     return authorityCalls.length === 1 &&
       spawnItems.length === 1 &&
-      waitItems.length >= 1
+      waitItems.length >= 1 &&
+      spawnIndex >= 0 &&
+      waitIndex > spawnIndex &&
+      authorityIndex > waitIndex
       ? "completed"
       : "invalid";
   }
 
-  private parentPrompt(request: AgentSpawnRequest, proof: string): string {
+  private parentPrompt(
+    request: AgentSpawnRequest,
+    proof: string,
+    exactChildPrompt: string,
+  ): string {
     return [
       "Use the native collaboration tools to spawn exactly one child, then wait for that same child to finish.",
       `The Farol responsibility role is ${request.authority.role}.`,
-      "The child must not inspect files, run commands, use the web, or call any other tool.",
-      `Tell the child to call farol_agent_authority exactly once with assignmentId ${request.identity.assignmentId}, authorityId ${request.authority.authorityId}, participantId ${request.authority.participantId}, role ${request.authority.role}, and proof ${proof}.`,
-      `Initial focus paths are starting evidence only: ${JSON.stringify(request.focus.initialPaths)}.`,
-      "After the child returns FAROL_AGENT_AUTHORITY_OK, wait for it and reply only FAROL_NATIVE_AGENT_OK.",
+      "Set the child's prompt to exactly the text between the markers, byte-for-byte, without either marker or any additional text.",
+      "FAROL_CHILD_PROMPT_BEGIN",
+      exactChildPrompt,
+      "FAROL_CHILD_PROMPT_END",
+      "After that exact child completes, wait for it.",
+      `Then you, the parent, must call farol_agent_authority exactly once with assignmentId ${request.identity.assignmentId}, authorityId ${request.authority.authorityId}, participantId ${request.authority.participantId}, role ${request.authority.role}, and proof ${proof}.`,
+      "After FAROL_AGENT_AUTHORITY_OK, reply only FAROL_NATIVE_AGENT_OK.",
     ].join("\n");
   }
 }

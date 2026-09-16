@@ -87,6 +87,7 @@ const exactChild: ChildCorrelation = {
   parentThreadId: "parent-thread-preview-a",
   childId: "child-preview-a",
   hostRole: "agent",
+  delegationDigest: "a".repeat(64),
 };
 
 class AuthorityDouble implements AgentAuthorityPort {
