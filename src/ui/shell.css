@@ -52,7 +52,6 @@
   --unavailable: #74717c;
   --radius-control: 7px;
   --radius-panel: 11px;
-  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   background: var(--bg);
   color: var(--text);
 }
@@ -147,7 +146,6 @@ kbd {
     ),
     var(--sidebar);
   border-right: 1px solid var(--line);
-  transition: width 220ms var(--ease);
 }
 
 html[data-sidebar="overlay"] .rail {
@@ -463,7 +461,6 @@ html[data-sidebar="overlay"] .brand {
   position: fixed;
   left: var(--sidebar-current);
   right: 0;
-  transition: left 220ms var(--ease);
 }
 
 .window-bar {
@@ -1450,16 +1447,6 @@ html[data-window-active="false"] .window-mark,
 html[data-window-active="false"] .brand-mark,
 html[data-window-active="false"] .primary-action:not(:focus-visible) {
   filter: saturate(0.35);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .rail,
-  .window-bar,
-  .task-bar,
-  .dossier,
-  .surface {
-    transition: none;
-  }
 }
 
 @media (max-width: 860px) {
