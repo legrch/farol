@@ -41,6 +41,8 @@ const taskProbeSchema = z.strictObject({
 
 const activityProbeSchema = z.strictObject({ running: z.boolean() });
 
+const hardenedRouteSessions = new WeakSet<Session>();
+
 const activityProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -396,7 +398,9 @@ export class ChatGptRoute {
       };
     }
     this.taskInFlight = true;
-    let submitted = false;
+    let submissionPhase:
+      "not_attempted" | "awaiting_acknowledgement" | "submitted" =
+      "not_attempted";
     let deltaCount = 0;
     let observedCharacters = 0;
     try {
@@ -468,19 +472,29 @@ export class ChatGptRoute {
       }
       const submitDeadline = Date.now() + 5_000;
       while (Date.now() < submitDeadline) {
+        submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
           await candidate.webContents.executeJavaScript(
             activateTaskScript,
             true,
           ),
         );
-        if (activated.success && activated.data.activated) {
-          submitted = true;
+        if (!activated.success) {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_ERROR",
+            deltaCount,
+            observedCharacters,
+          };
+        }
+        if (activated.data.activated) {
+          submissionPhase = "submitted";
           break;
         }
+        submissionPhase = "not_attempted";
         await delay(100);
       }
-      if (!submitted) {
+      if (submissionPhase !== "submitted") {
         return {
           state: "failed_before_submit",
           code: "CHATGPT_SUBMIT_UNAVAILABLE",
@@ -576,9 +590,16 @@ export class ChatGptRoute {
         observedCharacters,
       };
     } catch {
+      const submissionMayHaveOccurred =
+        submissionPhase === "awaiting_acknowledgement" ||
+        submissionPhase === "submitted";
       return {
-        state: submitted ? "outcome_unknown" : "failed_before_submit",
-        code: submitted ? "CHATGPT_TASK_ERROR" : "CHATGPT_SUBMIT_UNAVAILABLE",
+        state: submissionMayHaveOccurred
+          ? "outcome_unknown"
+          : "failed_before_submit",
+        code: submissionMayHaveOccurred
+          ? "CHATGPT_TASK_ERROR"
+          : "CHATGPT_SUBMIT_UNAVAILABLE",
         deltaCount,
         observedCharacters,
       };
@@ -668,11 +689,13 @@ export class ChatGptRoute {
   }
 
   private hardenSession(routeSession: Session): void {
+    if (hardenedRouteSessions.has(routeSession)) return;
     routeSession.setPermissionRequestHandler(
       (_webContents, _permission, callback) => callback(false),
     );
     routeSession.setPermissionCheckHandler(() => false);
     routeSession.on("will-download", (event) => event.preventDefault());
+    hardenedRouteSessions.add(routeSession);
   }
 
   private captureConversationUrl(contents: WebContents): string | null {

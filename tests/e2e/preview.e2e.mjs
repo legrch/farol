@@ -2510,6 +2510,14 @@ try {
         proof.isolatedSession === true,
     ),
   );
+  assert.equal(
+    await ordinaryLiveTasks.application.evaluate(({ session }) =>
+      session
+        .fromPartition("persist:farol-next-chatgpt")
+        .listenerCount("will-download"),
+    ),
+    1,
+  );
 
   const admittedState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
@@ -2664,6 +2672,14 @@ try {
   await waitForWindowCount(ordinaryLiveTasks.application, 4);
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "4 / 5");
+  assert.equal(
+    await ordinaryLiveTasks.application.evaluate(({ session }) =>
+      session
+        .fromPartition("persist:farol-next-chatgpt")
+        .listenerCount("will-download"),
+    ),
+    1,
+  );
 
   const liveTaskRoot = path.join(
     ordinaryLiveTasks.userData,
@@ -2769,6 +2785,7 @@ try {
     "live-task-rename-pin-close-and-capacity-recovery",
     "live-task-registry-private-content-free-persistence",
     "live-task-same-conversation-after-process-restart",
+    "shared-chatgpt-session-single-download-guard",
     "idle-live-task-cancel-refused-truthfully",
     "running-live-task-cancel-confirmed-once",
   );
