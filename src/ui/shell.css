@@ -836,13 +836,12 @@ html:not([data-section="browser"]) .surface {
   top: var(--window-height);
 }
 
-html[data-has-tasks="false"] .task-bar,
 html[data-has-tasks="false"] .dossier {
   display: none;
 }
 
 html[data-has-tasks="false"] .surface {
-  top: var(--window-height);
+  top: calc(var(--window-height) + var(--task-height));
 }
 
 .panel {
