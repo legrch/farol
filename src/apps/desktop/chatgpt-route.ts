@@ -246,6 +246,7 @@ export class ChatGptRoute {
   private displayTitle: string;
   private activityTimer: ReturnType<typeof setInterval> | null = null;
   private activityPollInFlight = false;
+  private activityGeneration = 0;
   private observedTaskRunning: boolean | null = null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
@@ -337,9 +338,6 @@ export class ChatGptRoute {
     try {
       await candidate.loadURL(this.entryUrl);
       this.load = "loaded";
-      if (this.options.onTaskActivityChanged) {
-        this.startTaskActivityWatch(candidate.webContents);
-      }
       candidate.show();
       candidate.focus();
       return { status: "opened" };
@@ -610,6 +608,9 @@ export class ChatGptRoute {
         );
         if (!observed.success) return "outcome_unknown";
         if (!observed.data.running) {
+          if (this.options.onTaskActivityChanged) {
+            this.startTaskActivityWatch(candidate.webContents);
+          }
           this.recordTaskActivity(false);
           return "cancelled";
         }
@@ -704,6 +705,9 @@ export class ChatGptRoute {
       contents.on("did-finish-load", () => {
         this.load = "loaded";
         this.reportConversationUrl(contents);
+        if (this.options.onTaskActivityChanged) {
+          this.startTaskActivityWatch(contents);
+        }
       });
       contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
         if (isMainFrame) this.reportConversationUrl(contents);
@@ -760,21 +764,27 @@ export class ChatGptRoute {
 
   private startTaskActivityWatch(contents: WebContents): void {
     this.stopTaskActivityWatch();
-    const poll = () => void this.pollTaskActivity(contents);
+    const generation = this.activityGeneration;
+    const poll = () => void this.pollTaskActivity(contents, generation);
     poll();
     this.activityTimer = setInterval(poll, 250);
     this.activityTimer.unref?.();
   }
 
   private stopTaskActivityWatch(): void {
+    this.activityGeneration += 1;
     if (this.activityTimer) clearInterval(this.activityTimer);
     this.activityTimer = null;
     this.activityPollInFlight = false;
     this.observedTaskRunning = null;
   }
 
-  private async pollTaskActivity(contents: WebContents): Promise<void> {
+  private async pollTaskActivity(
+    contents: WebContents,
+    generation: number,
+  ): Promise<void> {
     if (
+      generation !== this.activityGeneration ||
       this.activityPollInFlight ||
       contents.isDestroyed() ||
       this.load !== "loaded"
@@ -786,12 +796,21 @@ export class ChatGptRoute {
       const observed = activityProbeSchema.safeParse(
         await contents.executeJavaScript(activityProbe, true),
       );
-      if (observed.success) this.recordTaskActivity(observed.data.running);
+      if (
+        generation === this.activityGeneration &&
+        !contents.isDestroyed() &&
+        this.load === "loaded" &&
+        observed.success
+      ) {
+        this.recordTaskActivity(observed.data.running);
+      }
     } catch {
       // A navigation can invalidate an in-flight probe. Navigation lifecycle
       // events own readiness and the next bounded poll remeasures activity.
     } finally {
-      this.activityPollInFlight = false;
+      if (generation === this.activityGeneration) {
+        this.activityPollInFlight = false;
+      }
     }
   }
 
