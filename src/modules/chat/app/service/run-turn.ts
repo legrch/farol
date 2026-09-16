@@ -244,7 +244,11 @@ export class RunTurn {
     sequence: number | null = null,
     dispatched = false,
     capability:
-      "workspace.read" | "workspace.list" | "workspace.search" | null = null,
+      | "workspace.read"
+      | "workspace.list"
+      | "workspace.search"
+      | "verification.run"
+      | null = null,
   ): Promise<Turn> {
     if (!result.ok) {
       const failed = dispatched
@@ -272,7 +276,11 @@ export class RunTurn {
       | "terminal",
     sequence: number | null = null,
     capability:
-      "workspace.read" | "workspace.list" | "workspace.search" | null = null,
+      | "workspace.read"
+      | "workspace.list"
+      | "workspace.search"
+      | "verification.run"
+      | null = null,
   ): Promise<void> {
     await this.turns.save(turn);
     try {

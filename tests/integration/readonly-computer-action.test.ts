@@ -108,6 +108,11 @@ function request(
         kind: "workspace.search";
         relativePath: string;
         pattern: string;
+      }>
+    | Readonly<{
+        kind: "verification.run";
+        command: "git.status";
+        relativePath: ".";
       }>,
   participantId = "critic-a",
 ) {
@@ -421,6 +426,128 @@ describe("real read-only Computer action", () => {
       ok: false,
       error: { code: "COMPUTER_INVALID_REQUEST", source: "contract" },
     });
+  });
+
+  it("preserves verification authority across Main Turn to Agent to Critic and honors later narrowing", async () => {
+    const capabilities = [
+      "workspace.list",
+      "workspace.read",
+      "workspace.search",
+      "verification.run",
+    ] as const;
+    const commandApproval: ComputerApproval = {
+      ...approval(capabilities),
+      commands: "verification",
+    };
+    const commandAdmission: TaskAdmission = {
+      ...admission(),
+      capabilities,
+      commands: "verification",
+    };
+    const grant = deriveTaskGrant(
+      commandApproval,
+      commandAdmission,
+      clock.now(),
+    );
+    if (!grant.ok) throw new Error(grant.error.code);
+    const main = createParticipantAuthority(grant.value, {
+      participantId: "main-command",
+      role: "main",
+      mutationOwnership: "none",
+    });
+    if (!main.ok) throw new Error(main.error.code);
+    const agent = delegateParticipantAuthority(main.value, {
+      participantId: "agent-command",
+      role: "agent",
+      mutationOwnership: "none",
+    });
+    if (!agent.ok) throw new Error(agent.error.code);
+    const critic = delegateParticipantAuthority(agent.value, {
+      participantId: "critic-command",
+      role: "critic",
+      mutationOwnership: "none",
+    });
+    if (!critic.ok) throw new Error(critic.error.code);
+    const narrowed = delegateParticipantAuthority(agent.value, {
+      participantId: "critic-command-narrowed",
+      role: "critic",
+      mutationOwnership: "none",
+      narrowing: {
+        workspaces: commandAdmission.workspaces,
+        capabilities,
+        network: "none",
+        commands: "none",
+      },
+    });
+    if (!narrowed.ok) throw new Error(narrowed.error.code);
+    let calls = 0;
+    const workspace: ReadonlyWorkspace = {
+      async execute() {
+        calls += 1;
+        return {
+          ok: true,
+          value: {
+            kind: "workspace.command",
+            command: "git.status",
+            relativePath: ".",
+            exitCode: 0,
+            stdout: "## main\n",
+            stderr: "",
+            outputBytes: 8,
+            network: "none",
+          },
+        };
+      },
+    };
+    const command = request(
+      {
+        kind: "verification.run",
+        command: "git.status",
+        relativePath: ".",
+      },
+      "critic-command",
+    );
+    const available = [main.value, agent.value, critic.value, narrowed.value];
+
+    await expect(
+      contract(available, commandApproval, workspace).execute(command),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        participantId: "critic-command",
+        output: { kind: "workspace.command", command: "git.status" },
+      },
+    });
+    expect(calls).toBe(1);
+
+    await expect(
+      contract(available, commandApproval, workspace).execute({
+        ...command,
+        participantId: "critic-command-narrowed",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHORITY_COMMAND_DENIED",
+        source: "task-grant",
+        retry: "never",
+      },
+    });
+    await expect(
+      contract(
+        available,
+        { ...commandApproval, commands: "none" },
+        workspace,
+      ).execute(command),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHORITY_COMMAND_DENIED",
+        source: "computer-policy",
+        retry: "never",
+      },
+    });
+    expect(calls).toBe(1);
   });
 
   it("classifies authority stores, missing policy, invalid targets and native refusals", async () => {

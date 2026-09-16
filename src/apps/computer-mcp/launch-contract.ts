@@ -23,13 +23,16 @@ const ReadonlyCapabilitySchema = z.enum([
   "workspace.list",
   "workspace.read",
   "workspace.search",
+  "verification.run",
 ]);
 const MutableCapabilitySchema = z.enum([
   "workspace.list",
   "workspace.read",
   "workspace.search",
+  "verification.run",
   "workspace.write",
 ]);
+const CommandAuthoritySchema = z.enum(["none", "verification"]);
 
 function canonicalAbsolutePath(value: string): boolean {
   return (
@@ -109,7 +112,7 @@ const ReadonlyComputerApprovalSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
-  commands: z.literal("none"),
+  commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
 });
 const ReadonlyTaskAdmissionSchema = z.strictObject({
@@ -124,7 +127,7 @@ const ReadonlyTaskAdmissionSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
-  commands: z.literal("none"),
+  commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
 });
 const ReadonlyAuthorityNarrowingSchema = z.strictObject({
@@ -132,7 +135,7 @@ const ReadonlyAuthorityNarrowingSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
-  commands: z.literal("none"),
+  commands: CommandAuthoritySchema,
 });
 const ReadonlyParticipantSchema = z.strictObject({
   participantId: IdentifierSchema,
@@ -148,7 +151,7 @@ const MutableComputerApprovalSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
-  commands: z.literal("none"),
+  commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
 });
 const MutableTaskAdmissionSchema = z.strictObject({
@@ -163,7 +166,7 @@ const MutableTaskAdmissionSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
-  commands: z.literal("none"),
+  commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
 });
 const MutableAuthorityNarrowingSchema = z.strictObject({
@@ -171,7 +174,7 @@ const MutableAuthorityNarrowingSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
   network: z.literal("none"),
-  commands: z.literal("none"),
+  commands: CommandAuthoritySchema,
 });
 const MutableParticipantSchema = z.strictObject({
   participantId: IdentifierSchema,

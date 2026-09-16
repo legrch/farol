@@ -74,6 +74,9 @@ const SearchInputSchema = z.strictObject({
   relativePath: ScopeRelativePathSchema,
   pattern: SearchPatternSchema,
 });
+const VerificationInputSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+});
 const MutationTextSchema = z
   .string()
   .max(8 * 1_024 * 1_024)
@@ -161,7 +164,10 @@ function correlationMatches(
     value.operation.relativePath === request.operation.relativePath &&
     (value.operation.kind !== "workspace.search" ||
       (request.operation.kind === "workspace.search" &&
-        value.operation.pattern === request.operation.pattern))
+        value.operation.pattern === request.operation.pattern)) &&
+    (value.operation.kind !== "verification.run" ||
+      (request.operation.kind === "verification.run" &&
+        value.operation.command === request.operation.command))
   );
 }
 
@@ -206,7 +212,10 @@ async function execute(
     (request.operation.kind === "workspace.list" &&
       value.output.kind === "workspace.entries") ||
     (request.operation.kind === "workspace.search" &&
-      value.output.kind === "workspace.matches");
+      value.output.kind === "workspace.matches") ||
+    (request.operation.kind === "verification.run" &&
+      value.output.kind === "workspace.command" &&
+      value.output.command === request.operation.command);
   if (!correlationMatches(request, value) || !outputMatchesOperation) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
@@ -364,6 +373,22 @@ export function createReadonlyComputerMcpServer(
         kind: "workspace.search",
         relativePath,
         pattern,
+      }),
+  );
+  server.registerTool(
+    "computer_workspace_git_status",
+    {
+      title: "Inspect approved workspace Git status",
+      description:
+        "Run the fixed no-network Git status verifier at one approved workspace root. No executable, arguments, path, environment, or network access can be supplied by the caller.",
+      inputSchema: VerificationInputSchema,
+      annotations: READONLY_ANNOTATIONS,
+    },
+    async ({ workspaceId }, context) =>
+      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
+        kind: "verification.run",
+        command: "git.status",
+        relativePath: ".",
       }),
   );
 

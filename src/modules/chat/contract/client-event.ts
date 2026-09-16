@@ -32,7 +32,12 @@ export const ClientEventSchema = z.discriminatedUnion("kind", [
     ...identity,
     kind: z.literal("computer.requested"),
     callId: z.string().min(1).max(120),
-    operation: z.enum(["workspace.read", "workspace.list", "workspace.search"]),
+    operation: z.enum([
+      "workspace.read",
+      "workspace.list",
+      "workspace.search",
+      "verification.run",
+    ]),
   }),
   z.strictObject({
     ...identity,

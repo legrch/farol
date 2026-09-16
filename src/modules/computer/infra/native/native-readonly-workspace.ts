@@ -21,6 +21,7 @@ import type {
   ReadonlyWorkspaceResult,
   WorkspaceMatch,
 } from "../../app/port/readonly-workspace";
+import { executeNativeVerificationCommand } from "./native-verification-command";
 
 export type SafeOpenHelperRecord = Readonly<{
   sha256: string;
@@ -129,6 +130,7 @@ type NativeReadonlyWorkspaceOptions = Readonly<{
   helperPath: string;
   helper: SafeOpenHelperRecord;
   attestInterpreter?: () => Promise<string>;
+  attestGit?: () => Promise<string>;
 }>;
 
 type SystemFileMeasurement = Readonly<{
@@ -310,6 +312,14 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
     ) {
       return null;
     }
+  } else if (operation.kind === "verification.run") {
+    if (
+      !exactKeys(operation, ["kind", "command", "relativePath"]) ||
+      operation.command !== "git.status" ||
+      operation.relativePath !== "."
+    ) {
+      return null;
+    }
   } else {
     return null;
   }
@@ -482,6 +492,8 @@ function nativeRequest(
         operation: "grep",
         pattern: request.operation.pattern,
       };
+    case "verification.run":
+      throw new WorkspaceRefusal("WORKSPACE_INVALID_REQUEST");
   }
 }
 
@@ -1071,6 +1083,12 @@ function mutationErrorCode(
       return "WORKSPACE_MUTATION_CONFLICT";
     case "WORKSPACE_SEARCH_TIMEOUT":
     case "WORKSPACE_HELPER_FAILED":
+    case "WORKSPACE_COMMAND_UNSUPPORTED":
+    case "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE":
+    case "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED":
+    case "WORKSPACE_COMMAND_TIMEOUT":
+    case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
+    case "WORKSPACE_COMMAND_FAILED":
       return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
     default:
       return code;
@@ -1108,6 +1126,14 @@ export class NativeReadonlyWorkspace
     const validated = validateRequest(request);
     if (validated === null || !validTestOptions(options)) {
       return failure("WORKSPACE_INVALID_REQUEST");
+    }
+
+    if (validated.operation.kind === "verification.run") {
+      return executeNativeVerificationCommand(
+        validated,
+        validated.operation,
+        this.options.attestGit ? { attestGit: this.options.attestGit } : {},
+      );
     }
 
     let source: Buffer;

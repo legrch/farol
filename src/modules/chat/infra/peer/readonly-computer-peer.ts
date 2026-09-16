@@ -68,7 +68,9 @@ function operationsMatch(
     left.kind === right.kind &&
     left.relativePath === right.relativePath &&
     (left.kind !== "workspace.search" ||
-      (right.kind === "workspace.search" && left.pattern === right.pattern))
+      (right.kind === "workspace.search" && left.pattern === right.pattern)) &&
+    (left.kind !== "verification.run" ||
+      (right.kind === "verification.run" && left.command === right.command))
   );
 }
 
@@ -81,7 +83,10 @@ function outputMatchesOperation(
     (operation.kind === "workspace.list" &&
       output.kind === "workspace.entries") ||
     (operation.kind === "workspace.search" &&
-      output.kind === "workspace.matches")
+      output.kind === "workspace.matches") ||
+    (operation.kind === "verification.run" &&
+      output.kind === "workspace.command" &&
+      operation.command === output.command)
   );
 }
 

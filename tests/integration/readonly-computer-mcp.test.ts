@@ -1,9 +1,11 @@
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { RunReadonlyComputerAction } from "../../src/modules/computer/app/service/run-readonly-computer-action";
 import {
@@ -28,12 +30,16 @@ import { InMemoryComputerApprovalRepository } from "../../src/modules/computer/i
 
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
+const executeFile = promisify(execFile);
 let root = "";
+let git = "";
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mcp-"));
   root = await fs.realpath(root);
   await fs.chmod(root, 0o700);
+  git = (await executeFile("/usr/bin/xcrun", ["--find", "git"])).stdout.trim();
+  await executeFile(git, ["init", "--quiet", root]);
   await fs.mkdir(path.join(root, "src"), { mode: 0o700 });
   await fs.writeFile(
     path.join(root, "src", "discovered.ts"),
@@ -47,15 +53,20 @@ afterEach(async () => {
 });
 
 describe("read-only Computer MCP adapter", () => {
-  it("lists only read-only tools and carries delegated authority through a real MCP call", async () => {
+  it("lists only bounded read-only tools and carries delegated authority through real MCP calls", async () => {
     const approval: ComputerApproval = {
       ownerId: "owner-preview",
       computerId: "computer-preview",
       generation: 7,
       workspaces: [{ workspaceId: "farol", root, access: "read" }],
-      capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+      capabilities: [
+        "workspace.list",
+        "workspace.read",
+        "workspace.search",
+        "verification.run",
+      ],
       network: "none",
-      commands: "none",
+      commands: "verification",
       expiresAt: 20_000,
     };
     const admission: TaskAdmission = {
@@ -76,7 +87,7 @@ describe("read-only Computer MCP adapter", () => {
       ],
       capabilities: approval.capabilities,
       network: "none",
-      commands: "none",
+      commands: "verification",
       expiresAt: 10_000,
     };
     const grant = deriveTaskGrant(approval, admission, 1_000);
@@ -112,6 +123,7 @@ describe("read-only Computer MCP adapter", () => {
           helperPath: sourceHelper,
           helper: NEXT_SAFE_OPEN_HELPER,
           attestInterpreter: async () => "/usr/bin/python3",
+          attestGit: async () => git,
         }),
         { now: () => 1_000 },
       ),
@@ -138,6 +150,7 @@ describe("read-only Computer MCP adapter", () => {
         "computer_workspace_list",
         "computer_workspace_read",
         "computer_workspace_search",
+        "computer_workspace_git_status",
       ]);
       expect(
         listed.tools.every(
@@ -183,6 +196,33 @@ describe("read-only Computer MCP adapter", () => {
       expect((read.structuredContent as { callId?: unknown }).callId).toEqual(
         expect.any(String),
       );
+
+      const status = await client.callTool({
+        name: "computer_workspace_git_status",
+        arguments: { workspaceId: "farol" },
+      });
+      expect(status.isError).not.toBe(true);
+      expect(status.structuredContent).toMatchObject({
+        participantId: "critic-a",
+        workspaceId: "farol",
+        operation: {
+          kind: "verification.run",
+          command: "git.status",
+          relativePath: ".",
+        },
+        output: {
+          kind: "workspace.command",
+          command: "git.status",
+          exitCode: 0,
+          network: "none",
+        },
+      });
+
+      const injected = await client.callTool({
+        name: "computer_workspace_git_status",
+        arguments: { workspaceId: "farol", command: "rm -rf ." },
+      });
+      expect(injected.isError).toBe(true);
 
       const spoofed = await client.callTool({
         name: "computer_workspace_read",

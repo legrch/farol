@@ -16,7 +16,12 @@ export type ActivityRecord = Readonly<{
     | "terminal";
   phase: TurnPhase;
   sequence: number | null;
-  capability: "workspace.read" | "workspace.list" | "workspace.search" | null;
+  capability:
+    | "workspace.read"
+    | "workspace.list"
+    | "workspace.search"
+    | "verification.run"
+    | null;
 }>;
 
 export interface ActivityRecorder {

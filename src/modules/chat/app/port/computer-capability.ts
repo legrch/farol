@@ -5,6 +5,11 @@ export type ChatComputerOperation =
       kind: "workspace.search";
       relativePath: string;
       pattern: string;
+    }>
+  | Readonly<{
+      kind: "verification.run";
+      command: "git.status";
+      relativePath: ".";
     }>;
 
 export type ChatComputerRequest = Readonly<{
@@ -39,6 +44,16 @@ export type ChatComputerOutputValue =
       }>[];
       resultLimited: boolean;
       scanLimited: boolean;
+    }>
+  | Readonly<{
+      kind: "workspace.command";
+      command: "git.status";
+      relativePath: ".";
+      exitCode: 0;
+      stdout: string;
+      stderr: "";
+      outputBytes: number;
+      network: "none";
     }>;
 
 export type ChatComputerOutput = Readonly<{

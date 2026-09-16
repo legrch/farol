@@ -194,6 +194,28 @@ describe("read-only Computer launch contract", () => {
     expect(materialized.mutationEnabled).toBe(false);
   });
 
+  it("preserves verification command authority through the permitted delegation chain", () => {
+    const launch = launchContract();
+    launch.approval.capabilities.push("verification.run");
+    launch.approval.commands = "verification";
+    launch.admission.capabilities.push("verification.run");
+    launch.admission.commands = "verification";
+
+    const materialized = materializeReadonlyComputerLaunch(launch, 1_000);
+    expect(materialized.participants[2]).toMatchObject({
+      role: "critic",
+      grant: {
+        capabilities: [
+          "workspace.list",
+          "workspace.read",
+          "workspace.search",
+          "verification.run",
+        ],
+        commands: "verification",
+      },
+    });
+  });
+
   it("applies explicit narrowing without changing the parent's grant", () => {
     const launch = launchContract();
     const critic = launch.delegationChain[2];

@@ -11,6 +11,11 @@ export type ReadonlyWorkspaceOperation =
       kind: "workspace.search";
       relativePath: string;
       pattern: string;
+    }>
+  | Readonly<{
+      kind: "verification.run";
+      command: "git.status";
+      relativePath: ".";
     }>;
 
 export type ReadonlyWorkspaceRequest = Readonly<{
@@ -44,8 +49,19 @@ export type WorkspaceMatches = Readonly<{
   scanLimited: boolean;
 }>;
 
+export type WorkspaceCommandOutput = Readonly<{
+  kind: "workspace.command";
+  command: "git.status";
+  relativePath: ".";
+  exitCode: 0;
+  stdout: string;
+  stderr: "";
+  outputBytes: number;
+  network: "none";
+}>;
+
 export type ReadonlyWorkspaceOutput =
-  WorkspaceText | WorkspaceEntries | WorkspaceMatches;
+  WorkspaceText | WorkspaceEntries | WorkspaceMatches | WorkspaceCommandOutput;
 
 export type ReadonlyWorkspaceErrorCode =
   | "WORKSPACE_INVALID_REQUEST"
@@ -58,6 +74,12 @@ export type ReadonlyWorkspaceErrorCode =
   | "WORKSPACE_RACE_DETECTED"
   | "WORKSPACE_SEARCH_TIMEOUT"
   | "WORKSPACE_NOT_TEXT"
+  | "WORKSPACE_COMMAND_UNSUPPORTED"
+  | "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"
+  | "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED"
+  | "WORKSPACE_COMMAND_TIMEOUT"
+  | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
+  | "WORKSPACE_COMMAND_FAILED"
   | "WORKSPACE_HELPER_FAILED";
 
 export type ReadonlyWorkspaceResult =

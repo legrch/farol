@@ -1,9 +1,13 @@
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
+
+const executeFile = promisify(execFile);
 
 const root = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-computer-mcp-")),
@@ -58,6 +62,10 @@ await fs.mkdir(path.join(workspaceRoot, "notes"), {
   recursive: true,
   mode: 0o700,
 });
+const git = (
+  await executeFile("/usr/bin/xcrun", ["--find", "git"])
+).stdout.trim();
+await executeFile(git, ["init", "--quiet", workspaceRoot]);
 await fs.writeFile(
   path.join(workspaceRoot, "notes", "review.txt"),
   "delegated critic reached the native workspace\n",
@@ -74,9 +82,14 @@ const launch = {
     workspaces: [
       { workspaceId: "fixture", root: workspaceRoot, access: "read" },
     ],
-    capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+    capabilities: [
+      "workspace.list",
+      "workspace.read",
+      "workspace.search",
+      "verification.run",
+    ],
     network: "none",
-    commands: "none",
+    commands: "verification",
     expiresAt: now + 60_000,
   },
   admission: {
@@ -95,9 +108,14 @@ const launch = {
         access: "read",
       },
     ],
-    capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+    capabilities: [
+      "workspace.list",
+      "workspace.read",
+      "workspace.search",
+      "verification.run",
+    ],
     network: "none",
-    commands: "none",
+    commands: "verification",
     expiresAt: now + 30_000,
   },
   delegationChain: [
@@ -150,6 +168,7 @@ try {
       "computer_workspace_list",
       "computer_workspace_read",
       "computer_workspace_search",
+      "computer_workspace_git_status",
     ],
   );
   assert.equal(
@@ -199,6 +218,28 @@ try {
     text: "delegated critic reached the native workspace\n",
     bytes: 46,
   });
+
+  const status = await client.callTool({
+    name: "computer_workspace_git_status",
+    arguments: { workspaceId: "fixture" },
+  });
+  assert.equal(status.isError, undefined);
+  assert.equal(status.structuredContent?.participantId, "critic-e2e");
+  assert.deepEqual(status.structuredContent?.operation, {
+    kind: "verification.run",
+    command: "git.status",
+    relativePath: ".",
+  });
+  assert.equal(status.structuredContent?.output?.kind, "workspace.command");
+  assert.equal(status.structuredContent?.output?.command, "git.status");
+  assert.equal(status.structuredContent?.output?.exitCode, 0);
+  assert.equal(status.structuredContent?.output?.network, "none");
+
+  const injected = await client.callTool({
+    name: "computer_workspace_git_status",
+    arguments: { workspaceId: "fixture", command: "sh -c whoami" },
+  });
+  assert.equal(injected.isError, true);
   assert.equal(stderr, "");
   process.stdout.write(
     `${JSON.stringify({ tools: tools.tools.length, participant: "critic-e2e", transport: "stdio", runtime: packaged ? "sealed-package" : "development" })}\n`,

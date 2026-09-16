@@ -52,6 +52,11 @@ const OperationSchema = z.discriminatedUnion("kind", [
         }),
       ),
   }),
+  z.strictObject({
+    kind: z.literal("verification.run"),
+    command: z.literal("git.status"),
+    relativePath: z.literal("."),
+  }),
 ]);
 
 export const ReadonlyComputerCallRequestSchema = z.strictObject({
@@ -97,6 +102,20 @@ const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
     resultLimited: z.boolean(),
     scanLimited: z.boolean(),
   }),
+  z.strictObject({
+    kind: z.literal("workspace.command"),
+    command: z.literal("git.status"),
+    relativePath: z.literal("."),
+    exitCode: z.literal(0),
+    stdout: z.string().max(64 * 1_024),
+    stderr: z.literal(""),
+    outputBytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(64 * 1_024),
+    network: z.literal("none"),
+  }),
 ]);
 
 export const ReadonlyComputerCallCorrelationSchema = z.strictObject({
@@ -135,6 +154,12 @@ const ComputerErrorCodeSchema = z.enum([
   "WORKSPACE_SEARCH_TIMEOUT",
   "WORKSPACE_NOT_TEXT",
   "WORKSPACE_HELPER_FAILED",
+  "WORKSPACE_COMMAND_UNSUPPORTED",
+  "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+  "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED",
+  "WORKSPACE_COMMAND_TIMEOUT",
+  "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+  "WORKSPACE_COMMAND_FAILED",
   "COMPUTER_PARTICIPANT_NOT_FOUND",
   "COMPUTER_APPROVAL_NOT_FOUND",
   "COMPUTER_AUTHORITY_STORE_UNAVAILABLE",
