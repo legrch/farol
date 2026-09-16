@@ -1,6 +1,7 @@
 export const channels = Object.freeze({
   bootstrap: "farol-next:bootstrap",
   snapshot: "farol-next:snapshot",
+  configuration: "farol-next:configuration",
   control: "farol-next:control",
   layout: "farol-next:layout",
   runtimeEvent: "farol-next:runtime-event",

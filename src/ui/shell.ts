@@ -22,6 +22,12 @@ import {
   type TaskSurfaceStatus,
 } from "../pkg/ipc/task-surface-status";
 import {
+  ProductConfigurationCommandSchema,
+  ProductConfigurationResultSchema,
+  ProductConfigurationSnapshotSchema,
+  type ProductConfigurationCommand,
+} from "../pkg/product-settings/contract";
+import {
   advanceSetup,
   createSetupJourney,
   reopenSetup,
@@ -34,6 +40,7 @@ const bootstrapSchema = z.strictObject({
   productName: z.literal("Farol Next Preview"),
   bundleId: z.literal("local.farol.next.preview"),
   build: BuildIdentitySchema,
+  configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   runtimeError: z.string().nullable(),
   runtimeIdentity: z.string().nullable(),
@@ -60,6 +67,11 @@ const controlSuccessSchema = z.strictObject({ ok: z.literal(true) });
 
 type Bootstrap = z.infer<typeof bootstrapSchema>;
 type PreviewTask = Bootstrap["tasks"][number];
+type ReadySettings = Extract<
+  Bootstrap["configuration"],
+  { status: "ready" }
+>["settings"];
+type Readiness = ReadySettings["setup"]["chatgpt"];
 type TaskTone =
   | "connecting"
   | "running"
@@ -113,6 +125,7 @@ declare global {
     farolNext: Readonly<{
       bootstrap(): Promise<unknown>;
       snapshot(): Promise<unknown>;
+      configure(command: unknown): Promise<unknown>;
       control(taskId: string, action: string): Promise<unknown>;
       layout(
         section: string,
@@ -158,6 +171,10 @@ let windowState: WindowState = {
   trafficLightPosition: null,
 };
 let computerTargetTaskId: string | null = null;
+let settingsFeedback = "";
+let settingsFeedbackError = false;
+let renderedSettingsRevision = -1;
+let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
 const activity: SafeActivity[] = [];
 const pendingRuntimeEvents: ClientEventDto[] = [];
@@ -528,7 +545,17 @@ function renderComputer(): void {
 
 function renderActivity(): void {
   const list = required<HTMLOListElement>("#activity-list");
-  const visible = activity.slice(-14).reverse();
+  const technical =
+    bootstrap.configuration.status === "ready" &&
+    bootstrap.configuration.settings.general.activityDetail === "technical";
+  const visible = activity
+    .filter(
+      (record) =>
+        technical ||
+        !["text.delta", "client.delivery_acknowledged"].includes(record.kind),
+    )
+    .slice(-14)
+    .reverse();
   if (visible.length === 0) {
     const empty = document.createElement("li");
     empty.className = "activity-empty";
@@ -566,7 +593,74 @@ function renderActivity(): void {
   );
 }
 
+function readinessLabel(readiness: Readiness): string {
+  if (readiness.verified) return "Verified";
+  if (readiness.outcomeUnknown) return "Outcome unknown";
+  if (readiness.unavailable) return "Unavailable";
+  if (readiness.reachable === "reachable") return "Reachable · verify";
+  if (readiness.reachable === "unreachable") return "Unreachable";
+  if (readiness.configured) return "Configured · verify";
+  return "Needs action";
+}
+
+function readinessDetail(readiness: Readiness): string {
+  if (readiness.verified) {
+    return `Verified ${new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(readiness.verified.verifiedAt))}`;
+  }
+  return (
+    readiness.needsAction ??
+    readiness.unavailable ??
+    (readiness.reachable === "unreachable"
+      ? "The configured route could not be reached."
+      : "No verification has been recorded.")
+  );
+}
+
+async function configureProduct(
+  command: ProductConfigurationCommand,
+  successMessage: string,
+): Promise<boolean> {
+  settingsFeedback = "Saving and reading back…";
+  settingsFeedbackError = false;
+  render();
+  const parsed = ProductConfigurationResultSchema.safeParse(
+    await window.farolNext.configure(command),
+  );
+  if (!parsed.success) {
+    settingsFeedback =
+      "The settings response was invalid. Nothing was applied.";
+    settingsFeedbackError = true;
+    render();
+    return false;
+  }
+  bootstrap = { ...bootstrap, configuration: parsed.data.snapshot };
+  renderedSettingsRevision = -1;
+  if (!parsed.data.ok) {
+    settingsFeedback =
+      parsed.data.error === "WORKSPACE_PICKER_CANCELLED"
+        ? "No folder was selected."
+        : `Not applied · ${parsed.data.error}`;
+    settingsFeedbackError = parsed.data.error !== "WORKSPACE_PICKER_CANCELLED";
+    render();
+    return false;
+  }
+  settingsFeedback = successMessage;
+  settingsFeedbackError = false;
+  if (
+    command.kind === "general.update" &&
+    bootstrap.configuration.status === "ready"
+  ) {
+    sidebarPreference = bootstrap.configuration.settings.general.sidebarDefault;
+  }
+  render();
+  return true;
+}
+
 function renderSettings(): void {
+  const configured = bootstrap.configuration;
   const values = [
     ["Application", `${bootstrap.productName} · ${bootstrap.bundleId}`],
     [
@@ -590,7 +684,10 @@ function renderSettings(): void {
     ],
     [
       "Native access",
-      "Product runtime uses a fixture · read-only MCP verified separately · Agent and live provider unavailable",
+      configured.status === "ready" &&
+      configured.settings.computer.workspaces.length > 0
+        ? `${configured.settings.computer.workspaces.length} read-only workspace approval(s) · live provider and Agent still unverified`
+        : "No workspace approved · live provider and Agent still unverified",
     ],
   ];
   const list = required<HTMLDListElement>("#settings-list");
@@ -605,6 +702,151 @@ function renderSettings(): void {
       return row;
     }),
   );
+
+  const feedback = required<HTMLParagraphElement>("#settings-feedback");
+  feedback.textContent =
+    configured.status === "error"
+      ? `Settings unavailable · ${configured.error}`
+      : settingsFeedback;
+  feedback.classList.toggle(
+    "error",
+    configured.status === "error" || settingsFeedbackError,
+  );
+
+  const formControls = [
+    required<HTMLSelectElement>("#setting-open-at-launch"),
+    required<HTMLSelectElement>("#setting-sidebar-default"),
+    required<HTMLSelectElement>("#setting-activity-detail"),
+  ] as const;
+  const computerName = required<HTMLInputElement>("#computer-name");
+  const applyGeneral = required<HTMLButtonElement>("#apply-general-settings");
+  const saveComputerName = required<HTMLButtonElement>("#save-computer-name");
+  const addWorkspace = required<HTMLButtonElement>("#add-workspace");
+  const workspaces = required<HTMLDivElement>("#settings-workspaces");
+  const connections = required<HTMLDivElement>("#connection-readiness");
+  const computerReadiness = required<HTMLSpanElement>("#computer-readiness");
+
+  if (configured.status === "error") {
+    for (const control of formControls) control.disabled = true;
+    computerName.disabled = true;
+    applyGeneral.disabled = true;
+    saveComputerName.disabled = true;
+    addWorkspace.disabled = true;
+    workspaces.textContent =
+      "Repair is required before settings can be changed.";
+    connections.textContent =
+      "Readiness is unavailable while settings are invalid.";
+    computerReadiness.textContent = "Unavailable";
+    computerReadiness.classList.remove("verified");
+    return;
+  }
+
+  const settings = configured.settings;
+  for (const control of formControls) control.disabled = false;
+  computerName.disabled = false;
+  applyGeneral.disabled = false;
+  saveComputerName.disabled = false;
+  addWorkspace.disabled = false;
+  if (
+    renderedSettingsRevision !== settings.revision &&
+    ![...formControls, computerName].includes(
+      document.activeElement as HTMLInputElement & HTMLSelectElement,
+    )
+  ) {
+    formControls[0].value = settings.general.openAtLaunch;
+    formControls[1].value = settings.general.sidebarDefault;
+    formControls[2].value = settings.general.activityDetail;
+    computerName.value = settings.computer.name;
+    renderedSettingsRevision = settings.revision;
+  }
+
+  const computerState = settings.setup.computer;
+  computerReadiness.textContent = readinessLabel(computerState);
+  computerReadiness.classList.toggle(
+    "verified",
+    computerState.verified !== null,
+  );
+  if (settings.computer.workspaces.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "connection-row";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    const detail = document.createElement("small");
+    title.textContent = "No approved folders";
+    detail.textContent =
+      "Add a folder to create a read-only Computer approval.";
+    copy.append(title, detail);
+    empty.append(copy);
+    workspaces.replaceChildren(empty);
+  } else {
+    workspaces.replaceChildren(
+      ...settings.computer.workspaces.map((workspace) => {
+        const row = document.createElement("div");
+        row.className = "workspace-row";
+        const copy = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = workspace.label;
+        const detail = document.createElement("small");
+        const verified =
+          computerState.verified?.workspaceId === workspace.workspaceId &&
+          computerState.verified.configRevision ===
+            settings.computer.generation;
+        detail.textContent = `${workspace.root} · read-only · ${verified ? "verified" : "not verified"}`;
+        copy.append(title, detail);
+        const actions = document.createElement("span");
+        actions.className = "workspace-actions";
+        const verify = document.createElement("button");
+        verify.type = "button";
+        verify.textContent = verified ? "Recheck" : "Verify";
+        verify.addEventListener("click", () => {
+          void configureProduct(
+            {
+              kind: "computer.verify-workspace",
+              workspaceId: workspace.workspaceId,
+            },
+            `${workspace.label} read access verified.`,
+          );
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          void configureProduct(
+            {
+              kind: "computer.remove-workspace",
+              workspaceId: workspace.workspaceId,
+            },
+            `${workspace.label} approval removed.`,
+          );
+        });
+        actions.append(verify, remove);
+        row.append(copy, actions);
+        return row;
+      }),
+    );
+  }
+
+  const connectionStates: readonly [string, Readiness][] = [
+    ["ChatGPT", settings.setup.chatgpt],
+    ["Computer", settings.setup.computer],
+    ["Connection", settings.setup.connect],
+    ["Native hosts", settings.setup.hosts],
+    ["Verification", settings.setup.verify],
+  ];
+  connections.replaceChildren(
+    ...connectionStates.map(([label, state]) => {
+      const row = document.createElement("div");
+      row.className = "connection-row";
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = `${label} · ${readinessLabel(state)}`;
+      const detail = document.createElement("small");
+      detail.textContent = readinessDetail(state);
+      copy.append(title, detail);
+      row.append(copy);
+      return row;
+    }),
+  );
 }
 
 function renderSetup(): void {
@@ -616,20 +858,33 @@ function renderSetup(): void {
   }
   const step = setupSteps[setupJourney.step];
   if (!step) throw new Error("SETUP_STEP_MISSING");
+  const configured = bootstrap.configuration;
+  const readinessState =
+    configured.status === "ready" ? configured.settings.setup[step.id] : null;
   dialog.dataset.mode = setupJourney.mode;
   dialog.dataset.stepId = step.id;
   required("#setup-eyeline").textContent = step.eyeline;
   required("#setup-title").textContent = step.title;
   required("#setup-copy").textContent = step.copy;
   const status = required<HTMLDivElement>("#setup-status");
-  status.className = `setup-status ${step.tone}`;
-  required<HTMLElement>("#setup-status strong").textContent =
-    step.id === "verify" && bootstrap.runtimeState !== "ready"
-      ? "Local runtime unavailable"
-      : step.status;
+  const tone = readinessState?.verified
+    ? "available"
+    : readinessState?.configured || readinessState?.needsAction
+      ? "limited"
+      : "blocked";
+  status.className = `setup-status ${tone}`;
+  required<HTMLElement>("#setup-status strong").textContent = readinessState
+    ? readinessLabel(readinessState)
+    : "Settings unavailable";
   const details = required<HTMLUListElement>("#setup-details");
+  const liveDetails =
+    configured.status === "ready" && step.id === "computer"
+      ? configured.settings.computer.workspaces.map(
+          (workspace) => `${workspace.label}: read-only · ${workspace.root}`,
+        )
+      : [];
   details.replaceChildren(
-    ...step.details.map((detail) => {
+    ...[...step.details, ...liveDetails].map((detail) => {
       const item = document.createElement("li");
       item.textContent = detail;
       return item;
@@ -638,7 +893,14 @@ function renderSetup(): void {
   document
     .querySelectorAll<HTMLElement>("[data-setup-progress]")
     .forEach((item, index) => {
-      item.classList.toggle("complete", index < setupJourney.step);
+      const progressId = item.dataset.setupProgress as
+        (typeof setupSteps)[number]["id"] | undefined;
+      const progressState =
+        configured.status === "ready" && progressId
+          ? configured.settings.setup[progressId]
+          : null;
+      item.classList.toggle("complete", progressState?.verified != null);
+      item.classList.toggle("visited", progressState?.visited === true);
       item.classList.toggle("active", index === setupJourney.step);
       if (index === setupJourney.step)
         item.setAttribute("aria-current", "step");
@@ -651,6 +913,64 @@ function renderSetup(): void {
     setupJourney.step === setupSteps.length - 1 ? "Open Browser" : "Continue";
   required<HTMLButtonElement>("#setup-close").hidden =
     setupJourney.mode !== "review";
+  const liveAction = required<HTMLDivElement>("#setup-live-action");
+  const liveSummary = required<HTMLDivElement>("#setup-live-summary");
+  const livePrimary = required<HTMLButtonElement>("#setup-live-primary");
+  liveAction.hidden = false;
+  setupPrimaryAction = null;
+  if (configured.status === "error") {
+    liveSummary.textContent = `Settings cannot be changed: ${configured.error}`;
+    livePrimary.textContent = "Unavailable";
+    livePrimary.disabled = true;
+  } else if (step.id === "computer") {
+    const settings = configured.settings;
+    const workspace = settings.computer.workspaces[0];
+    const verified =
+      workspace !== undefined &&
+      settings.setup.computer.verified?.workspaceId === workspace.workspaceId &&
+      settings.setup.computer.verified.configRevision ===
+        settings.computer.generation;
+    liveSummary.textContent =
+      settings.computer.workspaces.length === 0
+        ? "Choose a folder with the native picker. It is saved as read-only."
+        : readinessDetail(settings.setup.computer);
+    livePrimary.textContent =
+      workspace === undefined
+        ? "Add folder…"
+        : verified
+          ? "Add another…"
+          : "Verify access";
+    livePrimary.disabled = false;
+    setupPrimaryAction = async () => {
+      if (!workspace || verified) {
+        await configureProduct(
+          { kind: "computer.add-workspace" },
+          "Read-only workspace saved and read back.",
+        );
+        return;
+      }
+      await configureProduct(
+        {
+          kind: "computer.verify-workspace",
+          workspaceId: workspace.workspaceId,
+        },
+        `${workspace.label} read access verified.`,
+      );
+    };
+  } else {
+    liveSummary.textContent = readinessState
+      ? readinessDetail(readinessState)
+      : "No readiness record is available.";
+    livePrimary.textContent =
+      step.id === "chatgpt"
+        ? "Sign-in unavailable"
+        : step.id === "connect"
+          ? "Connector unavailable"
+          : step.id === "hosts"
+            ? "Host setup unavailable"
+            : "Checks unavailable";
+    livePrimary.disabled = true;
+  }
   if (!dialog.open) dialog.showModal();
   const focusKey = `${setupJourney.mode}:${setupJourney.step}`;
   if (setupFocusKey !== focusKey) {
@@ -969,6 +1289,21 @@ async function start(): Promise<void> {
   bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
   windowState = bootstrap.windowState;
   selectedTaskId = bootstrap.tasks[0]?.taskId ?? "";
+  if (bootstrap.configuration.status === "ready") {
+    const settings = bootstrap.configuration.settings;
+    const persistedStep = Math.max(
+      0,
+      setupSteps.findIndex(
+        (step) => step.id === settings.setup.journey.currentStep,
+      ),
+    );
+    setupJourney = createSetupJourney({
+      open: !settings.setup.journey.dismissed,
+      step: persistedStep,
+    });
+    sidebarPreference = settings.general.sidebarDefault;
+    section = settings.general.openAtLaunch;
+  }
 
   document
     .querySelectorAll<HTMLButtonElement>(".nav-item")
@@ -1077,15 +1412,93 @@ async function start(): Promise<void> {
       );
     },
   );
+  required<HTMLButtonElement>("#apply-general-settings").addEventListener(
+    "click",
+    () => {
+      const openAtLaunch = required<HTMLSelectElement>(
+        "#setting-open-at-launch",
+      ).value;
+      const sidebarDefault = required<HTMLSelectElement>(
+        "#setting-sidebar-default",
+      ).value;
+      const activityDetail = required<HTMLSelectElement>(
+        "#setting-activity-detail",
+      ).value;
+      const command = ProductConfigurationCommandSchema.safeParse({
+        kind: "general.update",
+        openAtLaunch,
+        sidebarDefault,
+        activityDetail,
+      });
+      if (!command.success) return;
+      void configureProduct(command.data, "General settings applied.");
+    },
+  );
+  required<HTMLButtonElement>("#save-computer-name").addEventListener(
+    "click",
+    () => {
+      const name = required<HTMLInputElement>("#computer-name").value;
+      const command = ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.rename",
+        name,
+      });
+      if (!command.success) {
+        settingsFeedback = "Computer name must contain 1–80 characters.";
+        settingsFeedbackError = true;
+        render();
+        return;
+      }
+      void configureProduct(command.data, "Computer name saved.");
+    },
+  );
+  required<HTMLButtonElement>("#add-workspace").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "computer.add-workspace" },
+        "Read-only workspace saved and read back.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#setup-live-primary").addEventListener(
+    "click",
+    () => {
+      void setupPrimaryAction?.();
+    },
+  );
   required<HTMLButtonElement>("#setup-back").addEventListener("click", () => {
-    setupJourney = retreatSetup(setupJourney);
-    render();
+    const next = retreatSetup(setupJourney);
+    const step = setupSteps[next.step];
+    if (!step) return;
+    void configureProduct(
+      { kind: "setup.progress", currentStep: step.id, dismissed: false },
+      "Setup position saved.",
+    ).then((saved) => {
+      if (!saved) return;
+      setupJourney = next;
+      render();
+    });
   });
   required<HTMLButtonElement>("#setup-next").addEventListener("click", () => {
     const wasFirstRun = setupJourney.mode === "first-run";
-    setupJourney = advanceSetup(setupJourney);
-    if (!setupJourney.open && wasFirstRun) section = "browser";
-    render();
+    const next = advanceSetup(setupJourney);
+    const step = setupSteps[next.step];
+    if (!step) return;
+    void configureProduct(
+      {
+        kind: "setup.progress",
+        currentStep: step.id,
+        dismissed: !next.open,
+      },
+      next.open
+        ? "Setup position saved."
+        : "Setup saved. Limited mode is open.",
+    ).then((saved) => {
+      if (!saved) return;
+      setupJourney = next;
+      if (!setupJourney.open && wasFirstRun) section = "browser";
+      render();
+    });
   });
   required<HTMLButtonElement>("#setup-close").addEventListener("click", () => {
     setupJourney = { ...setupJourney, open: false };

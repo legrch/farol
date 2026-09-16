@@ -54,6 +54,10 @@ describe("Farol Next product configuration", () => {
     });
     expect(workspace.ok).toBe(true);
     expect(workspace.snapshot.status).toBe("ready");
+    await first.setSetupJourney({
+      currentStep: "computer",
+      dismissed: false,
+    });
 
     const restarted = new ProductConfigurationService(
       new ProductSettingsStore({ root }),
@@ -78,7 +82,12 @@ describe("Farol Next product configuration", () => {
       },
     ]);
     expect(snapshot.settings.setup.computer.configured).toBe(true);
+    expect(snapshot.settings.setup.computer.visited).toBe(true);
     expect(snapshot.settings.setup.computer.verified).toBeNull();
+    expect(snapshot.settings.setup.journey).toEqual({
+      currentStep: "computer",
+      dismissed: false,
+    });
   });
 
   it("keeps the last verified state when an atomic save fails", async () => {
@@ -116,6 +125,39 @@ describe("Farol Next product configuration", () => {
     );
     await readBack.initialize();
     expect(readBack.snapshot()).toEqual(before);
+  });
+
+  it("loads the initial preview schema before setup journey persistence", async () => {
+    const root = await stateRoot();
+    const original = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await original.initialize();
+    const settingsPath = path.join(root, "product-settings.json");
+    const legacy = JSON.parse(await fs.readFile(settingsPath, "utf8")) as {
+      setup?: Record<string, unknown>;
+    };
+    if (!legacy.setup) throw new Error("setup missing");
+    delete legacy.setup.journey;
+    await fs.writeFile(settingsPath, `${JSON.stringify(legacy, null, 2)}\n`, {
+      mode: 0o600,
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        setup: {
+          journey: { currentStep: "chatgpt", dismissed: false },
+        },
+      },
+    });
   });
 
   it("reports corrupt state without silently replacing it", async () => {

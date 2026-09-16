@@ -4,6 +4,8 @@ import { channels } from "../../pkg/ipc/channels";
 contextBridge.exposeInMainWorld("farolNext", {
   bootstrap: () => ipcRenderer.invoke(channels.bootstrap) as Promise<unknown>,
   snapshot: () => ipcRenderer.invoke(channels.snapshot) as Promise<unknown>,
+  configure: (command: unknown) =>
+    ipcRenderer.invoke(channels.configuration, command) as Promise<unknown>,
   control: (taskId: string, action: string) =>
     ipcRenderer.invoke(channels.control, {
       taskId,

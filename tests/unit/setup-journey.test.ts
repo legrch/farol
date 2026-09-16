@@ -40,6 +40,6 @@ describe("setup journey", () => {
     expect(retreatSetup(first)).toEqual(first);
 
     const reviewed = reopenSetup(advanceSetup(first));
-    expect(reviewed).toEqual({ open: true, mode: "review", step: 0 });
+    expect(reviewed).toEqual({ open: true, mode: "review", step: 1 });
   });
 });

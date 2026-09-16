@@ -542,6 +542,13 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
+  const workspaceRoot = path.join(isolatedHome, "approved-workspace");
+  await fs.mkdir(workspaceRoot, { mode: 0o700 });
+  await fs.writeFile(
+    path.join(workspaceRoot, "README.md"),
+    "Farol Next workspace verification fixture\n",
+    { mode: 0o600 },
+  );
   const launchArgs = [
     ...launchPrefix,
     `--user-data-dir=${userData}`,
@@ -550,6 +557,7 @@ async function launch(extraArgs = [], windowMode = "hidden") {
   ];
   const launchEnvironment = {
     FAROL_NEXT_E2E: "1",
+    FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -572,6 +580,7 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     window,
     isolatedHome,
     userData,
+    workspaceRoot,
     windowMode,
     presentation,
     launchArgs,
@@ -855,7 +864,8 @@ async function closeLegacyAppFixture(fixture) {
   await fs.rm(real, { recursive: true, force: true });
 }
 
-async function close(instance) {
+async function close(instance, options = {}) {
+  const removeHome = options.removeHome ?? true;
   if (instance.windowMode) {
     const presentation = await inspectWindowPresentation(instance.application);
     assert.equal(presentation.mode, instance.windowMode);
@@ -895,13 +905,31 @@ async function close(instance) {
     assert.equal(alive, false, `E2E_OWNED_PROCESS_SURVIVED_QUIT:${pid}`);
   }
   quitProofs += 1;
-  const real = path.resolve(instance.isolatedHome);
-  assert.ok(
-    real.startsWith(
-      `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
-    ),
+  if (removeHome) {
+    const real = path.resolve(instance.isolatedHome);
+    assert.ok(
+      real.startsWith(
+        `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
+      ),
+    );
+    await fs.rm(real, { recursive: true, force: true });
+  }
+}
+
+async function restart(instance) {
+  await close(instance, { removeHome: false });
+  instance.application = await electron.launch({
+    executablePath: executable,
+    args: instance.launchArgs,
+    env: instance.launchEnvironment,
+    timeout: 15_000,
+  });
+  instance.window = await instance.application.firstWindow({ timeout: 15_000 });
+  await instance.window.locator("#sidebar").waitFor({ state: "visible" });
+  instance.presentation = await waitForWindowPresentation(
+    instance.application,
+    instance.windowMode,
   );
-  await fs.rm(real, { recursive: true, force: true });
 }
 
 async function proveStartupRuntimeDeath(stage) {
@@ -1376,7 +1404,11 @@ const setupScreens = [
   ["verify", "setup-5-verify-wide.png"],
 ];
 
-async function completeSetup(instance, capture = false) {
+async function completeSetup(
+  instance,
+  capture = false,
+  configureComputer = false,
+) {
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
   assert.equal(
@@ -1395,14 +1427,69 @@ async function completeSetup(instance, capture = false) {
     assert.match(await dialog.innerText(), /Step [1-5] of 5/u);
     assert.match(
       await dialog.innerText(),
-      /Not connected|Preview only|Local only|Not configured|Verified locally/u,
+      /Needs action|Configured · verify|Verified|Unavailable|Outcome unknown|Reachable · verify/u,
     );
+    if (stepId === "computer" && configureComputer) {
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-live-primary")?.textContent ===
+          "Verify access",
+      );
+      let bootstrap = await instance.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(
+        bootstrap.configuration.settings.computer.workspaces.length,
+        1,
+      );
+      assert.equal(
+        bootstrap.configuration.settings.setup.computer.verified,
+        null,
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+          "Verified",
+      );
+      bootstrap = await instance.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(
+        bootstrap.configuration.settings.setup.computer.verified.workspaceId,
+        bootstrap.configuration.settings.computer.workspaces[0].workspaceId,
+      );
+    }
     if (capture) {
       await instance.window.screenshot({
         path: path.join(evidenceRoot, screenshot),
       });
     }
+    if (stepId === "verify" && configureComputer) {
+      assert.equal(
+        await instance.window
+          .locator('[data-setup-progress="computer"].complete')
+          .count(),
+        1,
+      );
+      assert.equal(
+        await instance.window
+          .locator('[data-setup-progress="chatgpt"].complete')
+          .count(),
+        0,
+      );
+    }
     await instance.window.locator("#setup-next").click();
+    if (stepId !== "verify") {
+      await instance.window.waitForFunction(
+        (previous) =>
+          document
+            .querySelector("#setup-dialog")
+            ?.getAttribute("data-step-id") !== previous,
+        stepId,
+      );
+    }
   }
   await dialog.waitFor({ state: "hidden" });
 }
@@ -1463,7 +1550,7 @@ try {
       `E2E_RUNTIME_NOT_READY:${runtimeLabel}:${await normal.window.locator("#settings-list").innerText()}`,
     );
   }
-  await completeSetup(normal, true);
+  await completeSetup(normal, true, true);
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
     () => document.documentElement.dataset.windowActive === "false",
@@ -1860,10 +1947,61 @@ try {
     ),
     "settings",
   );
+  await normal.window.locator("#diagnostics-group").evaluate((element) => {
+    element.open = true;
+  });
   assert.match(
     await normal.window.locator("#settings-list").innerText(),
     /local\.farol\.next\.preview/u,
   );
+  await normal.window.locator("#computer-name").fill("Owner Test Mac");
+  await normal.window.locator("#save-computer-name").click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("Computer name saved.", { exact: true })
+    .waitFor();
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByText(/not verified/u)
+    .waitFor();
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByRole("button", { name: "Verify", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-workspaces")
+    .getByText(/read-only · verified/u)
+    .waitFor();
+  await normal.window
+    .locator("#setting-open-at-launch")
+    .selectOption("settings");
+  await normal.window.locator("#setting-sidebar-default").selectOption("rail");
+  await normal.window
+    .locator("#setting-activity-detail")
+    .selectOption("technical");
+  await normal.window.locator("#apply-general-settings").click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("General settings applied.", { exact: true })
+    .waitFor();
+  const configuredBootstrap = await normal.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(configuredBootstrap.configuration.status, "ready");
+  assert.equal(
+    configuredBootstrap.configuration.settings.computer.name,
+    "Owner Test Mac",
+  );
+  assert.deepEqual(configuredBootstrap.configuration.settings.general, {
+    openAtLaunch: "settings",
+    sidebarDefault: "rail",
+    activityDetail: "technical",
+  });
+  assert.equal(
+    configuredBootstrap.configuration.settings.computer.workspaces[0].root,
+    normal.workspaceRoot,
+  );
+  assert.ok(configuredBootstrap.configuration.settings.setup.computer.verified);
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "settings-compact.png"),
   });
@@ -1871,7 +2009,7 @@ try {
   const reviewedSetup = normal.window.locator("#setup-dialog");
   await reviewedSetup.waitFor({ state: "visible" });
   assert.equal(await reviewedSetup.getAttribute("data-mode"), "review");
-  assert.equal(await reviewedSetup.getAttribute("data-step-id"), "chatgpt");
+  assert.equal(await reviewedSetup.getAttribute("data-step-id"), "verify");
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "setup-review-compact.png"),
   });
@@ -2048,6 +2186,47 @@ try {
     ),
     1,
   );
+  await restart(normal);
+  await normal.window.locator("#setup-dialog").waitFor({ state: "hidden" });
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
+  await normal.window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  const restartedBootstrap = await normal.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(restartedBootstrap.configuration.status, "ready");
+  const restartedSettings = restartedBootstrap.configuration.settings;
+  assert.equal(restartedSettings.computer.name, "Owner Test Mac");
+  assert.deepEqual(restartedSettings.general, {
+    openAtLaunch: "settings",
+    sidebarDefault: "rail",
+    activityDetail: "technical",
+  });
+  assert.equal(restartedSettings.computer.workspaces.length, 1);
+  assert.equal(
+    restartedSettings.computer.workspaces[0].root,
+    normal.workspaceRoot,
+  );
+  assert.equal(
+    restartedSettings.setup.computer.verified.workspaceId,
+    restartedSettings.computer.workspaces[0].workspaceId,
+  );
+  assert.equal(
+    restartedSettings.setup.computer.verified.configRevision,
+    restartedSettings.computer.generation,
+  );
+  assert.deepEqual(restartedSettings.setup.journey, {
+    currentStep: "verify",
+    dismissed: true,
+  });
+  const settingsRoot = path.join(normal.userData, "farol-next-state");
+  const settingsPath = path.join(settingsRoot, "product-settings.json");
+  assert.equal((await fs.stat(settingsRoot)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(settingsPath)).mode & 0o777, 0o600);
+  const savedSettings = await fs.readFile(settingsPath, "utf8");
+  assert.doesNotMatch(savedSettings, /workspace verification fixture/u);
+  assert.doesNotMatch(savedSettings, /Bearer|token|cookie|secret/u);
   cases.push(
     "visible-window-secondary-display",
     "visible-window-show-inactive",
@@ -2073,6 +2252,10 @@ try {
     "client-delivery-acknowledged",
     "first-run-setup-journey",
     "settings-setup-reentry",
+    "native-workspace-picker-save-readback",
+    "workspace-native-verification",
+    "settings-controls-persist-after-restart",
+    "setup-position-and-dismissal-persist",
     "mismatched-build-second-launch-rejected",
     "second-launch-reuses-single-instance",
     "window-close-reopen-keeps-runtime",

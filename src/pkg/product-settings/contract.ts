@@ -88,6 +88,12 @@ export const ProductSettingsSchema = z.strictObject({
     workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
   }),
   setup: z.strictObject({
+    journey: z
+      .strictObject({
+        currentStep: SetupStepIdSchema,
+        dismissed: z.boolean(),
+      })
+      .default({ currentStep: "chatgpt", dismissed: false }),
     chatgpt: SetupReadinessSchema,
     computer: SetupReadinessSchema,
     connect: SetupReadinessSchema,
@@ -114,6 +120,48 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
   ],
 );
 
+export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
+  ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
+  z.strictObject({
+    kind: z.literal("computer.rename"),
+    name: z.string().trim().min(1).max(80),
+  }),
+  z.strictObject({ kind: z.literal("computer.add-workspace") }),
+  z.strictObject({
+    kind: z.literal("computer.remove-workspace"),
+    workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.verify-workspace"),
+    workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("setup.progress"),
+    currentStep: SetupStepIdSchema,
+    dismissed: z.boolean(),
+  }),
+]);
+
+export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
+  z.strictObject({
+    ok: z.literal(true),
+    snapshot: ProductConfigurationSnapshotSchema,
+  }),
+  z.strictObject({
+    ok: z.literal(false),
+    error: z.enum([
+      "SETTINGS_UNAVAILABLE",
+      "SETTINGS_INPUT_INVALID",
+      "SETTINGS_WRITE_FAILED",
+      "WORKSPACE_NOT_FOUND",
+      "WORKSPACE_PICKER_CANCELLED",
+      "WORKSPACE_SELECTION_INVALID",
+      "WORKSPACE_VERIFICATION_FAILED",
+    ]),
+    snapshot: ProductConfigurationSnapshotSchema,
+  }),
+]);
+
 export type ProductGeneralSettings = z.infer<
   typeof ProductGeneralSettingsSchema
 >;
@@ -124,4 +172,10 @@ export type SetupStepId = z.infer<typeof SetupStepIdSchema>;
 export type ProductSettings = z.infer<typeof ProductSettingsSchema>;
 export type ProductConfigurationSnapshot = z.infer<
   typeof ProductConfigurationSnapshotSchema
+>;
+export type ProductConfigurationCommand = z.infer<
+  typeof ProductConfigurationCommandSchema
+>;
+export type ProductConfigurationResult = z.infer<
+  typeof ProductConfigurationResultSchema
 >;

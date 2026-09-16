@@ -98,6 +98,7 @@ function defaultSettings(id: () => string): ProductSettings {
       workspaces: [],
     },
     setup: {
+      journey: { currentStep: "chatgpt", dismissed: false },
       chatgpt: readiness("Sign in to the isolated Farol Next browser."),
       computer: readiness("Add a read-only workspace."),
       connect: readiness("Configure the Next-only Computer connection."),
@@ -334,6 +335,33 @@ export class ProductConfigurationService {
     });
   }
 
+  async renameComputer(input: unknown): Promise<MutationResult> {
+    const parsed = z.string().trim().min(1).max(80).safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      computer: {
+        ...settings.computer,
+        generation: settings.computer.generation + 1,
+        name: parsed.data,
+      },
+      setup: {
+        ...settings.setup,
+        computer: {
+          ...settings.setup.computer,
+          reachable: "unknown",
+          verified: null,
+          needsAction:
+            settings.computer.workspaces.length > 0
+              ? "Verify read access after changing This Mac."
+              : "Add a read-only workspace.",
+          outcomeUnknown: false,
+        },
+      },
+    }));
+  }
+
   async removeWorkspace(workspaceId: string): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
     if (
@@ -419,6 +447,32 @@ export class ProductConfigurationService {
       setup: {
         ...settings.setup,
         [parsed.data]: { ...settings.setup[parsed.data], visited: true },
+      },
+    }));
+  }
+
+  async setSetupJourney(input: unknown): Promise<MutationResult> {
+    const parsed = z
+      .strictObject({
+        currentStep: SetupStepIdSchema,
+        dismissed: z.boolean(),
+      })
+      .safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      setup: {
+        ...settings.setup,
+        [settings.setup.journey.currentStep]: {
+          ...settings.setup[settings.setup.journey.currentStep],
+          visited: true,
+        },
+        journey: parsed.data,
+        [parsed.data.currentStep]: {
+          ...settings.setup[parsed.data.currentStep],
+          visited: true,
+        },
       },
     }));
   }

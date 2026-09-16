@@ -1,6 +1,7 @@
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   Menu,
   screen,
@@ -11,6 +12,7 @@ import {
   type MenuItemConstructorOptions,
   type UtilityProcess,
 } from "electron";
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
@@ -18,6 +20,11 @@ import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
+import {
+  ProductConfigurationCommandSchema,
+  ProductConfigurationResultSchema,
+  type ProductConfigurationResult,
+} from "../../pkg/product-settings/contract";
 import {
   ShellLayoutSchema,
   type ShellOverlay,
@@ -49,13 +56,25 @@ import {
   previewStartupDelay,
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
+import {
+  ProductConfigurationService,
+  ProductSettingsStore,
+} from "./product-configuration";
 import { deriveSurfaceLayout } from "./surface-layout";
+import {
+  NativeReadonlyWorkspace,
+  NEXT_SAFE_OPEN_HELPER,
+} from "../../modules/computer/infra/native/native-readonly-workspace";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
 const launchIdentity = readBuildLaunchIdentity(directory);
+const nativeWorkspace = new NativeReadonlyWorkspace({
+  helperPath: path.join(directory, "computer-safe-open.py"),
+  helper: NEXT_SAFE_OPEN_HELPER,
+});
 const instanceRequest = createInstanceRequest(launchIdentity);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
 const primaryStartup = new PrimaryStartup();
@@ -126,6 +145,7 @@ let selectedTaskId: string = demoTasks[0].taskId;
 let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
+let configuration: ProductConfigurationService | null = null;
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
@@ -145,6 +165,10 @@ function bootstrap() {
     productName,
     bundleId,
     build: buildIdentity,
+    configuration: configuration?.snapshot() ?? {
+      status: "error",
+      error: "SETTINGS_READ_FAILED",
+    },
     runtimeState,
     runtimeError,
     runtimeIdentity: runtime?.identity ?? null,
@@ -165,6 +189,132 @@ function bootstrap() {
     liveProvider: false,
     windowState: currentWindowState(),
   };
+}
+
+function configurationFailure(
+  error: Extract<ProductConfigurationResult, { ok: false }>["error"],
+): ProductConfigurationResult {
+  return ProductConfigurationResultSchema.parse({
+    ok: false,
+    error,
+    snapshot: configuration?.snapshot() ?? {
+      status: "error",
+      error: "SETTINGS_READ_FAILED",
+    },
+  });
+}
+
+async function selectedWorkspace(): Promise<
+  Readonly<{ root: string; label: string }> | "cancelled" | "invalid"
+> {
+  let selected: string | undefined;
+  const testRoot =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_WORKSPACE_ROOT
+      : undefined;
+  if (testRoot) {
+    selected = testRoot;
+  } else {
+    if (!window) return "invalid";
+    const result = await dialog.showOpenDialog(window, {
+      title: "Add a read-only workspace",
+      buttonLabel: "Add Workspace",
+      properties: ["openDirectory"],
+      securityScopedBookmarks: false,
+    });
+    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
+    selected = result.filePaths[0];
+  }
+  if (!selected || !path.isAbsolute(selected)) return "invalid";
+  try {
+    const listed = await lstat(selected);
+    if (!listed.isDirectory() || listed.isSymbolicLink()) return "invalid";
+    const root = await realpath(selected);
+    if (!path.isAbsolute(root)) return "invalid";
+    return { root, label: path.basename(root) || root };
+  } catch {
+    return "invalid";
+  }
+}
+
+async function configureProduct(
+  value: unknown,
+): Promise<ProductConfigurationResult> {
+  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  const parsed = ProductConfigurationCommandSchema.safeParse(value);
+  if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
+  const command = parsed.data;
+  switch (command.kind) {
+    case "general.update":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.updateGeneral({
+          openAtLaunch: command.openAtLaunch,
+          sidebarDefault: command.sidebarDefault,
+          activityDetail: command.activityDetail,
+        }),
+      );
+    case "computer.rename":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.renameComputer(command.name),
+      );
+    case "computer.add-workspace": {
+      const selected = await selectedWorkspace();
+      if (selected === "cancelled") {
+        return configurationFailure("WORKSPACE_PICKER_CANCELLED");
+      }
+      if (selected === "invalid") {
+        return configurationFailure("WORKSPACE_SELECTION_INVALID");
+      }
+      return ProductConfigurationResultSchema.parse(
+        await configuration.addReadonlyWorkspace(selected),
+      );
+    }
+    case "computer.remove-workspace":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.removeWorkspace(command.workspaceId),
+      );
+    case "computer.verify-workspace": {
+      const snapshot = configuration.snapshot();
+      const workspace =
+        snapshot.status === "ready"
+          ? snapshot.settings.computer.workspaces.find(
+              (candidate) => candidate.workspaceId === command.workspaceId,
+            )
+          : undefined;
+      if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
+      const result = await nativeWorkspace.execute({
+        workspace: {
+          workspaceId: workspace.workspaceId,
+          root: workspace.root,
+          deniedPaths: workspace.excludedPaths.flatMap((excluded) => {
+            const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
+            return excluded.startsWith(prefix)
+              ? [excluded.slice(prefix.length)]
+              : [];
+          }),
+        },
+        operation: { kind: "workspace.list", relativePath: "." },
+      });
+      if (!result.ok || result.value.kind !== "workspace.entries") {
+        return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+      }
+      return ProductConfigurationResultSchema.parse(
+        await configuration.recordComputerVerification(workspace.workspaceId, {
+          profile: "computer.local.readonly/1",
+          runtimeGeneration: `${runtime?.identity ?? "runtime-offline"}:${buildIdentity.buildId}`,
+          buildId: buildIdentity.buildId,
+          protocol: "readonly-workspace/1",
+        }),
+      );
+    }
+    case "setup.progress":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.setSetupJourney({
+          currentStep: command.currentStep,
+          dismissed: command.dismissed,
+        }),
+      );
+  }
 }
 
 function currentRuntimeStatus(): RuntimeStatus {
@@ -696,6 +846,11 @@ function installIpc(): void {
       ? runtimeJson("/snapshot")
       : { error: "IPC_SENDER_DENIED" },
   );
+  ipcMain.handle(channels.configuration, (event, value: unknown) =>
+    event.sender === window?.webContents
+      ? configureProduct(value)
+      : configurationFailure("SETTINGS_UNAVAILABLE"),
+  );
   ipcMain.handle(channels.control, async (event, value: unknown) => {
     if (event.sender !== window?.webContents)
       return { error: "IPC_SENDER_DENIED" };
@@ -911,6 +1066,18 @@ async function main(): Promise<void> {
     },
   );
   await app.whenReady();
+  configuration = new ProductConfigurationService(
+    new ProductSettingsStore({
+      root: path.join(app.getPath("userData"), "farol-next-state"),
+    }),
+  );
+  await configuration.initialize();
+  const configured = configuration.snapshot();
+  if (configured.status === "ready") {
+    section = configured.settings.general.openAtLaunch;
+    sidebarMode = configured.settings.general.sidebarDefault;
+    setupOpen = !configured.settings.setup.journey.dismissed;
+  }
   if (startupDelayMs > 0) await delay(startupDelayMs);
   installIpc();
   installApplicationMenu();

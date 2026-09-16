@@ -1069,6 +1069,206 @@ html:not([data-section="browser"]) .surface {
   font-family: var(--font-mono);
 }
 
+.settings-feedback {
+  min-height: 18px;
+  max-width: 940px;
+  margin: -18px 0 14px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.settings-feedback.error {
+  color: var(--failed);
+}
+
+.settings-group {
+  max-width: 940px;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  padding: 18px;
+  background: var(--surface-raised);
+}
+
+.settings-group > header,
+.settings-group-actions,
+.computer-name-field > span,
+.workspace-row,
+.connection-row {
+  display: flex;
+  align-items: center;
+}
+
+.settings-group > header,
+.settings-group-actions,
+.workspace-row,
+.connection-row {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.settings-group > header p,
+.settings-group > header h2 {
+  margin: 0;
+}
+
+.settings-group > header p {
+  margin-bottom: 4px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-group > header h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-controls {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.settings-controls label,
+.computer-name-field {
+  display: grid;
+  gap: 7px;
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.settings-controls select,
+.computer-name-field input {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+}
+
+.computer-name-field {
+  margin-top: 18px;
+}
+
+.computer-name-field > span {
+  gap: 8px;
+}
+
+.settings-group button,
+.workspace-row button,
+.setup-live-action button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 13px;
+  background: var(--surface-soft);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.settings-group button:hover:not(:disabled),
+.setup-live-action button:hover:not(:disabled) {
+  border-color: var(--iris-bright);
+  background: var(--iris-soft);
+}
+
+.settings-group button:disabled,
+.setup-live-action button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.settings-group-actions {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.settings-group-actions > span {
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.workspace-list,
+.connection-readiness {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.workspace-row,
+.connection-row {
+  min-height: 54px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.workspace-row > div,
+.connection-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.workspace-row strong,
+.connection-row strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-row small,
+.connection-row small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.readiness-badge {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 9px;
+  color: var(--text-soft);
+  font-size: 9px;
+}
+
+.readiness-badge.verified {
+  border-color: color-mix(in srgb, var(--complete), transparent 45%);
+  color: var(--complete);
+}
+
+.diagnostics-group summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 580;
+}
+
+.diagnostics-group[open] summary {
+  margin-bottom: 18px;
+}
+
 .font-notice,
 .settings-action {
   max-width: 940px;
@@ -1491,6 +1691,28 @@ dialog::backdrop {
   background: var(--text-faint);
 }
 
+.setup-live-action {
+  min-height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line-soft);
+  padding-top: 14px;
+}
+
+.setup-live-action > div {
+  min-width: 0;
+  color: var(--text-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.setup-live-action[hidden] {
+  display: none;
+}
+
 .setup-actions {
   grid-column: 2;
   display: flex;
@@ -1561,6 +1783,10 @@ html[data-window-active="false"] .primary-action:not(:focus-visible) {
 
   .activity-list time {
     display: none;
+  }
+
+  .settings-controls {
+    grid-template-columns: 1fr;
   }
 }
 

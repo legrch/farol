@@ -283,32 +283,124 @@
 
       <section class="panel content-panel" data-panel="settings">
         <div class="panel-heading">
-          <p>Isolated identity</p>
+          <p>Product configuration</p>
           <h1>Settings</h1>
           <span
-            >Farol Next runs beside the legacy product without sharing its state
-            or route.</span
+            >Changes are saved to Farol Next state only and read back before
+            they are shown as applied.</span
           >
         </div>
-        <dl class="settings-list" id="settings-list"></dl>
-        <article class="font-notice">
-          <div class="font-sample" aria-hidden="true">Ag</div>
-          <div>
-            <strong>Geist 1.7.2</strong>
+        <p class="settings-feedback" id="settings-feedback" role="status"></p>
+        <section
+          class="settings-group"
+          aria-labelledby="settings-general-title"
+        >
+          <header>
+            <div>
+              <p>General</p>
+              <h2 id="settings-general-title">Window and activity</h2>
+            </div>
+          </header>
+          <div class="settings-controls">
+            <label
+              >Open at launch
+              <select id="setting-open-at-launch">
+                <option value="browser">Browser</option>
+                <option value="activity">Activity</option>
+                <option value="settings">Settings</option>
+              </select>
+            </label>
+            <label
+              >Default sidebar
+              <select id="setting-sidebar-default">
+                <option value="full">Full sidebar</option>
+                <option value="rail">Icon rail</option>
+              </select>
+            </label>
+            <label
+              >Activity detail
+              <select id="setting-activity-detail">
+                <option value="summary">Meaningful transitions</option>
+                <option value="technical">Technical trace</option>
+              </select>
+            </label>
+          </div>
+          <div class="settings-group-actions">
+            <span>Applies now where possible and on the next launch.</span>
+            <button id="apply-general-settings" type="button">Apply</button>
+          </div>
+        </section>
+
+        <section
+          class="settings-group"
+          aria-labelledby="settings-computer-title"
+        >
+          <header>
+            <div>
+              <p>Computer</p>
+              <h2 id="settings-computer-title">This Mac and workspaces</h2>
+            </div>
+            <span class="readiness-badge" id="computer-readiness"></span>
+          </header>
+          <label class="computer-name-field"
+            >Computer name
             <span
-              >Bundled under the SIL Open Font License 1.1. SF Pro and the
-              system sans-serif remain the fallback for scripts outside the
-              verified Latin coverage.</span
+              ><input id="computer-name" maxlength="80" /><button
+                id="save-computer-name"
+                type="button"
+              >
+                Save
+              </button></span
             >
+          </label>
+          <div class="workspace-list" id="settings-workspaces"></div>
+          <div class="settings-group-actions">
+            <span
+              >New folders begin read-only. Secrets stay denied by the native
+              helper.</span
+            >
+            <button id="add-workspace" type="button">Add folder…</button>
           </div>
-        </article>
-        <div class="settings-action">
-          <div>
-            <strong>Setup journey</strong
-            ><span>Review each connection boundary and its current proof.</span>
+        </section>
+
+        <section
+          class="settings-group"
+          aria-labelledby="settings-connections-title"
+        >
+          <header>
+            <div>
+              <p>ChatGPT and connections</p>
+              <h2 id="settings-connections-title">Current readiness</h2>
+            </div>
+          </header>
+          <div class="connection-readiness" id="connection-readiness"></div>
+          <div class="settings-group-actions">
+            <span
+              >Setup keeps authentication, connector and native-host proof
+              separate.</span
+            >
+            <button id="review-setup" type="button">Review setup</button>
           </div>
-          <button id="review-setup" type="button">Review setup</button>
-        </div>
+        </section>
+
+        <details
+          class="settings-group diagnostics-group"
+          id="diagnostics-group"
+        >
+          <summary>About &amp; Diagnostics</summary>
+          <dl class="settings-list" id="settings-list"></dl>
+          <article class="font-notice">
+            <div class="font-sample" aria-hidden="true">Ag</div>
+            <div>
+              <strong>Geist 1.7.2</strong>
+              <span
+                >Bundled under the SIL Open Font License 1.1. SF Pro and the
+                system sans-serif remain the fallback for scripts outside the
+                verified Latin coverage.</span
+              >
+            </div>
+          </article>
+        </details>
       </section>
     </main>
 
@@ -393,6 +485,10 @@
             <i></i><strong></strong>
           </div>
           <ul class="setup-details" id="setup-details"></ul>
+          <div class="setup-live-action" id="setup-live-action">
+            <div id="setup-live-summary"></div>
+            <button id="setup-live-primary" type="button"></button>
+          </div>
         </section>
         <footer class="setup-actions">
           <span id="setup-counter"></span>

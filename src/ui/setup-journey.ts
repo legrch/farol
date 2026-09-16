@@ -3,8 +3,6 @@ export type SetupStep = Readonly<{
   eyeline: string;
   title: string;
   copy: string;
-  status: string;
-  tone: "available" | "limited" | "blocked";
   details: readonly string[];
 }>;
 
@@ -19,36 +17,30 @@ export const setupSteps: readonly SetupStep[] = [
     id: "chatgpt",
     eyeline: "ChatGPT",
     title: "Keep the signed-in route separate",
-    copy: "Farol Next will use its own authenticated Browser route. This preview never borrows or changes the installed provider profile.",
-    status: "Not connected",
-    tone: "blocked",
+    copy: "Farol Next will use its own authenticated Browser route. Sign-in stays unavailable until the supported Electron gate is closed, and this build never borrows the installed provider profile.",
     details: [
-      "The controlled local provider remains available for this preview.",
-      "No ChatGPT login, cookies, or provider slot are read from the old lane.",
+      "No ChatGPT route is configured in this build.",
+      "No login, cookies, or provider slot are read from the old lane.",
     ],
   },
   {
     id: "computer",
     eyeline: "Computer",
     title: "Confirm what This Mac may expose",
-    copy: "Computer access starts closed and capability-bound. The preview offers one synthetic fixture check and nothing from your filesystem.",
-    status: "Preview only",
-    tone: "limited",
+    copy: "Computer access starts closed and capability-bound. Choose a folder with the native picker, then verify its read-only boundary before a task may use it.",
     details: [
-      "Available: synthetic workspace status after explicit approval.",
-      "Unavailable: files, commands, screenshots, and native host actions.",
+      "This verification lists only the selected workspace root; it does not read file contents.",
+      "Writes, commands, screenshots, and native host actions remain unavailable.",
     ],
   },
   {
     id: "connect",
     eyeline: "Connect",
-    title: "Use the isolated local runtime",
-    copy: "The desktop shell and its utility runtime communicate over an OS-assigned loopback endpoint with per-run capabilities.",
-    status: "Local only",
-    tone: "available",
+    title: "Configure the Next-owned route",
+    copy: "A Computer connection is ready only after its Next-owned endpoint is saved, reached, and verified. Local shell transport alone is not connection proof.",
     details: [
-      "Two task surfaces have distinct read capabilities and retained state.",
-      "No tunnel, global MCP registration, login item, or update channel is enabled.",
+      "The isolated local shell runtime is available.",
+      "No Computer endpoint, tunnel, global registration, or login item is configured yet.",
     ],
   },
   {
@@ -56,8 +48,6 @@ export const setupSteps: readonly SetupStep[] = [
     eyeline: "Codex and Agent apps",
     title: "Leave native hosts untouched",
     copy: "Host integrations require their own bounded live proof. They remain disabled instead of being inferred from configuration files.",
-    status: "Not configured",
-    tone: "blocked",
     details: [
       "Native Codex task creation has not been exercised.",
       "Native Agent creation and a real Consult have not been exercised.",
@@ -67,18 +57,22 @@ export const setupSteps: readonly SetupStep[] = [
     id: "verify",
     eyeline: "Verify",
     title: "Know exactly what is ready",
-    copy: "The local Browser stream and fixture Computer round-trip are available. Live ChatGPT, native hosts, and filesystem access remain separate gates.",
-    status: "Verified locally",
-    tone: "available",
+    copy: "Readiness is recorded per capability. A workspace counts only after the native read-only check; live ChatGPT, Computer routing, and native hosts remain separate gates.",
     details: [
-      "Ready here: isolated Browser tasks, local streaming, Activity, and fixture Computer.",
-      "Not run: live provider, native Codex, native Agent, and local filesystem.",
+      "Ready when shown: local shell runtime and explicitly verified workspace boundary.",
+      "Not run: live provider, Next-owned Computer route, native Codex, and native Agent.",
     ],
   },
 ];
 
-export function createSetupJourney(): SetupJourney {
-  return { open: true, mode: "first-run", step: 0 };
+export function createSetupJourney(
+  initial: Readonly<{ open?: boolean; step?: number }> = {},
+): SetupJourney {
+  const step = Math.min(
+    setupSteps.length - 1,
+    Math.max(0, Math.trunc(initial.step ?? 0)),
+  );
+  return { open: initial.open ?? true, mode: "first-run", step };
 }
 
 export function advanceSetup(journey: SetupJourney): SetupJourney {
@@ -94,6 +88,6 @@ export function retreatSetup(journey: SetupJourney): SetupJourney {
   return { ...journey, step: journey.step - 1 };
 }
 
-export function reopenSetup(_journey: SetupJourney): SetupJourney {
-  return { open: true, mode: "review", step: 0 };
+export function reopenSetup(journey: SetupJourney): SetupJourney {
+  return { open: true, mode: "review", step: journey.step };
 }
