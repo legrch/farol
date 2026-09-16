@@ -315,6 +315,7 @@ export class ChatGptRoute {
         candidate.webContents,
       );
       closingTaskRunning = this.observedTaskRunning === true;
+      this.stopTaskActivityWatch();
     });
     candidate.on("closed", () => {
       this.stopTaskActivityWatch();
