@@ -53,6 +53,7 @@ const DEFAULT_DENIED_PATHS = Object.freeze([
   ".gnupg",
   ".codex",
   ".claude",
+  ".git",
   ".git-credentials",
   ".netrc",
   ".npmrc",

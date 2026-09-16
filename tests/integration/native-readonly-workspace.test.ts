@@ -162,6 +162,46 @@ describe("native readonly Computer workspace", () => {
     }
   });
 
+  it("hides Git internals from generic file tools", async () => {
+    await fs.mkdir(path.join(root, ".git"), { mode: 0o700 });
+    await fs.writeFile(
+      path.join(root, ".git", "config"),
+      "farol-git-internal-marker\n",
+      { mode: 0o600 },
+    );
+    const workspace = reader();
+
+    await expect(
+      workspace.execute(request({ kind: "workspace.list", relativePath: "." })),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        kind: "workspace.entries",
+        entries: ["README.md", "src/"],
+      },
+    });
+    await expect(
+      workspace.execute(
+        request({ kind: "workspace.read", relativePath: ".git/config" }),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_PATH_REFUSED", retry: "never" },
+    });
+    await expect(
+      workspace.execute(
+        request({
+          kind: "workspace.search",
+          relativePath: ".",
+          pattern: "farol-git-internal-marker",
+        }),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { kind: "workspace.matches", matches: [] },
+    });
+  });
+
   it("keeps reading the opened ancestor when its pathname is swapped", async () => {
     await fs.mkdir(path.join(root, "stable"), { mode: 0o700 });
     await fs.mkdir(path.join(root, "stable", "nested"), { mode: 0o700 });
