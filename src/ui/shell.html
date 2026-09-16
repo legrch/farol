@@ -450,6 +450,51 @@
     </dialog>
 
     <dialog
+      class="context-preview"
+      id="context-preview"
+      aria-labelledby="context-preview-title"
+      aria-describedby="context-preview-note"
+    >
+      <header>
+        <p>Selected context</p>
+        <h2 id="context-preview-title">Review before sending</h2>
+      </header>
+      <dl>
+        <div>
+          <dt>File</dt>
+          <dd id="context-preview-file"></dd>
+        </div>
+        <div>
+          <dt>Scope</dt>
+          <dd id="context-preview-scope"></dd>
+        </div>
+        <div>
+          <dt>Context</dt>
+          <dd id="context-preview-budget"></dd>
+        </div>
+        <div>
+          <dt>Expires</dt>
+          <dd id="context-preview-expiry"></dd>
+        </div>
+      </dl>
+      <section>
+        <strong>Custom exclusions</strong>
+        <ul id="context-preview-exclusions"></ul>
+      </section>
+      <p id="context-preview-note">
+        File contents stay in main-process memory for this preview and are not
+        shown or saved here. Send once has no automatic retry after a possible
+        submission.
+      </p>
+      <footer>
+        <button id="context-preview-cancel" type="button">Cancel</button>
+        <button class="primary" id="context-preview-submit" type="button">
+          Send once
+        </button>
+      </footer>
+    </dialog>
+
+    <dialog
       class="setup-dialog"
       id="setup-dialog"
       aria-labelledby="setup-title"

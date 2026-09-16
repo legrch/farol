@@ -1644,6 +1644,128 @@ dialog::backdrop {
   font-size: 9px;
 }
 
+.context-preview {
+  width: min(580px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  margin: auto;
+  border: 1px solid #4a4653;
+  border-radius: 14px;
+  padding: 0;
+  overflow: auto;
+  background: #211f25;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.55);
+}
+
+.context-preview > header,
+.context-preview > dl,
+.context-preview > section,
+.context-preview > p,
+.context-preview > footer {
+  margin: 0;
+  padding: 18px 22px;
+}
+
+.context-preview > header,
+.context-preview > dl,
+.context-preview > section,
+.context-preview > p {
+  border-bottom: 1px solid var(--line);
+}
+
+.context-preview > header p,
+.context-preview > header h2 {
+  margin: 0;
+}
+
+.context-preview > header p {
+  margin-bottom: 5px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.context-preview > header h2 {
+  font-size: 18px;
+  font-weight: 620;
+}
+
+.context-preview > dl {
+  display: grid;
+  gap: 10px;
+}
+
+.context-preview > dl div {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.context-preview dt,
+.context-preview dd {
+  margin: 0;
+  font-size: 11px;
+}
+
+.context-preview dt {
+  color: var(--text-faint);
+}
+
+.context-preview dd {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.context-preview > section {
+  display: grid;
+  gap: 8px;
+}
+
+.context-preview > section strong {
+  color: var(--text-soft);
+  font-size: 10px;
+}
+
+.context-preview > section ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.context-preview > p {
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.context-preview > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.context-preview > footer button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 16px;
+  background: var(--surface-soft);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.context-preview > footer button.primary {
+  border-color: var(--iris-bright);
+  background: var(--iris);
+  color: #fff;
+}
+
 .setup-dialog {
   width: min(860px, calc(100vw - 48px));
   height: min(640px, calc(100vh - 48px));

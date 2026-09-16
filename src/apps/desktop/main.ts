@@ -13,8 +13,10 @@ import {
   type UtilityProcess,
 } from "electron";
 import { lstat, realpath } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import { channels } from "../../pkg/ipc/channels";
@@ -25,6 +27,7 @@ import {
   ProductConfigurationResultSchema,
   type ApprovedProductWorkspace,
   type ProductConfigurationResult,
+  type ProductSettings,
 } from "../../pkg/product-settings/contract";
 import {
   ShellLayoutSchema,
@@ -67,7 +70,10 @@ import {
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
 import { CHATGPT_HOME, CHATGPT_PARTITION } from "./chatgpt-page-policy";
-import { buildChatGptReadonlyTaskPrompt } from "./chatgpt-readonly-task";
+import {
+  MAX_CHATGPT_CONTEXT_CHARACTERS,
+  buildChatGptReadonlyTaskPrompt,
+} from "./chatgpt-readonly-task";
 import { ChatGptRoute } from "./chatgpt-route";
 
 const directory = __dirname;
@@ -154,6 +160,43 @@ let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
 let chatGptRoute: ChatGptRoute | null = null;
 let chatGptTaskAdmission = false;
+type ChatGptVerification = NonNullable<
+  ProductSettings["setup"]["chatgpt"]["verified"]
+>;
+type PendingChatGptReadonlyTask = Readonly<{
+  operationId: string;
+  workspaceId: string;
+  workspaceLabel: string;
+  computerGeneration: number;
+  relativePath: string;
+  bytes: number;
+  contextCharacters: number;
+  contextTruncated: boolean;
+  excludedPaths: readonly string[];
+  prompt: string;
+  chatGptVerification: ChatGptVerification;
+  expiresAt: number;
+}>;
+let pendingChatGptReadonlyTask: PendingChatGptReadonlyTask | null = null;
+
+function chatGptReadonlyTaskPreview(
+  pending: PendingChatGptReadonlyTask,
+): Readonly<Record<string, unknown>> {
+  return {
+    kind: "chatgpt.readonly-task-preview",
+    operationId: pending.operationId,
+    workspaceId: pending.workspaceId,
+    workspaceLabel: pending.workspaceLabel,
+    relativePath: pending.relativePath,
+    bytes: pending.bytes,
+    contextCharacters: pending.contextCharacters,
+    contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
+    contextTruncated: pending.contextTruncated,
+    excludedPaths: pending.excludedPaths,
+    expiresAt: new Date(pending.expiresAt).toISOString(),
+  };
+}
+
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
@@ -389,7 +432,7 @@ async function configureProduct(
         evidence: { kind: "chatgpt.readiness", ...observed },
       });
     }
-    case "chatgpt.run-readonly-task": {
+    case "chatgpt.prepare-readonly-task": {
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
@@ -405,6 +448,10 @@ async function configureProduct(
         if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
           return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
         }
+        const chatGptVerification = snapshot.settings.setup.chatgpt.verified;
+        if (!chatGptVerification) {
+          return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+        }
         const workspace = snapshot.settings.computer.workspaces.find(
           (candidate) => candidate.workspaceId === command.workspaceId,
         );
@@ -416,6 +463,25 @@ async function configureProduct(
             snapshot.settings.computer.generation
         ) {
           return configurationFailure("WORKSPACE_NOT_FOUND");
+        }
+        const pending = pendingChatGptReadonlyTask;
+        if (pending) {
+          const pendingStillCurrent =
+            Date.now() < pending.expiresAt &&
+            pending.computerGeneration ===
+              snapshot.settings.computer.generation &&
+            isDeepStrictEqual(pending.chatGptVerification, chatGptVerification);
+          if (pendingStillCurrent) {
+            if (pending.workspaceId !== workspace.workspaceId) {
+              return configurationFailure("CHATGPT_TASK_PREVIEW_PENDING");
+            }
+            return ProductConfigurationResultSchema.parse({
+              ok: true,
+              snapshot,
+              evidence: chatGptReadonlyTaskPreview(pending),
+            });
+          }
+          pendingChatGptReadonlyTask = null;
         }
         const relativePath = await selectedWorkspaceFile(workspace, {
           title: "Choose a text file for the read-only ChatGPT task",
@@ -446,7 +512,81 @@ async function configureProduct(
           relativePath,
           text: workspaceResult.value.text,
         });
-        const task = await chatGptRoute.runReadonlyTask(prompt.text);
+        const operationId = randomUUID();
+        const expiresAt = Date.now() + 10 * 60_000;
+        const excludedPaths = workspaceDeniedPaths(workspace);
+        pendingChatGptReadonlyTask = {
+          operationId,
+          workspaceId: workspace.workspaceId,
+          workspaceLabel: workspace.label,
+          computerGeneration: snapshot.settings.computer.generation,
+          relativePath,
+          bytes: workspaceResult.value.bytes,
+          contextCharacters: prompt.contextCharacters,
+          contextTruncated: prompt.contextTruncated,
+          excludedPaths,
+          prompt: prompt.text,
+          chatGptVerification,
+          expiresAt,
+        };
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot,
+          evidence: chatGptReadonlyTaskPreview(pendingChatGptReadonlyTask),
+        });
+      } finally {
+        chatGptTaskAdmission = false;
+      }
+    }
+    case "chatgpt.submit-readonly-task": {
+      if (!chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      const pending = pendingChatGptReadonlyTask;
+      if (!pending || pending.operationId !== command.operationId) {
+        return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
+      }
+      if (Date.now() >= pending.expiresAt) {
+        pendingChatGptReadonlyTask = null;
+        return configurationFailure("CHATGPT_TASK_PREVIEW_EXPIRED");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      if (snapshot.settings.setup.chatgpt.outcomeUnknown) {
+        pendingChatGptReadonlyTask = null;
+        return configurationFailure("CHATGPT_TASK_REQUIRES_REVIEW");
+      }
+      if (
+        !isDeepStrictEqual(
+          snapshot.settings.setup.chatgpt.verified,
+          pending.chatGptVerification,
+        )
+      ) {
+        pendingChatGptReadonlyTask = null;
+        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+      }
+      const workspace = snapshot.settings.computer.workspaces.find(
+        (candidate) => candidate.workspaceId === pending.workspaceId,
+      );
+      const computerVerification = snapshot.settings.setup.computer.verified;
+      if (
+        !workspace ||
+        snapshot.settings.computer.generation !== pending.computerGeneration ||
+        computerVerification?.workspaceId !== pending.workspaceId ||
+        computerVerification.configRevision !== pending.computerGeneration
+      ) {
+        pendingChatGptReadonlyTask = null;
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      chatGptTaskAdmission = true;
+      pendingChatGptReadonlyTask = null;
+      try {
+        const task = await chatGptRoute.runReadonlyTask(pending.prompt);
         if (task.code === "CHATGPT_TASK_IN_PROGRESS") {
           return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
         }
@@ -475,13 +615,15 @@ async function configureProduct(
           ...recorded,
           evidence: {
             kind: "chatgpt.readonly-task",
+            operationId: pending.operationId,
             state: task.state,
             code: task.code,
-            workspaceId: workspace.workspaceId,
-            relativePath,
-            bytes: workspaceResult.value.bytes,
-            contextCharacters: prompt.contextCharacters,
-            contextTruncated: prompt.contextTruncated,
+            workspaceId: pending.workspaceId,
+            relativePath: pending.relativePath,
+            bytes: pending.bytes,
+            contextCharacters: pending.contextCharacters,
+            contextLimit: MAX_CHATGPT_CONTEXT_CHARACTERS,
+            contextTruncated: pending.contextTruncated,
             deltaCount: task.deltaCount,
             observedCharacters: task.observedCharacters,
           },
@@ -489,6 +631,22 @@ async function configureProduct(
       } finally {
         chatGptTaskAdmission = false;
       }
+    }
+    case "chatgpt.cancel-readonly-task": {
+      if (chatGptTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      if (
+        !pendingChatGptReadonlyTask ||
+        pendingChatGptReadonlyTask.operationId !== command.operationId
+      ) {
+        return configurationFailure("CHATGPT_TASK_PREVIEW_NOT_FOUND");
+      }
+      pendingChatGptReadonlyTask = null;
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+      });
     }
     case "general.update":
       return ProductConfigurationResultSchema.parse(

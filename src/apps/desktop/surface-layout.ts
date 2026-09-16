@@ -2,7 +2,8 @@ export type SurfaceSection = "browser" | "computer" | "activity" | "settings";
 
 export type SidebarMode = "full" | "rail" | "overlay";
 
-export type ShellOverlay = "none" | "sidebar" | "task-menu" | "quick-switcher";
+export type ShellOverlay =
+  "none" | "sidebar" | "task-menu" | "quick-switcher" | "context-preview";
 
 export const shellGeometry = Object.freeze({
   autoRailBelow: 980,

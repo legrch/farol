@@ -2296,12 +2296,39 @@ try {
     await normal.window.locator("#settings-list").innerText(),
     /local\.farol\.next\.preview/u,
   );
+  const reviewReadOnlyTask = normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Review read-only task…", exact: true });
+  await reviewReadOnlyTask.click();
+  const contextPreview = normal.window.locator("#context-preview");
+  await contextPreview.waitFor({ state: "visible" });
+  const previewText = await contextPreview.innerText();
+  assert.match(previewText, /approved-workspace \/ README\.md/u);
+  assert.match(previewText, /Read-only · one file · 42 bytes/u);
+  assert.match(previewText, /42 of 24,000 characters/u);
+  assert.match(
+    previewText,
+    /No custom exclusions · credential defaults remain denied/u,
+  );
+  assert.doesNotMatch(previewText, /workspace verification fixture/u);
+  await contextPreview.getByRole("button", { name: "Cancel" }).click();
+  await contextPreview.waitFor({ state: "hidden" });
+  await waitForWindowCount(normal.application, 1);
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("Context preview cancelled. Nothing was submitted.", {
+      exact: true,
+    })
+    .waitFor();
+  cases.push("chatgpt-context-preview-cancel");
+
+  await reviewReadOnlyTask.click();
+  await contextPreview.waitFor({ state: "visible" });
   const readOnlyTaskWindow = normal.application.waitForEvent("window", {
     timeout: 15_000,
   });
-  await normal.window
-    .locator("#connection-readiness")
-    .getByRole("button", { name: "Run read-only task…", exact: true })
+  await contextPreview
+    .getByRole("button", { name: "Send once", exact: true })
     .evaluate((button) => {
       button.click();
       button.click();

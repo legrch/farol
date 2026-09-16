@@ -175,8 +175,16 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
   z.strictObject({
-    kind: z.literal("chatgpt.run-readonly-task"),
+    kind: z.literal("chatgpt.prepare-readonly-task"),
     workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.submit-readonly-task"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("chatgpt.cancel-readonly-task"),
+    operationId: IdentifierSchema,
   }),
   z.strictObject({
     kind: z.literal("computer.rename"),
@@ -235,7 +243,25 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
       .nullable(),
   }),
   z.strictObject({
+    kind: z.literal("chatgpt.readonly-task-preview"),
+    operationId: IdentifierSchema,
+    workspaceId: IdentifierSchema,
+    workspaceLabel: z.string().trim().min(1).max(120),
+    relativePath: ProductRelativePathSchema,
+    bytes: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(256 * 1_024),
+    contextCharacters: z.number().int().nonnegative().max(24_000),
+    contextLimit: z.literal(24_000),
+    contextTruncated: z.boolean(),
+    excludedPaths: z.array(ProductRelativePathSchema).max(32),
+    expiresAt: CanonicalTimestampSchema,
+  }),
+  z.strictObject({
     kind: z.literal("chatgpt.readonly-task"),
+    operationId: IdentifierSchema,
     state: z.enum([
       "completed",
       "not_authenticated",
@@ -263,6 +289,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
       .nonnegative()
       .max(256 * 1_024),
     contextCharacters: z.number().int().nonnegative().max(24_000),
+    contextLimit: z.literal(24_000),
     contextTruncated: z.boolean(),
     deltaCount: z.number().int().nonnegative(),
     observedCharacters: z.number().int().nonnegative(),
@@ -319,7 +346,11 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
       "CHATGPT_ROUTE_UNAVAILABLE",
+      "CHATGPT_CONNECTION_NOT_VERIFIED",
       "CHATGPT_TASK_IN_PROGRESS",
+      "CHATGPT_TASK_PREVIEW_PENDING",
+      "CHATGPT_TASK_PREVIEW_NOT_FOUND",
+      "CHATGPT_TASK_PREVIEW_EXPIRED",
       "CHATGPT_TASK_REQUIRES_REVIEW",
       "WORKSPACE_NOT_FOUND",
       "WORKSPACE_PICKER_CANCELLED",

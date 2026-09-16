@@ -186,6 +186,11 @@ let workspaceEvidence: Extract<
       | "computer.workspace-search";
   }
 > | null = null;
+let pendingChatGptPreview: Extract<
+  ProductConfigurationEvidence,
+  { kind: "chatgpt.readonly-task-preview" }
+> | null = null;
+let contextPreviewBusy = false;
 let renderedSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
@@ -665,9 +670,13 @@ async function configureProduct(
     workspaceEvidence = null;
   }
   settingsFeedback =
-    command.kind === "chatgpt.run-readonly-task"
-      ? "Reading the selected file and waiting for one ChatGPT result…"
-      : "Saving and reading back…";
+    command.kind === "chatgpt.prepare-readonly-task"
+      ? "Reading the selected file for review…"
+      : command.kind === "chatgpt.submit-readonly-task"
+        ? "Submitting once and waiting for one ChatGPT result…"
+        : command.kind === "chatgpt.cancel-readonly-task"
+          ? "Discarding the prepared context…"
+          : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -683,6 +692,13 @@ async function configureProduct(
   bootstrap = { ...bootstrap, configuration: parsed.data.snapshot };
   renderedSettingsRevision = -1;
   if (!parsed.data.ok) {
+    if (
+      command.kind === "chatgpt.submit-readonly-task" ||
+      command.kind === "chatgpt.cancel-readonly-task"
+    ) {
+      pendingChatGptPreview = null;
+      if (shellOverlay === "context-preview") shellOverlay = "none";
+    }
     settingsFeedback =
       parsed.data.error === "WORKSPACE_PICKER_CANCELLED" ||
       parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED"
@@ -719,7 +735,13 @@ async function configureProduct(
           : evidence.state === "unreachable"
             ? "The isolated ChatGPT page could not be reached."
             : "ChatGPT loaded, but its composer could not be verified.";
+  } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
+    pendingChatGptPreview = evidence;
+    shellOverlay = "context-preview";
+    settingsFeedback = `Review ${evidence.relativePath} before sending it once.`;
   } else if (evidence?.kind === "chatgpt.readonly-task") {
+    pendingChatGptPreview = null;
+    if (shellOverlay === "context-preview") shellOverlay = "none";
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
@@ -731,6 +753,10 @@ async function configureProduct(
             : `Task not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
   } else {
     settingsFeedback = successMessage;
+  }
+  if (command.kind === "chatgpt.cancel-readonly-task") {
+    pendingChatGptPreview = null;
+    if (shellOverlay === "context-preview") shellOverlay = "none";
   }
   settingsFeedbackError = evidenceError;
   if (
@@ -1089,7 +1115,7 @@ function renderSettings(): void {
         });
         const task = document.createElement("button");
         task.type = "button";
-        task.textContent = "Run read-only task…";
+        task.textContent = "Review read-only task…";
         const workspaceId = settings.setup.computer.verified?.workspaceId;
         task.disabled =
           !state.verified || workspaceId == null || state.outcomeUnknown;
@@ -1103,8 +1129,8 @@ function renderSettings(): void {
         task.addEventListener("click", () => {
           if (workspaceId == null) return;
           void configureProduct(
-            { kind: "chatgpt.run-readonly-task", workspaceId },
-            "Read-only ChatGPT task finished.",
+            { kind: "chatgpt.prepare-readonly-task", workspaceId },
+            "Read-only ChatGPT context prepared.",
           );
         });
         actions.append(open, verify, task);
@@ -1365,6 +1391,7 @@ function renderOverlayState(): void {
 
   const taskMenu = required<HTMLDialogElement>("#task-menu");
   const commandDialog = required<HTMLDialogElement>("#command-dialog");
+  const contextPreview = required<HTMLDialogElement>("#context-preview");
   if (shellOverlay === "task-menu" && !taskMenu.open) taskMenu.showModal();
   if (shellOverlay !== "task-menu" && taskMenu.open) taskMenu.close();
   if (shellOverlay === "quick-switcher" && !commandDialog.open) {
@@ -1375,6 +1402,39 @@ function renderOverlayState(): void {
   }
   if (shellOverlay !== "quick-switcher" && commandDialog.open) {
     commandDialog.close();
+  }
+  if (shellOverlay === "context-preview" && pendingChatGptPreview) {
+    const preview = pendingChatGptPreview;
+    required("#context-preview-file").textContent =
+      `${preview.workspaceLabel} / ${preview.relativePath}`;
+    required("#context-preview-scope").textContent =
+      `Read-only · one file · ${preview.bytes} bytes`;
+    required("#context-preview-budget").textContent =
+      `${preview.contextCharacters.toLocaleString()} of ${preview.contextLimit.toLocaleString()} characters${preview.contextTruncated ? " · truncated" : ""}`;
+    required("#context-preview-expiry").textContent = new Intl.DateTimeFormat(
+      undefined,
+      {
+        dateStyle: "medium",
+        timeStyle: "short",
+      },
+    ).format(new Date(preview.expiresAt));
+    const exclusions = required<HTMLUListElement>(
+      "#context-preview-exclusions",
+    );
+    const items =
+      preview.excludedPaths.length > 0
+        ? preview.excludedPaths.map((excluded) => `Excluded · ${excluded}`)
+        : ["No custom exclusions · credential defaults remain denied"];
+    exclusions.replaceChildren(
+      ...items.map((text) => {
+        const item = document.createElement("li");
+        item.textContent = text;
+        return item;
+      }),
+    );
+    if (!contextPreview.open) contextPreview.showModal();
+  } else if (contextPreview.open) {
+    contextPreview.close();
   }
   if (renderedOverlay !== shellOverlay) {
     renderedOverlay = shellOverlay;
@@ -1389,6 +1449,10 @@ function renderOverlayState(): void {
     } else if (shellOverlay === "quick-switcher") {
       queueMicrotask(() =>
         required<HTMLInputElement>("#command-search").focus(),
+      );
+    } else if (shellOverlay === "context-preview") {
+      queueMicrotask(() =>
+        required<HTMLButtonElement>("#context-preview-submit").focus(),
       );
     }
   }
@@ -1431,9 +1495,59 @@ function render(notify = true): void {
 }
 
 function closeOverlay(): void {
+  if (shellOverlay === "context-preview") {
+    void cancelContextPreview();
+    return;
+  }
   sidebarOverlayOpen = false;
   shellOverlay = "none";
   render();
+}
+
+async function cancelContextPreview(): Promise<void> {
+  if (contextPreviewBusy) return;
+  const preview = pendingChatGptPreview;
+  if (!preview) {
+    shellOverlay = "none";
+    render();
+    return;
+  }
+  contextPreviewBusy = true;
+  pendingChatGptPreview = null;
+  shellOverlay = "none";
+  render();
+  try {
+    await configureProduct(
+      {
+        kind: "chatgpt.cancel-readonly-task",
+        operationId: preview.operationId,
+      },
+      "Context preview cancelled. Nothing was submitted.",
+    );
+  } finally {
+    contextPreviewBusy = false;
+  }
+}
+
+async function submitContextPreview(): Promise<void> {
+  if (contextPreviewBusy) return;
+  const preview = pendingChatGptPreview;
+  if (!preview) return;
+  contextPreviewBusy = true;
+  pendingChatGptPreview = null;
+  shellOverlay = "none";
+  render();
+  try {
+    await configureProduct(
+      {
+        kind: "chatgpt.submit-readonly-task",
+        operationId: preview.operationId,
+      },
+      "Read-only ChatGPT task finished.",
+    );
+  } finally {
+    contextPreviewBusy = false;
+  }
 }
 
 function toggleSidebar(): void {
@@ -1674,6 +1788,21 @@ async function start(): Promise<void> {
       event.preventDefault();
       closeOverlay();
     },
+  );
+  required<HTMLDialogElement>("#context-preview").addEventListener(
+    "cancel",
+    (event) => {
+      event.preventDefault();
+      void cancelContextPreview();
+    },
+  );
+  required<HTMLButtonElement>("#context-preview-cancel").addEventListener(
+    "click",
+    () => void cancelContextPreview(),
+  );
+  required<HTMLButtonElement>("#context-preview-submit").addEventListener(
+    "click",
+    () => void submitContextPreview(),
   );
   required<HTMLInputElement>("#command-search").addEventListener(
     "input",

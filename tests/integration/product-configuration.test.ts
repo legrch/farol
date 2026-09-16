@@ -470,4 +470,74 @@ describe("Farol Next product configuration", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("separates ChatGPT context preparation from one-shot submission", () => {
+    const workspaceId = "00000000-0000-4000-8000-000000000001";
+    const operationId = "00000000-0000-4000-8000-000000000002";
+
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "chatgpt.prepare-readonly-task",
+        workspaceId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "chatgpt.submit-readonly-task",
+        operationId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "chatgpt.cancel-readonly-task",
+        operationId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "chatgpt.readonly-task-preview",
+        operationId,
+        workspaceId,
+        workspaceLabel: "Owner workspace",
+        relativePath: "README.md",
+        bytes: 42,
+        contextCharacters: 42,
+        contextLimit: 24_000,
+        contextTruncated: false,
+        excludedPaths: ["private"],
+        expiresAt: "2026-09-16T10:10:00.000Z",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "chatgpt.readonly-task",
+        operationId,
+        state: "completed",
+        code: null,
+        workspaceId,
+        relativePath: "README.md",
+        bytes: 42,
+        contextCharacters: 42,
+        contextLimit: 24_000,
+        contextTruncated: false,
+        deltaCount: 2,
+        observedCharacters: 84,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "chatgpt.readonly-task",
+        state: "completed",
+        code: null,
+        workspaceId,
+        relativePath: "README.md",
+        bytes: 42,
+        contextCharacters: 42,
+        contextLimit: 24_000,
+        contextTruncated: false,
+        deltaCount: 2,
+        observedCharacters: 84,
+      }).success,
+    ).toBe(false);
+  });
 });

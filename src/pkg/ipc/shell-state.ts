@@ -14,6 +14,7 @@ export const ShellOverlaySchema = z.enum([
   "sidebar",
   "task-menu",
   "quick-switcher",
+  "context-preview",
 ]);
 
 export const ShellLayoutSchema = z.strictObject({
