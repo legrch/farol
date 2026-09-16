@@ -492,7 +492,18 @@ function requestQuickSwitcher(): void {
 
 function requestSidebarToggle(): void {
   if (!window || setupOpen) return;
-  publishShellAction("toggle-sidebar");
+  const [width = 1] = window.getContentSize();
+  if (width <= 979) {
+    const opening = sidebarMode !== "overlay";
+    sidebarMode = opening ? "overlay" : "rail";
+    shellOverlay = opening ? "sidebar" : "none";
+  } else {
+    sidebarMode = sidebarMode === "full" ? "rail" : "full";
+    shellOverlay = "none";
+  }
+  applyLayout();
+  publishLayout();
+  focusForLayout();
 }
 
 function requestSettings(): void {
