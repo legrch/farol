@@ -5,7 +5,7 @@ public npm registry recorded in `.npmrc`.
 
 | Package               | Class           | Version | License    | Purpose / decision                                                                           |
 | --------------------- | --------------- | ------: | ---------- | -------------------------------------------------------------------------------------------- |
-| Electron              | runtime closure | 41.10.7 | MIT        | Desktop shell, WebContentsView, sandboxed renderer and bundled utility-process runtime; kept |
+| Electron              | runtime closure |  44.4.1 | MIT        | Desktop shell, WebContentsView, sandboxed renderer and bundled utility-process runtime; kept |
 | Zod                   | runtime         |   4.6.5 | MIT        | Parse untrusted IPC/HTTP boundary payloads; kept                                             |
 | TypeScript            | build           |   7.0.2 | Apache-2.0 | Strict static checks; kept                                                                   |
 | Vitest / coverage-v8  | test            |   5.0.0 | MIT        | One unit/component/property runner and measured V8 coverage; kept                            |

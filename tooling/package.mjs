@@ -205,7 +205,7 @@ const artifact = {
   artifactSha256: await treeDigest(appPath),
   electronSourceSha256,
   runtime: {
-    electron: "41.10.7",
+    electron: "44.4.1",
     node: "embedded-in-electron",
     testerManagedRuntime: false,
     layout: "nested-unmodified-vendor-bundle",

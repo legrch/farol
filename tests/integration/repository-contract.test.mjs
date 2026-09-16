@@ -72,4 +72,19 @@ describe("portable Farol Next repository contract", () => {
       "./vnext/dist/package/Farol\\ Next\\ Preview.app/Contents/MacOS/Farol\\ Next\\ Preview",
     );
   });
+
+  it("pins the reviewed supported Electron runtime", async () => {
+    const packageDocument = JSON.parse(
+      await fs.readFile(path.join(vnextRoot, "package.json"), "utf8"),
+    );
+    const dependencyDocument = await fs.readFile(
+      path.join(vnextRoot, "docs/dependencies.md"),
+      "utf8",
+    );
+
+    expect(packageDocument.dependencies.electron).toBe("44.4.1");
+    expect(dependencyDocument).toMatch(
+      /\| Electron\s+\| runtime closure \|\s+44\.4\.1\s+\|/u,
+    );
+  });
 });

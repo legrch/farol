@@ -122,7 +122,7 @@ requireValue(
   "PACKAGE_CHANNEL_INVALID",
 );
 requireValue(
-  artifact.runtime?.electron === "41.10.7" &&
+  artifact.runtime?.electron === "44.4.1" &&
     artifact.runtime?.node === "embedded-in-electron" &&
     artifact.runtime?.testerManagedRuntime === false &&
     artifact.runtime?.layout === "nested-unmodified-vendor-bundle" &&
