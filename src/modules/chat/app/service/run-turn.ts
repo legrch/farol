@@ -187,9 +187,13 @@ export class RunTurn {
       operation: event.operation,
     });
     if (!result.ok) {
-      const unknown = markOutcomeUnknown(changed, result.error.code);
+      const reason = `${result.error.source}:${result.error.code}`;
+      const terminal =
+        result.error.classification === "refused"
+          ? failTurn(changed, reason)
+          : markOutcomeUnknown(changed, reason);
       return this.requireTransition(
-        unknown,
+        terminal,
         changed,
         "terminal",
         null,

@@ -1,5 +1,3 @@
-import type { Result } from "../../../../pkg/kernel/domain/result";
-
 export type ChatComputerOperation =
   | Readonly<{ kind: "workspace.read"; relativePath: string }>
   | Readonly<{ kind: "workspace.list"; relativePath: string }>
@@ -57,8 +55,31 @@ export type ChatComputerOutput = Readonly<{
   output: ChatComputerOutputValue;
 }>;
 
+export type ChatComputerFailureSource =
+  | "computer-approval"
+  | "task-admission"
+  | "task-grant"
+  | "owner-restriction"
+  | "role"
+  | "computer-policy"
+  | "native-host"
+  | "authority-store"
+  | "native-workspace"
+  | "contract"
+  | "contract-transport";
+
+export type ChatComputerResult =
+  | Readonly<{ ok: true; value: ChatComputerOutput }>
+  | Readonly<{
+      ok: false;
+      error: Readonly<{
+        code: string;
+        source: ChatComputerFailureSource;
+        classification: "refused" | "outcome_unknown";
+        retry: "never";
+      }>;
+    }>;
+
 export interface ComputerCapability {
-  execute(
-    request: ChatComputerRequest,
-  ): Promise<Result<ChatComputerOutput, string>>;
+  execute(request: ChatComputerRequest): Promise<ChatComputerResult>;
 }

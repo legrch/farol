@@ -99,6 +99,19 @@ const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const ReadonlyComputerCallCorrelationSchema = z.strictObject({
+  ownerId: z.string().min(1).max(80),
+  sessionId: IdentifierSchema,
+  taskId: IdentifierSchema,
+  taskEpoch: z.number().int().nonnegative(),
+  participantId: IdentifierSchema,
+  turnId: IdentifierSchema,
+  generation: z.number().int().nonnegative(),
+  callId: IdentifierSchema,
+  workspaceId: IdentifierSchema,
+  relativePath: ScopeRelativePathSchema,
+});
+
 const ComputerErrorCodeSchema = z.enum([
   "AUTHORITY_OWNER_MISMATCH",
   "AUTHORITY_TASK_MISMATCH",
@@ -145,22 +158,13 @@ const FailureSourceSchema = z.enum([
 export const ReadonlyComputerCallResponseSchema = z.discriminatedUnion("ok", [
   z.strictObject({
     ok: z.literal(true),
-    value: z.strictObject({
-      ownerId: z.string(),
-      sessionId: z.string(),
-      taskId: z.string(),
-      taskEpoch: z.number().int().nonnegative(),
-      participantId: z.string(),
-      turnId: z.string(),
-      generation: z.number().int().nonnegative(),
-      callId: z.string(),
-      workspaceId: z.string(),
-      relativePath: z.string(),
+    value: ReadonlyComputerCallCorrelationSchema.extend({
       output: WorkspaceOutputSchema,
     }),
   }),
   z.strictObject({
     ok: z.literal(false),
+    correlation: ReadonlyComputerCallCorrelationSchema.nullable(),
     error: z.strictObject({
       code: ComputerErrorCodeSchema,
       source: FailureSourceSchema,

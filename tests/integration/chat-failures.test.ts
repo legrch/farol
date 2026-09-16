@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  failure,
-  success,
-  type Result,
-} from "../../src/pkg/kernel/domain/result";
-import type { ChatComputerOutput } from "../../src/modules/chat/app/port/computer-capability";
+import { success } from "../../src/pkg/kernel/domain/result";
+import type { ChatComputerResult } from "../../src/modules/chat/app/port/computer-capability";
 import type { ActivityRecord } from "../../src/modules/chat/app/port/activity-recorder";
 import type { ClientEvent } from "../../src/modules/chat/app/port/event-publisher";
 import type {
@@ -35,7 +31,7 @@ function sessionFrom(
   };
 }
 
-const exactComputerResult: Result<ChatComputerOutput, string> = success({
+const exactComputerResult: ChatComputerResult = success({
   ownerId: command.ownerId,
   sessionId: command.sessionId,
   taskId: command.taskId,
@@ -55,7 +51,7 @@ const exactComputerResult: Result<ChatComputerOutput, string> = success({
 
 function harness(
   provider: ChatProvider,
-  computerResult: Result<ChatComputerOutput, string> = exactComputerResult,
+  computerResult: ChatComputerResult = exactComputerResult,
   turns: TurnRepository = new InMemoryTurns(),
 ) {
   const events: ClientEvent[] = [];
@@ -409,7 +405,7 @@ describe("Chat failure semantics", () => {
     expect(submitted).toHaveBeenCalledTimes(1);
   });
 
-  it("tombstones the exact turn when Computer refuses after provider dispatch", async () => {
+  it("fails the exact turn with the refusal source when Computer deterministically refuses", async () => {
     const submitted = vi.fn<ProviderSession["submitComputerResult"]>();
     const test = harness(
       {
@@ -431,12 +427,60 @@ describe("Chat failure semantics", () => {
           submitComputerResult: submitted,
         }),
       },
-      failure("COMPUTER_FIXTURE_DENIED"),
+      {
+        ok: false,
+        error: {
+          code: "AUTHORITY_PATH_DENIED",
+          source: "owner-restriction",
+          classification: "refused",
+          retry: "never",
+        },
+      },
     );
     await expect(test.run.execute(command)).resolves.toMatchObject({
-      phase: "outcome_unknown",
-      terminalReason: "COMPUTER_FIXTURE_DENIED",
+      phase: "failed",
+      terminalReason: "owner-restriction:AUTHORITY_PATH_DENIED",
     });
+    expect(submitted).not.toHaveBeenCalled();
+  });
+
+  it("keeps an uncertain Computer transport result outcome-unknown without retry", async () => {
+    const submitted = vi.fn<ProviderSession["submitComputerResult"]>();
+    const test = harness(
+      {
+        prepare: async () => ({
+          async *events() {
+            yield { kind: "submit_activated" } as const;
+            yield { kind: "accepted" } as const;
+            yield {
+              kind: "computer_call",
+              callId: "call-a",
+              workspaceId: "preview-fixture",
+              operation: {
+                kind: "workspace.read",
+                relativePath: "status.txt",
+              },
+            } as const;
+          },
+          submitComputerResult: submitted,
+        }),
+      },
+      {
+        ok: false,
+        error: {
+          code: "COMPUTER_CONTRACT_UNAVAILABLE",
+          source: "contract-transport",
+          classification: "outcome_unknown",
+          retry: "never",
+        },
+      },
+    );
+
+    await expect(test.run.execute(command)).resolves.toMatchObject({
+      phase: "outcome_unknown",
+      terminalReason: "contract-transport:COMPUTER_CONTRACT_UNAVAILABLE",
+    });
+    expect(test.execute).toHaveBeenCalledTimes(1);
     expect(submitted).not.toHaveBeenCalled();
   });
 

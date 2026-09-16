@@ -7,6 +7,10 @@ import path from "node:path";
 
 import { RunReadonlyComputerAction } from "../../src/modules/computer/app/service/run-readonly-computer-action";
 import {
+  ReadonlyComputerCallRequestSchema,
+  type ReadonlyComputerContract,
+} from "../../src/modules/computer/contract/readonly-computer-contract";
+import {
   createParticipantAuthority,
   delegateParticipantAuthority,
   deriveTaskGrant,
@@ -189,6 +193,85 @@ describe("read-only Computer MCP adapter", () => {
         },
       });
       expect(spoofed.isError).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("accepts only an exactly correlated refusal from the Computer contract", async () => {
+    const contract: ReadonlyComputerContract = {
+      async execute(value) {
+        const request = ReadonlyComputerCallRequestSchema.parse(value);
+        return {
+          ok: false,
+          correlation: {
+            ownerId: request.ownerId,
+            sessionId: request.sessionId,
+            taskId: request.taskId,
+            taskEpoch: request.taskEpoch,
+            participantId:
+              request.operation.relativePath === "foreign.txt"
+                ? "agent-foreign"
+                : request.participantId,
+            turnId: request.turnId,
+            generation: request.generation,
+            callId: request.callId,
+            workspaceId: request.workspaceId,
+            relativePath: request.operation.relativePath,
+          },
+          error: {
+            code: "AUTHORITY_PATH_DENIED",
+            source: "owner-restriction",
+            retry: "never",
+          },
+        };
+      },
+    };
+    const server = createReadonlyComputerMcpServer(contract, {
+      ownerId: "owner-preview",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 3,
+      participantId: "critic-a",
+      turnId: "turn-a",
+      generation: 2,
+    });
+    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.connect(serverTransport),
+    ]);
+    try {
+      const exact = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "farol", relativePath: "denied.txt" },
+      });
+      expect(exact.isError).toBe(true);
+      expect(exact.structuredContent).toMatchObject({
+        ok: false,
+        correlation: { participantId: "critic-a", taskId: "task-a" },
+        error: {
+          code: "AUTHORITY_PATH_DENIED",
+          source: "owner-restriction",
+        },
+      });
+
+      const foreign = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "farol", relativePath: "foreign.txt" },
+      });
+      expect(foreign.isError).toBe(true);
+      expect(foreign.structuredContent).toEqual({
+        ok: false,
+        error: {
+          code: "COMPUTER_CONTRACT_CORRELATION",
+          source: "contract",
+          retry: "never",
+        },
+      });
     } finally {
       await client.close();
       await server.close();

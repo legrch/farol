@@ -96,7 +96,85 @@ describe("read-only Computer chat peer", () => {
 
     await expect(peer.execute(request)).resolves.toEqual({
       ok: false,
-      error: { code: "COMPUTER_CONTRACT_CORRELATION", retry: "never" },
+      error: {
+        code: "COMPUTER_CONTRACT_CORRELATION",
+        source: "contract",
+        classification: "refused",
+        retry: "never",
+      },
+    });
+  });
+
+  it("preserves a correlated refusal source and rejects a foreign refusal", async () => {
+    const correlated = {
+      ownerId: request.ownerId,
+      sessionId: request.sessionId,
+      taskId: request.taskId,
+      taskEpoch: 3,
+      participantId: "critic-a",
+      turnId: request.turnId,
+      generation: request.generation,
+      callId: request.callId,
+      workspaceId: request.workspaceId,
+      relativePath: request.operation.relativePath,
+    };
+    const refusal = (participantId: string) =>
+      ({
+        ok: false,
+        correlation: { ...correlated, participantId },
+        error: {
+          code: "AUTHORITY_PATH_DENIED",
+          source: "owner-restriction",
+          retry: "never",
+        },
+      }) as unknown as Awaited<ReturnType<ReadonlyComputerContract["execute"]>>;
+    const valid = new ReadonlyComputerPeer(
+      { execute: async () => refusal("critic-a") },
+      { taskEpoch: 3, participantId: "critic-a" },
+    );
+    const foreign = new ReadonlyComputerPeer(
+      { execute: async () => refusal("agent-other") },
+      { taskEpoch: 3, participantId: "critic-a" },
+    );
+
+    await expect(valid.execute(request)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "AUTHORITY_PATH_DENIED",
+        source: "owner-restriction",
+        classification: "refused",
+        retry: "never",
+      },
+    });
+    await expect(foreign.execute(request)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "COMPUTER_CONTRACT_CORRELATION",
+        source: "contract",
+        classification: "refused",
+        retry: "never",
+      },
+    });
+  });
+
+  it("classifies a thrown Computer transport as outcome-unknown", async () => {
+    const peer = new ReadonlyComputerPeer(
+      {
+        async execute() {
+          throw new Error("transport lost");
+        },
+      },
+      { taskEpoch: 3, participantId: "critic-a" },
+    );
+
+    await expect(peer.execute(request)).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "COMPUTER_CONTRACT_UNAVAILABLE",
+        source: "contract-transport",
+        classification: "outcome_unknown",
+        retry: "never",
+      },
     });
   });
 });

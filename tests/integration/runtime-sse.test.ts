@@ -366,7 +366,7 @@ describe("actual loopback SSE runtime", () => {
     expect(receipt.tasks).toEqual([
       {
         taskId: "task-atlantic",
-        phase: "outcome_unknown",
+        phase: "failed",
         terminal: true,
       },
       { taskId: "task-harbor", phase: "outcome_unknown", terminal: true },

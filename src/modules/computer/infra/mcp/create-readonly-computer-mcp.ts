@@ -140,6 +140,12 @@ async function execute(
   const parsed = ReadonlyComputerCallResponseSchema.safeParse(response);
   if (!parsed.success) return failure("COMPUTER_CONTRACT_INVALID");
   if (!parsed.data.ok) {
+    if (
+      parsed.data.correlation === null ||
+      !correlationMatches(request, parsed.data.correlation)
+    ) {
+      return failure("COMPUTER_CONTRACT_CORRELATION");
+    }
     return {
       content: [{ type: "text", text: JSON.stringify(parsed.data) }],
       structuredContent: { ...parsed.data },

@@ -13,6 +13,7 @@ export class ReadonlyComputerContractHandler implements ReadonlyComputerContract
     if (!parsed.success) {
       return {
         ok: false,
+        correlation: null,
         error: {
           code: "COMPUTER_INVALID_REQUEST",
           source: "contract",
@@ -21,7 +22,24 @@ export class ReadonlyComputerContractHandler implements ReadonlyComputerContract
       };
     }
     const result = await this.service.execute(parsed.data);
-    if (!result.ok) return result;
+    if (!result.ok) {
+      return {
+        ok: false,
+        correlation: {
+          ownerId: parsed.data.ownerId,
+          sessionId: parsed.data.sessionId,
+          taskId: parsed.data.taskId,
+          taskEpoch: parsed.data.taskEpoch,
+          participantId: parsed.data.participantId,
+          turnId: parsed.data.turnId,
+          generation: parsed.data.generation,
+          callId: parsed.data.callId,
+          workspaceId: parsed.data.workspaceId,
+          relativePath: parsed.data.operation.relativePath,
+        },
+        error: result.error,
+      };
+    }
     const output = result.value.output;
     return {
       ok: true,

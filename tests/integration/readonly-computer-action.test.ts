@@ -231,7 +231,7 @@ describe("real read-only Computer action", () => {
           pattern: "delegated",
         }),
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: false,
       error: {
         code: "AUTHORITY_CAPABILITY_DENIED",
@@ -287,7 +287,7 @@ describe("real read-only Computer action", () => {
           "critic-narrow",
         ),
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: false,
       error: {
         code: "AUTHORITY_PATH_DENIED",
@@ -353,7 +353,7 @@ describe("real read-only Computer action", () => {
           "critic-excluded",
         ),
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: false,
       error: {
         code: "AUTHORITY_PATH_DENIED",
@@ -372,7 +372,7 @@ describe("real read-only Computer action", () => {
         ...request({ kind: "workspace.read", relativePath: "README.md" }),
         ownerId: "foreign-owner",
       }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: false,
       error: {
         code: "AUTHORITY_OWNER_MISMATCH",
@@ -384,7 +384,7 @@ describe("real read-only Computer action", () => {
       computer.execute(
         request({ kind: "workspace.read", relativePath: "../README.md" }),
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       ok: false,
       error: {
         code: "COMPUTER_INVALID_REQUEST",
