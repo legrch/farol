@@ -1552,7 +1552,7 @@ function renderSettings(): void {
         });
         const verify = document.createElement("button");
         verify.type = "button";
-        verify.textContent = "Recheck";
+        verify.textContent = "Recheck host";
         verify.disabled = selected === null;
         verify.addEventListener("click", () => {
           void configureProduct(
