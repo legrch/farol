@@ -117,6 +117,9 @@ import {
 import { probeCodexHost } from "./codex-host-probe";
 import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
+import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
+import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
+import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -246,6 +249,21 @@ type PendingWorkspaceEdit = Readonly<{
 let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
 let workspaceMutationAdmission = false;
 let codexHostTaskAdmission = false;
+const agentCheckConfigurationMutations = new Set<string>([
+  "computer.rename",
+  "computer.add-workspace",
+  "computer.remove-workspace",
+  "computer.update-exclusions",
+  "computer.update-access",
+  "computer.verify-workspace",
+]);
+type ActiveCodexAgentCheck = Readonly<{
+  key: string;
+  client: Awaited<ReturnType<typeof launchCodexAppServer>>;
+  host: CodexNativeAgentHost;
+  boundedRunningObserved: boolean;
+}>;
+let activeCodexAgentCheck: ActiveCodexAgentCheck | null = null;
 
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
@@ -517,6 +535,14 @@ function codexHostProbeRoot(): string {
     app.getPath("userData"),
     "farol-next-state",
     "codex-host-probe",
+  );
+}
+
+function codexAgentAssignmentRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "native-agent-assignments",
   );
 }
 
@@ -917,8 +943,17 @@ async function configureProduct(
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
+  if (
+    activeCodexAgentCheck &&
+    agentCheckConfigurationMutations.has(command.kind)
+  ) {
+    return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+  }
   switch (command.kind) {
     case "host.select-codex": {
+      if (activeCodexAgentCheck) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
       const selected = await selectedCodexExecutable();
       if (selected === "cancelled") {
         return configurationFailure("CODEX_HOST_PICKER_CANCELLED");
@@ -929,6 +964,9 @@ async function configureProduct(
       return verifyCodexExecutable(selected);
     }
     case "host.verify-codex": {
+      if (activeCodexAgentCheck) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
       const snapshot = configuration.snapshot();
       if (snapshot.status !== "ready" || !snapshot.settings.nativeHosts.codex) {
         return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
@@ -938,14 +976,14 @@ async function configureProduct(
       );
     }
     case "host.run-codex-smoke": {
-      if (codexHostTaskAdmission) {
+      if (codexHostTaskAdmission || activeCodexAgentCheck) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
-      const selected =
-        snapshot.status === "ready"
-          ? snapshot.settings.nativeHosts.codex
-          : null;
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const selected = snapshot.settings.nativeHosts.codex;
       if (!selected) {
         return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
       }
@@ -1048,7 +1086,218 @@ async function configureProduct(
         codexHostTaskAdmission = false;
       }
     }
+    case "host.run-codex-agent-check": {
+      if (codexHostTaskAdmission) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const selected = snapshot.settings.nativeHosts.codex;
+      if (!selected) {
+        return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
+      }
+      if (
+        !selected.liveVerification ||
+        selected.liveVerification.executableSha256 !==
+          selected.executableSha256 ||
+        selected.liveVerification.schemaSha256 !== selected.schemaSha256 ||
+        selected.liveVerification.buildId !== buildIdentity.buildId
+      ) {
+        return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
+      }
+      const computerVerification = snapshot.settings.setup.computer.verified;
+      const workspace = computerVerification
+        ? snapshot.settings.computer.workspaces.find(
+            (candidate) =>
+              candidate.workspaceId === computerVerification.workspaceId,
+          )
+        : null;
+      if (
+        !computerVerification ||
+        computerVerification.configRevision !==
+          snapshot.settings.computer.generation ||
+        computerVerification.buildId !== buildIdentity.buildId ||
+        snapshot.settings.setup.computer.reachable !== "reachable" ||
+        snapshot.settings.setup.computer.outcomeUnknown ||
+        workspace?.access !== "read"
+      ) {
+        const recorded = await configuration.recordCodexAgentFailure(
+          "workspace_not_verified",
+        );
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        return configurationFailure("CODEX_AGENT_WORKSPACE_NOT_VERIFIED");
+      }
+      const checkKey = JSON.stringify([
+        selected.executablePath,
+        selected.executableSha256,
+        selected.schemaSha256,
+        buildIdentity.buildId,
+        snapshot.settings.computer.computerId,
+        snapshot.settings.computer.generation,
+        workspace.workspaceId,
+      ]);
+      if (activeCodexAgentCheck && activeCodexAgentCheck.key !== checkKey) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+
+      codexHostTaskAdmission = true;
+      let session = activeCodexAgentCheck;
+      let closeSession = false;
+      try {
+        let settings = snapshot.settings;
+        if (!session) {
+          const probe = await probeCodexHost({
+            executablePath: selected.executablePath,
+            scratchRoot: codexHostProbeRoot(),
+          });
+          const sameContract =
+            probe.executableSha256 === selected.executableSha256 &&
+            probe.schemaSha256 === selected.schemaSha256 &&
+            probe.version === selected.version &&
+            probe.protocol === selected.protocol;
+          const recordedContract = await configuration.recordCodexHost({
+            executablePath: probe.executablePath,
+            executableSha256: probe.executableSha256,
+            version: probe.version,
+            protocol: probe.protocol,
+            schemaSha256: probe.schemaSha256,
+            buildId: buildIdentity.buildId,
+          });
+          if (!recordedContract.ok) {
+            return ProductConfigurationResultSchema.parse(recordedContract);
+          }
+          if (!sameContract) {
+            return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
+          }
+          if (recordedContract.snapshot.status !== "ready") {
+            return configurationFailure("SETTINGS_UNAVAILABLE");
+          }
+          settings = recordedContract.snapshot.settings;
+          const runtimeRoot = await codexHostRuntimeRoot();
+          const configuredCodexHome = process.env.CODEX_HOME;
+          const client = await launchCodexAppServer({
+            executablePath: selected.executablePath,
+            cwd: runtimeRoot,
+            homePath: app.getPath("home"),
+            tempPath: app.getPath("temp"),
+            clientVersion: buildIdentity.version,
+            ...(configuredCodexHome &&
+            path.isAbsolute(configuredCodexHome) &&
+            !configuredCodexHome.includes("\0")
+              ? { codexHomePath: configuredCodexHome }
+              : {}),
+          });
+          const host = new CodexNativeAgentHost(client, {
+            model: "gpt-6-astra",
+            runtimeRoot,
+            spawnTimeoutMs: 120_000,
+            waitTimeoutMs: 250,
+            pollIntervalMs: 25,
+            nonce: randomUUID,
+            now: () => Date.now(),
+          });
+          session = {
+            key: checkKey,
+            client,
+            host,
+            boundedRunningObserved: false,
+          };
+          activeCodexAgentCheck = session;
+        }
+
+        const check = await runCodexNativeAgentCheck({
+          host: session.host,
+          assignments: new PrivateAssignmentStore({
+            root: codexAgentAssignmentRoot(),
+          }),
+          settings,
+          workspaceId: workspace.workspaceId,
+          executableSha256: selected.executableSha256,
+          schemaSha256: selected.schemaSha256,
+          buildId: buildIdentity.buildId,
+          now: () => Date.now(),
+          pause: async () => {
+            await delay(25);
+          },
+          maximumWaitCycles: 480,
+          boundedRunningObserved: session.boundedRunningObserved,
+        });
+        if (check.status === "completed") {
+          const { kind: _kind, ...evidence } = check.evidence;
+          const recorded =
+            await configuration.recordCodexAgentVerification(evidence);
+          closeSession = true;
+          if (!recorded.ok) {
+            return ProductConfigurationResultSchema.parse(recorded);
+          }
+          return ProductConfigurationResultSchema.parse({
+            ...recorded,
+            evidence: check.evidence,
+          });
+        }
+        if (check.status === "running") {
+          activeCodexAgentCheck = {
+            ...session,
+            boundedRunningObserved: true,
+          };
+          const recorded =
+            await configuration.recordCodexAgentFailure("running");
+          if (!recorded.ok) {
+            return ProductConfigurationResultSchema.parse(recorded);
+          }
+          return configurationFailure("CODEX_AGENT_STILL_RUNNING");
+        }
+        closeSession = true;
+        const recorded = await configuration.recordCodexAgentFailure(
+          check.status === "workspace_not_verified"
+            ? "workspace_not_verified"
+            : check.status === "outcome_unknown"
+              ? "outcome_unknown"
+              : "failed",
+        );
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        return configurationFailure(
+          check.status === "workspace_not_verified"
+            ? "CODEX_AGENT_WORKSPACE_NOT_VERIFIED"
+            : check.status === "outcome_unknown"
+              ? "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
+              : "CODEX_AGENT_LIVE_FAILED",
+        );
+      } catch {
+        closeSession = true;
+        const outcomeUnknown = session !== null;
+        const recorded = await configuration.recordCodexAgentFailure(
+          outcomeUnknown ? "outcome_unknown" : "failed",
+        );
+        if (!recorded.ok) {
+          return ProductConfigurationResultSchema.parse(recorded);
+        }
+        return configurationFailure(
+          outcomeUnknown
+            ? "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
+            : "CODEX_AGENT_LIVE_FAILED",
+        );
+      } finally {
+        if (closeSession && session) {
+          session.host.dispose();
+          await session.client.close().catch(() => undefined);
+          if (activeCodexAgentCheck === session) {
+            activeCodexAgentCheck = null;
+          }
+        }
+        codexHostTaskAdmission = false;
+      }
+    }
     case "host.remove-codex":
+      if (activeCodexAgentCheck) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
       return ProductConfigurationResultSchema.parse(
         await configuration.clearCodexHost(),
       );
@@ -3101,6 +3350,10 @@ async function main(): Promise<void> {
         attachmentTask.operationId,
       );
     }
+    const agentCheck = activeCodexAgentCheck;
+    activeCodexAgentCheck = null;
+    agentCheck?.host.dispose();
+    if (agentCheck) void agentCheck.client.close().catch(() => undefined);
     chatGptRoute?.dispose();
     stopRuntime();
   });

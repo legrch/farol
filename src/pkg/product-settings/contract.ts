@@ -40,6 +40,33 @@ const CodexHostLiveVerificationSchema = z.strictObject({
   verifiedAt: CanonicalTimestampSchema,
 });
 
+export const CodexAgentVerificationFieldsSchema = z.strictObject({
+  model: z.literal("gpt-6-astra"),
+  executableSha256: Sha256Schema,
+  schemaSha256: Sha256Schema,
+  buildId: Sha256Schema,
+  workspaceId: IdentifierSchema,
+  computerGeneration: z.number().int().positive(),
+  transport: z.literal("codex-native-agent/spawn-prompt-sha256-v1"),
+  authorityRole: z.enum(["agent", "critic"]),
+  hostRole: z.string().min(1).max(160).nullable(),
+  delegationDigest: Sha256Schema,
+  parentThreadSha256: Sha256Schema,
+  childThreadSha256: Sha256Schema,
+  boundedRunning: z.literal(true),
+  modelTurnsSubmitted: z.literal(1),
+  fallbackAllowed: z.literal(false),
+  descendantCount: z.literal(0),
+  resultRefProtocol: z.literal("codex-app-server"),
+  resultRetention: z.literal("durable"),
+  parentDelivery: z.literal("acknowledged"),
+  workspaceEnforcement: z.literal("not_verified"),
+});
+
+const CodexAgentVerificationSchema = CodexAgentVerificationFieldsSchema.extend({
+  verifiedAt: CanonicalTimestampSchema,
+});
+
 export const CodexHostSelectionSchema = z.strictObject({
   executablePath: CanonicalAbsolutePathSchema,
   executableSha256: Sha256Schema,
@@ -48,6 +75,7 @@ export const CodexHostSelectionSchema = z.strictObject({
   schemaSha256: Sha256Schema,
   verifiedAt: CanonicalTimestampSchema,
   liveVerification: CodexHostLiveVerificationSchema.nullable().default(null),
+  agentVerification: CodexAgentVerificationSchema.nullable().default(null),
 });
 
 const ProductRelativePathSchema = z.string().refine((value) => {
@@ -239,6 +267,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("host.verify-codex") }),
   z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("host.run-codex-smoke") }),
+  z.strictObject({ kind: z.literal("host.run-codex-agent-check") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
@@ -339,6 +368,9 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     dynamicToolCalls: z.literal(1),
     executableSha256: Sha256Schema,
     schemaSha256: Sha256Schema,
+  }),
+  CodexAgentVerificationFieldsSchema.extend({
+    kind: z.literal("host.codex-agent-lineage"),
   }),
   z.strictObject({
     kind: z.literal("chatgpt.readiness"),
@@ -656,6 +688,10 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_HOST_MODEL_UNAVAILABLE",
       "CODEX_HOST_LIVE_FAILED",
       "CODEX_HOST_LIVE_OUTCOME_UNKNOWN",
+      "CODEX_AGENT_WORKSPACE_NOT_VERIFIED",
+      "CODEX_AGENT_STILL_RUNNING",
+      "CODEX_AGENT_LIVE_FAILED",
+      "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

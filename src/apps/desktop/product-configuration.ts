@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import {
+  CodexAgentVerificationFieldsSchema,
   ProductConfigurationSnapshotSchema,
   ProductGeneralSettingsSchema,
   ProductSettingsSchema,
@@ -90,6 +91,13 @@ const codexHostLiveFailureSchema = z.enum([
   "outcome_unknown",
 ]);
 
+const codexAgentFailureSchema = z.enum([
+  "failed",
+  "running",
+  "outcome_unknown",
+  "workspace_not_verified",
+]);
+
 function settingsError(error: unknown): ProductConfigurationSnapshot {
   const message = error instanceof Error ? error.message : "";
   if (message === "SETTINGS_CORRUPT") {
@@ -111,6 +119,68 @@ function readiness(needsAction: string): ProductSettings["setup"][SetupStepId] {
     needsAction,
     unavailable: null,
     outcomeUnknown: false,
+  };
+}
+
+function pendingAgentReadiness(
+  previous: ProductSettings["setup"]["verify"],
+  needsAction: string,
+  configured: boolean,
+): ProductSettings["setup"]["verify"] {
+  return {
+    ...previous,
+    configured,
+    reachable: "unknown",
+    verified: null,
+    needsAction,
+    unavailable: null,
+    outcomeUnknown: false,
+  };
+}
+
+function invalidateStaleAgentVerification(
+  settings: ProductSettings,
+): ProductSettings {
+  const host = settings.nativeHosts.codex;
+  const verification = host?.agentVerification;
+  if (!host || !verification) return settings;
+
+  const workspace = settings.computer.workspaces.find(
+    (candidate) => candidate.workspaceId === verification.workspaceId,
+  );
+  const computerVerification = settings.setup.computer.verified;
+  const liveVerification = host.liveVerification;
+  const current =
+    host.executableSha256 === verification.executableSha256 &&
+    host.schemaSha256 === verification.schemaSha256 &&
+    liveVerification?.executableSha256 === verification.executableSha256 &&
+    liveVerification.schemaSha256 === verification.schemaSha256 &&
+    liveVerification.buildId === verification.buildId &&
+    settings.computer.generation === verification.computerGeneration &&
+    workspace?.access === "read" &&
+    computerVerification?.workspaceId === verification.workspaceId &&
+    computerVerification.configRevision === verification.computerGeneration &&
+    computerVerification.buildId === verification.buildId &&
+    settings.setup.computer.reachable === "reachable" &&
+    !settings.setup.computer.outcomeUnknown;
+  if (current) return settings;
+
+  return {
+    ...settings,
+    nativeHosts: {
+      ...settings.nativeHosts,
+      codex: { ...host, agentVerification: null },
+    },
+    setup: {
+      ...settings.setup,
+      verify: pendingAgentReadiness(
+        settings.setup.verify,
+        liveVerification
+          ? "Run the native Agent lineage check."
+          : "Run the live Codex host check first.",
+        liveVerification !== null,
+      ),
+    },
   };
 }
 
@@ -696,6 +766,11 @@ export class ProductConfigurationService {
         previous.liveVerification?.buildId === parsed.data.buildId
           ? previous.liveVerification
           : null;
+      const agentVerification =
+        sameContract &&
+        previous.agentVerification?.buildId === parsed.data.buildId
+          ? previous.agentVerification
+          : null;
       return {
         ...settings,
         revision: settings.revision + 1,
@@ -709,6 +784,7 @@ export class ProductConfigurationService {
             schemaSha256: parsed.data.schemaSha256,
             verifiedAt,
             liveVerification,
+            agentVerification,
           },
         },
         setup: {
@@ -736,6 +812,15 @@ export class ProductConfigurationService {
             unavailable: null,
             outcomeUnknown: false,
           },
+          verify: agentVerification
+            ? settings.setup.verify
+            : pendingAgentReadiness(
+                settings.setup.verify,
+                liveVerification
+                  ? "Run the native Agent lineage check."
+                  : "Run the live Codex host check first.",
+                liveVerification !== null,
+              ),
         },
       };
     });
@@ -795,6 +880,130 @@ export class ProductConfigurationService {
             unavailable: null,
             outcomeUnknown: false,
           },
+          verify: host.agentVerification
+            ? settings.setup.verify
+            : pendingAgentReadiness(
+                settings.setup.verify,
+                "Run the native Agent lineage check.",
+                true,
+              ),
+        },
+      };
+    });
+  }
+
+  async recordCodexAgentVerification(input: unknown): Promise<MutationResult> {
+    const parsed = CodexAgentVerificationFieldsSchema.safeParse(input);
+    if (!parsed.success || this.current === null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    const host = this.current.nativeHosts.codex;
+    const liveVerification = host?.liveVerification;
+    const workspace = this.current.computer.workspaces.find(
+      (candidate) => candidate.workspaceId === parsed.data.workspaceId,
+    );
+    const computerVerification = this.current.setup.computer.verified;
+    if (
+      !host ||
+      !liveVerification ||
+      host.executableSha256 !== parsed.data.executableSha256 ||
+      host.schemaSha256 !== parsed.data.schemaSha256 ||
+      liveVerification.executableSha256 !== parsed.data.executableSha256 ||
+      liveVerification.schemaSha256 !== parsed.data.schemaSha256 ||
+      liveVerification.buildId !== parsed.data.buildId ||
+      parsed.data.computerGeneration !== this.current.computer.generation ||
+      workspace?.access !== "read" ||
+      computerVerification?.workspaceId !== parsed.data.workspaceId ||
+      computerVerification.configRevision !== parsed.data.computerGeneration ||
+      computerVerification.buildId !== parsed.data.buildId ||
+      this.current.setup.computer.reachable !== "reachable" ||
+      this.current.setup.computer.outcomeUnknown
+    ) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+
+    return this.mutate((settings) => {
+      const selected = settings.nativeHosts.codex;
+      if (!selected) return settings;
+      const verifiedAt = this.now();
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        nativeHosts: {
+          ...settings.nativeHosts,
+          codex: {
+            ...selected,
+            agentVerification: { ...parsed.data, verifiedAt },
+          },
+        },
+        setup: {
+          ...settings.setup,
+          verify: {
+            ...settings.setup.verify,
+            visited: true,
+            skipped: false,
+            configured: true,
+            reachable: "reachable",
+            verified: {
+              profile: "codex.native-agent.lineage/1",
+              configRevision: settings.revision + 1,
+              workspaceId: parsed.data.workspaceId,
+              runtimeGeneration: parsed.data.executableSha256,
+              buildId: parsed.data.buildId,
+              protocol: parsed.data.transport,
+              verifiedAt,
+            },
+            needsAction: null,
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      };
+    });
+  }
+
+  async recordCodexAgentFailure(input: unknown): Promise<MutationResult> {
+    const parsed = codexAgentFailureSchema.safeParse(input);
+    if (!parsed.success || this.current?.nativeHosts.codex == null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    return this.mutate((settings) => {
+      const host = settings.nativeHosts.codex;
+      if (!host) return settings;
+      const outcomeUnknown = parsed.data === "outcome_unknown";
+      const running = parsed.data === "running";
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        nativeHosts: {
+          ...settings.nativeHosts,
+          codex: { ...host, agentVerification: null },
+        },
+        setup: {
+          ...settings.setup,
+          verify: {
+            ...settings.setup.verify,
+            visited: true,
+            skipped: false,
+            configured: host.liveVerification !== null,
+            reachable:
+              outcomeUnknown ||
+              running ||
+              parsed.data === "workspace_not_verified"
+                ? "unknown"
+                : "unreachable",
+            verified: null,
+            needsAction:
+              parsed.data === "workspace_not_verified"
+                ? "Verify read access to one workspace first."
+                : running
+                  ? "Rejoin the same native Agent assignment to collect its result."
+                  : outcomeUnknown
+                    ? "Inspect and explicitly rejoin the same native Agent assignment before another launch."
+                    : "Recheck the native Agent contract before running it again.",
+            unavailable: null,
+            outcomeUnknown,
+          },
         },
       };
     });
@@ -814,7 +1023,11 @@ export class ProductConfigurationService {
         revision: settings.revision + 1,
         nativeHosts: {
           ...settings.nativeHosts,
-          codex: { ...host, liveVerification: null },
+          codex: {
+            ...host,
+            liveVerification: null,
+            agentVerification: null,
+          },
         },
         setup: {
           ...settings.setup,
@@ -841,6 +1054,13 @@ export class ProductConfigurationService {
                 : null,
             outcomeUnknown,
           },
+          verify: pendingAgentReadiness(
+            settings.setup.verify,
+            outcomeUnknown
+              ? "Resolve the live Codex host outcome before checking Agent lineage."
+              : "Run the live Codex host check first.",
+            false,
+          ),
         },
       };
     });
@@ -857,7 +1077,11 @@ export class ProductConfigurationService {
         nativeHosts: selected
           ? {
               generation: settings.nativeHosts.generation + 1,
-              codex: { ...selected, liveVerification: null },
+              codex: {
+                ...selected,
+                liveVerification: null,
+                agentVerification: null,
+              },
             }
           : settings.nativeHosts,
         setup: {
@@ -880,6 +1104,11 @@ export class ProductConfigurationService {
                 : null,
             outcomeUnknown: false,
           },
+          verify: pendingAgentReadiness(
+            settings.setup.verify,
+            "Run the live Codex host check first.",
+            false,
+          ),
         },
       };
     });
@@ -908,6 +1137,11 @@ export class ProductConfigurationService {
             unavailable: null,
             outcomeUnknown: false,
           },
+          verify: pendingAgentReadiness(
+            settings.setup.verify,
+            "Choose and verify a Codex host first.",
+            false,
+          ),
         },
       };
     });
@@ -959,7 +1193,13 @@ export class ProductConfigurationService {
     const before = structuredClone(this.current);
     let candidate: ProductSettings;
     try {
-      candidate = ProductSettingsSchema.parse(transform(before));
+      const transformed = ProductSettingsSchema.parse(transform(before));
+      const invalidated = invalidateStaleAgentVerification(transformed);
+      candidate = ProductSettingsSchema.parse(
+        invalidated !== transformed && invalidated.revision === before.revision
+          ? { ...invalidated, revision: before.revision + 1 }
+          : invalidated,
+      );
     } catch {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
