@@ -2345,6 +2345,19 @@ try {
     .locator("#settings-workspaces")
     .getByText(/not verified/u)
     .waitFor();
+  assert.equal(
+    await normal.window
+      .locator("#settings-workspaces")
+      .getByRole("button", { name: "List root", exact: true })
+      .isDisabled(),
+    true,
+  );
+  assert.equal(
+    await normal.window
+      .getByLabel("Search approved-workspace", { exact: true })
+      .isDisabled(),
+    true,
+  );
   await normal.window
     .locator("#settings-workspaces")
     .getByRole("button", { name: "Verify", exact: true })
@@ -2361,6 +2374,44 @@ try {
     await normal.window.locator("#settings-feedback").innerText(),
     /Read 42 bytes from README\.md\. Nothing from the file was persisted\./u,
   );
+
+  const workspaceCard = normal.window
+    .locator("#settings-workspaces .workspace-card")
+    .filter({ hasText: "approved-workspace" });
+  const listRoot = workspaceCard.getByRole("button", {
+    name: "List root",
+    exact: true,
+  });
+  assert.equal(await listRoot.count(), 1);
+  await listRoot.click();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText("README.md", { exact: true })
+    .waitFor();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("Listed 1 entry from the workspace root.", { exact: true })
+    .waitFor();
+
+  await workspaceCard
+    .getByLabel("Search approved-workspace", { exact: true })
+    .fill("verification");
+  await workspaceCard
+    .getByRole("button", { name: "Search", exact: true })
+    .click();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText("README.md:1", { exact: true })
+    .waitFor();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText("Farol Next workspace verification fixture", { exact: true })
+    .waitFor();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText('Found 1 match for "verification".', { exact: true })
+    .waitFor();
+  cases.push("workspace-app-list-search");
 
   const exclusionInput = normal.window.getByLabel(
     "Excluded paths for approved-workspace",

@@ -6,6 +6,10 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
+import {
+  ProductConfigurationCommandSchema,
+  ProductConfigurationEvidenceSchema,
+} from "../../src/pkg/product-settings/contract";
 
 const roots: string[] = [];
 
@@ -394,5 +398,76 @@ describe("Farol Next product configuration", () => {
     );
     await restarted.initialize();
     expect(restarted.snapshot()).toMatchObject(result.snapshot);
+  });
+
+  it("admits bounded workspace list and search actions through the product contract", () => {
+    const workspaceId = "00000000-0000-4000-8000-000000000001";
+
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.list-workspace",
+        workspaceId,
+        relativePath: ".",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.search-workspace",
+        workspaceId,
+        relativePath: ".",
+        pattern: "verification",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-list",
+        workspaceId,
+        relativePath: ".",
+        entries: ["README.md", "src/"],
+        truncated: false,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-search",
+        workspaceId,
+        relativePath: ".",
+        pattern: "verification",
+        matches: [
+          {
+            path: "README.md",
+            line: 1,
+            text: "Farol Next workspace verification fixture",
+            truncated: false,
+          },
+        ],
+        resultLimited: false,
+        scanLimited: false,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.list-workspace",
+        workspaceId,
+        relativePath: "..",
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.search-workspace",
+        workspaceId,
+        relativePath: ".",
+        pattern: "line\nsecond line",
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-list",
+        workspaceId,
+        relativePath: ".",
+        entries: ["../escape"],
+        truncated: false,
+      }).success,
+    ).toBe(false);
   });
 });

@@ -179,7 +179,12 @@ let settingsFeedbackError = false;
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
-  { kind: "computer.workspace-read" }
+  {
+    kind:
+      | "computer.workspace-read"
+      | "computer.workspace-list"
+      | "computer.workspace-search";
+  }
 > | null = null;
 let renderedSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
@@ -652,6 +657,8 @@ async function configureProduct(
 ): Promise<boolean> {
   if (
     command.kind === "computer.verify-workspace" ||
+    command.kind === "computer.list-workspace" ||
+    command.kind === "computer.search-workspace" ||
     command.kind === "computer.update-exclusions" ||
     command.kind === "computer.remove-workspace"
   ) {
@@ -693,6 +700,16 @@ async function configureProduct(
   if (evidence?.kind === "computer.workspace-read") {
     workspaceEvidence = evidence;
     settingsFeedback = `Read ${evidence.bytes} bytes from ${evidence.relativePath}. Nothing from the file was persisted.`;
+  } else if (evidence?.kind === "computer.workspace-list") {
+    workspaceEvidence = evidence;
+    const location =
+      evidence.relativePath === "."
+        ? "the workspace root"
+        : evidence.relativePath;
+    settingsFeedback = `Listed ${evidence.entries.length} ${evidence.entries.length === 1 ? "entry" : "entries"} from ${location}${evidence.truncated ? " (result limited)" : ""}.`;
+  } else if (evidence?.kind === "computer.workspace-search") {
+    workspaceEvidence = evidence;
+    settingsFeedback = `Found ${evidence.matches.length} ${evidence.matches.length === 1 ? "match" : "matches"} for "${evidence.pattern}"${evidence.resultLimited || evidence.scanLimited ? " (result limited)" : ""}.`;
   } else if (evidence?.kind === "chatgpt.readiness") {
     settingsFeedback =
       evidence.state === "authenticated"
@@ -938,14 +955,92 @@ function renderSettings(): void {
         policy.append(exclusionLabel, saveExclusions);
         card.append(row, policy);
 
+        const query = document.createElement("div");
+        query.className = "workspace-query";
+        const listRoot = document.createElement("button");
+        listRoot.type = "button";
+        listRoot.textContent = "List root";
+        listRoot.disabled = !verified;
+        listRoot.title = verified
+          ? "List the visible entries at this workspace root"
+          : "Verify this workspace first";
+        listRoot.addEventListener("click", () => {
+          void configureProduct(
+            {
+              kind: "computer.list-workspace",
+              workspaceId: workspace.workspaceId,
+              relativePath: ".",
+            },
+            `${workspace.label} root listed.`,
+          );
+        });
+        const searchLabel = document.createElement("label");
+        searchLabel.textContent = "Search workspace";
+        const searchInput = document.createElement("input");
+        searchInput.type = "search";
+        searchInput.maxLength = 160;
+        searchInput.placeholder = "Exact text pattern";
+        searchInput.setAttribute("aria-label", `Search ${workspace.label}`);
+        searchInput.disabled = !verified;
+        searchLabel.append(searchInput);
+        const search = document.createElement("button");
+        search.type = "button";
+        search.textContent = "Search";
+        search.disabled = true;
+        searchInput.addEventListener("input", () => {
+          search.disabled = !verified || searchInput.value.trim().length === 0;
+        });
+        search.addEventListener("click", () => {
+          const command = ProductConfigurationCommandSchema.safeParse({
+            kind: "computer.search-workspace",
+            workspaceId: workspace.workspaceId,
+            relativePath: ".",
+            pattern: searchInput.value.trim(),
+          });
+          if (!command.success) return;
+          void configureProduct(
+            command.data,
+            `${workspace.label} search completed.`,
+          );
+        });
+        query.append(listRoot, searchLabel, search);
+        card.append(query);
+
         if (workspaceEvidence?.workspaceId === workspace.workspaceId) {
           const evidence = document.createElement("section");
-          evidence.className = "workspace-read-evidence";
+          evidence.className =
+            workspaceEvidence.kind === "computer.workspace-read"
+              ? "workspace-read-evidence"
+              : "workspace-query-evidence";
           const heading = document.createElement("strong");
-          heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes${workspaceEvidence.truncated ? " · preview truncated" : ""}`;
-          const preview = document.createElement("pre");
-          preview.textContent = workspaceEvidence.text;
-          evidence.append(heading, preview);
+          if (workspaceEvidence.kind === "computer.workspace-read") {
+            heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.bytes} bytes${workspaceEvidence.truncated ? " · preview truncated" : ""}`;
+            const preview = document.createElement("pre");
+            preview.textContent = workspaceEvidence.text;
+            evidence.append(heading, preview);
+          } else if (workspaceEvidence.kind === "computer.workspace-list") {
+            heading.textContent = `${workspaceEvidence.relativePath} · ${workspaceEvidence.entries.length} visible ${workspaceEvidence.entries.length === 1 ? "entry" : "entries"}${workspaceEvidence.truncated ? " · result limited" : ""}`;
+            const entries = document.createElement("ul");
+            for (const entry of workspaceEvidence.entries) {
+              const item = document.createElement("li");
+              item.textContent = entry;
+              entries.append(item);
+            }
+            evidence.append(heading, entries);
+          } else {
+            heading.textContent = `Search · ${workspaceEvidence.matches.length} ${workspaceEvidence.matches.length === 1 ? "match" : "matches"}${workspaceEvidence.resultLimited || workspaceEvidence.scanLimited ? " · result limited" : ""}`;
+            const matches = document.createElement("ol");
+            for (const match of workspaceEvidence.matches) {
+              const item = document.createElement("li");
+              const location = document.createElement("code");
+              location.textContent = `${match.path}:${match.line}`;
+              const text = document.createElement("span");
+              text.textContent = match.text;
+              item.append(location, text);
+              matches.append(item);
+            }
+            evidence.append(heading, matches);
+          }
           card.append(evidence);
         }
         return card;

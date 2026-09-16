@@ -256,6 +256,28 @@ function workspaceDeniedPaths(
   );
 }
 
+function verifiedProductWorkspace(
+  workspaceId: string,
+):
+  | Readonly<{ status: "verified"; workspace: ApprovedProductWorkspace }>
+  | Readonly<{ status: "not_found" }>
+  | Readonly<{ status: "not_verified" }> {
+  const snapshot = configuration?.snapshot();
+  if (!snapshot || snapshot.status !== "ready") return { status: "not_found" };
+  const workspace = snapshot.settings.computer.workspaces.find(
+    (candidate) => candidate.workspaceId === workspaceId,
+  );
+  if (!workspace) return { status: "not_found" };
+  const verification = snapshot.settings.setup.computer.verified;
+  if (
+    verification?.workspaceId !== workspace.workspaceId ||
+    verification.configRevision !== snapshot.settings.computer.generation
+  ) {
+    return { status: "not_verified" };
+  }
+  return { status: "verified", workspace };
+}
+
 async function selectedWorkspaceFile(
   workspace: ApprovedProductWorkspace,
   labels: Readonly<{ title: string; buttonLabel: string }> = {
@@ -302,6 +324,7 @@ function workspaceReadFailure(code: string): ProductConfigurationResult {
     case "WORKSPACE_NOT_A_FILE":
     case "WORKSPACE_FILE_TOO_LARGE":
     case "WORKSPACE_NOT_TEXT":
+    case "WORKSPACE_SEARCH_TIMEOUT":
       return configurationFailure(code);
     default:
       return configurationFailure("WORKSPACE_READ_FAILED");
@@ -561,6 +584,79 @@ async function configureProduct(
           bytes: result.value.bytes,
           text,
           truncated: text.length < result.value.text.length,
+        },
+      });
+    }
+    case "computer.list-workspace": {
+      const selected = verifiedProductWorkspace(command.workspaceId);
+      if (selected.status === "not_found") {
+        return configurationFailure("WORKSPACE_NOT_FOUND");
+      }
+      if (selected.status === "not_verified") {
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      const result = await nativeWorkspace.execute({
+        workspace: {
+          workspaceId: selected.workspace.workspaceId,
+          root: selected.workspace.root,
+          deniedPaths: workspaceDeniedPaths(selected.workspace),
+        },
+        operation: {
+          kind: "workspace.list",
+          relativePath: command.relativePath,
+        },
+      });
+      if (!result.ok) return workspaceReadFailure(result.error.code);
+      if (result.value.kind !== "workspace.entries") {
+        return configurationFailure("WORKSPACE_READ_FAILED");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: {
+          kind: "computer.workspace-list",
+          workspaceId: selected.workspace.workspaceId,
+          relativePath: command.relativePath,
+          entries: result.value.entries,
+          truncated: result.value.truncated,
+        },
+      });
+    }
+    case "computer.search-workspace": {
+      const selected = verifiedProductWorkspace(command.workspaceId);
+      if (selected.status === "not_found") {
+        return configurationFailure("WORKSPACE_NOT_FOUND");
+      }
+      if (selected.status === "not_verified") {
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      }
+      const result = await nativeWorkspace.execute({
+        workspace: {
+          workspaceId: selected.workspace.workspaceId,
+          root: selected.workspace.root,
+          deniedPaths: workspaceDeniedPaths(selected.workspace),
+        },
+        operation: {
+          kind: "workspace.search",
+          relativePath: command.relativePath,
+          pattern: command.pattern,
+        },
+      });
+      if (!result.ok) return workspaceReadFailure(result.error.code);
+      if (result.value.kind !== "workspace.matches") {
+        return configurationFailure("WORKSPACE_READ_FAILED");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: {
+          kind: "computer.workspace-search",
+          workspaceId: selected.workspace.workspaceId,
+          relativePath: command.relativePath,
+          pattern: command.pattern,
+          matches: result.value.matches,
+          resultLimited: result.value.resultLimited,
+          scanLimited: result.value.scanLimited,
         },
       });
     }

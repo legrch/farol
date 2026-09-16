@@ -40,6 +40,37 @@ const ProductRelativePathSchema = z.string().refine((value) => {
   });
 });
 
+const ProductScopeRelativePathSchema = z
+  .string()
+  .refine(
+    (value) =>
+      value === "." || ProductRelativePathSchema.safeParse(value).success,
+  );
+
+const ProductSearchPatternSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) =>
+    [...value].every((character) => {
+      const code = character.codePointAt(0);
+      return code !== undefined && code >= 32 && code !== 127;
+    }),
+  );
+
+const ProductWorkspaceEntrySchema = z
+  .string()
+  .min(1)
+  .max(256)
+  .refine((value) => {
+    const name = value.endsWith("/") ? value.slice(0, -1) : value;
+    return (
+      name.length > 0 &&
+      !name.includes("/") &&
+      ProductRelativePathSchema.safeParse(name).success
+    );
+  });
+
 export const ProductGeneralSettingsSchema = z.strictObject({
   openAtLaunch: z.enum(["browser", "activity", "settings"]),
   sidebarDefault: z.enum(["full", "rail"]),
@@ -169,6 +200,17 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
   }),
   z.strictObject({
+    kind: z.literal("computer.list-workspace"),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductScopeRelativePathSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.search-workspace"),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductScopeRelativePathSchema,
+    pattern: ProductSearchPatternSchema,
+  }),
+  z.strictObject({
     kind: z.literal("setup.progress"),
     currentStep: SetupStepIdSchema,
     dismissed: z.boolean(),
@@ -237,6 +279,31 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     text: z.string().max(32_768),
     truncated: z.boolean(),
   }),
+  z.strictObject({
+    kind: z.literal("computer.workspace-list"),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductScopeRelativePathSchema,
+    entries: z.array(ProductWorkspaceEntrySchema).max(500),
+    truncated: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("computer.workspace-search"),
+    workspaceId: IdentifierSchema,
+    relativePath: ProductScopeRelativePathSchema,
+    pattern: ProductSearchPatternSchema,
+    matches: z
+      .array(
+        z.strictObject({
+          path: ProductRelativePathSchema,
+          line: z.number().int().positive(),
+          text: z.string().max(500),
+          truncated: z.boolean(),
+        }),
+      )
+      .max(100),
+    resultLimited: z.boolean(),
+    scanLimited: z.boolean(),
+  }),
 ]);
 
 export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
@@ -264,6 +331,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_NOT_A_FILE",
       "WORKSPACE_FILE_TOO_LARGE",
       "WORKSPACE_NOT_TEXT",
+      "WORKSPACE_SEARCH_TIMEOUT",
+      "WORKSPACE_VERIFICATION_REQUIRED",
       "WORKSPACE_READ_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
