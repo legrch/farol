@@ -49,6 +49,12 @@ const content: CheckpointContent = {
   nextSafeStep: "Observe write-17 before another mutation.",
 };
 
+const request = {
+  operationId: "compact-atlantic-1",
+  source: "retained_agent" as const,
+  sourceBoundary: "message-42",
+};
+
 function value<T>(result: {
   ok: boolean;
   value?: T;
@@ -133,6 +139,15 @@ describe("private context persistence", () => {
     const savedCheckpoint = checkpoint("checkpoint-1", 1_000);
     await first.save(session);
     await first.put(savedCheckpoint);
+    const admission = await first.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (admission.status !== "acquired") {
+      throw new Error(`EXPECTED_ADMISSION_${admission.status}`);
+    }
+    await first.releaseCompactionAdmission(admission.lease);
 
     const restarted = new PrivateContextStore({ root: stateRoot });
     await expect(restarted.load(binding)).resolves.toEqual(session);
@@ -155,6 +170,131 @@ describe("private context persistence", () => {
       expect(stat.mode & 0o077).toBe(0);
       expect(stat.mode & 0o700).toBe(stat.isDirectory() ? 0o700 : 0o600);
     }
+  });
+
+  it("fences concurrent coordinators through the shared filesystem", async () => {
+    const stateRoot = await root();
+    const first = new PrivateContextStore({ root: stateRoot });
+    const second = new PrivateContextStore({ root: stateRoot });
+
+    const results = await Promise.all([
+      first.acquireCompactionAdmission(binding, 1, request),
+      second.acquireCompactionAdmission(binding, 1, {
+        ...request,
+        operationId: "automatic-atlantic-1",
+      }),
+    ]);
+
+    expect(
+      results.filter((result) => result.status === "acquired"),
+    ).toHaveLength(1);
+    expect(results.filter((result) => result.status === "busy")).toHaveLength(
+      1,
+    );
+    const acquired = results.find((result) => result.status === "acquired");
+    if (!acquired || acquired.status !== "acquired") {
+      throw new Error("EXPECTED_ONE_ADMISSION");
+    }
+    await first.releaseCompactionAdmission(acquired.lease);
+
+    const persisted = await second.acquireCompactionAdmission(
+      binding,
+      1,
+      acquired.admission.request,
+    );
+    expect(persisted).toMatchObject({
+      status: "acquired",
+      admission: acquired.admission,
+    });
+    if (persisted.status !== "acquired") {
+      throw new Error(`EXPECTED_PERSISTED_ADMISSION_${persisted.status}`);
+    }
+    await second.releaseCompactionAdmission(persisted.lease);
+  });
+
+  it("rejects binding, epoch, and request changes against durable admission", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({ root: stateRoot });
+    const admitted = await store.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (admitted.status !== "acquired") {
+      throw new Error(`EXPECTED_ADMISSION_${admitted.status}`);
+    }
+    await store.releaseCompactionAdmission(admitted.lease);
+
+    const changedRequest = await store.acquireCompactionAdmission(binding, 1, {
+      ...request,
+      operationId: "automatic-atlantic-1",
+    });
+    expect(changedRequest).toEqual({
+      status: "conflict",
+      reason: "request",
+    });
+
+    const changedEpoch = await store.acquireCompactionAdmission(
+      binding,
+      2,
+      request,
+    );
+    expect(changedEpoch).toEqual({ status: "conflict", reason: "epoch" });
+
+    const changedBinding = await store.acquireCompactionAdmission(
+      { ...binding, providerProfileId: "profile-foreign" },
+      1,
+      request,
+    );
+    expect(changedBinding).toEqual({
+      status: "conflict",
+      reason: "binding",
+    });
+  });
+
+  it("reclaims a lease only after the recorded process is proven dead", async () => {
+    const stateRoot = await root();
+    const abandoned = new PrivateContextStore({ root: stateRoot });
+    const first = await abandoned.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (first.status !== "acquired") {
+      throw new Error(`EXPECTED_ADMISSION_${first.status}`);
+    }
+
+    const recovering = new PrivateContextStore(
+      { root: stateRoot },
+      { isProcessAlive: () => false },
+    );
+    const recovered = await recovering.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    expect(recovered).toMatchObject({ status: "acquired" });
+    if (recovered.status !== "acquired") {
+      throw new Error(`EXPECTED_RECOVERY_${recovered.status}`);
+    }
+    expect(recovered.lease.token).not.toBe(first.lease.token);
+    await recovering.releaseCompactionAdmission(recovered.lease);
+  });
+
+  it("keeps the core session binding immutable", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({ root: stateRoot });
+    const session = createContextSession(binding);
+    await store.save(session);
+
+    const foreignBinding = {
+      ...binding,
+      providerProfileId: "profile-foreign",
+    };
+    await expect(store.load(foreignBinding)).resolves.toEqual(session);
+    await expect(
+      store.save(createContextSession(foreignBinding)),
+    ).rejects.toThrow("CONTEXT_STATE_BINDING_MISMATCH");
   });
 
   it("keeps the previous durable session when replacement is interrupted", async () => {

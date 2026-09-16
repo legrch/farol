@@ -4,13 +4,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { CheckpointStore } from "../../app/port/checkpoint-store";
-import type { ContextRepository } from "../../app/port/context-repository";
+import type {
+  ContextAdmission,
+  ContextAdmissionLease,
+  ContextAdmissionResult,
+  ContextRepository,
+} from "../../app/port/context-repository";
 import {
   validateCheckpointEnvelope,
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 import {
+  sameCompactionRequest,
   sameContextBinding,
+  sameContextSessionIdentity,
+  type CompactionRequest,
   type ContextBinding,
   type ContextSession,
 } from "../../domain/context-continuity";
@@ -35,26 +43,46 @@ const operationSchema = z.strictObject({
   hostContextRef: z.string().min(1).max(160).nullable(),
 });
 
-const sessionSchema = z.strictObject({
-  binding: bindingSchema,
-  epoch: z.number().int().positive(),
-  phase: z.enum([
-    "active",
-    "quiescing",
-    "checkpoint_requested",
-    "validated",
-    "durably_stored",
-    "handoff_offered",
-    "host_context_confirmed",
-    "old_epoch_retired",
-    "blocked",
-    "outcome_unknown",
-  ]),
-  operation: operationSchema.nullable(),
-  lastCheckpointId: z.string().min(1).max(160).nullable(),
-  lastCompletedOperationId: z.string().min(1).max(160).nullable(),
-  blockedCode: z.string().min(1).max(160).nullable(),
+const compactionRequestSchema = z.strictObject({
+  operationId: z.string().min(1).max(160),
+  source: z.enum(["retained_agent", "canonical_history"]),
+  sourceBoundary: z.string().min(1).max(160),
 });
+
+const sessionSchema = z
+  .strictObject({
+    binding: bindingSchema,
+    epoch: z.number().int().positive(),
+    phase: z.enum([
+      "active",
+      "quiescing",
+      "checkpoint_requested",
+      "validated",
+      "durably_stored",
+      "handoff_offered",
+      "host_context_confirmed",
+      "old_epoch_retired",
+      "blocked",
+      "outcome_unknown",
+    ]),
+    operation: operationSchema.nullable(),
+    lastCheckpointId: z.string().min(1).max(160).nullable(),
+    lastCompletedOperationId: z.string().min(1).max(160).nullable(),
+    lastCompletedRequest: compactionRequestSchema.nullable().optional(),
+    blockedCode: z.string().min(1).max(160).nullable(),
+  })
+  .superRefine((session, context) => {
+    if (
+      session.lastCompletedRequest &&
+      session.lastCompletedOperationId !==
+        session.lastCompletedRequest.operationId
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "completed operation identity mismatch",
+      });
+    }
+  });
 
 const sessionRecordSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -66,6 +94,25 @@ const checkpointRecordSchema = z.strictObject({
   schemaVersion: z.literal(1),
   kind: z.literal("context_checkpoint"),
   checkpoint: z.unknown(),
+});
+
+const admissionSchema = z.strictObject({
+  binding: bindingSchema,
+  sourceEpoch: z.number().int().positive(),
+  request: compactionRequestSchema,
+});
+
+const admissionRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_admission"),
+  admission: admissionSchema,
+});
+
+const admissionLeaseRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_admission_lease"),
+  processId: z.number().int().positive(),
+  token: z.string().length(32),
 });
 
 const CLOSE_ON_EXEC =
@@ -87,6 +134,7 @@ export type PrivateContextStoreOptions = Readonly<{
 
 export type AtomicWriteHooks = Readonly<{
   beforeCommit?: (target: string) => Promise<void>;
+  isProcessAlive?: (processId: number) => boolean | Promise<boolean>;
 }>;
 
 type ParsedRecord = Readonly<{
@@ -104,10 +152,29 @@ function bindingKey(binding: ContextBinding): string {
     binding.taskId,
     binding.hostThreadId,
     binding.sessionId,
-    binding.providerProfileId,
-    binding.modelId,
-    binding.mode,
   ]);
+}
+
+function boundaryKey(request: CompactionRequest): string {
+  return digest([request.source, request.sourceBoundary]);
+}
+
+function admissionConflict(
+  admission: ContextAdmission,
+  binding: ContextBinding,
+  sourceEpoch: number,
+  request: CompactionRequest,
+): ContextAdmissionResult | null {
+  if (!sameContextBinding(admission.binding, binding)) {
+    return { status: "conflict", reason: "binding" };
+  }
+  if (admission.sourceEpoch !== sourceEpoch) {
+    return { status: "conflict", reason: "epoch" };
+  }
+  if (!sameCompactionRequest(admission.request, request)) {
+    return { status: "conflict", reason: "request" };
+  }
+  return null;
 }
 
 function checkpointKey(checkpointId: string): string {
@@ -162,26 +229,126 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!parsed.success) {
       throw this.schemaError(record.value, "CONTEXT_STATE");
     }
-    if (!sameContextBinding(parsed.data.session.binding, binding)) {
-      throw new Error("CONTEXT_STATE_BINDING_MISMATCH");
+    if (!sameContextSessionIdentity(parsed.data.session.binding, binding)) {
+      throw new Error("CONTEXT_STATE_IDENTITY_MISMATCH");
     }
-    return structuredClone(parsed.data.session);
+    return structuredClone({
+      ...parsed.data.session,
+      lastCompletedRequest: parsed.data.session.lastCompletedRequest ?? null,
+    });
   }
 
   async save(session: ContextSession): Promise<void> {
     const parsed = sessionSchema.safeParse(session);
     if (!parsed.success) throw new Error("CONTEXT_STATE_INVALID");
+    const existing = await this.load(session.binding);
+    if (existing && !sameContextBinding(existing.binding, session.binding)) {
+      throw new Error("CONTEXT_STATE_BINDING_MISMATCH");
+    }
     const directory = await this.ensureTaskDirectory(session.binding);
     await this.atomicWrite(
       path.join(directory, "session.json"),
       {
         schemaVersion: 1,
         kind: "context_session",
-        session: parsed.data,
+        session: {
+          ...parsed.data,
+          lastCompletedRequest: parsed.data.lastCompletedRequest ?? null,
+        },
       },
       this.maximumSessionBytes,
       "CONTEXT_STATE_OVERSIZED",
     );
+  }
+
+  async acquireCompactionAdmission(
+    binding: ContextBinding,
+    sourceEpoch: number,
+    request: CompactionRequest,
+  ): Promise<ContextAdmissionResult> {
+    if (!Number.isSafeInteger(sourceEpoch) || sourceEpoch < 1) {
+      throw new Error("CONTEXT_ADMISSION_EPOCH_INVALID");
+    }
+    const task = await this.ensureTaskDirectory(binding);
+    const lease = await this.acquireAdmissionLease(binding, task);
+    if (!lease) return { status: "busy" };
+
+    try {
+      const admissions = await this.ensureAdmissionDirectories(task);
+      const boundaryFile = path.join(
+        admissions.boundaries,
+        `${boundaryKey(request)}.json`,
+      );
+      const existingBoundary = await this.readAdmission(boundaryFile);
+      if (existingBoundary) {
+        const conflict = admissionConflict(
+          existingBoundary,
+          binding,
+          sourceEpoch,
+          request,
+        );
+        if (conflict) {
+          await this.releaseCompactionAdmission(lease);
+          return conflict;
+        }
+      }
+
+      const epochFile = path.join(admissions.epochs, `${sourceEpoch}.json`);
+      const existingEpoch = await this.readAdmission(epochFile);
+      if (existingEpoch) {
+        const conflict = admissionConflict(
+          existingEpoch,
+          binding,
+          sourceEpoch,
+          request,
+        );
+        if (conflict) {
+          await this.releaseCompactionAdmission(lease);
+          return conflict;
+        }
+      }
+
+      const admission: ContextAdmission = {
+        binding: { ...binding },
+        sourceEpoch,
+        request: { ...request },
+      };
+      if (!existingEpoch) {
+        await this.createAdmission(epochFile, admission);
+      }
+      if (!existingBoundary) {
+        await this.createAdmission(boundaryFile, admission);
+      }
+      return {
+        status: "acquired",
+        admission: structuredClone(admission),
+        lease,
+      };
+    } catch (error) {
+      await this.releaseCompactionAdmission(lease).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async releaseCompactionAdmission(
+    lease: ContextAdmissionLease,
+  ): Promise<void> {
+    const file = this.admissionLeaseFile(lease.sessionKey);
+    const record = await this.readRecord(
+      file,
+      this.maximumSessionBytes,
+      "CONTEXT_LEASE",
+    );
+    if (!record) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
+    const parsed = admissionLeaseRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_LEASE");
+    }
+    if (parsed.data.token !== lease.token) {
+      throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
+    }
+    await fs.unlink(file);
+    await this.syncDirectory(path.dirname(file));
   }
 
   async put(checkpoint: CheckpointEnvelope): Promise<void> {
@@ -240,6 +407,115 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     this.assertPrivateDirectory(info, "CONTEXT_TASK_DIRECTORY_UNSAFE");
     await fs.rm(directory, { recursive: true, force: false });
     await this.syncDirectory(path.join(this.options.root, "tasks"));
+  }
+
+  private async acquireAdmissionLease(
+    binding: ContextBinding,
+    taskDirectory: string,
+  ): Promise<ContextAdmissionLease | null> {
+    const sessionKey = bindingKey(binding);
+    const file = path.join(taskDirectory, "admission.lock");
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const token = randomBytes(16).toString("hex");
+      const created = await this.exclusiveWrite(
+        file,
+        {
+          schemaVersion: 1,
+          kind: "context_admission_lease",
+          processId: process.pid,
+          token,
+        },
+        this.maximumSessionBytes,
+        "CONTEXT_LEASE_OVERSIZED",
+      );
+      if (created) return { sessionKey, token };
+
+      let record: ParsedRecord | null;
+      try {
+        record = await this.readRecord(
+          file,
+          this.maximumSessionBytes,
+          "CONTEXT_LEASE",
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "";
+        if (
+          attempt < 7 &&
+          (message === "CONTEXT_LEASE_UNSAFE" ||
+            message === "CONTEXT_LEASE_CORRUPT")
+        ) {
+          await new Promise<void>((resolve) => setTimeout(resolve, 1));
+          continue;
+        }
+        throw error;
+      }
+      if (!record) continue;
+      const parsed = admissionLeaseRecordSchema.safeParse(record.value);
+      if (!parsed.success) {
+        throw this.schemaError(record.value, "CONTEXT_LEASE");
+      }
+      if (await this.processIsAlive(parsed.data.processId)) return null;
+
+      const stale = path.join(
+        taskDirectory,
+        `.admission.lock.stale-${randomBytes(8).toString("hex")}`,
+      );
+      try {
+        await fs.rename(file, stale);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      await this.syncDirectory(taskDirectory);
+      await fs.unlink(stale);
+      await this.syncDirectory(taskDirectory);
+    }
+    throw new Error("CONTEXT_ADMISSION_CONTENTION");
+  }
+
+  private async processIsAlive(processId: number): Promise<boolean> {
+    if (this.hooks.isProcessAlive) {
+      return this.hooks.isProcessAlive(processId);
+    }
+    try {
+      process.kill(processId, 0);
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ESRCH") return false;
+      return true;
+    }
+  }
+
+  private async createAdmission(
+    file: string,
+    admission: ContextAdmission,
+  ): Promise<void> {
+    const created = await this.exclusiveWrite(
+      file,
+      {
+        schemaVersion: 1,
+        kind: "context_admission",
+        admission,
+      },
+      this.maximumSessionBytes,
+      "CONTEXT_ADMISSION_OVERSIZED",
+    );
+    if (!created) throw new Error("CONTEXT_ADMISSION_RACE");
+  }
+
+  private async readAdmission(file: string): Promise<ContextAdmission | null> {
+    const record = await this.readRecord(
+      file,
+      this.maximumSessionBytes,
+      "CONTEXT_ADMISSION",
+    );
+    if (!record) return null;
+    const parsed = admissionRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_ADMISSION");
+    }
+    return structuredClone(parsed.data.admission);
   }
 
   private validateCheckpoint(candidate: unknown): CheckpointEnvelope {
@@ -315,7 +591,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private async readRecord(
     file: string,
     maximumBytes: number,
-    code: "CONTEXT_STATE" | "CHECKPOINT_STATE",
+    code:
+      | "CHECKPOINT_STATE"
+      | "CONTEXT_ADMISSION"
+      | "CONTEXT_LEASE"
+      | "CONTEXT_STATE",
   ): Promise<ParsedRecord | null> {
     let handle;
     try {
@@ -398,6 +678,44 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  private async exclusiveWrite(
+    target: string,
+    value: unknown,
+    maximumBytes: number,
+    oversizedCode: string,
+  ): Promise<boolean> {
+    const serialized = `${JSON.stringify(value)}\n`;
+    if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
+      throw new Error(oversizedCode);
+    }
+    let handle;
+    try {
+      handle = await fs.open(
+        target,
+        fsConstants.O_WRONLY |
+          fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC,
+        0o600,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+    let complete = false;
+    try {
+      await handle.writeFile(serialized, "utf8");
+      await handle.sync();
+      complete = true;
+    } finally {
+      await handle.close();
+      if (!complete) await fs.unlink(target).catch(() => undefined);
+    }
+    await this.syncDirectory(path.dirname(target));
+    return true;
+  }
+
   private async ensureRoot(): Promise<void> {
     await this.ensurePrivateDirectory(this.options.root);
     await this.ensurePrivateDirectory(path.join(this.options.root, "tasks"));
@@ -417,6 +735,21 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     const directory = path.join(task, "checkpoints");
     await this.ensurePrivateDirectory(directory);
     return directory;
+  }
+
+  private async ensureAdmissionDirectories(task: string): Promise<
+    Readonly<{
+      boundaries: string;
+      epochs: string;
+    }>
+  > {
+    const root = path.join(task, "admissions");
+    const boundaries = path.join(root, "boundaries");
+    const epochs = path.join(root, "epochs");
+    await this.ensurePrivateDirectory(root);
+    await this.ensurePrivateDirectory(boundaries);
+    await this.ensurePrivateDirectory(epochs);
+    return { boundaries, epochs };
   }
 
   private async ensurePrivateDirectory(directory: string): Promise<void> {
@@ -474,6 +807,13 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
 
   private taskDirectory(binding: ContextBinding): string {
     return path.join(this.options.root, "tasks", bindingKey(binding));
+  }
+
+  private admissionLeaseFile(sessionKey: string): string {
+    if (!/^[a-f0-9]{64}$/u.test(sessionKey)) {
+      throw new Error("CONTEXT_ADMISSION_LEASE_KEY_INVALID");
+    }
+    return path.join(this.options.root, "tasks", sessionKey, "admission.lock");
   }
 
   private checkpointDirectory(binding: ContextBinding): string {

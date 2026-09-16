@@ -142,12 +142,14 @@ function sessionAt(
 function harness(
   options: Readonly<{
     initial?: ContextSession;
+    now?: () => number;
     summary?: ContextSummaryReceipt;
+    sessions?: InMemoryContextSessions;
   }> = {},
 ) {
-  const sessions = new InMemoryContextSessions(
-    options.initial ? [options.initial] : [],
-  );
+  const sessions =
+    options.sessions ??
+    new InMemoryContextSessions(options.initial ? [options.initial] : []);
   const checkpoints = new InMemoryCheckpoints();
   const request = vi
     .fn<ContextSummarizer["request"]>()
@@ -172,7 +174,7 @@ function harness(
     checkpoints,
     { offer, reconcile },
     { retire },
-    { now: () => 1_000 },
+    { now: options.now ?? (() => 1_000) },
     { nextCheckpointId: () => "checkpoint-1" },
     16_384,
   );
@@ -228,6 +230,164 @@ describe("context continuity transaction", () => {
         executionTools: [],
       }),
     );
+  });
+
+  it("serializes distinct triggers for the same source boundary", async () => {
+    const test = harness();
+    const automatic = {
+      ...command,
+      operationId: "automatic-atlantic-1",
+    };
+
+    const [manualResult, automaticResult] = await Promise.all([
+      test.service.execute(command),
+      test.service.execute(automatic),
+    ]);
+
+    const rejected = [manualResult, automaticResult].find(
+      (result) => !result.ok,
+    );
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_ADMISSION_CONFLICT" },
+    });
+    expect(test.request).toHaveBeenCalledTimes(1);
+    expect(test.offer).toHaveBeenCalledTimes(1);
+    expect(test.retire).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects an in-flight trigger with a foreign immutable binding", async () => {
+    const test = harness();
+    const foreign = {
+      ...command,
+      binding: {
+        ...command.binding,
+        providerProfileId: "profile-foreign",
+      },
+    };
+
+    const [accepted, rejected] = await Promise.all([
+      test.service.execute(command),
+      test.service.execute(foreign),
+    ]);
+
+    expect(accepted).toMatchObject({ ok: true });
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_BINDING_CONFLICT" },
+    });
+    expect(test.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("fences two coordinators sharing one durable session", async () => {
+    const sessions = new InMemoryContextSessions();
+    const first = harness({ sessions });
+    const second = harness({ sessions });
+
+    const results = await Promise.all([
+      first.service.execute(command),
+      second.service.execute({
+        ...command,
+        operationId: "automatic-atlantic-1",
+      }),
+    ]);
+
+    const rejected = results.find((result) => !result.ok);
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: {
+        code: expect.stringMatching(
+          /CONTEXT_(ADMISSION_CONFLICT|OPERATION_IN_PROGRESS)/u,
+        ),
+      },
+    });
+    expect(
+      first.request.mock.calls.length + second.request.mock.calls.length,
+    ).toBe(1);
+  });
+
+  it("fails closed when the durable admission lease cannot be released", async () => {
+    const test = harness();
+    vi.spyOn(test.sessions, "releaseCompactionAdmission").mockRejectedValueOnce(
+      new Error("synthetic lease release failure"),
+    );
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_REPOSITORY_FAILED" },
+    });
+    expect(test.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when durable admission cannot be read", async () => {
+    const test = harness();
+    vi.spyOn(test.sessions, "acquireCompactionAdmission").mockRejectedValueOnce(
+      new Error("synthetic admission read failure"),
+    );
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_REPOSITORY_FAILED" },
+    });
+    expect(test.request).not.toHaveBeenCalled();
+  });
+
+  it("maps durable admission binding conflicts without starting work", async () => {
+    const test = harness();
+    vi.spyOn(test.sessions, "acquireCompactionAdmission").mockResolvedValueOnce(
+      { status: "conflict", reason: "binding" },
+    );
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_BINDING_CONFLICT" },
+    });
+    expect(test.request).not.toHaveBeenCalled();
+  });
+
+  it("releases the admission while preserving an unexpected execution error", async () => {
+    const test = harness({
+      now: () => {
+        throw new Error("synthetic clock failure");
+      },
+    });
+    const release = vi
+      .spyOn(test.sessions, "releaseCompactionAdmission")
+      .mockRejectedValueOnce(new Error("synthetic lease release failure"));
+
+    await expect(test.service.execute(command)).rejects.toThrow(
+      "synthetic clock failure",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps unrelated sessions independent while each is admitted once", async () => {
+    const sessions = new InMemoryContextSessions();
+    const first = harness({ sessions });
+    const second = harness({ sessions });
+    const harbor = {
+      ...command,
+      binding: {
+        ...binding,
+        taskId: "task-harbor",
+        hostThreadId: "thread-harbor",
+        sessionId: "session-harbor",
+      },
+      operationId: "compact-harbor-1",
+      sourceBoundary: "message-harbor-42",
+    };
+
+    const results = await Promise.all([
+      first.service.execute(command),
+      second.service.execute(harbor),
+    ]);
+
+    expect(results).toEqual([
+      expect.objectContaining({ ok: true }),
+      expect.objectContaining({ ok: true }),
+    ]);
+    expect(first.request).toHaveBeenCalledTimes(1);
+    expect(second.request).toHaveBeenCalledTimes(1);
   });
 
   it("observes a recovered request instead of resubmitting it", async () => {
@@ -402,7 +562,7 @@ describe("context continuity transaction", () => {
     });
     await expect(foreign.service.execute(command)).resolves.toMatchObject({
       ok: false,
-      error: { code: "CONTEXT_REPOSITORY_FAILED" },
+      error: { code: "CONTEXT_BINDING_CONFLICT" },
     });
 
     const noOperation = harness({
@@ -445,6 +605,41 @@ describe("context continuity transaction", () => {
     expect(test.observe).not.toHaveBeenCalled();
     expect(test.offer).not.toHaveBeenCalled();
     expect(test.retire).not.toHaveBeenCalled();
+  });
+
+  it("rejects completed-operation replay with a changed payload", async () => {
+    const test = harness({ initial: sessionAt("active_completed") });
+    await seedCheckpoint(test);
+
+    await expect(
+      test.service.execute({
+        ...command,
+        sourceBoundary: "message-forged",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_ADMISSION_CONFLICT" },
+    });
+    expect(test.request).not.toHaveBeenCalled();
+    expect(test.observe).not.toHaveBeenCalled();
+    expect(test.offer).not.toHaveBeenCalled();
+    expect(test.retire).not.toHaveBeenCalled();
+  });
+
+  it("does not replay a legacy completed id without its full payload", async () => {
+    const test = harness({
+      initial: {
+        ...sessionAt("active_completed"),
+        lastCompletedRequest: null,
+      },
+    });
+    await seedCheckpoint(test);
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_ADMISSION_CONFLICT" },
+    });
+    expect(test.request).not.toHaveBeenCalled();
   });
 
   it("classifies thrown, blocked, and malformed summary outcomes", async () => {

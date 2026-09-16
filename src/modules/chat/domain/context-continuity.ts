@@ -47,11 +47,13 @@ export type ContextSession = Readonly<{
   operation: ContextOperation | null;
   lastCheckpointId: string | null;
   lastCompletedOperationId: string | null;
+  lastCompletedRequest: CompactionRequest | null;
   blockedCode: string | null;
 }>;
 
 export type ContextErrorCode =
   | "CONTEXT_OPERATION_INVALID"
+  | "CONTEXT_OPERATION_CONFLICT"
   | "CONTEXT_OPERATION_IN_PROGRESS"
   | "CONTEXT_INVALID_TRANSITION"
   | "CHECKPOINT_BINDING_MISMATCH"
@@ -93,6 +95,50 @@ export function sameContextBinding(
   );
 }
 
+export function sameContextSessionIdentity(
+  left: ContextBinding,
+  right: ContextBinding,
+): boolean {
+  return (
+    left.ownerId === right.ownerId &&
+    left.taskId === right.taskId &&
+    left.hostThreadId === right.hostThreadId &&
+    left.sessionId === right.sessionId
+  );
+}
+
+export function validContextBinding(binding: ContextBinding): boolean {
+  return (
+    validIdentity(binding.ownerId) &&
+    validIdentity(binding.taskId) &&
+    validIdentity(binding.hostThreadId) &&
+    validIdentity(binding.sessionId) &&
+    validIdentity(binding.providerProfileId) &&
+    validIdentity(binding.modelId) &&
+    validIdentity(binding.mode)
+  );
+}
+
+export function validCompactionRequest(request: CompactionRequest): boolean {
+  return (
+    validIdentity(request.operationId) &&
+    validIdentity(request.sourceBoundary) &&
+    (request.source === "retained_agent" ||
+      request.source === "canonical_history")
+  );
+}
+
+export function sameCompactionRequest(
+  left: CompactionRequest,
+  right: CompactionRequest,
+): boolean {
+  return (
+    left.operationId === right.operationId &&
+    left.source === right.source &&
+    left.sourceBoundary === right.sourceBoundary
+  );
+}
+
 export function createContextSession(binding: ContextBinding): ContextSession {
   return {
     binding: { ...binding },
@@ -101,6 +147,7 @@ export function createContextSession(binding: ContextBinding): ContextSession {
     operation: null,
     lastCheckpointId: null,
     lastCompletedOperationId: null,
+    lastCompletedRequest: null,
     blockedCode: null,
   };
 }
@@ -109,21 +156,14 @@ function sameOperation(
   operation: ContextOperation,
   request: CompactionRequest,
 ): boolean {
-  return (
-    operation.operationId === request.operationId &&
-    operation.source === request.source &&
-    operation.sourceBoundary === request.sourceBoundary
-  );
+  return sameCompactionRequest(operation, request);
 }
 
 export function beginCompaction(
   session: ContextSession,
   request: CompactionRequest,
 ): Result<ContextSession, ContextErrorCode> {
-  if (
-    !validIdentity(request.operationId) ||
-    !validIdentity(request.sourceBoundary)
-  ) {
+  if (!validCompactionRequest(request)) {
     return failure("CONTEXT_OPERATION_INVALID");
   }
   if (session.operation) {
@@ -134,8 +174,19 @@ export function beginCompaction(
   if (session.phase !== "active") {
     return failure("CONTEXT_INVALID_TRANSITION");
   }
-  if (session.lastCompletedOperationId === request.operationId) {
-    return success(session);
+  if (session.lastCompletedRequest) {
+    if (sameCompactionRequest(session.lastCompletedRequest, request)) {
+      return success(session);
+    }
+    if (
+      session.lastCompletedRequest.operationId === request.operationId ||
+      (session.lastCompletedRequest.source === request.source &&
+        session.lastCompletedRequest.sourceBoundary === request.sourceBoundary)
+    ) {
+      return failure("CONTEXT_OPERATION_CONFLICT");
+    }
+  } else if (session.lastCompletedOperationId === request.operationId) {
+    return failure("CONTEXT_OPERATION_CONFLICT");
   }
   return success({
     ...session,
@@ -301,6 +352,11 @@ export function activateNextEpoch(
     operation: null,
     lastCheckpointId: operation.checkpointId,
     lastCompletedOperationId: operation.operationId,
+    lastCompletedRequest: {
+      operationId: operation.operationId,
+      source: operation.source,
+      sourceBoundary: operation.sourceBoundary,
+    },
     blockedCode: null,
   });
 }

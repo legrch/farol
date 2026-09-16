@@ -5,7 +5,10 @@ import {
 } from "../../../../pkg/kernel/domain/result";
 import type { Clock } from "../../../../pkg/kernel/app/clock";
 import type { CheckpointStore } from "../port/checkpoint-store";
-import type { ContextRepository } from "../port/context-repository";
+import type {
+  ContextAdmissionLease,
+  ContextRepository,
+} from "../port/context-repository";
 import type {
   ContextSummarizer,
   ContextSummaryReceipt,
@@ -31,7 +34,10 @@ import {
   requestCheckpoint,
   restoreActiveBeforeSummaryDispatch,
   restoreStoredBeforeHostOffer,
+  sameCompactionRequest,
   sameContextBinding,
+  validCompactionRequest,
+  validContextBinding,
   type CompactionRequest,
   type ContextBinding,
   type ContextSession,
@@ -51,6 +57,9 @@ export type CompactContextReceipt = Readonly<{
 }>;
 
 export type CompactContextErrorCode =
+  | "CONTEXT_ADMISSION_CONFLICT"
+  | "CONTEXT_BINDING_CONFLICT"
+  | "CONTEXT_OPERATION_IN_PROGRESS"
   | "CONTEXT_REPOSITORY_FAILED"
   | "CONTEXT_TRANSITION_FAILED"
   | "CHECKPOINT_STORE_FAILED"
@@ -63,7 +72,12 @@ export interface CheckpointIds {
 export class CompactContext {
   private readonly inFlight = new Map<
     string,
-    Promise<Result<CompactContextReceipt, CompactContextErrorCode>>
+    Readonly<{
+      command: CompactContextCommand;
+      execution: Promise<
+        Result<CompactContextReceipt, CompactContextErrorCode>
+      >;
+    }>
   >();
 
   constructor(
@@ -80,18 +94,38 @@ export class CompactContext {
   execute(
     command: CompactContextCommand,
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
+    const selected: CompactContextCommand = {
+      binding: { ...command.binding },
+      operationId: command.operationId,
+      source: command.source,
+      sourceBoundary: command.sourceBoundary,
+    };
+    if (
+      !validContextBinding(selected.binding) ||
+      !validCompactionRequest(selected)
+    ) {
+      return Promise.resolve(failure("CONTEXT_TRANSITION_FAILED"));
+    }
     const key = JSON.stringify([
-      command.binding.ownerId,
-      command.binding.taskId,
-      command.binding.sessionId,
-      command.operationId,
+      selected.binding.ownerId,
+      selected.binding.taskId,
+      selected.binding.hostThreadId,
+      selected.binding.sessionId,
     ]);
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const execution = this.executeOnce(command).finally(() => {
+    if (existing) {
+      if (!sameContextBinding(existing.command.binding, selected.binding)) {
+        return Promise.resolve(failure("CONTEXT_BINDING_CONFLICT"));
+      }
+      if (!sameCompactionRequest(existing.command, selected)) {
+        return Promise.resolve(failure("CONTEXT_ADMISSION_CONFLICT"));
+      }
+      return existing.execution;
+    }
+    const execution = this.executeOnce(selected).finally(() => {
       this.inFlight.delete(key);
     });
-    this.inFlight.set(key, execution);
+    this.inFlight.set(key, { command: selected, execution });
     return execution;
   }
 
@@ -107,21 +141,97 @@ export class CompactContext {
       return failure("CONTEXT_REPOSITORY_FAILED");
     }
     if (!sameContextBinding(session.binding, command.binding)) {
-      return failure("CONTEXT_REPOSITORY_FAILED");
+      return failure("CONTEXT_BINDING_CONFLICT");
     }
 
-    if (
+    if (session.phase !== "active") {
+      if (session.operation === null) {
+        return failure("CONTEXT_TRANSITION_FAILED");
+      }
+      if (!sameCompactionRequest(session.operation, command)) {
+        return failure("CONTEXT_ADMISSION_CONFLICT");
+      }
+    }
+
+    if (session.phase === "active" && session.lastCompletedRequest) {
+      if (!sameCompactionRequest(session.lastCompletedRequest, command)) {
+        if (
+          session.lastCompletedRequest.operationId === command.operationId ||
+          (session.lastCompletedRequest.source === command.source &&
+            session.lastCompletedRequest.sourceBoundary ===
+              command.sourceBoundary)
+        ) {
+          return failure("CONTEXT_ADMISSION_CONFLICT");
+        }
+      } else {
+        const checkpoint = await this.loadCheckpoint(
+          session.binding,
+          session.lastCheckpointId,
+        );
+        if (!checkpoint.ok) return checkpoint;
+        return success({ session, checkpoint: checkpoint.value });
+      }
+    } else if (
       session.phase === "active" &&
       session.lastCompletedOperationId === command.operationId
     ) {
-      const checkpoint = await this.loadCheckpoint(
-        session.binding,
-        session.lastCheckpointId,
-      );
-      if (!checkpoint.ok) return checkpoint;
-      return success({ session, checkpoint: checkpoint.value });
+      return failure("CONTEXT_ADMISSION_CONFLICT");
     }
 
+    const sourceEpoch = session.operation?.sourceEpoch ?? session.epoch;
+    let admission;
+    try {
+      admission = await this.sessions.acquireCompactionAdmission(
+        command.binding,
+        sourceEpoch,
+        command,
+      );
+    } catch {
+      return failure("CONTEXT_REPOSITORY_FAILED");
+    }
+    if (admission.status === "busy") {
+      return failure("CONTEXT_OPERATION_IN_PROGRESS");
+    }
+    if (admission.status === "conflict") {
+      return failure(
+        admission.reason === "binding"
+          ? "CONTEXT_BINDING_CONFLICT"
+          : "CONTEXT_ADMISSION_CONFLICT",
+      );
+    }
+
+    return this.executeAdmitted(command, session, admission.lease);
+  }
+
+  private async executeAdmitted(
+    command: CompactContextCommand,
+    initial: ContextSession,
+    lease: ContextAdmissionLease,
+  ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
+    let result: Result<CompactContextReceipt, CompactContextErrorCode>;
+    try {
+      result = await this.advance(command, initial);
+    } catch (error) {
+      try {
+        await this.sessions.releaseCompactionAdmission(lease);
+      } catch {
+        // Keep the original unexpected failure; the durable lease fails closed.
+      }
+      throw error;
+    }
+    try {
+      await this.sessions.releaseCompactionAdmission(lease);
+    } catch {
+      return failure("CONTEXT_REPOSITORY_FAILED");
+    }
+    return result;
+  }
+
+  private async advance(
+    command: CompactContextCommand,
+    initial: ContextSession,
+  ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
+    let session = initial;
     let shouldStartSummary = false;
     if (session.phase === "active") {
       const started = beginCompaction(session, command);
