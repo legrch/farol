@@ -21,6 +21,25 @@ const IdentifierSchema = z
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
   );
 
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
+
+const CodexHostCapabilitiesSchema = z.strictObject({
+  dynamicTools: z.literal(true),
+  correlatedToolCalls: z.literal(true),
+  descendantObservation: z.literal(true),
+  collabObservation: z.literal(true),
+  compaction: z.literal(true),
+});
+
+export const CodexHostSelectionSchema = z.strictObject({
+  executablePath: CanonicalAbsolutePathSchema,
+  executableSha256: Sha256Schema,
+  version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
+  protocol: z.literal("codex-app-server/v2"),
+  schemaSha256: Sha256Schema,
+  verifiedAt: CanonicalTimestampSchema,
+});
+
 const ProductRelativePathSchema = z.string().refine((value) => {
   if (
     value.length === 0 ||
@@ -161,6 +180,12 @@ export const ProductSettingsSchema = z.strictObject({
     name: z.string().trim().min(1).max(80),
     workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
   }),
+  nativeHosts: z
+    .strictObject({
+      generation: z.number().int().positive(),
+      codex: CodexHostSelectionSchema.nullable(),
+    })
+    .default({ generation: 1, codex: null }),
   setup: z.strictObject({
     journey: z
       .strictObject({
@@ -200,6 +225,9 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
   z.strictObject({ kind: z.literal("chatgpt.reset-conversation") }),
   z.strictObject({ kind: z.literal("support.export") }),
+  z.strictObject({ kind: z.literal("host.select-codex") }),
+  z.strictObject({ kind: z.literal("host.verify-codex") }),
+  z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
@@ -285,6 +313,14 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("host.codex-probe"),
+    version: CodexHostSelectionSchema.shape.version,
+    protocol: CodexHostSelectionSchema.shape.protocol,
+    executableSha256: Sha256Schema,
+    schemaSha256: Sha256Schema,
+    capabilities: CodexHostCapabilitiesSchema,
+  }),
   z.strictObject({
     kind: z.literal("chatgpt.readiness"),
     state: z.enum([
@@ -590,6 +626,12 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_MUTATION_FAILED",
       "SUPPORT_EXPORT_CANCELLED",
       "SUPPORT_EXPORT_FAILED",
+      "CODEX_HOST_PICKER_CANCELLED",
+      "CODEX_HOST_NOT_CONFIGURED",
+      "CODEX_HOST_SELECTION_INVALID",
+      "CODEX_HOST_EXECUTABLE_UNSAFE",
+      "CODEX_HOST_INCOMPATIBLE",
+      "CODEX_HOST_PROBE_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),
@@ -601,6 +643,7 @@ export type ProductGeneralSettings = z.infer<
 export type ApprovedProductWorkspace = z.infer<
   typeof ApprovedProductWorkspaceSchema
 >;
+export type CodexHostSelection = z.infer<typeof CodexHostSelectionSchema>;
 export type SetupStepId = z.infer<typeof SetupStepIdSchema>;
 export type ProductSettings = z.infer<typeof ProductSettingsSchema>;
 export type ProductConfigurationSnapshot = z.infer<

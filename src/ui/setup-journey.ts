@@ -30,7 +30,7 @@ export const setupSteps: readonly SetupStep[] = [
     copy: "Computer access starts closed and capability-bound. Choose a folder with the native picker, then verify its read-only boundary before a task may use it.",
     details: [
       "This verification lists only the selected workspace root; it does not read file contents.",
-      "Writes, commands, screenshots, and native host actions remain unavailable.",
+      "Writes require a separate per-workspace grant. Commands and screenshots remain unavailable.",
     ],
   },
   {
@@ -46,10 +46,10 @@ export const setupSteps: readonly SetupStep[] = [
   {
     id: "hosts",
     eyeline: "Codex and Agent apps",
-    title: "Leave native hosts untouched",
-    copy: "Host integrations require their own bounded live proof. They remain disabled instead of being inferred from configuration files.",
+    title: "Choose and verify the native Codex host",
+    copy: "Select the exact Codex executable Farol Next may start. The app runs only a bounded version and App Server schema probe, then stores the verified executable and contract digests for rechecking.",
     details: [
-      "Native Codex task creation has not been exercised.",
+      "A successful probe proves host compatibility, not task or Agent completion.",
       "Native Agent creation and a real Consult have not been exercised.",
     ],
   },

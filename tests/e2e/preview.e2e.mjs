@@ -769,6 +769,7 @@ async function launch(
   const workspaceRoot = await fs.realpath(workspacePath);
   const workspaceFile = path.join(workspaceRoot, "README.md");
   const supportExport = path.join(isolatedHome, "Farol-Next-Support.json");
+  const codexFixture = path.join(isolatedHome, "codex-fixture");
   const attachmentImage = path.join(isolatedHome, "evidence.png");
   const attachmentDocument = path.join(isolatedHome, "notes.md");
   await fs.writeFile(
@@ -791,6 +792,35 @@ async function launch(
       mode: 0o600,
     },
   );
+  await fs.writeFile(
+    codexFixture,
+    `#!${process.execPath}
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args.length === 1 && args[0] === "--version") {
+  process.stdout.write("codex-cli 9.8.7-e2e\\n");
+  process.exit(0);
+}
+if (args.slice(0, 4).join(" ") !== "app-server generate-json-schema --experimental --out" || !args[4]) {
+  process.exit(64);
+}
+const root = args[4];
+fs.mkdirSync(path.join(root, "v2"), { recursive: true });
+const files = {
+  "v2/ThreadStartParams.json": { properties: { dynamicTools: { items: { $ref: "#/definitions/DynamicToolSpec" } } } },
+  "DynamicToolCallParams.json": { required: ["threadId", "turnId", "callId", "tool", "arguments"] },
+  "ServerRequest.json": { oneOf: [{ properties: { method: { enum: ["item/tool/call"] } } }] },
+  "ClientRequest.json": { oneOf: [{ properties: { method: { enum: ["thread/compact/start"] } } }] },
+  "v2/ThreadListParams.json": { properties: { parentThreadId: {}, ancestorThreadId: {} } },
+  "v2/ThreadReadResponse.json": { definitions: { Thread: { properties: { parentThreadId: {} } }, ThreadItem: { oneOf: [{ properties: { type: { enum: ["collabAgentToolCall"] } } }] } } }
+};
+for (const [name, value] of Object.entries(files)) {
+  fs.writeFileSync(path.join(root, name), JSON.stringify(value) + "\\n", { mode: 0o600 });
+}
+`,
+    { mode: 0o700 },
+  );
   const chatGptFixture = await startChatGptFixture();
   const launchArgs = [
     ...launchPrefix,
@@ -809,6 +839,7 @@ async function launch(
       attachmentDocument,
     ]),
     FAROL_NEXT_E2E_CHATGPT_URL: chatGptFixture.url,
+    FAROL_NEXT_E2E_CODEX_EXECUTABLE: codexFixture,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -845,6 +876,7 @@ async function launch(
     workspaceFile,
     workspaceRoot,
     supportExport,
+    codexFixture,
     attachmentImage,
     attachmentDocument,
     expectedTaskViewCount,
@@ -1707,6 +1739,7 @@ async function completeSetup(
   capture = false,
   configureComputer = false,
   configureChatGpt = false,
+  configureHost = false,
 ) {
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
@@ -1880,6 +1913,48 @@ async function completeSetup(
         bootstrap.configuration.settings.computer.workspaces[0].workspaceId,
       );
     }
+    if (stepId === "hosts" && configureHost) {
+      assert.equal(
+        await instance.window.locator("#setup-live-primary").innerText(),
+        "Choose executable…",
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+            "Verified" &&
+          document.querySelector("#setup-live-primary")?.textContent ===
+            "Recheck host",
+      );
+      let bootstrap = await instance.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(
+        bootstrap.configuration.settings.nativeHosts.codex.executablePath,
+        instance.codexFixture,
+      );
+      assert.equal(
+        bootstrap.configuration.settings.nativeHosts.codex.version,
+        "9.8.7-e2e",
+      );
+      assert.equal(
+        bootstrap.configuration.settings.setup.hosts.verified.configRevision,
+        bootstrap.configuration.settings.nativeHosts.generation,
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(() =>
+        document
+          .querySelector("#settings-feedback")
+          ?.textContent?.includes("Codex 9.8.7-e2e verified"),
+      );
+      bootstrap = await instance.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(
+        bootstrap.configuration.settings.setup.hosts.verified.configRevision,
+        bootstrap.configuration.settings.nativeHosts.generation,
+      );
+    }
     if (capture) {
       await instance.window.screenshot({
         path: path.join(evidenceRoot, screenshot),
@@ -1897,6 +1972,12 @@ async function completeSetup(
           .locator('[data-setup-progress="chatgpt"].complete')
           .count(),
         configureChatGpt ? 1 : 0,
+      );
+      assert.equal(
+        await instance.window
+          .locator('[data-setup-progress="hosts"].complete')
+          .count(),
+        configureHost ? 1 : 0,
       );
     }
     await instance.window.locator("#setup-next").click();
@@ -2063,7 +2144,8 @@ try {
       `E2E_RUNTIME_NOT_READY:${runtimeLabel}:${await normal.window.locator("#settings-list").innerText()}`,
     );
   }
-  await completeSetup(normal, true, true, true);
+  await completeSetup(normal, true, true, true, true);
+  cases.push("native-codex-host-selected-and-rechecked");
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
     () => document.documentElement.dataset.windowActive === "false",
@@ -2899,6 +2981,7 @@ try {
     /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|Bearer|token|cookie|prompt|answer/u,
   );
   assert.doesNotMatch(supportExportText, new RegExp(normal.workspaceRoot, "u"));
+  assert.doesNotMatch(supportExportText, new RegExp(normal.codexFixture, "u"));
   cases.push("support-export-content-free");
   await normal.window.keyboard.press("Meta+3");
   await normal.window.locator('[data-panel="activity"].active').waitFor();
@@ -3146,6 +3229,15 @@ try {
   assert.equal(
     restartedSettings.setup.chatgpt.verified.profile,
     "chatgpt.next-partition/1",
+  );
+  assert.equal(
+    restartedSettings.nativeHosts.codex.executablePath,
+    normal.codexFixture,
+  );
+  assert.equal(restartedSettings.nativeHosts.codex.version, "9.8.7-e2e");
+  assert.equal(
+    restartedSettings.setup.hosts.verified.configRevision,
+    restartedSettings.nativeHosts.generation,
   );
   await normal.window
     .locator("#connection-readiness")

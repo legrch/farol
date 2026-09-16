@@ -157,8 +157,110 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toMatchObject({
       status: "ready",
       settings: {
+        nativeHosts: { generation: 1, codex: null },
         setup: {
           journey: { currentStep: "chatgpt", dismissed: false },
+        },
+      },
+    });
+  });
+
+  it("persists a verified Codex host contract across restart", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+
+    const recorded = await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    expect(recorded).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          nativeHosts: {
+            generation: 2,
+            codex: {
+              executablePath: "/Users/example/bin/codex",
+              executableSha256: "a".repeat(64),
+              version: "0.153.4",
+              protocol: "codex-app-server/v2",
+              schemaSha256: "b".repeat(64),
+              verifiedAt: "2026-09-16T10:00:00.000Z",
+            },
+          },
+          setup: {
+            hosts: {
+              configured: true,
+              reachable: "reachable",
+              needsAction: null,
+              unavailable: null,
+              outcomeUnknown: false,
+              verified: {
+                profile: "codex.app-server/2",
+                configRevision: 2,
+                workspaceId: null,
+                runtimeGeneration: "a".repeat(64),
+                buildId: "c".repeat(64),
+                protocol: "codex-app-server/v2",
+                verifiedAt: "2026-09-16T10:00:00.000Z",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(recorded.snapshot);
+  });
+
+  it("clears a selected Codex host and invalidates host readiness", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    const cleared = await service.clearCodexHost();
+
+    expect(cleared).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          nativeHosts: { generation: 3, codex: null },
+          setup: {
+            hosts: {
+              configured: false,
+              reachable: "unknown",
+              verified: null,
+              needsAction: "Choose a Codex executable to verify.",
+              outcomeUnknown: false,
+            },
+          },
         },
       },
     });
@@ -744,6 +846,57 @@ describe("Farol Next product configuration", () => {
         conversationContinuity: "retained",
         redelivered: false,
         deliveryAckRequired: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("admits bounded native host setup commands and content-free evidence", () => {
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "host.select-codex",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "host.verify-codex",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "host.remove-codex",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "host.codex-probe",
+        version: "0.153.4",
+        protocol: "codex-app-server/v2",
+        executableSha256: "a".repeat(64),
+        schemaSha256: "b".repeat(64),
+        capabilities: {
+          dynamicTools: true,
+          correlatedToolCalls: true,
+          descendantObservation: true,
+          collabObservation: true,
+          compaction: true,
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "host.codex-probe",
+        executablePath: "/Users/example/bin/codex",
+        version: "0.153.4",
+        protocol: "codex-app-server/v2",
+        executableSha256: "a".repeat(64),
+        schemaSha256: "b".repeat(64),
+        capabilities: {
+          dynamicTools: true,
+          correlatedToolCalls: true,
+          descendantObservation: true,
+          collabObservation: true,
+          compaction: true,
+        },
       }).success,
     ).toBe(false);
   });

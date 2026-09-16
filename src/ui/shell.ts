@@ -1115,27 +1115,32 @@ async function configureProduct(
   settingsFeedback =
     command.kind === "support.export"
       ? "Preparing a content-free support export…"
-      : command.kind === "chatgpt.prepare-attachment-task"
-        ? "Validating and privately staging the selected attachments…"
-        : command.kind === "chatgpt.submit-attachment-task"
-          ? "Uploading the reviewed attachments and submitting once…"
-          : command.kind === "chatgpt.cancel-attachment-task"
-            ? "Removing the private attachment staging…"
-            : command.kind === "chatgpt.prepare-readonly-task"
-              ? "Reading the selected file for review…"
-              : command.kind === "chatgpt.submit-readonly-task"
-                ? "Submitting once and waiting for one ChatGPT result…"
-                : command.kind === "chatgpt.cancel-readonly-task"
-                  ? "Discarding the prepared context…"
-                  : command.kind === "chatgpt.reset-conversation"
-                    ? "Clearing the retained conversation binding…"
-                    : command.kind === "computer.prepare-workspace-edit"
-                      ? "Reading the selected file and preparing a content-free edit review…"
-                      : command.kind === "computer.apply-workspace-edit"
-                        ? "Applying this guarded edit once…"
-                        : command.kind === "computer.cancel-workspace-edit"
-                          ? "Discarding the prepared edit…"
-                          : "Saving and reading back…";
+      : command.kind === "host.select-codex" ||
+          command.kind === "host.verify-codex"
+        ? "Verifying the selected Codex executable and bounded App Server contract…"
+        : command.kind === "host.remove-codex"
+          ? "Removing the saved Codex host selection…"
+          : command.kind === "chatgpt.prepare-attachment-task"
+            ? "Validating and privately staging the selected attachments…"
+            : command.kind === "chatgpt.submit-attachment-task"
+              ? "Uploading the reviewed attachments and submitting once…"
+              : command.kind === "chatgpt.cancel-attachment-task"
+                ? "Removing the private attachment staging…"
+                : command.kind === "chatgpt.prepare-readonly-task"
+                  ? "Reading the selected file for review…"
+                  : command.kind === "chatgpt.submit-readonly-task"
+                    ? "Submitting once and waiting for one ChatGPT result…"
+                    : command.kind === "chatgpt.cancel-readonly-task"
+                      ? "Discarding the prepared context…"
+                      : command.kind === "chatgpt.reset-conversation"
+                        ? "Clearing the retained conversation binding…"
+                        : command.kind === "computer.prepare-workspace-edit"
+                          ? "Reading the selected file and preparing a content-free edit review…"
+                          : command.kind === "computer.apply-workspace-edit"
+                            ? "Applying this guarded edit once…"
+                            : command.kind === "computer.cancel-workspace-edit"
+                              ? "Discarding the prepared edit…"
+                              : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1165,6 +1170,7 @@ async function configureProduct(
       parsed.data.error === "WORKSPACE_PICKER_CANCELLED" ||
       parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED" ||
       parsed.data.error === "CHATGPT_ATTACHMENT_PICKER_CANCELLED" ||
+      parsed.data.error === "CODEX_HOST_PICKER_CANCELLED" ||
       parsed.data.error === "SUPPORT_EXPORT_CANCELLED"
         ? "No selection was made."
         : `Not applied · ${parsed.data.error}`;
@@ -1172,6 +1178,7 @@ async function configureProduct(
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_FILE_PICKER_CANCELLED",
       "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
+      "CODEX_HOST_PICKER_CANCELLED",
       "SUPPORT_EXPORT_CANCELLED",
     ].includes(parsed.data.error);
     render();
@@ -1210,6 +1217,8 @@ async function configureProduct(
             : "ChatGPT loaded, but its composer could not be verified.";
   } else if (evidence?.kind === "support.exported") {
     settingsFeedback = `Saved ${evidence.fileName} · ${evidence.bytes} bytes · ${evidence.sha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "host.codex-probe") {
+    settingsFeedback = `Codex ${evidence.version} verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
@@ -1337,6 +1346,12 @@ function renderSettings(): void {
     ["Update channel", bootstrap.updateChannel],
     ["Typeface", "Geist 1.7.2 · SIL OFL 1.1 · system fallback"],
     [
+      "Native Codex host",
+      configured.status === "ready" && configured.settings.nativeHosts.codex
+        ? `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol} · verified ${configured.settings.nativeHosts.codex.verifiedAt}`
+        : "Not selected",
+    ],
+    [
       "Task authority",
       "Contract-tested · Main Turn → Agent → Critic continuity with explicit owner narrowing",
     ],
@@ -1428,7 +1443,9 @@ function renderSettings(): void {
       detail.textContent =
         label === "ChatGPT"
           ? `${readinessDetail(state)} · Conversation: ${bootstrap.chatgptConversationState.replace("_", " ")}`
-          : readinessDetail(state);
+          : label === "Native hosts" && settings.nativeHosts.codex
+            ? `${readinessDetail(state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
+            : readinessDetail(state);
       copy.append(title, detail);
       row.append(copy);
       if (label === "ChatGPT") {
@@ -1520,6 +1537,41 @@ function renderSettings(): void {
         });
         actions.append(open, verify, task, attachments, reset);
         row.append(actions);
+      } else if (label === "Native hosts") {
+        const actions = document.createElement("span");
+        actions.className = "connection-actions";
+        const selected = settings.nativeHosts.codex;
+        const choose = document.createElement("button");
+        choose.type = "button";
+        choose.textContent = selected ? "Replace…" : "Choose…";
+        choose.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.select-codex" },
+            "Codex host selected and verified.",
+          );
+        });
+        const verify = document.createElement("button");
+        verify.type = "button";
+        verify.textContent = "Recheck";
+        verify.disabled = selected === null;
+        verify.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.verify-codex" },
+            "Codex host rechecked.",
+          );
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.disabled = selected === null;
+        remove.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.remove-codex" },
+            "Codex host selection removed.",
+          );
+        });
+        actions.append(choose, verify, remove);
+        row.append(actions);
       }
       return row;
     }),
@@ -1559,7 +1611,14 @@ function renderSetup(): void {
       ? configured.settings.computer.workspaces.map(
           (workspace) => `${workspace.label}: read-only · ${workspace.root}`,
         )
-      : [];
+      : configured.status === "ready" &&
+          step.id === "hosts" &&
+          configured.settings.nativeHosts.codex
+        ? [
+            `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol}`,
+            `Executable · ${configured.settings.nativeHosts.codex.executablePath}`,
+          ]
+        : [];
   details.replaceChildren(
     ...[...step.details, ...liveDetails].map((detail) => {
       const item = document.createElement("li");
@@ -1669,16 +1728,25 @@ function renderSetup(): void {
         `${workspace.label} read access verified.`,
       );
     };
+  } else if (step.id === "hosts") {
+    const host = configured.settings.nativeHosts.codex;
+    liveSummary.textContent = host
+      ? `${readinessDetail(configured.settings.setup.hosts)} Codex ${host.version} is selected; rechecking recalculates both digests.`
+      : "Choose the exact Codex executable. Farol Next will not search your shell PATH or infer a host from configuration files.";
+    livePrimary.textContent = host ? "Recheck host" : "Choose executable…";
+    livePrimary.disabled = false;
+    setupPrimaryAction = async () => {
+      await configureProduct(
+        { kind: host ? "host.verify-codex" : "host.select-codex" },
+        host ? "Codex host rechecked." : "Codex host selected and verified.",
+      );
+    };
   } else {
     liveSummary.textContent = readinessState
       ? readinessDetail(readinessState)
       : "No readiness record is available.";
     livePrimary.textContent =
-      step.id === "connect"
-        ? "Connector unavailable"
-        : step.id === "hosts"
-          ? "Host setup unavailable"
-          : "Checks unavailable";
+      step.id === "connect" ? "Connector unavailable" : "Checks unavailable";
     livePrimary.disabled = true;
   }
   if (!dialog.open) dialog.showModal();

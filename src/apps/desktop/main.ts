@@ -114,6 +114,7 @@ import {
   PrivateChatGptConversationStore,
   type ChatGptConversationRecord,
 } from "./chatgpt-conversation-store";
+import { probeCodexHost } from "./codex-host-probe";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -508,6 +509,14 @@ function chatGptConversationStoreRoot(): string {
   );
 }
 
+function codexHostProbeRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "codex-host-probe",
+  );
+}
+
 function chatGptConversationState():
   "new" | "retained" | "review_required" | "unavailable" {
   if (!chatGptConversationStore) return "unavailable";
@@ -698,6 +707,79 @@ async function selectedWorkspace(): Promise<
   }
 }
 
+async function selectedCodexExecutable(): Promise<
+  string | "cancelled" | "invalid"
+> {
+  let selected: string | undefined;
+  const testExecutable =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_CODEX_EXECUTABLE
+      : undefined;
+  if (testExecutable) {
+    selected = testExecutable;
+  } else {
+    if (!window) return "invalid";
+    const result = await dialog.showOpenDialog(window, {
+      title: "Choose the Codex executable",
+      buttonLabel: "Verify Codex",
+      properties: ["openFile"],
+      securityScopedBookmarks: false,
+    });
+    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
+    selected = result.filePaths[0];
+  }
+  return selected && path.isAbsolute(selected) && !selected.includes("\0")
+    ? selected
+    : "invalid";
+}
+
+async function verifyCodexExecutable(
+  executablePath: string,
+): Promise<ProductConfigurationResult> {
+  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  try {
+    const probe = await probeCodexHost({
+      executablePath,
+      scratchRoot: codexHostProbeRoot(),
+    });
+    const recorded = await configuration.recordCodexHost({
+      executablePath: probe.executablePath,
+      executableSha256: probe.executableSha256,
+      version: probe.version,
+      protocol: probe.protocol,
+      schemaSha256: probe.schemaSha256,
+      buildId: buildIdentity.buildId,
+    });
+    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+    return ProductConfigurationResultSchema.parse({
+      ...recorded,
+      evidence: {
+        kind: "host.codex-probe",
+        version: probe.version,
+        protocol: probe.protocol,
+        executableSha256: probe.executableSha256,
+        schemaSha256: probe.schemaSha256,
+        capabilities: probe.capabilities,
+      },
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    const unsupported = code === "CODEX_HOST_INCOMPATIBLE";
+    const recorded = await configuration.recordCodexHostFailure(
+      unsupported ? "unsupported" : "unreachable",
+    );
+    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+    if (code === "CODEX_HOST_SELECTION_INVALID") {
+      return configurationFailure("CODEX_HOST_SELECTION_INVALID");
+    }
+    if (code === "CODEX_HOST_EXECUTABLE_UNSAFE") {
+      return configurationFailure("CODEX_HOST_EXECUTABLE_UNSAFE");
+    }
+    if (unsupported) return configurationFailure("CODEX_HOST_INCOMPATIBLE");
+    return configurationFailure("CODEX_HOST_PROBE_FAILED");
+  }
+}
+
 function workspaceDeniedPaths(
   workspace: ApprovedProductWorkspace,
 ): readonly string[] {
@@ -813,6 +895,29 @@ async function configureProduct(
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
   switch (command.kind) {
+    case "host.select-codex": {
+      const selected = await selectedCodexExecutable();
+      if (selected === "cancelled") {
+        return configurationFailure("CODEX_HOST_PICKER_CANCELLED");
+      }
+      if (selected === "invalid") {
+        return configurationFailure("CODEX_HOST_SELECTION_INVALID");
+      }
+      return verifyCodexExecutable(selected);
+    }
+    case "host.verify-codex": {
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready" || !snapshot.settings.nativeHosts.codex) {
+        return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
+      }
+      return verifyCodexExecutable(
+        snapshot.settings.nativeHosts.codex.executablePath,
+      );
+    }
+    case "host.remove-codex":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.clearCodexHost(),
+      );
     case "support.export": {
       try {
         const target = await selectedSupportExportTarget();
