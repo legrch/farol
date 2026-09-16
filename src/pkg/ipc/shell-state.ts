@@ -25,7 +25,12 @@ export const ShellLayoutSchema = z.strictObject({
 });
 
 export const ShellActionSchema = z.strictObject({
-  action: z.enum(["toggle-sidebar", "open-quick-switcher", "close-overlay"]),
+  action: z.enum([
+    "toggle-sidebar",
+    "open-quick-switcher",
+    "open-settings",
+    "close-overlay",
+  ]),
 });
 
 export const WindowStateSchema = z.strictObject({

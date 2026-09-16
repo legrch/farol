@@ -232,10 +232,18 @@ html[data-full-screen="true"] .sidebar-toggle {
   font-size: 11px;
 }
 
-nav {
+.nav-primary,
+.nav-utility {
   display: grid;
   gap: 6px;
+}
+
+.nav-primary {
   margin-top: 24px;
+}
+
+.nav-utility {
+  margin-top: auto;
 }
 
 .nav-item {
@@ -322,7 +330,6 @@ html[data-window-active="false"] .nav-item.active {
 }
 
 .runtime-pill {
-  margin-top: auto;
   min-height: 48px;
   display: flex;
   align-items: center;
@@ -330,6 +337,32 @@ html[data-window-active="false"] .nav-item.active {
   padding: 8px 10px;
   overflow: hidden;
   color: var(--text-soft);
+}
+
+.build-identity {
+  min-height: 34px;
+  display: grid;
+  gap: 2px;
+  padding: 5px 10px 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.build-identity span,
+.build-identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.build-identity span {
+  font-size: 10px;
+  font-weight: 560;
+}
+
+.build-identity small {
+  font-family: var(--font-mono);
+  font-size: 8px;
 }
 
 .runtime-pill > span {
@@ -404,12 +437,20 @@ html[data-sidebar="rail"] .brand-copy,
 html[data-sidebar="rail"] .nav-label,
 html[data-sidebar="rail"] .nav-item > kbd,
 html[data-sidebar="rail"] .runtime-pill > span,
+html[data-sidebar="rail"] .build-identity {
+  display: none;
+}
+
 html[data-sidebar="rail"] .brand-mark,
+html[data-sidebar="rail"] .brand-copy {
+  display: none;
+}
+
 html[data-sidebar="rail"] .brand {
   visibility: hidden;
 }
 
-html[data-sidebar="rail"] nav {
+html[data-sidebar="rail"] .nav-primary {
   margin-top: 24px;
 }
 
@@ -445,13 +486,26 @@ html[data-sidebar="rail"] .runtime-pill {
   justify-content: center;
 }
 
-html[data-sidebar="overlay"] .brand-copy,
-html[data-sidebar="overlay"] .nav-label,
-html[data-sidebar="overlay"] .nav-item > kbd,
-html[data-sidebar="overlay"] .runtime-pill > span,
+html[data-sidebar="overlay"] .brand,
 html[data-sidebar="overlay"] .brand-mark,
-html[data-sidebar="overlay"] .brand {
+html[data-sidebar="overlay"] .brand-copy,
+html[data-sidebar="overlay"] .build-identity {
   visibility: visible;
+}
+
+html[data-sidebar="overlay"] .brand-mark {
+  display: grid;
+}
+
+html[data-sidebar="overlay"] .brand-copy,
+html[data-sidebar="overlay"] .runtime-pill > span,
+html[data-sidebar="overlay"] .build-identity {
+  display: grid;
+}
+
+html[data-sidebar="overlay"] .nav-label,
+html[data-sidebar="overlay"] .nav-item > kbd {
+  display: inline;
 }
 
 .window-bar,
@@ -474,6 +528,11 @@ html[data-sidebar="overlay"] .brand {
   background: var(--chrome);
   border-bottom: 1px solid var(--line-soft);
   -webkit-app-region: drag;
+}
+
+html:not([data-full-screen="true"])[data-sidebar="rail"] .window-bar,
+html:not([data-full-screen="true"])[data-sidebar="overlay"] .window-bar {
+  padding-left: 50px;
 }
 
 .window-identity {
@@ -763,6 +822,18 @@ html[data-window-active="false"] .task-tab.active::before {
   bottom: 0;
   overflow: hidden;
   background: var(--bg);
+}
+
+html:not([data-section="browser"]) .task-bar {
+  display: none;
+}
+
+html:not([data-section="browser"]) .dossier {
+  display: none;
+}
+
+html:not([data-section="browser"]) .surface {
+  top: var(--window-height);
 }
 
 .panel {

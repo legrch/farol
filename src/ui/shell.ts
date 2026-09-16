@@ -415,7 +415,9 @@ function renderSignals(): void {
       const signal = signals[route];
       const badge = button.querySelector<HTMLElement>(".nav-signal");
       if (!badge) return;
-      const base = `${route.charAt(0).toUpperCase()}${route.slice(1)} (⌘${sections.indexOf(route) + 1})`;
+      const shortcut =
+        route === "settings" ? "⌘," : `⌘${sections.indexOf(route) + 1}`;
+      const base = `${route.charAt(0).toUpperCase()}${route.slice(1)} (${shortcut})`;
       if (!signal) {
         badge.hidden = true;
         button.title = base;
@@ -462,7 +464,7 @@ function renderDossier(): void {
   route.disabled = state.tone === "connecting";
   route.innerHTML =
     state.tone === "waiting"
-      ? "Review Computer request <span>›</span>"
+      ? "Review request <span>›</span>"
       : state.tone === "unavailable"
         ? "Open Settings <span>›</span>"
         : "Open Activity <span>›</span>";
@@ -750,6 +752,7 @@ function renderOverlayState(): void {
 }
 
 function render(notify = true): void {
+  document.documentElement.dataset.section = section;
   document.querySelectorAll<HTMLElement>(".nav-item").forEach((item) => {
     const active = item.dataset.section === section;
     item.classList.toggle("active", active);
@@ -899,7 +902,10 @@ async function start(): Promise<void> {
     if (!parsed.success || !bootstrapReady) return;
     if (parsed.data.action === "toggle-sidebar") toggleSidebar();
     else if (parsed.data.action === "open-quick-switcher") openCommands();
-    else closeOverlay();
+    else if (parsed.data.action === "open-settings") {
+      setupJourney = { ...setupJourney, open: false };
+      selectSection("settings");
+    } else closeOverlay();
   });
   window.farolNext.onWindowState((value) => {
     const parsed = WindowStateSchema.safeParse(value);

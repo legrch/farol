@@ -209,7 +209,11 @@ function publishLayout(): void {
 }
 
 function publishShellAction(
-  action: "toggle-sidebar" | "open-quick-switcher" | "close-overlay",
+  action:
+    | "toggle-sidebar"
+    | "open-quick-switcher"
+    | "open-settings"
+    | "close-overlay",
 ): void {
   window?.webContents.send(channels.shellAction, { action });
 }
@@ -236,6 +240,12 @@ function requestSidebarToggle(): void {
   publishShellAction("toggle-sidebar");
 }
 
+function requestSettings(): void {
+  if (!window) return;
+  publishShellAction("open-settings");
+  window.webContents.focus();
+}
+
 function closeShellOverlay(): void {
   if (shellOverlay === "none") return;
   if (sidebarMode === "overlay") sidebarMode = "rail";
@@ -248,8 +258,44 @@ function closeShellOverlay(): void {
 function installApplicationMenu(): void {
   const template: MenuItemConstructorOptions[] = [
     ...(process.platform === "darwin"
-      ? ([{ role: "appMenu" }] satisfies MenuItemConstructorOptions[])
-      : []),
+      ? ([
+          {
+            label: productName,
+            submenu: [
+              { role: "about" },
+              { type: "separator" },
+              {
+                id: "app.settings",
+                label: "Settings…",
+                accelerator: "CommandOrControl+,",
+                click: requestSettings,
+              },
+              { type: "separator" },
+              { role: "services" },
+              { type: "separator" },
+              { role: "hide" },
+              { role: "hideOthers" },
+              { role: "unhide" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ] satisfies MenuItemConstructorOptions[])
+      : ([
+          {
+            label: "File",
+            submenu: [
+              {
+                id: "app.settings",
+                label: "Settings",
+                accelerator: "CommandOrControl+,",
+                click: requestSettings,
+              },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          },
+        ] satisfies MenuItemConstructorOptions[])),
     {
       label: "Edit",
       submenu: [
@@ -439,8 +485,12 @@ function installNetworkFence(): Electron.Session | null {
 }
 
 function handleShortcut(input: Input): boolean {
-  if (setupOpen) return false;
   const key = input.key.toLowerCase();
+  if (input.meta && input.key === ",") {
+    requestSettings();
+    return true;
+  }
+  if (setupOpen) return false;
   if (input.control && input.meta && key === "s") {
     requestSidebarToggle();
     return true;

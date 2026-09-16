@@ -1186,9 +1186,13 @@ async function watchRailGeometry(window) {
       fullScreen: document.documentElement.dataset.fullScreen,
       sidebar: bounds("#sidebar"),
       toggle: bounds("#sidebar-toggle"),
+      windowIdentity: bounds(".window-identity"),
       taskBar: bounds(".task-bar"),
       dossier: bounds(".dossier"),
       surface: bounds(".surface"),
+      navTargetHeights: [...document.querySelectorAll(".nav-item")].map(
+        (element) => Math.round(element.getBoundingClientRect().height),
+      ),
     };
   });
 }
@@ -1198,12 +1202,16 @@ async function applicationMenuState(application) {
     const menu = Menu.getApplicationMenu();
     const sidebar = menu?.getMenuItemById("view.toggle-sidebar");
     const switcher = menu?.getMenuItemById("view.quick-switcher");
+    const settings = menu?.getMenuItemById("app.settings");
     return {
       sidebar: sidebar
         ? { label: sidebar.label, accelerator: sidebar.accelerator }
         : null,
       switcher: switcher
         ? { label: switcher.label, accelerator: switcher.accelerator }
+        : null,
+      settings: settings
+        ? { label: settings.label, accelerator: settings.accelerator }
         : null,
     };
   });
@@ -1386,6 +1394,10 @@ try {
       label: "Quick Switcher",
       accelerator: "CommandOrControl+K",
     },
+    settings: {
+      label: "Settings…",
+      accelerator: "CommandOrControl+,",
+    },
   });
   const initialChrome = await nativeWindowChrome(normal.application);
   assert.equal(initialChrome.focused, false);
@@ -1399,6 +1411,13 @@ try {
   await normal.window.waitForFunction(
     () => document.documentElement.dataset.sidebar === "rail",
   );
+  const railGeometry = await watchRailGeometry(normal.window);
+  assert.ok(
+    railGeometry.toggle.x + railGeometry.toggle.width <=
+      railGeometry.windowIdentity.x,
+    `sidebar toggle overlaps window identity: ${JSON.stringify(railGeometry)}`,
+  );
+  assert.deepEqual([...new Set(railGeometry.navTargetHeights)], [44]);
   const menuRailSurface = await waitForTaskSurface(
     normal.application,
     "task-atlantic",
@@ -1675,6 +1694,10 @@ try {
 
   await normal.window.keyboard.press("Meta+3");
   await normal.window.locator('[data-panel="activity"].active').waitFor();
+  const activityGeometry = await watchRailGeometry(normal.window);
+  assert.equal(activityGeometry.taskBar.height, 0);
+  assert.equal(activityGeometry.dossier.height, 0);
+  assert.equal(activityGeometry.surface.y, 52);
   const activityText = await normal.window
     .locator('[data-panel="activity"]')
     .innerText();
@@ -1696,8 +1719,14 @@ try {
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "complete-compact.png"),
   });
-  await normal.window.keyboard.press("Meta+4");
+  await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
+  assert.equal(
+    await normal.window.evaluate(
+      () => document.documentElement.dataset.section,
+    ),
+    "settings",
+  );
   assert.match(
     await normal.window.locator("#settings-list").innerText(),
     /local\.farol\.next\.preview/u,
@@ -1900,6 +1929,8 @@ try {
     "computer-exact-correlation",
     "watch-rail-native-geometry",
     "sidebar-native-menu-and-shortcut",
+    "settings-native-menu-and-global-chrome",
+    "rail-hit-targets-and-titlebar-clearance",
     "compact-sidebar-overlay-hides-native-page",
     "task-menu-hides-native-page",
     "quick-switcher-keyboard-navigation",
