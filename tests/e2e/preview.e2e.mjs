@@ -2315,6 +2315,120 @@ try {
   await close(ordinary);
 }
 
+const ordinaryLiveTasks = await launch([], "secondary-visible", "ordinary");
+try {
+  await completeSetup(ordinaryLiveTasks, false, false, true, false);
+  const newTask = ordinaryLiveTasks.window.locator("#new-task");
+  await newTask.waitFor({ state: "visible" });
+  assert.equal(await newTask.isEnabled(), true);
+  assert.equal(await newTask.locator("small").innerText(), "0 / 5");
+
+  const taskPages = [];
+  for (let index = 1; index <= 5; index += 1) {
+    const opened = ordinaryLiveTasks.application.waitForEvent("window", {
+      timeout: 15_000,
+    });
+    await newTask.click();
+    const providerPage = await opened;
+    await providerPage.waitForURL(ordinaryLiveTasks.chatGptFixture.url);
+    taskPages.push(providerPage);
+    await ordinaryLiveTasks.window.waitForFunction(
+      (count) =>
+        document.querySelectorAll("#task-tabs .task-tab").length === count,
+      index,
+    );
+    const state = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(state.taskRevision, index);
+    assert.equal(state.tasks.length, index);
+    const task = state.tasks[index - 1];
+    assert.match(task.taskId, /^[0-9a-f-]{36}$/u);
+    assert.match(task.sessionId, /^[0-9a-f-]{36}$/u);
+    assert.match(task.turnId, /^[0-9a-f-]{36}$/u);
+    assert.equal(task.label, `ChatGPT task ${index}`);
+    assert.equal(task.provider, "chatgpt");
+    assert.equal(task.requestedModel, "Account default");
+    assert.equal(task.observedModel, null);
+    assert.equal(task.requestedMode, "Account default");
+    assert.equal(task.observedMode, null);
+    assert.equal(task.lifecycle, "idle");
+    assert.equal(await newTask.locator("small").innerText(), `${index} / 5`);
+  }
+
+  assert.equal(taskPages.length, 5);
+  assert.equal(await newTask.isDisabled(), true);
+  const capacity = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.task({ kind: "task.create-chatgpt" }),
+  );
+  assert.deepEqual(capacity, {
+    ok: false,
+    error: "TASK_CAPACITY_REACHED",
+    state: capacity.state,
+  });
+  assert.equal(capacity.state.tasks.length, 5);
+  assert.equal(capacity.state.revision, 5);
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-tabs .task-tab").count(),
+    5,
+  );
+  assert.match(
+    await ordinaryLiveTasks.window.locator("#dossier-model").innerText(),
+    /Requested: Account default · Observed: Not observed/u,
+  );
+  assert.match(
+    await ordinaryLiveTasks.window.locator("#browser-state-detail").innerText(),
+    /actual provider surface/u,
+  );
+  const nativeTitles = await ordinaryLiveTasks.application.evaluate(
+    ({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()
+        .map((candidate) => candidate.getTitle())
+        .filter((title) => title.startsWith("ChatGPT task "))
+        .sort(),
+  );
+  assert.deepEqual(
+    nativeTitles,
+    [1, 2, 3, 4, 5].map((index) => `ChatGPT task ${index} · Farol Next`),
+  );
+  const providerSecurity = await ordinaryLiveTasks.application.evaluate(
+    ({ session, webContents }, origin) =>
+      webContents
+        .getAllWebContents()
+        .filter((contents) => contents.getURL().startsWith(origin))
+        .map((contents) => {
+          const preferences = contents.getLastWebPreferences();
+          return {
+            sandbox: preferences.sandbox,
+            contextIsolation: preferences.contextIsolation,
+            nodeIntegration: preferences.nodeIntegration,
+            isolatedSession:
+              contents.session ===
+              session.fromPartition("persist:farol-next-chatgpt"),
+          };
+        }),
+    new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
+  );
+  assert.equal(providerSecurity.length, 5);
+  assert.ok(
+    providerSecurity.every(
+      (proof) =>
+        proof.sandbox === true &&
+        proof.contextIsolation === true &&
+        proof.nodeIntegration === false &&
+        proof.isolatedSession === true,
+    ),
+  );
+  cases.push(
+    "ordinary-new-task-opens-actual-chatgpt-surface",
+    "five-live-chatgpt-task-capacity",
+    "sixth-live-task-refused-without-replacement",
+    "live-task-requested-observed-state-truthful",
+  );
+} finally {
+  await close(ordinaryLiveTasks);
+}
+
 const interruptedChatGptTask = await launch([], "hidden", "ordinary", {
   seedChatGptDispatchIntent: true,
 });

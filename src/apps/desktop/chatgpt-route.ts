@@ -162,6 +162,8 @@ export type ChatGptRouteOptions = Readonly<{
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
+  title?: string;
+  onClosed?: () => void;
   taskTimeoutMs?: number;
   taskPollMs?: number;
 }>;
@@ -202,9 +204,11 @@ export class ChatGptRoute {
   private disposing = false;
   private taskInFlight = false;
   private entryUrl: string;
+  private displayTitle: string;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.entryUrl = options.initialUrl;
+    this.displayTitle = options.title ?? "ChatGPT · Farol Next";
     if (
       !allowedChatGptPageUrl(options.homeUrl, options.e2eOrigin) ||
       !allowedChatGptPageUrl(options.initialUrl, options.e2eOrigin) ||
@@ -234,7 +238,7 @@ export class ChatGptRoute {
       this.routeSession = routeSession;
     }
     const candidate = new BrowserWindow({
-      title: "ChatGPT · Farol Next",
+      title: this.displayTitle,
       width: 1080,
       height: 760,
       minWidth: 720,
@@ -246,8 +250,16 @@ export class ChatGptRoute {
     this.routeWindow = candidate;
     this.disposing = false;
     this.hardenContents(candidate.webContents, true);
+    candidate.on("page-title-updated", (event) => {
+      event.preventDefault();
+      candidate.setTitle(this.displayTitle);
+    });
+    candidate.on("close", () => {
+      this.captureConversationUrl(candidate.webContents);
+    });
     candidate.on("closed", () => {
       if (this.routeWindow === candidate) this.routeWindow = null;
+      if (!this.disposing) this.options.onClosed?.();
       setTimeout(() => {
         if (
           !this.disposing &&
@@ -509,12 +521,14 @@ export class ChatGptRoute {
     if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
       return null;
     }
-    const canonical = canonicalChatGptConversationUrl(
-      candidate.webContents.getURL(),
-      this.options.e2eOrigin,
-    );
-    if (canonical !== null) this.entryUrl = canonical;
-    return canonical;
+    return this.captureConversationUrl(candidate.webContents);
+  }
+
+  setTitle(title: string): void {
+    this.displayTitle = title;
+    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
+      this.routeWindow.setTitle(title);
+    }
   }
 
   resetConversation(): void {
@@ -551,6 +565,16 @@ export class ChatGptRoute {
     );
     routeSession.setPermissionCheckHandler(() => false);
     routeSession.on("will-download", (event) => event.preventDefault());
+  }
+
+  private captureConversationUrl(contents: WebContents): string | null {
+    if (contents.isDestroyed() || this.load !== "loaded") return null;
+    const canonical = canonicalChatGptConversationUrl(
+      contents.getURL(),
+      this.options.e2eOrigin,
+    );
+    if (canonical !== null) this.entryUrl = canonical;
+    return canonical;
   }
 
   private hardenContents(

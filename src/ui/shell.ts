@@ -4,6 +4,12 @@ import {
   type ClientEventDto,
 } from "../modules/chat/contract/client-event";
 import {
+  ProductTaskCommandResultSchema,
+  ProductTaskSchema,
+  ProductTasksStateSchema,
+  type ProductTasksState,
+} from "../modules/chat/contract/product-task";
+import {
   RuntimeStatusSchema,
   type RuntimeStatus,
 } from "../pkg/ipc/runtime-status";
@@ -48,15 +54,8 @@ const bootstrapSchema = z.strictObject({
   runtimeIdentity: z.string().nullable(),
   embeddedNode: z.string().nullable(),
   embeddedElectron: z.string().nullable(),
-  tasks: z.array(
-    z.strictObject({
-      taskId: z.string(),
-      sessionId: z.string(),
-      turnId: z.string(),
-      label: z.string(),
-      hasComputer: z.boolean(),
-    }),
-  ),
+  taskRevision: z.number().int().nonnegative(),
+  tasks: z.array(ProductTaskSchema).max(5),
   partition: z.string(),
   chatgptPartition: z.literal("persist:farol-next-chatgpt"),
   chatgptRecoveryPending: z.boolean(),
@@ -136,6 +135,7 @@ declare global {
       bootstrap(): Promise<unknown>;
       snapshot(): Promise<unknown>;
       configure(command: unknown): Promise<unknown>;
+      task(command: unknown): Promise<unknown>;
       control(taskId: string, action: string): Promise<unknown>;
       layout(
         section: string,
@@ -147,6 +147,7 @@ declare global {
       onRuntimeEvent(listener: (event: unknown) => void): () => void;
       onRuntimeState(listener: (status: unknown) => void): () => void;
       onTaskSurfaceState(listener: (status: unknown) => void): () => void;
+      onTasksState(listener: (state: unknown) => void): () => void;
       onLayout(listener: (layout: unknown) => void): () => void;
       onShellAction(listener: (action: unknown) => void): () => void;
       onWindowState(listener: (state: unknown) => void): () => void;
@@ -184,6 +185,7 @@ let computerTargetTaskId: string | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
 let settingsFeedbackSurface: "computer" | "settings" = "settings";
+let taskAdmissionFeedback = "";
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
@@ -211,6 +213,7 @@ const activity: SafeActivity[] = [];
 const pendingRuntimeEvents: ClientEventDto[] = [];
 let pendingRuntimeStatus: RuntimeStatus | null = null;
 const pendingTaskSurfaceStatuses: TaskSurfaceStatus[] = [];
+let pendingTasksState: ProductTasksState | null = null;
 let pendingLayout: z.infer<typeof ShellLayoutSchema> | null = null;
 const taskSurfaceStatuses = new Map<string, TaskSurfaceStatus>();
 
@@ -249,6 +252,22 @@ function taskState(taskId: string): TaskState {
   }
   if (taskSurfaceStatuses.get(taskId)?.state === "failed") {
     return { tone: "failed", label: "Surface failed", attention: true };
+  }
+  const task = taskById(taskId);
+  if (task?.provider === "chatgpt") {
+    if (task.lifecycle === "running") {
+      return { tone: "running", label: "Running", attention: false };
+    }
+    if (task.lifecycle === "completed") {
+      return { tone: "complete", label: "Complete", attention: false };
+    }
+    if (task.lifecycle === "outcome_unknown") {
+      return { tone: "unknown", label: "Outcome unknown", attention: true };
+    }
+    if (task.lifecycle === "failed") {
+      return { tone: "failed", label: "Needs attention", attention: true };
+    }
+    return { tone: "complete", label: "Ready", attention: false };
   }
   const events = taskEvents.get(taskId) ?? [];
   const terminal = events
@@ -366,20 +385,33 @@ function renderBrowser(): void {
   const title = required<HTMLElement>("#browser-state-title");
   const detail = required<HTMLElement>("#browser-state-detail");
   const mark = required<HTMLElement>("#browser-state-mark");
+  const task = taskById(selectedTaskId);
   const surfaceFailed =
     taskSurfaceStatuses.get(selectedTaskId)?.state === "failed";
   if (bootstrap.runtimeState === "ready" && bootstrap.tasks.length === 0) {
     loading.dataset.state = "empty";
     mark.className = "state-lamp unavailable";
-    title.textContent = "No tasks yet";
+    title.textContent = taskAdmissionFeedback
+      ? "Task not created"
+      : "No tasks yet";
     detail.textContent =
+      taskAdmissionFeedback ||
       "Complete Setup and connect a supported route to create the first real task.";
-  } else if (surfaceFailed) {
+  } else if (surfaceFailed || task?.lifecycle === "failed") {
     loading.dataset.state = "failed";
     mark.className = "state-lamp failed";
     title.textContent = "Selected task surface is unavailable";
     detail.textContent =
       "This task stream failed in isolation. Other task surfaces remain independent.";
+  } else if (
+    bootstrap.runtimeState === "ready" &&
+    task?.provider === "chatgpt"
+  ) {
+    loading.dataset.state = "ready";
+    mark.className = "state-lamp complete";
+    title.textContent = "Isolated ChatGPT task";
+    detail.textContent =
+      "The separate task window is the actual provider surface; Farol does not mirror its conversation.";
   } else if (bootstrap.runtimeState === "ready") {
     loading.dataset.state = "ready";
     mark.className = "state-lamp running";
@@ -530,6 +562,10 @@ function renderDossier(): void {
     state.label.toLocaleUpperCase();
   stateElement.dataset.tone = state.tone;
   required<HTMLElement>("#dossier-title").textContent = taskLabel(task);
+  required<HTMLElement>("#dossier-model").textContent =
+    `Requested: ${task.requestedModel ?? "Not selected"} · Observed: ${task.observedModel ?? "Not observed"}`;
+  required<HTMLElement>("#dossier-mode").textContent =
+    `Requested: ${task.requestedMode ?? "Not selected"} · Observed: ${task.observedMode ?? "Not observed"}`;
   required<HTMLElement>("#dossier-computer").textContent =
     unresolvedComputerRequest(selectedTaskId)
       ? "Approval required"
@@ -538,6 +574,7 @@ function renderDossier(): void {
         : "Unavailable";
 
   const canFinish =
+    task.provider === "fixture" &&
     state.tone === "running" &&
     bootstrap.runtimeState === "ready" &&
     taskSurfaceStatuses.get(selectedTaskId)?.state !== "failed";
@@ -546,11 +583,13 @@ function renderDossier(): void {
   route.hidden = canFinish;
   route.disabled = state.tone === "connecting";
   route.innerHTML =
-    state.tone === "waiting"
-      ? "Review request <span>›</span>"
-      : state.tone === "unavailable"
-        ? "Open Settings <span>›</span>"
-        : "Open Activity <span>›</span>";
+    task.provider === "chatgpt"
+      ? "Open Browser <span>›</span>"
+      : state.tone === "waiting"
+        ? "Review request <span>›</span>"
+        : state.tone === "unavailable"
+          ? "Open Settings <span>›</span>"
+          : "Open Activity <span>›</span>";
 
   taskMenuComputer.disabled = !unresolvedComputerRequest(selectedTaskId);
 }
@@ -2082,11 +2121,37 @@ function render(notify = true): void {
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
   required("#window-mode").textContent = bootstrap.demoMode
     ? "Explicit demo · synthetic provider"
-    : "Local preview · no task route configured";
+    : bootstrap.tasks.length > 0
+      ? "Local preview · isolated ChatGPT tasks"
+      : "Local preview · no task route configured";
   const newTask = required<HTMLButtonElement>("#new-task");
+  const chatGptReady =
+    bootstrap.configuration.status === "ready" &&
+    bootstrap.configuration.settings.setup.chatgpt.reachable === "reachable" &&
+    bootstrap.configuration.settings.setup.chatgpt.configured &&
+    !bootstrap.configuration.settings.setup.chatgpt.outcomeUnknown &&
+    bootstrap.configuration.settings.setup.chatgpt.verified !== null;
+  const taskCapacityAvailable = bootstrap.tasks.length < 5;
+  newTask.disabled =
+    bootstrap.demoMode ||
+    bootstrap.runtimeState !== "ready" ||
+    !chatGptReady ||
+    !taskCapacityAvailable;
   newTask.title = bootstrap.demoMode
     ? "Unavailable in explicit demo mode"
-    : "Unavailable until a task route is configured";
+    : !chatGptReady
+      ? "Verify the isolated ChatGPT connection in Setup or Settings"
+      : !taskCapacityAvailable
+        ? "Five live tasks are already admitted"
+        : "Create an isolated ChatGPT task";
+  const newTaskLabel = newTask.querySelector<HTMLElement>("b");
+  const newTaskStatus = newTask.querySelector<HTMLElement>("small");
+  if (newTaskLabel) newTaskLabel.textContent = "New task";
+  if (newTaskStatus) {
+    newTaskStatus.textContent = bootstrap.demoMode
+      ? "Unavailable"
+      : `${bootstrap.tasks.length} / 5`;
+  }
   document.querySelectorAll<HTMLElement>(".nav-item").forEach((item) => {
     const active = item.dataset.section === section;
     item.classList.toggle("active", active);
@@ -2266,6 +2331,26 @@ function applyRuntimeStatus(status: RuntimeStatus): void {
   render();
 }
 
+function applyTasksState(state: ProductTasksState): void {
+  if (state.revision < bootstrap.taskRevision) return;
+  bootstrap = {
+    ...bootstrap,
+    taskRevision: state.revision,
+    tasks: state.tasks,
+  };
+  const taskIds = new Set(state.tasks.map((task) => task.taskId));
+  for (const taskId of taskEvents.keys()) {
+    if (!taskIds.has(taskId)) taskEvents.delete(taskId);
+  }
+  for (const taskId of taskSurfaceStatuses.keys()) {
+    if (!taskIds.has(taskId)) taskSurfaceStatuses.delete(taskId);
+  }
+  if (!taskIds.has(selectedTaskId)) {
+    selectedTaskId = state.tasks[0]?.taskId ?? "";
+  }
+  render();
+}
+
 function applyTaskSurfaceStatus(status: TaskSurfaceStatus): void {
   if (!taskById(status.taskId)) return;
   taskSurfaceStatuses.set(status.taskId, status);
@@ -2344,6 +2429,15 @@ async function start(): Promise<void> {
     }
     applyTaskSurfaceStatus(parsed.data);
   });
+  window.farolNext.onTasksState((value) => {
+    const parsed = ProductTasksStateSchema.safeParse(value);
+    if (!parsed.success) return;
+    if (!bootstrapReady) {
+      pendingTasksState = parsed.data;
+      return;
+    }
+    applyTasksState(parsed.data);
+  });
 
   bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
   windowState = bootstrap.windowState;
@@ -2382,6 +2476,39 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#command-button").addEventListener(
     "click",
     openCommands,
+  );
+  required<HTMLButtonElement>("#new-task").addEventListener(
+    "click",
+    async () => {
+      taskAdmissionFeedback = "";
+      const button = required<HTMLButtonElement>("#new-task");
+      button.disabled = true;
+      const parsed = ProductTaskCommandResultSchema.safeParse(
+        await window.farolNext.task({ kind: "task.create-chatgpt" }),
+      );
+      if (!parsed.success) {
+        taskAdmissionFeedback = "The task route returned an invalid result.";
+        render();
+        return;
+      }
+      applyTasksState(parsed.data.state);
+      if (!parsed.data.ok) {
+        taskAdmissionFeedback =
+          parsed.data.error === "CHATGPT_CONNECTION_NOT_VERIFIED"
+            ? "Verify the isolated ChatGPT connection in Setup or Settings."
+            : parsed.data.error === "TASK_CAPACITY_REACHED"
+              ? "Five live tasks are already admitted."
+              : parsed.data.error === "TASK_SURFACE_UNREACHABLE"
+                ? "The isolated ChatGPT page could not be opened."
+                : "The task route is unavailable.";
+        render();
+        return;
+      }
+      selectedTaskId = parsed.data.selectedTaskId;
+      section = "browser";
+      shellOverlay = "none";
+      render();
+    },
   );
   required<HTMLButtonElement>("#task-menu-button").addEventListener(
     "click",
@@ -2476,6 +2603,14 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#dossier-route").addEventListener(
     "click",
     () => {
+      const task = taskById(selectedTaskId);
+      if (task?.provider === "chatgpt") {
+        void window.farolNext.task({
+          kind: "task.activate",
+          taskId: selectedTaskId,
+        });
+        return;
+      }
       const tone = taskState(selectedTaskId).tone;
       selectSection(
         tone === "waiting"
@@ -2641,6 +2776,11 @@ async function start(): Promise<void> {
 
   bootstrapReady = true;
   if (pendingRuntimeStatus) applyRuntimeStatus(pendingRuntimeStatus);
+  if (pendingTasksState) {
+    const state = pendingTasksState;
+    pendingTasksState = null;
+    applyTasksState(state);
+  }
   pendingTaskSurfaceStatuses.splice(0).forEach(applyTaskSurfaceStatus);
   pendingRuntimeEvents.splice(0).forEach(recordEvent);
   if (pendingLayout) {

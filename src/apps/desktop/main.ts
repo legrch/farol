@@ -20,6 +20,14 @@ import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
+import {
+  ProductTaskCommandResultSchema,
+  ProductTaskCommandSchema,
+  ProductTasksStateSchema,
+  type ProductTask,
+  type ProductTaskCommandResult,
+} from "../../modules/chat/contract/product-task";
+import { LiveTaskRegistry } from "./live-task-registry";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
@@ -205,6 +213,11 @@ let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
 let chatGptRoute: ChatGptRoute | null = null;
+const liveTaskRegistry = new LiveTaskRegistry(5);
+const liveTaskRoutes = new Map<string, ChatGptRoute>();
+let primaryChatGptTaskId: string | null = null;
+let chatGptHomeUrl = CHATGPT_HOME;
+let chatGptE2eOrigin: string | null = null;
 let chatGptTaskAdmission = false;
 type ChatGptVerification = NonNullable<
   ProductSettings["setup"]["chatgpt"]["verified"]
@@ -412,11 +425,35 @@ const pendingComputer = new Map<
   Extract<z.infer<typeof ClientEventSchema>, { kind: "computer.requested" }>
 >();
 
+function demoShellTasks(): readonly ProductTask[] {
+  return (runtime?.tasks ?? expectedTasks).map((task) => ({
+    taskId: task.taskId,
+    sessionId: task.sessionId,
+    turnId: task.turnId,
+    label: task.label,
+    provider: "fixture" as const,
+    requestedModel: "Synthetic local fixture",
+    observedModel: "Synthetic local fixture",
+    requestedMode: "Deterministic demo",
+    observedMode: "Deterministic demo",
+    hasComputer: task.hasComputer,
+    pinned: false,
+    lifecycle: "event_driven" as const,
+  }));
+}
+
+function productTasksState() {
+  return demoMode
+    ? ProductTasksStateSchema.parse({ revision: 0, tasks: demoShellTasks() })
+    : liveTaskRegistry.snapshot();
+}
+
 function runtimeBase(): string | null {
   return runtime ? `http://127.0.0.1:${runtime.port}` : null;
 }
 
 function bootstrap() {
+  const taskState = productTasksState();
   return {
     schema: 3,
     productName,
@@ -432,14 +469,8 @@ function bootstrap() {
     runtimeIdentity: runtime?.identity ?? null,
     embeddedNode: runtime?.embeddedNode ?? null,
     embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
-    tasks: (runtime?.tasks ?? expectedTasks).map(
-      ({ ownerId: _ownerId, generation: _generation, ...task }) => {
-        const { readToken: _readToken, ...safeTask } = task as typeof task & {
-          readToken?: string;
-        };
-        return safeTask;
-      },
-    ),
+    taskRevision: taskState.revision,
+    tasks: taskState.tasks,
     partition: "persist:farol-next-preview",
     chatgptPartition: CHATGPT_PARTITION,
     chatgptRecoveryPending: recoverableChatGptTask !== null,
@@ -450,6 +481,153 @@ function bootstrap() {
     liveProvider: false,
     windowState: currentWindowState(),
   };
+}
+
+function publishTasksState(): void {
+  if (demoMode) return;
+  window?.webContents.send(channels.tasksState, liveTaskRegistry.snapshot());
+}
+
+function taskFailure(
+  error: Extract<ProductTaskCommandResult, { ok: false }>["error"],
+): ProductTaskCommandResult {
+  return ProductTaskCommandResultSchema.parse({
+    ok: false,
+    error,
+    state: liveTaskRegistry.snapshot(),
+  });
+}
+
+function taskSuccess(taskId: string): ProductTaskCommandResult {
+  return ProductTaskCommandResultSchema.parse({
+    ok: true,
+    state: liveTaskRegistry.snapshot(),
+    selectedTaskId: taskId,
+  });
+}
+
+function setLiveTaskLifecycle(
+  taskId: string,
+  lifecycle: ProductTask["lifecycle"],
+): void {
+  if (!liveTaskRegistry.setLifecycle(taskId, lifecycle)) return;
+  publishTasksState();
+}
+
+function chatGptTaskAdmissionReady(): boolean {
+  const snapshot = configuration?.snapshot();
+  if (!snapshot || snapshot.status !== "ready") return false;
+  const readiness = snapshot.settings.setup.chatgpt;
+  return (
+    readiness.reachable === "reachable" &&
+    readiness.configured &&
+    !readiness.outcomeUnknown &&
+    readiness.verified !== null
+  );
+}
+
+function createLiveChatGptRoute(taskId: string, label: string): ChatGptRoute {
+  return new ChatGptRoute({
+    homeUrl: chatGptHomeUrl,
+    initialUrl: chatGptHomeUrl,
+    e2eOrigin: chatGptE2eOrigin,
+    parent: () => window,
+    title: `${label} · Farol Next`,
+    onClosed: () => setLiveTaskLifecycle(taskId, "idle"),
+    ...(process.env.FAROL_NEXT_E2E === "1"
+      ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
+      : {}),
+  });
+}
+
+async function openLiveTaskSurface(taskId: string): Promise<boolean> {
+  const route = liveTaskRoutes.get(taskId);
+  if (!route) return false;
+  try {
+    const opened = await route.open();
+    if (opened.status !== "opened") {
+      setLiveTaskLifecycle(taskId, "failed");
+      return false;
+    }
+    const current = liveTaskRegistry.get(taskId);
+    if (current?.lifecycle === "failed") {
+      setLiveTaskLifecycle(taskId, "idle");
+    }
+    return true;
+  } catch {
+    setLiveTaskLifecycle(taskId, "failed");
+    return false;
+  }
+}
+
+async function runProductTaskCommand(
+  value: unknown,
+): Promise<ProductTaskCommandResult> {
+  const command = ProductTaskCommandSchema.safeParse(value);
+  if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
+  if (demoMode || runtimeState !== "ready") {
+    return taskFailure("TASKS_UNAVAILABLE");
+  }
+  if (command.data.kind === "task.activate") {
+    if (!liveTaskRegistry.get(command.data.taskId)) {
+      return taskFailure("TASK_NOT_FOUND");
+    }
+    selectedTaskId = command.data.taskId;
+    section = "browser";
+    shellOverlay = "none";
+    applyLayout();
+    publishLayout();
+    return (await openLiveTaskSurface(command.data.taskId))
+      ? taskSuccess(command.data.taskId)
+      : taskFailure("TASK_SURFACE_UNREACHABLE");
+  }
+  if (!chatGptTaskAdmissionReady()) {
+    return taskFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+  }
+  if (!chatGptRoute) return taskFailure("TASK_ROUTE_UNAVAILABLE");
+
+  const ordinal = liveTaskRegistry.snapshot().tasks.length + 1;
+  const task: ProductTask = {
+    taskId: randomUUID(),
+    sessionId: randomUUID(),
+    turnId: randomUUID(),
+    label: `ChatGPT task ${ordinal}`,
+    provider: "chatgpt",
+    requestedModel: "Account default",
+    observedModel: null,
+    requestedMode: "Account default",
+    observedMode: null,
+    hasComputer: false,
+    pinned: false,
+    lifecycle: "idle",
+  };
+  const admitted = liveTaskRegistry.admit(task);
+  if (admitted.status === "capacity") {
+    return taskFailure("TASK_CAPACITY_REACHED");
+  }
+  if (admitted.status !== "admitted") {
+    return taskFailure("TASK_ROUTE_UNAVAILABLE");
+  }
+
+  const route =
+    primaryChatGptTaskId === null
+      ? chatGptRoute
+      : createLiveChatGptRoute(task.taskId, task.label);
+  if (primaryChatGptTaskId === null) {
+    primaryChatGptTaskId = task.taskId;
+    route.setTitle(`${task.label} · Farol Next`);
+  }
+  liveTaskRoutes.set(task.taskId, route);
+  selectedTaskId = task.taskId;
+  section = "browser";
+  setupOpen = false;
+  shellOverlay = "none";
+  publishTasksState();
+  publishLayout();
+  if (!(await openLiveTaskSurface(task.taskId))) {
+    return taskFailure("TASK_SURFACE_UNREACHABLE");
+  }
+  return taskSuccess(task.taskId);
 }
 
 function configurationFailure(
@@ -1314,7 +1492,7 @@ async function configureProduct(
         if (target === null) {
           return configurationFailure("SUPPORT_EXPORT_CANCELLED");
         }
-        const tasks = runtime?.tasks ?? expectedTasks;
+        const tasks = productTasksState().tasks;
         const receipt = await writeSupportExport(
           target,
           createSupportExport({
@@ -2849,7 +3027,7 @@ function handleShortcut(input: Input): boolean {
     return true;
   }
   if (input.control && input.key === "Tab") {
-    const tasks = runtime?.tasks ?? expectedTasks;
+    const tasks = productTasksState().tasks;
     if (tasks.length === 0) return false;
     const index = tasks.findIndex((task) => task.taskId === selectedTaskId);
     const direction = input.shift ? -1 : 1;
@@ -3045,6 +3223,11 @@ function installIpc(): void {
       ? configureProduct(value)
       : configurationFailure("SETTINGS_UNAVAILABLE"),
   );
+  ipcMain.handle(channels.task, (event, value: unknown) =>
+    event.sender === window?.webContents
+      ? runProductTaskCommand(value)
+      : taskFailure("TASKS_UNAVAILABLE"),
+  );
   ipcMain.handle(channels.control, async (event, value: unknown) => {
     if (event.sender !== window?.webContents)
       return { error: "IPC_SENDER_DENIED" };
@@ -3086,13 +3269,15 @@ function installIpc(): void {
   ipcMain.on(channels.layout, (event, value: unknown) => {
     if (event.sender !== window?.webContents) return;
     const parsed = ShellLayoutSchema.safeParse(value);
+    if (!parsed.success) return;
+    const tasks = productTasksState().tasks;
     if (
-      !parsed.success ||
-      (expectedTasks.length === 0
+      tasks.length === 0
         ? parsed.data.taskId !== ""
-        : !expectedTasks.some((task) => task.taskId === parsed.data.taskId))
-    )
+        : !tasks.some((task) => task.taskId === parsed.data.taskId)
+    ) {
       return;
+    }
     const focusTargetChanged =
       section !== parsed.data.section ||
       selectedTaskId !== parsed.data.taskId ||
@@ -3105,6 +3290,15 @@ function installIpc(): void {
     shellOverlay = parsed.data.overlay;
     applyLayout();
     if (focusTargetChanged) focusForLayoutAfterRendererCommit();
+    if (
+      !demoMode &&
+      parsed.data.section === "browser" &&
+      !parsed.data.setupOpen &&
+      parsed.data.overlay === "none" &&
+      parsed.data.taskId !== ""
+    ) {
+      void openLiveTaskSurface(parsed.data.taskId);
+    }
   });
 }
 
@@ -3254,6 +3448,13 @@ function stopRuntime(): void {
   runtimeChild?.postMessage("shutdown");
 }
 
+function disposeChatGptRoutes(): void {
+  const routes = new Set(liveTaskRoutes.values());
+  if (chatGptRoute) routes.add(chatGptRoute);
+  for (const route of routes) route.dispose();
+  liveTaskRoutes.clear();
+}
+
 async function main(): Promise<void> {
   app.on(
     "second-instance",
@@ -3303,6 +3504,8 @@ async function main(): Promise<void> {
     chatGptUrl = parsed.href;
     e2eChatGptOrigin = parsed.origin;
   }
+  chatGptHomeUrl = chatGptUrl;
+  chatGptE2eOrigin = e2eChatGptOrigin;
   let chatGptInitialUrl = chatGptUrl;
   try {
     chatGptConversationStore = new PrivateChatGptConversationStore({
@@ -3332,6 +3535,11 @@ async function main(): Promise<void> {
     initialUrl: chatGptInitialUrl,
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
+    onClosed: () => {
+      if (primaryChatGptTaskId !== null) {
+        setLiveTaskLifecycle(primaryChatGptTaskId, "idle");
+      }
+    },
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
@@ -3361,7 +3569,7 @@ async function main(): Promise<void> {
     activeCodexAgentCheck = null;
     agentCheck?.host.dispose();
     if (agentCheck) void agentCheck.client.close().catch(() => undefined);
-    chatGptRoute?.dispose();
+    disposeChatGptRoutes();
     stopRuntime();
   });
   app.on("window-all-closed", () => {
