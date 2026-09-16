@@ -1071,6 +1071,18 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
 }
 
 async function activateForNativeFocusProof(application) {
+  if (process.platform === "darwin") {
+    const activation = spawnSync(
+      "/usr/bin/open",
+      ["-b", development ? "com.github.Electron" : "local.farol.next.preview"],
+      { encoding: "utf8" },
+    );
+    assert.equal(
+      activation.status,
+      0,
+      `${activation.stdout}${activation.stderr}`,
+    );
+  }
   let last = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     last = await application.evaluate(async ({ app, BrowserWindow }) => {
