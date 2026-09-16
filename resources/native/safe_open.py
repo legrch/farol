@@ -2,15 +2,18 @@
 
 This reviewed helper started from the Farol Hub safe-open implementation at
 commit 59ae5c4's parent.  Next packages and attests its own bytes, sends them to
-the reviewed CPython interpreter on stdin, and exposes only read, list and grep
-through its typed Computer adapter.  A successful response is ``FAROLR1\0``
-plus an unsigned 64-bit big-endian payload length and the exact payload bytes.
-Failures are content-free exit statuses.
+the reviewed CPython interpreter on stdin, and exposes typed read, list, grep,
+write and edit operations through bounded Computer adapters.  Mutations require
+an exact source digest (or an explicit create-only precondition), publish with
+one descriptor-relative atomic replace and return content-free receipts.  A
+successful response is ``FAROLR1\0`` plus an unsigned 64-bit big-endian payload
+length and the exact payload bytes.  Failures are content-free exit statuses.
 """
 
 import json
 import errno
 import codecs
+import hashlib
 import itertools
 import os
 import re
@@ -861,18 +864,47 @@ def _mutation_text(value):
     return payload
 
 
+def _expected_sha256(request, *, allow_absent):
+    if "expectedSha256" not in request:
+        refuse(EXIT_INVALID)
+    value = request.get("expectedSha256")
+    if value is None and allow_absent:
+        return None
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        refuse(EXIT_INVALID)
+    return value
+
+
+def _payload_sha256(payload):
+    return hashlib.sha256(payload).hexdigest()
+
+
 def _write_regular(request, parent_fd, leaf):
     if not _safe_output_name(leaf):
         refuse(EXIT_PATH_REFUSED)
+    expected = _expected_sha256(request, allow_absent=True)
     payload = _mutation_text(request.get("content"))
     descriptor, previous = _existing_regular(parent_fd, leaf, required=False)
     try:
+        before_sha256 = None
+        if descriptor is not None:
+            before_payload = _read_descriptor(descriptor, ceiling=MAX_MUTATION_BYTES)
+            if before_payload is None:
+                refuse(EXIT_FILE_TOO_LARGE)
+            before_sha256 = _payload_sha256(before_payload)
+        if before_sha256 != expected:
+            refuse(EXIT_RACE)
         _atomic_publish(request, parent_fd, leaf, payload, previous)
     finally:
         if descriptor is not None:
             os.close(descriptor)
     return json.dumps(
-        {"bytes": len(payload)},
+        {
+            "afterSha256": _payload_sha256(payload),
+            "beforeSha256": before_sha256,
+            "bytes": len(payload),
+            "replacements": 0,
+        },
         ensure_ascii=True,
         allow_nan=False,
         separators=(",", ":"),
@@ -891,6 +923,7 @@ def _normalized_edit_text(value):
 def _edit_regular(request, parent_fd, leaf):
     if not _safe_output_name(leaf):
         refuse(EXIT_PATH_REFUSED)
+    expected = _expected_sha256(request, allow_absent=False)
     edits = request.get("edits")
     if not isinstance(edits, list) or not edits or len(edits) > MAX_EDITS:
         refuse(EXIT_INVALID)
@@ -914,6 +947,9 @@ def _edit_regular(request, parent_fd, leaf):
         payload = _read_descriptor(descriptor, ceiling=MAX_MUTATION_BYTES)
         if payload is None:
             refuse(EXIT_FILE_TOO_LARGE)
+        before_sha256 = _payload_sha256(payload)
+        if before_sha256 != expected:
+            refuse(EXIT_RACE)
         has_bom = payload.startswith(codecs.BOM_UTF8)
         source_payload = payload[len(codecs.BOM_UTF8) :] if has_bom else payload
         try:
@@ -954,7 +990,12 @@ def _edit_regular(request, parent_fd, leaf):
         os.close(descriptor)
 
     return json.dumps(
-        {"bytes": len(result_payload), "replacements": len(replacements)},
+        {
+            "afterSha256": _payload_sha256(result_payload),
+            "beforeSha256": before_sha256,
+            "bytes": len(result_payload),
+            "replacements": len(replacements),
+        },
         ensure_ascii=True,
         allow_nan=False,
         separators=(",", ":"),
@@ -1645,6 +1686,7 @@ def _dispatch(request):
         "length",
         "pattern",
         "content",
+        "expectedSha256",
         "denied",
         "writeDenied",
         "edits",
@@ -1698,12 +1740,24 @@ def _dispatch(request):
     elif "pattern" in request:
         refuse(EXIT_INVALID)
     if operation == "write":
-        if "content" not in request or "edits" in request:
+        if (
+            "content" not in request
+            or "edits" in request
+            or "expectedSha256" not in request
+        ):
             refuse(EXIT_INVALID)
     elif operation == "edit":
-        if "edits" not in request or "content" in request:
+        if (
+            "edits" not in request
+            or "content" in request
+            or "expectedSha256" not in request
+        ):
             refuse(EXIT_INVALID)
-    elif "content" in request or "edits" in request:
+    elif (
+        "content" in request
+        or "edits" in request
+        or "expectedSha256" in request
+    ):
         refuse(EXIT_INVALID)
     # Keyed on the operation rather than placed inside one walk: ``write`` goes
     # through ``_walk_parent_for_write`` and ``edit`` goes through
@@ -1728,7 +1782,7 @@ def _dispatch(request):
             return _grep_search(request, root_fd)
         parent_fd, leaf = (
             _walk_parent_for_write(request, root_fd)
-            if operation == "write"
+            if operation == "write" and request.get("expectedSha256") is None
             else _walk_parent(request, root_fd)
         )
         try:

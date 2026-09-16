@@ -8,6 +8,13 @@ import type { Readable, Writable } from "node:stream";
 import { TextDecoder } from "node:util";
 
 import type {
+  MutableWorkspace,
+  WorkspaceMutationErrorCode,
+  WorkspaceMutationRequest,
+  WorkspaceMutationResult,
+  WorkspaceMutationReceipt,
+} from "../../app/port/mutable-workspace";
+import type {
   ReadonlyWorkspace,
   ReadonlyWorkspaceErrorCode,
   ReadonlyWorkspaceRequest,
@@ -22,8 +29,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "ac6b914a97f7822fbf32eb9ad3eecbc46c791d3bc98ee0f2f23facc5aca77e42",
-  size: 60_872,
+  sha256: "4b8a7107ddcca266c47e0bcccc6ab6a26c83065a1e5f9c48c12fcd2b05b6fa02",
+  size: 62_695,
   mode: 0o644,
 });
 
@@ -31,8 +38,9 @@ const RESPONSE_MAGIC = Buffer.from("FAROLR1\0", "ascii");
 const RESPONSE_HEADER_BYTES = 16;
 const O_CLOEXEC =
   (Reflect.get(fsConstants, "O_CLOEXEC") as number | undefined) ?? 0;
-const MAX_REQUEST_BYTES = 64 * 1024;
+const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 256 * 1024;
+const MAX_MUTATION_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const MAX_STDERR_BYTES = 4 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -53,7 +61,9 @@ const DEFAULT_DENIED_PATHS = Object.freeze([
   "Library/Keychains",
 ]);
 
-const EXIT_TO_ERROR = new Map<number, ReadonlyWorkspaceErrorCode>([
+const DEFAULT_WRITE_DENIED_PATHS = Object.freeze([".git"]);
+
+const EXIT_TO_ERROR = new Map<number, NativeWorkspaceErrorCode>([
   [20, "WORKSPACE_INVALID_REQUEST"],
   [21, "WORKSPACE_NOT_FOUND"],
   [22, "WORKSPACE_PATH_REFUSED"],
@@ -63,6 +73,10 @@ const EXIT_TO_ERROR = new Map<number, ReadonlyWorkspaceErrorCode>([
   [26, "WORKSPACE_HELPER_FAILED"],
   [27, "WORKSPACE_SEARCH_TIMEOUT"],
   [28, "WORKSPACE_NOT_TEXT"],
+  [29, "WORKSPACE_EDIT_NO_MATCH"],
+  [30, "WORKSPACE_EDIT_NOT_UNIQUE"],
+  [31, "WORKSPACE_EDIT_OVERLAP"],
+  [32, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"],
 ]);
 
 const REVIEWED_PYTHON = Object.freeze({
@@ -93,12 +107,16 @@ type JsonValue =
   | Readonly<{ [key: string]: JsonValue }>;
 
 type NativeRequest = Readonly<{
-  operation: "read" | "list-directory" | "grep";
+  operation: "edit" | "grep" | "list-directory" | "read" | "write";
   root: string;
   relative: string;
   denied: readonly string[];
+  writeDenied?: readonly string[];
   maxBytes?: number;
   pattern?: string;
+  content?: string;
+  edits?: readonly Readonly<{ oldText: string; newText: string }>[];
+  expectedSha256?: string | null;
   testHook?: Readonly<{ phase: string; index: number | null }>;
 }>;
 
@@ -121,8 +139,11 @@ type SystemFileMeasurement = Readonly<{
   mode: number;
 }>;
 
+type NativeWorkspaceErrorCode =
+  ReadonlyWorkspaceErrorCode | WorkspaceMutationErrorCode;
+
 class WorkspaceRefusal extends Error {
-  constructor(readonly code: ReadonlyWorkspaceErrorCode) {
+  constructor(readonly code: NativeWorkspaceErrorCode) {
     super(code);
   }
 }
@@ -134,6 +155,12 @@ function success(
 }
 
 function failure(code: ReadonlyWorkspaceErrorCode): ReadonlyWorkspaceResult {
+  return { ok: false, error: { code, retry: "never" } };
+}
+
+function mutationFailure(
+  code: WorkspaceMutationErrorCode,
+): WorkspaceMutationResult {
   return { ok: false, error: { code, retry: "never" } };
 }
 
@@ -289,10 +316,149 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   return value as ReadonlyWorkspaceRequest;
 }
 
-function deniedPaths(request: ReadonlyWorkspaceRequest): readonly string[] {
+function deniedPaths(
+  request: Readonly<{
+    workspace: Readonly<{ deniedPaths: readonly string[] }>;
+  }>,
+): readonly string[] {
   return [
     ...new Set([...DEFAULT_DENIED_PATHS, ...request.workspace.deniedPaths]),
   ];
+}
+
+function validSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+function boundedMutationText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    !value.includes("\0") &&
+    Buffer.byteLength(value, "utf8") <= MAX_MUTATION_BYTES
+  );
+}
+
+function validRelativePaths(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 64 &&
+    value.every((entry) => canonicalRelativePath(entry)) &&
+    value.length === new Set(value).size
+  );
+}
+
+function validateMutationRequest(
+  value: unknown,
+): WorkspaceMutationRequest | null {
+  if (!exactKeys(value, ["workspace", "operation"])) return null;
+  const candidate = value as Readonly<Record<string, unknown>>;
+  if (
+    !exactKeys(candidate.workspace, [
+      "workspaceId",
+      "root",
+      "deniedPaths",
+      "writeDeniedPaths",
+    ])
+  ) {
+    return null;
+  }
+  const workspace = candidate.workspace as Readonly<Record<string, unknown>>;
+  if (
+    !validWorkspaceId(workspace.workspaceId) ||
+    !canonicalAbsolutePath(workspace.root) ||
+    !validRelativePaths(workspace.deniedPaths) ||
+    !validRelativePaths(workspace.writeDeniedPaths) ||
+    candidate.operation === null ||
+    typeof candidate.operation !== "object" ||
+    Array.isArray(candidate.operation)
+  ) {
+    return null;
+  }
+  const operation = candidate.operation as Readonly<Record<string, unknown>>;
+  if (operation.kind === "workspace.write") {
+    if (
+      !exactKeys(operation, [
+        "kind",
+        "relativePath",
+        "content",
+        "expectedSha256",
+      ]) ||
+      !canonicalRelativePath(operation.relativePath) ||
+      !boundedMutationText(operation.content) ||
+      !(
+        operation.expectedSha256 === null ||
+        validSha256(operation.expectedSha256)
+      )
+    ) {
+      return null;
+    }
+  } else if (operation.kind === "workspace.edit") {
+    if (
+      !exactKeys(operation, [
+        "kind",
+        "relativePath",
+        "edits",
+        "expectedSha256",
+      ]) ||
+      !canonicalRelativePath(operation.relativePath) ||
+      !validSha256(operation.expectedSha256) ||
+      !Array.isArray(operation.edits) ||
+      operation.edits.length === 0 ||
+      operation.edits.length > 256
+    ) {
+      return null;
+    }
+    let aggregate = 0;
+    for (const edit of operation.edits) {
+      if (!exactKeys(edit, ["oldText", "newText"])) return null;
+      const record = edit as Readonly<Record<string, unknown>>;
+      if (
+        !boundedMutationText(record.oldText) ||
+        !boundedMutationText(record.newText) ||
+        record.oldText.length === 0 ||
+        record.oldText === record.newText
+      ) {
+        return null;
+      }
+      aggregate +=
+        Buffer.byteLength(record.oldText, "utf8") +
+        Buffer.byteLength(record.newText, "utf8");
+      if (aggregate > MAX_MUTATION_BYTES) return null;
+    }
+  } else {
+    return null;
+  }
+  return value as WorkspaceMutationRequest;
+}
+
+function nativeMutationRequest(
+  request: WorkspaceMutationRequest,
+  options: NativeReadonlyWorkspaceTestOptions,
+): NativeRequest {
+  const common = {
+    root: request.workspace.root,
+    relative: request.operation.relativePath,
+    denied: deniedPaths(request),
+    writeDenied: [
+      ...new Set([
+        ...DEFAULT_WRITE_DENIED_PATHS,
+        ...request.workspace.writeDeniedPaths,
+      ]),
+    ],
+    expectedSha256: request.operation.expectedSha256,
+    ...(options.testHookRequest ? { testHook: options.testHookRequest } : {}),
+  };
+  return request.operation.kind === "workspace.write"
+    ? {
+        ...common,
+        operation: "write",
+        content: request.operation.content,
+      }
+    : {
+        ...common,
+        operation: "edit",
+        edits: request.operation.edits.map((edit) => ({ ...edit })),
+      };
 }
 
 function nativeRequest(
@@ -596,7 +762,7 @@ async function defaultAttestInterpreter(): Promise<string> {
   }
 }
 
-function mapExitCode(code: number | null): ReadonlyWorkspaceErrorCode {
+function mapExitCode(code: number | null): NativeWorkspaceErrorCode {
   if (code === null) return "WORKSPACE_HELPER_FAILED";
   return EXIT_TO_ERROR.get(code) ?? "WORKSPACE_HELPER_FAILED";
 }
@@ -845,7 +1011,75 @@ function parseText(raw: Buffer): ReadonlyWorkspaceResult {
   }
 }
 
-export class NativeReadonlyWorkspace implements ReadonlyWorkspace {
+function parseMutationReceipt(
+  raw: Buffer,
+  operation: WorkspaceMutationRequest["operation"],
+): WorkspaceMutationResult {
+  const parsed = parseJson(raw);
+  if (
+    !exactKeys(parsed, ["afterSha256", "beforeSha256", "bytes", "replacements"])
+  ) {
+    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
+  }
+  const value = parsed as Readonly<Record<string, unknown>>;
+  if (
+    !validSha256(value.afterSha256) ||
+    !(value.beforeSha256 === null || validSha256(value.beforeSha256)) ||
+    !Number.isSafeInteger(value.bytes) ||
+    (value.bytes as number) < 0 ||
+    (value.bytes as number) > MAX_MUTATION_BYTES ||
+    !Number.isSafeInteger(value.replacements) ||
+    (value.replacements as number) < 0 ||
+    (value.replacements as number) > 256 ||
+    (operation.kind === "workspace.write" && value.replacements !== 0) ||
+    (operation.kind === "workspace.edit" && (value.replacements as number) < 1)
+  ) {
+    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
+  }
+  const receipt: WorkspaceMutationReceipt = {
+    kind: "workspace.mutation",
+    operation: operation.kind === "workspace.write" ? "write" : "edit",
+    relativePath: operation.relativePath,
+    bytes: value.bytes as number,
+    replacements: value.replacements as number,
+    beforeSha256: value.beforeSha256 as string | null,
+    afterSha256: value.afterSha256,
+  };
+  return { ok: true, value: receipt };
+}
+
+function readonlyErrorCode(
+  code: NativeWorkspaceErrorCode,
+): ReadonlyWorkspaceErrorCode {
+  switch (code) {
+    case "WORKSPACE_EDIT_NO_MATCH":
+    case "WORKSPACE_EDIT_NOT_UNIQUE":
+    case "WORKSPACE_EDIT_OVERLAP":
+    case "WORKSPACE_MUTATION_CONFLICT":
+    case "WORKSPACE_MUTATION_OUTCOME_UNKNOWN":
+      return "WORKSPACE_HELPER_FAILED";
+    default:
+      return code;
+  }
+}
+
+function mutationErrorCode(
+  code: NativeWorkspaceErrorCode,
+): WorkspaceMutationErrorCode {
+  switch (code) {
+    case "WORKSPACE_RACE_DETECTED":
+      return "WORKSPACE_MUTATION_CONFLICT";
+    case "WORKSPACE_SEARCH_TIMEOUT":
+    case "WORKSPACE_HELPER_FAILED":
+      return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
+    default:
+      return code;
+  }
+}
+
+export class NativeReadonlyWorkspace
+  implements ReadonlyWorkspace, MutableWorkspace
+{
   private helperAttestation: Promise<Buffer> | undefined;
   private readonly attestInterpreter: () => Promise<string>;
 
@@ -910,8 +1144,50 @@ export class NativeReadonlyWorkspace implements ReadonlyWorkspace {
     } catch (error) {
       return failure(
         error instanceof WorkspaceRefusal
-          ? error.code
+          ? readonlyErrorCode(error.code)
           : "WORKSPACE_HELPER_FAILED",
+      );
+    }
+  }
+
+  async mutate(
+    request: WorkspaceMutationRequest,
+    options: NativeReadonlyWorkspaceTestOptions = {},
+  ): Promise<WorkspaceMutationResult> {
+    const validated = validateMutationRequest(request);
+    if (validated === null || !validTestOptions(options)) {
+      return mutationFailure("WORKSPACE_INVALID_REQUEST");
+    }
+
+    let source: Buffer;
+    try {
+      source = await this.helperSource();
+    } catch {
+      return mutationFailure("WORKSPACE_HELPER_UNTRUSTED");
+    }
+    let interpreter: string;
+    try {
+      interpreter = await this.attestInterpreter();
+      if (!canonicalAbsolutePath(interpreter)) {
+        return mutationFailure("WORKSPACE_INTERPRETER_UNTRUSTED");
+      }
+    } catch {
+      return mutationFailure("WORKSPACE_INTERPRETER_UNTRUSTED");
+    }
+
+    try {
+      const raw = await runHelper(
+        interpreter,
+        source,
+        nativeMutationRequest(validated, options),
+        options,
+      );
+      return parseMutationReceipt(raw, validated.operation);
+    } catch (error) {
+      return mutationFailure(
+        error instanceof WorkspaceRefusal
+          ? mutationErrorCode(error.code)
+          : "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
       );
     }
   }
