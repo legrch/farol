@@ -174,6 +174,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
+  z.strictObject({ kind: z.literal("support.export") }),
   z.strictObject({
     kind: z.literal("chatgpt.prepare-readonly-task"),
     workspaceId: IdentifierSchema,
@@ -383,6 +384,16 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     resultRetention: z.enum(["durable", "memory_only"]),
     redelivered: z.boolean(),
   }),
+  z.strictObject({
+    kind: z.literal("support.exported"),
+    fileName: z
+      .string()
+      .min(1)
+      .max(255)
+      .refine((value) => !value.includes("/") && !value.includes("\\")),
+    bytes: z.number().int().positive(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  }),
 ]);
 
 export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
@@ -426,6 +437,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_EDIT_NOT_UNIQUE",
       "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
       "WORKSPACE_MUTATION_FAILED",
+      "SUPPORT_EXPORT_CANCELLED",
+      "SUPPORT_EXPORT_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

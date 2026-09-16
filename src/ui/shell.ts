@@ -1081,19 +1081,21 @@ async function configureProduct(
     workspaceEvidence = null;
   }
   settingsFeedback =
-    command.kind === "chatgpt.prepare-readonly-task"
-      ? "Reading the selected file for review…"
-      : command.kind === "chatgpt.submit-readonly-task"
-        ? "Submitting once and waiting for one ChatGPT result…"
-        : command.kind === "chatgpt.cancel-readonly-task"
-          ? "Discarding the prepared context…"
-          : command.kind === "computer.prepare-workspace-edit"
-            ? "Reading the selected file and preparing a content-free edit review…"
-            : command.kind === "computer.apply-workspace-edit"
-              ? "Applying this guarded edit once…"
-              : command.kind === "computer.cancel-workspace-edit"
-                ? "Discarding the prepared edit…"
-                : "Saving and reading back…";
+    command.kind === "support.export"
+      ? "Preparing a content-free support export…"
+      : command.kind === "chatgpt.prepare-readonly-task"
+        ? "Reading the selected file for review…"
+        : command.kind === "chatgpt.submit-readonly-task"
+          ? "Submitting once and waiting for one ChatGPT result…"
+          : command.kind === "chatgpt.cancel-readonly-task"
+            ? "Discarding the prepared context…"
+            : command.kind === "computer.prepare-workspace-edit"
+              ? "Reading the selected file and preparing a content-free edit review…"
+              : command.kind === "computer.apply-workspace-edit"
+                ? "Applying this guarded edit once…"
+                : command.kind === "computer.cancel-workspace-edit"
+                  ? "Discarding the prepared edit…"
+                  : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1119,12 +1121,14 @@ async function configureProduct(
     }
     settingsFeedback =
       parsed.data.error === "WORKSPACE_PICKER_CANCELLED" ||
-      parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED"
+      parsed.data.error === "WORKSPACE_FILE_PICKER_CANCELLED" ||
+      parsed.data.error === "SUPPORT_EXPORT_CANCELLED"
         ? "No selection was made."
         : `Not applied · ${parsed.data.error}`;
     settingsFeedbackError = ![
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_FILE_PICKER_CANCELLED",
+      "SUPPORT_EXPORT_CANCELLED",
     ].includes(parsed.data.error);
     render();
     return false;
@@ -1159,6 +1163,8 @@ async function configureProduct(
           : evidence.state === "unreachable"
             ? "The isolated ChatGPT page could not be reached."
             : "ChatGPT loaded, but its composer could not be verified.";
+  } else if (evidence?.kind === "support.exported") {
+    settingsFeedback = `Saved ${evidence.fileName} · ${evidence.bytes} bytes · ${evidence.sha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
@@ -2095,6 +2101,15 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#open-computer-settings").addEventListener(
     "click",
     () => selectSection("computer"),
+  );
+  required<HTMLButtonElement>("#export-support").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "support.export" },
+        "Support report exported.",
+      );
+    },
   );
   required<HTMLButtonElement>("#save-computer-name").addEventListener(
     "click",

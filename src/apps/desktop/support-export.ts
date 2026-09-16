@@ -1,0 +1,198 @@
+import { createHash, randomUUID } from "node:crypto";
+import { constants as fsConstants, type Stats } from "node:fs";
+import fs from "node:fs/promises";
+import path from "node:path";
+
+import type { BuildIdentity } from "../../pkg/build-info/identity";
+import type { ProductConfigurationSnapshot } from "../../pkg/product-settings/contract";
+
+const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const CLOSE_ON_EXEC =
+  (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
+
+export type SupportRuntimeErrorCode =
+  | "process_exited"
+  | "process_failed"
+  | "start_timeout"
+  | "manifest_mismatch"
+  | "startup_failed"
+  | "other";
+
+type SupportExportInput = Readonly<{
+  generatedAt: string;
+  build: BuildIdentity;
+  configuration: ProductConfigurationSnapshot;
+  runtime: Readonly<{
+    state: "starting" | "ready" | "offline" | "failed";
+    errorCode: SupportRuntimeErrorCode | null;
+    identity: string | null;
+  }>;
+  capabilities: Readonly<{
+    nativeFilesystem: boolean;
+    nativeAgent: boolean;
+    liveProvider: boolean;
+  }>;
+  tasks: Readonly<{
+    total: number;
+    running: number;
+    waiting: number;
+    failed: number;
+  }>;
+}>;
+
+function setupReadiness(
+  readiness: Extract<
+    ProductConfigurationSnapshot,
+    { status: "ready" }
+  >["settings"]["setup"]["chatgpt"],
+) {
+  return {
+    visited: readiness.visited,
+    skipped: readiness.skipped,
+    configured: readiness.configured,
+    reachable: readiness.reachable,
+    verified: readiness.verified !== null,
+    outcomeUnknown: readiness.outcomeUnknown,
+  } as const;
+}
+
+export function createSupportExport(input: SupportExportInput) {
+  const configuration =
+    input.configuration.status === "error"
+      ? {
+          status: "error" as const,
+          error: input.configuration.error,
+        }
+      : {
+          status: "ready" as const,
+          revision: input.configuration.settings.revision,
+          general: input.configuration.settings.general,
+          computer: {
+            generation: input.configuration.settings.computer.generation,
+            workspaceCount:
+              input.configuration.settings.computer.workspaces.length,
+            readWorkspaceCount:
+              input.configuration.settings.computer.workspaces.filter(
+                (workspace) => workspace.access === "read",
+              ).length,
+            writeWorkspaceCount:
+              input.configuration.settings.computer.workspaces.filter(
+                (workspace) => workspace.access === "write",
+              ).length,
+            exclusionCount:
+              input.configuration.settings.computer.workspaces.reduce(
+                (count, workspace) => count + workspace.excludedPaths.length,
+                0,
+              ),
+          },
+          setup: {
+            chatgpt: setupReadiness(input.configuration.settings.setup.chatgpt),
+            computer: setupReadiness(
+              input.configuration.settings.setup.computer,
+            ),
+            connect: setupReadiness(input.configuration.settings.setup.connect),
+            hosts: setupReadiness(input.configuration.settings.setup.hosts),
+            verify: setupReadiness(input.configuration.settings.setup.verify),
+          },
+        };
+
+  return {
+    schema: 1 as const,
+    kind: "farol_next_support" as const,
+    generatedAt: input.generatedAt,
+    build: input.build,
+    runtime: input.runtime,
+    capabilities: input.capabilities,
+    configuration,
+    tasks: input.tasks,
+  };
+}
+
+function assertReplaceableTarget(info: Stats): void {
+  const effectiveUser = process.geteuid?.();
+  if (
+    !info.isFile() ||
+    info.isSymbolicLink() ||
+    info.nlink !== 1 ||
+    (effectiveUser !== undefined && info.uid !== effectiveUser)
+  ) {
+    throw new Error("SUPPORT_EXPORT_UNSAFE");
+  }
+}
+
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await fs.open(
+    directory,
+    fsConstants.O_RDONLY |
+      (fsConstants.O_DIRECTORY ?? 0) |
+      NO_FOLLOW |
+      CLOSE_ON_EXEC,
+  );
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+export async function writeSupportExport(target: string, report: unknown) {
+  if (!path.isAbsolute(target) || target.includes("\0")) {
+    throw new Error("SUPPORT_EXPORT_UNSAFE");
+  }
+  const fileName = path.basename(target);
+  if (fileName === "." || fileName === ".." || fileName.length === 0) {
+    throw new Error("SUPPORT_EXPORT_UNSAFE");
+  }
+  const parent = await fs.realpath(path.dirname(target));
+  const parentInfo = await fs.lstat(parent);
+  const effectiveUser = process.geteuid?.();
+  if (
+    !parentInfo.isDirectory() ||
+    parentInfo.isSymbolicLink() ||
+    (effectiveUser !== undefined && parentInfo.uid !== effectiveUser)
+  ) {
+    throw new Error("SUPPORT_EXPORT_UNSAFE");
+  }
+  const canonicalTarget = path.join(parent, fileName);
+  try {
+    assertReplaceableTarget(await fs.lstat(canonicalTarget));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  let serialized: string;
+  try {
+    serialized = `${JSON.stringify(report, null, 2)}\n`;
+  } catch {
+    throw new Error("SUPPORT_EXPORT_INVALID");
+  }
+  if (serialized === "undefined\n") {
+    throw new Error("SUPPORT_EXPORT_INVALID");
+  }
+  const bytes = Buffer.byteLength(serialized);
+  const sha256 = createHash("sha256").update(serialized).digest("hex");
+  const temporary = path.join(parent, `.${fileName}.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await fs.open(
+      temporary,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+      0o600,
+    );
+    await handle.writeFile(serialized, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await fs.rename(temporary, canonicalTarget);
+    await fs.chmod(canonicalTarget, 0o600);
+    await syncDirectory(parent);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
+  return { fileName, bytes, sha256 } as const;
+}

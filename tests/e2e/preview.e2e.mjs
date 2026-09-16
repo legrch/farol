@@ -693,6 +693,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
   await fs.mkdir(workspacePath, { mode: 0o700 });
   const workspaceRoot = await fs.realpath(workspacePath);
   const workspaceFile = path.join(workspaceRoot, "README.md");
+  const supportExport = path.join(isolatedHome, "Farol-Next-Support.json");
   await fs.writeFile(
     workspaceFile,
     "Farol Next workspace verification fixture\n",
@@ -710,6 +711,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     FAROL_NEXT_E2E: "1",
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
+    FAROL_NEXT_E2E_SUPPORT_EXPORT: supportExport,
     FAROL_NEXT_E2E_CHATGPT_URL: chatGptFixture.url,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
@@ -746,6 +748,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     userData,
     workspaceFile,
     workspaceRoot,
+    supportExport,
     expectedTaskViewCount,
     windowMode,
     presentation,
@@ -2574,6 +2577,37 @@ try {
     normal.workspaceRoot,
   );
   assert.ok(configuredBootstrap.configuration.settings.setup.computer.verified);
+  await normal.window.locator("#diagnostics-group").evaluate((element) => {
+    element.open = true;
+  });
+  await normal.window
+    .getByRole("button", { name: "Export support…", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText(/^Saved Farol-Next-Support\.json · \d+ bytes · [a-f0-9]{12}\.$/u)
+    .waitFor();
+  const supportExportText = await fs.readFile(normal.supportExport, "utf8");
+  const supportExport = JSON.parse(supportExportText);
+  assert.equal(supportExport.schema, 1);
+  assert.equal(supportExport.kind, "farol_next_support");
+  assert.equal(supportExport.build.buildId, buildIdentity.buildId);
+  assert.equal(supportExport.build.sourceCommit, buildIdentity.sourceCommit);
+  assert.equal(supportExport.configuration.status, "ready");
+  assert.equal(supportExport.configuration.computer.workspaceCount, 1);
+  assert.equal(supportExport.configuration.computer.writeWorkspaceCount, 1);
+  assert.equal(supportExport.tasks.total, 2);
+  assert.equal((await fs.stat(normal.supportExport)).mode & 0o777, 0o600);
+  assert.doesNotMatch(
+    supportExportText,
+    /Owner Test Mac|approved-workspace|guarded workspace mutation|workspace verification fixture/u,
+  );
+  assert.doesNotMatch(
+    supportExportText,
+    /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|Bearer|token|cookie|prompt|answer/u,
+  );
+  assert.doesNotMatch(supportExportText, new RegExp(normal.workspaceRoot, "u"));
+  cases.push("support-export-content-free");
   await normal.window.keyboard.press("Meta+3");
   await normal.window.locator('[data-panel="activity"].active').waitFor();
   await normal.window

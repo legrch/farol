@@ -10,6 +10,7 @@ import {
   WebContentsView,
   type Input,
   type MenuItemConstructorOptions,
+  type SaveDialogOptions,
   type UtilityProcess,
 } from "electron";
 import { lstat, realpath } from "node:fs/promises";
@@ -87,6 +88,11 @@ import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/na
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
 import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
+import {
+  createSupportExport,
+  writeSupportExport,
+  type SupportRuntimeErrorCode,
+} from "./support-export";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -382,6 +388,48 @@ function configurationFailure(
   });
 }
 
+function supportRuntimeErrorCode(
+  error: string | null,
+): SupportRuntimeErrorCode | null {
+  if (error === null) return null;
+  if (error === "RUNTIME_PROCESS_EXITED") return "process_exited";
+  if (error === "RUNTIME_PROCESS_FAILED") return "process_failed";
+  if (error === "RUNTIME_START_TIMEOUT") return "start_timeout";
+  if (error === "RUNTIME_TASK_MANIFEST_MISMATCH") return "manifest_mismatch";
+  if (
+    error === "RUNTIME_EXITED" ||
+    error === "RUNTIME_START_FAILED" ||
+    /^RUNTIME_START_FAILED_-?\d+$/u.test(error)
+  ) {
+    return "startup_failed";
+  }
+  return "other";
+}
+
+async function selectedSupportExportTarget(): Promise<string | null> {
+  if (process.env.FAROL_NEXT_E2E === "1") {
+    const target = process.env.FAROL_NEXT_E2E_SUPPORT_EXPORT;
+    if (!target || !path.isAbsolute(target) || target.includes("\0")) {
+      throw new Error("SUPPORT_EXPORT_E2E_TARGET_INVALID");
+    }
+    return target;
+  }
+  const options: SaveDialogOptions = {
+    title: "Export content-free Farol Next support report",
+    defaultPath: path.join(
+      app.getPath("documents"),
+      `Farol-Next-Support-${buildIdentity.version}.json`,
+    ),
+    buttonLabel: "Export Support Report",
+    filters: [{ name: "JSON", extensions: ["json"] }],
+    properties: ["createDirectory", "showOverwriteConfirmation"],
+  };
+  const selected = window
+    ? await dialog.showSaveDialog(window, options)
+    : await dialog.showSaveDialog(options);
+  return selected.canceled || !selected.filePath ? null : selected.filePath;
+}
+
 async function selectedWorkspace(): Promise<
   Readonly<{ root: string; label: string }> | "cancelled" | "invalid"
 > {
@@ -530,6 +578,46 @@ async function configureProduct(
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
   switch (command.kind) {
+    case "support.export": {
+      try {
+        const target = await selectedSupportExportTarget();
+        if (target === null) {
+          return configurationFailure("SUPPORT_EXPORT_CANCELLED");
+        }
+        const tasks = runtime?.tasks ?? expectedTasks;
+        const receipt = await writeSupportExport(
+          target,
+          createSupportExport({
+            generatedAt: new Date().toISOString(),
+            build: buildIdentity,
+            configuration: configuration.snapshot(),
+            runtime: {
+              state: runtimeState,
+              errorCode: supportRuntimeErrorCode(runtimeError),
+              identity: runtime?.identity ?? null,
+            },
+            capabilities: {
+              nativeFilesystem: true,
+              nativeAgent: false,
+              liveProvider: false,
+            },
+            tasks: {
+              total: tasks.length,
+              running: streamControllers.size,
+              waiting: pendingComputer.size,
+              failed: taskSurfaceFailures.size,
+            },
+          }),
+        );
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: { kind: "support.exported", ...receipt },
+        });
+      } catch {
+        return configurationFailure("SUPPORT_EXPORT_FAILED");
+      }
+    }
     case "chatgpt.open-sign-in": {
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
