@@ -666,7 +666,7 @@ export class ChatGptRoute {
   }
 
   private captureConversationUrl(contents: WebContents): string | null {
-    if (contents.isDestroyed() || this.load !== "loaded") return null;
+    if (contents.isDestroyed()) return null;
     const canonical = canonicalChatGptConversationUrl(
       contents.getURL(),
       this.options.e2eOrigin,
