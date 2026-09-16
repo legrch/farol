@@ -621,8 +621,11 @@ async function startChatGptFixture() {
           const stop = document.querySelector('[data-testid="stop-button"]');
           const conversation = document.querySelector('#conversation');
           const requestedTask = new URLSearchParams(location.search).get('farol-e2e-task');
-          const existingConversation = location.pathname.match(/^\/chatgpt\/c\/([A-Za-z0-9-]{8,128})\/?$/);
-          const conversationId = existingConversation?.[1] || requestedTask || 'farol-next-e2e';
+          const pathParts = location.pathname.split('/').filter(Boolean);
+          const existingConversationId = pathParts.length === 3 && pathParts[0] === 'chatgpt' && pathParts[1] === 'c'
+            ? pathParts[2]
+            : null;
+          const conversationId = existingConversationId || requestedTask || 'farol-next-e2e';
           const conversationPath = '/chatgpt/c/' + conversationId;
           const conversationStorageKey = 'farol-next-e2e-conversation:' + conversationPath;
           window.__farolTaskProgress = [];
