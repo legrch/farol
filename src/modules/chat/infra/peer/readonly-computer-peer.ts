@@ -1,6 +1,8 @@
 import { success } from "../../../../pkg/kernel/domain/result";
 import type {
   ChatComputerFailureSource,
+  ChatComputerOperation,
+  ChatComputerOutputValue,
   ChatComputerRequest,
   ChatComputerResult,
   ComputerCapability,
@@ -40,6 +42,7 @@ function correlationMatches(
     callId: string;
     workspaceId: string;
     relativePath: string;
+    operation: ChatComputerOperation;
   }>,
 ): boolean {
   return (
@@ -52,7 +55,33 @@ function correlationMatches(
     value.generation === request.generation &&
     value.callId === request.callId &&
     value.workspaceId === request.workspaceId &&
-    value.relativePath === request.operation.relativePath
+    value.relativePath === request.operation.relativePath &&
+    operationsMatch(value.operation, request.operation)
+  );
+}
+
+function operationsMatch(
+  left: ChatComputerOperation,
+  right: ChatComputerOperation,
+): boolean {
+  return (
+    left.kind === right.kind &&
+    left.relativePath === right.relativePath &&
+    (left.kind !== "workspace.search" ||
+      (right.kind === "workspace.search" && left.pattern === right.pattern))
+  );
+}
+
+function outputMatchesOperation(
+  operation: ChatComputerOperation,
+  output: ChatComputerOutputValue,
+): boolean {
+  return (
+    (operation.kind === "workspace.read" && output.kind === "workspace.text") ||
+    (operation.kind === "workspace.list" &&
+      output.kind === "workspace.entries") ||
+    (operation.kind === "workspace.search" &&
+      output.kind === "workspace.matches")
   );
 }
 
@@ -79,19 +108,28 @@ export class ReadonlyComputerPeer implements ComputerCapability {
     }
     const parsed = ReadonlyComputerCallResponseSchema.safeParse(raw);
     if (!parsed.success) {
-      return computerFailure("COMPUTER_CONTRACT_INVALID", "contract");
+      return computerFailure(
+        "COMPUTER_CONTRACT_INVALID",
+        "contract",
+        "outcome_unknown",
+      );
     }
     if (!parsed.data.ok) {
       if (
         parsed.data.correlation === null ||
         !correlationMatches(request, this.binding, parsed.data.correlation)
       ) {
-        return computerFailure("COMPUTER_CONTRACT_CORRELATION", "contract");
+        return computerFailure(
+          "COMPUTER_CONTRACT_CORRELATION",
+          "contract",
+          "outcome_unknown",
+        );
       }
       return computerFailure(parsed.data.error.code, parsed.data.error.source);
     }
     const value = parsed.data.value;
-    return correlationMatches(request, this.binding, value)
+    return correlationMatches(request, this.binding, value) &&
+      outputMatchesOperation(request.operation, value.output)
       ? success({
           ...value,
           output:
@@ -106,6 +144,10 @@ export class ReadonlyComputerPeer implements ComputerCapability {
                   }
                 : value.output,
         })
-      : computerFailure("COMPUTER_CONTRACT_CORRELATION", "contract");
+      : computerFailure(
+          "COMPUTER_CONTRACT_CORRELATION",
+          "contract",
+          "outcome_unknown",
+        );
   }
 }

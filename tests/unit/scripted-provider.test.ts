@@ -23,6 +23,7 @@ function output(ownerId: string = request.ownerId) {
     callId: "turn-a-computer-1",
     workspaceId: "preview-fixture",
     relativePath: "status.txt",
+    operation: { kind: "workspace.read" as const, relativePath: "status.txt" },
     output: {
       kind: "workspace.text" as const,
       text: "Fixture workspace is ready.\n",

@@ -332,6 +332,22 @@ describe("real read-only Computer action", () => {
     await expect(
       computer.execute(
         request(
+          { kind: "workspace.list", relativePath: "." },
+          "critic-excluded",
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        output: {
+          kind: "workspace.entries",
+          entries: ["README.md", "src/"],
+        },
+      },
+    });
+    await expect(
+      computer.execute(
+        request(
           {
             kind: "workspace.search",
             relativePath: ".",

@@ -42,6 +42,7 @@ const exactComputerResult: ChatComputerResult = success({
   callId: "call-a",
   workspaceId: "preview-fixture",
   relativePath: "status.txt",
+  operation: { kind: "workspace.read", relativePath: "status.txt" },
   output: {
     kind: "workspace.text" as const,
     text: "Fixture workspace is ready.\n",

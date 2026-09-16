@@ -29,10 +29,12 @@ commands and network authority remain unavailable.
 The N2 authority core now derives a task-bound `TaskGrant`, preserves it through
 main -> Agent -> Critic delegation, retains explicit owner narrowing including
 do-not-inspect paths, and intersects every Computer action with current Computer
-policy. Negative results retain exact request correlation and distinguish a known
-refusal from an outcome-unknown transport. Agent lifecycle tests still use an
+policy. Results retain exact request and operation correlation; only a validated,
+correlated refusal is reported as known, while malformed or rebound responses are
+outcome-unknown. Agent lifecycle tests still use an
 in-memory host double; they do not prove native child admission. The Agent app
-seam now persists assignment correlation in a private atomic store, rejoins an
+seam now persists assignment correlation in a private atomic store with exclusive
+first publication and serialized monotonic updates, rejoins an
 already-known running child after restart without another spawn, distinguishes a
 durably retained result from a memory-only result, and records an exact
 parent/child/result delivery acknowledgement. That persistence path is exercised

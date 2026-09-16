@@ -74,8 +74,32 @@ export type PrivateAssignmentStoreOptions = Readonly<{
 }>;
 
 export type AssignmentAtomicWriteHooks = Readonly<{
+  beforeAdmissionCommit?: (target: string) => Promise<void>;
   beforeCommit?: (target: string) => Promise<void>;
 }>;
+
+const assignmentOperations = new Map<string, Promise<void>>();
+
+async function withAssignmentOperation<Value>(
+  key: string,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  const previous = assignmentOperations.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  assignmentOperations.set(key, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (assignmentOperations.get(key) === current) {
+      assignmentOperations.delete(key);
+    }
+  }
+}
 
 function digestIdentity(identity: AssignmentIdentity): string {
   return createHash("sha256")
@@ -140,27 +164,30 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       record,
       "AGENT_ASSIGNMENT_STATE_INVALID",
     );
-    const directory = await this.ensureRoot();
     const target = this.recordFile(validated.assignment.identity);
-    const existing = await this.readRecord(
-      target,
-      validated.assignment.identity,
-    );
-    if (existing) return { status: "existing", record: existing };
-
-    try {
-      await this.createExclusive(target, validated);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const raced = await this.readRecord(
+    return withAssignmentOperation(target, async () => {
+      const directory = await this.ensureRoot();
+      await this.cleanupTemporaryFiles(target);
+      const existing = await this.readRecord(
         target,
         validated.assignment.identity,
       );
-      if (!raced) throw new Error("AGENT_ASSIGNMENT_ADMISSION_UNCERTAIN");
-      return { status: "existing", record: raced };
-    }
-    await this.syncDirectory(directory);
-    return { status: "admitted", record: structuredClone(validated) };
+      if (existing) return { status: "existing", record: existing };
+
+      try {
+        await this.createExclusive(target, validated);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const raced = await this.readRecord(
+          target,
+          validated.assignment.identity,
+        );
+        if (!raced) throw new Error("AGENT_ASSIGNMENT_ADMISSION_UNCERTAIN");
+        return { status: "existing", record: raced };
+      }
+      await this.syncDirectory(directory);
+      return { status: "admitted", record: structuredClone(validated) };
+    });
   }
 
   async save(record: StoredAssignment): Promise<void> {
@@ -168,21 +195,28 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       record,
       "AGENT_ASSIGNMENT_STATE_INVALID",
     );
-    await this.ensureRoot();
     const target = this.recordFile(validated.assignment.identity);
-    const existing = await this.readRecord(
-      target,
-      validated.assignment.identity,
-    );
-    if (!existing) throw new Error("AGENT_ASSIGNMENT_STATE_MISSING");
-    if (sameValue(existing, validated)) return;
-    this.assertMonotonic(existing, validated);
-    await this.atomicWrite(target, validated);
+    await withAssignmentOperation(target, async () => {
+      await this.ensureRoot();
+      await this.cleanupTemporaryFiles(target);
+      const existing = await this.readRecord(
+        target,
+        validated.assignment.identity,
+      );
+      if (!existing) throw new Error("AGENT_ASSIGNMENT_STATE_MISSING");
+      if (sameValue(existing, validated)) return;
+      this.assertMonotonic(existing, validated);
+      await this.atomicWrite(target, validated);
+    });
   }
 
   async load(identity: AssignmentIdentity): Promise<StoredAssignment | null> {
-    await this.ensureRoot();
-    return this.readRecord(this.recordFile(identity), identity);
+    const target = this.recordFile(identity);
+    return withAssignmentOperation(target, async () => {
+      await this.ensureRoot();
+      await this.cleanupTemporaryFiles(target);
+      return this.readRecord(target, identity);
+    });
   }
 
   private validateRecord(candidate: unknown, code: string): StoredAssignment {
@@ -319,8 +353,10 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     record: StoredAssignment,
   ): Promise<void> {
     const serialized = this.serialize(record);
+    const directory = path.dirname(target);
+    const temporary = this.temporaryFile(target);
     const handle = await fs.open(
-      target,
+      temporary,
       fsConstants.O_WRONLY |
         fsConstants.O_CREAT |
         fsConstants.O_EXCL |
@@ -328,11 +364,23 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         CLOSE_ON_EXEC,
       0o600,
     );
+    let temporaryExists = true;
     try {
-      await handle.writeFile(serialized, "utf8");
-      await handle.sync();
+      try {
+        await handle.writeFile(serialized, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await this.hooks.beforeAdmissionCommit?.(target);
+      await fs.link(temporary, target);
+      await fs.unlink(temporary);
+      temporaryExists = false;
+      await this.syncDirectory(directory);
     } finally {
-      await handle.close();
+      if (temporaryExists) {
+        await fs.unlink(temporary).catch(() => undefined);
+      }
     }
   }
 
@@ -342,10 +390,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
   ): Promise<void> {
     const serialized = this.serialize(record);
     const directory = path.dirname(target);
-    const temporary = path.join(
-      directory,
-      `.${path.basename(target)}.tmp-${randomBytes(8).toString("hex")}`,
-    );
+    const temporary = this.temporaryFile(target);
     const handle = await fs.open(
       temporary,
       fsConstants.O_WRONLY |
@@ -429,6 +474,36 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     } finally {
       await handle.close();
     }
+  }
+
+  private async cleanupTemporaryFiles(target: string): Promise<void> {
+    const directory = path.dirname(target);
+    const prefix = `.${path.basename(target)}.tmp-`;
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    let changed = false;
+    for (const entry of entries) {
+      if (!entry.name.startsWith(prefix)) continue;
+      const temporary = path.join(directory, entry.name);
+      const info = await fs.lstat(temporary);
+      if (
+        !info.isFile() ||
+        info.isSymbolicLink() ||
+        (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||
+        (info.mode & 0o077) !== 0
+      ) {
+        throw new Error("AGENT_ASSIGNMENT_STATE_UNSAFE");
+      }
+      await fs.unlink(temporary);
+      changed = true;
+    }
+    if (changed) await this.syncDirectory(directory);
+  }
+
+  private temporaryFile(target: string): string {
+    return path.join(
+      path.dirname(target),
+      `.${path.basename(target)}.tmp-${randomBytes(8).toString("hex")}`,
+    );
   }
 
   private recordFile(identity: AssignmentIdentity): string {

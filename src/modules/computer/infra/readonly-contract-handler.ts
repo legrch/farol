@@ -36,6 +36,7 @@ export class ReadonlyComputerContractHandler implements ReadonlyComputerContract
           callId: parsed.data.callId,
           workspaceId: parsed.data.workspaceId,
           relativePath: parsed.data.operation.relativePath,
+          operation: parsed.data.operation,
         },
         error: result.error,
       };

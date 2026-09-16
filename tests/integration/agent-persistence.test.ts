@@ -271,6 +271,99 @@ describe("private Agent assignment persistence", () => {
     ).toBe(false);
   });
 
+  it("does not expose a partial record when first admission is interrupted", async () => {
+    const root = await stateRoot();
+    const interrupted = new PrivateAssignmentStore({ root }, {
+      beforeAdmissionCommit: async () => {
+        throw new Error("SYNTHETIC_ASSIGNMENT_ADMISSION_INTERRUPTION");
+      },
+    } as never);
+
+    await expect(interrupted.admit(preparedRecord())).rejects.toThrow(
+      "SYNTHETIC_ASSIGNMENT_ADMISSION_INTERRUPTION",
+    );
+    await expect(
+      new PrivateAssignmentStore({ root }).admit(preparedRecord()),
+    ).resolves.toMatchObject({ status: "admitted" });
+    expect(
+      (await descendants(root)).some((target) =>
+        path.basename(target).includes(".tmp-"),
+      ),
+    ).toBe(false);
+  });
+
+  it("serializes competing terminal writes instead of accepting stale overwrite", async () => {
+    const root = await stateRoot();
+    const stable = new PrivateAssignmentStore({ root });
+    await stable.admit(preparedRecord());
+    const running = runningRecord();
+    await stable.save(running);
+    const completed = completeAssignment(running.assignment, child);
+    const uncertain = markChildOutcomeUnknown(running.assignment, child);
+    if (!completed.ok) throw new Error(completed.error.code);
+    if (!uncertain.ok) throw new Error(uncertain.error.code);
+
+    let enterCommit!: () => void;
+    let releaseCommit!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enterCommit = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const delayed = new PrivateAssignmentStore(
+      { root },
+      {
+        beforeCommit: async () => {
+          enterCommit();
+          await release;
+        },
+      },
+    );
+    let enterCompetingCommit!: () => void;
+    const competingEntered = new Promise<void>((resolve) => {
+      enterCompetingCommit = resolve;
+    });
+    const competing = new PrivateAssignmentStore(
+      { root },
+      {
+        beforeCommit: async () => {
+          enterCompetingCommit();
+        },
+      },
+    );
+    const stale = delayed.save({
+      assignment: uncertain.value,
+      resultRef: null,
+      parentDelivery: "not_applicable",
+    });
+    await entered;
+    const winner = competing.save({
+      assignment: completed.value,
+      resultRef: "result-durable-a",
+      parentDelivery: "pending",
+    });
+    const concurrentState = await Promise.race([
+      competingEntered.then(() => "entered" as const),
+      new Promise<"blocked">((resolve) => {
+        setTimeout(() => resolve("blocked"), 25);
+      }),
+    ]);
+    releaseCommit();
+
+    const outcomes = await Promise.allSettled([stale, winner]);
+    expect(concurrentState).toBe("blocked");
+    expect(
+      outcomes.filter((outcome) => outcome.status === "fulfilled"),
+    ).toHaveLength(1);
+    expect(
+      outcomes.filter((outcome) => outcome.status === "rejected"),
+    ).toHaveLength(1);
+    await expect(stable.load(command.identity)).resolves.toMatchObject({
+      assignment: { terminal: true },
+    });
+  });
+
   it("rejects stale, rebound and terminal rewrites", async () => {
     const root = await stateRoot();
     const store = new PrivateAssignmentStore({ root });

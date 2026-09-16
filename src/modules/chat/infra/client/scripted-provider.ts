@@ -82,7 +82,9 @@ class ScriptedSession implements ProviderSession {
       result.taskEpoch === 0 &&
       result.participantId === `${this.request.taskId}:main` &&
       result.workspaceId === "preview-fixture" &&
-      result.relativePath === "status.txt";
+      result.relativePath === "status.txt" &&
+      result.operation.kind === "workspace.read" &&
+      result.operation.relativePath === "status.txt";
     if (!exact || this.submitted !== null)
       return failure("PROVIDER_RESULT_REJECTED");
     this.submitted = structuredClone(result);

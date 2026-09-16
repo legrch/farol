@@ -110,6 +110,7 @@ export const ReadonlyComputerCallCorrelationSchema = z.strictObject({
   callId: IdentifierSchema,
   workspaceId: IdentifierSchema,
   relativePath: ScopeRelativePathSchema,
+  operation: OperationSchema,
 });
 
 const ComputerErrorCodeSchema = z.enum([

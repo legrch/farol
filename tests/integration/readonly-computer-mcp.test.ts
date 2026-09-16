@@ -219,6 +219,13 @@ describe("read-only Computer MCP adapter", () => {
             callId: request.callId,
             workspaceId: request.workspaceId,
             relativePath: request.operation.relativePath,
+            operation:
+              request.operation.relativePath === "operation.txt"
+                ? {
+                    kind: "workspace.list" as const,
+                    relativePath: request.operation.relativePath,
+                  }
+                : request.operation,
           },
           error: {
             code: "AUTHORITY_PATH_DENIED",
@@ -265,6 +272,20 @@ describe("read-only Computer MCP adapter", () => {
       });
       expect(foreign.isError).toBe(true);
       expect(foreign.structuredContent).toEqual({
+        ok: false,
+        error: {
+          code: "COMPUTER_CONTRACT_CORRELATION",
+          source: "contract",
+          retry: "never",
+        },
+      });
+
+      const foreignOperation = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "farol", relativePath: "operation.txt" },
+      });
+      expect(foreignOperation.isError).toBe(true);
+      expect(foreignOperation.structuredContent).toEqual({
         ok: false,
         error: {
           code: "COMPUTER_CONTRACT_CORRELATION",

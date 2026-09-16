@@ -52,6 +52,7 @@ export type ChatComputerOutput = Readonly<{
   callId: string;
   workspaceId: string;
   relativePath: string;
+  operation: ChatComputerOperation;
   output: ChatComputerOutputValue;
 }>;
 

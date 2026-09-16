@@ -102,6 +102,7 @@ function correlationMatches(
     callId: string;
     workspaceId: string;
     relativePath: string;
+    operation: ReadonlyComputerCallRequest["operation"];
   }>,
 ): boolean {
   return (
@@ -114,7 +115,12 @@ function correlationMatches(
     value.generation === request.generation &&
     value.callId === request.callId &&
     value.workspaceId === request.workspaceId &&
-    value.relativePath === request.operation.relativePath
+    value.relativePath === request.operation.relativePath &&
+    value.operation.kind === request.operation.kind &&
+    value.operation.relativePath === request.operation.relativePath &&
+    (value.operation.kind !== "workspace.search" ||
+      (request.operation.kind === "workspace.search" &&
+        value.operation.pattern === request.operation.pattern))
   );
 }
 
@@ -152,14 +158,22 @@ async function execute(
       isError: true,
     };
   }
-  if (!correlationMatches(request, parsed.data.value)) {
+  const value = parsed.data.value;
+  const outputMatchesOperation =
+    (request.operation.kind === "workspace.read" &&
+      value.output.kind === "workspace.text") ||
+    (request.operation.kind === "workspace.list" &&
+      value.output.kind === "workspace.entries") ||
+    (request.operation.kind === "workspace.search" &&
+      value.output.kind === "workspace.matches");
+  if (!correlationMatches(request, value) || !outputMatchesOperation) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
   const structuredContent: Record<string, unknown> = {
-    ...parsed.data.value,
+    ...value,
   };
   return {
-    content: [{ type: "text", text: JSON.stringify(parsed.data.value.output) }],
+    content: [{ type: "text", text: JSON.stringify(value.output) }],
     structuredContent,
   };
 }

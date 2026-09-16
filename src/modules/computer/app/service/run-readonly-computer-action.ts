@@ -39,6 +39,7 @@ export type ReadonlyComputerActionOutput = Readonly<{
   callId: string;
   workspaceId: string;
   relativePath: string;
+  operation: ReadonlyWorkspaceOperation;
   output: ReadonlyWorkspaceOutput;
 }>;
 
@@ -210,6 +211,7 @@ export class RunReadonlyComputerAction {
         callId: request.callId,
         workspaceId: request.workspaceId,
         relativePath: request.operation.relativePath,
+        operation: { ...request.operation },
         output: result.value,
       },
     };
