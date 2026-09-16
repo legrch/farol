@@ -58,6 +58,7 @@ const bootstrapSchema = z.strictObject({
     }),
   ),
   partition: z.string(),
+  chatgptPartition: z.literal("persist:farol-next-chatgpt"),
   updateChannel: z.literal("local-preview-only"),
   nativeFilesystem: z.literal(false),
   nativeAgent: z.literal(false),
@@ -175,7 +176,11 @@ let windowState: WindowState = {
 let computerTargetTaskId: string | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
-let workspaceEvidence: ProductConfigurationEvidence | null = null;
+let chatGptSignInOpened = false;
+let workspaceEvidence: Extract<
+  ProductConfigurationEvidence,
+  { kind: "computer.workspace-read" }
+> | null = null;
 let renderedSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
@@ -679,10 +684,22 @@ async function configureProduct(
     render();
     return false;
   }
-  workspaceEvidence = parsed.data.evidence ?? workspaceEvidence;
-  settingsFeedback = parsed.data.evidence
-    ? `Read ${parsed.data.evidence.bytes} bytes from ${parsed.data.evidence.relativePath}. Nothing from the file was persisted.`
-    : successMessage;
+  const evidence = parsed.data.evidence;
+  if (evidence?.kind === "computer.workspace-read") {
+    workspaceEvidence = evidence;
+    settingsFeedback = `Read ${evidence.bytes} bytes from ${evidence.relativePath}. Nothing from the file was persisted.`;
+  } else if (evidence?.kind === "chatgpt.readiness") {
+    settingsFeedback =
+      evidence.state === "authenticated"
+        ? "ChatGPT composer verified in the isolated Next partition."
+        : evidence.state === "signed_out"
+          ? "The isolated ChatGPT page is reachable and needs sign-in."
+          : evidence.state === "unreachable"
+            ? "The isolated ChatGPT page could not be reached."
+            : "ChatGPT loaded, but its composer could not be verified.";
+  } else {
+    settingsFeedback = successMessage;
+  }
   settingsFeedbackError = false;
   if (
     command.kind === "general.update" &&
@@ -711,6 +728,7 @@ function renderSettings(): void {
       `Electron ${bootstrap.embeddedElectron ?? "unknown"} · Node ${bootstrap.embeddedNode ?? "unknown"}`,
     ],
     ["Browser partition", bootstrap.partition],
+    ["ChatGPT partition", bootstrap.chatgptPartition],
     ["Update channel", bootstrap.updateChannel],
     ["Typeface", "Geist 1.7.2 · SIL OFL 1.1 · system fallback"],
     [
@@ -938,6 +956,30 @@ function renderSettings(): void {
       detail.textContent = readinessDetail(state);
       copy.append(title, detail);
       row.append(copy);
+      if (label === "ChatGPT") {
+        const actions = document.createElement("span");
+        actions.className = "connection-actions";
+        const open = document.createElement("button");
+        open.type = "button";
+        open.textContent = "Open sign-in…";
+        open.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "chatgpt.open-sign-in" },
+            "Isolated ChatGPT window opened.",
+          );
+        });
+        const verify = document.createElement("button");
+        verify.type = "button";
+        verify.textContent = state.verified ? "Recheck" : "Check connection";
+        verify.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "chatgpt.verify" },
+            "ChatGPT connection checked.",
+          );
+        });
+        actions.append(open, verify);
+        row.append(actions);
+      }
       return row;
     }),
   );
@@ -1016,6 +1058,41 @@ function renderSetup(): void {
     liveSummary.textContent = `Settings cannot be changed: ${configured.error}`;
     livePrimary.textContent = "Unavailable";
     livePrimary.disabled = true;
+  } else if (step.id === "chatgpt") {
+    const readiness = configured.settings.setup.chatgpt;
+    const needsSignIn =
+      !chatGptSignInOpened &&
+      (!readiness.visited ||
+        readiness.reachable === "unreachable" ||
+        (readiness.reachable === "reachable" &&
+          !readiness.configured &&
+          readiness.needsAction !== null));
+    liveSummary.textContent = readinessDetail(readiness);
+    livePrimary.textContent = needsSignIn
+      ? "Open sign-in…"
+      : readiness.verified
+        ? "Recheck connection"
+        : "Check connection";
+    livePrimary.disabled = false;
+    setupPrimaryAction = async () => {
+      if (needsSignIn) {
+        if (
+          await configureProduct(
+            { kind: "chatgpt.open-sign-in" },
+            "Isolated ChatGPT window opened.",
+          )
+        ) {
+          chatGptSignInOpened = true;
+          render();
+        }
+        return;
+      }
+      chatGptSignInOpened = false;
+      await configureProduct(
+        { kind: "chatgpt.verify" },
+        "ChatGPT connection checked.",
+      );
+    };
   } else if (step.id === "computer") {
     const settings = configured.settings;
     const workspace = settings.computer.workspaces[0];
@@ -1056,13 +1133,11 @@ function renderSetup(): void {
       ? readinessDetail(readinessState)
       : "No readiness record is available.";
     livePrimary.textContent =
-      step.id === "chatgpt"
-        ? "Sign-in unavailable"
-        : step.id === "connect"
-          ? "Connector unavailable"
-          : step.id === "hosts"
-            ? "Host setup unavailable"
-            : "Checks unavailable";
+      step.id === "connect"
+        ? "Connector unavailable"
+        : step.id === "hosts"
+          ? "Host setup unavailable"
+          : "Checks unavailable";
     livePrimary.disabled = true;
   }
   if (!dialog.open) dialog.showModal();

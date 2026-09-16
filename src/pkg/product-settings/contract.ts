@@ -141,6 +141,8 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
 
 export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
+  z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
+  z.strictObject({ kind: z.literal("chatgpt.verify") }),
   z.strictObject({
     kind: z.literal("computer.rename"),
     name: z.string().trim().min(1).max(80),
@@ -171,6 +173,22 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
+    kind: z.literal("chatgpt.readiness"),
+    state: z.enum([
+      "authenticated",
+      "signed_out",
+      "unreachable",
+      "unsupported",
+    ]),
+    code: z
+      .enum([
+        "CHATGPT_PAGE_UNREACHABLE",
+        "CHATGPT_SIGN_IN_REQUIRED",
+        "CHATGPT_UI_UNRECOGNIZED",
+      ])
+      .nullable(),
+  }),
+  z.strictObject({
     kind: z.literal("computer.workspace-read"),
     workspaceId: IdentifierSchema,
     relativePath: ProductRelativePathSchema,
@@ -196,6 +214,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SETTINGS_UNAVAILABLE",
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
+      "CHATGPT_ROUTE_UNAVAILABLE",
       "WORKSPACE_NOT_FOUND",
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_SELECTION_INVALID",

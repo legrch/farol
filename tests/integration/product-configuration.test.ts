@@ -281,4 +281,79 @@ describe("Farol Next product configuration", () => {
       },
     });
   });
+
+  it("persists truthful ChatGPT readiness without credentials or page content", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+
+    const signedOut = await service.recordChatGptObservation({
+      state: "signed_out",
+    });
+    expect(signedOut).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          setup: {
+            chatgpt: {
+              visited: true,
+              configured: false,
+              reachable: "reachable",
+              verified: null,
+              needsAction: "Sign in to ChatGPT in the isolated Next window.",
+            },
+          },
+        },
+      },
+    });
+
+    const authenticated = await service.recordChatGptObservation({
+      state: "authenticated",
+      profile: "chatgpt.next-partition/1",
+      runtimeGeneration: "persist:farol-next-chatgpt",
+      buildId: "a".repeat(64),
+      protocol: "chatgpt-page-readiness/1",
+    });
+    expect(authenticated).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          setup: {
+            chatgpt: {
+              configured: true,
+              reachable: "reachable",
+              needsAction: null,
+              unavailable: null,
+              outcomeUnknown: false,
+              verified: {
+                profile: "chatgpt.next-partition/1",
+                workspaceId: null,
+                runtimeGeneration: "persist:farol-next-chatgpt",
+                buildId: "a".repeat(64),
+                protocol: "chatgpt-page-readiness/1",
+                verifiedAt: "2026-09-16T10:00:00.000Z",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject(authenticated.snapshot);
+
+    const saved = await fs.readFile(path.join(root, "product-settings.json"), {
+      encoding: "utf8",
+    });
+    expect(saved).not.toMatch(/cookie|token|conversation|prompt|answer/iu);
+  });
 });

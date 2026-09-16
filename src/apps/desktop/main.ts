@@ -66,6 +66,8 @@ import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
+import { CHATGPT_HOME, CHATGPT_PARTITION } from "./chatgpt-page-policy";
+import { ChatGptRoute } from "./chatgpt-route";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -149,6 +151,7 @@ let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
+let chatGptRoute: ChatGptRoute | null = null;
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
 const streamControllers = new Map<string, AbortController>();
@@ -187,6 +190,7 @@ function bootstrap() {
       },
     ),
     partition: "persist:farol-next-preview",
+    chatgptPartition: CHATGPT_PARTITION,
     updateChannel: buildIdentity.updateChannel,
     nativeFilesystem: false,
     nativeAgent: false,
@@ -306,6 +310,56 @@ async function configureProduct(
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
   switch (command.kind) {
+    case "chatgpt.open-sign-in": {
+      if (!chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
+      try {
+        opened = await chatGptRoute.open();
+      } catch {
+        opened = { status: "unreachable" };
+      }
+      const recorded =
+        opened.status === "opened"
+          ? await configuration.markSetupVisited("chatgpt")
+          : await configuration.recordChatGptObservation({
+              state: "unreachable",
+            });
+      return ProductConfigurationResultSchema.parse({
+        ...recorded,
+        ...(opened.status === "unreachable"
+          ? {
+              evidence: {
+                kind: "chatgpt.readiness",
+                state: "unreachable",
+                code: "CHATGPT_PAGE_UNREACHABLE",
+              },
+            }
+          : {}),
+      });
+    }
+    case "chatgpt.verify": {
+      if (!chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      const observed = await chatGptRoute.observe();
+      const recorded = await configuration.recordChatGptObservation(
+        observed.state === "authenticated"
+          ? {
+              state: "authenticated",
+              profile: "chatgpt.next-partition/1",
+              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              buildId: buildIdentity.buildId,
+              protocol: "chatgpt-page-readiness/1",
+            }
+          : { state: observed.state },
+      );
+      return ProductConfigurationResultSchema.parse({
+        ...recorded,
+        evidence: { kind: "chatgpt.readiness", ...observed },
+      });
+    }
     case "general.update":
       return ProductConfigurationResultSchema.parse(
         await configuration.updateGeneral({
@@ -1190,6 +1244,25 @@ async function main(): Promise<void> {
     }),
   );
   await configuration.initialize();
+  const e2eChatGptUrl =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_CHATGPT_URL
+      : undefined;
+  let chatGptUrl = CHATGPT_HOME;
+  let e2eChatGptOrigin: string | null = null;
+  if (e2eChatGptUrl) {
+    const parsed = new URL(e2eChatGptUrl);
+    if (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") {
+      throw new Error("CHATGPT_E2E_URL_INVALID");
+    }
+    chatGptUrl = parsed.href;
+    e2eChatGptOrigin = parsed.origin;
+  }
+  chatGptRoute = new ChatGptRoute({
+    initialUrl: chatGptUrl,
+    e2eOrigin: e2eChatGptOrigin,
+    parent: () => window,
+  });
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
     section = configured.settings.general.openAtLaunch;
@@ -1202,7 +1275,10 @@ async function main(): Promise<void> {
   await startRuntime();
   await ensureWindow();
   app.on("activate", reopenWindow);
-  app.on("before-quit", stopRuntime);
+  app.on("before-quit", () => {
+    chatGptRoute?.dispose();
+    stopRuntime();
+  });
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });

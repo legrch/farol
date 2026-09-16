@@ -16,11 +16,11 @@ export const setupSteps: readonly SetupStep[] = [
   {
     id: "chatgpt",
     eyeline: "ChatGPT",
-    title: "Keep the signed-in route separate",
-    copy: "Farol Next will use its own authenticated Browser route. Sign-in stays unavailable until the supported Electron gate is closed, and this build never borrows the installed provider profile.",
+    title: "Sign in on the isolated Next route",
+    copy: "Open the dedicated ChatGPT window, sign in there, then deliberately check that the real composer is available. Farol Next never borrows another application's cookies or profile.",
     details: [
-      "No ChatGPT route is configured in this build.",
-      "No login, cookies, or provider slot are read from the old lane.",
+      "The persistent partition belongs only to Farol Next.",
+      "Readiness stores only a content-free result; credentials, page text, conversations, prompts, and answers are never copied into settings.",
     ],
   },
   {

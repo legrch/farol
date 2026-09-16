@@ -58,6 +58,13 @@ const verificationInputSchema = z.strictObject({
   protocol: z.string().min(1).max(160),
 });
 
+const chatGptObservationSchema = z.discriminatedUnion("state", [
+  verificationInputSchema.extend({ state: z.literal("authenticated") }),
+  z.strictObject({ state: z.literal("signed_out") }),
+  z.strictObject({ state: z.literal("unreachable") }),
+  z.strictObject({ state: z.literal("unsupported") }),
+]);
+
 function settingsError(error: unknown): ProductConfigurationSnapshot {
   const message = error instanceof Error ? error.message : "";
   if (message === "SETTINGS_CORRUPT") {
@@ -488,6 +495,78 @@ export class ProductConfigurationService {
         },
       },
     }));
+  }
+
+  async recordChatGptObservation(input: unknown): Promise<MutationResult> {
+    const parsed = chatGptObservationSchema.safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.mutate((settings) => {
+      const revision = settings.revision + 1;
+      const common = {
+        ...settings.setup.chatgpt,
+        visited: true,
+        skipped: false,
+        outcomeUnknown: false,
+      };
+      let chatgpt: ProductSettings["setup"]["chatgpt"];
+      switch (parsed.data.state) {
+        case "authenticated":
+          chatgpt = {
+            ...common,
+            configured: true,
+            reachable: "reachable",
+            verified: {
+              profile: parsed.data.profile,
+              configRevision: 1,
+              workspaceId: null,
+              runtimeGeneration: parsed.data.runtimeGeneration,
+              buildId: parsed.data.buildId,
+              protocol: parsed.data.protocol,
+              verifiedAt: this.now(),
+            },
+            needsAction: null,
+            unavailable: null,
+          };
+          break;
+        case "signed_out":
+          chatgpt = {
+            ...common,
+            configured: false,
+            reachable: "reachable",
+            verified: null,
+            needsAction: "Sign in to ChatGPT in the isolated Next window.",
+            unavailable: null,
+          };
+          break;
+        case "unreachable":
+          chatgpt = {
+            ...common,
+            configured: false,
+            reachable: "unreachable",
+            verified: null,
+            needsAction:
+              "Open the isolated ChatGPT window and check network access.",
+            unavailable: null,
+          };
+          break;
+        case "unsupported":
+          chatgpt = {
+            ...common,
+            configured: false,
+            reachable: "reachable",
+            verified: null,
+            needsAction: null,
+            unavailable:
+              "The ChatGPT page loaded, but this build could not verify its composer.",
+          };
+          break;
+      }
+      return {
+        ...settings,
+        revision,
+        setup: { ...settings.setup, chatgpt },
+      };
+    });
   }
 
   async markSetupVisited(step: unknown): Promise<MutationResult> {

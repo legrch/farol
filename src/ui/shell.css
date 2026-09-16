@@ -1261,6 +1261,14 @@ html[data-has-tasks="false"] .surface {
   gap: 6px;
 }
 
+.connection-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .workspace-policy {
   display: flex;
   align-items: end;

@@ -541,6 +541,81 @@ async function waitForWindowPresentation(
   );
 }
 
+async function startChatGptFixture() {
+  const fixture = createServer((request, response) => {
+    if (request.url === "/chatgpt-popup") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy":
+          "default-src 'none'; style-src 'unsafe-inline'",
+      });
+      response.end(`<!doctype html>
+        <html><head><meta charset="utf-8"><title>ChatGPT popup fixture</title>
+        <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}</style></head>
+        <body><p data-testid="popup-ready">Secure popup ready</p></body></html>`);
+      return;
+    }
+    if (request.url !== "/chatgpt") {
+      response.writeHead(404, { "content-type": "text/plain" });
+      response.end("not found\n");
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      "content-security-policy":
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'",
+    });
+    response.end(`<!doctype html>
+      <html><head><meta charset="utf-8"><title>ChatGPT readiness fixture</title>
+      <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}button,#prompt-textarea{min-width:280px;min-height:44px}</style></head>
+      <body>
+        <button data-testid="login-button" type="button">Log in</button>
+        <button data-testid="popup-button" type="button">Open login popup</button>
+        <button data-testid="expire-button" type="button" hidden>Expire session</button>
+        <div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message" hidden></div>
+        <script>
+          const login = document.querySelector('[data-testid="login-button"]');
+          const popup = document.querySelector('[data-testid="popup-button"]');
+          const expire = document.querySelector('[data-testid="expire-button"]');
+          const composer = document.querySelector('#prompt-textarea');
+          const render = () => {
+            const authenticated = localStorage.getItem('farol-next-e2e-authenticated') === '1';
+            login.hidden = authenticated;
+            expire.hidden = !authenticated;
+            composer.hidden = !authenticated;
+          };
+          popup.addEventListener('click', () => window.open('/chatgpt-popup', 'chatgpt-auth'));
+          login.addEventListener('click', () => {
+            localStorage.setItem('farol-next-e2e-authenticated', '1');
+            render();
+          });
+          expire.addEventListener('click', () => {
+            localStorage.removeItem('farol-next-e2e-authenticated');
+            render();
+          });
+          render();
+        </script>
+      </body></html>`);
+  });
+  fixture.listen(0, "127.0.0.1");
+  await once(fixture, "listening");
+  const address = fixture.address();
+  assert.ok(address && typeof address !== "string");
+  return {
+    server: fixture,
+    url: `http://127.0.0.1:${address.port}/chatgpt`,
+  };
+}
+
+async function stopChatGptFixture(fixture) {
+  if (!fixture) return;
+  await new Promise((resolve, reject) => {
+    fixture.server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
 async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
@@ -555,6 +630,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     "Farol Next workspace verification fixture\n",
     { mode: 0o600 },
   );
+  const chatGptFixture = await startChatGptFixture();
   const launchArgs = [
     ...launchPrefix,
     ...(mode === "demo" ? ["--demo"] : []),
@@ -566,6 +642,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     FAROL_NEXT_E2E: "1",
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
+    FAROL_NEXT_E2E_CHATGPT_URL: chatGptFixture.url,
     HOME: isolatedHome,
     LANG: "en_US.UTF-8",
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
@@ -606,6 +683,7 @@ async function launch(extraArgs = [], windowMode = "hidden", mode = "demo") {
     presentation,
     launchArgs,
     launchEnvironment,
+    chatGptFixture,
   };
 }
 
@@ -929,6 +1007,8 @@ async function close(instance, options = {}) {
   }
   quitProofs += 1;
   if (removeHome) {
+    await stopChatGptFixture(instance.chatGptFixture);
+    instance.chatGptFixture = null;
     const real = path.resolve(instance.isolatedHome);
     assert.ok(
       real.startsWith(
@@ -1433,6 +1513,7 @@ async function completeSetup(
   instance,
   capture = false,
   configureComputer = false,
+  configureChatGpt = false,
 ) {
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
@@ -1454,6 +1535,115 @@ async function completeSetup(
       await dialog.innerText(),
       /Needs action|Configured · verify|Verified|Unavailable|Outcome unknown|Reachable · verify/u,
     );
+    if (stepId === "chatgpt" && configureChatGpt) {
+      assert.equal(
+        await instance.window.locator("#setup-live-primary").innerText(),
+        "Open sign-in…",
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await waitForWindowCount(instance.application, 2);
+      const chatGptPage = instance.application
+        .windows()
+        .find((page) => page.url() === instance.chatGptFixture.url);
+      assert.ok(chatGptPage, "CHATGPT_FIXTURE_WINDOW_MISSING");
+      const security = await instance.application.evaluate(
+        ({ webContents }, expectedUrl) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((candidate) => candidate.getURL() === expectedUrl);
+          if (!contents) throw new Error("CHATGPT_WEB_CONTENTS_MISSING");
+          const preferences = contents.getLastWebPreferences();
+          return {
+            sandbox: preferences.sandbox,
+            contextIsolation: preferences.contextIsolation,
+            nodeIntegration: preferences.nodeIntegration,
+            partition: preferences.partition,
+          };
+        },
+        instance.chatGptFixture.url,
+      );
+      assert.deepEqual(security, {
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        partition: "persist:farol-next-chatgpt",
+      });
+      await chatGptPage.locator('[data-testid="popup-button"]').click();
+      await waitForWindowCount(instance.application, 3);
+      const popupPage = instance.application
+        .windows()
+        .find((page) => page.url().endsWith("/chatgpt-popup"));
+      assert.ok(popupPage, "CHATGPT_POPUP_WINDOW_MISSING");
+      await popupPage.locator('[data-testid="popup-ready"]').waitFor();
+      const popupSecurity = await instance.application.evaluate(
+        ({ webContents }, popupUrl) => {
+          const contents = webContents
+            .getAllWebContents()
+            .find((candidate) => candidate.getURL() === popupUrl);
+          if (!contents) throw new Error("CHATGPT_POPUP_WEB_CONTENTS_MISSING");
+          const preferences = contents.getLastWebPreferences();
+          return {
+            sandbox: preferences.sandbox,
+            contextIsolation: preferences.contextIsolation,
+            nodeIntegration: preferences.nodeIntegration,
+            partition: preferences.partition,
+          };
+        },
+        `${new URL(instance.chatGptFixture.url).origin}/chatgpt-popup`,
+      );
+      assert.deepEqual(popupSecurity, security);
+      await popupPage.close();
+      await waitForWindowCount(instance.application, 2);
+      assert.equal(
+        await chatGptPage.evaluate(
+          () => window.open("file:///tmp/forbidden", "_blank") === null,
+        ),
+        true,
+      );
+      await waitForWindowCount(instance.application, 2);
+      await chatGptPage.locator('[data-testid="login-button"]').click();
+      await chatGptPage.locator("#prompt-textarea").waitFor({
+        state: "visible",
+      });
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-live-primary")?.textContent ===
+          "Check connection",
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+          "Verified",
+      );
+      await chatGptPage.locator('[data-testid="expire-button"]').click();
+      await chatGptPage.locator('[data-testid="login-button"]').waitFor({
+        state: "visible",
+      });
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+            "Needs action" &&
+          document.querySelector("#setup-live-primary")?.textContent ===
+            "Open sign-in…",
+      );
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-live-primary")?.textContent ===
+          "Check connection",
+      );
+      await chatGptPage.locator('[data-testid="login-button"]').click();
+      await instance.window.locator("#setup-live-primary").click();
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-status strong")?.textContent ===
+          "Verified",
+      );
+      await chatGptPage.close();
+      await waitForWindowCount(instance.application, 1);
+    }
     if (stepId === "computer" && configureComputer) {
       await instance.window.locator("#setup-live-primary").click();
       await instance.window.waitForFunction(
@@ -1502,7 +1692,7 @@ async function completeSetup(
         await instance.window
           .locator('[data-setup-progress="chatgpt"].complete')
           .count(),
-        0,
+        configureChatGpt ? 1 : 0,
       );
     }
     await instance.window.locator("#setup-next").click();
@@ -1621,7 +1811,7 @@ try {
       `E2E_RUNTIME_NOT_READY:${runtimeLabel}:${await normal.window.locator("#settings-list").innerText()}`,
     );
   }
-  await completeSetup(normal, true, true);
+  await completeSetup(normal, true, true, true);
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
     () => document.documentElement.dataset.windowActive === "false",
@@ -2369,6 +2559,44 @@ try {
     restartedSettings.setup.computer.verified.configRevision,
     restartedSettings.computer.generation,
   );
+  assert.equal(
+    restartedSettings.setup.chatgpt.verified.profile,
+    "chatgpt.next-partition/1",
+  );
+  await normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Open sign-in…", exact: true })
+    .click();
+  await waitForWindowCount(normal.application, 2);
+  const restartedChatGptPage = normal.application
+    .windows()
+    .find((page) => page.url() === normal.chatGptFixture.url);
+  assert.ok(restartedChatGptPage, "RESTARTED_CHATGPT_WINDOW_MISSING");
+  await restartedChatGptPage.locator("#prompt-textarea").waitFor({
+    state: "visible",
+  });
+  assert.equal(
+    await restartedChatGptPage.locator('[data-testid="login-button"]').count(),
+    1,
+  );
+  assert.equal(
+    await restartedChatGptPage
+      .locator('[data-testid="login-button"]')
+      .isHidden(),
+    true,
+  );
+  await normal.window
+    .locator("#connection-readiness")
+    .getByRole("button", { name: "Recheck", exact: true })
+    .click();
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("ChatGPT composer verified in the isolated Next partition.", {
+      exact: true,
+    })
+    .waitFor();
+  await restartedChatGptPage.close();
+  await waitForWindowCount(normal.application, 1);
   assert.deepEqual(restartedSettings.setup.journey, {
     currentStep: "verify",
     dismissed: true,
@@ -2412,6 +2640,9 @@ try {
     "workspace-exclusion-effective",
     "settings-controls-persist-after-restart",
     "setup-position-and-dismissal-persist",
+    "chatgpt-next-partition-readiness",
+    "chatgpt-popup-and-expiry-recovery",
+    "chatgpt-session-persists-after-restart",
     "mismatched-build-second-launch-rejected",
     "second-launch-reuses-single-instance",
     "window-close-reopen-keeps-runtime",
