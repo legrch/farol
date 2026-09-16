@@ -542,8 +542,9 @@ async function launch(extraArgs = [], windowMode = "hidden") {
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
-  const workspaceRoot = path.join(isolatedHome, "approved-workspace");
-  await fs.mkdir(workspaceRoot, { mode: 0o700 });
+  const workspacePath = path.join(isolatedHome, "approved-workspace");
+  await fs.mkdir(workspacePath, { mode: 0o700 });
+  const workspaceRoot = await fs.realpath(workspacePath);
   await fs.writeFile(
     path.join(workspaceRoot, "README.md"),
     "Farol Next workspace verification fixture\n",
@@ -1926,11 +1927,13 @@ try {
   assert.doesNotMatch(activityText, /Fixture result|Fixture read|computer-1/u);
   assert.doesNotMatch(activityText, /Bearer|token|\/private\//u);
   assert.doesNotMatch(activityText, /task-atlantic|turn-atlantic/u);
-  await normal.window
-    .locator("#activity-list")
-    .getByText("Client delivery acknowledged", { exact: true })
-    .first()
-    .waitFor();
+  assert.equal(
+    await normal.window
+      .locator("#activity-list")
+      .getByText("Client delivery acknowledged", { exact: true })
+      .count(),
+    0,
+  );
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "complete-wide.png"),
   });
@@ -2002,6 +2005,15 @@ try {
     normal.workspaceRoot,
   );
   assert.ok(configuredBootstrap.configuration.settings.setup.computer.verified);
+  await normal.window.keyboard.press("Meta+3");
+  await normal.window.locator('[data-panel="activity"].active').waitFor();
+  await normal.window
+    .locator("#activity-list")
+    .getByText("Client delivery acknowledged", { exact: true })
+    .first()
+    .waitFor();
+  await invokeApplicationMenu(normal.application, "app.settings");
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "settings-compact.png"),
   });
@@ -2019,6 +2031,10 @@ try {
   await normal.window.keyboard.press("Meta+1");
   if (nativeWindowProofAvailable) {
     await setWindowSize(normal.application, 1180, 760);
+    await normal.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "rail",
+    );
+    await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
     await normal.window.waitForFunction(
       () => document.documentElement.dataset.sidebar === "full",
     );
@@ -2165,10 +2181,8 @@ try {
   });
   repeatLaunch(normal);
   normal.window = await reopenedWindow;
-  await normal.window
-    .locator("#task-tabs .task-tab")
-    .first()
-    .waitFor({ state: "visible" });
+  await normal.window.locator("#sidebar").waitFor({ state: "visible" });
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
   await waitForWindowPresentation(normal.application, normal.windowMode);
   const reopenedBootstrap = await normal.window.evaluate(() =>
     window.farolNext.bootstrap(),
@@ -2247,6 +2261,7 @@ try {
     "geist-resource-loaded",
     "setup-hides-native-page",
     "activity-redaction",
+    "activity-detail-preference",
     "compact-layout",
     "stable-layout-geometry",
     "client-delivery-acknowledged",
