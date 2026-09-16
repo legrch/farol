@@ -7,95 +7,107 @@ import {
   markChildOutcomeUnknown,
   markSpawnOutcomeUnknown,
   startAssignment,
+  type AssignmentAuthority,
+  type AssignmentIdentity,
+  type ChildCorrelation,
 } from "../../src/modules/agent/domain/assignment";
+
+const identity: AssignmentIdentity = {
+  assignmentId: "assignment-a",
+  ownerId: "owner-preview",
+  sessionId: "session-a",
+  taskId: "task-a",
+  taskEpoch: 3,
+  generation: 2,
+};
+
+const authority: AssignmentAuthority = {
+  authorityId: "authority-task-a",
+  participantId: "agent-a",
+  parentParticipantId: "main-a",
+  role: "agent",
+  mutationOwnership: "task",
+};
+
+const child: ChildCorrelation = {
+  ...identity,
+  authorityId: authority.authorityId,
+  childId: "child-a",
+};
+
+function prepared() {
+  return createAssignment(identity, authority);
+}
 
 describe("Agent assignment policy", () => {
   it("admits one exact child and accepts only that child's result", () => {
-    const assignment = createAssignment({
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-    });
-    const started = startAssignment(assignment, {
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-      childId: "child-a",
-    });
+    const started = startAssignment(prepared(), child);
     expect(started.ok).toBe(true);
     if (!started.ok) return;
     expect(
-      completeAssignment(started.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-b",
-      }),
+      completeAssignment(started.value, { ...child, childId: "child-b" }),
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
-    expect(
-      completeAssignment(started.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-a",
-      }),
-    ).toMatchObject({ ok: true, value: { phase: "completed" } });
+    expect(completeAssignment(started.value, child)).toMatchObject({
+      ok: true,
+      value: { phase: "completed" },
+    });
   });
 
-  it("rejects a second child and stale generation", () => {
-    const assignment = createAssignment({
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-    });
-    const stale = startAssignment(assignment, {
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 1,
-      childId: "child-a",
-    });
-    expect(stale).toMatchObject({
+  it("rejects a second child and stale task or authority correlation", () => {
+    expect(
+      startAssignment(prepared(), { ...child, generation: 1 }),
+    ).toMatchObject({
       ok: false,
       error: { code: "AGENT_CORRELATION" },
     });
-    const started = startAssignment(assignment, {
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-      childId: "child-a",
+    expect(
+      startAssignment(prepared(), {
+        ...child,
+        authorityId: "foreign-authority",
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CORRELATION" },
     });
+    expect(
+      startAssignment(prepared(), { ...child, taskEpoch: 2 }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CORRELATION" },
+    });
+
+    const started = startAssignment(prepared(), child);
     if (!started.ok) throw new Error("start failed");
     expect(
-      startAssignment(started.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-b",
-      }),
+      startAssignment(started.value, { ...child, childId: "child-b" }),
     ).toMatchObject({ ok: false, error: { code: "AGENT_ALREADY_STARTED" } });
   });
 
-  it("keeps terminal and child finishing transitions explicit", () => {
-    const prepared = createAssignment({
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-    });
-    expect(failPreparedAssignment(prepared)).toMatchObject({
+  it("keeps terminal causes and child finishing transitions explicit", () => {
+    expect(failPreparedAssignment(prepared())).toMatchObject({
       ok: true,
-      value: { phase: "failed", terminal: true },
+      value: {
+        phase: "failed",
+        terminal: true,
+        terminalReason: {
+          code: "AGENT_SPAWN_REJECTED",
+          source: "native-host",
+        },
+      },
     });
-    expect(markSpawnOutcomeUnknown(prepared)).toMatchObject({
+    expect(markSpawnOutcomeUnknown(prepared())).toMatchObject({
       ok: true,
-      value: { phase: "outcome_unknown", terminal: true },
+      value: {
+        phase: "outcome_unknown",
+        terminal: true,
+        terminalReason: {
+          code: "AGENT_SPAWN_ACK_LOST",
+          source: "native-host-transport",
+        },
+      },
     });
 
-    const started = startAssignment(prepared, {
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-      childId: "child-a",
-    });
+    const started = startAssignment(prepared(), child);
     if (!started.ok) throw new Error("start failed");
     expect(failPreparedAssignment(started.value)).toMatchObject({
       ok: false,
@@ -107,55 +119,34 @@ describe("Agent assignment policy", () => {
     });
     expect(
       failChildAssignment(started.value, {
-        assignmentId: "assignment-a",
+        ...child,
         ownerId: "foreign-owner",
-        generation: 2,
-        childId: "child-a",
       }),
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
-    expect(
-      failChildAssignment(started.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-a",
-      }),
-    ).toMatchObject({ ok: true, value: { phase: "failed", terminal: true } });
-    expect(
-      markChildOutcomeUnknown(started.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-a",
-      }),
-    ).toMatchObject({
+    expect(failChildAssignment(started.value, child)).toMatchObject({
+      ok: true,
+      value: { phase: "failed", terminal: true },
+    });
+    expect(markChildOutcomeUnknown(started.value, child)).toMatchObject({
       ok: true,
       value: { phase: "outcome_unknown", terminal: true },
     });
+  });
 
-    const terminal = completeAssignment(started.value, {
-      assignmentId: "assignment-a",
-      ownerId: "owner-preview",
-      generation: 2,
-      childId: "child-a",
-    });
+  it("keeps every terminal assignment immutable", () => {
+    const started = startAssignment(prepared(), child);
+    if (!started.ok) throw new Error("start failed");
+    const terminal = completeAssignment(started.value, child);
     if (!terminal.ok) throw new Error("completion failed");
-    expect(
-      startAssignment(terminal.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-a",
-      }),
-    ).toMatchObject({ ok: false, error: { code: "AGENT_TERMINAL" } });
-    expect(
-      completeAssignment(terminal.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-a",
-      }),
-    ).toMatchObject({ ok: false, error: { code: "AGENT_TERMINAL" } });
+
+    expect(startAssignment(terminal.value, child)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TERMINAL" },
+    });
+    expect(completeAssignment(terminal.value, child)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TERMINAL" },
+    });
     expect(failPreparedAssignment(terminal.value)).toMatchObject({
       ok: false,
       error: { code: "AGENT_TERMINAL" },
@@ -164,13 +155,9 @@ describe("Agent assignment policy", () => {
       ok: false,
       error: { code: "AGENT_TERMINAL" },
     });
-    expect(
-      failChildAssignment(terminal.value, {
-        assignmentId: "assignment-a",
-        ownerId: "owner-preview",
-        generation: 2,
-        childId: "child-a",
-      }),
-    ).toMatchObject({ ok: false, error: { code: "AGENT_TERMINAL" } });
+    expect(failChildAssignment(terminal.value, child)).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_TERMINAL" },
+    });
   });
 });

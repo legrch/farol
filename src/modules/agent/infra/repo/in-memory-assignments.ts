@@ -8,6 +8,9 @@ function key(record: StoredAssignment): string {
   return JSON.stringify([
     identity.assignmentId,
     identity.ownerId,
+    identity.sessionId,
+    identity.taskId,
+    identity.taskEpoch,
     identity.generation,
   ]);
 }

@@ -1,0 +1,56 @@
+import type {
+  AgentAuthorityDecision,
+  AgentAuthorityFailureSource,
+  AgentAuthorityPort,
+  AgentDelegationRequest,
+} from "../../app/port/execution-authority";
+import type { ExecutionAuthorityContract } from "../../../computer/contract/execution-authority-contract";
+
+function mapSource(source: string): AgentAuthorityFailureSource {
+  switch (source) {
+    case "computer-approval":
+    case "task-admission":
+    case "task-grant":
+    case "owner-restriction":
+    case "role":
+    case "computer-policy":
+    case "native-host":
+      return source;
+    default:
+      return "authority-store";
+  }
+}
+
+export class ComputerExecutionAuthorityPeer implements AgentAuthorityPort {
+  constructor(private readonly contract: ExecutionAuthorityContract) {}
+
+  async delegate(
+    request: AgentDelegationRequest,
+  ): Promise<AgentAuthorityDecision> {
+    const response = await this.contract.delegate({
+      ownerId: request.identity.ownerId,
+      sessionId: request.identity.sessionId,
+      taskId: request.identity.taskId,
+      taskEpoch: request.identity.taskEpoch,
+      parentParticipantId: request.parentParticipantId,
+      participantId: request.participantId,
+      role: request.role,
+      mutationOwnership: request.mutationOwnership,
+      ...(request.narrowing ? { narrowing: request.narrowing } : {}),
+    });
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: {
+          code:
+            response.error.code === "AUTHORITY_STORE_UNAVAILABLE"
+              ? "AGENT_AUTHORITY_UNAVAILABLE"
+              : "AGENT_AUTHORITY_DENIED",
+          source: mapSource(response.error.source),
+          retry: "never",
+        },
+      };
+    }
+    return { ok: true, value: response.value };
+  }
+}

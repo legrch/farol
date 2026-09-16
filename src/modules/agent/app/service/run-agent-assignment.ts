@@ -5,6 +5,11 @@ import {
 } from "../../../../pkg/kernel/domain/result";
 import type { AgentHost } from "../port/agent-host";
 import type {
+  AgentAuthorityNarrowing,
+  AgentAuthorityPort,
+  DelegatedAgentAuthority,
+} from "../port/execution-authority";
+import type {
   AssignmentRepository,
   StoredAssignment,
 } from "../port/assignment-repository";
@@ -17,11 +22,24 @@ import {
   markSpawnOutcomeUnknown,
   startAssignment,
   type Assignment,
+  type AssignmentAuthority,
   type AssignmentErrorCode,
   type AssignmentIdentity,
 } from "../../domain/assignment";
 
 export type AgentRunReceipt = StoredAssignment;
+
+export type AgentAssignmentCommand = Readonly<{
+  identity: AssignmentIdentity;
+  delegation: Readonly<{
+    parentParticipantId: string;
+    participantId: string;
+    role: "agent" | "critic";
+    mutationOwnership: "none" | "task";
+    narrowing?: AgentAuthorityNarrowing;
+  }>;
+  focus: Readonly<{ initialPaths: readonly string[] }>;
+}>;
 
 export class RunAgentAssignment {
   private readonly inFlight = new Map<
@@ -32,19 +50,24 @@ export class RunAgentAssignment {
   constructor(
     private readonly host: AgentHost,
     private readonly assignments: AssignmentRepository,
+    private readonly authority: AgentAuthorityPort,
   ) {}
 
   execute(
-    identity: AssignmentIdentity,
+    command: AgentAssignmentCommand,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
+    const identity = command.identity;
     const key = JSON.stringify([
       identity.assignmentId,
       identity.ownerId,
+      identity.sessionId,
+      identity.taskId,
+      identity.taskEpoch,
       identity.generation,
     ]);
     const existing = this.inFlight.get(key);
     if (existing) return existing;
-    const execution = this.executeAdmitted(identity).finally(() => {
+    const execution = this.executeAdmitted(command).finally(() => {
       this.inFlight.delete(key);
     });
     this.inFlight.set(key, execution);
@@ -52,9 +75,20 @@ export class RunAgentAssignment {
   }
 
   private async executeAdmitted(
-    identity: AssignmentIdentity,
+    command: AgentAssignmentCommand,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
-    const prepared = createAssignment(identity);
+    const delegated = await this.resolveAuthority(command);
+    if (!delegated.ok) return delegated;
+    const identity = command.identity;
+    const authority = delegated.value;
+    const assignmentAuthority: AssignmentAuthority = {
+      authorityId: authority.authorityId,
+      participantId: authority.participantId,
+      parentParticipantId: authority.parentParticipantId,
+      role: authority.role,
+      mutationOwnership: authority.mutationOwnership,
+    };
+    const prepared = createAssignment(identity, assignmentAuthority);
     let admission: Awaited<ReturnType<AssignmentRepository["admit"]>>;
     try {
       admission = await this.assignments.admit({
@@ -65,21 +99,46 @@ export class RunAgentAssignment {
       return failure("AGENT_ADMISSION_FAILED");
     }
     if (admission.status === "existing") {
+      if (!this.matchesStoredAuthority(admission.record, authority)) {
+        return failure("AGENT_AUTHORITY_CORRELATION");
+      }
       return success(await this.tombstoneInterrupted(admission.record));
     }
 
     let spawned: Awaited<ReturnType<AgentHost["spawn"]>>;
     try {
-      spawned = await this.host.spawn(identity);
+      spawned = await this.host.spawn({
+        identity,
+        authority,
+        focus: { initialPaths: [...command.focus.initialPaths] },
+      });
     } catch {
-      return this.terminal(markSpawnOutcomeUnknown(prepared));
+      return this.terminal(
+        markSpawnOutcomeUnknown(prepared, {
+          code: "AGENT_SPAWN_TRANSPORT_UNKNOWN",
+          source: "native-host-transport",
+          retry: "never",
+        }),
+      );
     }
 
     if (spawned.status === "outcome_unknown") {
-      return this.terminal(markSpawnOutcomeUnknown(prepared));
+      return this.terminal(
+        markSpawnOutcomeUnknown(prepared, {
+          code: spawned.code,
+          source: "native-host-transport",
+          retry: "never",
+        }),
+      );
     }
     if (spawned.status === "failed") {
-      return this.terminal(failPreparedAssignment(prepared));
+      return this.terminal(
+        failPreparedAssignment(prepared, {
+          code: spawned.code,
+          source: "native-host",
+          retry: "never",
+        }),
+      );
     }
 
     const started = startAssignment(prepared, spawned.correlation);
@@ -91,7 +150,11 @@ export class RunAgentAssignment {
       waited = await this.host.wait(spawned.correlation);
     } catch {
       return this.terminal(
-        markChildOutcomeUnknown(started.value, spawned.correlation),
+        markChildOutcomeUnknown(started.value, spawned.correlation, {
+          code: "AGENT_WAIT_TRANSPORT_UNKNOWN",
+          source: "native-host-transport",
+          retry: "never",
+        }),
       );
     }
 
@@ -107,11 +170,76 @@ export class RunAgentAssignment {
     }
     if (waited.status === "outcome_unknown") {
       return this.terminal(
-        markChildOutcomeUnknown(started.value, waited.correlation),
+        markChildOutcomeUnknown(started.value, waited.correlation, {
+          code: waited.code,
+          source: "native-host-transport",
+          retry: "never",
+        }),
       );
     }
     return this.terminal(
-      failChildAssignment(started.value, waited.correlation),
+      failChildAssignment(started.value, waited.correlation, {
+        code: waited.code,
+        source: "native-host",
+        retry: "never",
+      }),
+    );
+  }
+
+  private async resolveAuthority(
+    command: AgentAssignmentCommand,
+  ): Promise<Result<DelegatedAgentAuthority, AssignmentErrorCode>> {
+    let decision: Awaited<ReturnType<AgentAuthorityPort["delegate"]>>;
+    try {
+      const request = {
+        identity: command.identity,
+        parentParticipantId: command.delegation.parentParticipantId,
+        participantId: command.delegation.participantId,
+        role: command.delegation.role,
+        mutationOwnership: command.delegation.mutationOwnership,
+        ...(command.delegation.narrowing
+          ? { narrowing: command.delegation.narrowing }
+          : {}),
+      };
+      decision = await this.authority.delegate(request);
+    } catch {
+      return failure("AGENT_AUTHORITY_UNAVAILABLE");
+    }
+    if (!decision.ok) return failure(decision.error.code);
+    return this.matchesCommandAuthority(command, decision.value)
+      ? success(decision.value)
+      : failure("AGENT_AUTHORITY_CORRELATION");
+  }
+
+  private matchesCommandAuthority(
+    command: AgentAssignmentCommand,
+    authority: DelegatedAgentAuthority,
+  ): boolean {
+    const identity = command.identity;
+    const delegation = command.delegation;
+    return (
+      authority.ownerId === identity.ownerId &&
+      authority.sessionId === identity.sessionId &&
+      authority.taskId === identity.taskId &&
+      authority.taskEpoch === identity.taskEpoch &&
+      authority.parentParticipantId === delegation.parentParticipantId &&
+      authority.participantId === delegation.participantId &&
+      authority.role === delegation.role &&
+      authority.mutationOwnership === delegation.mutationOwnership
+    );
+  }
+
+  private matchesStoredAuthority(
+    record: StoredAssignment,
+    authority: DelegatedAgentAuthority,
+  ): boolean {
+    const stored = record.assignment.authority;
+    return (
+      stored.authorityId === authority.authorityId &&
+      stored.participantId === authority.participantId &&
+      stored.parentParticipantId === authority.parentParticipantId &&
+      stored.role === authority.role &&
+      stored.mutationOwnership === authority.mutationOwnership
     );
   }
 
@@ -130,11 +258,24 @@ export class RunAgentAssignment {
     if (record.assignment.terminal) return record;
     const result =
       record.assignment.phase === "prepared" || !record.assignment.childId
-        ? markSpawnOutcomeUnknown(record.assignment)
-        : markChildOutcomeUnknown(record.assignment, {
-            ...record.assignment.identity,
-            childId: record.assignment.childId,
-          });
+        ? markSpawnOutcomeUnknown(record.assignment, {
+            code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
+            source: "recovery",
+            retry: "never",
+          })
+        : markChildOutcomeUnknown(
+            record.assignment,
+            {
+              ...record.assignment.identity,
+              authorityId: record.assignment.authority.authorityId,
+              childId: record.assignment.childId,
+            },
+            {
+              code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
+              source: "recovery",
+              retry: "never",
+            },
+          );
     if (!result.ok) return record;
     const tombstone = { assignment: result.value, resultRef: null };
     await this.bestEffortSave(tombstone);

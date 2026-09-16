@@ -2,6 +2,13 @@ import type {
   AssignmentIdentity,
   ChildCorrelation,
 } from "../../domain/assignment";
+import type { DelegatedAgentAuthority } from "./execution-authority";
+
+export type AgentSpawnRequest = Readonly<{
+  identity: AssignmentIdentity;
+  authority: DelegatedAgentAuthority;
+  focus: Readonly<{ initialPaths: readonly string[] }>;
+}>;
 
 export type AgentSpawnReceipt =
   | Readonly<{ status: "started"; correlation: ChildCorrelation }>
@@ -26,6 +33,6 @@ export type AgentWaitReceipt =
     }>;
 
 export interface AgentHost {
-  spawn(identity: AssignmentIdentity): Promise<AgentSpawnReceipt>;
+  spawn(request: AgentSpawnRequest): Promise<AgentSpawnReceipt>;
   wait(correlation: ChildCorrelation): Promise<AgentWaitReceipt>;
 }
