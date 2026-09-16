@@ -84,7 +84,10 @@ const child: ChildCorrelation = {
   ...command.identity,
   authorityId: authority.authorityId,
   participantId: authority.participantId,
+  role: authority.role,
+  parentThreadId: "parent-thread-durable-a",
   childId: "child-durable-a",
+  hostRole: "agent",
 };
 
 function preparedRecord() {

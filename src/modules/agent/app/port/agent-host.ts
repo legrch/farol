@@ -17,6 +17,10 @@ export type AgentSpawnReceipt =
 
 export type AgentWaitReceipt =
   | Readonly<{
+      status: "running";
+      correlation: ChildCorrelation;
+    }>
+  | Readonly<{
       status: "completed";
       correlation: ChildCorrelation;
       resultRef: string;

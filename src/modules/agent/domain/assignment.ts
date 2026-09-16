@@ -42,7 +42,10 @@ export type ChildCorrelation = Readonly<{
   generation: number;
   authorityId: string;
   participantId: string;
+  role: "agent" | "critic";
+  parentThreadId: string;
   childId: string;
+  hostRole: string | null;
 }>;
 
 export type AssignmentTerminalReason = Readonly<{
@@ -55,7 +58,9 @@ export type Assignment = Readonly<{
   identity: AssignmentIdentity;
   authority: AssignmentAuthority;
   phase: "prepared" | "running" | "completed" | "failed" | "outcome_unknown";
+  parentThreadId: string | null;
   childId: string | null;
+  hostRole: string | null;
   terminal: boolean;
   terminalReason: AssignmentTerminalReason | null;
 }>;
@@ -68,13 +73,15 @@ export function createAssignment(
     identity: { ...identity },
     authority: { ...authority },
     phase: "prepared",
+    parentThreadId: null,
     childId: null,
+    hostRole: null,
     terminal: false,
     terminalReason: null,
   };
 }
 
-function matches(
+export function matchesChildCorrelation(
   assignment: Assignment,
   correlation: ChildCorrelation,
 ): boolean {
@@ -86,7 +93,11 @@ function matches(
     assignment.identity.taskEpoch === correlation.taskEpoch &&
     assignment.identity.generation === correlation.generation &&
     assignment.authority.authorityId === correlation.authorityId &&
-    assignment.authority.participantId === correlation.participantId
+    assignment.authority.participantId === correlation.participantId &&
+    assignment.authority.role === correlation.role &&
+    assignment.parentThreadId === correlation.parentThreadId &&
+    assignment.childId === correlation.childId &&
+    assignment.hostRole === correlation.hostRole
   );
 }
 
@@ -95,14 +106,33 @@ export function startAssignment(
   correlation: ChildCorrelation,
 ): Result<Assignment, AssignmentErrorCode> {
   if (assignment.terminal) return failure("AGENT_TERMINAL");
-  if (!matches(assignment, correlation)) return failure("AGENT_CORRELATION");
-  if (assignment.phase !== "prepared" || assignment.childId !== null) {
+  if (
+    assignment.identity.assignmentId !== correlation.assignmentId ||
+    assignment.identity.ownerId !== correlation.ownerId ||
+    assignment.identity.sessionId !== correlation.sessionId ||
+    assignment.identity.taskId !== correlation.taskId ||
+    assignment.identity.taskEpoch !== correlation.taskEpoch ||
+    assignment.identity.generation !== correlation.generation ||
+    assignment.authority.authorityId !== correlation.authorityId ||
+    assignment.authority.participantId !== correlation.participantId ||
+    assignment.authority.role !== correlation.role
+  ) {
+    return failure("AGENT_CORRELATION");
+  }
+  if (
+    assignment.phase !== "prepared" ||
+    assignment.parentThreadId !== null ||
+    assignment.childId !== null ||
+    assignment.hostRole !== null
+  ) {
     return failure("AGENT_ALREADY_STARTED");
   }
   return success({
     ...assignment,
     phase: "running",
+    parentThreadId: correlation.parentThreadId,
     childId: correlation.childId,
+    hostRole: correlation.hostRole,
   });
 }
 
@@ -113,8 +143,7 @@ export function completeAssignment(
   if (assignment.terminal) return failure("AGENT_TERMINAL");
   if (
     assignment.phase !== "running" ||
-    !matches(assignment, correlation) ||
-    assignment.childId !== correlation.childId
+    !matchesChildCorrelation(assignment, correlation)
   ) {
     return failure("AGENT_CORRELATION");
   }
@@ -170,8 +199,7 @@ function finishChild(
   if (assignment.terminal) return failure("AGENT_TERMINAL");
   if (
     assignment.phase !== "running" ||
-    !matches(assignment, correlation) ||
-    assignment.childId !== correlation.childId
+    !matchesChildCorrelation(assignment, correlation)
   ) {
     return failure("AGENT_CORRELATION");
   }

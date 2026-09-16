@@ -35,7 +35,10 @@ const child: ChildCorrelation = {
   ...identity,
   authorityId: authority.authorityId,
   participantId: authority.participantId,
+  role: authority.role,
+  parentThreadId: "parent-thread-a",
   childId: "child-a",
+  hostRole: "agent",
 };
 
 const acknowledgement: AgentResultDeliveryAcknowledgement = {

@@ -45,7 +45,9 @@ const assignmentSchema = z.strictObject({
     "failed",
     "outcome_unknown",
   ]),
+  parentThreadId: boundedId.nullable().default(null),
   childId: boundedId.nullable(),
+  hostRole: boundedId.nullable().default(null),
   terminal: z.boolean(),
   terminalReason: terminalReasonSchema.nullable(),
 });
@@ -227,18 +229,22 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     const valid =
       (assignment.phase === "prepared" &&
         !assignment.terminal &&
+        assignment.parentThreadId === null &&
         assignment.childId === null &&
+        assignment.hostRole === null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
         record.parentDelivery === "not_applicable") ||
       (assignment.phase === "running" &&
         !assignment.terminal &&
+        assignment.parentThreadId !== null &&
         assignment.childId !== null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
         record.parentDelivery === "not_applicable") ||
       (assignment.phase === "completed" &&
         assignment.terminal &&
+        assignment.parentThreadId !== null &&
         assignment.childId !== null &&
         assignment.terminalReason === null &&
         record.resultRef !== null &&
@@ -291,7 +297,10 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     }
     if (
       existing.assignment.childId !== null &&
-      replacement.assignment.childId !== existing.assignment.childId
+      (replacement.assignment.childId !== existing.assignment.childId ||
+        replacement.assignment.parentThreadId !==
+          existing.assignment.parentThreadId ||
+        replacement.assignment.hostRole !== existing.assignment.hostRole)
     ) {
       throw new Error("AGENT_ASSIGNMENT_CHILD_MISMATCH");
     }

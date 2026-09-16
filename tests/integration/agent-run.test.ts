@@ -83,7 +83,10 @@ const exactChild: ChildCorrelation = {
   ...command.identity,
   authorityId: delegatedAuthority.authorityId,
   participantId: delegatedAuthority.participantId,
+  role: delegatedAuthority.role,
+  parentThreadId: "parent-thread-preview-a",
   childId: "child-preview-a",
+  hostRole: "agent",
 };
 
 class AuthorityDouble implements AgentAuthorityPort {
@@ -254,6 +257,46 @@ describe("Agent app service", () => {
     });
     expect(runningHost.spawnCalls).toBe(0);
     expect(runningHost.waitCalls).toBe(1);
+  });
+
+  it("returns bounded running state and later rejoins the same child", async () => {
+    let waits = 0;
+    const host: AgentHost & { spawnCalls: number } = {
+      spawnCalls: 0,
+      async spawn() {
+        this.spawnCalls += 1;
+        return { status: "started", correlation: exactChild };
+      },
+      async wait(correlation) {
+        waits += 1;
+        return waits === 1
+          ? { status: "running", correlation }
+          : {
+              status: "completed",
+              correlation,
+              resultRef: "result-preview-rejoined",
+            };
+      },
+    };
+    const runner = createRunner(host);
+
+    await expect(runner.execute(command)).resolves.toMatchObject({
+      ok: true,
+      value: {
+        assignment: { phase: "running", terminal: false },
+        resultRef: null,
+        resultRetention: "not_applicable",
+      },
+    });
+    await expect(runner.execute(command)).resolves.toMatchObject({
+      ok: true,
+      value: {
+        assignment: { phase: "completed", terminal: true },
+        resultRef: "result-preview-rejoined",
+      },
+    });
+    expect(host.spawnCalls).toBe(1);
+    expect(waits).toBe(2);
   });
 
   it("fails closed before spawn when assignment admission is unavailable", async () => {

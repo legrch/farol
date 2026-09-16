@@ -20,6 +20,7 @@ import {
   failPreparedAssignment,
   markChildOutcomeUnknown,
   markSpawnOutcomeUnknown,
+  matchesChildCorrelation,
   startAssignment,
   type Assignment,
   type AssignmentAuthority,
@@ -158,6 +159,7 @@ export class RunAgentAssignment {
       if (
         !recovered.terminal &&
         recovered.phase === "running" &&
+        recovered.parentThreadId &&
         recovered.childId
       ) {
         const childId = recovered.childId;
@@ -165,7 +167,10 @@ export class RunAgentAssignment {
           ...recovered.identity,
           authorityId: recovered.authority.authorityId,
           participantId: recovered.authority.participantId,
+          role: recovered.authority.role,
+          parentThreadId: recovered.parentThreadId,
           childId,
+          hostRole: recovered.hostRole,
         });
       }
       return success(await this.recoverInterrupted(admission.record));
@@ -239,6 +244,14 @@ export class RunAgentAssignment {
         resultRef: waited.resultRef,
         parentDelivery: "pending" as const,
       };
+      const persisted = await this.trySave(record);
+      return success(this.receipt(record, persisted));
+    }
+    if (waited.status === "running") {
+      if (!matchesChildCorrelation(assignment, waited.correlation)) {
+        return failure("AGENT_CORRELATION");
+      }
+      const record = this.record(assignment, null);
       const persisted = await this.trySave(record);
       return success(this.receipt(record, persisted));
     }
@@ -331,7 +344,9 @@ export class RunAgentAssignment {
   ): Promise<AgentRunReceipt> {
     if (record.assignment.terminal) return this.receipt(record, true);
     const result =
-      record.assignment.phase === "prepared" || !record.assignment.childId
+      record.assignment.phase === "prepared" ||
+      !record.assignment.parentThreadId ||
+      !record.assignment.childId
         ? markSpawnOutcomeUnknown(record.assignment, {
             code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
             source: "recovery",
@@ -343,7 +358,10 @@ export class RunAgentAssignment {
               ...record.assignment.identity,
               authorityId: record.assignment.authority.authorityId,
               participantId: record.assignment.authority.participantId,
+              role: record.assignment.authority.role,
+              parentThreadId: record.assignment.parentThreadId,
               childId: record.assignment.childId,
+              hostRole: record.assignment.hostRole,
             },
             {
               code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",

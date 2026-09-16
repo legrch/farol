@@ -33,7 +33,10 @@ const child: ChildCorrelation = {
   ...identity,
   authorityId: authority.authorityId,
   participantId: authority.participantId,
+  role: authority.role,
+  parentThreadId: "parent-thread-a",
   childId: "child-a",
+  hostRole: "agent",
 };
 
 function prepared() {
@@ -47,6 +50,15 @@ describe("Agent assignment policy", () => {
     if (!started.ok) return;
     expect(
       completeAssignment(started.value, { ...child, childId: "child-b" }),
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
+    expect(
+      completeAssignment(started.value, {
+        ...child,
+        parentThreadId: "foreign-parent-thread",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
+    expect(
+      completeAssignment(started.value, { ...child, role: "critic" }),
     ).toMatchObject({ ok: false, error: { code: "AGENT_CORRELATION" } });
     expect(completeAssignment(started.value, child)).toMatchObject({
       ok: true,
@@ -75,6 +87,12 @@ describe("Agent assignment policy", () => {
         ...child,
         participantId: "critic-a",
       }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AGENT_CORRELATION" },
+    });
+    expect(
+      startAssignment(prepared(), { ...child, role: "critic" }),
     ).toMatchObject({
       ok: false,
       error: { code: "AGENT_CORRELATION" },

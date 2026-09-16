@@ -34,8 +34,11 @@ function matchesIdentity(
     identity.generation === correlation.generation &&
     assignment.authority.authorityId === correlation.authorityId &&
     assignment.authority.participantId === correlation.participantId &&
+    assignment.authority.role === correlation.role &&
     assignment.authority.parentParticipantId === command.parentParticipantId &&
-    assignment.childId === correlation.childId
+    assignment.parentThreadId === correlation.parentThreadId &&
+    assignment.childId === correlation.childId &&
+    assignment.hostRole === correlation.hostRole
   );
 }
 
