@@ -1536,10 +1536,18 @@ async function restart(instance) {
   });
   instance.window = await instance.application.firstWindow({ timeout: 15_000 });
   await instance.window.locator("#sidebar").waitFor({ state: "visible" });
+  const bootstrap = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  const expectedTaskViewCount = bootstrap.demoMode
+    ? instance.expectedTaskViewCount
+    : bootstrap.tasks.length > 0
+      ? 1
+      : 0;
   instance.presentation = await waitForWindowPresentation(
     instance.application,
     instance.windowMode,
-    instance.expectedTaskViewCount,
+    expectedTaskViewCount,
   );
 }
 
