@@ -2575,7 +2575,7 @@ try {
   );
   assert.match(
     await ordinaryLiveTasks.window.locator("#browser-state-detail").innerText(),
-    /actual provider surface/u,
+    /actual provider page is embedded/u,
   );
   const embeddedSurfaces = await liveChatGptSurfaces(
     ordinaryLiveTasks.application,
