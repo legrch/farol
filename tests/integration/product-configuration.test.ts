@@ -131,6 +131,176 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toMatchObject(updated.snapshot);
   });
 
+  it("persists a Next-only secure MCP connector without persisting its credential", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+
+    expect(service.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        connectors: {
+          secureMcp: {
+            generation: 1,
+            profile: "farol-next",
+            tunnelId: null,
+            tunnelClient: null,
+            credential: "missing",
+            runtime: null,
+            attachment: null,
+          },
+        },
+      },
+    });
+
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+    await service.recordSecureMcpCredential("stored");
+    await service.recordSecureMcpRuntime({
+      state: "ready",
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 1,
+      buildId: "c".repeat(64),
+    });
+    const attached = await service.recordSecureMcpAttachment({
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 1,
+      buildId: "c".repeat(64),
+      challengeSha256: "d".repeat(64),
+      receiptSha256: "e".repeat(64),
+    });
+
+    expect(attached).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          connectors: {
+            secureMcp: {
+              generation: 4,
+              profile: "farol-next",
+              tunnelId: "tunnel_farol_next",
+              credential: "stored",
+              runtime: {
+                state: "ready",
+                runtimeGeneration: "b".repeat(64),
+                computerGeneration: 1,
+                buildId: "c".repeat(64),
+              },
+              attachment: {
+                runtimeGeneration: "b".repeat(64),
+                computerGeneration: 1,
+                buildId: "c".repeat(64),
+                challengeSha256: "d".repeat(64),
+                receiptSha256: "e".repeat(64),
+                verifiedAt: "2026-09-16T10:00:00.000Z",
+              },
+            },
+          },
+          setup: {
+            connect: {
+              configured: true,
+              reachable: "reachable",
+              outcomeUnknown: false,
+              needsAction: null,
+              unavailable: null,
+              verified: {
+                profile: "farol-next",
+                configRevision: 4,
+                workspaceId: null,
+                runtimeGeneration: "b".repeat(64),
+                buildId: "c".repeat(64),
+                protocol: "openai-tunnel-client/v1",
+                verifiedAt: "2026-09-16T10:00:00.000Z",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(attached.snapshot);
+
+    const saved = await fs.readFile(
+      path.join(root, "product-settings.json"),
+      "utf8",
+    );
+    expect(saved).not.toMatch(/api[-_ ]?key|secret|bearer/iu);
+  });
+
+  it("invalidates connector runtime and attachment when Computer authority changes", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+    await service.recordSecureMcpCredential("stored");
+    await service.recordSecureMcpRuntime({
+      state: "ready",
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 1,
+      buildId: "c".repeat(64),
+    });
+    await service.recordSecureMcpAttachment({
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 1,
+      buildId: "c".repeat(64),
+      challengeSha256: "d".repeat(64),
+      receiptSha256: "e".repeat(64),
+    });
+
+    const changed = await service.renameComputer("Owner Mac");
+
+    expect(changed).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          computer: { generation: 2 },
+          connectors: {
+            secureMcp: {
+              generation: 5,
+              credential: "stored",
+              runtime: null,
+              attachment: null,
+            },
+          },
+          setup: {
+            connect: {
+              configured: true,
+              reachable: "unknown",
+              verified: null,
+              needsAction:
+                "Restart the connector after changing Computer authority.",
+              outcomeUnknown: false,
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("keeps the last verified state when an atomic save fails", async () => {
     const root = await stateRoot();
     const baseline = new ProductConfigurationService(

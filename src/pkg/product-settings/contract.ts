@@ -78,6 +78,59 @@ export const CodexHostSelectionSchema = z.strictObject({
   agentVerification: CodexAgentVerificationSchema.nullable().default(null),
 });
 
+const SecureMcpTunnelClientSchema = z.strictObject({
+  executablePath: CanonicalAbsolutePathSchema,
+  executableSha256: Sha256Schema,
+  version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
+  protocol: z.literal("openai-tunnel-client/v1"),
+  verifiedAt: CanonicalTimestampSchema,
+});
+
+const SecureMcpRuntimeSchema = z.strictObject({
+  state: z.enum(["ready", "unreachable", "outcome_unknown"]),
+  connectorGeneration: z.number().int().positive(),
+  runtimeGeneration: Sha256Schema,
+  computerGeneration: z.number().int().positive(),
+  buildId: Sha256Schema,
+  observedAt: CanonicalTimestampSchema,
+});
+
+const SecureMcpAttachmentSchema = z.strictObject({
+  tunnelId: z.string().min(1).max(160),
+  connectorGeneration: z.number().int().positive(),
+  runtimeGeneration: Sha256Schema,
+  computerGeneration: z.number().int().positive(),
+  buildId: Sha256Schema,
+  challengeSha256: Sha256Schema,
+  receiptSha256: Sha256Schema,
+  verifiedAt: CanonicalTimestampSchema,
+});
+
+export const SecureMcpConnectorSchema = z.strictObject({
+  generation: z.number().int().positive(),
+  profile: z.literal("farol-next"),
+  tunnelId: z
+    .string()
+    .min(1)
+    .max(160)
+    .regex(/^[0-9A-Za-z._:-]+$/u)
+    .nullable(),
+  tunnelClient: SecureMcpTunnelClientSchema.nullable(),
+  credential: z.enum(["missing", "stored"]),
+  runtime: SecureMcpRuntimeSchema.nullable(),
+  attachment: SecureMcpAttachmentSchema.nullable(),
+});
+
+const DefaultSecureMcpConnector = {
+  generation: 1,
+  profile: "farol-next" as const,
+  tunnelId: null,
+  tunnelClient: null,
+  credential: "missing" as const,
+  runtime: null,
+  attachment: null,
+};
+
 const ProductRelativePathSchema = z.string().refine((value) => {
   if (
     value.length === 0 ||
@@ -225,6 +278,11 @@ export const ProductSettingsSchema = z.strictObject({
       codex: CodexHostSelectionSchema.nullable(),
     })
     .default({ generation: 1, codex: null }),
+  connectors: z
+    .strictObject({
+      secureMcp: SecureMcpConnectorSchema,
+    })
+    .default({ secureMcp: DefaultSecureMcpConnector }),
   setup: z.strictObject({
     journey: z
       .strictObject({
@@ -732,6 +790,7 @@ export type ApprovedProductWorkspace = z.infer<
   typeof ApprovedProductWorkspaceSchema
 >;
 export type CodexHostSelection = z.infer<typeof CodexHostSelectionSchema>;
+export type SecureMcpConnector = z.infer<typeof SecureMcpConnectorSchema>;
 export type SetupStepId = z.infer<typeof SetupStepIdSchema>;
 export type ProductSettings = z.infer<typeof ProductSettingsSchema>;
 export type ProductConfigurationSnapshot = z.infer<

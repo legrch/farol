@@ -98,6 +98,36 @@ const codexAgentFailureSchema = z.enum([
   "workspace_not_verified",
 ]);
 
+const secureMcpTunnelClientInputSchema = z.strictObject({
+  executablePath: z.string(),
+  executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
+  protocol: z.literal("openai-tunnel-client/v1"),
+});
+
+const secureMcpTunnelInputSchema = z.strictObject({
+  tunnelId: z
+    .string()
+    .min(1)
+    .max(160)
+    .regex(/^[0-9A-Za-z._:-]+$/u),
+});
+
+const secureMcpRuntimeInputSchema = z.strictObject({
+  state: z.enum(["ready", "unreachable", "outcome_unknown"]),
+  runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
+  computerGeneration: z.number().int().positive(),
+  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
+const secureMcpAttachmentInputSchema = z.strictObject({
+  runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
+  computerGeneration: z.number().int().positive(),
+  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
+  challengeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
 function settingsError(error: unknown): ProductConfigurationSnapshot {
   const message = error instanceof Error ? error.message : "";
   if (message === "SETTINGS_CORRUPT") {
@@ -184,6 +214,82 @@ function invalidateStaleAgentVerification(
   };
 }
 
+function connectorConfigured(
+  connector: ProductSettings["connectors"]["secureMcp"],
+): boolean {
+  return (
+    connector.tunnelClient !== null &&
+    connector.tunnelId !== null &&
+    connector.credential === "stored"
+  );
+}
+
+function pendingConnectorReadiness(
+  previous: ProductSettings["setup"]["connect"],
+  connector: ProductSettings["connectors"]["secureMcp"],
+  needsAction?: string,
+): ProductSettings["setup"]["connect"] {
+  const configured = connectorConfigured(connector);
+  const nextAction =
+    needsAction ??
+    (connector.tunnelClient === null
+      ? "Choose the verified tunnel-client executable."
+      : connector.tunnelId === null
+        ? "Enter the OpenAI tunnel ID."
+        : connector.credential === "missing"
+          ? "Store the tunnel runtime key in the private connector store."
+          : "Start the connector and check readiness.");
+  return {
+    ...previous,
+    configured,
+    reachable: "unknown",
+    verified: null,
+    needsAction: nextAction,
+    unavailable: null,
+    outcomeUnknown: false,
+  };
+}
+
+function invalidateStaleConnectorRuntime(
+  settings: ProductSettings,
+): ProductSettings {
+  const connector = settings.connectors.secureMcp;
+  const runtime = connector.runtime;
+  const attachment = connector.attachment;
+  const runtimeCurrent =
+    runtime === null ||
+    (runtime.connectorGeneration === connector.generation &&
+      runtime.computerGeneration === settings.computer.generation);
+  const attachmentCurrent =
+    attachment === null ||
+    (runtime?.state === "ready" &&
+      attachment.connectorGeneration === connector.generation &&
+      attachment.runtimeGeneration === runtime.runtimeGeneration &&
+      attachment.computerGeneration === settings.computer.generation &&
+      attachment.buildId === runtime.buildId &&
+      attachment.tunnelId === connector.tunnelId);
+  if (runtimeCurrent && attachmentCurrent) return settings;
+
+  const invalidated = {
+    ...connector,
+    generation: connector.generation + 1,
+    runtime: null,
+    attachment: null,
+  };
+  return {
+    ...settings,
+    connectors: { ...settings.connectors, secureMcp: invalidated },
+    setup: {
+      ...settings.setup,
+      connect: pendingConnectorReadiness(
+        settings.setup.connect,
+        invalidated,
+        "Restart the connector after changing Computer authority.",
+      ),
+    },
+  };
+}
+
 function defaultSettings(id: () => string): ProductSettings {
   return ProductSettingsSchema.parse({
     schema: 1,
@@ -201,6 +307,17 @@ function defaultSettings(id: () => string): ProductSettings {
       workspaces: [],
     },
     nativeHosts: { generation: 1, codex: null },
+    connectors: {
+      secureMcp: {
+        generation: 1,
+        profile: "farol-next",
+        tunnelId: null,
+        tunnelClient: null,
+        credential: "missing",
+        runtime: null,
+        attachment: null,
+      },
+    },
     setup: {
       journey: { currentStep: "chatgpt", dismissed: false },
       chatgpt: readiness("Sign in to the isolated Farol Next browser."),
@@ -393,6 +510,205 @@ export class ProductConfigurationService {
       revision: settings.revision + 1,
       general: parsed.data,
     }));
+  }
+
+  async recordSecureMcpTunnelClient(input: unknown): Promise<MutationResult> {
+    const parsed = secureMcpTunnelClientInputSchema.safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.mutate((settings) => {
+      const connector = settings.connectors.secureMcp;
+      const selected = connector.tunnelClient;
+      if (
+        selected?.executablePath === parsed.data.executablePath &&
+        selected.executableSha256 === parsed.data.executableSha256 &&
+        selected.version === parsed.data.version &&
+        selected.protocol === parsed.data.protocol
+      ) {
+        return settings;
+      }
+      const next = {
+        ...connector,
+        generation: connector.generation + 1,
+        tunnelClient: { ...parsed.data, verifiedAt: this.now() },
+        runtime: null,
+        attachment: null,
+      };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: { ...settings.connectors, secureMcp: next },
+        setup: {
+          ...settings.setup,
+          connect: pendingConnectorReadiness(settings.setup.connect, next),
+        },
+      };
+    });
+  }
+
+  async configureSecureMcpTunnel(input: unknown): Promise<MutationResult> {
+    const parsed = secureMcpTunnelInputSchema.safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.mutate((settings) => {
+      const connector = settings.connectors.secureMcp;
+      if (connector.tunnelId === parsed.data.tunnelId) return settings;
+      const next = {
+        ...connector,
+        generation: connector.generation + 1,
+        tunnelId: parsed.data.tunnelId,
+        runtime: null,
+        attachment: null,
+      };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: { ...settings.connectors, secureMcp: next },
+        setup: {
+          ...settings.setup,
+          connect: pendingConnectorReadiness(settings.setup.connect, next),
+        },
+      };
+    });
+  }
+
+  async recordSecureMcpCredential(
+    credential: unknown,
+  ): Promise<MutationResult> {
+    const parsed = z.enum(["missing", "stored"]).safeParse(credential);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.mutate((settings) => {
+      const connector = settings.connectors.secureMcp;
+      if (connector.credential === parsed.data) return settings;
+      const next = {
+        ...connector,
+        generation: connector.generation + 1,
+        credential: parsed.data,
+        runtime: null,
+        attachment: null,
+      };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: { ...settings.connectors, secureMcp: next },
+        setup: {
+          ...settings.setup,
+          connect: pendingConnectorReadiness(settings.setup.connect, next),
+        },
+      };
+    });
+  }
+
+  async recordSecureMcpRuntime(input: unknown): Promise<MutationResult> {
+    const parsed = secureMcpRuntimeInputSchema.safeParse(input);
+    if (!parsed.success || this.current === null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    const connector = this.current.connectors.secureMcp;
+    if (
+      !connectorConfigured(connector) ||
+      parsed.data.computerGeneration !== this.current.computer.generation
+    ) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    return this.mutate((settings) => {
+      const current = settings.connectors.secureMcp;
+      const observedAt = this.now();
+      const runtime = {
+        ...parsed.data,
+        connectorGeneration: current.generation,
+        observedAt,
+      };
+      const ready = parsed.data.state === "ready";
+      const outcomeUnknown = parsed.data.state === "outcome_unknown";
+      const next = { ...current, runtime, attachment: null };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: { ...settings.connectors, secureMcp: next },
+        setup: {
+          ...settings.setup,
+          connect: {
+            ...settings.setup.connect,
+            visited: true,
+            skipped: false,
+            configured: true,
+            reachable: ready
+              ? "reachable"
+              : outcomeUnknown
+                ? "unknown"
+                : "unreachable",
+            verified: null,
+            needsAction: ready
+              ? "Verify the ChatGPT attachment with a one-time challenge."
+              : outcomeUnknown
+                ? "Inspect the connector before deliberately starting it again."
+                : "Run connector repair, then check readiness again.",
+            unavailable: null,
+            outcomeUnknown,
+          },
+        },
+      };
+    });
+  }
+
+  async recordSecureMcpAttachment(input: unknown): Promise<MutationResult> {
+    const parsed = secureMcpAttachmentInputSchema.safeParse(input);
+    if (!parsed.success || this.current === null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    const connector = this.current.connectors.secureMcp;
+    const runtime = connector.runtime;
+    if (
+      connector.tunnelId === null ||
+      connector.tunnelClient === null ||
+      runtime?.state !== "ready" ||
+      runtime.connectorGeneration !== connector.generation ||
+      runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
+      runtime.computerGeneration !== parsed.data.computerGeneration ||
+      runtime.buildId !== parsed.data.buildId ||
+      parsed.data.computerGeneration !== this.current.computer.generation
+    ) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    return this.mutate((settings) => {
+      const current = settings.connectors.secureMcp;
+      const verifiedAt = this.now();
+      const attachment = {
+        ...parsed.data,
+        tunnelId: current.tunnelId as string,
+        connectorGeneration: current.generation,
+        verifiedAt,
+      };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: {
+          ...settings.connectors,
+          secureMcp: { ...current, attachment },
+        },
+        setup: {
+          ...settings.setup,
+          connect: {
+            ...settings.setup.connect,
+            visited: true,
+            skipped: false,
+            configured: true,
+            reachable: "reachable",
+            verified: {
+              profile: current.profile,
+              configRevision: current.generation,
+              workspaceId: null,
+              runtimeGeneration: parsed.data.runtimeGeneration,
+              buildId: parsed.data.buildId,
+              protocol: current.tunnelClient?.protocol as string,
+              verifiedAt,
+            },
+            needsAction: null,
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      };
+    });
   }
 
   async addReadonlyWorkspace(input: unknown): Promise<MutationResult> {
@@ -1230,7 +1546,9 @@ export class ProductConfigurationService {
     let candidate: ProductSettings;
     try {
       const transformed = ProductSettingsSchema.parse(transform(before));
-      const invalidated = invalidateStaleAgentVerification(transformed);
+      const connectorInvalidated = invalidateStaleConnectorRuntime(transformed);
+      const invalidated =
+        invalidateStaleAgentVerification(connectorInvalidated);
       candidate = ProductSettingsSchema.parse(
         invalidated !== transformed && invalidated.revision === before.revision
           ? { ...invalidated, revision: before.revision + 1 }
