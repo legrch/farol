@@ -707,6 +707,8 @@ def _read_regular(request, parent_fd, leaf, ceiling):
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             refuse(EXIT_NOT_A_FILE)
+        if before.st_nlink != 1:
+            refuse(EXIT_PATH_REFUSED)
         if before.st_size < 0 or before.st_size > ceiling:
             refuse(EXIT_FILE_TOO_LARGE)
         chunks = []
@@ -721,7 +723,7 @@ def _read_regular(request, parent_fd, leaf, ceiling):
             refuse(EXIT_RACE)
         _test_hook(request, "before-post-stat", None)
         after = os.fstat(descriptor)
-        if _stable_identity(before) != _stable_identity(after):
+        if _stable_identity(before) != _stable_identity(after) or after.st_nlink != 1:
             refuse(EXIT_RACE)
         payload = b"".join(chunks)
         if len(payload) != before.st_size:

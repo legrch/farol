@@ -162,6 +162,60 @@ describe("native readonly Computer workspace", () => {
     }
   });
 
+  it("refuses a direct-read hardlink without disclosing its bytes", async () => {
+    const outside = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-hardlink-"),
+    );
+    try {
+      const canary = "outside-hardlink-canary";
+      const outsideFile = path.join(outside, "canary.txt");
+      await fs.writeFile(outsideFile, canary, { mode: 0o600 });
+      await fs.link(outsideFile, path.join(root, "hardlink.txt"));
+      const workspace = reader();
+
+      const read = await workspace.execute(
+        request({ kind: "workspace.read", relativePath: "hardlink.txt" }),
+      );
+      expect(read).toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED", retry: "never" },
+      });
+      expect(JSON.stringify(read)).not.toContain(canary);
+      await expect(
+        workspace.execute(
+          request({
+            kind: "workspace.search",
+            relativePath: ".",
+            pattern: canary,
+          }),
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "workspace.matches", matches: [] },
+      });
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses when a direct-read file gains another link before post-stat", async () => {
+    const alias = path.join(root, "README-alias.md");
+    const result = await reader().execute(
+      request({ kind: "workspace.read", relativePath: "README.md" }),
+      {
+        testHookRequest: { phase: "before-post-stat", index: null },
+        testHook: async () => {
+          await fs.link(path.join(root, "README.md"), alias);
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_RACE_DETECTED", retry: "never" },
+    });
+  });
+
   it("hides Git internals from generic file tools", async () => {
     await fs.mkdir(path.join(root, ".git"), { mode: 0o700 });
     await fs.writeFile(
