@@ -2638,6 +2638,9 @@ try {
       surface.hostBounds.y === 178,
     "Browser restores the selected embedded provider page",
   );
+  await ordinaryLiveTasks.window.screenshot({
+    path: path.join(evidenceRoot, "live-task-watch-rail-wide.png"),
+  });
   await setWindowSize(ordinaryLiveTasks.application, 640, 520);
   await waitForLiveChatGptSurface(
     ordinaryLiveTasks,
@@ -2650,6 +2653,9 @@ try {
       surface.hostBounds.height === 342,
     "minimum window keeps the embedded provider page bounded",
   );
+  await ordinaryLiveTasks.window.screenshot({
+    path: path.join(evidenceRoot, "live-task-watch-rail-compact.png"),
+  });
   await ordinaryLiveTasks.window.locator("#command-button").click();
   await ordinaryLiveTasks.window
     .locator("#command-dialog")
@@ -4701,6 +4707,8 @@ const report = {
   cases,
   skippedCases,
   screenshots: [
+    "live-task-watch-rail-wide.png",
+    "live-task-watch-rail-compact.png",
     "running-browser-view.png",
     "running-browser-compact.png",
     "watch-sidebar-overlay-compact.png",
