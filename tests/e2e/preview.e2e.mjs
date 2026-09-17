@@ -2013,6 +2013,7 @@ async function activateForNativeFocusProof(application) {
     );
   }
   let last = null;
+  let consecutiveFocusedSamples = 0;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     last = await application.evaluate(async ({ app, BrowserWindow }) => {
       const targetWindow = BrowserWindow.getAllWindows()[0];
@@ -2034,7 +2035,10 @@ async function activateForNativeFocusProof(application) {
         shellFocused: targetWindow.webContents.isFocused(),
       };
     });
-    if (last.focused) return;
+    consecutiveFocusedSamples = last.focused
+      ? consecutiveFocusedSamples + 1
+      : 0;
+    if (consecutiveFocusedSamples >= 3) return last;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`E2E_NATIVE_WINDOW_FOCUS_TIMEOUT:${JSON.stringify(last)}`);
@@ -4491,11 +4495,13 @@ try {
     await normal.window.waitForFunction(
       () => document.documentElement.dataset.sidebar === "full",
     );
-    await activateForNativeFocusProof(normal.application);
+    const activatedWindow = await activateForNativeFocusProof(
+      normal.application,
+    );
     await normal.window.waitForFunction(
       () => document.documentElement.dataset.windowActive === "true",
     );
-    assert.equal((await nativeWindowChrome(normal.application)).focused, true);
+    assert.equal(activatedWindow.focused, true);
 
     await sendKeyFromTask(normal.application, "task-atlantic", "K", ["meta"]);
     await normal.window
@@ -4557,8 +4563,10 @@ try {
     await normal.window.waitForFunction(
       () => document.documentElement.dataset.sidebar === "full",
     );
-    await activateForNativeFocusProof(normal.application);
-    assert.equal((await nativeWindowChrome(normal.application)).focused, true);
+    const restoredWindow = await activateForNativeFocusProof(
+      normal.application,
+    );
+    assert.equal(restoredWindow.focused, true);
 
     await sendShortcutFromTask(normal.application, "task-atlantic");
     await normal.window
