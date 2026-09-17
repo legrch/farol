@@ -88,6 +88,8 @@ const child: ChildCorrelation = {
   role: authority.role,
   parentThreadId: "parent-thread-durable-a",
   childId: "child-durable-a",
+  parentTurnId: "parent-turn-durable-a",
+  childTurnId: "child-turn-durable-a",
   hostRole: "agent",
   delegationDigest: "a".repeat(64),
 };

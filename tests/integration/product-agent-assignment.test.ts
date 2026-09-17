@@ -113,6 +113,8 @@ function dependencies() {
       role: request.authority.role,
       parentThreadId: "parent-a",
       childId: "child-a",
+      parentTurnId: "parent-turn-a",
+      childTurnId: "child-turn-a",
       hostRole: "default",
       delegationDigest: "a".repeat(64),
     },
@@ -205,7 +207,7 @@ describe("product Agent assignment composition", () => {
     });
   });
 
-  it("applies explicit exact-path owner narrowing without dropping read capabilities", async () => {
+  it("limits explicit exact-file narrowing to non-recursive reads", async () => {
     const fixture = dependencies();
     const narrowed = input({
       scope: {
@@ -219,7 +221,12 @@ describe("product Agent assignment composition", () => {
     });
 
     await expect(
-      runProductAgentAssignment(settings(), task, narrowed, fixture.value),
+      runProductAgentAssignment(
+        settings(7, "verification"),
+        task,
+        narrowed,
+        fixture.value,
+      ),
     ).resolves.toMatchObject({ ok: true });
     if (narrowed.scope.mode !== "exact") throw new Error("TEST_SCOPE_INVALID");
     const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
@@ -234,7 +241,7 @@ describe("product Agent assignment composition", () => {
           access: "read",
         },
       ],
-      capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+      capabilities: ["workspace.read"],
       network: "none",
       commands: "none",
     });

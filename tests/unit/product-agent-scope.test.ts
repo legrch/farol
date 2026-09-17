@@ -69,4 +69,24 @@ describe("Product Agent owner scope", () => {
       }),
     ).toBeNull();
   });
+
+  it("rejects macOS case and Unicode aliases of configured exclusions", () => {
+    expect(
+      resolveProductAgentScope(
+        "/workspace/approved",
+        ["/workspace/approved/Private"],
+        { mode: "subtree", relativeRoot: "private", excludedPaths: [] },
+      ),
+    ).toBeNull();
+    expect(
+      resolveProductAgentScope(
+        "/workspace/approved",
+        ["/workspace/approved/Caf\u00e9"],
+        {
+          mode: "exact",
+          relativePaths: ["Cafe\u0301/secret.md"],
+        },
+      ),
+    ).toBeNull();
+  });
 });

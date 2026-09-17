@@ -102,6 +102,8 @@ function host(): AgentHost & { spawn: ReturnType<typeof vi.fn> } {
         role: request.authority.role,
         parentThreadId: "parent-thread-a",
         childId: "child-a",
+        parentTurnId: "parent-turn-a",
+        childTurnId: "child-turn-a",
         hostRole: request.authority.role,
         delegationDigest: "a".repeat(64),
       },

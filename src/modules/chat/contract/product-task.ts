@@ -61,6 +61,10 @@ export const ProductTaskLifecycleSchema = z.enum([
 ]);
 
 export const ProductTaskAgentSchema = z.strictObject({
+  assignmentBindingSha256: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
   phase: z.enum([
     "running",
     "completed",

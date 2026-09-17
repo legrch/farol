@@ -74,6 +74,8 @@ class ProductPeer implements CodexNativeAgentPeer {
   authorityCompleted = false;
   computerItems: unknown[] = [];
   extraChildItems: unknown[] = [];
+  extraChildTurns: unknown[] = [];
+  extraParentTurns: unknown[] = [];
   readonly interruptedThreads = new Set<string>();
   private authorityProof = "";
 
@@ -253,6 +255,7 @@ class ProductPeer implements CodexNativeAgentPeer {
                 ]
               : [],
           },
+          ...this.extraChildTurns,
         ],
       },
     };
@@ -322,6 +325,7 @@ class ProductPeer implements CodexNativeAgentPeer {
                 : "inProgress",
             items,
           },
+          ...this.extraParentTurns,
         ],
       },
     };
@@ -347,6 +351,10 @@ describe("native Codex product Agent host", () => {
     );
     const spawned = await host.spawn(request);
     if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    expect(spawned.correlation).toMatchObject({
+      parentTurnId: "parent-turn-product-a",
+      childTurnId: "child-turn-product-a",
+    });
 
     await expect(host.cancel(spawned.correlation)).resolves.toEqual({
       status: "cancelled",
@@ -357,6 +365,49 @@ describe("native Codex product Agent host", () => {
         .filter(({ method }) => method === "turn/interrupt")
         .map(({ params }) => (params as { threadId: string }).threadId),
     ).toEqual(["child-product-a", "parent-product-a"]);
+  });
+
+  it("interrupts only the correlated turns when newer turns exist", async () => {
+    const peer = new ProductPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      { execute: vi.fn() },
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.extraChildTurns.push({
+      id: "child-turn-foreign",
+      status: "inProgress",
+      items: [],
+    });
+    peer.extraParentTurns.push({
+      id: "parent-turn-foreign",
+      status: "inProgress",
+      items: [],
+    });
+
+    await expect(host.cancel(spawned.correlation)).resolves.toEqual({
+      status: "cancelled",
+      correlation: spawned.correlation,
+    });
+    expect(
+      peer.requests
+        .filter(({ method }) => method === "turn/interrupt")
+        .map(({ params }) => params),
+    ).toEqual([
+      { threadId: "child-product-a", turnId: "child-turn-product-a" },
+      { threadId: "parent-product-a", turnId: "parent-turn-product-a" },
+    ]);
   });
 
   it("finishes an exact cancellation after a previously interrupted child", async () => {
@@ -609,6 +660,111 @@ describe("native Codex product Agent host", () => {
     ).toHaveLength(1);
   });
 
+  it("retains the exact completed child turn when newer history exists", async () => {
+    const peer = new ProductPeer();
+    const computer: AgentComputer = {
+      execute: vi.fn(async (input) =>
+        input.operation.kind === "workspace.search"
+          ? {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.matches" as const,
+                matches: [],
+                resultLimited: false,
+                scanLimited: false,
+              },
+            }
+          : {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.text" as const,
+                text: "marker",
+                bytes: 6,
+              },
+            },
+      ),
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    await peer.finish();
+    peer.extraChildTurns.push({
+      id: "child-turn-foreign-completed",
+      status: "completed",
+      items: [{ id: "foreign-answer", type: "agentMessage", text: "foreign" }],
+    });
+
+    await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "completed",
+      resultRef:
+        "codex-app-server://thread/child-product-a/turn/child-turn-product-a",
+    });
+  });
+
+  it("describes exact-file authority without promising subtree discovery", async () => {
+    const peer = new ProductPeer();
+    const exactAuthority: DelegatedAgentAuthority = {
+      ...authority,
+      workspaces: [
+        {
+          workspaceId: "workspace-product-a",
+          mode: "exact",
+          root: "/workspace/product",
+          paths: ["/workspace/product/README.md"],
+          access: "read",
+        },
+      ],
+      capabilities: ["workspace.read"],
+      commands: "none",
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      { execute: vi.fn() },
+    );
+
+    await expect(
+      host.spawn({
+        ...request,
+        authority: exactAuthority,
+        focus: { initialPaths: ["/workspace/product/README.md"] },
+      }),
+    ).resolves.toMatchObject({ status: "started" });
+    expect(peer.childPrompt).toContain('"mode":"exact"');
+    expect(peer.childPrompt).toContain(
+      "Initial paths are the exact file authority boundary.",
+    );
+    expect(peer.childPrompt).toContain(
+      "Use only these operations allowed by the supplied TaskGrant: workspace.read.",
+    );
+    expect(peer.childPrompt).toContain(
+      "verification.run is not granted for this assignment.",
+    );
+    expect(peer.childPrompt).not.toContain("discover other relevant files");
+  });
+
   it("rejects foreign Computer correlation before inherited authority runs", async () => {
     const peer = new ProductPeer();
     const computer: AgentComputer = { execute: vi.fn() };
@@ -654,6 +810,49 @@ describe("native Codex product Agent host", () => {
       status: "outcome_unknown",
       code: "AGENT_WAIT_ACK_LOST",
     });
+  });
+
+  it("rejects a Computer call from another turn in the correlated child", async () => {
+    const peer = new ProductPeer();
+    const computer: AgentComputer = { execute: vi.fn() };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    const handler = peer.handlers.get("item/tool/call");
+    if (!handler) throw new Error("TOOL_HANDLER_MISSING");
+    const proof =
+      /computer proof ([a-f0-9]{64})/u.exec(peer.childPrompt)?.[1] ?? "";
+
+    await expect(
+      handler({
+        threadId: "child-product-a",
+        turnId: "child-turn-foreign",
+        callId: "foreign-turn-call-a",
+        tool: "farol_agent_computer",
+        arguments: {
+          assignmentId: request.identity.assignmentId,
+          authorityId: authority.authorityId,
+          participantId: authority.participantId,
+          proof,
+          workspaceId: "workspace-product-a",
+          operation: { kind: "workspace.read", relativePath: "README.md" },
+        },
+      }),
+    ).rejects.toThrow("CODEX_AGENT_COMPUTER_CORRELATION");
+    expect(computer.execute).not.toHaveBeenCalled();
   });
 
   it("accepts only inherited fixed verification through Farol Computer", async () => {

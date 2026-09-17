@@ -49,6 +49,8 @@ const assignmentSchema = z.strictObject({
   ]),
   parentThreadId: boundedId.nullable().default(null),
   childId: boundedId.nullable(),
+  parentTurnId: boundedId.nullable().default(null),
+  childTurnId: boundedId.nullable().default(null),
   hostRole: boundedId.nullable().default(null),
   delegationDigest: sha256Digest.nullable().default(null),
   terminal: z.boolean(),
@@ -237,6 +239,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         !assignment.terminal &&
         assignment.parentThreadId === null &&
         assignment.childId === null &&
+        assignment.parentTurnId === null &&
+        assignment.childTurnId === null &&
         assignment.hostRole === null &&
         assignment.delegationDigest === null &&
         assignment.terminalReason === null &&
@@ -247,6 +251,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         !assignment.terminal &&
         assignment.parentThreadId !== null &&
         assignment.childId !== null &&
+        assignment.parentTurnId !== null &&
+        assignment.childTurnId !== null &&
         assignment.delegationDigest !== null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
@@ -256,6 +262,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.terminal &&
         assignment.parentThreadId !== null &&
         assignment.childId !== null &&
+        assignment.parentTurnId !== null &&
+        assignment.childTurnId !== null &&
         assignment.delegationDigest !== null &&
         assignment.terminalReason === null &&
         record.resultRef !== null &&
@@ -315,6 +323,10 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       (replacement.assignment.childId !== existing.assignment.childId ||
         replacement.assignment.parentThreadId !==
           existing.assignment.parentThreadId ||
+        replacement.assignment.parentTurnId !==
+          existing.assignment.parentTurnId ||
+        replacement.assignment.childTurnId !==
+          existing.assignment.childTurnId ||
         replacement.assignment.hostRole !== existing.assignment.hostRole ||
         replacement.assignment.delegationDigest !==
           existing.assignment.delegationDigest)

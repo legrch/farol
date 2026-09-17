@@ -26,6 +26,8 @@ const correlation: ChildCorrelation = {
   role: "agent",
   parentThreadId: "parent-cancel-a",
   childId: "child-cancel-a",
+  parentTurnId: "parent-turn-cancel-a",
+  childTurnId: "child-turn-cancel-a",
   hostRole: "default",
   delegationDigest: "a".repeat(64),
 };

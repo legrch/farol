@@ -1188,15 +1188,17 @@ async function closeProductAgentSession(
     session.expiryTimer = null;
   }
   session.host.dispose();
+  let closed = true;
   try {
     await session.client.close();
   } catch {
-    return false;
+    closed = false;
+  } finally {
+    if (activeProductAgentSession === session) {
+      activeProductAgentSession = null;
+    }
   }
-  if (activeProductAgentSession === session) {
-    activeProductAgentSession = null;
-  }
-  return true;
+  return closed;
 }
 
 function productAgentSummary(
@@ -1211,6 +1213,7 @@ function productAgentSummary(
     throw new Error("PRODUCT_AGENT_STATE_INVALID");
   }
   return {
+    assignmentBindingSha256: productAgentAssignmentBinding(input),
     phase,
     workspaceId: input.workspaceId,
     parentDelivery: receipt.parentDelivery,
@@ -1244,12 +1247,51 @@ function productAgentUnknownSummary(
   input: ProductAgentInput,
 ): ProductTaskAgent {
   return {
+    assignmentBindingSha256: productAgentAssignmentBinding(input),
     phase: "outcome_unknown",
     workspaceId: input.workspaceId,
     parentDelivery: "not_applicable",
     workspaceEnforcement: "not_applicable",
     resultAvailable: false,
   };
+}
+
+function productAgentUnknownSummaryFromTask(
+  agent: ProductTaskAgent,
+): ProductTaskAgent {
+  return {
+    ...(agent.assignmentBindingSha256
+      ? { assignmentBindingSha256: agent.assignmentBindingSha256 }
+      : {}),
+    phase: "outcome_unknown",
+    workspaceId: agent.workspaceId,
+    parentDelivery: "not_applicable",
+    workspaceEnforcement: "not_applicable",
+    resultAvailable: false,
+  };
+}
+
+function productAgentAssignmentBinding(input: ProductAgentInput): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        "farol-product-agent-binding-v1",
+        input.taskId,
+        input.sessionId,
+        input.assignmentId,
+      ]),
+    )
+    .digest("hex");
+}
+
+function productAgentAssignmentMatches(
+  agent: ProductTaskAgent,
+  input: ProductAgentInput,
+): boolean {
+  return (
+    agent.assignmentBindingSha256 !== undefined &&
+    agent.assignmentBindingSha256 === productAgentAssignmentBinding(input)
+  );
 }
 
 function armProductAgentExpiry(
@@ -1324,14 +1366,11 @@ async function recoverProductAgentExpiry(): Promise<void> {
   } catch {
     input = null;
   }
-  if (!input) {
-    await persistProductAgentSummary(task.taskId, {
-      phase: "outcome_unknown",
-      workspaceId: task.agent!.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    }).catch(() => undefined);
+  if (!input || !productAgentAssignmentMatches(task.agent!, input)) {
+    await persistProductAgentSummary(
+      task.taskId,
+      productAgentUnknownSummaryFromTask(task.agent!),
+    ).catch(() => undefined);
     return;
   }
   schedulePersistedProductAgentExpiry(task.taskId, input);
@@ -1430,6 +1469,19 @@ async function cancelProductAgentTask(
     if (activeProductAgentSession.taskId !== task.taskId) {
       return taskFailure("AGENT_ALREADY_RUNNING");
     }
+    if (
+      !productAgentAssignmentMatches(
+        runningAgent,
+        activeProductAgentSession.input,
+      )
+    ) {
+      await persistProductAgentSummary(
+        task.taskId,
+        productAgentUnknownSummaryFromTask(runningAgent),
+      ).catch(() => undefined);
+      await closeProductAgentSession(activeProductAgentSession);
+      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+    }
     return cancelProductAgentSession(activeProductAgentSession);
   }
 
@@ -1437,23 +1489,17 @@ async function cancelProductAgentTask(
   try {
     input = (await productAgentStore?.load(task.taskId)) ?? null;
   } catch {
-    await persistProductAgentSummary(task.taskId, {
-      phase: "outcome_unknown",
-      workspaceId: runningAgent.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    }).catch(() => undefined);
+    await persistProductAgentSummary(
+      task.taskId,
+      productAgentUnknownSummaryFromTask(runningAgent),
+    ).catch(() => undefined);
     return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
   }
-  if (!input) {
-    await persistProductAgentSummary(task.taskId, {
-      phase: "outcome_unknown",
-      workspaceId: runningAgent.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    }).catch(() => undefined);
+  if (!input || !productAgentAssignmentMatches(runningAgent, input)) {
+    await persistProductAgentSummary(
+      task.taskId,
+      productAgentUnknownSummaryFromTask(runningAgent),
+    ).catch(() => undefined);
     return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
   }
 
@@ -1475,6 +1521,7 @@ async function executeProductAgent(
   task: ProductTask,
   input: ProductAgentInput,
   context: ProductAgentContext,
+  admission: "new" | "rejoin",
 ): Promise<ProductTaskCommandResult> {
   if (!productAgentInputMatchesContext(input, context)) {
     return taskFailure("AGENT_NOT_READY");
@@ -1483,13 +1530,18 @@ async function executeProductAgent(
   try {
     session = await openProductAgentSession(input, context);
   } catch (error) {
+    const rejoinOutcomeUnknown = admission === "rejoin";
     await persistProductAgentSummary(task.taskId, {
-      phase: "failed",
+      assignmentBindingSha256: productAgentAssignmentBinding(input),
+      phase: rejoinOutcomeUnknown ? "outcome_unknown" : "failed",
       workspaceId: input.workspaceId,
       parentDelivery: "not_applicable",
       workspaceEnforcement: "not_applicable",
       resultAvailable: false,
     }).catch(() => undefined);
+    if (rejoinOutcomeUnknown) {
+      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+    }
     return taskFailure(
       error instanceof Error && error.message === "PRODUCT_AGENT_SESSION_BUSY"
         ? "AGENT_ALREADY_RUNNING"
@@ -1499,13 +1551,20 @@ async function executeProductAgent(
   const assignments = session.assignments;
   let result;
   try {
-    result = await runProductAgentAssignment(context.settings, task, input, {
-      host: session.host,
-      assignments,
-      now: () => Date.now(),
-    });
+    result = await runProductAgentAssignment(
+      context.settings,
+      task,
+      input,
+      {
+        host: session.host,
+        assignments,
+        now: () => Date.now(),
+      },
+      admission,
+    );
   } catch {
     await persistProductAgentSummary(task.taskId, {
+      assignmentBindingSha256: productAgentAssignmentBinding(input),
       phase: "outcome_unknown",
       workspaceId: input.workspaceId,
       parentDelivery: "not_applicable",
@@ -1516,15 +1575,21 @@ async function executeProductAgent(
     return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
   }
   if (!result.ok) {
+    const rejoinUnavailable = admission === "rejoin";
     await persistProductAgentSummary(task.taskId, {
-      phase: "failed",
+      assignmentBindingSha256: productAgentAssignmentBinding(input),
+      phase: rejoinUnavailable ? "outcome_unknown" : "failed",
       workspaceId: input.workspaceId,
       parentDelivery: "not_applicable",
       workspaceEnforcement: "not_applicable",
       resultAvailable: false,
     }).catch(() => undefined);
     await closeProductAgentSession(session);
-    return taskFailure("AGENT_ASSIGNMENT_FAILED");
+    return taskFailure(
+      rejoinUnavailable
+        ? "AGENT_REJOIN_UNAVAILABLE"
+        : "AGENT_ASSIGNMENT_FAILED",
+    );
   }
   const receipt = result.value;
   const summary = productAgentSummary(input, receipt);
@@ -1555,6 +1620,8 @@ async function executeProductAgent(
       role: assignment.authority.role,
       parentThreadId: assignment.parentThreadId!,
       childId: assignment.childId!,
+      parentTurnId: assignment.parentTurnId!,
+      childTurnId: assignment.childTurnId!,
       hostRole: assignment.hostRole,
       delegationDigest: assignment.delegationDigest!,
     },
@@ -1656,6 +1723,7 @@ async function runProductTaskCommand(
         }
         if (
           !liveTaskRegistry.setAgent(task.taskId, {
+            assignmentBindingSha256: productAgentAssignmentBinding(input),
             phase: "running",
             workspaceId: input.workspaceId,
             parentDelivery: "not_applicable",
@@ -1687,12 +1755,24 @@ async function runProductTaskCommand(
         } catch {
           return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
         }
+        if (!productAgentAssignmentMatches(task.agent!, input)) {
+          await persistProductAgentSummary(
+            task.taskId,
+            productAgentUnknownSummaryFromTask(task.agent!),
+          ).catch(() => undefined);
+          return taskFailure("AGENT_REJOIN_UNAVAILABLE");
+        }
         context = productAgentContext(input.workspaceId);
         if (!context || !productAgentInputMatchesContext(input, context)) {
           return taskFailure("AGENT_NOT_READY");
         }
       }
-      return executeProductAgent(task, input, context);
+      return executeProductAgent(
+        task,
+        input,
+        context,
+        command.data.kind === "task.rejoin-agent" ? "rejoin" : "new",
+      );
     }
     if (command.data.kind === "task.rename") {
       if (!liveTaskRegistry.rename(command.data.taskId, command.data.label)) {

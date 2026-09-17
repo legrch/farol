@@ -45,6 +45,7 @@ export type AgentAssignmentCommand = Readonly<{
   }>;
   focus: Readonly<{ initialPaths: readonly string[] }>;
   intent: AgentAssignmentIntent;
+  admission?: "new" | "rejoin";
 }>;
 
 function validIntent(intent: AgentAssignmentIntent): boolean {
@@ -161,9 +162,19 @@ export class RunAgentAssignment {
     const prepared = createAssignment(identity, assignmentAuthority);
     let admission: Awaited<ReturnType<AssignmentRepository["admit"]>>;
     try {
-      admission = await this.assignments.admit(this.record(prepared, null));
+      if (command.admission === "rejoin") {
+        const existing = await this.assignments.load(identity);
+        if (!existing) return failure("AGENT_REJOIN_UNAVAILABLE");
+        admission = { status: "existing", record: existing };
+      } else {
+        admission = await this.assignments.admit(this.record(prepared, null));
+      }
     } catch {
-      return failure("AGENT_ADMISSION_FAILED");
+      return failure(
+        command.admission === "rejoin"
+          ? "AGENT_REJOIN_UNAVAILABLE"
+          : "AGENT_ADMISSION_FAILED",
+      );
     }
     if (admission.status === "existing") {
       if (!this.matchesStoredAuthority(admission.record, authority)) {
@@ -175,6 +186,8 @@ export class RunAgentAssignment {
         recovered.phase === "running" &&
         recovered.parentThreadId &&
         recovered.childId &&
+        recovered.parentTurnId &&
+        recovered.childTurnId &&
         recovered.delegationDigest
       ) {
         const childId = recovered.childId;
@@ -185,6 +198,8 @@ export class RunAgentAssignment {
           role: recovered.authority.role,
           parentThreadId: recovered.parentThreadId,
           childId,
+          parentTurnId: recovered.parentTurnId,
+          childTurnId: recovered.childTurnId,
           hostRole: recovered.hostRole,
           delegationDigest: recovered.delegationDigest,
         });
@@ -365,6 +380,8 @@ export class RunAgentAssignment {
       record.assignment.phase === "prepared" ||
       !record.assignment.parentThreadId ||
       !record.assignment.childId ||
+      !record.assignment.parentTurnId ||
+      !record.assignment.childTurnId ||
       !record.assignment.delegationDigest
         ? markSpawnOutcomeUnknown(record.assignment, {
             code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
@@ -380,6 +397,8 @@ export class RunAgentAssignment {
               role: record.assignment.authority.role,
               parentThreadId: record.assignment.parentThreadId,
               childId: record.assignment.childId,
+              parentTurnId: record.assignment.parentTurnId,
+              childTurnId: record.assignment.childTurnId,
               hostRole: record.assignment.hostRole,
               delegationDigest: record.assignment.delegationDigest,
             },

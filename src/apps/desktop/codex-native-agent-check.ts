@@ -273,6 +273,8 @@ export async function runCodexNativeAgentCheck(
       !receipt.resultRef.startsWith("codex-app-server://") ||
       !assignment.parentThreadId ||
       !assignment.childId ||
+      !assignment.parentTurnId ||
+      !assignment.childTurnId ||
       !assignment.delegationDigest
     ) {
       return failure("failed", "AGENT_EVIDENCE_INCOMPLETE");
@@ -284,6 +286,8 @@ export async function runCodexNativeAgentCheck(
       role: assignment.authority.role,
       parentThreadId: assignment.parentThreadId,
       childId: assignment.childId,
+      parentTurnId: assignment.parentTurnId,
+      childTurnId: assignment.childTurnId,
       hostRole: assignment.hostRole,
       delegationDigest: assignment.delegationDigest,
     };

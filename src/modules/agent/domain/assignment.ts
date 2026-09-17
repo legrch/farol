@@ -15,6 +15,7 @@ export type AssignmentErrorCode =
   | "AGENT_TERMINAL"
   | "AGENT_ADMISSION_FAILED"
   | "AGENT_CANCELLATION_UNAVAILABLE"
+  | "AGENT_REJOIN_UNAVAILABLE"
   | "AGENT_DELIVERY_CORRELATION"
   | "AGENT_DELIVERY_UNAVAILABLE";
 
@@ -47,6 +48,8 @@ export type ChildCorrelation = Readonly<{
   role: "agent" | "critic";
   parentThreadId: string;
   childId: string;
+  parentTurnId: string;
+  childTurnId: string;
   hostRole: string | null;
   delegationDigest: string;
 }>;
@@ -69,6 +72,8 @@ export type Assignment = Readonly<{
     | "outcome_unknown";
   parentThreadId: string | null;
   childId: string | null;
+  parentTurnId: string | null;
+  childTurnId: string | null;
   hostRole: string | null;
   delegationDigest: string | null;
   terminal: boolean;
@@ -85,6 +90,8 @@ export function createAssignment(
     phase: "prepared",
     parentThreadId: null,
     childId: null,
+    parentTurnId: null,
+    childTurnId: null,
     hostRole: null,
     delegationDigest: null,
     terminal: false,
@@ -108,6 +115,8 @@ export function matchesChildCorrelation(
     assignment.authority.role === correlation.role &&
     assignment.parentThreadId === correlation.parentThreadId &&
     assignment.childId === correlation.childId &&
+    assignment.parentTurnId === correlation.parentTurnId &&
+    assignment.childTurnId === correlation.childTurnId &&
     assignment.hostRole === correlation.hostRole &&
     assignment.delegationDigest === correlation.delegationDigest
   );
@@ -135,6 +144,8 @@ export function startAssignment(
     assignment.phase !== "prepared" ||
     assignment.parentThreadId !== null ||
     assignment.childId !== null ||
+    assignment.parentTurnId !== null ||
+    assignment.childTurnId !== null ||
     assignment.hostRole !== null ||
     assignment.delegationDigest !== null
   ) {
@@ -145,6 +156,8 @@ export function startAssignment(
     phase: "running",
     parentThreadId: correlation.parentThreadId,
     childId: correlation.childId,
+    parentTurnId: correlation.parentTurnId,
+    childTurnId: correlation.childTurnId,
     hostRole: correlation.hostRole,
     delegationDigest: correlation.delegationDigest,
   });

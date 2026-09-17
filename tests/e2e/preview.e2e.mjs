@@ -3750,7 +3750,12 @@ try {
     (task) => task.taskId === pinnedTask.taskId,
   );
   assert.ok(productAgentTask);
+  assert.match(
+    productAgentTask.agent.assignmentBindingSha256,
+    /^[a-f0-9]{64}$/u,
+  );
   assert.deepEqual(productAgentTask.agent, {
+    assignmentBindingSha256: productAgentTask.agent.assignmentBindingSha256,
     phase: "completed",
     workspaceId: productWorkspaceId,
     parentDelivery: "acknowledged",
@@ -3822,6 +3827,9 @@ try {
       (task) => task.taskId === agentCancellationTask.taskId,
     )?.agent,
     {
+      assignmentBindingSha256: cancelledAgentBootstrap.tasks.find(
+        (task) => task.taskId === agentCancellationTask.taskId,
+      )?.agent?.assignmentBindingSha256,
       phase: "cancelled",
       workspaceId: productWorkspaceId,
       parentDelivery: "not_applicable",
@@ -3865,6 +3873,34 @@ try {
   );
   assert.ok(deliveredProductAgentInput);
   assert.ok(cancelledProductAgentInput);
+  assert.equal(
+    createHash("sha256")
+      .update(
+        JSON.stringify([
+          "farol-product-agent-binding-v1",
+          deliveredProductAgentInput.envelope.input.taskId,
+          deliveredProductAgentInput.envelope.input.sessionId,
+          deliveredProductAgentInput.envelope.input.assignmentId,
+        ]),
+      )
+      .digest("hex"),
+    productAgentTask.agent.assignmentBindingSha256,
+  );
+  assert.equal(
+    createHash("sha256")
+      .update(
+        JSON.stringify([
+          "farol-product-agent-binding-v1",
+          cancelledProductAgentInput.envelope.input.taskId,
+          cancelledProductAgentInput.envelope.input.sessionId,
+          cancelledProductAgentInput.envelope.input.assignmentId,
+        ]),
+      )
+      .digest("hex"),
+    cancelledAgentBootstrap.tasks.find(
+      (task) => task.taskId === agentCancellationTask.taskId,
+    )?.agent?.assignmentBindingSha256,
+  );
   assert.match(
     deliveredProductAgentInput.text,
     /Read README\.md through the approved exact-path scope/u,

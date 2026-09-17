@@ -87,6 +87,8 @@ const exactChild: ChildCorrelation = {
   role: delegatedAuthority.role,
   parentThreadId: "parent-thread-preview-a",
   childId: "child-preview-a",
+  parentTurnId: "parent-turn-preview-a",
+  childTurnId: "child-turn-preview-a",
   hostRole: "agent",
   delegationDigest: "a".repeat(64),
 };
@@ -155,6 +157,50 @@ describe("Agent app service", () => {
       error: { code: "AGENT_ASSIGNMENT_INVALID", retry: "never" },
     });
     expect(authority.calls).toBe(0);
+    expect(host.spawnCalls).toBe(0);
+  });
+
+  it("rejects malformed or duplicate focus paths before spawn", async () => {
+    for (const initialPaths of [
+      ["/workspace/farol/"],
+      ["/workspace/farol/README.md", "/workspace/farol/README.md"],
+    ]) {
+      const host = new AgentHostDouble(new Error("must not spawn"), null);
+
+      await expect(
+        createRunner(host).execute({
+          ...command,
+          focus: { initialPaths },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: { code: "AGENT_FOCUS_DENIED", retry: "never" },
+      });
+      expect(host.spawnCalls).toBe(0);
+    }
+  });
+
+  it("rejects focus resolution through a malformed delegated root", async () => {
+    const authority: AgentAuthorityPort = {
+      delegate: async () => ({
+        ok: true,
+        value: {
+          ...delegatedAuthority,
+          workspaces: delegatedAuthority.workspaces.map((workspace) => ({
+            ...workspace,
+            root: `${workspace.root}/`,
+          })),
+        },
+      }),
+    };
+    const host = new AgentHostDouble(new Error("must not spawn"), null);
+
+    await expect(
+      createRunner(host, new InMemoryAssignments(), authority).execute(command),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "AGENT_FOCUS_DENIED", retry: "never" },
+    });
     expect(host.spawnCalls).toBe(0);
   });
 
@@ -253,6 +299,50 @@ describe("Agent app service", () => {
     expect(preparedHost.spawnCalls).toBe(0);
   });
 
+  it("never admits a new child when a rejoin record is missing", async () => {
+    const host = new AgentHostDouble(new Error("must not spawn"), null);
+    const rejoinCommand = {
+      ...command,
+      admission: "rejoin" as const,
+    } as AgentAssignmentCommand & { admission: "rejoin" };
+
+    await expect(
+      createRunner(host).execute(rejoinCommand),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AGENT_REJOIN_UNAVAILABLE", retry: "never" },
+    });
+    expect(host.spawnCalls).toBe(0);
+    expect(host.waitCalls).toBe(0);
+  });
+
+  it("fails closed when the exact rejoin record cannot be read", async () => {
+    const repository: AssignmentRepository = {
+      admit: async () => {
+        throw new Error("must not admit");
+      },
+      load: async () => {
+        throw new Error("repository unavailable");
+      },
+      save: async () => {
+        throw new Error("must not save");
+      },
+    };
+    const host = new AgentHostDouble(new Error("must not spawn"), null);
+
+    await expect(
+      createRunner(host, repository).execute({
+        ...command,
+        admission: "rejoin",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "AGENT_REJOIN_UNAVAILABLE", retry: "never" },
+    });
+    expect(host.spawnCalls).toBe(0);
+    expect(host.waitCalls).toBe(0);
+  });
+
   it("rejoins the exact running child after restart without spawning again", async () => {
     const runningRepository = new InMemoryAssignments();
     const running = startAssignment(
@@ -272,7 +362,10 @@ describe("Agent app service", () => {
       workspaceEnforcement: "verified",
     });
     await expect(
-      createRunner(runningHost, runningRepository).execute(command),
+      createRunner(runningHost, runningRepository).execute({
+        ...command,
+        admission: "rejoin",
+      }),
     ).resolves.toMatchObject({
       ok: true,
       value: {
@@ -285,6 +378,23 @@ describe("Agent app service", () => {
     });
     expect(runningHost.spawnCalls).toBe(0);
     expect(runningHost.waitCalls).toBe(1);
+  });
+
+  it("rejects a foreign running correlation", async () => {
+    const host = new AgentHostDouble(
+      { status: "started", correlation: exactChild },
+      {
+        status: "running",
+        correlation: { ...exactChild, childTurnId: "foreign-turn" },
+      },
+    );
+
+    await expect(createRunner(host).execute(command)).resolves.toEqual({
+      ok: false,
+      error: { code: "AGENT_CORRELATION", retry: "never" },
+    });
+    expect(host.spawnCalls).toBe(1);
+    expect(host.waitCalls).toBe(1);
   });
 
   it("returns bounded running state and later rejoins the same child", async () => {

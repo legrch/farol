@@ -855,7 +855,7 @@ function renderTaskMenu(): void {
           ? "Explicit owner narrowing keeps the verified workspace while adding the listed exclusions."
           : scopeSelection.mode === "subtree"
             ? "Explicit owner narrowing limits this assignment to one subfolder plus the listed exclusions."
-            : "Explicit owner narrowing limits this assignment to the exact listed paths.";
+            : "Explicit owner narrowing permits non-recursive reads of only the listed files.";
 
   const agentPresentation =
     task.agent?.phase === "running"

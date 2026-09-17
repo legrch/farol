@@ -285,6 +285,7 @@ type ActiveOperation = {
   parentThreadId: string | null;
   parentTurnId: string | null;
   childId: string | null;
+  childTurnId: string | null;
   childPrompt: string;
   delegationDigest: string;
   authorityToolCalls: number;
@@ -396,19 +397,26 @@ function childPrompt(request: AgentSpawnRequest): string {
   const authority = request.authority;
   const envelope = assignmentEnvelope(request);
   if (request.intent.kind === "product") {
-    const operations = request.authority.capabilities.includes(
+    const operations = request.authority.capabilities.join(", ");
+    const exactFilesOnly = request.authority.workspaces.every(
+      (workspace) => workspace.mode === "exact",
+    );
+    const scopeGuidance = exactFilesOnly
+      ? "Initial paths are the exact file authority boundary. Do not list, search, or discover any other path."
+      : "Initial paths are focus, not the authority boundary. You may discover other relevant files inside a granted subtree without asking for per-file approval.";
+    const verificationGuidance = request.authority.capabilities.includes(
       "verification.run",
     )
-      ? "workspace.list, workspace.search, workspace.read, and fixed verification.run"
-      : "workspace.list, workspace.search, and workspace.read";
+      ? "verification.run is permitted only through farol_agent_computer and exposes no caller-controlled executable or arguments."
+      : "verification.run is not granted for this assignment.";
     return [
       "FAROL_NATIVE_AGENT_TASK_V2",
       JSON.stringify({ ...envelope, objective: request.intent.objective }),
       `Complete this exact owner assignment: ${request.intent.objective}`,
-      `For every workspace list, search, read, or fixed verification, call farol_agent_computer with assignmentId ${identity.assignmentId}, authorityId ${authority.authorityId}, participantId ${authority.participantId}, and computer proof ${computerProof({ assignmentId: identity.assignmentId, authorityId: authority.authorityId, participantId: authority.participantId })}.`,
-      `Use only ${operations} operations allowed by the supplied TaskGrant.`,
-      "Initial paths are focus, not the authority boundary. You may discover other relevant files inside a granted subtree without asking for per-file approval.",
-      "Do not inspect files directly, run native or arbitrary commands, use the web, create descendants, or call any other tool. verification.run is permitted only through farol_agent_computer and exposes no caller-controlled executable or arguments.",
+      `For every permitted Farol Computer operation, call farol_agent_computer with assignmentId ${identity.assignmentId}, authorityId ${authority.authorityId}, participantId ${authority.participantId}, and computer proof ${computerProof({ assignmentId: identity.assignmentId, authorityId: authority.authorityId, participantId: authority.participantId })}.`,
+      `Use only these operations allowed by the supplied TaskGrant: ${operations}.`,
+      scopeGuidance,
+      `Do not inspect files directly, run native or arbitrary commands, use the web, create descendants, or call any other tool. ${verificationGuidance}`,
       "Return a concise answer to the owner assignment.",
     ].join("\n");
   }
@@ -744,6 +752,7 @@ export class CodexNativeAgentHost implements AgentHost {
       parentThreadId: null,
       parentTurnId: null,
       childId: null,
+      childTurnId: null,
       childPrompt: exactChildPrompt,
       delegationDigest: sha256(exactChildPrompt),
       authorityToolCalls: 0,
@@ -810,6 +819,10 @@ export class CodexNativeAgentHost implements AgentHost {
       if (child?.parentThreadId !== operation.parentThreadId) {
         throw error("CODEX_AGENT_LINEAGE_INVALID");
       }
+      if (child.turns.length !== 1) {
+        throw error("CODEX_AGENT_CHILD_TURN_INVALID");
+      }
+      operation.childTurnId = child.turns[0]!.id;
       const correlation: ChildCorrelation = {
         ...request.identity,
         authorityId: request.authority.authorityId,
@@ -817,6 +830,8 @@ export class CodexNativeAgentHost implements AgentHost {
         role: request.authority.role,
         parentThreadId: operation.parentThreadId,
         childId,
+        parentTurnId: operation.parentTurnId,
+        childTurnId: operation.childTurnId,
         hostRole: child.agentRole ?? null,
         delegationDigest: operation.delegationDigest,
       };
@@ -840,6 +855,8 @@ export class CodexNativeAgentHost implements AgentHost {
         role: this.active.request.authority.role,
         parentThreadId: this.active.parentThreadId ?? "",
         childId: this.active.childId ?? "",
+        parentTurnId: this.active.parentTurnId ?? "",
+        childTurnId: this.active.childTurnId ?? "",
         hostRole: correlation.hostRole,
         delegationDigest: this.active.delegationDigest,
       };
@@ -877,9 +894,9 @@ export class CodexNativeAgentHost implements AgentHost {
       }
       const observed = this.observeCompletion(correlation, child, parent);
       if (observed === "completed") {
-        const completedTurn = [...child.turns]
-          .reverse()
-          .find((turn) => turn.status === "completed");
+        const completedTurn = child.turns.find(
+          (turn) => turn.id === correlation.childTurnId,
+        );
         if (!completedTurn) {
           return {
             status: "outcome_unknown",
@@ -922,6 +939,8 @@ export class CodexNativeAgentHost implements AgentHost {
         role: this.active.request.authority.role,
         parentThreadId: this.active.parentThreadId ?? "",
         childId: this.active.childId ?? "",
+        parentTurnId: this.active.parentTurnId ?? "",
+        childTurnId: this.active.childTurnId ?? "",
         hostRole: correlation.hostRole,
         delegationDigest: this.active.delegationDigest,
       };
@@ -964,43 +983,31 @@ export class CodexNativeAgentHost implements AgentHost {
       };
     }
 
-    const targets = [
-      ...[...child.turns]
-        .reverse()
-        .filter(
-          (turn) =>
-            turn.status === "inProgress" ||
-            turn.status === "interrupted" ||
-            turn.status === "completed",
-        )
-        .slice(0, 1)
-        .map((turn) => ({
-          threadId: child.id,
-          turnId: turn.id,
-          status: turn.status,
-        })),
-      ...[...parent.turns]
-        .reverse()
-        .filter(
-          (turn) =>
-            turn.status === "inProgress" ||
-            turn.status === "interrupted" ||
-            turn.status === "completed",
-        )
-        .slice(0, 1)
-        .map((turn) => ({
-          threadId: parent.id,
-          turnId: turn.id,
-          status: turn.status,
-        })),
-    ];
-    if (targets.length !== 2) {
+    const childTurn = child.turns.find(
+      (turn) => turn.id === correlation.childTurnId,
+    );
+    const parentTurn = parent.turns.find(
+      (turn) => turn.id === correlation.parentTurnId,
+    );
+    if (!childTurn || !parentTurn) {
       return {
         status: "outcome_unknown",
         correlation,
         code: "AGENT_WAIT_ACK_LOST",
       };
     }
+    const targets = [
+      {
+        threadId: child.id,
+        turnId: childTurn.id,
+        status: childTurn.status,
+      },
+      {
+        threadId: parent.id,
+        turnId: parentTurn.id,
+        status: parentTurn.status,
+      },
+    ];
     try {
       for (const { threadId, turnId, status } of targets) {
         if (status === "inProgress") {
@@ -1150,7 +1157,8 @@ export class CodexNativeAgentHost implements AgentHost {
       !operation ||
       operation.request.intent.kind !== "compatibility" ||
       !parsed.success ||
-      !operation.childId
+      !operation.childId ||
+      !operation.childTurnId
     ) {
       throw this.fail("CODEX_AGENT_WORKSPACE_CORRELATION");
     }
@@ -1163,6 +1171,7 @@ export class CodexNativeAgentHost implements AgentHost {
     });
     if (
       call.threadId !== operation.childId ||
+      call.turnId !== operation.childTurnId ||
       operation.workspaceToolCalls !== 0 ||
       call.arguments.assignmentId !== operation.request.identity.assignmentId ||
       call.arguments.authorityId !== authority.authorityId ||
@@ -1202,7 +1211,8 @@ export class CodexNativeAgentHost implements AgentHost {
       operation.request.intent.kind !== "product" ||
       !this.computer ||
       !parsed.success ||
-      !operation.childId
+      !operation.childId ||
+      !operation.childTurnId
     ) {
       throw this.fail("CODEX_AGENT_COMPUTER_CORRELATION");
     }
@@ -1215,6 +1225,7 @@ export class CodexNativeAgentHost implements AgentHost {
     });
     if (
       call.threadId !== operation.childId ||
+      call.turnId !== operation.childTurnId ||
       operation.computerCallIds.size >= 32 ||
       operation.computerCallIds.has(call.callId) ||
       call.arguments.assignmentId !== operation.request.identity.assignmentId ||
@@ -1328,6 +1339,14 @@ export class CodexNativeAgentHost implements AgentHost {
       parsed.data.turn.id !== operation.parentTurnId
     ) {
       this.fail("CODEX_AGENT_PARENT_CORRELATION");
+      return;
+    }
+    if (
+      parsed.data.threadId === operation.childId &&
+      operation.childTurnId &&
+      parsed.data.turn.id !== operation.childTurnId
+    ) {
+      this.fail("CODEX_AGENT_CHILD_CORRELATION");
     }
   }
 
@@ -1357,10 +1376,10 @@ export class CodexNativeAgentHost implements AgentHost {
     correlation: ChildCorrelation,
     child: ThreadSnapshot,
   ): Extract<AgentCancelReceipt, Readonly<{ status: "completed" }>> {
-    const completedTurn = [...child.turns]
-      .reverse()
-      .find((turn) => turn.status === "completed");
-    if (!completedTurn) {
+    const completedTurn = child.turns.find(
+      (turn) => turn.id === correlation.childTurnId,
+    );
+    if (!completedTurn || completedTurn.status !== "completed") {
       throw error("CODEX_AGENT_THREAD_INVALID");
     }
     return {
@@ -1387,11 +1406,19 @@ export class CodexNativeAgentHost implements AgentHost {
         }),
       })
       .safeParse(child.source);
+    const childTurn = child.turns.find(
+      (turn) => turn.id === correlation.childTurnId,
+    );
+    const parentTurn = parent.turns.find(
+      (turn) => turn.id === correlation.parentTurnId,
+    );
     if (
       child.id !== correlation.childId ||
       child.parentThreadId !== correlation.parentThreadId ||
       parent.id !== correlation.parentThreadId ||
       parent.parentThreadId != null ||
+      !childTurn ||
+      !parentTurn ||
       !source.success ||
       source.data.subAgent.thread_spawn.parent_thread_id !==
         correlation.parentThreadId ||
@@ -1403,8 +1430,8 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return "invalid";
     }
-    const childItems = child.turns.flatMap((turn) => turn.items);
-    const parentItems = parent.turns.flatMap(parseHistoryItems);
+    const childItems = childTurn.items;
+    const parentItems = parseHistoryItems(parentTurn);
     const authorityCalls = parentItems.filter(
       (item) =>
         item.type === "dynamicToolCall" &&
@@ -1448,7 +1475,9 @@ export class CodexNativeAgentHost implements AgentHost {
     const activeIntent =
       this.active &&
       this.active.parentThreadId === correlation.parentThreadId &&
-      this.active.childId === correlation.childId
+      this.active.childId === correlation.childId &&
+      this.active.parentTurnId === correlation.parentTurnId &&
+      this.active.childTurnId === correlation.childTurnId
         ? this.active.request.intent.kind
         : null;
     const intent = activeIntent ?? durableIntent;
@@ -1528,15 +1557,11 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return "invalid";
     }
-    const childInterrupted = child.turns.some(
-      (turn) => turn.status === "interrupted",
-    );
-    const parentInterrupted = parent.turns.some(
-      (turn) => turn.status === "interrupted",
-    );
+    const childInterrupted = childTurn.status === "interrupted";
+    const parentInterrupted = parentTurn.status === "interrupted";
     if (childInterrupted || parentInterrupted) return "interrupted";
-    const childFailed = child.turns.some((turn) => turn.status === "failed");
-    const parentFailed = parent.turns.some((turn) => turn.status === "failed");
+    const childFailed = childTurn.status === "failed";
+    const parentFailed = parentTurn.status === "failed";
     if (
       childFailed ||
       parentFailed ||
@@ -1545,12 +1570,8 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return "failed";
     }
-    const childCompleted = child.turns.some(
-      (turn) => turn.status === "completed",
-    );
-    const parentCompleted = parent.turns.some(
-      (turn) => turn.status === "completed",
-    );
+    const childCompleted = childTurn.status === "completed";
+    const parentCompleted = parentTurn.status === "completed";
     if (!childCompleted || !parentCompleted) return "running";
     const spawnIndex = parentItems.indexOf(spawnItems[0]!);
     const waitIndex = parentItems.indexOf(waitItems.at(-1)!);

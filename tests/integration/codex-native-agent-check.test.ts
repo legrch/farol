@@ -136,6 +136,8 @@ function completingHost() {
           role: input.authority.role,
           parentThreadId: "parent-thread-a",
           childId: "child-thread-a",
+          parentTurnId: "parent-turn-a",
+          childTurnId: "child-turn-a",
           hostRole: "default",
           delegationDigest: "d".repeat(64),
         },

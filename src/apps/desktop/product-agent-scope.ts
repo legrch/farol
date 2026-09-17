@@ -40,6 +40,37 @@ function within(root: string, candidate: string): boolean {
   return root === "/" || candidate === root || candidate.startsWith(`${root}/`);
 }
 
+const pathComponentCollator = new Intl.Collator("en-US", {
+  usage: "search",
+  sensitivity: "base",
+});
+
+function comparableWithin(root: string, candidate: string): boolean {
+  const rootParts = root.split("/");
+  const candidateParts = candidate.split("/");
+  return (
+    rootParts.length <= candidateParts.length &&
+    rootParts.every(
+      (part, index) =>
+        pathComponentCollator.compare(part, candidateParts[index] ?? "") === 0,
+    )
+  );
+}
+
+function aliasesConfiguredExclusion(
+  excludedPaths: readonly string[],
+  candidate: string,
+): boolean {
+  return excludedPaths.some((excluded) => {
+    const comparableOverlap =
+      comparableWithin(excluded, candidate) ||
+      comparableWithin(candidate, excluded);
+    const lexicalOverlap =
+      within(excluded, candidate) || within(candidate, excluded);
+    return comparableOverlap && !lexicalOverlap;
+  });
+}
+
 function denied(excludedPaths: readonly string[], candidate: string): boolean {
   return excludedPaths.some((excluded) => within(excluded, candidate));
 }
@@ -70,6 +101,9 @@ export function productAgentScopeMatchesWorkspace(
   }
   const { scope, excludedPaths } = value;
   if (!within(workspaceRoot, scope.root)) return false;
+  if (aliasesConfiguredExclusion(configuredExcludedPaths, scope.root)) {
+    return false;
+  }
   if (scope.mode === "exact") {
     return (
       scope.root === workspaceRoot &&
@@ -77,7 +111,8 @@ export function productAgentScopeMatchesWorkspace(
       scope.paths.every(
         (candidate) =>
           within(workspaceRoot, candidate) &&
-          !denied(configuredExcludedPaths, candidate),
+          !denied(configuredExcludedPaths, candidate) &&
+          !aliasesConfiguredExclusion(configuredExcludedPaths, candidate),
       )
     );
   }

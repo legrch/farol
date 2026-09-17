@@ -76,6 +76,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
   workspaceCompleted = false;
   waitCompleted = false;
   childSpawnedDescendant = false;
+  extraChildTurn = false;
   childPrompt = "";
   private nonce = "";
 
@@ -337,6 +338,15 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
                 : []),
             ],
           },
+          ...(this.extraChildTurn
+            ? [
+                {
+                  id: "child-turn-foreign",
+                  status: "inProgress",
+                  items: [],
+                },
+              ]
+            : []),
         ],
       },
     };
@@ -396,6 +406,52 @@ function verifiedWorkspaceProbe(): AgentWorkspaceProbe {
 }
 
 describe("native Codex Agent host", () => {
+  it("rejects invalid host options before installing protocol handlers", () => {
+    const peer = new NativeAgentPeer();
+
+    expect(
+      () =>
+        new CodexNativeAgentHost(
+          peer,
+          {
+            model: "gpt-6-astra",
+            runtimeRoot: "relative/runtime",
+            spawnTimeoutMs: 1_000,
+            waitTimeoutMs: 5,
+            pollIntervalMs: 1,
+            nonce: () => "proof-a",
+            now: () => 1,
+          },
+          verifiedWorkspaceProbe(),
+        ),
+    ).toThrow("CODEX_AGENT_OPTIONS_INVALID");
+    expect(peer.handlers.size).toBe(0);
+    expect(peer.notifications.size).toBe(0);
+  });
+
+  it("rejects a malformed proof nonce before starting a native thread", async () => {
+    const peer = new NativeAgentPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "INVALID PROOF",
+        now: () => 1,
+      },
+      verifiedWorkspaceProbe(),
+    );
+
+    await expect(host.spawn(request)).resolves.toEqual({
+      status: "failed",
+      code: "AGENT_SPAWN_REJECTED",
+    });
+    expect(peer.requests).toEqual([]);
+  });
+
   it("admits one real child, returns bounded running, then completes the same lineage", async () => {
     const peer = new NativeAgentPeer();
     const host = new CodexNativeAgentHost(
@@ -430,6 +486,8 @@ describe("native Codex Agent host", () => {
         role: authority.role,
         parentThreadId: "parent-thread-a",
         childId: "child-thread-a",
+        parentTurnId: "parent-turn-a",
+        childTurnId: "child-turn-a",
         hostRole: "critic",
         delegationDigest: createHash("sha256")
           .update(peer.childPrompt)
@@ -502,6 +560,32 @@ describe("native Codex Agent host", () => {
         model: "gpt-6-astra",
         runtimeRoot: "/private/tmp/farol-agent-runtime",
         spawnTimeoutMs: 5,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-a",
+        now: () => 1,
+      },
+      verifiedWorkspaceProbe(),
+    );
+
+    await expect(host.spawn(request)).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "AGENT_SPAWN_ACK_LOST",
+    });
+    expect(
+      peer.requests.filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
+  });
+
+  it("returns outcome unknown when spawn resolves to more than one child turn", async () => {
+    const peer = new NativeAgentPeer();
+    peer.extraChildTurn = true;
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
         waitTimeoutMs: 5,
         pollIntervalMs: 1,
         nonce: () => "proof-a",

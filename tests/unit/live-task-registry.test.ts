@@ -148,6 +148,7 @@ describe("live task registry", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));
     const agent = {
+      assignmentBindingSha256: "a".repeat(64),
       phase: "running" as const,
       workspaceId: "workspace-a",
       parentDelivery: "not_applicable" as const,
