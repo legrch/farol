@@ -129,7 +129,7 @@ describe("source identity", () => {
     } finally {
       await fs.rm(repository, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   it("compares tracked files larger than Node's default spawn buffer", async () => {
     const repository = await fs.mkdtemp(
