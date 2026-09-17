@@ -4071,6 +4071,10 @@ try {
         .querySelector("#settings-feedback")
         ?.textContent?.includes("Nothing was submitted again") === true,
   );
+  await interruptedChatGptTask.window.waitForFunction(
+    async () =>
+      (await window.farolNext.bootstrap()).chatgptRecoveryPending === false,
+  );
   const recoveredBootstrap = await interruptedChatGptTask.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
