@@ -128,6 +128,30 @@ function isCompactionTrigger(candidate: unknown): boolean {
   );
 }
 
+function isTransparentHistoryItem(candidate: unknown): boolean {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return false;
+  }
+  const item = candidate as Record<string, unknown>;
+  if (item.type === undefined) {
+    return (
+      (item.role === "user" || item.role === "assistant") && "content" in item
+    );
+  }
+  if (
+    item.type === "message" ||
+    item.type === "function_call" ||
+    item.type === "function_call_output"
+  ) {
+    return true;
+  }
+  return (
+    item.type === "compaction" &&
+    typeof item.encrypted_content === "string" &&
+    item.encrypted_content.startsWith(HOST_CHECKPOINT_PREFIX)
+  );
+}
+
 function sourceBoundary(
   variant: HostCompactionVariant,
   threadId: string,
@@ -213,6 +237,10 @@ export function parseHostCompactionRequest(
       return failure("HOST_COMPACTION_TRIGGER_INVALID");
     }
     variant = "streamed_compaction_item";
+  }
+
+  if (!history.every(isTransparentHistoryItem)) {
+    return failure("HOST_COMPACTION_OPAQUE");
   }
 
   const exactHistory = structuredClone(history);

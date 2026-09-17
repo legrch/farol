@@ -624,4 +624,38 @@ describe("Codex host context continuity composition", () => {
     expect(summary.request).not.toHaveBeenCalled();
     expect(summary.observe).not.toHaveBeenCalled();
   });
+
+  it("rejects opaque compaction history before selecting a browser source", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: new PrivateContextStore({ root }),
+      summary,
+    });
+
+    await expect(
+      continuity.compact({
+        endpoint: "responses_compact",
+        body: {
+          ...unaryBody(),
+          input: [
+            ...history(),
+            {
+              type: "opaque_native_state",
+              encrypted_content: "provider-owned-state",
+            },
+          ],
+        },
+        metadataHeader: metadata(),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "HOST_COMPACTION_OPAQUE" },
+    });
+    expect(summary.selectSource).not.toHaveBeenCalled();
+    expect(summary.request).not.toHaveBeenCalled();
+    expect(summary.observe).not.toHaveBeenCalled();
+  });
 });
