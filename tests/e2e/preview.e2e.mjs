@@ -3708,9 +3708,13 @@ try {
     productWorkspaceId,
   );
   await ordinaryLiveTasks.window
+    .locator("#task-agent-scope")
+    .selectOption("exact");
+  await ordinaryLiveTasks.window.locator("#task-agent-paths").fill("README.md");
+  await ordinaryLiveTasks.window
     .locator("#task-agent-objective")
     .fill(
-      "Read README.md inside the approved subtree and report its boundary marker.",
+      "Read README.md through the approved exact-path scope and report its boundary marker.",
     );
   assert.equal(
     await ordinaryLiveTasks.window.locator("#task-menu-agent").isEnabled(),
@@ -3849,11 +3853,12 @@ try {
   const productAgentInputs = await Promise.all(
     productAgentInputFiles.map(async (entry) => {
       const target = path.join(productAgentInputRoot, entry);
-      return { target, text: await fs.readFile(target, "utf8") };
+      const text = await fs.readFile(target, "utf8");
+      return { target, text, envelope: JSON.parse(text) };
     }),
   );
   const deliveredProductAgentInput = productAgentInputs.find(({ text }) =>
-    /Read README\.md inside the approved subtree/u.test(text),
+    /Read README\.md through the approved exact-path scope/u.test(text),
   );
   const cancelledProductAgentInput = productAgentInputs.find(({ text }) =>
     /proves exact native cancellation/u.test(text),
@@ -3862,8 +3867,21 @@ try {
   assert.ok(cancelledProductAgentInput);
   assert.match(
     deliveredProductAgentInput.text,
-    /Read README\.md inside the approved subtree/u,
+    /Read README\.md through the approved exact-path scope/u,
   );
+  assert.equal(deliveredProductAgentInput.envelope.schema, 2);
+  assert.deepEqual(deliveredProductAgentInput.envelope.input.scope, {
+    mode: "exact",
+    root: workspaceRoot,
+    paths: [path.join(workspaceRoot, "README.md")],
+  });
+  assert.deepEqual(deliveredProductAgentInput.envelope.input.excludedPaths, []);
+  assert.equal(cancelledProductAgentInput.envelope.schema, 2);
+  assert.deepEqual(cancelledProductAgentInput.envelope.input.scope, {
+    mode: "subtree",
+    root: workspaceRoot,
+  });
+  assert.deepEqual(cancelledProductAgentInput.envelope.input.excludedPaths, []);
   assert.equal((await fs.stat(productAgentInputRoot)).mode & 0o777, 0o700);
   assert.ok(
     (
@@ -3972,7 +3990,7 @@ try {
   ]);
   assert.doesNotMatch(
     liveTaskText,
-    /continuity canary|cancellation canary|bounded workspace verification|Read README\.md inside the approved subtree|proves exact native cancellation/iu,
+    /continuity canary|cancellation canary|bounded workspace verification|Read README\.md through the approved exact-path scope|proves exact native cancellation/iu,
   );
   assert.equal((await fs.stat(liveTaskRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
@@ -4273,6 +4291,9 @@ try {
     "live-task-native-agent-result-delivery-acknowledged",
     "live-task-native-agent-private-input",
     "live-task-native-agent-content-free-recovery",
+    "live-task-native-agent-owner-exact-path-narrowing",
+    "live-task-native-agent-cancel-confirmed",
+    "live-task-native-agent-expiry-cancelled-after-restart",
     "live-task-context-preservation-visible",
     "live-task-context-handoff-survives-restart",
     "live-task-context-confirmation-retires-source",

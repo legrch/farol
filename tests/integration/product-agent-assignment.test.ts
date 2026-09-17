@@ -90,7 +90,8 @@ function input(overrides: Partial<ProductAgentInput> = {}): ProductAgentInput {
     taskEpoch: 7,
     generation: 1,
     workspaceId,
-    focusPath: "/workspace/approved",
+    scope: { mode: "subtree", root: "/workspace/approved" },
+    excludedPaths: [],
     objective: "Find and summarize the continuity marker.",
     computerGeneration: 7,
     executableSha256: "a".repeat(64),
@@ -204,11 +205,80 @@ describe("product Agent assignment composition", () => {
     });
   });
 
+  it("applies explicit exact-path owner narrowing without dropping read capabilities", async () => {
+    const fixture = dependencies();
+    const narrowed = input({
+      scope: {
+        mode: "exact",
+        root: "/workspace/approved",
+        paths: [
+          "/workspace/approved/README.md",
+          "/workspace/approved/docs/plan.md",
+        ],
+      },
+    });
+
+    await expect(
+      runProductAgentAssignment(settings(), task, narrowed, fixture.value),
+    ).resolves.toMatchObject({ ok: true });
+    if (narrowed.scope.mode !== "exact") throw new Error("TEST_SCOPE_INVALID");
+    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
+    expect(request.focus.initialPaths).toEqual(narrowed.scope.paths);
+    expect(request.authority).toMatchObject({
+      workspaces: [
+        {
+          workspaceId,
+          mode: "exact",
+          root: "/workspace/approved",
+          paths: narrowed.scope.paths,
+          access: "read",
+        },
+      ],
+      capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+      network: "none",
+      commands: "none",
+    });
+  });
+
+  it("preserves an explicit owner exclusion while narrowing to one subtree", async () => {
+    const fixture = dependencies();
+
+    await expect(
+      runProductAgentAssignment(
+        settings(),
+        task,
+        input({
+          scope: { mode: "subtree", root: "/workspace/approved/docs" },
+          excludedPaths: ["/workspace/approved/docs/private"],
+        }),
+        fixture.value,
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
+    expect(request.focus.initialPaths).toEqual(["/workspace/approved/docs"]);
+    expect(request.authority).toMatchObject({
+      workspaces: [
+        {
+          workspaceId,
+          mode: "subtree",
+          root: "/workspace/approved/docs",
+          access: "read",
+        },
+      ],
+      excludedPaths: [
+        { workspaceId, path: "/workspace/approved/docs/private" },
+      ],
+    });
+  });
+
   it("refuses removed, changed-generation, or foreign task input before spawn", async () => {
     for (const [configured, journal] of [
       [settings(8), input()],
       [settings(), input({ taskId: "foreign-task" })],
-      [settings(), input({ focusPath: "/workspace/foreign" })],
+      [
+        settings(),
+        input({ scope: { mode: "subtree", root: "/workspace/foreign" } }),
+      ],
     ] as const) {
       const fixture = dependencies();
       await expect(

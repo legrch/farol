@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +36,8 @@ function input(overrides: Partial<ProductAgentInput> = {}): ProductAgentInput {
     taskEpoch: 7,
     generation: 1,
     workspaceId: "workspace-a",
-    focusPath: "/workspace/approved",
+    scope: { mode: "subtree", root: "/workspace/approved" },
+    excludedPaths: [],
     objective: "Find the continuity marker without reading excluded files.",
     computerGeneration: 7,
     executableSha256: "a".repeat(64),
@@ -79,6 +81,34 @@ describe("private product Agent input store", () => {
       interrupted.save(input({ assignmentId: "assignment-b" })),
     ).rejects.toThrow("disk full");
     await expect(stable.load("task-a")).resolves.toEqual(input());
+  });
+
+  it("migrates a schema-one full-workspace input without narrowing it to one file", async () => {
+    const root = await temporaryRoot();
+    const taskId = "task-a";
+    const target = path.join(
+      root,
+      `${createHash("sha256").update(taskId).digest("hex")}.json`,
+    );
+    const canonical = input();
+    const {
+      scope: _scope,
+      excludedPaths: _excludedPaths,
+      ...legacy
+    } = canonical;
+    await fs.writeFile(
+      target,
+      `${JSON.stringify({
+        schema: 1,
+        kind: "product_agent_input",
+        input: { ...legacy, focusPath: "/workspace/approved" },
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    await expect(
+      new PrivateProductAgentStore({ root }).load(taskId),
+    ).resolves.toEqual(canonical);
   });
 
   it("removes only the exact task journal", async () => {

@@ -26,6 +26,7 @@ import {
   ProductTaskCommandResultSchema,
   ProductTaskCommandSchema,
   ProductTasksStateSchema,
+  type ProductAgentScopeSelection,
   type ProductTask,
   type ProductTaskAgent,
   type ProductTaskCommandResult,
@@ -156,6 +157,10 @@ import {
   PrivateProductAgentStore,
   type ProductAgentInput,
 } from "./product-agent-store";
+import {
+  productAgentScopeMatchesWorkspace,
+  resolveProductAgentScope,
+} from "./product-agent-scope";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import {
@@ -1031,8 +1036,15 @@ function productAgentInput(
   task: ProductTask,
   context: ProductAgentContext,
   objective: string,
-): ProductAgentInput {
+  scope: ProductAgentScopeSelection,
+): ProductAgentInput | null {
   const now = Date.now();
+  const resolved = resolveProductAgentScope(
+    context.workspace.root,
+    context.workspace.excludedPaths,
+    scope,
+  );
+  if (!resolved) return null;
   return {
     taskId: task.taskId,
     sessionId: task.sessionId,
@@ -1043,7 +1055,7 @@ function productAgentInput(
     taskEpoch: context.settings.computer.generation,
     generation: 1,
     workspaceId: context.workspace.workspaceId,
-    focusPath: context.workspace.root,
+    ...resolved,
     objective,
     computerGeneration: context.settings.computer.generation,
     executableSha256: context.host.executableSha256,
@@ -1062,6 +1074,8 @@ function productAgentSessionKey(input: ProductAgentInput): string {
     input.schemaSha256,
     input.buildId,
     input.computerGeneration,
+    input.scope,
+    input.excludedPaths,
   ]);
 }
 
@@ -1072,7 +1086,11 @@ function productAgentInputMatchesContext(
   return (
     input.computerGeneration === context.settings.computer.generation &&
     input.workspaceId === context.workspace.workspaceId &&
-    input.focusPath === context.workspace.root &&
+    productAgentScopeMatchesWorkspace(
+      context.workspace.root,
+      context.workspace.excludedPaths,
+      input,
+    ) &&
     input.executableSha256 === context.host.executableSha256 &&
     input.schemaSha256 === context.host.schemaSha256 &&
     input.buildId === buildIdentity.buildId
@@ -1623,7 +1641,14 @@ async function runProductTaskCommand(
         }
         context = productAgentContext(command.data.workspaceId);
         if (!context) return taskFailure("AGENT_NOT_READY");
-        input = productAgentInput(task, context, command.data.objective);
+        const candidate = productAgentInput(
+          task,
+          context,
+          command.data.objective,
+          command.data.scope,
+        );
+        if (!candidate) return taskFailure("AGENT_SCOPE_INVALID");
+        input = candidate;
         try {
           await productAgentStore!.save(input);
         } catch {

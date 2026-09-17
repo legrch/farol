@@ -4,9 +4,11 @@ import {
   type ClientEventDto,
 } from "../modules/chat/contract/client-event";
 import {
+  ProductAgentScopeSelectionSchema,
   ProductTaskCommandResultSchema,
   ProductTaskSchema,
   ProductTasksStateSchema,
+  type ProductAgentScopeSelection,
   type ProductTaskCommand,
   type ProductTasksState,
 } from "../modules/chat/contract/product-task";
@@ -710,6 +712,34 @@ function productAgentReadiness(): ProductAgentReadiness {
   return { ready: true, workspace };
 }
 
+function scopeLines(selector: string): string[] {
+  return required<HTMLTextAreaElement>(selector)
+    .value.split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function productAgentScopeSelection(): ProductAgentScopeSelection | null {
+  const mode = required<HTMLSelectElement>("#task-agent-scope").value;
+  const excludedPaths = scopeLines("#task-agent-exclusions");
+  const candidate =
+    mode === "workspace"
+      ? { mode, excludedPaths }
+      : mode === "subtree"
+        ? {
+            mode,
+            relativeRoot: required<HTMLInputElement>(
+              "#task-agent-subtree",
+            ).value.trim(),
+            excludedPaths,
+          }
+        : mode === "exact"
+          ? { mode, relativePaths: scopeLines("#task-agent-paths") }
+          : null;
+  const parsed = ProductAgentScopeSelectionSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : null;
+}
+
 function renderTaskMenu(): void {
   const task = taskById(selectedTaskId);
   const live = task?.provider === "chatgpt";
@@ -723,6 +753,11 @@ function renderTaskMenu(): void {
   const cancel = required<HTMLButtonElement>("#task-menu-cancel");
   const close = required<HTMLButtonElement>("#task-menu-close-task");
   const workspace = required<HTMLSelectElement>("#task-agent-workspace");
+  const scopeMode = required<HTMLSelectElement>("#task-agent-scope");
+  const subtree = required<HTMLInputElement>("#task-agent-subtree");
+  const paths = required<HTMLTextAreaElement>("#task-agent-paths");
+  const exclusions = required<HTMLTextAreaElement>("#task-agent-exclusions");
+  const scopeHelp = required<HTMLElement>("#task-agent-scope-help");
   const objective = required<HTMLTextAreaElement>("#task-agent-objective");
   const runAgent = required<HTMLButtonElement>("#task-menu-agent");
   const agentState = required<HTMLElement>("#task-agent-state");
@@ -730,6 +765,24 @@ function renderTaskMenu(): void {
   const agentLabel = required<HTMLElement>("#task-agent-state small");
   const agentDetail = required<HTMLElement>("#task-agent-detail");
   const readiness = productAgentReadiness();
+  const scopeSelection = productAgentScopeSelection();
+  const exactScope = scopeMode.value === "exact";
+  const subtreeScope = scopeMode.value === "subtree";
+  for (const element of document.querySelectorAll<HTMLElement>(
+    '[data-agent-scope-field="subtree"]',
+  )) {
+    element.hidden = !subtreeScope;
+  }
+  for (const element of document.querySelectorAll<HTMLElement>(
+    '[data-agent-scope-field="exact"]',
+  )) {
+    element.hidden = !exactScope;
+  }
+  for (const element of document.querySelectorAll<HTMLElement>(
+    '[data-agent-scope-field="exclusions"]',
+  )) {
+    element.hidden = exactScope;
+  }
   const previousWorkspace = workspace.value;
   if (readiness.ready) {
     const option = document.createElement("option");
@@ -765,13 +818,18 @@ function renderTaskMenu(): void {
     (!agentRunning && (task.lifecycle !== "running" || agentLocked));
   close.disabled = taskMenuBusy || agentLocked;
   workspace.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  scopeMode.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  subtree.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  paths.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  exclusions.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   objective.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   runAgent.disabled =
     taskMenuBusy ||
     !readiness.ready ||
     uncertain ||
     contextLocked ||
-    (!needsRejoin && objective.value.trim().length === 0);
+    (!needsRejoin &&
+      (objective.value.trim().length === 0 || scopeSelection === null));
   runAgent.querySelector("span")!.textContent =
     task.agent?.phase === "running"
       ? "Rejoin Agent"
@@ -783,7 +841,21 @@ function renderTaskMenu(): void {
     ? task.agent?.phase === "running"
       ? "Same child"
       : "Durable result"
-    : "Read-only";
+    : scopeSelection?.mode === "workspace" &&
+        scopeSelection.excludedPaths.length === 0
+      ? "Whole workspace"
+      : "Owner narrowed";
+  scopeHelp.textContent =
+    scopeSelection === null
+      ? "Enter canonical relative paths without wildcards, empty segments, or parent traversal."
+      : scopeSelection.mode === "workspace" &&
+          scopeSelection.excludedPaths.length === 0
+        ? "The Agent inherits the whole verified workspace and its existing exclusions. This does not require per-file approval."
+        : scopeSelection.mode === "workspace"
+          ? "Explicit owner narrowing keeps the verified workspace while adding the listed exclusions."
+          : scopeSelection.mode === "subtree"
+            ? "Explicit owner narrowing limits this assignment to one subfolder plus the listed exclusions."
+            : "Explicit owner narrowing limits this assignment to the exact listed paths.";
 
   const agentPresentation =
     task.agent?.phase === "running"
@@ -2946,6 +3018,10 @@ function openTaskMenu(): void {
     if (taskAgentDraftTaskId !== task.taskId) {
       taskAgentDraftTaskId = task.taskId;
       required<HTMLTextAreaElement>("#task-agent-objective").value = "";
+      required<HTMLSelectElement>("#task-agent-scope").value = "workspace";
+      required<HTMLInputElement>("#task-agent-subtree").value = "";
+      required<HTMLTextAreaElement>("#task-agent-paths").value = "";
+      required<HTMLTextAreaElement>("#task-agent-exclusions").value = "";
     }
   }
   sidebarOverlayOpen = false;
@@ -2977,6 +3053,9 @@ function taskMenuErrorMessage(
   }
   if (error === "AGENT_NOT_READY") {
     return "Verify the exact native host, Agent lineage, and read-only workspace first.";
+  }
+  if (error === "AGENT_SCOPE_INVALID") {
+    return "The requested Agent scope is outside the verified workspace or conflicts with an existing exclusion.";
   }
   if (error === "AGENT_ALREADY_RUNNING") {
     return "This Agent assignment must be reconciled before changing or closing the task.";
@@ -3349,6 +3428,14 @@ async function start(): Promise<void> {
     "input",
     renderTaskMenu,
   );
+  for (const selector of [
+    "#task-agent-scope",
+    "#task-agent-subtree",
+    "#task-agent-paths",
+    "#task-agent-exclusions",
+  ]) {
+    required<HTMLElement>(selector).addEventListener("input", renderTaskMenu);
+  }
   required<HTMLButtonElement>("#task-menu-agent").addEventListener(
     "click",
     () => {
@@ -3374,12 +3461,15 @@ async function start(): Promise<void> {
       const objective = required<HTMLTextAreaElement>(
         "#task-agent-objective",
       ).value.trim();
+      const scope = productAgentScopeSelection();
+      if (!scope) return;
       void runTaskMenuCommand(
         {
           kind: "task.start-agent",
           taskId: task.taskId,
           workspaceId,
           objective,
+          scope,
         },
         "Agent assignment admitted.",
       );

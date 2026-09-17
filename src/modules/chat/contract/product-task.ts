@@ -8,6 +8,47 @@ const ProductAgentObjectiveSchema = z
   .min(1)
   .max(8_000)
   .refine((value) => !value.includes("\0"));
+const ProductAgentRelativePathSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine(
+    (value) =>
+      !value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.includes("\\") &&
+      !value.includes("\0") &&
+      !["*", "?", "[", "]", "{", "}"].some((symbol) =>
+        value.includes(symbol),
+      ) &&
+      value
+        .split("/")
+        .every((part) => part !== "" && part !== "." && part !== ".."),
+  );
+const ProductAgentExcludedPathsSchema = z
+  .array(ProductAgentRelativePathSchema)
+  .max(32)
+  .refine((paths) => new Set(paths).size === paths.length);
+
+export const ProductAgentScopeSelectionSchema = z.discriminatedUnion("mode", [
+  z.strictObject({
+    mode: z.literal("workspace"),
+    excludedPaths: ProductAgentExcludedPathsSchema,
+  }),
+  z.strictObject({
+    mode: z.literal("subtree"),
+    relativeRoot: ProductAgentRelativePathSchema,
+    excludedPaths: ProductAgentExcludedPathsSchema,
+  }),
+  z.strictObject({
+    mode: z.literal("exact"),
+    relativePaths: z
+      .array(ProductAgentRelativePathSchema)
+      .min(1)
+      .max(32)
+      .refine((paths) => new Set(paths).size === paths.length),
+  }),
+]);
 
 export const ProductTaskLifecycleSchema = z.enum([
   "event_driven",
@@ -102,6 +143,7 @@ export const ProductTaskCommandSchema = z.discriminatedUnion("kind", [
     taskId: ProductTaskIdentifierSchema,
     workspaceId: ProductTaskIdentifierSchema,
     objective: ProductAgentObjectiveSchema,
+    scope: ProductAgentScopeSelectionSchema,
   }),
   z.strictObject({
     kind: z.literal("task.rejoin-agent"),
@@ -130,6 +172,7 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
       "TASK_NOT_RUNNING",
       "TASK_CANCEL_FAILED",
       "AGENT_NOT_READY",
+      "AGENT_SCOPE_INVALID",
       "AGENT_ALREADY_RUNNING",
       "AGENT_INPUT_STATE_UNAVAILABLE",
       "AGENT_ASSIGNMENT_FAILED",
@@ -143,6 +186,9 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
 ]);
 
 export type ProductTask = z.infer<typeof ProductTaskSchema>;
+export type ProductAgentScopeSelection = z.infer<
+  typeof ProductAgentScopeSelectionSchema
+>;
 export type ProductTaskLifecycle = z.infer<typeof ProductTaskLifecycleSchema>;
 export type ProductTaskAgent = z.infer<typeof ProductTaskAgentSchema>;
 export type ProductTaskContext = z.infer<typeof ProductTaskContextSchema>;

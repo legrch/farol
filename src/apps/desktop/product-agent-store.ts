@@ -4,6 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
+import {
+  ProductAgentResolvedExclusionsSchema,
+  ProductAgentResolvedScopeSchema,
+} from "./product-agent-scope";
+
 const boundedId = z.string().min(1).max(120);
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
 const absolutePath = z
@@ -16,7 +21,7 @@ const timestamp = z.string().refine((value) => {
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
 });
 
-export const ProductAgentInputSchema = z.strictObject({
+const productAgentInputShape = {
   taskId: boundedId,
   sessionId: boundedId,
   assignmentId: boundedId,
@@ -26,7 +31,6 @@ export const ProductAgentInputSchema = z.strictObject({
   taskEpoch: z.number().int().nonnegative(),
   generation: z.number().int().positive(),
   workspaceId: boundedId,
-  focusPath: absolutePath,
   objective: z
     .string()
     .trim()
@@ -39,12 +43,29 @@ export const ProductAgentInputSchema = z.strictObject({
   buildId: boundedId,
   expiresAt: z.number().int().positive(),
   createdAt: timestamp,
+} as const;
+
+export const ProductAgentInputSchema = z.strictObject({
+  ...productAgentInputShape,
+  scope: ProductAgentResolvedScopeSchema,
+  excludedPaths: ProductAgentResolvedExclusionsSchema,
+});
+
+const LegacyProductAgentInputSchema = z.strictObject({
+  ...productAgentInputShape,
+  focusPath: absolutePath,
 });
 
 const envelopeSchema = z.strictObject({
-  schema: z.literal(1),
+  schema: z.literal(2),
   kind: z.literal("product_agent_input"),
   input: ProductAgentInputSchema,
+});
+
+const legacyEnvelopeSchema = z.strictObject({
+  schema: z.literal(1),
+  kind: z.literal("product_agent_input"),
+  input: LegacyProductAgentInputSchema,
 });
 
 export type ProductAgentInput = z.infer<typeof ProductAgentInputSchema>;
@@ -106,10 +127,19 @@ export class PrivateProductAgentStore {
         stateError("PRODUCT_AGENT_STATE_CORRUPT");
       }
       const parsed = envelopeSchema.safeParse(value);
-      if (!parsed.success || parsed.data.input.taskId !== parsedTaskId.data) {
+      if (parsed.success && parsed.data.input.taskId === parsedTaskId.data) {
+        return parsed.data.input;
+      }
+      const legacy = legacyEnvelopeSchema.safeParse(value);
+      if (!legacy.success || legacy.data.input.taskId !== parsedTaskId.data) {
         stateError("PRODUCT_AGENT_STATE_CORRUPT");
       }
-      return parsed.data.input;
+      const { focusPath, ...input } = legacy.data.input;
+      return ProductAgentInputSchema.parse({
+        ...input,
+        scope: { mode: "subtree", root: focusPath },
+        excludedPaths: [],
+      });
     } finally {
       await handle.close();
     }
@@ -136,7 +166,7 @@ export class PrivateProductAgentStore {
         0o600,
       );
       await handle.writeFile(
-        `${JSON.stringify({ schema: 1, kind: "product_agent_input", input: validated }, null, 2)}\n`,
+        `${JSON.stringify({ schema: 2, kind: "product_agent_input", input: validated }, null, 2)}\n`,
         "utf8",
       );
       await handle.sync();

@@ -19,6 +19,10 @@ import {
 import { ExecutionAuthorityContractHandler } from "../../modules/computer/infra/authority-contract-handler";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import type { ProductAgentInput } from "./product-agent-store";
+import {
+  productAgentInitialPaths,
+  productAgentScopeMatchesWorkspace,
+} from "./product-agent-scope";
 
 export type ProductAgentAssignmentResult = Result<
   AgentRunReceipt,
@@ -65,7 +69,11 @@ export async function runProductAgentAssignment(
   if (
     !selected ||
     selected.access !== "read" ||
-    selected.root !== input.focusPath
+    !productAgentScopeMatchesWorkspace(
+      selected.root,
+      selected.excludedPaths,
+      input,
+    )
   ) {
     return denied();
   }
@@ -144,6 +152,25 @@ export async function runProductAgentAssignment(
       new ExecutionAuthorityContractHandler(delegate),
     ),
   );
+  const narrowedWorkspace =
+    input.scope.mode === "subtree"
+      ? {
+          workspaceId: selected.workspaceId,
+          mode: "subtree" as const,
+          root: input.scope.root,
+          access: "read" as const,
+        }
+      : {
+          workspaceId: selected.workspaceId,
+          mode: "exact" as const,
+          root: input.scope.root,
+          paths: [...input.scope.paths],
+          access: "read" as const,
+        };
+  const explicitlyNarrowed =
+    input.scope.mode === "exact" ||
+    input.scope.root !== selected.root ||
+    input.excludedPaths.length > 0;
   return runner.execute({
     identity: {
       assignmentId: input.assignmentId,
@@ -158,8 +185,22 @@ export async function runProductAgentAssignment(
       participantId: input.agentParticipantId,
       role: "agent",
       mutationOwnership: "none",
+      ...(explicitlyNarrowed
+        ? {
+            narrowing: {
+              workspaces: [narrowedWorkspace],
+              excludedPaths: input.excludedPaths.map((excluded) => ({
+                workspaceId: selected.workspaceId,
+                path: excluded,
+              })),
+              capabilities,
+              network: "none" as const,
+              commands: settings.computer.commands,
+            },
+          }
+        : {}),
     },
-    focus: { initialPaths: [input.focusPath] },
+    focus: { initialPaths: productAgentInitialPaths(input.scope) },
     intent: { kind: "product", objective: input.objective },
   });
 }

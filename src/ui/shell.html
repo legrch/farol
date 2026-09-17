@@ -475,6 +475,59 @@
           </div>
           <label for="task-agent-workspace">Approved workspace</label>
           <select id="task-agent-workspace"></select>
+          <label for="task-agent-scope">Authority scope</label>
+          <select
+            id="task-agent-scope"
+            aria-describedby="task-agent-scope-help"
+          >
+            <option value="workspace">Whole approved workspace</option>
+            <option value="subtree">One subfolder</option>
+            <option value="exact">Exact paths only</option>
+          </select>
+          <label
+            for="task-agent-subtree"
+            data-agent-scope-field="subtree"
+            hidden
+            >Subfolder path</label
+          >
+          <input
+            id="task-agent-subtree"
+            data-agent-scope-field="subtree"
+            type="text"
+            maxlength="4096"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="vnext/src"
+            hidden
+          />
+          <label for="task-agent-paths" data-agent-scope-field="exact" hidden
+            >Exact relative paths · one per line</label
+          >
+          <textarea
+            id="task-agent-paths"
+            data-agent-scope-field="exact"
+            maxlength="8192"
+            rows="3"
+            spellcheck="false"
+            placeholder="README.md&#10;vnext/src/ui/shell.ts"
+            hidden
+          ></textarea>
+          <label for="task-agent-exclusions" data-agent-scope-field="exclusions"
+            >Additional exclusions · one per line</label
+          >
+          <textarea
+            id="task-agent-exclusions"
+            data-agent-scope-field="exclusions"
+            maxlength="8192"
+            rows="2"
+            spellcheck="false"
+            placeholder="private&#10;notes/do-not-inspect.md"
+          ></textarea>
+          <small class="task-agent-scope-help" id="task-agent-scope-help"
+            >The Agent inherits the verified workspace unless you explicitly
+            narrow it. Paths are relative; wildcards and parent traversal are
+            not allowed.</small
+          >
           <label for="task-agent-objective">Objective</label>
           <textarea
             id="task-agent-objective"

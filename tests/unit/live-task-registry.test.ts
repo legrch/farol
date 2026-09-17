@@ -27,12 +27,14 @@ describe("live task registry", () => {
         taskId: "task-1",
         workspaceId: "workspace-a",
         objective: "Inspect the approved workspace and summarize the risk.",
+        scope: { mode: "workspace", excludedPaths: [] },
       }),
     ).toEqual({
       kind: "task.start-agent",
       taskId: "task-1",
       workspaceId: "workspace-a",
       objective: "Inspect the approved workspace and summarize the risk.",
+      scope: { mode: "workspace", excludedPaths: [] },
     });
     expect(
       ProductTaskCommandSchema.parse({
@@ -46,6 +48,44 @@ describe("live task registry", () => {
         taskId: "task-1",
         workspaceId: "workspace-a",
         objective: "\0",
+        scope: { mode: "workspace", excludedPaths: [] },
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductTaskCommandSchema.safeParse({
+        kind: "task.start-agent",
+        taskId: "task-1",
+        workspaceId: "workspace-a",
+        objective: "Inspect one explicitly narrowed subtree.",
+        scope: {
+          mode: "subtree",
+          relativeRoot: "../private",
+          excludedPaths: [],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductTaskCommandSchema.safeParse({
+        kind: "task.start-agent",
+        taskId: "task-1",
+        workspaceId: "workspace-a",
+        objective: "Inspect exact approved files.",
+        scope: {
+          mode: "exact",
+          relativePaths: ["README.md", "README.md"],
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductTaskCommandSchema.safeParse({
+        kind: "task.start-agent",
+        taskId: "task-1",
+        workspaceId: "workspace-a",
+        objective: "Inspect exact approved files.",
+        scope: {
+          mode: "exact",
+          relativePaths: ["docs/*.md"],
+        },
       }).success,
     ).toBe(false);
   });
