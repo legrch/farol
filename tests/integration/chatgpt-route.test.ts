@@ -350,6 +350,33 @@ describe("ChatGPT embedded task surface", () => {
     expect(onConversationChanged).toHaveBeenCalledExactlyOnceWith(null);
   });
 
+  it("ignores closing and navigation events from a retired surface", async () => {
+    const surface = embeddedSurface();
+    const onConversationChanged = vi.fn();
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/c/task-owned-stale-surface",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onConversationChanged,
+    });
+    await candidate.open();
+    onConversationChanged.mockClear();
+
+    candidate.resetConversation();
+    surface.webContents.emit("did-finish-load");
+    surface.webContents.emit(
+      "did-navigate-in-page",
+      {},
+      "https://chatgpt.com/c/task-owned-stale-surface",
+      true,
+    );
+
+    expect(candidate.retainedConversationUrl()).toBeNull();
+    expect(onConversationChanged).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
   it("uses the injected task-owned surface without creating a separate window", async () => {
     const surface = embeddedSurface();
     const surfaceFactory = vi.fn(() => surface);

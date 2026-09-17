@@ -817,8 +817,23 @@ export class ChatGptRoute {
       contents.getURL(),
       this.options.e2eOrigin,
     );
-    if (canonical !== null) this.entryUrl = canonical;
+    if (
+      canonical !== null &&
+      !this.disposing &&
+      this.routeWindow?.webContents === contents
+    ) {
+      this.entryUrl = canonical;
+    }
     return canonical;
+  }
+
+  private ownsRouteContents(contents: WebContents): boolean {
+    return (
+      !this.disposing &&
+      this.routeWindow !== null &&
+      !this.routeWindow.isDestroyed() &&
+      this.routeWindow.webContents === contents
+    );
   }
 
   private hardenContents(
@@ -837,17 +852,20 @@ export class ChatGptRoute {
       contents.on(
         "did-start-navigation",
         (_event, url, inPlace, isMainFrame) => {
-          if (!isMainFrame) return;
+          if (!isMainFrame || !this.ownsRouteContents(contents)) return;
           this.load = inPlace && allowed(url) ? "loaded" : "failed";
         },
       );
       contents.on(
         "did-fail-load",
         (_event, _code, _description, _url, isMainFrame) => {
-          if (isMainFrame) this.load = "failed";
+          if (isMainFrame && this.ownsRouteContents(contents)) {
+            this.load = "failed";
+          }
         },
       );
       contents.on("did-finish-load", () => {
+        if (!this.ownsRouteContents(contents)) return;
         this.load = "loaded";
         this.reportConversationUrl(contents);
         if (this.options.onTaskActivityChanged) {
@@ -858,6 +876,7 @@ export class ChatGptRoute {
         if (isMainFrame) this.reportConversationUrl(contents);
       });
       contents.on("render-process-gone", () => {
+        if (!this.ownsRouteContents(contents)) return;
         if (this.observedTaskRunning === true) {
           this.options.onTaskActivityChanged?.("outcome_unknown");
         }
@@ -886,7 +905,12 @@ export class ChatGptRoute {
   }
 
   private reportConversationUrl(contents: WebContents): void {
-    if (!this.options.onConversationChanged) return;
+    if (
+      !this.options.onConversationChanged ||
+      !this.ownsRouteContents(contents)
+    ) {
+      return;
+    }
     const canonical = this.captureConversationUrl(contents);
     if (canonical !== null) {
       this.options.onConversationChanged(canonical);
