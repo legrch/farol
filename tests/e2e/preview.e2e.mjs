@@ -3833,6 +3833,9 @@ try {
     path: path.join(evidenceRoot, "live-task-native-agent-cancelled.png"),
   });
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+  await ordinaryLiveTasks.window
+    .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
+    .click();
 
   const productAgentInputRoot = path.join(
     ordinaryLiveTasks.userData,
