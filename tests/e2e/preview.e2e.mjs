@@ -511,15 +511,16 @@ function assertVisibleWindowPlacement(presentation) {
     (display) => !display.primary && display.internal,
   );
   const secondary = presentation.displays.filter((display) => !display.primary);
+  assert.ok(secondary.length > 0, "E2E_SECONDARY_DISPLAY_UNAVAILABLE");
   if (preferred.length > 0) {
     assert.equal(presentation.display.internal, true);
     assert.equal(presentation.display.primary, false);
-  } else if (secondary.length > 0) {
-    assert.equal(presentation.display.primary, false);
   } else {
-    assert.equal(presentation.display.primary, true);
+    assert.equal(presentation.display.primary, false);
   }
   const { bounds, display } = presentation;
+  assert.equal(bounds.width, 1180);
+  assert.equal(bounds.height, 760);
   assert.ok(bounds.x >= display.workArea.x);
   assert.ok(bounds.y >= display.workArea.y);
   assert.ok(

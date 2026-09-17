@@ -92,7 +92,7 @@ describe("preview window placement", () => {
     expect(placement.primary).toBe(false);
   });
 
-  it("falls back explicitly to the primary internal display on one screen", () => {
+  it("refuses visible automation when only the primary display is available", () => {
     const primaryInternal: PreviewDisplay = {
       id: 1,
       internal: true,
@@ -100,37 +100,28 @@ describe("preview window placement", () => {
       workArea: { x: 0, y: 24, width: 1000, height: 650 },
     };
 
-    expect(
+    expect(() =>
       selectPreviewWindowPlacement([primaryInternal], primaryInternal.id, {
         width: 1180,
         height: 760,
       }),
-    ).toEqual({
-      displayId: primaryInternal.id,
-      internal: true,
-      primary: true,
-      selection: "internal-primary-fallback",
-      bounds: { x: 0, y: 24, width: 1000, height: 650 },
-    });
+    ).toThrow("SECONDARY_DISPLAY_UNAVAILABLE");
   });
 
-  it("uses an explicit primary fallback when the only display is external", () => {
-    const placement = selectPreviewWindowPlacement(
-      [externalPrimary],
-      externalPrimary.id,
-      { width: 1180, height: 760 },
-    );
-
-    expect(placement.displayId).toBe(externalPrimary.id);
-    expect(placement.internal).toBe(false);
-    expect(placement.primary).toBe(true);
-    expect(placement.selection).toBe("primary-fallback");
-    expect(placement.bounds).toEqual({
-      x: 690,
-      y: 310,
-      width: 1180,
-      height: 760,
-    });
+  it("refuses a secondary that cannot preserve the required viewport", () => {
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [
+          externalPrimary,
+          {
+            ...builtInSecondary,
+            workArea: { x: -900, y: 100, width: 900, height: 700 },
+          },
+        ],
+        externalPrimary.id,
+        { width: 1180, height: 760 },
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
   });
 
   it("fails closed when Electron's display inventory is inconsistent", () => {

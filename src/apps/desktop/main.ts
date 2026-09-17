@@ -5446,8 +5446,8 @@ async function createWindow(): Promise<void> {
     width: initialWindowSize.width,
     height: initialWindowSize.height,
     ...(testPlacement?.bounds ?? {}),
-    minWidth: Math.min(640, testPlacement?.bounds.width ?? 640),
-    minHeight: Math.min(520, testPlacement?.bounds.height ?? 520),
+    minWidth: 640,
+    minHeight: 520,
     backgroundColor: "#111216",
     titleBarStyle: "hiddenInset",
     ...(process.platform === "darwin"

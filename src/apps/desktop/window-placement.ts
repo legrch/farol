@@ -18,11 +18,7 @@ export interface PreviewWindowPlacement {
   readonly displayId: number;
   readonly internal: boolean;
   readonly primary: boolean;
-  readonly selection:
-    | "non-primary-internal"
-    | "non-primary"
-    | "internal-primary-fallback"
-    | "primary-fallback";
+  readonly selection: "non-primary-internal" | "non-primary";
   readonly bounds: PreviewRectangle;
 }
 
@@ -65,8 +61,11 @@ function centeredBounds(
   ) {
     throw new Error("WINDOW_DISPLAY_GEOMETRY_INVALID");
   }
-  const width = Math.min(Math.trunc(requested.width), workArea.width);
-  const height = Math.min(Math.trunc(requested.height), workArea.height);
+  if (requested.width > workArea.width || requested.height > workArea.height) {
+    throw new Error("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  }
+  const width = Math.trunc(requested.width);
+  const height = Math.trunc(requested.height);
   return {
     x: Math.floor(workArea.x + (workArea.width - width) / 2),
     y: Math.floor(workArea.y + (workArea.height - height) / 2),
@@ -91,16 +90,10 @@ export function selectPreviewWindowPlacement(
     (display) => display.id !== primaryDisplayId && display.internal,
   );
   const nonPrimary = ordered.find((display) => display.id !== primaryDisplayId);
-  const internal = ordered.find((display) => display.internal);
-  const selected = nonPrimaryInternal ?? nonPrimary ?? internal ?? primary;
+  const selected = nonPrimaryInternal ?? nonPrimary;
+  if (!selected) throw new Error("SECONDARY_DISPLAY_UNAVAILABLE");
   const isPrimary = selected.id === primaryDisplayId;
-  const selection = nonPrimaryInternal
-    ? "non-primary-internal"
-    : nonPrimary
-      ? "non-primary"
-      : internal
-        ? "internal-primary-fallback"
-        : "primary-fallback";
+  const selection = nonPrimaryInternal ? "non-primary-internal" : "non-primary";
 
   return {
     displayId: selected.id,

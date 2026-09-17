@@ -13,11 +13,13 @@ a renderer. Use the least visible route that preserves the evidence:
    and displayed with `showInactive()`. The window is activated only for the final
    native focus-transfer assertion, then closed immediately.
 
-The visible selector is deterministic: non-primary internal, any non-primary,
-internal, then primary. The chosen 1180x760 bounds are clamped and centered inside
-the display work area. A primary-display result is a recorded fallback, not an
-implicit default. The packaged and development reports include the actual display
-class, display count, work area, bounds, and initial focus observation.
+The visible selector is deterministic: non-primary internal, then any non-primary.
+The exact requested 1180x760 viewport is centered inside that display's work area.
+If no secondary can preserve it, the visible lane fails closed instead of using the
+primary display or shrinking the assertion. Equivalent hidden evidence remains valid
+only for boundaries that do not require native visibility or focus. The packaged and
+development reports include the actual display class, display count, work area,
+bounds, and initial focus observation.
 
 Ordinary `npm --prefix vnext run preview` launches do not carry a test window mode and
 retain foreground product behavior. The two accepted test-only arguments are
