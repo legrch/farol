@@ -460,7 +460,13 @@ describe("private context persistence", () => {
 
   it("reclaims a lease only after the recorded process is proven dead", async () => {
     const stateRoot = await root();
-    const abandoned = new PrivateContextStore({ root: stateRoot });
+    const abandoned = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        processId: 4_101,
+        processInstanceId: "a".repeat(32),
+      },
+    );
     const first = await abandoned.acquireCompactionAdmission(
       binding,
       1,
@@ -472,7 +478,11 @@ describe("private context persistence", () => {
 
     const recovering = new PrivateContextStore(
       { root: stateRoot },
-      { isProcessAlive: () => false },
+      {
+        processId: 4_102,
+        processInstanceId: "b".repeat(32),
+        isProcessAlive: () => false,
+      },
     );
     const recovered = await recovering.acquireCompactionAdmission(
       binding,
@@ -487,9 +497,83 @@ describe("private context persistence", () => {
     await recovering.releaseCompactionAdmission(recovered.lease);
   });
 
+  it("distinguishes a reused PID from the original process instance", async () => {
+    const stateRoot = await root();
+    const abandoned = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        processId: 4_242,
+        processInstanceId: "a".repeat(32),
+      },
+    );
+    const original = await abandoned.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (original.status !== "acquired") {
+      throw new Error(`EXPECTED_ORIGINAL_ADMISSION_${original.status}`);
+    }
+
+    const restarted = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        processId: 4_242,
+        processInstanceId: "b".repeat(32),
+        isProcessAlive: () => true,
+      },
+    );
+    const recovered = await restarted.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    expect(recovered.status).toBe("acquired");
+    if (recovered.status === "acquired") {
+      await restarted.releaseCompactionAdmission(recovered.lease);
+    }
+  });
+
+  it("fails closed when a foreign recorded PID is still alive", async () => {
+    const stateRoot = await root();
+    const owner = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        processId: 4_242,
+        processInstanceId: "a".repeat(32),
+      },
+    );
+    const original = await owner.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (original.status !== "acquired") {
+      throw new Error(`EXPECTED_ORIGINAL_ADMISSION_${original.status}`);
+    }
+
+    const observer = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        processId: 4_343,
+        processInstanceId: "b".repeat(32),
+        isProcessAlive: () => true,
+      },
+    );
+    await expect(
+      observer.acquireCompactionAdmission(binding, 1, request),
+    ).rejects.toThrow("CONTEXT_ADMISSION_OWNER_AMBIGUOUS");
+  });
+
   it("does not let a delayed stale reclaimer remove a live successor", async () => {
     const stateRoot = await root();
-    const abandoned = new PrivateContextStore({ root: stateRoot });
+    const abandoned = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        processId: 4_101,
+        processInstanceId: "a".repeat(32),
+      },
+    );
     const original = await abandoned.acquireCompactionAdmission(
       binding,
       1,
@@ -511,6 +595,8 @@ describe("private context persistence", () => {
     const delayed = new PrivateContextStore(
       { root: stateRoot },
       {
+        processId: 4_102,
+        processInstanceId: "b".repeat(32),
         isProcessAlive: () => successorInstalled,
         afterStaleLeaseRead: async () => {
           observed();
@@ -527,7 +613,11 @@ describe("private context persistence", () => {
 
     const successor = new PrivateContextStore(
       { root: stateRoot },
-      { isProcessAlive: () => false },
+      {
+        processId: 4_103,
+        processInstanceId: "c".repeat(32),
+        isProcessAlive: () => false,
+      },
     );
     const current = await successor.acquireCompactionAdmission(
       binding,
@@ -540,7 +630,9 @@ describe("private context persistence", () => {
     successorInstalled = true;
     resume();
 
-    await expect(delayedAdmission).resolves.toEqual({ status: "busy" });
+    await expect(delayedAdmission).rejects.toThrow(
+      "CONTEXT_ADMISSION_OWNER_AMBIGUOUS",
+    );
     await expect(
       successor.save(requestedSession(), current.lease),
     ).resolves.toBeUndefined();

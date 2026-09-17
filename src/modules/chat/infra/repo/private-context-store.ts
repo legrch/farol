@@ -163,6 +163,7 @@ const admissionLeaseRecordSchema = z.strictObject({
   schemaVersion: z.literal(1),
   kind: z.literal("context_admission_lease"),
   processId: z.number().int().positive(),
+  processInstanceId: z.string().regex(/^[a-f0-9]{32}$/u),
   token: z.string().length(32),
 });
 
@@ -177,6 +178,7 @@ const DEFAULT_SOURCE_RECORD_BYTES = 1 * 1_024 * 1_024;
 const DEFAULT_SUMMARY_RECORD_BYTES = 384 * 1_024;
 const DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES = 16 * 1_024;
 const DEFAULT_RETENTION = 8;
+const PROCESS_INSTANCE_ID = randomBytes(16).toString("hex");
 
 export type StoredContextSource = Readonly<z.infer<typeof contextSourceSchema>>;
 
@@ -210,6 +212,8 @@ export type AtomicWriteHooks = Readonly<{
   afterStaleLeaseRead?: (target: string) => Promise<void>;
   afterExclusiveCreate?: (target: string) => Promise<void>;
   afterExclusivePublish?: (target: string) => Promise<void>;
+  processId?: number;
+  processInstanceId?: string;
 }>;
 
 // The product constructs this store only in the Electron primary process after
@@ -295,6 +299,8 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private readonly maximumSummaryRecordBytes: number;
   private readonly maximumSummaryAttemptRecordBytes: number;
   private readonly maxCheckpointsPerTask: number;
+  private readonly processId: number;
+  private readonly processInstanceId: string;
 
   constructor(
     private readonly options: PrivateContextStoreOptions,
@@ -332,6 +338,14 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       options.maxCheckpointsPerTask ?? DEFAULT_RETENTION,
       "CHECKPOINT_RETENTION_INVALID",
     );
+    this.processId = positiveInteger(
+      hooks.processId ?? process.pid,
+      "CONTEXT_PROCESS_ID_INVALID",
+    );
+    this.processInstanceId = hooks.processInstanceId ?? PROCESS_INSTANCE_ID;
+    if (!/^[a-f0-9]{32}$/u.test(this.processInstanceId)) {
+      throw new Error("CONTEXT_PROCESS_INSTANCE_ID_INVALID");
+    }
   }
 
   async load(binding: ContextBinding): Promise<ContextSession | null> {
@@ -767,7 +781,8 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         {
           schemaVersion: 1,
           kind: "context_admission_lease",
-          processId: process.pid,
+          processId: this.processId,
+          processInstanceId: this.processInstanceId,
           token,
         },
         this.maximumSessionBytes,
@@ -799,7 +814,18 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if (!parsed.success) {
         throw this.schemaError(record.value, "CONTEXT_LEASE");
       }
-      if (await this.processIsAlive(parsed.data.processId)) return null;
+      if (
+        parsed.data.processId === this.processId &&
+        parsed.data.processInstanceId === this.processInstanceId
+      ) {
+        return null;
+      }
+      if (
+        parsed.data.processId !== this.processId &&
+        (await this.processIsAlive(parsed.data.processId))
+      ) {
+        throw new Error("CONTEXT_ADMISSION_OWNER_AMBIGUOUS");
+      }
       await this.hooks.afterStaleLeaseRead?.(file);
       const repaired = await withExclusiveRecordOperation(file, async () => {
         const current = await this.readRecord(
