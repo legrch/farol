@@ -320,6 +320,20 @@ describe("ChatGPT route streaming observation", () => {
 });
 
 describe("ChatGPT embedded task surface", () => {
+  it("retains an exact owned conversation binding before the surface reopens", () => {
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/c/task-owned-after-restart",
+      e2eOrigin: null,
+      parent: () => null,
+    });
+
+    expect(candidate.currentConversationUrl()).toBeNull();
+    expect(candidate.retainedConversationUrl()).toBe(
+      "https://chatgpt.com/c/task-owned-after-restart",
+    );
+  });
+
   it("uses the injected task-owned surface without creating a separate window", async () => {
     const surface = embeddedSurface();
     const surfaceFactory = vi.fn(() => surface);

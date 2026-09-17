@@ -29,6 +29,7 @@ const MAXIMUM_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 export interface ChatGptContextSummaryRoute {
   runReadonlyTask(prompt: string): Promise<ChatGptReadonlyTaskResult>;
   currentConversationUrl(): string | null;
+  retainedConversationUrl(): string | null;
   resetConversation(): void;
   dispose(): void;
 }
@@ -173,7 +174,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }>,
   ): Promise<ContextSource> {
     const retained = this.options.routes.retained(input.binding);
-    return retained?.currentConversationUrl()
+    return retained?.retainedConversationUrl()
       ? "retained_agent"
       : "canonical_history";
   }

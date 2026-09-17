@@ -84,8 +84,11 @@ function source(
 
 function route(
   result: ChatGptReadonlyTaskResult,
+  retainedConversationUrl = "https://chatgpt.com/c/summary-context-1",
 ): ChatGptContextSummaryRoute & {
   runReadonlyTask: ReturnType<typeof vi.fn>;
+  currentConversationUrl: ReturnType<typeof vi.fn>;
+  retainedConversationUrl: ReturnType<typeof vi.fn>;
   resetConversation: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
 } {
@@ -94,6 +97,7 @@ function route(
     currentConversationUrl: vi
       .fn()
       .mockReturnValue("https://chatgpt.com/c/summary-context-1"),
+    retainedConversationUrl: vi.fn().mockReturnValue(retainedConversationUrl),
     resetConversation: vi.fn((): void => undefined),
     dispose: vi.fn((): void => undefined),
   };
@@ -167,6 +171,30 @@ describe("ChatGPT summary-only context driver", () => {
       content,
     });
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects a persisted retained conversation before its surface reopens", async () => {
+    const state = await store();
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    retained.currentConversationUrl.mockReturnValue(null);
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+
+    await expect(
+      summary.selectSource({
+        binding,
+        variant: "unary_replacement_history",
+        history: source().history,
+      }),
+    ).resolves.toBe("retained_agent");
   });
 
   it("uses and retires an isolated fallback only when retained context is missing", async () => {

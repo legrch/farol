@@ -721,6 +721,13 @@ export class ChatGptRoute {
     return this.captureConversationUrl(candidate.webContents);
   }
 
+  retainedConversationUrl(): string | null {
+    return canonicalChatGptConversationUrl(
+      this.entryUrl,
+      this.options.e2eOrigin,
+    );
+  }
+
   async cancelActiveTask(): Promise<
     "cancelled" | "not_running" | "outcome_unknown"
   > {
