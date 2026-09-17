@@ -284,6 +284,28 @@ describe("private Agent assignment persistence", () => {
     ).toBe(false);
   });
 
+  it("removes a private orphan temporary record before the next write", async () => {
+    const root = await stateRoot();
+    const store = new PrivateAssignmentStore({ root });
+    await store.admit(preparedRecord());
+    const recordFile = (await descendants(root)).find((target) =>
+      target.endsWith(".json"),
+    );
+    if (!recordFile) throw new Error("ASSIGNMENT_FILE_MISSING");
+    const orphan = path.join(
+      path.dirname(recordFile),
+      `.${path.basename(recordFile)}.tmp-orphan`,
+    );
+    await fs.writeFile(orphan, "stale temporary record\n", { mode: 0o600 });
+
+    await store.save(runningRecord());
+
+    await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(store.load(command.identity)).resolves.toEqual(
+      runningRecord(),
+    );
+  });
+
   it("does not expose a partial record when first admission is interrupted", async () => {
     const root = await stateRoot();
     const interrupted = new PrivateAssignmentStore({ root }, {
