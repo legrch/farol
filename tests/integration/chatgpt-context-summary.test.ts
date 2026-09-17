@@ -404,4 +404,46 @@ describe("ChatGPT summary-only context driver", () => {
       state.getSummary(binding, request.operationId),
     ).resolves.toBeNull();
   });
+
+  it("keeps attachment references but never treats model text as byte availability", async () => {
+    const state = await store();
+    const claimedAvailable: CheckpointContent = {
+      ...content,
+      attachmentRefs: content.attachmentRefs.map((attachment) => ({
+        ...attachment,
+        availability: "available" as const,
+      })),
+    };
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(claimedAvailable).length,
+      outputText: JSON.stringify(claimedAvailable),
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+
+    await expect(
+      summary.request({ request, source: source() }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      content: {
+        attachmentRefs: [
+          { reference: "attachment-owner-1", availability: "unavailable" },
+        ],
+      },
+    });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toMatchObject({
+      content: {
+        attachmentRefs: [
+          { reference: "attachment-owner-1", availability: "unavailable" },
+        ],
+      },
+    });
+  });
 });

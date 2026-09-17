@@ -151,6 +151,18 @@ function completedReceipt(
   };
 }
 
+function withoutUnverifiedAttachmentAvailability(
+  content: CheckpointContent,
+): CheckpointContent {
+  return {
+    ...content,
+    attachmentRefs: content.attachmentRefs.map((attachment) => ({
+      ...attachment,
+      availability: "unavailable",
+    })),
+  };
+}
+
 export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   private readonly routes = new Map<string, RouteLease>();
   private readonly dispatched = new Set<string>();
@@ -291,6 +303,9 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
       return { status: "blocked", code: content.error.code };
     }
+    const boundedContent = withoutUnverifiedAttachmentAvailability(
+      content.value,
+    );
     const conversationUrl = lease.route.currentConversationUrl();
     if (!conversationUrl) {
       if (!this.releaseOwnedLease(input.request.operationId)) {
@@ -313,7 +328,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         ]),
       ).slice(0, 40)}`,
       sourceCursor: `conversation:${digest(conversationUrl)}`,
-      content: content.value,
+      content: boundedContent,
     };
     try {
       await this.options.store.putSummary(summary);
