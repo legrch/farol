@@ -2746,8 +2746,10 @@ try {
       await waitForLiveChatGptSurface(
         ordinaryLiveTasks,
         pinnedTask.taskId,
-        (surface) => surface.hostVisible,
-        "renamed pinned task remains selected",
+        (surface) =>
+          !surface.hostVisible &&
+          surface.contentsId === taskSurfaceIds.get(pinnedTask.taskId),
+        "renamed pinned task remains retained under the task menu",
       )
     ).contentsId,
     taskSurfaceIds.get(pinnedTask.taskId),
@@ -2763,6 +2765,12 @@ try {
   });
   assert.equal(idleCancel.state.revision, 7);
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    pinnedTask.taskId,
+    (surface) => surface.hostVisible,
+    "closing the task menu restores the selected provider page",
+  );
 
   const continuityPrompt = "Farol live task continuity canary";
   assert.equal(
