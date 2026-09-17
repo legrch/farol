@@ -15,9 +15,13 @@ import { replayHostCheckpoint } from "../../modules/chat/infra/client/host-compa
 import {
   PrivateContextStore,
   type StoredContextSummary,
+  type StoredContextSummaryAttempt,
   type StoredContextSource,
 } from "../../modules/chat/infra/repo/private-context-store";
-import type { ChatGptReadonlyTaskResult } from "./chatgpt-route";
+import type {
+  ChatGptReadonlyTaskResult,
+  ChatGptTaskObserver,
+} from "./chatgpt-route";
 import type {
   CodexContextSummaryDriver,
   CodexContextSummaryInput,
@@ -27,7 +31,11 @@ const DEFAULT_MAXIMUM_PROMPT_CHARACTERS = 128 * 1_024;
 const MAXIMUM_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 
 export interface ChatGptContextSummaryRoute {
-  runReadonlyTask(prompt: string): Promise<ChatGptReadonlyTaskResult>;
+  runReadonlyTask(
+    prompt: string,
+    attachments?: readonly [],
+    observer?: ChatGptTaskObserver,
+  ): Promise<ChatGptReadonlyTaskResult>;
   observeReadonlyTask?(
     input: Readonly<{
       prompt: string;
@@ -44,6 +52,10 @@ export interface ChatGptContextSummaryRoute {
 export interface ChatGptContextSummaryRoutes {
   retained(binding: ContextBinding): ChatGptContextSummaryRoute | null;
   createFallback(binding: ContextBinding): ChatGptContextSummaryRoute;
+  recoverFallback?(
+    binding: ContextBinding,
+    conversationUrl: string,
+  ): ChatGptContextSummaryRoute | null;
 }
 
 export type ChatGptContextSummaryDriverOptions = Readonly<{
@@ -77,6 +89,34 @@ function operationKey(binding: ContextBinding, operationId: string): string {
       operationId,
     ]),
   );
+}
+
+function routeConversationUrl(
+  route: ChatGptContextSummaryRoute,
+): string | null {
+  return route.currentConversationUrl() ?? route.retainedConversationUrl();
+}
+
+function summaryAttempt(
+  input: CodexContextSummaryInput,
+  phase: StoredContextSummaryAttempt["phase"],
+  route: ChatGptContextSummaryRoute,
+  correlation: Readonly<{
+    turnUserId?: string | null;
+    turnAssistantId?: string | null;
+  }> = {},
+): StoredContextSummaryAttempt {
+  return {
+    schemaVersion: 1,
+    operationId: input.request.operationId,
+    binding: { ...input.request.binding },
+    source: input.source.source,
+    sourceBoundary: input.source.sourceBoundary,
+    phase,
+    conversationUrl: routeConversationUrl(route),
+    turnUserId: correlation.turnUserId ?? null,
+    turnAssistantId: correlation.turnAssistantId ?? null,
+  };
 }
 
 function validInput(input: CodexContextSummaryInput): boolean {
@@ -228,6 +268,22 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     if (this.dispatched.has(input.request.operationId)) {
       return this.observe(input);
     }
+    try {
+      if (
+        (await this.options.store.getSummary(
+          input.request.binding,
+          input.request.operationId,
+        )) ||
+        (await this.options.store.getSummaryAttempt(
+          input.request.binding,
+          input.request.operationId,
+        ))
+      ) {
+        return this.observe(input);
+      }
+    } catch {
+      return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+    }
     const prepared = summaryPrompt(input.source);
     if (!prepared.ok) return { status: "blocked", code: prepared.code };
     if (prepared.prompt.length > this.maximumPromptCharacters) {
@@ -254,28 +310,54 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
     }
 
+    let attempt = summaryAttempt(input, "prepared", lease.route);
+    try {
+      await this.options.store.putSummaryAttempt(attempt);
+    } catch {
+      return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+    }
+
+    const observer: ChatGptTaskObserver = {
+      onDispatchIntent: async () => {
+        attempt = {
+          ...attempt,
+          phase: "possible_send",
+          conversationUrl:
+            routeConversationUrl(lease.route) ?? attempt.conversationUrl,
+        };
+        await this.options.store.putSummaryAttempt(attempt);
+      },
+      onCorrelation: async (correlation) => {
+        attempt = {
+          ...attempt,
+          phase: "possible_send",
+          conversationUrl:
+            routeConversationUrl(lease.route) ?? attempt.conversationUrl,
+          turnUserId: correlation.turnUserId,
+          turnAssistantId: correlation.turnAssistantId,
+        };
+        await this.options.store.putSummaryAttempt(attempt);
+      },
+    };
     let result: ChatGptReadonlyTaskResult;
     this.dispatched.add(input.request.operationId);
     try {
-      result = await lease.route.runReadonlyTask(prepared.prompt);
+      result = await lease.route.runReadonlyTask(prepared.prompt, [], observer);
     } catch {
       return {
         status: "outcome_unknown",
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
-    if (result.code === "CHATGPT_USAGE_LIMITED") {
-      if (!this.releaseOwnedLease(input.request.operationId)) {
-        return {
-          status: "blocked",
-          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
-        };
-      }
-      this.routes.delete(input.request.operationId);
-      this.dispatched.delete(input.request.operationId);
-      return { status: "blocked", code: "SUMMARY_USAGE_LIMITED" };
-    }
     if (result.state === "failed_before_submit") {
+      try {
+        await this.options.store.deleteSummaryAttempt(
+          input.request.binding,
+          input.request.operationId,
+        );
+      } catch {
+        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+      }
       if (!this.releaseOwnedLease(input.request.operationId)) {
         return {
           status: "blocked",
@@ -289,6 +371,14 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     if (result.state === "not_authenticated") {
+      try {
+        await this.options.store.deleteSummaryAttempt(
+          input.request.binding,
+          input.request.operationId,
+        );
+      } catch {
+        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+      }
       if (!this.releaseOwnedLease(input.request.operationId)) {
         return {
           status: "blocked",
@@ -296,9 +386,23 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         };
       }
       this.dispatched.delete(input.request.operationId);
-      return { status: "blocked", code: "SUMMARY_SIGN_IN_REQUIRED" };
+      return { status: "not_submitted", code: "SUMMARY_SIGN_IN_REQUIRED" };
     }
     if (result.state === "outcome_unknown") {
+      attempt = {
+        ...attempt,
+        phase: "outcome_unknown",
+        conversationUrl:
+          routeConversationUrl(lease.route) ?? attempt.conversationUrl,
+        turnUserId: result.turnUserId ?? attempt.turnUserId,
+        turnAssistantId: result.turnAssistantId ?? attempt.turnAssistantId,
+      };
+      try {
+        await this.options.store.putSummaryAttempt(attempt);
+      } catch {
+        // The earlier possible-send record remains fail-closed. Observation
+        // never authorizes a second provider submission.
+      }
       if (result.turnUserId) {
         this.pending.set(
           operationKey(input.request.binding, input.request.operationId),
@@ -311,7 +415,10 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
       return {
         status: "outcome_unknown",
-        code: "SUMMARY_SUBMISSION_UNRESOLVED",
+        code:
+          result.code === "CHATGPT_USAGE_LIMITED"
+            ? "SUMMARY_USAGE_LIMITED_AFTER_SEND"
+            : "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
     return this.acceptCompletedResult(input, lease, result);
@@ -345,8 +452,71 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }
     if (summary) return completedReceipt(summary);
 
-    const pending = this.pending.get(key);
-    const lease = this.routes.get(input.request.operationId);
+    let pending = this.pending.get(key);
+    let lease = this.routes.get(input.request.operationId);
+    let attempt: StoredContextSummaryAttempt | null = null;
+    if (!pending || !lease) {
+      try {
+        attempt = await this.options.store.getSummaryAttempt(
+          input.request.binding,
+          input.request.operationId,
+        );
+      } catch {
+        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+      }
+      if (attempt?.phase === "prepared") {
+        try {
+          await this.options.store.deleteSummaryAttempt(
+            input.request.binding,
+            input.request.operationId,
+          );
+        } catch {
+          return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+        }
+        return { status: "not_submitted", code: "SUMMARY_NOT_SUBMITTED" };
+      }
+      const prepared = summaryPrompt(input.source);
+      if (!prepared.ok) return { status: "blocked", code: prepared.code };
+      if (
+        attempt?.turnUserId &&
+        prepared.prompt.length <= this.maximumPromptCharacters
+      ) {
+        let route: ChatGptContextSummaryRoute | null = null;
+        try {
+          route =
+            input.source.source === "retained_agent"
+              ? this.options.routes.retained(input.request.binding)
+              : attempt.conversationUrl
+                ? (this.options.routes.recoverFallback?.(
+                    input.request.binding,
+                    attempt.conversationUrl,
+                  ) ?? null)
+                : null;
+        } catch {
+          route = null;
+        }
+        const retainedUrl = route?.retainedConversationUrl() ?? null;
+        if (
+          route &&
+          (attempt.conversationUrl === null ||
+            retainedUrl === null ||
+            retainedUrl === attempt.conversationUrl)
+        ) {
+          lease = {
+            route,
+            owned: input.source.source === "canonical_history",
+          };
+          pending = {
+            prompt: prepared.prompt,
+            turnUserId: attempt.turnUserId,
+            turnAssistantId: attempt.turnAssistantId,
+          };
+          this.routes.set(input.request.operationId, lease);
+          this.pending.set(key, pending);
+          this.dispatched.add(input.request.operationId);
+        }
+      }
+    }
     if (!pending || !lease?.route.observeReadonlyTask) {
       return {
         status: "outcome_unknown",
@@ -363,6 +533,19 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     if (observed.state !== "completed") {
+      if (attempt) {
+        await this.options.store
+          .putSummaryAttempt({
+            ...attempt,
+            phase: "outcome_unknown",
+            conversationUrl:
+              routeConversationUrl(lease.route) ?? attempt.conversationUrl,
+            turnUserId: observed.turnUserId ?? attempt.turnUserId,
+            turnAssistantId:
+              observed.turnAssistantId ?? attempt.turnAssistantId,
+          })
+          .catch(() => undefined);
+      }
       return {
         status: "outcome_unknown",
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
@@ -393,6 +576,10 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }
     try {
       await this.options.store.deleteSummary(input.binding, input.operationId);
+      await this.options.store.deleteSummaryAttempt(
+        input.binding,
+        input.operationId,
+      );
     } catch {
       return { status: "blocked", code: "CONTEXT_SUMMARY_CLEANUP_FAILED" };
     }
@@ -468,6 +655,9 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     } catch {
       return completedReceipt(summary);
     }
+    await this.options.store
+      .deleteSummaryAttempt(input.request.binding, input.request.operationId)
+      .catch(() => undefined);
     return completedReceipt(summary);
   }
 

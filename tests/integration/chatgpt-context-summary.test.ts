@@ -310,7 +310,7 @@ describe("ChatGPT summary-only context driver", () => {
     expect(retained.observeReadonlyTask).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks on an explicit usage limit and releases only an owned fallback", async () => {
+  it("keeps a post-send usage limit outcome unknown and retains its fallback", async () => {
     const state = await store();
     const fallback = route({
       state: "outcome_unknown",
@@ -335,14 +335,186 @@ describe("ChatGPT summary-only context driver", () => {
     await expect(
       summary.request({ request: selectedRequest, source: selectedSource }),
     ).resolves.toEqual({
-      status: "blocked",
-      code: "SUMMARY_USAGE_LIMITED",
+      status: "outcome_unknown",
+      code: "SUMMARY_USAGE_LIMITED_AFTER_SEND",
     });
     expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
-    expect(fallback.dispose).toHaveBeenCalledTimes(1);
+    expect(fallback.dispose).not.toHaveBeenCalled();
     await expect(
       state.getSummary(binding, request.operationId),
     ).resolves.toBeNull();
+  });
+
+  it("recovers a prepared-only attempt as definitely not submitted", async () => {
+    const state = await store();
+    const retained = route({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    retained.runReadonlyTask.mockRejectedValueOnce(
+      new Error("synthetic crash before dispatch intent"),
+    );
+    const first = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+
+    await expect(first.request({ request, source: source() })).resolves.toEqual(
+      {
+        status: "outcome_unknown",
+        code: "SUMMARY_SUBMISSION_UNRESOLVED",
+      },
+    );
+    await expect(
+      state.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toMatchObject({ phase: "prepared" });
+
+    const restarted = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+    await expect(
+      restarted.observe({ request, source: source() }),
+    ).resolves.toEqual({
+      status: "not_submitted",
+      code: "SUMMARY_NOT_SUBMITTED",
+    });
+    expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves a possible-send attempt across restart without another submission", async () => {
+    const state = await store();
+    const fallback = route({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    fallback.runReadonlyTask.mockImplementationOnce(
+      async (_prompt, _attachments, observer) => {
+        await observer?.onDispatchIntent?.();
+        throw new Error("synthetic crash after dispatch intent");
+      },
+    );
+    const createFallback = vi.fn().mockReturnValue(fallback);
+    const selectedSource = source("canonical_history");
+    const selectedRequest = {
+      ...request,
+      source: "canonical_history" as const,
+    };
+    const first = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => null, createFallback },
+    });
+
+    await expect(
+      first.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "outcome_unknown" });
+    await expect(
+      state.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toMatchObject({ phase: "possible_send" });
+
+    const restartedCreate = vi.fn();
+    const restarted = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => null, createFallback: restartedCreate },
+    });
+    await expect(
+      restarted.observe({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "SUMMARY_SUBMISSION_UNRESOLVED",
+    });
+    expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(restartedCreate).not.toHaveBeenCalled();
+  });
+
+  it("recovers and observes one correlated fallback attempt after restart", async () => {
+    const state = await store();
+    const fallback = route({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    fallback.runReadonlyTask.mockImplementationOnce(
+      async (_prompt, _attachments, observer) => {
+        await observer?.onDispatchIntent?.();
+        await observer?.onCorrelation?.({
+          turnUserId: "summary-user-restart",
+          turnAssistantId: null,
+        });
+        return {
+          state: "outcome_unknown",
+          code: "CHATGPT_TASK_TIMEOUT",
+          deltaCount: 0,
+          observedCharacters: 0,
+          outputText: "",
+          turnUserId: "summary-user-restart",
+          turnAssistantId: null,
+        };
+      },
+    );
+    const selectedSource = source("canonical_history");
+    const selectedRequest = {
+      ...request,
+      source: "canonical_history" as const,
+    };
+    const first = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => null,
+        createFallback: vi.fn().mockReturnValue(fallback),
+      },
+    });
+    await expect(
+      first.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "outcome_unknown" });
+
+    const recovered = Object.assign(
+      route({
+        state: "completed",
+        code: null,
+        deltaCount: 1,
+        observedCharacters: JSON.stringify(content).length,
+        outputText: JSON.stringify(content),
+      }),
+      {
+        observeReadonlyTask: vi.fn(async () => ({
+          state: "completed" as const,
+          code: null,
+          deltaCount: 1,
+          observedCharacters: JSON.stringify(content).length,
+          outputText: JSON.stringify(content),
+          turnUserId: "summary-user-restart",
+          turnAssistantId: "summary-assistant-restart",
+        })),
+      },
+    );
+    const recoverFallback = vi.fn().mockReturnValue(recovered);
+    const restarted = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => null,
+        createFallback: vi.fn(),
+        recoverFallback,
+      },
+    });
+
+    await expect(
+      restarted.observe({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(recovered.observeReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(recoverFallback).toHaveBeenCalledWith(
+      binding,
+      "https://chatgpt.com/c/summary-context-1",
+    );
   });
 
   it("observes an unresolved fallback operation instead of dispatching it twice", async () => {

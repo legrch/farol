@@ -269,6 +269,54 @@ describe("private context persistence", () => {
     ).resolves.toBeNull();
   });
 
+  it("persists monotonic summary-send certainty and exact message identity", async () => {
+    const stateRoot = await root();
+    const first = new PrivateContextStore({ root: stateRoot });
+    const prepared = {
+      schemaVersion: 1 as const,
+      operationId: request.operationId,
+      binding,
+      source: request.source,
+      sourceBoundary: request.sourceBoundary,
+      phase: "prepared" as const,
+      conversationUrl: null,
+      turnUserId: null,
+      turnAssistantId: null,
+    };
+    await first.putSummaryAttempt(prepared);
+    await first.putSummaryAttempt({
+      ...prepared,
+      phase: "possible_send",
+      conversationUrl: "https://chatgpt.com/c/context-atlantic",
+      turnUserId: "summary-user-atlantic",
+    });
+
+    const restarted = new PrivateContextStore({ root: stateRoot });
+    await expect(
+      restarted.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toEqual({
+      ...prepared,
+      phase: "possible_send",
+      conversationUrl: "https://chatgpt.com/c/context-atlantic",
+      turnUserId: "summary-user-atlantic",
+    });
+    await expect(restarted.putSummaryAttempt(prepared)).rejects.toThrow(
+      "CONTEXT_SUMMARY_ATTEMPT_CONFLICT",
+    );
+    await expect(
+      restarted.putSummaryAttempt({
+        ...prepared,
+        phase: "outcome_unknown",
+        conversationUrl: "https://chatgpt.com/c/context-forged",
+        turnUserId: "summary-user-atlantic",
+      }),
+    ).rejects.toThrow("CONTEXT_SUMMARY_ATTEMPT_CONFLICT");
+    await restarted.deleteSummaryAttempt(binding, request.operationId);
+    await expect(
+      restarted.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toBeNull();
+  });
+
   it("fences concurrent coordinators through the shared filesystem", async () => {
     const stateRoot = await root();
     const first = new PrivateContextStore({ root: stateRoot });

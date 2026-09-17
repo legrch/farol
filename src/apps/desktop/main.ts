@@ -817,9 +817,10 @@ function contextBinding(taskId: string): ContextBinding {
 
 function createContextSummaryFallbackRoute(
   binding: ContextBinding,
+  recoveredConversationUrl?: string,
 ): ChatGptRoute {
-  let initialUrl = chatGptHomeUrl;
-  if (chatGptE2eOrigin !== null) {
+  let initialUrl = recoveredConversationUrl ?? chatGptHomeUrl;
+  if (recoveredConversationUrl === undefined && chatGptE2eOrigin !== null) {
     const fixtureUrl = new URL(initialUrl);
     fixtureUrl.searchParams.set("farol-e2e-task", `context-${binding.taskId}`);
     initialUrl = fixtureUrl.href;
@@ -844,6 +845,8 @@ function initializeCodexContextController(): void {
     summaryRoutes: {
       retained: (binding) => liveTaskRoutes.get(binding.taskId) ?? null,
       createFallback: createContextSummaryFallbackRoute,
+      recoverFallback: (binding, conversationUrl) =>
+        createContextSummaryFallbackRoute(binding, conversationUrl),
     },
     onContextStateChanged: async (session) => {
       if (

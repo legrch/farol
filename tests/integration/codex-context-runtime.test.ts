@@ -303,7 +303,7 @@ describe("assembled Codex context runtime", () => {
     });
   });
 
-  it("keeps the current epoch and one submission when summary usage is limited", async () => {
+  it("keeps post-send usage limits outcome-unknown with one submission", async () => {
     const root = await stateRoot();
     const retained = {
       runReadonlyTask: vi.fn(async () => ({
@@ -345,28 +345,28 @@ describe("assembled Codex context runtime", () => {
     const first = await request();
     expect(first.status).toBe(422);
     await expect(first.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED" },
+      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
     });
     const repeated = await request();
     expect(repeated.status).toBe(422);
     await expect(repeated.json()).resolves.toEqual({
-      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED" },
+      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN" },
     });
 
     const session = await new PrivateContextStore({ root }).load(binding);
     expect(session).toMatchObject({
-      phase: "blocked",
+      phase: "outcome_unknown",
       epoch: 1,
-      blockedCode: "SUMMARY_USAGE_LIMITED",
+      blockedCode: "SUMMARY_USAGE_LIMITED_AFTER_SEND",
       operation: {
         source: "retained_agent",
       },
     });
     expect(toProductTaskContext(session!)).toEqual({
       epoch: 1,
-      phase: "blocked",
+      phase: "outcome_unknown",
       source: "retained_agent",
-      code: "SUMMARY_USAGE_LIMITED",
+      code: "SUMMARY_USAGE_LIMITED_AFTER_SEND",
     });
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
     expect(retained.resetConversation).not.toHaveBeenCalled();

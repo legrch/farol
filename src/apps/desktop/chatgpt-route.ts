@@ -341,6 +341,13 @@ export type ChatGptTaskTextDelta = Readonly<{
 
 export type ChatGptTaskObserver = Readonly<{
   onTextDelta?: (delta: ChatGptTaskTextDelta) => void | Promise<void>;
+  onDispatchIntent?: () => void | Promise<void>;
+  onCorrelation?: (
+    correlation: Readonly<{
+      turnUserId: string;
+      turnAssistantId: string | null;
+    }>,
+  ) => void | Promise<void>;
 }>;
 
 export class ChatGptRoute {
@@ -628,6 +635,7 @@ export class ChatGptRoute {
       }
       const submitDeadline = Date.now() + 5_000;
       while (Date.now() < submitDeadline) {
+        await observer.onDispatchIntent?.();
         submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
           await candidate.webContents.executeJavaScript(
@@ -721,6 +729,10 @@ export class ChatGptRoute {
         if (probe.data.turnUserId !== null) {
           if (correlatedUserId === null) {
             correlatedUserId = probe.data.turnUserId;
+            await observer.onCorrelation?.({
+              turnUserId: correlatedUserId,
+              turnAssistantId: correlatedAssistantId,
+            });
           } else if (probe.data.turnUserId !== correlatedUserId) {
             return {
               state: "outcome_unknown",
@@ -748,6 +760,10 @@ export class ChatGptRoute {
           }
           if (correlatedAssistantId === null) {
             correlatedAssistantId = probe.data.turnAssistantId;
+            await observer.onCorrelation?.({
+              turnUserId: correlatedUserId,
+              turnAssistantId: correlatedAssistantId,
+            });
           } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
             return {
               state: "outcome_unknown",

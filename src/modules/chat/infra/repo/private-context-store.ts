@@ -129,6 +129,24 @@ const contextSummaryRecordSchema = z.strictObject({
   summary: contextSummarySchema,
 });
 
+const contextSummaryAttemptSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  operationId: z.string().min(1).max(160),
+  binding: bindingSchema,
+  source: z.enum(["retained_agent", "canonical_history"]),
+  sourceBoundary: z.string().min(1).max(160),
+  phase: z.enum(["prepared", "possible_send", "outcome_unknown"]),
+  conversationUrl: z.string().min(1).max(2_048).nullable(),
+  turnUserId: z.string().min(1).max(256).nullable(),
+  turnAssistantId: z.string().min(1).max(256).nullable(),
+});
+
+const contextSummaryAttemptRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_summary_attempt"),
+  attempt: contextSummaryAttemptSchema,
+});
+
 const admissionSchema = z.strictObject({
   binding: bindingSchema,
   sourceEpoch: z.number().int().positive(),
@@ -157,6 +175,7 @@ const DEFAULT_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 const DEFAULT_CHECKPOINT_RECORD_BYTES = 384 * 1_024;
 const DEFAULT_SOURCE_RECORD_BYTES = 1 * 1_024 * 1_024;
 const DEFAULT_SUMMARY_RECORD_BYTES = 384 * 1_024;
+const DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES = 16 * 1_024;
 const DEFAULT_RETENTION = 8;
 
 export type StoredContextSource = Readonly<z.infer<typeof contextSourceSchema>>;
@@ -170,6 +189,10 @@ export type StoredContextSummary = Readonly<{
   content: CheckpointContent;
 }>;
 
+export type StoredContextSummaryAttempt = Readonly<
+  z.infer<typeof contextSummaryAttemptSchema>
+>;
+
 export type PrivateContextStoreOptions = Readonly<{
   root: string;
   maximumSessionBytes?: number;
@@ -177,6 +200,7 @@ export type PrivateContextStoreOptions = Readonly<{
   maximumCheckpointRecordBytes?: number;
   maximumSourceRecordBytes?: number;
   maximumSummaryRecordBytes?: number;
+  maximumSummaryAttemptRecordBytes?: number;
   maxCheckpointsPerTask?: number;
 }>;
 
@@ -240,6 +264,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private readonly maximumCheckpointRecordBytes: number;
   private readonly maximumSourceRecordBytes: number;
   private readonly maximumSummaryRecordBytes: number;
+  private readonly maximumSummaryAttemptRecordBytes: number;
   private readonly maxCheckpointsPerTask: number;
 
   constructor(
@@ -268,6 +293,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     this.maximumSummaryRecordBytes = positiveInteger(
       options.maximumSummaryRecordBytes ?? DEFAULT_SUMMARY_RECORD_BYTES,
       "CONTEXT_SUMMARY_BUDGET_INVALID",
+    );
+    this.maximumSummaryAttemptRecordBytes = positiveInteger(
+      options.maximumSummaryAttemptRecordBytes ??
+        DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES,
+      "CONTEXT_SUMMARY_ATTEMPT_BUDGET_INVALID",
     );
     this.maxCheckpointsPerTask = positiveInteger(
       options.maxCheckpointsPerTask ?? DEFAULT_RETENTION,
@@ -583,6 +613,103 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  async putSummaryAttempt(
+    candidate: StoredContextSummaryAttempt,
+  ): Promise<void> {
+    const parsed = contextSummaryAttemptSchema.safeParse(candidate);
+    if (
+      !parsed.success ||
+      (parsed.data.turnAssistantId !== null && parsed.data.turnUserId === null)
+    ) {
+      throw new Error("CONTEXT_SUMMARY_ATTEMPT_INVALID");
+    }
+    const attempt = structuredClone(parsed.data);
+    const directory = await this.ensureSummaryAttemptDirectory(attempt.binding);
+    const file = path.join(
+      directory,
+      `${checkpointKey(attempt.operationId)}.json`,
+    );
+    const existing = await this.readSummaryAttemptFile(file, attempt.binding);
+    if (existing) {
+      const sameIdentity =
+        existing.operationId === attempt.operationId &&
+        existing.source === attempt.source &&
+        existing.sourceBoundary === attempt.sourceBoundary &&
+        sameContextBinding(existing.binding, attempt.binding);
+      const phases = {
+        prepared: 0,
+        possible_send: 1,
+        outcome_unknown: 2,
+      } as const;
+      const stableConversation =
+        existing.conversationUrl === null ||
+        existing.conversationUrl === attempt.conversationUrl;
+      const stableUser =
+        existing.turnUserId === null ||
+        existing.turnUserId === attempt.turnUserId;
+      const stableAssistant =
+        existing.turnAssistantId === null ||
+        existing.turnAssistantId === attempt.turnAssistantId;
+      if (
+        !sameIdentity ||
+        phases[attempt.phase] < phases[existing.phase] ||
+        !stableConversation ||
+        !stableUser ||
+        !stableAssistant
+      ) {
+        throw new Error("CONTEXT_SUMMARY_ATTEMPT_CONFLICT");
+      }
+      if (JSON.stringify(existing) === JSON.stringify(attempt)) return;
+    }
+    await this.atomicWrite(
+      file,
+      {
+        schemaVersion: 1,
+        kind: "context_summary_attempt",
+        attempt,
+      },
+      this.maximumSummaryAttemptRecordBytes,
+      "CONTEXT_SUMMARY_ATTEMPT_OVERSIZED",
+    );
+  }
+
+  async getSummaryAttempt(
+    binding: ContextBinding,
+    operationId: string,
+  ): Promise<StoredContextSummaryAttempt | null> {
+    if (!operationId || operationId.length > 160) {
+      throw new Error("CONTEXT_SUMMARY_ATTEMPT_ID_INVALID");
+    }
+    const file = path.join(
+      this.summaryAttemptDirectory(binding),
+      `${checkpointKey(operationId)}.json`,
+    );
+    const attempt = await this.readSummaryAttemptFile(file, binding);
+    if (attempt && attempt.operationId !== operationId) {
+      throw new Error("CONTEXT_SUMMARY_ATTEMPT_ID_MISMATCH");
+    }
+    return attempt;
+  }
+
+  async deleteSummaryAttempt(
+    binding: ContextBinding,
+    operationId: string,
+  ): Promise<void> {
+    if (!operationId || operationId.length > 160) {
+      throw new Error("CONTEXT_SUMMARY_ATTEMPT_ID_INVALID");
+    }
+    const file = path.join(
+      this.summaryAttemptDirectory(binding),
+      `${checkpointKey(operationId)}.json`,
+    );
+    try {
+      await fs.unlink(file);
+      await this.syncDirectory(path.dirname(file));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
   async deleteTask(binding: ContextBinding): Promise<void> {
     await this.ensureRoot();
     const directory = this.taskDirectory(binding);
@@ -808,6 +935,26 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return structuredClone({ ...parsed.data.summary, content: content.value });
   }
 
+  private async readSummaryAttemptFile(
+    file: string,
+    binding: ContextBinding,
+  ): Promise<StoredContextSummaryAttempt | null> {
+    const record = await this.readRecord(
+      file,
+      this.maximumSummaryAttemptRecordBytes,
+      "CONTEXT_SUMMARY_ATTEMPT",
+    );
+    if (!record) return null;
+    const parsed = contextSummaryAttemptRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
+    }
+    if (!sameContextBinding(parsed.data.attempt.binding, binding)) {
+      throw new Error("CONTEXT_SUMMARY_ATTEMPT_BINDING_MISMATCH");
+    }
+    return structuredClone(parsed.data.attempt);
+  }
+
   private async pruneCheckpoints(
     directory: string,
     binding: ContextBinding,
@@ -857,6 +1004,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       | "CONTEXT_LEASE"
       | "CONTEXT_SOURCE"
       | "CONTEXT_SUMMARY"
+      | "CONTEXT_SUMMARY_ATTEMPT"
       | "CONTEXT_STATE",
   ): Promise<ParsedRecord | null> {
     let handle;
@@ -1019,6 +1167,15 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return directory;
   }
 
+  private async ensureSummaryAttemptDirectory(
+    binding: ContextBinding,
+  ): Promise<string> {
+    const task = await this.ensureTaskDirectory(binding);
+    const directory = path.join(task, "summary-attempts");
+    await this.ensurePrivateDirectory(directory);
+    return directory;
+  }
+
   private async ensureAdmissionDirectories(task: string): Promise<
     Readonly<{
       boundaries: string;
@@ -1108,6 +1265,10 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
 
   private summaryDirectory(binding: ContextBinding): string {
     return path.join(this.taskDirectory(binding), "summaries");
+  }
+
+  private summaryAttemptDirectory(binding: ContextBinding): string {
+    return path.join(this.taskDirectory(binding), "summary-attempts");
   }
 
   private sessionFile(binding: ContextBinding): string {
