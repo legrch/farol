@@ -261,6 +261,66 @@ describe("Agent app service", () => {
     expect(host.waitCalls).toBe(1);
   });
 
+  it("lets a second service instance follow the live prepared owner", async () => {
+    let releaseSpawn!: () => void;
+    let announceSpawn!: () => void;
+    const spawnEntered = new Promise<void>((resolve) => {
+      announceSpawn = resolve;
+    });
+    const spawnReleased = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const ownerHost: AgentHost & { spawnCalls: number; waitCalls: number } = {
+      spawnCalls: 0,
+      waitCalls: 0,
+      async spawn() {
+        this.spawnCalls += 1;
+        announceSpawn();
+        await spawnReleased;
+        return { status: "started", correlation: exactChild };
+      },
+      async wait(correlation) {
+        this.waitCalls += 1;
+        return {
+          status: "completed",
+          correlation,
+          resultRef: "result-preview-a",
+          workspaceEnforcement: "verified" as const,
+        };
+      },
+      async cancel() {
+        throw new Error("UNEXPECTED_CANCEL");
+      },
+    };
+    const repository = new InMemoryAssignments();
+    const first = createRunner(ownerHost, repository).execute(command);
+    await spawnEntered;
+
+    const followerHost = new AgentHostDouble(new Error("must not spawn"), null);
+    const follower = createRunner(followerHost, repository).execute(command);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    releaseSpawn();
+
+    const [ownerResult, followerResult] = await Promise.all([first, follower]);
+    expect(followerResult).toEqual(ownerResult);
+    expect(ownerResult).toMatchObject({
+      ok: true,
+      value: {
+        assignment: { phase: "completed", terminal: true },
+        resultRef: "result-preview-a",
+        resultRetention: "durable",
+      },
+    });
+    await expect(repository.load(command.identity)).resolves.toMatchObject({
+      assignment: { phase: "completed", terminal: true },
+      resultRef: "result-preview-a",
+    });
+    expect(ownerHost.spawnCalls).toBe(1);
+    expect(ownerHost.waitCalls).toBe(1);
+    expect(followerHost.spawnCalls).toBe(0);
+    expect(followerHost.waitCalls).toBe(0);
+  });
+
   it("rejects changed intent while the same assignment is in flight", async () => {
     let releaseSpawn!: () => void;
     let announceSpawn!: () => void;

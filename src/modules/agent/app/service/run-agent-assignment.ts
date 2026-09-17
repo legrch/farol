@@ -131,15 +131,18 @@ function focusAllowed(
   );
 }
 
-export class RunAgentAssignment {
-  private readonly inFlight = new Map<
-    string,
-    Readonly<{
-      commandFingerprint: string;
-      execution: Promise<Result<AgentRunReceipt, AssignmentErrorCode>>;
-    }>
-  >();
+type ActiveAssignmentExecution = Readonly<{
+  commandFingerprint: string;
+  execution: Promise<Result<AgentRunReceipt, AssignmentErrorCode>>;
+}>;
 
+// The desktop is a single process, but product composition may create a fresh
+// service object for a follower invocation. Keep the execution owner at the
+// process boundary so a live prepared record cannot be mistaken for crash
+// recovery merely because the follower received a different service object.
+const activeAssignmentExecutions = new Map<string, ActiveAssignmentExecution>();
+
+export class RunAgentAssignment {
   constructor(
     private readonly host: AgentHost,
     private readonly assignments: AssignmentRepository,
@@ -173,7 +176,7 @@ export class RunAgentAssignment {
       command,
       this.commandDigester,
     );
-    const existing = this.inFlight.get(key);
+    const existing = activeAssignmentExecutions.get(key);
     if (existing) {
       return existing.commandFingerprint === commandFingerprint
         ? existing.execution
@@ -184,11 +187,11 @@ export class RunAgentAssignment {
       authority,
       commandFingerprint,
     ).finally(() => {
-      if (this.inFlight.get(key)?.execution === execution) {
-        this.inFlight.delete(key);
+      if (activeAssignmentExecutions.get(key)?.execution === execution) {
+        activeAssignmentExecutions.delete(key);
       }
     });
-    this.inFlight.set(key, { commandFingerprint, execution });
+    activeAssignmentExecutions.set(key, { commandFingerprint, execution });
     return execution;
   }
 
