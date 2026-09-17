@@ -3164,12 +3164,7 @@ try {
   assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
 
   await ordinaryLiveTasks.window.evaluate((taskId) => {
-    window.__farolContextFixtureResult = null;
-    void window.farolNext
-      .control(taskId, "compact-context-fixture")
-      .then((result) => {
-        window.__farolContextFixtureResult = result;
-      });
+    void window.farolNext.control(taskId, "compact-context-fixture");
   }, pinnedTask.taskId);
   await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
     const state = await window.farolNext.bootstrap();
@@ -3183,18 +3178,24 @@ try {
   await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
     const state = await window.farolNext.bootstrap();
     return (
-      window.__farolContextFixtureResult?.ok === true &&
-      window.__farolContextFixtureResult?.phase === "handoff_offered" &&
       state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
-        "handoff_offered"
+      "handoff_offered"
     );
   }, pinnedTask.taskId);
-  assert.deepEqual(
-    await ordinaryLiveTasks.window.evaluate(
-      () => window.__farolContextFixtureResult,
-    ),
-    { ok: true, phase: "handoff_offered" },
+  const repeatedCompaction = await ordinaryLiveTasks.window.evaluate(
+    (taskId) => window.farolNext.control(taskId, "compact-context-fixture"),
+    pinnedTask.taskId,
   );
+  assert.deepEqual(repeatedCompaction, { ok: true, phase: "handoff_offered" });
+  const handoffSurface = await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    pinnedTask.taskId,
+    (surface) =>
+      surface.state.submitCount === 2 &&
+      surface.state.assistantText.includes('"nextSafeStep"'),
+    "duplicate compaction observes the one submitted summary",
+  );
+  assert.equal(handoffSurface.state.submitCount, 2);
   assert.equal(
     await ordinaryLiveTasks.window.locator("#dossier-state b").innerText(),
     "INSTALLING CONTEXT",
