@@ -881,6 +881,43 @@ describe("context continuity transaction", () => {
     });
   });
 
+  it("resumes after the checkpoint write outlives its session transition", async () => {
+    let now = 1_000;
+    const test = harness({ now: () => (now += 1_000) });
+    failSaveAt(test, 5);
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_REPOSITORY_FAILED" },
+    });
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: true,
+      value: { session: { phase: "active", epoch: 2 } },
+    });
+
+    expect(test.request).toHaveBeenCalledTimes(1);
+    expect(test.observe).not.toHaveBeenCalled();
+    expect(test.offer).toHaveBeenCalledTimes(1);
+    expect(test.retire).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a durable checkpoint that does not match the validated session", async () => {
+    const test = harness({ initial: storedSession("validated") });
+    await test.checkpoints.put({
+      ...checkpointFixture(),
+      operationId: "compact-foreign-1",
+    });
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHECKPOINT_STORE_FAILED" },
+    });
+
+    expect(test.observe).not.toHaveBeenCalled();
+    expect(test.offer).not.toHaveBeenCalled();
+    expect(test.retire).not.toHaveBeenCalled();
+  });
+
   it("handles failures while resuming a validated summary", async () => {
     const observationFailure = harness({
       initial: storedSession("validated"),

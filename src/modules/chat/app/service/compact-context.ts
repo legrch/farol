@@ -78,6 +78,24 @@ function compactionRequest(command: CompactContextCommand): CompactionRequest {
   };
 }
 
+function checkpointMatchesValidatedSession(
+  session: ContextSession,
+  checkpoint: CheckpointEnvelope,
+): boolean {
+  const operation = session.operation;
+  return (
+    session.phase === "validated" &&
+    operation !== null &&
+    operation.checkpointId === checkpoint.checkpointId &&
+    operation.operationId === checkpoint.operationId &&
+    operation.source === checkpoint.source &&
+    operation.sourceBoundary === checkpoint.sourceBoundary &&
+    session.epoch === checkpoint.epoch &&
+    session.lastCheckpointId === checkpoint.parentCheckpointId &&
+    sameContextBinding(session.binding, checkpoint.binding)
+  );
+}
+
 export class CompactContext {
   private readonly inFlight = new Map<
     string,
@@ -283,18 +301,41 @@ export class CompactContext {
     }
 
     if (session.phase === "validated") {
-      const request = this.summaryRequest(session);
-      if (!request) return failure("CONTEXT_TRANSITION_FAILED");
-      let observed: ContextSummaryReceipt;
+      const checkpointId = session.operation?.checkpointId;
+      if (!checkpointId) return failure("CONTEXT_TRANSITION_FAILED");
+      let durableCheckpoint: CheckpointEnvelope | null;
       try {
-        observed = await this.summarizer.observe(request);
+        durableCheckpoint = await this.checkpoints.get(
+          session.binding,
+          checkpointId,
+        );
       } catch {
         return failure("CHECKPOINT_STORE_FAILED");
       }
-      const handled = await this.handleSummary(session, observed);
-      if (!handled.ok) return handled;
-      session = handled.value.session;
-      if (handled.value.checkpoint === null) return handled;
+      if (durableCheckpoint) {
+        if (!checkpointMatchesValidatedSession(session, durableCheckpoint)) {
+          return failure("CHECKPOINT_STORE_FAILED");
+        }
+        const stored = markCheckpointStored(session);
+        if (!stored.ok) return failure("CONTEXT_TRANSITION_FAILED");
+        session = stored.value;
+        if (!(await this.persist(session))) {
+          return failure("CONTEXT_REPOSITORY_FAILED");
+        }
+      } else {
+        const request = this.summaryRequest(session);
+        if (!request) return failure("CONTEXT_TRANSITION_FAILED");
+        let observed: ContextSummaryReceipt;
+        try {
+          observed = await this.summarizer.observe(request);
+        } catch {
+          return failure("CHECKPOINT_STORE_FAILED");
+        }
+        const handled = await this.handleSummary(session, observed);
+        if (!handled.ok) return handled;
+        session = handled.value.session;
+        if (handled.value.checkpoint === null) return handled;
+      }
     }
 
     return this.advanceHandoff(session);
