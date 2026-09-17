@@ -96,6 +96,22 @@ const checkpointRecordSchema = z.strictObject({
   checkpoint: z.unknown(),
 });
 
+const contextSourceSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  operationId: z.string().min(1).max(160),
+  binding: bindingSchema,
+  source: z.enum(["retained_agent", "canonical_history"]),
+  sourceBoundary: z.string().min(1).max(160),
+  variant: z.enum(["unary_replacement_history", "streamed_compaction_item"]),
+  history: z.array(z.unknown()).max(4_096),
+});
+
+const contextSourceRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_source"),
+  source: contextSourceSchema,
+});
+
 const admissionSchema = z.strictObject({
   binding: bindingSchema,
   sourceEpoch: z.number().int().positive(),
@@ -122,13 +138,17 @@ const DIRECTORY = fsConstants.O_DIRECTORY ?? 0;
 const DEFAULT_SESSION_BYTES = 64 * 1_024;
 const DEFAULT_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 const DEFAULT_CHECKPOINT_RECORD_BYTES = 384 * 1_024;
+const DEFAULT_SOURCE_RECORD_BYTES = 1 * 1_024 * 1_024;
 const DEFAULT_RETENTION = 8;
+
+export type StoredContextSource = Readonly<z.infer<typeof contextSourceSchema>>;
 
 export type PrivateContextStoreOptions = Readonly<{
   root: string;
   maximumSessionBytes?: number;
   maximumCheckpointContentBytes?: number;
   maximumCheckpointRecordBytes?: number;
+  maximumSourceRecordBytes?: number;
   maxCheckpointsPerTask?: number;
 }>;
 
@@ -190,6 +210,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private readonly maximumSessionBytes: number;
   private readonly maximumCheckpointContentBytes: number;
   private readonly maximumCheckpointRecordBytes: number;
+  private readonly maximumSourceRecordBytes: number;
   private readonly maxCheckpointsPerTask: number;
 
   constructor(
@@ -210,6 +231,10 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     this.maximumCheckpointRecordBytes = positiveInteger(
       options.maximumCheckpointRecordBytes ?? DEFAULT_CHECKPOINT_RECORD_BYTES,
       "CHECKPOINT_RECORD_BUDGET_INVALID",
+    );
+    this.maximumSourceRecordBytes = positiveInteger(
+      options.maximumSourceRecordBytes ?? DEFAULT_SOURCE_RECORD_BYTES,
+      "CONTEXT_SOURCE_BUDGET_INVALID",
     );
     this.maxCheckpointsPerTask = positiveInteger(
       options.maxCheckpointsPerTask ?? DEFAULT_RETENTION,
@@ -394,6 +419,46 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return checkpoint;
   }
 
+  async putSource(candidate: StoredContextSource): Promise<void> {
+    const parsed = contextSourceSchema.safeParse(candidate);
+    if (!parsed.success) throw new Error("CONTEXT_SOURCE_INVALID");
+    const source = structuredClone(parsed.data);
+    const directory = await this.ensureSourceDirectory(source.binding);
+    const file = path.join(
+      directory,
+      `${checkpointKey(source.operationId)}.json`,
+    );
+    const existing = await this.readSourceFile(file, source.binding);
+    if (existing) {
+      if (JSON.stringify(existing) === JSON.stringify(source)) return;
+      throw new Error("CONTEXT_SOURCE_ID_CONFLICT");
+    }
+    await this.atomicWrite(
+      file,
+      { schemaVersion: 1, kind: "context_source", source },
+      this.maximumSourceRecordBytes,
+      "CONTEXT_SOURCE_OVERSIZED",
+    );
+  }
+
+  async getSource(
+    binding: ContextBinding,
+    operationId: string,
+  ): Promise<StoredContextSource | null> {
+    if (!operationId || operationId.length > 160) {
+      throw new Error("CONTEXT_SOURCE_ID_INVALID");
+    }
+    const file = path.join(
+      this.sourceDirectory(binding),
+      `${checkpointKey(operationId)}.json`,
+    );
+    const source = await this.readSourceFile(file, binding);
+    if (source && source.operationId !== operationId) {
+      throw new Error("CONTEXT_SOURCE_ID_MISMATCH");
+    }
+    return source;
+  }
+
   async deleteTask(binding: ContextBinding): Promise<void> {
     await this.ensureRoot();
     const directory = this.taskDirectory(binding);
@@ -548,6 +613,26 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return checkpoint;
   }
 
+  private async readSourceFile(
+    file: string,
+    binding: ContextBinding,
+  ): Promise<StoredContextSource | null> {
+    const record = await this.readRecord(
+      file,
+      this.maximumSourceRecordBytes,
+      "CONTEXT_SOURCE",
+    );
+    if (!record) return null;
+    const parsed = contextSourceRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_SOURCE");
+    }
+    if (!sameContextBinding(parsed.data.source.binding, binding)) {
+      throw new Error("CONTEXT_SOURCE_BINDING_MISMATCH");
+    }
+    return structuredClone(parsed.data.source);
+  }
+
   private async pruneCheckpoints(
     directory: string,
     binding: ContextBinding,
@@ -595,6 +680,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       | "CHECKPOINT_STATE"
       | "CONTEXT_ADMISSION"
       | "CONTEXT_LEASE"
+      | "CONTEXT_SOURCE"
       | "CONTEXT_STATE",
   ): Promise<ParsedRecord | null> {
     let handle;
@@ -737,6 +823,15 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return directory;
   }
 
+  private async ensureSourceDirectory(
+    binding: ContextBinding,
+  ): Promise<string> {
+    const task = await this.ensureTaskDirectory(binding);
+    const directory = path.join(task, "sources");
+    await this.ensurePrivateDirectory(directory);
+    return directory;
+  }
+
   private async ensureAdmissionDirectories(task: string): Promise<
     Readonly<{
       boundaries: string;
@@ -818,6 +913,10 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
 
   private checkpointDirectory(binding: ContextBinding): string {
     return path.join(this.taskDirectory(binding), "checkpoints");
+  }
+
+  private sourceDirectory(binding: ContextBinding): string {
+    return path.join(this.taskDirectory(binding), "sources");
   }
 
   private sessionFile(binding: ContextBinding): string {

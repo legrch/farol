@@ -172,6 +172,68 @@ describe("private context persistence", () => {
     }
   });
 
+  it("retains exact canonical source across restart and rejects replacement", async () => {
+    const stateRoot = await root();
+    const first = new PrivateContextStore({ root: stateRoot });
+    const source = {
+      schemaVersion: 1 as const,
+      operationId: "compact-atlantic-1",
+      binding,
+      source: "canonical_history" as const,
+      sourceBoundary: "sha256:canonical-atlantic-1",
+      variant: "streamed_compaction_item" as const,
+      history: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Keep the correction." }],
+        },
+      ],
+    };
+    await first.putSource(source);
+
+    const restarted = new PrivateContextStore({ root: stateRoot });
+    await expect(
+      restarted.getSource(binding, source.operationId),
+    ).resolves.toEqual(source);
+    await expect(
+      restarted.getSource(
+        { ...binding, taskId: "task-harbor" },
+        source.operationId,
+      ),
+    ).resolves.toBeNull();
+    await expect(
+      restarted.putSource({
+        ...source,
+        history: [{ type: "message", role: "user", content: "changed" }],
+      }),
+    ).rejects.toThrow("CONTEXT_SOURCE_ID_CONFLICT");
+
+    await restarted.deleteTask(binding);
+    await expect(
+      restarted.getSource(binding, source.operationId),
+    ).resolves.toBeNull();
+  });
+
+  it("rejects over-budget canonical source before persistence", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({
+      root: stateRoot,
+      maximumSourceRecordBytes: 512,
+    });
+    await expect(
+      store.putSource({
+        schemaVersion: 1,
+        operationId: "compact-atlantic-large",
+        binding,
+        source: "canonical_history",
+        sourceBoundary: "sha256:canonical-atlantic-large",
+        variant: "unary_replacement_history",
+        history: [{ type: "message", content: "x".repeat(1_024) }],
+      }),
+    ).rejects.toThrow("CONTEXT_SOURCE_OVERSIZED");
+  });
+
   it("fences concurrent coordinators through the shared filesystem", async () => {
     const stateRoot = await root();
     const first = new PrivateContextStore({ root: stateRoot });
