@@ -3056,6 +3056,7 @@ try {
     ordinaryLiveTasks.userData,
     "farol-next-state",
     "native-agent-assignments",
+    "assignments",
   );
   const assignmentFiles = (await fs.readdir(assignmentRoot)).filter((entry) =>
     entry.endsWith(".json"),
