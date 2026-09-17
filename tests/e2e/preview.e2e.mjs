@@ -1661,6 +1661,109 @@ async function taskSurfaces(application) {
   });
 }
 
+async function liveChatGptSurfaces(application, expectedOrigin) {
+  return application.evaluate(async ({ BrowserWindow }, origin) => {
+    const host = BrowserWindow.getAllWindows().find(
+      (candidate) => candidate.getTitle() === "Farol Next Preview",
+    );
+    const views = (host?.contentView.children ?? []).filter(
+      (view) => "webContents" in view,
+    );
+    const surfaces = [];
+    for (const view of views) {
+      const url = view.webContents.getURL();
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch {
+        continue;
+      }
+      if (parsed.origin !== origin) continue;
+      const parts = parsed.pathname.split("/").filter(Boolean);
+      const taskId =
+        parsed.searchParams.get("farol-e2e-task") ??
+        (parts.length === 3 && parts[0] === "chatgpt" && parts[1] === "c"
+          ? parts[2]
+          : null);
+      if (!taskId) continue;
+      const state = await view.webContents.executeJavaScript(`(() => ({
+          composerVisible: document.querySelector('#prompt-textarea')?.hidden === false,
+          sendDisabled: document.querySelector('[data-testid="send-button"]')?.disabled ?? null,
+          stopVisible: document.querySelector('[data-testid="stop-button"]')?.hidden === false,
+          userText: document.querySelector('[data-message-author-role="user"]')?.textContent ?? "",
+          assistantText: document.querySelector('[data-message-author-role="assistant"]')?.textContent ?? "",
+          submitCount: Number(window.__farolSubmitCount ?? 0)
+        }))()`);
+      surfaces.push({
+        taskId,
+        contentsId: view.webContents.id,
+        url,
+        hostVisible: view.getVisible(),
+        hostBounds: view.getBounds(),
+        focused: view.webContents.isFocused(),
+        state,
+      });
+    }
+    return surfaces;
+  }, expectedOrigin);
+}
+
+async function waitForLiveChatGptSurface(instance, taskId, predicate, message) {
+  const origin = new URL(instance.chatGptFixture.url).origin;
+  let last = [];
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    last = await liveChatGptSurfaces(instance.application, origin);
+    const surface = last.find((candidate) => candidate.taskId === taskId);
+    if (surface && predicate(surface)) return surface;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(
+    `E2E_LIVE_CHATGPT_SURFACE_TIMEOUT:${message}:${JSON.stringify(last)}`,
+  );
+}
+
+async function submitLiveChatGptTask(instance, taskId, prompt) {
+  return instance.application.evaluate(
+    async ({ BrowserWindow }, input) => {
+      const host = BrowserWindow.getAllWindows().find(
+        (candidate) => candidate.getTitle() === "Farol Next Preview",
+      );
+      const view = (host?.contentView.children ?? [])
+        .filter((candidate) => "webContents" in candidate)
+        .find((candidate) => {
+          const candidateUrl = new URL(candidate.webContents.getURL());
+          const parts = candidateUrl.pathname.split("/").filter(Boolean);
+          return (
+            candidateUrl.searchParams.get("farol-e2e-task") === input.taskId ||
+            (parts.length === 3 &&
+              parts[0] === "chatgpt" &&
+              parts[1] === "c" &&
+              parts[2] === input.taskId)
+          );
+        });
+      if (!view) throw new Error("LIVE_CHATGPT_TASK_SURFACE_MISSING");
+      return view.webContents.executeJavaScript(`(() => {
+        const composer = document.querySelector('#prompt-textarea');
+        const send = document.querySelector('[data-testid="send-button"]');
+        if (!(composer instanceof HTMLElement) || !(send instanceof HTMLButtonElement)) {
+          throw new Error('LIVE_CHATGPT_TASK_CONTROLS_MISSING');
+        }
+        composer.focus();
+        composer.replaceChildren(document.createTextNode(${JSON.stringify(input.prompt)}));
+        composer.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          data: ${JSON.stringify(input.prompt)},
+          inputType: 'insertText'
+        }));
+        if (send.disabled) throw new Error('LIVE_CHATGPT_TASK_SEND_DISABLED');
+        send.click();
+        return Number(window.__farolSubmitCount ?? 0);
+      })()`);
+    },
+    { taskId, prompt },
+  );
+}
+
 async function waitForTaskSurface(application, taskId, predicate, message) {
   let last = [];
   for (let attempt = 0; attempt < 150; attempt += 1) {
@@ -2402,21 +2505,9 @@ try {
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "0 / 5");
 
-  const taskPages = [];
+  const taskSurfaceIds = new Map();
   for (let index = 1; index <= 5; index += 1) {
-    const opened = ordinaryLiveTasks.application.waitForEvent("window", {
-      timeout: 15_000,
-    });
     await newTask.click();
-    const providerPage = await opened;
-    const fixtureUrl = new URL(ordinaryLiveTasks.chatGptFixture.url);
-    await providerPage.waitForURL(
-      (candidate) =>
-        candidate.origin === fixtureUrl.origin &&
-        candidate.pathname === fixtureUrl.pathname &&
-        candidate.searchParams.has("farol-e2e-task"),
-    );
-    taskPages.push(providerPage);
     await ordinaryLiveTasks.window.waitForFunction(
       (count) =>
         document.querySelectorAll("#task-tabs .task-tab").length === count,
@@ -2438,14 +2529,29 @@ try {
     assert.equal(task.requestedMode, "Account default");
     assert.equal(task.observedMode, null);
     assert.equal(task.lifecycle, "idle");
-    assert.equal(
-      new URL(providerPage.url()).searchParams.get("farol-e2e-task"),
+    const providerSurface = await waitForLiveChatGptSurface(
+      ordinaryLiveTasks,
       task.taskId,
+      (surface) =>
+        surface.state.composerVisible &&
+        new URL(surface.url).searchParams.get("farol-e2e-task") === task.taskId,
+      `embedded task ${index}`,
+    );
+    taskSurfaceIds.set(task.taskId, providerSurface.contentsId);
+    assert.equal(
+      new URL(providerSurface.url).searchParams.get("farol-e2e-task"),
+      task.taskId,
+    );
+    assert.equal(
+      await ordinaryLiveTasks.application.evaluate(
+        ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
+      ),
+      1,
     );
     assert.equal(await newTask.locator("small").innerText(), `${index} / 5`);
   }
 
-  assert.equal(taskPages.length, 5);
+  assert.equal(taskSurfaceIds.size, 5);
   assert.equal(await newTask.isDisabled(), true);
   const capacity = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.task({ kind: "task.create-chatgpt" }),
@@ -2471,16 +2577,96 @@ try {
     await ordinaryLiveTasks.window.locator("#browser-state-detail").innerText(),
     /actual provider surface/u,
   );
-  const nativeTitles = await ordinaryLiveTasks.application.evaluate(
-    ({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()
-        .map((candidate) => candidate.getTitle())
-        .filter((title) => title.startsWith("ChatGPT task "))
-        .sort(),
+  const embeddedSurfaces = await liveChatGptSurfaces(
+    ordinaryLiveTasks.application,
+    new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
   );
-  assert.deepEqual(
-    nativeTitles,
-    [1, 2, 3, 4, 5].map((index) => `ChatGPT task ${index} · Farol Next`),
+  assert.equal(embeddedSurfaces.length, 5);
+  assert.equal(
+    new Set(embeddedSurfaces.map((surface) => surface.contentsId)).size,
+    5,
+  );
+  assert.equal(
+    embeddedSurfaces.filter((surface) => surface.hostVisible).length,
+    1,
+  );
+  const selectedLiveTaskId = capacity.state.tasks.at(-1)?.taskId;
+  assert.ok(selectedLiveTaskId);
+  const expectedSurfaceIds = [...taskSurfaceIds.values()].sort(
+    (left, right) => left - right,
+  );
+  for (const globalSection of ["computer", "activity", "settings"]) {
+    await ordinaryLiveTasks.window
+      .locator(`.nav-item[data-section="${globalSection}"]`)
+      .click();
+    await ordinaryLiveTasks.window
+      .locator(`[data-panel="${globalSection}"].active`)
+      .waitFor();
+    await waitForLiveChatGptSurface(
+      ordinaryLiveTasks,
+      selectedLiveTaskId,
+      (surface) => !surface.hostVisible,
+      `${globalSection} hides live provider pages`,
+    );
+    const hiddenSurfaces = await liveChatGptSurfaces(
+      ordinaryLiveTasks.application,
+      new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
+    );
+    assert.ok(hiddenSurfaces.every((surface) => !surface.hostVisible));
+    assert.deepEqual(
+      hiddenSurfaces
+        .map((surface) => surface.contentsId)
+        .sort((left, right) => left - right),
+      expectedSurfaceIds,
+    );
+  }
+  await ordinaryLiveTasks.window
+    .locator('.nav-item[data-section="browser"]')
+    .click();
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    selectedLiveTaskId,
+    (surface) =>
+      surface.hostVisible &&
+      surface.hostBounds.x === 216 &&
+      surface.hostBounds.y === 178,
+    "Browser restores the selected embedded provider page",
+  );
+  await setWindowSize(ordinaryLiveTasks.application, 640, 520);
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    selectedLiveTaskId,
+    (surface) =>
+      surface.hostVisible &&
+      surface.hostBounds.x === 72 &&
+      surface.hostBounds.y === 178 &&
+      surface.hostBounds.width === 568 &&
+      surface.hostBounds.height === 342,
+    "minimum window keeps the embedded provider page bounded",
+  );
+  await ordinaryLiveTasks.window.locator("#command-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#command-dialog")
+    .waitFor({ state: "visible" });
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    selectedLiveTaskId,
+    (surface) => !surface.hostVisible,
+    "quick switcher hides the embedded provider page",
+  );
+  await ordinaryLiveTasks.window.keyboard.press("Escape");
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    selectedLiveTaskId,
+    (surface) => surface.hostVisible && surface.hostBounds.x === 72,
+    "Escape restores the embedded provider page",
+  );
+  await setWindowSize(ordinaryLiveTasks.application, 1_180, 760);
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    selectedLiveTaskId,
+    (surface) => surface.hostVisible && surface.hostBounds.x === 216,
+    "wide layout restores the embedded provider page",
   );
   const providerSecurity = await ordinaryLiveTasks.application.evaluate(
     ({ session, webContents }, origin) =>
@@ -2556,14 +2742,15 @@ try {
   assert.equal(managedState.tasks[0].pinned, true);
   assert.equal(managedState.taskRevision, 7);
   assert.equal(
-    await ordinaryLiveTasks.application.evaluate(
-      ({ BrowserWindow }, title) =>
-        BrowserWindow.getAllWindows().some(
-          (candidate) => candidate.getTitle() === title,
-        ),
-      "Pinned continuity task · Farol Next",
-    ),
-    true,
+    (
+      await waitForLiveChatGptSurface(
+        ordinaryLiveTasks,
+        pinnedTask.taskId,
+        (surface) => surface.hostVisible,
+        "renamed pinned task remains selected",
+      )
+    ).contentsId,
+    taskSurfaceIds.get(pinnedTask.taskId),
   );
   const idleCancel = await ordinaryLiveTasks.window.evaluate(
     (taskId) => window.farolNext.task({ kind: "task.cancel", taskId }),
@@ -2578,22 +2765,27 @@ try {
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
 
   const continuityPrompt = "Farol live task continuity canary";
-  const continuityPage = taskPages[4];
-  await continuityPage.locator("#prompt-textarea").fill(continuityPrompt);
-  await continuityPage.waitForFunction(
-    () =>
-      document.querySelector('[data-testid="send-button"]')?.disabled === false,
+  assert.equal(
+    await submitLiveChatGptTask(
+      ordinaryLiveTasks,
+      pinnedTask.taskId,
+      continuityPrompt,
+    ),
+    1,
   );
-  await continuityPage.locator('[data-testid="send-button"]').click();
-  await continuityPage.waitForURL(/\/chatgpt\/c\/[A-Za-z0-9-]{8,128}$/u);
-  const retainedLiveConversationUrl = continuityPage.url();
-  await continuityPage.waitForFunction(
-    () =>
-      document
-        .querySelector('[data-message-author-role="assistant"]')
-        ?.textContent?.includes("keep the read-only boundary in place") ===
-      true,
+  const completedContinuitySurface = await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    pinnedTask.taskId,
+    (surface) =>
+      /\/chatgpt\/c\/[A-Za-z0-9-]{8,128}$/u.test(
+        new URL(surface.url).pathname,
+      ) &&
+      surface.state.assistantText.includes(
+        "keep the read-only boundary in place",
+      ),
+    "embedded task completes without leaving Watch Rail",
   );
+  const retainedLiveConversationUrl = completedContinuitySurface.url;
   await ordinaryLiveTasks.window.waitForFunction(
     async (taskId) =>
       (await window.farolNext.bootstrap()).tasks.find(
@@ -2601,21 +2793,23 @@ try {
       )?.lifecycle === "completed",
     pinnedTask.taskId,
   );
-  await continuityPage.close();
-  await waitForWindowCount(ordinaryLiveTasks.application, 5);
+  assert.equal(
+    completedContinuitySurface.contentsId,
+    taskSurfaceIds.get(pinnedTask.taskId),
+  );
+  await waitForWindowCount(ordinaryLiveTasks.application, 1);
 
   await ordinaryLiveTasks.window
     .locator(`#task-tabs .task-tab[data-task-id="${cancellableTask.taskId}"]`)
     .click();
-  const cancellablePage = taskPages[2];
-  await cancellablePage
-    .locator("#prompt-textarea")
-    .fill("Farol live cancellation canary");
-  await cancellablePage.waitForFunction(
-    () =>
-      document.querySelector('[data-testid="send-button"]')?.disabled === false,
+  assert.equal(
+    await submitLiveChatGptTask(
+      ordinaryLiveTasks,
+      cancellableTask.taskId,
+      "Farol live cancellation canary",
+    ),
+    1,
   );
-  await cancellablePage.locator('[data-testid="send-button"]').click();
   await ordinaryLiveTasks.window.waitForFunction(
     async (taskId) =>
       (await window.farolNext.bootstrap()).tasks.find(
@@ -2651,8 +2845,15 @@ try {
     "cancelled",
   );
   assert.equal(
-    await cancellablePage.locator('[data-testid="stop-button"]').isHidden(),
-    true,
+    (
+      await waitForLiveChatGptSurface(
+        ordinaryLiveTasks,
+        cancellableTask.taskId,
+        (surface) => !surface.state.stopVisible,
+        "cancel hides provider stop control",
+      )
+    ).contentsId,
+    taskSurfaceIds.get(cancellableTask.taskId),
   );
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
 
@@ -2669,9 +2870,20 @@ try {
       !document.querySelector(`#task-tabs .task-tab[data-task-id="${taskId}"]`),
     closingTask.taskId,
   );
-  await waitForWindowCount(ordinaryLiveTasks.application, 4);
+  await waitForWindowCount(ordinaryLiveTasks.application, 1);
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "4 / 5");
+  const retainedSurfacesAfterClose = await liveChatGptSurfaces(
+    ordinaryLiveTasks.application,
+    new URL(ordinaryLiveTasks.chatGptFixture.url).origin,
+  );
+  assert.equal(retainedSurfacesAfterClose.length, 4);
+  assert.equal(
+    retainedSurfacesAfterClose.some(
+      (surface) => surface.taskId === closingTask.taskId,
+    ),
+    false,
+  );
   assert.equal(
     await ordinaryLiveTasks.application.evaluate(({ session }) =>
       session
@@ -2749,40 +2961,40 @@ try {
   const recoveredNewTask = ordinaryLiveTasks.window.locator("#new-task");
   assert.equal(await recoveredNewTask.isEnabled(), true);
   assert.equal(await recoveredNewTask.locator("small").innerText(), "4 / 5");
-  const reopened = ordinaryLiveTasks.application.waitForEvent("window", {
-    timeout: 15_000,
-  });
   await ordinaryLiveTasks.window.locator("#dossier-route").click();
-  const reopenedContinuityPage = await reopened;
-  await reopenedContinuityPage.waitForURL(retainedLiveConversationUrl);
-  assert.equal(
-    await reopenedContinuityPage
-      .locator('[data-message-author-role="user"]')
-      .innerText(),
-    continuityPrompt,
+  const reopenedContinuitySurface = await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    pinnedTask.taskId,
+    (surface) =>
+      surface.url === retainedLiveConversationUrl &&
+      surface.hostVisible &&
+      surface.state.userText === continuityPrompt &&
+      surface.state.assistantText.includes(
+        "keep the read-only boundary in place",
+      ),
+    "retained embedded task after process restart",
   );
+  assert.equal(reopenedContinuitySurface.state.userText, continuityPrompt);
   assert.match(
-    await reopenedContinuityPage
-      .locator('[data-message-author-role="assistant"]')
-      .innerText(),
+    reopenedContinuitySurface.state.assistantText,
     /keep the read-only boundary in place/u,
   );
   assert.equal(
     await ordinaryLiveTasks.application.evaluate(
-      ({ BrowserWindow }, expectedUrl) =>
-        BrowserWindow.getAllWindows()
-          .find((candidate) => candidate.webContents.getURL() === expectedUrl)
-          ?.getTitle() ?? null,
-      retainedLiveConversationUrl,
+      ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
     ),
-    "Pinned continuity task · Farol Next",
+    1,
   );
   cases.push(
     "ordinary-new-task-opens-actual-chatgpt-surface",
+    "ordinary-live-task-embedded-in-watch-rail",
     "five-live-chatgpt-task-capacity",
     "sixth-live-task-refused-without-replacement",
+    "live-task-global-sections-preserve-native-surfaces",
+    "live-task-compact-overlay-bounds",
     "live-task-requested-observed-state-truthful",
     "live-task-rename-pin-close-and-capacity-recovery",
+    "live-task-close-disposes-exact-surface",
     "live-task-registry-private-content-free-persistence",
     "live-task-same-conversation-after-process-restart",
     "shared-chatgpt-session-single-download-guard",

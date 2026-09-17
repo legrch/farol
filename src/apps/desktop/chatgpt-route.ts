@@ -198,6 +198,7 @@ export type ChatGptRouteOptions = Readonly<{
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
+  surfaceFactory?: ChatGptRouteSurfaceFactory;
   title?: string;
   onClosed?: (conversationUrl: string | null, taskRunning: boolean) => void;
   onConversationChanged?: (conversationUrl: string | null) => void;
@@ -211,6 +212,27 @@ export type ChatGptRouteOptions = Readonly<{
 export type ChatGptOpenResult = Readonly<{
   status: "opened" | "unreachable";
 }>;
+
+export type ChatGptRouteSurface = Readonly<{
+  kind: "window" | "embedded";
+  webContents: WebContents;
+  isDestroyed: () => boolean;
+  loadURL: (url: string) => Promise<void>;
+  reveal: () => void;
+  focus: () => void;
+  setTitle: (title: string) => void;
+  destroy: () => void;
+  onPageTitleUpdated: (
+    listener: (event: { preventDefault: () => void }) => void,
+  ) => void;
+  onClosing: (listener: () => void) => void;
+  onClosed: (listener: () => void) => void;
+}>;
+
+export type ChatGptRouteSurfaceFactory = (input: {
+  title: string;
+  webPreferences: Electron.WebPreferences;
+}) => ChatGptRouteSurface;
 
 export type ChatGptReadonlyTaskResult = Readonly<{
   state:
@@ -237,7 +259,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
 }>;
 
 export class ChatGptRoute {
-  private routeWindow: BrowserWindow | null = null;
+  private routeWindow: ChatGptRouteSurface | null = null;
   private readonly popupWindows = new Set<BrowserWindow>();
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
@@ -268,8 +290,7 @@ export class ChatGptRoute {
   async open(): Promise<ChatGptOpenResult> {
     if (this.opening) return this.opening;
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      if (this.routeWindow.isMinimized()) this.routeWindow.restore();
-      this.routeWindow.show();
+      this.routeWindow.reveal();
       this.routeWindow.focus();
       return { status: this.load === "loaded" ? "opened" : "unreachable" };
     }
@@ -293,27 +314,23 @@ export class ChatGptRoute {
       this.hardenSession(routeSession);
       this.routeSession = routeSession;
     }
-    const candidate = new BrowserWindow({
-      title: this.displayTitle,
-      width: 1080,
-      height: 760,
-      minWidth: 720,
-      minHeight: 560,
-      backgroundColor: "#111216",
-      show: false,
-      webPreferences: this.remoteWebPreferences(),
-    });
+    const candidate = this.options.surfaceFactory
+      ? this.options.surfaceFactory({
+          title: this.displayTitle,
+          webPreferences: this.remoteWebPreferences(),
+        })
+      : this.createWindowSurface();
     this.routeWindow = candidate;
     this.disposing = false;
     this.hardenContents(candidate.webContents, true);
     let closingConversationObserved = false;
     let closingConversationUrl: string | null = null;
     let closingTaskRunning = false;
-    candidate.on("page-title-updated", (event) => {
+    candidate.onPageTitleUpdated((event) => {
       event.preventDefault();
       candidate.setTitle(this.displayTitle);
     });
-    candidate.on("close", () => {
+    candidate.onClosing(() => {
       closingConversationObserved = true;
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
@@ -321,7 +338,7 @@ export class ChatGptRoute {
       closingTaskRunning = this.observedTaskRunning === true;
       this.stopTaskActivityWatch();
     });
-    candidate.on("closed", () => {
+    candidate.onClosed(() => {
       this.stopTaskActivityWatch();
       if (this.routeWindow === candidate) this.routeWindow = null;
       if (!this.disposing) {
@@ -336,6 +353,7 @@ export class ChatGptRoute {
       setTimeout(() => {
         if (
           !this.disposing &&
+          candidate.kind === "window" &&
           restoreParent &&
           parent &&
           !parent.isDestroyed()
@@ -349,14 +367,49 @@ export class ChatGptRoute {
     try {
       await candidate.loadURL(this.entryUrl);
       this.load = "loaded";
-      candidate.show();
+      candidate.reveal();
       candidate.focus();
       return { status: "opened" };
     } catch {
       this.load = "failed";
-      if (!candidate.isDestroyed()) candidate.show();
+      if (!candidate.isDestroyed()) candidate.reveal();
       return { status: "unreachable" };
     }
+  }
+
+  private createWindowSurface(): ChatGptRouteSurface {
+    const candidate = new BrowserWindow({
+      title: this.displayTitle,
+      width: 1080,
+      height: 760,
+      minWidth: 720,
+      minHeight: 560,
+      backgroundColor: "#111216",
+      show: false,
+      webPreferences: this.remoteWebPreferences(),
+    });
+    return {
+      kind: "window",
+      webContents: candidate.webContents,
+      isDestroyed: () => candidate.isDestroyed(),
+      loadURL: (url) => candidate.loadURL(url),
+      reveal: () => {
+        if (candidate.isMinimized()) candidate.restore();
+        candidate.show();
+      },
+      focus: () => candidate.focus(),
+      setTitle: (title) => candidate.setTitle(title),
+      destroy: () => candidate.destroy(),
+      onPageTitleUpdated: (listener) => {
+        candidate.on("page-title-updated", (event) => listener(event));
+      },
+      onClosing: (listener) => {
+        candidate.on("close", listener);
+      },
+      onClosed: (listener) => {
+        candidate.on("closed", listener);
+      },
+    };
   }
 
   async observe(): Promise<ChatGptPageObservation> {

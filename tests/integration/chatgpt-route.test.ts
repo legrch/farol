@@ -19,7 +19,10 @@ vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
   uploadChatGptAttachments: attachmentMock.upload,
 }));
 
-import { ChatGptRoute } from "../../src/apps/desktop/chatgpt-route";
+import {
+  ChatGptRoute,
+  type ChatGptRouteSurfaceFactory,
+} from "../../src/apps/desktop/chatgpt-route";
 
 const prepared = {
   ready: true,
@@ -73,7 +76,42 @@ function harden(
   Reflect.set(routeCandidate, "routeSession", sharedSession);
 }
 
+function embeddedSurface() {
+  let url = "about:blank";
+  const contents = Object.assign(new EventEmitter(), {
+    getURL: () => url,
+    isDestroyed: () => false,
+    setWindowOpenHandler: vi.fn(),
+  });
+  const closing = new Set<() => void>();
+  const closed = new Set<() => void>();
+  return {
+    kind: "embedded" as const,
+    webContents: contents,
+    isDestroyed: vi.fn(() => false),
+    loadURL: vi.fn(async (nextUrl: string) => {
+      url = nextUrl;
+    }),
+    reveal: vi.fn(),
+    focus: vi.fn(),
+    setTitle: vi.fn(),
+    destroy: vi.fn(() => {
+      for (const listener of closing) listener();
+      for (const listener of closed) listener();
+    }),
+    onPageTitleUpdated: vi.fn(),
+    onClosing: vi.fn((listener: () => void) => closing.add(listener)),
+    onClosed: vi.fn((listener: () => void) => closed.add(listener)),
+  };
+}
+
 beforeEach(() => {
+  const routeSession = Object.assign(new EventEmitter(), {
+    setPermissionRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+  });
+  electronMock.fromPartition.mockReset();
+  electronMock.fromPartition.mockReturnValue(routeSession);
   attachmentMock.upload.mockReset();
   attachmentMock.upload.mockResolvedValue({ status: "ready" });
 });
@@ -162,6 +200,42 @@ describe("ChatGPT route submission boundary", () => {
     expect(attachmentMock.upload).toHaveBeenCalledTimes(1);
     expect(submissions).toBe(1);
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ChatGPT embedded task surface", () => {
+  it("uses the injected task-owned surface without creating a separate window", async () => {
+    const surface = embeddedSurface();
+    const surfaceFactory = vi.fn(() => surface);
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/c/task-owned-surface",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: surfaceFactory as unknown as ChatGptRouteSurfaceFactory,
+    });
+
+    await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+    expect(surfaceFactory).toHaveBeenCalledTimes(1);
+    expect(surfaceFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "ChatGPT · Farol Next",
+        webPreferences: expect.objectContaining({
+          partition: "persist:farol-next-chatgpt",
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+        }),
+      }),
+    );
+    expect(surface.loadURL).toHaveBeenCalledWith(
+      "https://chatgpt.com/c/task-owned-surface",
+    );
+    expect(surface.reveal).toHaveBeenCalledTimes(1);
+    expect(surface.focus).toHaveBeenCalledTimes(1);
+
+    candidate.dispose();
+    expect(surface.destroy).toHaveBeenCalledTimes(1);
   });
 });
 

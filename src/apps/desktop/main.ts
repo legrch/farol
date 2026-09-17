@@ -88,7 +88,11 @@ import {
   buildChatGptAttachmentTaskPrompt,
   buildChatGptReadonlyTaskPrompt,
 } from "./chatgpt-readonly-task";
-import { ChatGptRoute } from "./chatgpt-route";
+import {
+  ChatGptRoute,
+  type ChatGptRouteSurface,
+  type ChatGptRouteSurfaceFactory,
+} from "./chatgpt-route";
 import {
   PrivateLiveTaskStore,
   type LiveTaskStoreRecord,
@@ -510,6 +514,8 @@ function verificationWorkspaceAction(
 
 const windowOpenCoordinator = new WindowOpenCoordinator();
 const taskViews = new Map<string, WebContentsView>();
+const taskViewKinds = new Map<string, "runtime" | "chatgpt">();
+const attachedTaskViewIds = new Set<string>();
 const streamControllers = new Map<string, AbortController>();
 const taskSurfaceFailures = new Map<string, string>();
 const pendingComputer = new Map<
@@ -681,6 +687,7 @@ function createLiveChatGptRoute(
     initialUrl: routeInitialUrl,
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
+    surfaceFactory: liveChatGptSurfaceFactory(taskId),
     title: `${label} · Farol Next`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
@@ -765,6 +772,8 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
     if (current?.lifecycle === "failed") {
       setLiveTaskLifecycle(taskId, "idle");
     }
+    applyLayout();
+    focusForLayoutAfterRendererCommit();
     return true;
   } catch {
     setLiveTaskLifecycle(taskId, "failed");
@@ -777,7 +786,7 @@ async function runProductTaskCommand(
 ): Promise<ProductTaskCommandResult> {
   const command = ProductTaskCommandSchema.safeParse(value);
   if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
-  if (demoMode || runtimeState !== "ready") {
+  if (demoMode) {
     return taskFailure("TASKS_UNAVAILABLE");
   }
   if (taskMutationInFlight) return taskFailure("TASK_OPERATION_IN_PROGRESS");
@@ -853,6 +862,7 @@ async function runProductTaskCommand(
           ? (tasks[0]?.taskId ?? "")
           : selectedTaskId;
       publishTasksState();
+      applyLayout();
       publishLayout();
       return taskSuccess(selectedTaskId || null);
     }
@@ -3242,9 +3252,103 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+function attachTaskView(taskId: string, view: WebContentsView): void {
+  if (
+    !window ||
+    window.isDestroyed() ||
+    view.webContents.isDestroyed() ||
+    attachedTaskViewIds.has(taskId)
+  ) {
+    return;
+  }
+  window.contentView.addChildView(view);
+  attachedTaskViewIds.add(taskId);
+}
+
+function attachTaskViews(): void {
+  for (const [taskId, view] of taskViews) attachTaskView(taskId, view);
+}
+
+function detachTaskViews(): void {
+  const host = window;
+  if (host && !host.isDestroyed()) {
+    for (const taskId of attachedTaskViewIds) {
+      const view = taskViews.get(taskId);
+      if (view) host.contentView.removeChildView(view);
+    }
+  }
+  attachedTaskViewIds.clear();
+}
+
+function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
+  return ({ webPreferences }): ChatGptRouteSurface => {
+    const existing = taskViews.get(taskId);
+    if (existing && !existing.webContents.isDestroyed()) {
+      throw new Error("CHATGPT_TASK_SURFACE_ALREADY_EXISTS");
+    }
+    const view = new WebContentsView({
+      webPreferences: {
+        ...webPreferences,
+        backgroundThrottling: false,
+      },
+    });
+    const closingListeners = new Set<() => void>();
+    const closedListeners = new Set<() => void>();
+    let closingNotified = false;
+    let closedNotified = false;
+    const notifyClosing = () => {
+      if (closingNotified) return;
+      closingNotified = true;
+      for (const listener of closingListeners) listener();
+    };
+    const notifyClosed = () => {
+      if (closedNotified) return;
+      closedNotified = true;
+      for (const listener of closedListeners) listener();
+    };
+    view.setVisible(false);
+    taskViews.set(taskId, view);
+    taskViewKinds.set(taskId, "chatgpt");
+    attachTaskView(taskId, view);
+    view.webContents.on("before-input-event", (event, input) => {
+      if (handleShortcut(input)) event.preventDefault();
+    });
+    view.webContents.once("destroyed", notifyClosed);
+    return {
+      kind: "embedded",
+      webContents: view.webContents,
+      isDestroyed: () => view.webContents.isDestroyed(),
+      loadURL: (url) => view.webContents.loadURL(url),
+      reveal: () => {
+        attachTaskView(taskId, view);
+        applyLayout();
+      },
+      focus: () => {
+        if (view.getVisible()) view.webContents.focus();
+      },
+      setTitle: () => undefined,
+      destroy: () => {
+        if (view.webContents.isDestroyed()) {
+          notifyClosed();
+          return;
+        }
+        notifyClosing();
+        disposeTaskView(taskId, view);
+        notifyClosed();
+      },
+      onPageTitleUpdated: (listener) => {
+        view.webContents.on("page-title-updated", (event) => listener(event));
+      },
+      onClosing: (listener) => closingListeners.add(listener),
+      onClosed: (listener) => closedListeners.add(listener),
+    };
+  };
+}
+
 function disposeTaskView(taskId: string, view: WebContentsView): void {
   taskViews.delete(taskId);
-  if (window && !window.isDestroyed()) {
+  taskViewKinds.delete(taskId);
+  if (attachedTaskViewIds.delete(taskId) && window && !window.isDestroyed()) {
     window.contentView.removeChildView(view);
   }
   if (!view.webContents.isDestroyed()) {
@@ -3252,8 +3356,9 @@ function disposeTaskView(taskId: string, view: WebContentsView): void {
   }
 }
 
-function disposeTaskViews(): void {
+function disposeTaskViews(kind?: "runtime" | "chatgpt"): void {
   for (const [taskId, view] of [...taskViews]) {
+    if (kind && taskViewKinds.get(taskId) !== kind) continue;
     disposeTaskView(taskId, view);
   }
 }
@@ -3291,7 +3396,7 @@ function handleRuntimeExit(code: number | null): void {
   stopStreams();
   taskSurfaceFailures.clear();
   pendingComputer.clear();
-  disposeTaskViews();
+  disposeTaskViews("runtime");
   publishRuntimeStatus();
 }
 
@@ -3426,7 +3531,11 @@ function handleShortcut(input: Input): boolean {
     shellOverlay = "none";
     applyLayout();
     publishLayout();
-    focusForLayout();
+    if (liveTaskRoutes.has(selectedTaskId)) {
+      void openLiveTaskSurface(selectedTaskId);
+    } else {
+      focusForLayout();
+    }
     return true;
   }
   if (input.meta && /^[1-4]$/u.test(input.key)) {
@@ -3437,7 +3546,11 @@ function handleShortcut(input: Input): boolean {
     shellOverlay = "none";
     applyLayout();
     publishLayout();
-    focusForLayout();
+    if (section === "browser" && liveTaskRoutes.has(selectedTaskId)) {
+      void openLiveTaskSurface(selectedTaskId);
+    } else {
+      focusForLayout();
+    }
     return true;
   }
   return false;
@@ -3446,6 +3559,7 @@ function handleShortcut(input: Input): boolean {
 function applyLayout(): void {
   if (!window) return;
   const [width = 1, height = 1] = window.getContentSize();
+  const selectedViewKind = taskViewKinds.get(selectedTaskId);
   const layout = deriveSurfaceLayout({
     width,
     height,
@@ -3453,7 +3567,7 @@ function applyLayout(): void {
     overlay: shellOverlay,
     section,
     setupOpen,
-    runtimeReady: runtimeState === "ready",
+    runtimeReady: selectedViewKind === "chatgpt" || runtimeState === "ready",
     selectedTaskPresent: taskViews.has(selectedTaskId),
   });
   for (const [taskId, view] of taskViews) {
@@ -3470,6 +3584,11 @@ async function createTaskViews(): Promise<void> {
   if (!base || !installNetworkFence()) return;
   for (const task of activeRuntime.tasks) {
     if (runtimeState !== "ready" || runtime !== activeRuntime) return;
+    const retained = taskViews.get(task.taskId);
+    if (retained && !retained.webContents.isDestroyed()) {
+      attachTaskView(task.taskId, retained);
+      continue;
+    }
     const view = new WebContentsView({
       webPreferences: {
         partition: partitionName(),
@@ -3481,7 +3600,8 @@ async function createTaskViews(): Promise<void> {
     });
     view.setVisible(false);
     taskViews.set(task.taskId, view);
-    window.contentView.addChildView(view);
+    taskViewKinds.set(task.taskId, "runtime");
+    attachTaskView(task.taskId, view);
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     view.webContents.on("will-navigate", (event, url) => {
       if (!url.startsWith(`${base}/`)) event.preventDefault();
@@ -3719,7 +3839,10 @@ async function createWindow(): Promise<void> {
     applyLayout();
     publishWindowState();
   });
-  window.on("focus", publishWindowState);
+  window.on("focus", () => {
+    publishWindowState();
+    focusForLayoutAfterRendererCommit();
+  });
   window.on("blur", publishWindowState);
   window.on("enter-full-screen", () => {
     applyLayout();
@@ -3729,15 +3852,19 @@ async function createWindow(): Promise<void> {
     applyLayout();
     publishWindowState();
   });
+  window.on("close", detachTaskViews);
   window.on("closed", () => {
     stopStreams();
-    disposeTaskViews();
-    taskViews.clear();
+    attachedTaskViewIds.clear();
     window = null;
   });
   await window.loadFile(path.join(directory, "shell.html"));
   publishWindowState();
+  attachTaskViews();
   await createTaskViews();
+  if (!demoMode && selectedTaskId) {
+    await openLiveTaskSurface(selectedTaskId);
+  }
   for (const task of runtime?.tasks ?? []) {
     void consumeSse(task).catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
@@ -3766,8 +3893,8 @@ function ensureWindow(): Promise<void> {
 
 function recoverWindowOpenFailure(): void {
   stopStreams();
-  disposeTaskViews();
-  taskViews.clear();
+  disposeTaskViews("runtime");
+  detachTaskViews();
   pendingComputer.clear();
   taskSurfaceFailures.clear();
   const failedWindow = window;
@@ -3783,7 +3910,9 @@ function isPrimaryReady(): boolean {
   return primaryStartupReady({
     runtimeState,
     windowReady: window !== null && !window.isDestroyed(),
-    taskViewCount: taskViews.size,
+    taskViewCount: [...taskViewKinds.values()].filter(
+      (kind) => kind === "runtime",
+    ).length,
     expectedTaskViewCount: expectedTasks.length,
   });
 }
@@ -3945,6 +4074,7 @@ async function main(): Promise<void> {
     agentCheck?.host.dispose();
     if (agentCheck) void agentCheck.client.close().catch(() => undefined);
     disposeChatGptRoutes();
+    disposeTaskViews("runtime");
     stopRuntime();
   });
   app.on("window-all-closed", () => {

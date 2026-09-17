@@ -429,15 +429,12 @@ function renderBrowser(): void {
     title.textContent = "Selected task surface is unavailable";
     detail.textContent =
       "This task stream failed in isolation. Other task surfaces remain independent.";
-  } else if (
-    bootstrap.runtimeState === "ready" &&
-    task?.provider === "chatgpt"
-  ) {
+  } else if (task?.provider === "chatgpt") {
     loading.dataset.state = "ready";
     mark.className = "state-lamp complete";
     title.textContent = "Isolated ChatGPT task";
     detail.textContent =
-      "The separate task window is the actual provider surface; Farol does not mirror its conversation.";
+      "The actual provider page is embedded below this dossier; Farol does not mirror its conversation.";
   } else if (bootstrap.runtimeState === "ready") {
     loading.dataset.state = "ready";
     mark.className = "state-lamp running";
@@ -608,7 +605,7 @@ function renderDossier(): void {
   route.disabled = state.tone === "connecting";
   route.innerHTML =
     task.provider === "chatgpt"
-      ? "Open Browser <span>›</span>"
+      ? "Focus page <span>›</span>"
       : state.tone === "waiting"
         ? "Review request <span>›</span>"
         : state.tone === "unavailable"
@@ -2263,10 +2260,7 @@ function render(notify = true): void {
     bootstrap.configuration.settings.setup.chatgpt.verified !== null;
   const taskCapacityAvailable = bootstrap.tasks.length < 5;
   newTask.disabled =
-    bootstrap.demoMode ||
-    bootstrap.runtimeState !== "ready" ||
-    !chatGptReady ||
-    !taskCapacityAvailable;
+    bootstrap.demoMode || !chatGptReady || !taskCapacityAvailable;
   newTask.title = bootstrap.demoMode
     ? "Unavailable in explicit demo mode"
     : !chatGptReady
