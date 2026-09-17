@@ -328,6 +328,8 @@ export type ChatGptReadonlyTaskResult = Readonly<{
   deltaCount: number;
   observedCharacters: number;
   outputText?: string;
+  turnUserId?: string | null;
+  turnAssistantId?: string | null;
 }>;
 
 export type ChatGptTaskTextDelta = Readonly<{
@@ -543,6 +545,15 @@ export class ChatGptRoute {
     let observedCharacters = 0;
     let observedText = "";
     let sequence = 0;
+    let correlatedUserId: string | null = null;
+    let correlatedAssistantId: string | null = null;
+    const correlation = () =>
+      correlatedUserId === null && correlatedAssistantId === null
+        ? {}
+        : {
+            turnUserId: correlatedUserId,
+            turnAssistantId: correlatedAssistantId,
+          };
     try {
       const opened = await this.open();
       if (opened.status !== "opened") {
@@ -652,8 +663,6 @@ export class ChatGptRoute {
 
       let accepted = false;
       let stablePolls = 0;
-      let correlatedUserId: string | null = null;
-      let correlatedAssistantId: string | null = null;
       const pollMs = this.options.taskPollMs ?? 250;
       const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       while (Date.now() < deadline) {
@@ -665,6 +674,7 @@ export class ChatGptRoute {
             deltaCount,
             observedCharacters,
             outputText: observedText,
+            ...correlation(),
           };
         }
         const currentUrl = active.webContents.getURL();
@@ -675,6 +685,7 @@ export class ChatGptRoute {
             deltaCount,
             observedCharacters,
             outputText: observedText,
+            ...correlation(),
           };
         }
         const probe = taskProbeSchema.safeParse(
@@ -690,6 +701,7 @@ export class ChatGptRoute {
             deltaCount,
             observedCharacters,
             outputText: observedText,
+            ...correlation(),
           };
         }
         if (probe.data.signInVisible || probe.data.errorVisible) {
@@ -703,6 +715,7 @@ export class ChatGptRoute {
             deltaCount,
             observedCharacters,
             outputText: observedText,
+            ...correlation(),
           };
         }
         if (probe.data.turnUserId !== null) {
@@ -715,6 +728,7 @@ export class ChatGptRoute {
               deltaCount,
               observedCharacters,
               outputText: observedText,
+              ...correlation(),
             };
           }
         }
@@ -729,6 +743,7 @@ export class ChatGptRoute {
               deltaCount,
               observedCharacters,
               outputText: observedText,
+              ...correlation(),
             };
           }
           if (correlatedAssistantId === null) {
@@ -740,6 +755,7 @@ export class ChatGptRoute {
               deltaCount,
               observedCharacters,
               outputText: observedText,
+              ...correlation(),
             };
           }
         }
@@ -809,6 +825,7 @@ export class ChatGptRoute {
         deltaCount,
         observedCharacters,
         outputText: observedText,
+        ...correlation(),
       };
     } catch {
       const submissionMayHaveOccurred =
@@ -824,7 +841,159 @@ export class ChatGptRoute {
         deltaCount,
         observedCharacters,
         outputText: observedText,
+        ...correlation(),
       };
+    } finally {
+      this.taskInFlight = false;
+    }
+  }
+
+  async observeReadonlyTask(
+    input: Readonly<{
+      prompt: string;
+      turnUserId: string;
+      turnAssistantId: string | null;
+    }>,
+    observer: ChatGptTaskObserver = {},
+  ): Promise<ChatGptReadonlyTaskResult> {
+    if (this.taskInFlight || !input.turnUserId || !input.prompt) {
+      return {
+        state: "outcome_unknown",
+        code: this.taskInFlight
+          ? "CHATGPT_TASK_IN_PROGRESS"
+          : "CHATGPT_TASK_OUTPUT_CHANGED",
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: "",
+        turnUserId: input.turnUserId || null,
+        turnAssistantId: input.turnAssistantId,
+      };
+    }
+    this.taskInFlight = true;
+    let deltaCount = 0;
+    let observedCharacters = 0;
+    let observedText = "";
+    let sequence = 0;
+    let correlatedAssistantId = input.turnAssistantId;
+    const result = (
+      code: NonNullable<ChatGptReadonlyTaskResult["code"]>,
+    ): ChatGptReadonlyTaskResult => ({
+      state: "outcome_unknown",
+      code,
+      deltaCount,
+      observedCharacters,
+      outputText: observedText,
+      turnUserId: input.turnUserId,
+      turnAssistantId: correlatedAssistantId,
+    });
+    try {
+      const opened = await this.open();
+      if (opened.status !== "opened") {
+        return result("CHATGPT_PAGE_UNREACHABLE");
+      }
+      const readiness = await this.observe();
+      if (readiness.state !== "authenticated") {
+        return result(
+          readiness.state === "signed_out"
+            ? "CHATGPT_SIGN_IN_REQUIRED"
+            : "CHATGPT_UI_UNRECOGNIZED",
+        );
+      }
+      const candidate = this.routeWindow;
+      if (!candidate || candidate.isDestroyed()) {
+        return result("CHATGPT_TASK_PAGE_LOST");
+      }
+      let stablePolls = 0;
+      const pollMs = this.options.taskPollMs ?? 250;
+      const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+      while (Date.now() < deadline) {
+        const active = this.routeWindow;
+        if (!active || active !== candidate || active.isDestroyed()) {
+          return result("CHATGPT_TASK_PAGE_LOST");
+        }
+        const currentUrl = active.webContents.getURL();
+        if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
+          return result("CHATGPT_TASK_PAGE_LOST");
+        }
+        const probe = taskProbeSchema.safeParse(
+          await active.webContents.executeJavaScript(
+            taskProbeScript(input.prompt, []),
+            true,
+          ),
+        );
+        if (!probe.success) return result("CHATGPT_TASK_ERROR");
+        if (probe.data.signInVisible || probe.data.errorVisible) {
+          return result(
+            probe.data.signInVisible
+              ? "CHATGPT_SIGN_IN_REQUIRED"
+              : probe.data.errorKind === "usage_limited"
+                ? "CHATGPT_USAGE_LIMITED"
+                : "CHATGPT_TASK_ERROR",
+          );
+        }
+        if (probe.data.turnUserId !== input.turnUserId) {
+          stablePolls = 0;
+          await delay(pollMs);
+          continue;
+        }
+        if (probe.data.turnAssistantId === null) {
+          stablePolls = 0;
+          await delay(pollMs);
+          continue;
+        }
+        if (correlatedAssistantId === null) {
+          correlatedAssistantId = probe.data.turnAssistantId;
+        } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
+          return result("CHATGPT_TASK_OUTPUT_CHANGED");
+        }
+        if (probe.data.assistantText !== observedText) {
+          if (
+            observedText.startsWith(probe.data.assistantText) ||
+            !probe.data.assistantText.startsWith(observedText)
+          ) {
+            return result("CHATGPT_TASK_OUTPUT_CHANGED");
+          }
+          const delta = probe.data.assistantText.slice(observedText.length);
+          observedText = probe.data.assistantText;
+          observedCharacters = observedText.length;
+          deltaCount += 1;
+          sequence += 1;
+          await observer.onTextDelta?.({
+            sequence,
+            delta,
+            text: observedText,
+            observedCharacters,
+          });
+          stablePolls = 0;
+        } else if (
+          observedCharacters > 0 &&
+          !probe.data.busy &&
+          probe.data.sendVisible
+        ) {
+          stablePolls += 1;
+        } else {
+          stablePolls = 0;
+        }
+        if (
+          observedCharacters > 0 &&
+          probe.data.sendVisible &&
+          stablePolls >= 3
+        ) {
+          return {
+            state: "completed",
+            code: null,
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            turnUserId: input.turnUserId,
+            turnAssistantId: correlatedAssistantId,
+          };
+        }
+        await delay(pollMs);
+      }
+      return result("CHATGPT_TASK_TIMEOUT");
+    } catch {
+      return result("CHATGPT_TASK_ERROR");
     } finally {
       this.taskInFlight = false;
     }

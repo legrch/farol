@@ -442,6 +442,66 @@ describe("ChatGPT route streaming observation", () => {
     });
   });
 
+  it("returns the observed user-message identity when a correlated reply is still late", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(
+        correlatedProbe("", {
+          busy: true,
+          sendVisible: false,
+          turnUserId: "user-current",
+          turnAssistantId: null,
+        }),
+      );
+
+    await expect(
+      streamingTaskRoute(executeJavaScript, 20).runReadonlyTask(
+        "preserve this context",
+      ),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+      turnUserId: "user-current",
+      turnAssistantId: null,
+    });
+  });
+
+  it("observes one known late provider turn without touching the composer or send control", async () => {
+    const executeJavaScript = vi.fn().mockResolvedValue(
+      correlatedProbe("Recovered summary", {
+        busy: false,
+        sendVisible: true,
+        turnUserId: "user-current",
+        turnAssistantId: "assistant-current",
+      }),
+    );
+    const candidate = streamingTaskRoute(executeJavaScript);
+
+    await expect(
+      candidate.observeReadonlyTask({
+        prompt: "preserve this context",
+        turnUserId: "user-current",
+        turnAssistantId: null,
+      }),
+    ).resolves.toEqual({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: "Recovered summary".length,
+      outputText: "Recovered summary",
+      turnUserId: "user-current",
+      turnAssistantId: "assistant-current",
+    });
+    expect(executeJavaScript).toHaveBeenCalledTimes(4);
+    expect(
+      executeJavaScript.mock.calls.every(
+        ([script]) => !String(script).includes("send.click()"),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps a provider error after streamed text outcome-unknown", async () => {
     const executeJavaScript = vi
       .fn()
@@ -467,6 +527,8 @@ describe("ChatGPT route streaming observation", () => {
       deltaCount: 1,
       observedCharacters: 7,
       outputText: "Partial",
+      turnUserId: "user-current",
+      turnAssistantId: "assistant-current",
     });
     expect(deltas).toHaveLength(1);
   });

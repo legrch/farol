@@ -271,6 +271,45 @@ describe("ChatGPT summary-only context driver", () => {
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
   });
 
+  it("observes a late reply for the same correlated summary without resubmitting", async () => {
+    const state = await store();
+    const retained = Object.assign(
+      route({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: "",
+        turnUserId: "summary-user-1",
+        turnAssistantId: null,
+      }),
+      {
+        observeReadonlyTask: vi.fn(async () => ({
+          state: "completed" as const,
+          code: null,
+          deltaCount: 1,
+          observedCharacters: JSON.stringify(content).length,
+          outputText: JSON.stringify(content),
+          turnUserId: "summary-user-1",
+          turnAssistantId: "summary-assistant-1",
+        })),
+      },
+    );
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+
+    await expect(
+      summary.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "outcome_unknown" });
+    await expect(
+      summary.observe({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(retained.observeReadonlyTask).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks on an explicit usage limit and releases only an owned fallback", async () => {
     const state = await store();
     const fallback = route({

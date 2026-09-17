@@ -28,6 +28,13 @@ const MAXIMUM_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 
 export interface ChatGptContextSummaryRoute {
   runReadonlyTask(prompt: string): Promise<ChatGptReadonlyTaskResult>;
+  observeReadonlyTask?(
+    input: Readonly<{
+      prompt: string;
+      turnUserId: string;
+      turnAssistantId: string | null;
+    }>,
+  ): Promise<ChatGptReadonlyTaskResult>;
   currentConversationUrl(): string | null;
   retainedConversationUrl(): string | null;
   resetConversation(): void;
@@ -48,6 +55,12 @@ export type ChatGptContextSummaryDriverOptions = Readonly<{
 type RouteLease = Readonly<{
   route: ChatGptContextSummaryRoute;
   owned: boolean;
+}>;
+
+type PendingObservation = Readonly<{
+  prompt: string;
+  turnUserId: string;
+  turnAssistantId: string | null;
 }>;
 
 function digest(value: string): string {
@@ -179,6 +192,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   private readonly routes = new Map<string, RouteLease>();
   private readonly dispatched = new Set<string>();
   private readonly received = new Map<string, StoredContextSummary>();
+  private readonly pending = new Map<string, PendingObservation>();
   private readonly maximumPromptCharacters: number;
 
   constructor(private readonly options: ChatGptContextSummaryDriverOptions) {
@@ -285,12 +299,115 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       return { status: "blocked", code: "SUMMARY_SIGN_IN_REQUIRED" };
     }
     if (result.state === "outcome_unknown") {
+      if (result.turnUserId) {
+        this.pending.set(
+          operationKey(input.request.binding, input.request.operationId),
+          {
+            prompt: prepared.prompt,
+            turnUserId: result.turnUserId,
+            turnAssistantId: result.turnAssistantId ?? null,
+          },
+        );
+      }
       return {
         status: "outcome_unknown",
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
+    return this.acceptCompletedResult(input, lease, result);
+  }
 
+  async observe(
+    input: CodexContextSummaryInput,
+  ): Promise<ContextSummaryReceipt> {
+    if (!validInput(input)) {
+      return { status: "blocked", code: "SUMMARY_CAPABILITY_INVALID" };
+    }
+    const key = operationKey(input.request.binding, input.request.operationId);
+    const received = this.received.get(key);
+    if (received) {
+      try {
+        await this.options.store.putSummary(received);
+      } catch {
+        // The exact received bytes and their source route remain owned in
+        // memory. A later observation retries only this local publication.
+      }
+      return completedReceipt(received);
+    }
+    let summary: StoredContextSummary | null;
+    try {
+      summary = await this.options.store.getSummary(
+        input.request.binding,
+        input.request.operationId,
+      );
+    } catch {
+      return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+    }
+    if (summary) return completedReceipt(summary);
+
+    const pending = this.pending.get(key);
+    const lease = this.routes.get(input.request.operationId);
+    if (!pending || !lease?.route.observeReadonlyTask) {
+      return {
+        status: "outcome_unknown",
+        code: "SUMMARY_SUBMISSION_UNRESOLVED",
+      };
+    }
+    let observed: ChatGptReadonlyTaskResult;
+    try {
+      observed = await lease.route.observeReadonlyTask(pending);
+    } catch {
+      return {
+        status: "outcome_unknown",
+        code: "SUMMARY_SUBMISSION_UNRESOLVED",
+      };
+    }
+    if (observed.state !== "completed") {
+      return {
+        status: "outcome_unknown",
+        code: "SUMMARY_SUBMISSION_UNRESOLVED",
+      };
+    }
+    return this.acceptCompletedResult(input, lease, observed);
+  }
+
+  async retire(
+    input: Parameters<CodexContextSummaryDriver["retire"]>[0],
+  ): Promise<SourceRetirementReceipt> {
+    if (
+      input.operationId !== input.source.operationId ||
+      !sameContextBinding(input.binding, input.source.binding)
+    ) {
+      return { status: "blocked", code: "SUMMARY_SOURCE_MISMATCH" };
+    }
+    const lease = this.routes.get(input.operationId);
+    try {
+      if (lease) {
+        if (lease.owned) lease.route.dispose();
+        else lease.route.resetConversation();
+      } else if (input.source.source === "retained_agent") {
+        this.options.routes.retained(input.binding)?.resetConversation();
+      }
+    } catch {
+      return { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" };
+    }
+    try {
+      await this.options.store.deleteSummary(input.binding, input.operationId);
+    } catch {
+      return { status: "blocked", code: "CONTEXT_SUMMARY_CLEANUP_FAILED" };
+    }
+    this.routes.delete(input.operationId);
+    this.dispatched.delete(input.operationId);
+    this.received.delete(operationKey(input.binding, input.operationId));
+    this.pending.delete(operationKey(input.binding, input.operationId));
+    return { status: "retired" };
+  }
+
+  private async acceptCompletedResult(
+    input: CodexContextSummaryInput,
+    lease: RouteLease,
+    result: ChatGptReadonlyTaskResult,
+  ): Promise<ContextSummaryReceipt> {
     let candidate: unknown;
     try {
       candidate = JSON.parse(result.outputText ?? "");
@@ -343,80 +460,15 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       sourceCursor: `conversation:${digest(conversationUrl)}`,
       content: boundedContent,
     };
-    this.received.set(
-      operationKey(input.request.binding, input.request.operationId),
-      summary,
-    );
+    const key = operationKey(input.request.binding, input.request.operationId);
+    this.pending.delete(key);
+    this.received.set(key, summary);
     try {
       await this.options.store.putSummary(summary);
     } catch {
       return completedReceipt(summary);
     }
     return completedReceipt(summary);
-  }
-
-  async observe(
-    input: CodexContextSummaryInput,
-  ): Promise<ContextSummaryReceipt> {
-    if (!validInput(input)) {
-      return { status: "blocked", code: "SUMMARY_CAPABILITY_INVALID" };
-    }
-    const key = operationKey(input.request.binding, input.request.operationId);
-    const received = this.received.get(key);
-    if (received) {
-      try {
-        await this.options.store.putSummary(received);
-      } catch {
-        // The exact received bytes and their source route remain owned in
-        // memory. A later observation retries only this local publication.
-      }
-      return completedReceipt(received);
-    }
-    try {
-      const summary = await this.options.store.getSummary(
-        input.request.binding,
-        input.request.operationId,
-      );
-      return summary
-        ? completedReceipt(summary)
-        : {
-            status: "outcome_unknown",
-            code: "SUMMARY_SUBMISSION_UNRESOLVED",
-          };
-    } catch {
-      return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
-    }
-  }
-
-  async retire(
-    input: Parameters<CodexContextSummaryDriver["retire"]>[0],
-  ): Promise<SourceRetirementReceipt> {
-    if (
-      input.operationId !== input.source.operationId ||
-      !sameContextBinding(input.binding, input.source.binding)
-    ) {
-      return { status: "blocked", code: "SUMMARY_SOURCE_MISMATCH" };
-    }
-    const lease = this.routes.get(input.operationId);
-    try {
-      if (lease) {
-        if (lease.owned) lease.route.dispose();
-        else lease.route.resetConversation();
-      } else if (input.source.source === "retained_agent") {
-        this.options.routes.retained(input.binding)?.resetConversation();
-      }
-    } catch {
-      return { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" };
-    }
-    try {
-      await this.options.store.deleteSummary(input.binding, input.operationId);
-    } catch {
-      return { status: "blocked", code: "CONTEXT_SUMMARY_CLEANUP_FAILED" };
-    }
-    this.routes.delete(input.operationId);
-    this.dispatched.delete(input.operationId);
-    this.received.delete(operationKey(input.binding, input.operationId));
-    return { status: "retired" };
   }
 
   private releaseOwnedLease(operationId: string): boolean {
