@@ -34,6 +34,10 @@ export type CodexAppServerClientOptions = Readonly<{
   shutdownTimeoutMs?: number;
 }>;
 
+export type CodexAppServerRequestOptions = Readonly<{
+  timeoutMs?: number;
+}>;
+
 type ServerRequestHandler = (params: unknown) => Promise<unknown>;
 type ServerNotificationHandler = (params: unknown) => void;
 
@@ -138,20 +142,31 @@ export class CodexAppServerClient {
     this.ready = true;
   }
 
-  request(method: string, params: unknown): Promise<unknown> {
+  request(
+    method: string,
+    params: unknown,
+    options: CodexAppServerRequestOptions = {},
+  ): Promise<unknown> {
     if (this.closed) {
       return Promise.reject(protocolError("CODEX_APP_SERVER_CLOSED"));
     }
     if (method.length === 0) {
       return Promise.reject(protocolError("CODEX_APP_SERVER_METHOD_INVALID"));
     }
+    const requestedTimeoutMs = options.timeoutMs ?? this.requestTimeoutMs;
+    if (!Number.isSafeInteger(requestedTimeoutMs) || requestedTimeoutMs < 1) {
+      return Promise.reject(
+        protocolError("CODEX_APP_SERVER_REQUEST_TIMEOUT_INVALID"),
+      );
+    }
+    const timeoutMs = Math.min(requestedTimeoutMs, this.requestTimeoutMs);
     const id = this.nextId;
     this.nextId += 1;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(protocolError("CODEX_APP_SERVER_REQUEST_TIMEOUT"));
-      }, this.requestTimeoutMs);
+      }, timeoutMs);
       timer.unref?.();
       this.pending.set(id, { resolve, reject, timer });
       try {

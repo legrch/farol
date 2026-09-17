@@ -14,7 +14,11 @@ import type { AgentWorkspaceProbe } from "../../app/port/workspace-probe";
 import type { ChildCorrelation } from "../../domain/assignment";
 
 export type CodexNativeAgentPeer = Readonly<{
-  request(method: string, params: unknown): Promise<unknown>;
+  request(
+    method: string,
+    params: unknown,
+    options?: Readonly<{ timeoutMs?: number }>,
+  ): Promise<unknown>;
   handleServerRequest(
     method: string,
     handler: (params: unknown) => Promise<unknown>,
@@ -878,14 +882,21 @@ export class CodexNativeAgentHost implements AgentHost {
           code: "AGENT_WAIT_ACK_LOST",
         };
       }
+      const remainingReadBudgetMs = deadline - Date.now();
+      if (remainingReadBudgetMs <= 0) {
+        return { status: "running", correlation };
+      }
       let child: ThreadSnapshot;
       let parent: ThreadSnapshot;
       try {
         [child, parent] = await Promise.all([
-          this.readThread(correlation.childId),
-          this.readThread(correlation.parentThreadId),
+          this.readThread(correlation.childId, remainingReadBudgetMs),
+          this.readThread(correlation.parentThreadId, remainingReadBudgetMs),
         ]);
       } catch {
+        if (Date.now() >= deadline) {
+          return { status: "running", correlation };
+        }
         return {
           status: "outcome_unknown",
           correlation,
@@ -925,8 +936,11 @@ export class CodexNativeAgentHost implements AgentHost {
           code: "AGENT_WAIT_ACK_LOST",
         };
       }
-      if (Date.now() >= deadline) return { status: "running", correlation };
-      await sleep(this.options.pollIntervalMs);
+      const remainingPollBudgetMs = deadline - Date.now();
+      if (remainingPollBudgetMs <= 0) {
+        return { status: "running", correlation };
+      }
+      await sleep(Math.min(this.options.pollIntervalMs, remainingPollBudgetMs));
     }
   }
 
@@ -1359,12 +1373,19 @@ export class CodexNativeAgentHost implements AgentHost {
     return failure;
   }
 
-  private async readThread(threadId: string): Promise<ThreadSnapshot> {
+  private async readThread(
+    threadId: string,
+    timeoutMs?: number,
+  ): Promise<ThreadSnapshot> {
     const parsed = threadReadSchema.safeParse(
-      await this.peer.request("thread/read", {
-        threadId,
-        includeTurns: true,
-      }),
+      await this.peer.request(
+        "thread/read",
+        {
+          threadId,
+          includeTurns: true,
+        },
+        timeoutMs === undefined ? undefined : { timeoutMs },
+      ),
     );
     if (!parsed.success || parsed.data.thread.id !== threadId) {
       throw error("CODEX_AGENT_THREAD_INVALID");

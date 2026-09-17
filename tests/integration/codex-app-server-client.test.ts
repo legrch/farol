@@ -245,6 +245,21 @@ describe("Codex App Server client", () => {
     await client.close();
   });
 
+  it("applies a shorter timeout to one observation request", async () => {
+    const process = new FakeProcess();
+    const client = new CodexAppServerClient(process, {
+      requestTimeoutMs: 1_000,
+      clientInfo: { name: "farol-next", version: "0.1.0" },
+    });
+    const startedAt = Date.now();
+    const pending = client.request("thread/read", {}, { timeoutMs: 5 });
+    await nextLine(process.stdin);
+
+    await expect(pending).rejects.toThrow("CODEX_APP_SERVER_REQUEST_TIMEOUT");
+    expect(Date.now() - startedAt).toBeLessThan(100);
+    await client.close();
+  });
+
   it("fails closed on an oversized protocol frame", async () => {
     const process = new FakeProcess();
     const client = new CodexAppServerClient(process, {

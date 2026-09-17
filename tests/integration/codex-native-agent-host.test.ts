@@ -399,6 +399,26 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
   }
 }
 
+class SlowObservationPeer extends NativeAgentPeer {
+  slowReads = false;
+  readonly readTimeouts: (number | null)[] = [];
+
+  override async request(
+    method: string,
+    params: unknown,
+    options?: Readonly<{ timeoutMs?: number }>,
+  ): Promise<unknown> {
+    if (this.slowReads && method === "thread/read") {
+      this.readTimeouts.push(options?.timeoutMs ?? null);
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, (options?.timeoutMs ?? 80) + 2),
+      );
+      throw new Error("OBSERVATION_TIMEOUT");
+    }
+    return super.request(method, params);
+  }
+}
+
 function verifiedWorkspaceProbe(): AgentWorkspaceProbe {
   return {
     verify: async () => ({ status: "verified" }),
@@ -507,6 +527,39 @@ describe("native Codex Agent host", () => {
       resultRef: "codex-app-server://thread/child-thread-a/turn/child-turn-a",
       workspaceEnforcement: "verified",
     });
+  });
+
+  it("bounds each history read by the remaining observation budget", async () => {
+    const peer = new SlowObservationPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 8,
+        pollIntervalMs: 1,
+        nonce: () => "proof-a",
+        now: () => 1,
+      },
+      verifiedWorkspaceProbe(),
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.slowReads = true;
+    const startedAt = Date.now();
+
+    await expect(host.wait(spawned.correlation)).resolves.toEqual({
+      status: "running",
+      correlation: spawned.correlation,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(50);
+    expect(peer.readTimeouts).toHaveLength(2);
+    expect(peer.readTimeouts.every((timeout) => timeout !== null)).toBe(true);
+    expect(
+      peer.readTimeouts.every((timeout) => timeout !== null && timeout <= 8),
+    ).toBe(true);
   });
 
   it("rejoins a completed exact child without spawning another parent", async () => {
