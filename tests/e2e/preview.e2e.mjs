@@ -2232,6 +2232,7 @@ async function completeSetup(
   configureComputer = false,
   configureChatGpt = false,
   configureHost = false,
+  agentEvidenceScope = null,
 ) {
   const dialog = instance.window.locator("#setup-dialog");
   await dialog.waitFor({ state: "visible" });
@@ -2456,6 +2457,7 @@ async function completeSetup(
       );
     }
     if (stepId === "verify" && configureComputer && configureHost) {
+      assert.match(agentEvidenceScope ?? "", /^[a-z][a-z0-9-]{0,39}$/u);
       assert.equal(
         await instance.window.locator("#setup-live-primary").innerText(),
         "Verify Agent",
@@ -2503,11 +2505,11 @@ async function completeSetup(
         /thread-e2e|assignment-|owner-desktop|native-agent-session/iu,
       );
       cases.push(
-        "native-codex-agent-lineage-verified",
-        "native-agent-workspace-enforcement-verified",
-        "native-agent-bounded-rejoin",
-        "native-agent-result-delivery-acknowledged",
-        "native-agent-evidence-content-free",
+        `${agentEvidenceScope}-native-codex-agent-lineage-verified`,
+        `${agentEvidenceScope}-native-agent-workspace-enforcement-verified`,
+        `${agentEvidenceScope}-native-agent-bounded-rejoin`,
+        `${agentEvidenceScope}-native-agent-result-delivery-acknowledged`,
+        `${agentEvidenceScope}-native-agent-evidence-content-free`,
       );
     }
     if (capture) {
@@ -3227,7 +3229,7 @@ try {
 
 const ordinaryLiveTasks = await launch([], "secondary-visible", "ordinary");
 try {
-  await completeSetup(ordinaryLiveTasks, false, true, true, true);
+  await completeSetup(ordinaryLiveTasks, false, true, true, true, "ordinary");
   const newTask = ordinaryLiveTasks.window.locator("#new-task");
   await newTask.waitFor({ state: "visible" });
   assert.equal(await newTask.isEnabled(), true);
@@ -4149,7 +4151,7 @@ try {
       `E2E_RUNTIME_NOT_READY:${runtimeLabel}:${await normal.window.locator("#settings-list").innerText()}`,
     );
   }
-  await completeSetup(normal, true, true, true, true);
+  await completeSetup(normal, true, true, true, true, "demo");
   cases.push("native-codex-host-live-tool-verified");
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
@@ -5754,6 +5756,15 @@ cases.push("fault-scenarios-remain-hidden");
 assert.ok(quitProofs >= 8, `E2E_QUIT_PROOF_INCOMPLETE:${quitProofs}`);
 cases.push("quit-terminates-exact-owned-processes");
 
+const repeatedCaseIds = cases.filter(
+  (caseId, index) => cases.indexOf(caseId) !== index,
+);
+assert.deepEqual(
+  repeatedCaseIds,
+  [],
+  `E2E_CASE_IDS_NOT_UNIQUE:${[...new Set(repeatedCaseIds)].join(",")}`,
+);
+
 const report = {
   schema: 1,
   status: blockedCases.length > 0 ? "BLOCKED" : "PASS",
@@ -5789,6 +5800,8 @@ const report = {
       "startup-runtime-death-during-second-view",
     ],
   },
+  caseCount: cases.length,
+  uniqueCaseCount: new Set(cases).size,
   cases,
   blockedCases,
   skippedCases,

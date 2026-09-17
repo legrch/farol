@@ -40,6 +40,21 @@ const requiredMutationIds = [
   "apply_update_while_accepted_work_remains",
 ];
 
+function validBuildManifest(overrides = {}) {
+  return {
+    schema: 3,
+    sourceMode: "head-exact",
+    product: "Farol Next Preview",
+    buildId: "c".repeat(64),
+    builtAt: "2026-09-16T10:00:00.000Z",
+    sourceCommit: "a".repeat(40),
+    sourceTreeDigest: "b".repeat(64),
+    dirty: false,
+    inputExact: true,
+    ...overrides,
+  };
+}
+
 function validVitestReport(root) {
   const testResults = requiredSuites.map((suite) => ({
     name: path.join(root, suite.file),
@@ -118,16 +133,7 @@ async function createFixtureRoot() {
     ),
     writeFile(
       path.join(root, "dist/app/build-manifest.json"),
-      `${JSON.stringify({
-        schema: 3,
-        sourceMode: "head-exact",
-        product: "Farol Next Preview",
-        buildId: "c".repeat(64),
-        builtAt: "2026-09-16T10:00:00.000Z",
-        sourceCommit: "a".repeat(40),
-        sourceTreeDigest: "b".repeat(64),
-        dirty: false,
-      })}\n`,
+      `${JSON.stringify(validBuildManifest())}\n`,
     ),
   ]);
   return root;
@@ -213,6 +219,26 @@ describe("Hunt report Vitest evidence", () => {
         shrinkBudget: 24,
         defects: requiredMutationIds,
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["dirty source", { dirty: true }],
+    ["inexact build input", { inputExact: false }],
+  ])("refuses PASS evidence from %s", async (_name, buildOverride) => {
+    const root = await createFixtureRoot();
+    try {
+      await writeFile(
+        path.join(root, "dist/app/build-manifest.json"),
+        `${JSON.stringify(validBuildManifest(buildOverride))}\n`,
+      );
+      const result = await runWithEvidence(root, validVitestReport(root));
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("HUNT_BUILD_SOURCE_NOT_EXACT");
+      expect(result.stdout).not.toContain('"verdict": "PASS"');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

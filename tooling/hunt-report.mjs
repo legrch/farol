@@ -395,9 +395,14 @@ if (
   !/^[a-f0-9]{64}$/u.test(build.buildId) ||
   typeof build.builtAt !== "string" ||
   !/^[a-f0-9]{40}$/u.test(build.sourceCommit) ||
-  !/^[a-f0-9]{64}$/u.test(build.sourceTreeDigest)
+  !/^[a-f0-9]{64}$/u.test(build.sourceTreeDigest) ||
+  typeof build.dirty !== "boolean" ||
+  typeof build.inputExact !== "boolean"
 ) {
   throw new Error("HUNT_BUILD_IDENTITY_INVALID");
+}
+if (build.dirty || !build.inputExact) {
+  throw new Error("HUNT_BUILD_SOURCE_NOT_EXACT");
 }
 
 const buildIdentity = [
