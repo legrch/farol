@@ -4,6 +4,7 @@ import {
   ProductTasksStateSchema,
   type ProductTask,
   type ProductTaskAgent,
+  type ProductTaskContext,
   type ProductTaskLifecycle,
   type ProductTasksState,
 } from "../../modules/chat/contract/product-task";
@@ -131,6 +132,21 @@ export class LiveTaskRegistry {
     if (!current) return false;
     const updated = ProductTaskSchema.parse({ ...current, agent });
     if (JSON.stringify(current.agent ?? null) === JSON.stringify(agent)) {
+      return true;
+    }
+    this.tasks[index] = updated;
+    this.revision += 1;
+    return true;
+  }
+
+  setContext(taskId: string, context: ProductTaskContext | null): boolean {
+    const index = this.tasks.findIndex(
+      (candidate) => candidate.taskId === taskId,
+    );
+    const current = this.tasks[index];
+    if (!current) return false;
+    const updated = ProductTaskSchema.parse({ ...current, context });
+    if (JSON.stringify(current.context ?? null) === JSON.stringify(context)) {
       return true;
     }
     this.tasks[index] = updated;

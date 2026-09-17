@@ -42,6 +42,7 @@ import {
   retreatSetup,
   setupSteps,
 } from "./setup-journey";
+import { contextTaskPresentation } from "./context-task-presentation";
 
 const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
@@ -298,6 +299,8 @@ function taskState(taskId: string): TaskState {
     if (task.agent?.phase === "failed") {
       return { tone: "failed", label: "Agent failed", attention: true };
     }
+    const context = contextTaskPresentation(task.context);
+    if (context) return context;
     if (task.lifecycle === "running") {
       return { tone: "running", label: "Running", attention: false };
     }
@@ -746,7 +749,9 @@ function renderTaskMenu(): void {
       task.agent.parentDelivery === "pending" &&
       task.agent.resultAvailable);
   const uncertain = task.agent?.phase === "outcome_unknown";
-  const agentLocked = needsRejoin;
+  const context = contextTaskPresentation(task.context);
+  const contextLocked = context?.locked ?? false;
+  const agentLocked = needsRejoin || contextLocked;
   name.disabled = taskMenuBusy;
   rename.disabled = taskMenuBusy;
   pin.disabled = taskMenuBusy;
@@ -758,6 +763,7 @@ function renderTaskMenu(): void {
     taskMenuBusy ||
     !readiness.ready ||
     uncertain ||
+    contextLocked ||
     (!needsRejoin && objective.value.trim().length === 0);
   runAgent.querySelector("span")!.textContent =
     task.agent?.phase === "running"
@@ -836,13 +842,15 @@ function renderTaskMenu(): void {
   note.dataset.error = String(taskMenuFeedbackError);
   note.textContent =
     taskMenuFeedback ||
-    (agentLocked
-      ? "Agent state is retained before native execution. Closing and provider cancellation stay unavailable until the same assignment is reconciled."
-      : uncertain
-        ? "Outcome unknown is not Failed. Farol will not submit this Agent assignment again."
-        : task.lifecycle === "running"
-          ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
-          : "Close removes this local task and its window. It does not cancel provider work.");
+    (contextLocked
+      ? `${context?.label ?? "Context transition"} is still active. Farol will not cancel, close, or delegate this task until the exact context operation is reconciled.`
+      : agentLocked
+        ? "Agent state is retained before native execution. Closing and provider cancellation stay unavailable until the same assignment is reconciled."
+        : uncertain
+          ? "Outcome unknown is not Failed. Farol will not submit this Agent assignment again."
+          : task.lifecycle === "running"
+            ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
+            : "Close removes this local task and its window. It does not cancel provider work.");
 }
 
 function pendingComputerTask(): PreviewTask | null {

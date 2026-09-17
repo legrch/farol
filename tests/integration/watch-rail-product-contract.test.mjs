@@ -72,4 +72,18 @@ describe("Watch Rail product contract", () => {
     expect(settings).not.toContain('id="computer-workspaces"');
     expect(settings).not.toContain('id="add-workspace"');
   });
+
+  it("renders content-free context recovery states and locks destructive task actions", async () => {
+    const [shell, presentation] = await Promise.all([
+      source("src/ui/shell.ts"),
+      source("src/ui/context-task-presentation.ts"),
+    ]);
+
+    expect(shell).toContain("contextTaskPresentation(task.context)");
+    expect(shell).toContain("contextLocked");
+    expect(presentation).toContain('"Preserving context"');
+    expect(presentation).toContain('"Recovering from history"');
+    expect(presentation).toContain('label: "Context outcome unknown"');
+    expect(presentation).not.toMatch(/checkpointContent|activeConstraints/iu);
+  });
 });

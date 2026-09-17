@@ -128,6 +128,27 @@ describe("live task registry", () => {
     expect(registry.snapshot().revision).toBe(2);
   });
 
+  it("stores only content-free context continuity state on the visible task", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    const context = {
+      epoch: 2,
+      phase: "checkpoint_requested" as const,
+      source: "canonical_history" as const,
+      code: null,
+    };
+
+    expect(registry.setContext("missing", context)).toBe(false);
+    expect(registry.setContext("task-1", context)).toBe(true);
+    expect(registry.snapshot()).toEqual({
+      revision: 2,
+      tasks: [{ ...candidate(1), context }],
+    });
+    expect(JSON.stringify(registry.snapshot())).not.toMatch(
+      /canonicalHistory|checkpointContent|prompt|answer/iu,
+    );
+  });
+
   it("renames, pins, and closes tasks without changing their identities", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));
