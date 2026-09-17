@@ -679,6 +679,12 @@ function taskSuccess(taskId: string | null): ProductTaskCommandResult {
   });
 }
 
+function surfaceLiveTaskPersistenceFailure(taskId: string): void {
+  if (!liveTaskRegistry.get(taskId)) return;
+  liveTaskRegistry.setLifecycle(taskId, "outcome_unknown");
+  publishTasksState();
+}
+
 function setLiveTaskLifecycle(
   taskId: string,
   lifecycle: ProductTask["lifecycle"],
@@ -686,7 +692,9 @@ function setLiveTaskLifecycle(
   if (liveTaskRegistry.get(taskId)?.lifecycle === lifecycle) return;
   if (!liveTaskRegistry.setLifecycle(taskId, lifecycle)) return;
   publishTasksState();
-  void persistLiveTaskState().catch(() => undefined);
+  void persistLiveTaskState().catch(() =>
+    surfaceLiveTaskPersistenceFailure(taskId),
+  );
 }
 
 function chatGptTaskAdmissionReady(): boolean {
@@ -742,7 +750,9 @@ function createLiveChatGptRoute(
     if (!liveTaskRegistry.get(taskId)) return;
     if (liveTaskConversationUrls.get(taskId) === conversationUrl) return;
     liveTaskConversationUrls.set(taskId, conversationUrl);
-    void persistLiveTaskState().catch(() => undefined);
+    void persistLiveTaskState().catch(() =>
+      surfaceLiveTaskPersistenceFailure(taskId),
+    );
   };
   const recordTaskActivity = (
     state: "idle" | "running" | "outcome_unknown",
@@ -1452,6 +1462,8 @@ async function runProductTaskCommand(
         await persistLiveTaskState();
       } catch {
         liveTaskStore = null;
+        surfaceLiveTaskPersistenceFailure(command.data.taskId);
+        return taskFailure("TASK_STATE_UNAVAILABLE");
       }
       return result === "cancelled"
         ? taskSuccess(command.data.taskId)
