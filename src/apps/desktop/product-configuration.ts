@@ -711,6 +711,25 @@ export class ProductConfigurationService {
     });
   }
 
+  async recordSecureMcpStopped(): Promise<MutationResult> {
+    return this.mutate((settings) => {
+      const connector = settings.connectors.secureMcp;
+      if (connector.runtime === null && connector.attachment === null) {
+        return settings;
+      }
+      const next = { ...connector, runtime: null, attachment: null };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: { ...settings.connectors, secureMcp: next },
+        setup: {
+          ...settings.setup,
+          connect: pendingConnectorReadiness(settings.setup.connect, next),
+        },
+      };
+    });
+  }
+
   async addReadonlyWorkspace(input: unknown): Promise<MutationResult> {
     const parsed = workspaceInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");

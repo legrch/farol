@@ -13,7 +13,7 @@ import {
   type SaveDialogOptions,
   type UtilityProcess,
 } from "electron";
-import { chmod, lstat, mkdir, realpath } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -139,6 +139,13 @@ import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
 import { CodexAgentWorkspaceProbe } from "./codex-agent-workspace-probe";
 import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
+import { PrivateConnectorCredentialStore } from "./connector-credential-store";
+import { probeTunnelClient } from "./tunnel-client-probe";
+import {
+  PrivateSecureMcpLaunchStore,
+  createSecureMcpLaunchContract,
+} from "./secure-mcp-launch-contract";
+import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -222,6 +229,9 @@ let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
+let connectorCredentialStore: PrivateConnectorCredentialStore | null = null;
+let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
+let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
@@ -284,6 +294,14 @@ const agentCheckConfigurationMutations = new Set<string>([
   "computer.update-access",
   "computer.update-commands",
   "computer.verify-workspace",
+]);
+const connectorAuthorityMutations = new Set<string>([
+  "computer.rename",
+  "computer.add-workspace",
+  "computer.remove-workspace",
+  "computer.update-exclusions",
+  "computer.update-access",
+  "computer.update-commands",
 ]);
 type ActiveCodexAgentCheck = Readonly<{
   key: string;
@@ -1026,6 +1044,26 @@ function liveTaskStoreRoot(): string {
   return path.join(app.getPath("userData"), "farol-next-state", "live-tasks");
 }
 
+function secureMcpConnectorRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "secure-mcp-connector",
+  );
+}
+
+function secureMcpCredentialRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-private",
+    "secure-mcp-connector",
+  );
+}
+
+function secureMcpLaunchRoot(): string {
+  return path.join(secureMcpConnectorRoot(), "computer-authority");
+}
+
 function codexHostProbeRoot(): string {
   return path.join(
     app.getPath("userData"),
@@ -1325,6 +1363,259 @@ async function verifyCodexExecutable(
   }
 }
 
+async function selectedTunnelClientExecutable(): Promise<
+  string | "cancelled" | "invalid"
+> {
+  let selected: string | undefined;
+  const testExecutable =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_TUNNEL_CLIENT
+      : undefined;
+  if (testExecutable) {
+    selected = testExecutable;
+  } else {
+    if (!window) return "invalid";
+    const result = await dialog.showOpenDialog(window, {
+      title: "Choose the tunnel-client executable",
+      buttonLabel: "Verify tunnel-client",
+      properties: ["openFile"],
+      securityScopedBookmarks: false,
+    });
+    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
+    selected = result.filePaths[0];
+  }
+  return selected && path.isAbsolute(selected) && !selected.includes("\0")
+    ? selected
+    : "invalid";
+}
+
+async function verifyTunnelClientExecutable(
+  executablePath: string,
+): Promise<ProductConfigurationResult> {
+  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  try {
+    const probe = await probeTunnelClient({ executablePath });
+    if (secureMcpConnectorRuntime?.isRunning()) {
+      return configurationFailure("CONNECTOR_STOP_REQUIRED");
+    }
+    const recorded = await configuration.recordSecureMcpTunnelClient(probe);
+    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+    return ProductConfigurationResultSchema.parse({
+      ...recorded,
+      evidence: {
+        kind: "connector.client-probe",
+        version: probe.version,
+        protocol: probe.protocol,
+        executableSha256: probe.executableSha256,
+      },
+    });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "TUNNEL_CLIENT_SELECTION_INVALID") {
+      return configurationFailure("TUNNEL_CLIENT_SELECTION_INVALID");
+    }
+    if (code === "TUNNEL_CLIENT_EXECUTABLE_UNSAFE") {
+      return configurationFailure("TUNNEL_CLIENT_EXECUTABLE_UNSAFE");
+    }
+    if (code === "TUNNEL_CLIENT_INCOMPATIBLE") {
+      return configurationFailure("TUNNEL_CLIENT_INCOMPATIBLE");
+    }
+    return configurationFailure("TUNNEL_CLIENT_PROBE_FAILED");
+  }
+}
+
+function connectorAttemptGeneration(
+  input: Readonly<{
+    connectorGeneration: number;
+    computerGeneration: number;
+    launchContractSha256: string;
+    phase: string;
+  }>,
+): string {
+  return createHash("sha256")
+    .update(
+      [
+        String(input.connectorGeneration),
+        String(input.computerGeneration),
+        buildIdentity.buildId,
+        input.launchContractSha256,
+        input.phase,
+      ].join("\0"),
+    )
+    .digest("hex");
+}
+
+async function recordConnectorRuntime(
+  state: "ready" | "unreachable" | "outcome_unknown",
+  runtimeGeneration: string,
+  computerGeneration: number,
+): Promise<ProductConfigurationResult | null> {
+  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
+  const recorded = await configuration.recordSecureMcpRuntime({
+    state,
+    runtimeGeneration,
+    computerGeneration,
+    buildId: buildIdentity.buildId,
+  });
+  return recorded.ok ? null : ProductConfigurationResultSchema.parse(recorded);
+}
+
+async function startSecureMcpConnector(
+  repair: boolean,
+): Promise<ProductConfigurationResult> {
+  if (
+    !configuration ||
+    !connectorCredentialStore ||
+    !secureMcpConnectorRuntime
+  ) {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  if (connectorTaskAdmission) {
+    return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+  }
+  if (secureMcpConnectorRuntime.isRunning() && !repair) {
+    return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+  }
+  connectorTaskAdmission = true;
+  try {
+    if (repair) {
+      await secureMcpConnectorRuntime.stop();
+      const stopped = await configuration.recordSecureMcpStopped();
+      if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
+    }
+    const snapshot = configuration.snapshot();
+    if (snapshot.status !== "ready") {
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    }
+    const connector = snapshot.settings.connectors.secureMcp;
+    if (!connector.tunnelClient || !connector.tunnelId) {
+      return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
+    }
+    let credentialReference: string;
+    try {
+      credentialReference = await connectorCredentialStore.reference();
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      if (code === "CONNECTOR_CREDENTIAL_MISSING") {
+        await configuration.recordSecureMcpCredential("missing");
+        return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
+      }
+      return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
+    }
+
+    const runtimeId = randomUUID();
+    let launchFile: string;
+    let launchContractSha256: string;
+    try {
+      const contract = createSecureMcpLaunchContract(snapshot.settings, {
+        now: Date.now(),
+        runtimeId,
+      });
+      launchFile = await new PrivateSecureMcpLaunchStore({
+        root: secureMcpLaunchRoot(),
+      }).write(contract);
+      launchContractSha256 = createHash("sha256")
+        .update(await readFile(launchFile))
+        .digest("hex");
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "";
+      if (code === "SECURE_MCP_WORKSPACE_REQUIRED") {
+        return configurationFailure("CONNECTOR_WORKSPACE_REQUIRED");
+      }
+      if (code === "SECURE_MCP_WORKSPACE_LIMIT") {
+        return configurationFailure("CONNECTOR_WORKSPACE_LIMIT");
+      }
+      return configurationFailure("CONNECTOR_START_FAILED");
+    }
+
+    const attempt = (phase: string) =>
+      connectorAttemptGeneration({
+        connectorGeneration: connector.generation,
+        computerGeneration: snapshot.settings.computer.generation,
+        launchContractSha256,
+        phase,
+      });
+    try {
+      await secureMcpConnectorRuntime.configure({
+        executablePath: connector.tunnelClient.executablePath,
+        tunnelId: connector.tunnelId,
+        credentialReference,
+        mcp: {
+          electronPath: process.execPath,
+          entryPath: path.join(directory, "computer-mcp.cjs"),
+          launchContractPath: launchFile,
+        },
+      });
+    } catch {
+      const failed = await recordConnectorRuntime(
+        "unreachable",
+        attempt("configure"),
+        snapshot.settings.computer.generation,
+      );
+      if (failed) return failed;
+      return configurationFailure("CONNECTOR_CONFIGURE_FAILED");
+    }
+    try {
+      await secureMcpConnectorRuntime.doctor({
+        executablePath: connector.tunnelClient.executablePath,
+      });
+    } catch {
+      const failed = await recordConnectorRuntime(
+        "unreachable",
+        attempt("doctor"),
+        snapshot.settings.computer.generation,
+      );
+      if (failed) return failed;
+      return configurationFailure("CONNECTOR_DOCTOR_FAILED");
+    }
+
+    let started;
+    try {
+      started = await secureMcpConnectorRuntime.start({
+        executablePath: connector.tunnelClient.executablePath,
+        executableSha256: connector.tunnelClient.executableSha256,
+        connectorGeneration: connector.generation,
+        computerGeneration: snapshot.settings.computer.generation,
+        buildId: buildIdentity.buildId,
+        launchContractSha256,
+      });
+    } catch {
+      const failed = await recordConnectorRuntime(
+        "unreachable",
+        attempt("start"),
+        snapshot.settings.computer.generation,
+      );
+      if (failed) return failed;
+      return configurationFailure("CONNECTOR_START_FAILED");
+    }
+    const failed = await recordConnectorRuntime(
+      started.state,
+      started.runtimeGeneration,
+      snapshot.settings.computer.generation,
+    );
+    if (failed) return failed;
+    if (started.state === "unreachable") {
+      return configurationFailure("CONNECTOR_RUNTIME_UNREACHABLE");
+    }
+    if (started.state === "outcome_unknown") {
+      return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+    }
+    return ProductConfigurationResultSchema.parse({
+      ok: true,
+      snapshot: configuration.snapshot(),
+      evidence: {
+        kind: "connector.runtime",
+        state: "ready",
+        runtimeGeneration: started.runtimeGeneration,
+        computerGeneration: snapshot.settings.computer.generation,
+        buildId: buildIdentity.buildId,
+      },
+    });
+  } finally {
+    connectorTaskAdmission = false;
+  }
+}
+
 function workspaceDeniedPaths(
   workspace: ApprovedProductWorkspace,
 ): readonly string[] {
@@ -1464,7 +1755,72 @@ async function configureProduct(
   ) {
     return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
   }
+  if (
+    secureMcpConnectorRuntime?.isRunning() &&
+    connectorAuthorityMutations.has(command.kind)
+  ) {
+    return configurationFailure("CONNECTOR_STOP_REQUIRED");
+  }
   switch (command.kind) {
+    case "connector.select-client": {
+      const selected = await selectedTunnelClientExecutable();
+      if (selected === "cancelled") {
+        return configurationFailure("TUNNEL_CLIENT_PICKER_CANCELLED");
+      }
+      if (selected === "invalid") {
+        return configurationFailure("TUNNEL_CLIENT_SELECTION_INVALID");
+      }
+      return verifyTunnelClientExecutable(selected);
+    }
+    case "connector.configure": {
+      if (!connectorCredentialStore || secureMcpConnectorRuntime?.isRunning()) {
+        return configurationFailure(
+          secureMcpConnectorRuntime?.isRunning()
+            ? "CONNECTOR_STOP_REQUIRED"
+            : "SETTINGS_UNAVAILABLE",
+        );
+      }
+      try {
+        if (command.runtimeKey !== null) {
+          await connectorCredentialStore.store(command.runtimeKey);
+        }
+        const credentialStatus = await connectorCredentialStore.status();
+        if (credentialStatus === "missing") {
+          await configuration.recordSecureMcpCredential("missing");
+          return configurationFailure("CONNECTOR_CREDENTIAL_REQUIRED");
+        }
+        const tunnel = await configuration.configureSecureMcpTunnel({
+          tunnelId: command.tunnelId,
+        });
+        if (!tunnel.ok) return ProductConfigurationResultSchema.parse(tunnel);
+        return ProductConfigurationResultSchema.parse(
+          await configuration.recordSecureMcpCredential("stored"),
+        );
+      } catch {
+        return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
+      }
+    }
+    case "connector.start":
+      return startSecureMcpConnector(false);
+    case "connector.repair":
+      return startSecureMcpConnector(true);
+    case "connector.stop": {
+      if (!secureMcpConnectorRuntime) {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      if (connectorTaskAdmission) {
+        return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+      }
+      connectorTaskAdmission = true;
+      try {
+        await secureMcpConnectorRuntime.stop();
+        return ProductConfigurationResultSchema.parse(
+          await configuration.recordSecureMcpStopped(),
+        );
+      } finally {
+        connectorTaskAdmission = false;
+      }
+    }
     case "host.select-codex": {
       if (activeCodexAgentCheck) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
@@ -3982,6 +4338,26 @@ async function main(): Promise<void> {
     }),
   );
   await configuration.initialize();
+  connectorCredentialStore = new PrivateConnectorCredentialStore({
+    root: secureMcpCredentialRoot(),
+  });
+  secureMcpConnectorRuntime = new SecureMcpConnectorRuntime({
+    root: secureMcpConnectorRoot(),
+    homePath: app.getPath("home"),
+    tempPath: app.getPath("temp"),
+  });
+  try {
+    const credential = await connectorCredentialStore.status();
+    const snapshot = configuration.snapshot();
+    if (
+      snapshot.status === "ready" &&
+      snapshot.settings.connectors.secureMcp.credential !== credential
+    ) {
+      await configuration.recordSecureMcpCredential(credential);
+    }
+  } catch {
+    connectorCredentialStore = null;
+  }
   try {
     chatGptTaskJournal = new PrivateChatGptTaskJournal({
       root: chatGptTaskJournalRoot(),
@@ -4073,6 +4449,7 @@ async function main(): Promise<void> {
     activeCodexAgentCheck = null;
     agentCheck?.host.dispose();
     if (agentCheck) void agentCheck.client.close().catch(() => undefined);
+    void secureMcpConnectorRuntime?.stop();
     disposeChatGptRoutes();
     disposeTaskViews("runtime");
     stopRuntime();

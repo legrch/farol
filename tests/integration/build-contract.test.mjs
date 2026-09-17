@@ -60,7 +60,6 @@ describe("build entry contract", () => {
     "autoUpdater",
     "registerSchemesAsPrivileged",
     "codex-chatgpt-web",
-    "secure-mcp-tunnel",
     "synthetic://workspace/status",
   ])("rejects the forbidden built capability token %s", async (token) => {
     const root = await fs.mkdtemp(

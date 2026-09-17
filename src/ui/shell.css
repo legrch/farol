@@ -1286,6 +1286,53 @@ html[data-has-tasks="false"] .surface {
   gap: 6px;
 }
 
+.connector-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(360px, 1.4fr) auto;
+  align-items: end;
+  padding-block: 10px;
+}
+
+.connector-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(190px, 1.2fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.setup-connector-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.connector-form label,
+.setup-connector-form label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.connector-form input,
+.setup-connector-form input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 9px;
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.connector-form input:disabled,
+.setup-connector-form input:disabled {
+  color: var(--text-faint);
+  opacity: 0.7;
+}
+
 .workspace-policy {
   display: flex;
   align-items: end;
@@ -2173,6 +2220,17 @@ html[data-window-active="false"] .primary-action:not(:focus-visible) {
 
   .settings-controls {
     grid-template-columns: 1fr;
+  }
+
+  .connector-row,
+  .connector-form,
+  .setup-connector-form {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .connector-row .connection-actions {
+    justify-content: flex-start;
   }
 }
 

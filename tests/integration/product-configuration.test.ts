@@ -301,6 +301,59 @@ describe("Farol Next product configuration", () => {
     });
   });
 
+  it("clears runtime proof after an explicit connector stop", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol_next" });
+    await service.recordSecureMcpCredential("stored");
+    await service.recordSecureMcpRuntime({
+      state: "ready",
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 1,
+      buildId: "c".repeat(64),
+    });
+    await service.recordSecureMcpAttachment({
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 1,
+      buildId: "c".repeat(64),
+      challengeSha256: "d".repeat(64),
+      receiptSha256: "e".repeat(64),
+    });
+
+    const stopped = await service.recordSecureMcpStopped();
+
+    expect(stopped).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          connectors: {
+            secureMcp: { runtime: null, attachment: null },
+          },
+          setup: {
+            connect: {
+              configured: true,
+              reachable: "unknown",
+              verified: null,
+              needsAction: "Start the connector and check readiness.",
+              outcomeUnknown: false,
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("keeps the last verified state when an atomic save fails", async () => {
     const root = await stateRoot();
     const baseline = new ProductConfigurationService(
@@ -1447,5 +1500,69 @@ describe("Farol Next product configuration", () => {
         schemaSha256: "b".repeat(64),
       }).success,
     ).toBe(true);
+  });
+
+  it("admits connector setup commands and only content-free evidence", () => {
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.select-client",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.configure",
+        tunnelId: "tunnel_farol_next",
+        runtimeKey: "sk-runtime-example-1234567890",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.start",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.repair",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.stop",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.configure",
+        tunnelId: "not valid whitespace",
+        runtimeKey: "sk-runtime-example-1234567890",
+      }).success,
+    ).toBe(false);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "connector.client-probe",
+        version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+        protocol: "openai-tunnel-client/v1",
+        executableSha256: "a".repeat(64),
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "connector.runtime",
+        state: "ready",
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration: 7,
+        buildId: "c".repeat(64),
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "connector.runtime",
+        state: "ready",
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration: 7,
+        buildId: "c".repeat(64),
+        runtimeKey: "must-not-escape",
+      }).success,
+    ).toBe(false);
   });
 });

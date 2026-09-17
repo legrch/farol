@@ -368,6 +368,11 @@ export class SecureMcpConnectorRuntime {
       if (remaining <= 0) break;
       await this.wait(Math.min(50, remaining));
     }
+    if (!healthObserved) {
+      child.kill("SIGTERM");
+      if (!(await child.waitForExit(1_000))) child.kill("SIGKILL");
+      this.child = null;
+    }
     return {
       state: healthObserved ? "outcome_unknown" : "unreachable",
       runtimeGeneration,
@@ -384,6 +389,10 @@ export class SecureMcpConnectorRuntime {
       child.kill("SIGKILL");
       await child.waitForExit(1_000);
     }
+  }
+
+  isRunning(): boolean {
+    return this.child?.exitCode === null;
   }
 
   private commandBase(

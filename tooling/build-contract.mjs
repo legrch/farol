@@ -31,7 +31,6 @@ const FORBIDDEN_INTEGRATION_TOKENS = Object.freeze([
   "autoUpdater",
   "registerSchemesAsPrivileged",
   "codex-chatgpt-web",
-  "secure-mcp-tunnel",
   "synthetic://workspace/status",
 ]);
 

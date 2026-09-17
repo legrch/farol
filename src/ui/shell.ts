@@ -1270,40 +1270,55 @@ async function configureProduct(
   settingsFeedback =
     command.kind === "support.export"
       ? "Preparing a content-free support export…"
-      : command.kind === "host.select-codex" ||
-          command.kind === "host.verify-codex"
-        ? "Verifying the selected Codex executable and bounded App Server contract…"
-        : command.kind === "host.run-codex-smoke"
-          ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
-          : command.kind === "host.run-codex-agent-check"
-            ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
-            : command.kind === "host.remove-codex"
-              ? "Removing the saved Codex host selection…"
-              : command.kind === "chatgpt.prepare-attachment-task"
-                ? "Validating and privately staging the selected attachments…"
-                : command.kind === "chatgpt.submit-attachment-task"
-                  ? "Uploading the reviewed attachments and submitting once…"
-                  : command.kind === "chatgpt.cancel-attachment-task"
-                    ? "Removing the private attachment staging…"
-                    : command.kind === "chatgpt.prepare-readonly-task"
-                      ? "Reading the selected file for review…"
-                      : command.kind === "chatgpt.submit-readonly-task"
-                        ? "Submitting once and waiting for one ChatGPT result…"
-                        : command.kind === "chatgpt.cancel-readonly-task"
-                          ? "Discarding the prepared context…"
-                          : command.kind === "chatgpt.reset-conversation"
-                            ? "Clearing the retained conversation binding…"
-                            : command.kind === "computer.prepare-workspace-edit"
-                              ? "Reading the selected file and preparing a content-free edit review…"
-                              : command.kind === "computer.run-git-status"
-                                ? "Running fixed Apple Git status with no network access…"
+      : command.kind === "connector.select-client"
+        ? "Verifying the exact tunnel-client executable and supported CLI surface…"
+        : command.kind === "connector.configure"
+          ? "Saving the tunnel ID and private runtime-key reference…"
+          : command.kind === "connector.start"
+            ? "Checking the profile, starting one owned connector, and waiting for loopback readiness…"
+            : command.kind === "connector.repair"
+              ? "Stopping the known connector, rebuilding its profile, and checking readiness once…"
+              : command.kind === "connector.stop"
+                ? "Stopping the owned connector and clearing runtime proof…"
+                : command.kind === "host.select-codex" ||
+                    command.kind === "host.verify-codex"
+                  ? "Verifying the selected Codex executable and bounded App Server contract…"
+                  : command.kind === "host.run-codex-smoke"
+                    ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
+                    : command.kind === "host.run-codex-agent-check"
+                      ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
+                      : command.kind === "host.remove-codex"
+                        ? "Removing the saved Codex host selection…"
+                        : command.kind === "chatgpt.prepare-attachment-task"
+                          ? "Validating and privately staging the selected attachments…"
+                          : command.kind === "chatgpt.submit-attachment-task"
+                            ? "Uploading the reviewed attachments and submitting once…"
+                            : command.kind === "chatgpt.cancel-attachment-task"
+                              ? "Removing the private attachment staging…"
+                              : command.kind === "chatgpt.prepare-readonly-task"
+                                ? "Reading the selected file for review…"
                                 : command.kind ===
-                                    "computer.apply-workspace-edit"
-                                  ? "Applying this guarded edit once…"
+                                    "chatgpt.submit-readonly-task"
+                                  ? "Submitting once and waiting for one ChatGPT result…"
                                   : command.kind ===
-                                      "computer.cancel-workspace-edit"
-                                    ? "Discarding the prepared edit…"
-                                    : "Saving and reading back…";
+                                      "chatgpt.cancel-readonly-task"
+                                    ? "Discarding the prepared context…"
+                                    : command.kind ===
+                                        "chatgpt.reset-conversation"
+                                      ? "Clearing the retained conversation binding…"
+                                      : command.kind ===
+                                          "computer.prepare-workspace-edit"
+                                        ? "Reading the selected file and preparing a content-free edit review…"
+                                        : command.kind ===
+                                            "computer.run-git-status"
+                                          ? "Running fixed Apple Git status with no network access…"
+                                          : command.kind ===
+                                              "computer.apply-workspace-edit"
+                                            ? "Applying this guarded edit once…"
+                                            : command.kind ===
+                                                "computer.cancel-workspace-edit"
+                                              ? "Discarding the prepared edit…"
+                                              : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1334,6 +1349,7 @@ async function configureProduct(
       "WORKSPACE_FILE_PICKER_CANCELLED",
       "CHATGPT_ATTACHMENT_PICKER_CANCELLED",
       "CODEX_HOST_PICKER_CANCELLED",
+      "TUNNEL_CLIENT_PICKER_CANCELLED",
       "SUPPORT_EXPORT_CANCELLED",
     ].includes(parsed.data.error);
     settingsFeedback = cancellation
@@ -1342,7 +1358,11 @@ async function configureProduct(
         ? "The same native Agent child is still running. Use Rejoin Agent to collect its result; no second child will be created."
         : parsed.data.error === "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
           ? "Native Agent outcome unknown. Inspect the existing Codex task before any deliberate recovery."
-          : `Not applied · ${parsed.data.error}`;
+          : parsed.data.error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+            ? "Connector readiness is unknown. Inspect the current connector before an explicit Repair."
+            : parsed.data.error === "CONNECTOR_STOP_REQUIRED"
+              ? "Stop the connector before changing Computer authority or connector identity."
+              : `Not applied · ${parsed.data.error}`;
     settingsFeedbackError =
       !cancellation && parsed.data.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
@@ -1390,6 +1410,10 @@ async function configureProduct(
     settingsFeedback = `${evidence.model} host turn completed with ${evidence.dynamicToolCalls} correlated Farol Next tool call · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.codex-agent-lineage") {
     settingsFeedback = `Main → Agent → Critic verified on ${evidence.model} · one model turn · same-child bounded rejoin · durable delivery acknowledged · workspace enforcement ${evidence.workspaceEnforcement.replace("_", " ")}.`;
+  } else if (evidence?.kind === "connector.client-probe") {
+    settingsFeedback = `tunnel-client ${evidence.version} verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "connector.runtime") {
+    settingsFeedback = `Connector ${evidence.state.replace("_", " ")} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · Computer generation ${evidence.computerGeneration}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
@@ -1509,6 +1533,14 @@ function renderSettings(): void {
       `${bootstrap.runtimeState} · ${bootstrap.runtimeIdentity ?? "not started"}${bootstrap.runtimeError ? ` · ${bootstrap.runtimeError}` : ""}`,
     ],
     [
+      "Secure MCP connector",
+      configured.status === "ready"
+        ? configured.settings.connectors.secureMcp.tunnelClient
+          ? `tunnel-client ${configured.settings.connectors.secureMcp.tunnelClient.version} · tunnel ${configured.settings.connectors.secureMcp.tunnelId ?? "not set"} · runtime ${configured.settings.connectors.secureMcp.runtime?.state ?? "stopped"} · attachment ${configured.settings.connectors.secureMcp.attachment ? "verified" : "not verified"}`
+          : "tunnel-client not selected"
+        : "Unavailable",
+    ],
+    [
       "Embedded closure",
       `Electron ${bootstrap.embeddedElectron ?? "unknown"} · Node ${bootstrap.embeddedNode ?? "unknown"}`,
     ],
@@ -1616,12 +1648,14 @@ function renderSettings(): void {
       detail.textContent =
         label === "ChatGPT"
           ? `${readinessDetail(state)} · Conversation: ${bootstrap.chatgptConversationState.replace("_", " ")}`
-          : label === "Native hosts" && settings.nativeHosts.codex
-            ? `${readinessDetail(state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
-            : label === "Native Agent" &&
-                settings.nativeHosts.codex?.agentVerification
-              ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
-              : readinessDetail(state);
+          : label === "Connection"
+            ? `${readinessDetail(state)} · ${settings.connectors.secureMcp.tunnelClient ? `tunnel-client ${settings.connectors.secureMcp.tunnelClient.version}` : "client not selected"} · tunnel ${settings.connectors.secureMcp.tunnelId ?? "not set"} · credential ${settings.connectors.secureMcp.credential} · runtime ${settings.connectors.secureMcp.runtime?.state ?? "stopped"}`
+            : label === "Native hosts" && settings.nativeHosts.codex
+              ? `${readinessDetail(state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
+              : label === "Native Agent" &&
+                  settings.nativeHosts.codex?.agentVerification
+                ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
+                : readinessDetail(state);
       copy.append(title, detail);
       row.append(copy);
       if (label === "ChatGPT") {
@@ -1713,6 +1747,109 @@ function renderSettings(): void {
         });
         actions.append(open, verify, task, attachments, reset);
         row.append(actions);
+      } else if (label === "Connection") {
+        row.classList.add("connector-row");
+        const connector = settings.connectors.secureMcp;
+        const running =
+          connector.runtime?.state === "ready" ||
+          connector.runtime?.state === "outcome_unknown";
+        const form = document.createElement("form");
+        form.className = "connector-form";
+        const tunnelLabel = document.createElement("label");
+        tunnelLabel.textContent = "Tunnel ID";
+        const tunnel = document.createElement("input");
+        tunnel.type = "text";
+        tunnel.autocomplete = "off";
+        tunnel.spellcheck = false;
+        tunnel.placeholder = "tunnel_…";
+        tunnel.value = connector.tunnelId ?? "";
+        tunnel.disabled = running;
+        tunnelLabel.append(tunnel);
+        const keyLabel = document.createElement("label");
+        keyLabel.textContent = "Runtime key";
+        const key = document.createElement("input");
+        key.type = "password";
+        key.autocomplete = "off";
+        key.spellcheck = false;
+        key.placeholder =
+          connector.credential === "stored"
+            ? "Stored privately; leave blank to keep"
+            : "Required once";
+        key.disabled = running;
+        keyLabel.append(key);
+        const save = document.createElement("button");
+        save.type = "submit";
+        save.textContent = "Save route";
+        save.disabled = connector.tunnelClient === null || running;
+        form.append(tunnelLabel, keyLabel, save);
+        form.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const command = ProductConfigurationCommandSchema.safeParse({
+            kind: "connector.configure",
+            tunnelId: tunnel.value.trim(),
+            runtimeKey: key.value === "" ? null : key.value,
+          });
+          key.value = "";
+          if (!command.success) {
+            settingsFeedbackSurface = "settings";
+            settingsFeedback =
+              "Enter a valid tunnel ID and a runtime key of at least 20 printable characters.";
+            settingsFeedbackError = true;
+            render();
+            return;
+          }
+          void configureProduct(command.data, "Connector route saved.");
+        });
+
+        const actions = document.createElement("span");
+        actions.className = "connection-actions";
+        const choose = document.createElement("button");
+        choose.type = "button";
+        choose.textContent = connector.tunnelClient
+          ? "Replace client…"
+          : "Choose client…";
+        choose.disabled = running;
+        choose.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "connector.select-client" },
+            "tunnel-client selected and verified.",
+          );
+        });
+        const start = document.createElement("button");
+        start.type = "button";
+        start.textContent =
+          connector.runtime?.state === "outcome_unknown"
+            ? "Repair explicitly"
+            : connector.runtime?.state === "ready"
+              ? "Running"
+              : "Start & check";
+        start.disabled =
+          connector.tunnelClient === null ||
+          connector.tunnelId === null ||
+          connector.credential !== "stored" ||
+          settings.computer.workspaces.length === 0 ||
+          connector.runtime?.state === "ready";
+        start.addEventListener("click", () => {
+          const repair = connector.runtime?.state === "outcome_unknown";
+          void configureProduct(
+            { kind: repair ? "connector.repair" : "connector.start" },
+            repair
+              ? "Connector repaired and readiness checked."
+              : "Connector started and readiness checked.",
+          );
+        });
+        const stop = document.createElement("button");
+        stop.type = "button";
+        stop.textContent = "Stop";
+        stop.disabled = connector.runtime === null;
+        stop.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "connector.stop" },
+            "Connector stopped and runtime proof cleared.",
+          );
+        });
+        actions.append(choose, start, stop);
+        row.append(form, actions);
       } else if (label === "Native hosts") {
         const actions = document.createElement("span");
         actions.className = "connection-actions";
@@ -1842,22 +1979,28 @@ function renderSetup(): void {
       ? configured.settings.computer.workspaces.map(
           (workspace) => `${workspace.label}: read-only · ${workspace.root}`,
         )
-      : configured.status === "ready" &&
-          step.id === "hosts" &&
-          configured.settings.nativeHosts.codex
+      : configured.status === "ready" && step.id === "connect"
         ? [
-            `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol}`,
-            `Executable · ${configured.settings.nativeHosts.codex.executablePath}`,
+            `Client · ${configured.settings.connectors.secureMcp.tunnelClient ? `${configured.settings.connectors.secureMcp.tunnelClient.version} · ${configured.settings.connectors.secureMcp.tunnelClient.executablePath}` : "not selected"}`,
+            `Tunnel · ${configured.settings.connectors.secureMcp.tunnelId ?? "not set"} · credential ${configured.settings.connectors.secureMcp.credential}`,
+            `Runtime · ${configured.settings.connectors.secureMcp.runtime?.state ?? "stopped"} · attachment ${configured.settings.connectors.secureMcp.attachment ? "verified" : "not verified"}`,
           ]
         : configured.status === "ready" &&
-            step.id === "verify" &&
-            configured.settings.nativeHosts.codex?.agentVerification
+            step.id === "hosts" &&
+            configured.settings.nativeHosts.codex
           ? [
-              `Delegation · ${configured.settings.nativeHosts.codex.agentVerification.delegationDigest.slice(0, 12)}`,
-              `Parent ${configured.settings.nativeHosts.codex.agentVerification.parentThreadSha256.slice(0, 12)} · child ${configured.settings.nativeHosts.codex.agentVerification.childThreadSha256.slice(0, 12)}`,
-              `Native workspace enforcement · ${configured.settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"}`,
+              `Codex ${configured.settings.nativeHosts.codex.version} · ${configured.settings.nativeHosts.codex.protocol}`,
+              `Executable · ${configured.settings.nativeHosts.codex.executablePath}`,
             ]
-          : [];
+          : configured.status === "ready" &&
+              step.id === "verify" &&
+              configured.settings.nativeHosts.codex?.agentVerification
+            ? [
+                `Delegation · ${configured.settings.nativeHosts.codex.agentVerification.delegationDigest.slice(0, 12)}`,
+                `Parent ${configured.settings.nativeHosts.codex.agentVerification.parentThreadSha256.slice(0, 12)} · child ${configured.settings.nativeHosts.codex.agentVerification.childThreadSha256.slice(0, 12)}`,
+                `Native workspace enforcement · ${configured.settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"}`,
+              ]
+            : [];
   details.replaceChildren(
     ...[...step.details, ...liveDetails].map((detail) => {
       const item = document.createElement("li");
@@ -1965,6 +2108,97 @@ function renderSetup(): void {
           workspaceId: workspace.workspaceId,
         },
         `${workspace.label} read access verified.`,
+      );
+    };
+  } else if (step.id === "connect") {
+    const settings = configured.settings;
+    const connector = settings.connectors.secureMcp;
+    const readiness = settings.setup.connect;
+    liveSummary.textContent = connector.tunnelClient
+      ? readinessDetail(readiness)
+      : "Choose the exact installed tunnel-client. Farol Next verifies its profile, doctor, and run surface before saving it.";
+    if (
+      connector.tunnelClient &&
+      (connector.tunnelId === null || connector.credential === "missing")
+    ) {
+      const form = document.createElement("div");
+      form.className = "setup-connector-form";
+      const tunnelLabel = document.createElement("label");
+      tunnelLabel.textContent = "Tunnel ID";
+      const tunnel = document.createElement("input");
+      tunnel.id = "setup-connector-tunnel";
+      tunnel.type = "text";
+      tunnel.autocomplete = "off";
+      tunnel.spellcheck = false;
+      tunnel.placeholder = "tunnel_…";
+      tunnel.value = connector.tunnelId ?? "";
+      tunnelLabel.append(tunnel);
+      const keyLabel = document.createElement("label");
+      keyLabel.textContent = "Runtime key";
+      const key = document.createElement("input");
+      key.id = "setup-connector-key";
+      key.type = "password";
+      key.autocomplete = "off";
+      key.spellcheck = false;
+      key.placeholder =
+        connector.credential === "stored"
+          ? "Stored privately; leave blank to keep"
+          : "Required once";
+      keyLabel.append(key);
+      form.append(tunnelLabel, keyLabel);
+      liveSummary.append(form);
+    }
+    livePrimary.textContent = !connector.tunnelClient
+      ? "Choose tunnel-client…"
+      : connector.tunnelId === null || connector.credential === "missing"
+        ? "Save connector"
+        : connector.runtime?.state === "outcome_unknown"
+          ? "Repair explicitly"
+          : connector.runtime?.state === "ready"
+            ? "Stop connector"
+            : "Start & check";
+    livePrimary.disabled = false;
+    setupPrimaryAction = async () => {
+      if (!connector.tunnelClient) {
+        await configureProduct(
+          { kind: "connector.select-client" },
+          "tunnel-client selected and verified.",
+        );
+        return;
+      }
+      if (connector.tunnelId === null || connector.credential === "missing") {
+        const tunnel = required<HTMLInputElement>("#setup-connector-tunnel");
+        const key = required<HTMLInputElement>("#setup-connector-key");
+        const command = ProductConfigurationCommandSchema.safeParse({
+          kind: "connector.configure",
+          tunnelId: tunnel.value.trim(),
+          runtimeKey: key.value === "" ? null : key.value,
+        });
+        key.value = "";
+        if (!command.success) {
+          settingsFeedbackSurface = "settings";
+          settingsFeedback =
+            "Enter a valid tunnel ID and a runtime key of at least 20 printable characters.";
+          settingsFeedbackError = true;
+          render();
+          return;
+        }
+        await configureProduct(command.data, "Connector route saved.");
+        return;
+      }
+      if (connector.runtime?.state === "ready") {
+        await configureProduct(
+          { kind: "connector.stop" },
+          "Connector stopped and runtime proof cleared.",
+        );
+        return;
+      }
+      const repair = connector.runtime?.state === "outcome_unknown";
+      await configureProduct(
+        { kind: repair ? "connector.repair" : "connector.start" },
+        repair
+          ? "Connector repaired and readiness checked."
+          : "Connector started and readiness checked.",
       );
     };
   } else if (step.id === "hosts") {

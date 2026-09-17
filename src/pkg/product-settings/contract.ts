@@ -327,6 +327,29 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("host.run-codex-smoke") }),
   z.strictObject({ kind: z.literal("host.run-codex-agent-check") }),
+  z.strictObject({ kind: z.literal("connector.select-client") }),
+  z.strictObject({
+    kind: z.literal("connector.configure"),
+    tunnelId: z
+      .string()
+      .min(1)
+      .max(160)
+      .regex(/^[0-9A-Za-z._:-]+$/u),
+    runtimeKey: z
+      .string()
+      .min(20)
+      .max(512)
+      .refine((value) =>
+        [...value].every((character) => {
+          const code = character.codePointAt(0);
+          return code !== undefined && code >= 33 && code <= 126;
+        }),
+      )
+      .nullable(),
+  }),
+  z.strictObject({ kind: z.literal("connector.start") }),
+  z.strictObject({ kind: z.literal("connector.repair") }),
+  z.strictObject({ kind: z.literal("connector.stop") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
@@ -435,6 +458,21 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     dynamicToolCalls: z.literal(1),
     executableSha256: Sha256Schema,
     schemaSha256: Sha256Schema,
+  }),
+  z.strictObject({
+    kind: z.literal("connector.client-probe"),
+    version: z
+      .string()
+      .regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
+    protocol: z.literal("openai-tunnel-client/v1"),
+    executableSha256: Sha256Schema,
+  }),
+  z.strictObject({
+    kind: z.literal("connector.runtime"),
+    state: z.enum(["ready", "unreachable", "outcome_unknown"]),
+    runtimeGeneration: Sha256Schema,
+    computerGeneration: z.number().int().positive(),
+    buildId: Sha256Schema,
   }),
   CodexAgentVerificationFieldsSchema.extend({
     kind: z.literal("host.codex-agent-lineage"),
@@ -778,6 +816,22 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_AGENT_STILL_RUNNING",
       "CODEX_AGENT_LIVE_FAILED",
       "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN",
+      "TUNNEL_CLIENT_PICKER_CANCELLED",
+      "TUNNEL_CLIENT_SELECTION_INVALID",
+      "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+      "TUNNEL_CLIENT_INCOMPATIBLE",
+      "TUNNEL_CLIENT_PROBE_FAILED",
+      "CONNECTOR_CREDENTIAL_REQUIRED",
+      "CONNECTOR_CREDENTIAL_STORE_FAILED",
+      "CONNECTOR_WORKSPACE_REQUIRED",
+      "CONNECTOR_WORKSPACE_LIMIT",
+      "CONNECTOR_CONFIGURE_FAILED",
+      "CONNECTOR_DOCTOR_FAILED",
+      "CONNECTOR_START_FAILED",
+      "CONNECTOR_RUNTIME_UNREACHABLE",
+      "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+      "CONNECTOR_ALREADY_RUNNING",
+      "CONNECTOR_STOP_REQUIRED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

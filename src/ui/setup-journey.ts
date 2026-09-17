@@ -37,10 +37,10 @@ export const setupSteps: readonly SetupStep[] = [
     id: "connect",
     eyeline: "Connect",
     title: "Configure the Next-owned route",
-    copy: "A Computer connection is ready only after its Next-owned endpoint is saved, reached, and verified. Local shell transport alone is not connection proof.",
+    copy: "Select the exact OpenAI tunnel-client, save one tunnel ID and runtime key in Farol Next private state, then start and check the app-owned connector. Local shell transport alone is not connection proof.",
     details: [
-      "The isolated local shell runtime is available.",
-      "No Computer endpoint, tunnel, global registration, or login item is configured yet.",
+      "The connector launches only the packaged Computer MCP with the current owner-approved TaskGrant; it does not register a global shell command or login item.",
+      "Profile, Computer generation, runtime readiness, and ChatGPT attachment remain separate proofs. Runtime credentials never enter product settings, support exports, or source.",
     ],
   },
   {
