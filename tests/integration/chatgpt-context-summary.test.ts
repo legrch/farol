@@ -242,6 +242,88 @@ describe("ChatGPT summary-only context driver", () => {
     expect(fallback.resetConversation).not.toHaveBeenCalled();
   });
 
+  it("does not retire a newer retained conversation after restart", async () => {
+    const state = await store();
+    const original = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const first = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => original, createFallback: vi.fn() },
+    });
+    await expect(
+      first.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    const newer = route(
+      {
+        state: "completed",
+        code: null,
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: JSON.stringify(content),
+      },
+      "https://chatgpt.com/c/newer-task-conversation",
+    );
+    newer.currentConversationUrl.mockReturnValue(
+      "https://chatgpt.com/c/newer-task-conversation",
+    );
+    const restarted = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => newer, createFallback: vi.fn() },
+    });
+
+    await expect(
+      restarted.retire({
+        binding,
+        epoch: 1,
+        operationId: request.operationId,
+        source: source(),
+      }),
+    ).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "SOURCE_RETIREMENT_UNKNOWN",
+    });
+    expect(newer.resetConversation).not.toHaveBeenCalled();
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+  });
+
+  it("retires the exact retained conversation after restart", async () => {
+    const state = await store();
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const routes = { retained: () => retained, createFallback: vi.fn() };
+    const first = new ChatGptContextSummaryDriver({ store: state, routes });
+    await expect(
+      first.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    const restarted = new ChatGptContextSummaryDriver({ store: state, routes });
+    await expect(
+      restarted.retire({
+        binding,
+        epoch: 1,
+        operationId: request.operationId,
+        source: source(),
+      }),
+    ).resolves.toEqual({ status: "retired" });
+    expect(retained.resetConversation).toHaveBeenCalledTimes(1);
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toBeNull();
+  });
+
   it("does not resubmit when browser completion is unknown", async () => {
     const state = await store();
     const retained = route({

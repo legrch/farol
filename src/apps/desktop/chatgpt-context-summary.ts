@@ -97,6 +97,10 @@ function routeConversationUrl(
   return route.currentConversationUrl() ?? route.retainedConversationUrl();
 }
 
+function conversationSourceCursor(conversationUrl: string): string {
+  return `conversation:${digest(conversationUrl)}`;
+}
+
 function summaryAttempt(
   input: CodexContextSummaryInput,
   phase: StoredContextSummaryAttempt["phase"],
@@ -564,12 +568,44 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       return { status: "blocked", code: "SUMMARY_SOURCE_MISMATCH" };
     }
     const lease = this.routes.get(input.operationId);
+    const route =
+      lease?.route ??
+      (input.source.source === "retained_agent"
+        ? this.options.routes.retained(input.binding)
+        : null);
+    if (route) {
+      let summary = this.received.get(
+        operationKey(input.binding, input.operationId),
+      );
+      if (!summary) {
+        try {
+          summary =
+            (await this.options.store.getSummary(
+              input.binding,
+              input.operationId,
+            )) ?? undefined;
+        } catch {
+          return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+        }
+      }
+      const conversationUrl = routeConversationUrl(route);
+      if (
+        !summary ||
+        !conversationUrl ||
+        summary.sourceCursor !== conversationSourceCursor(conversationUrl)
+      ) {
+        return {
+          status: "outcome_unknown",
+          code: "SOURCE_RETIREMENT_UNKNOWN",
+        };
+      }
+    }
     try {
       if (lease) {
         if (lease.owned) lease.route.dispose();
         else lease.route.resetConversation();
-      } else if (input.source.source === "retained_agent") {
-        this.options.routes.retained(input.binding)?.resetConversation();
+      } else if (route) {
+        route.resetConversation();
       }
     } catch {
       return { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" };
@@ -644,7 +680,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
           conversationUrl,
         ]),
       ).slice(0, 40)}`,
-      sourceCursor: `conversation:${digest(conversationUrl)}`,
+      sourceCursor: conversationSourceCursor(conversationUrl),
       content: boundedContent,
     };
     const key = operationKey(input.request.binding, input.request.operationId);
