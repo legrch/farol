@@ -67,6 +67,7 @@ type VerificationOperation = Extract<
 
 export type NativeVerificationCommandOptions = Readonly<{
   attestGit?: () => Promise<string>;
+  signal?: AbortSignal;
 }>;
 
 type ExactResult = Readonly<{ stdout: string; stderr: string }>;
@@ -78,6 +79,7 @@ type CommandFailureCode =
   | "WORKSPACE_COMMAND_UNSUPPORTED"
   | "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"
   | "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED"
+  | "WORKSPACE_COMMAND_CANCELLED"
   | "WORKSPACE_COMMAND_TIMEOUT"
   | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
   | "WORKSPACE_COMMAND_FAILED";
@@ -467,7 +469,11 @@ function runGitVerification(
   metadata: WorkspaceGitMetadata,
   command: VerificationOperation["command"],
   deniedPaths: readonly string[],
+  signal?: AbortSignal,
 ): Promise<ReadonlyWorkspaceResult> {
+  if (signal?.aborted) {
+    return Promise.resolve(failure("WORKSPACE_COMMAND_CANCELLED"));
+  }
   let profile: string;
   let parameters: string[];
   try {
@@ -557,6 +563,7 @@ function runGitVerification(
     let stderrBytes = 0;
     let timedOut = false;
     let outputTooLarge = false;
+    let cancelled = false;
     let finished = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -566,8 +573,16 @@ function runGitVerification(
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
       resolve(result);
     };
+    const cancel = (): void => {
+      if (finished || cancelled) return;
+      cancelled = true;
+      killProcessGroup(child);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
       if (stdoutBytes > MAX_OUTPUT_BYTES) {
@@ -587,9 +602,19 @@ function runGitVerification(
       }
     });
     child.once("error", () =>
-      finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE")),
+      finish(
+        failure(
+          cancelled
+            ? "WORKSPACE_COMMAND_CANCELLED"
+            : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+        ),
+      ),
     );
     child.once("close", (code, signal) => {
+      if (cancelled) {
+        finish(failure("WORKSPACE_COMMAND_CANCELLED"));
+        return;
+      }
       if (timedOut) {
         finish(failure("WORKSPACE_COMMAND_TIMEOUT"));
         return;
@@ -640,6 +665,9 @@ export async function executeNativeVerificationCommand(
   operation: VerificationOperation,
   options: NativeVerificationCommandOptions = {},
 ): Promise<ReadonlyWorkspaceResult> {
+  if (options.signal?.aborted) {
+    return failure("WORKSPACE_COMMAND_CANCELLED");
+  }
   if (
     (operation.command !== "git.status" && operation.command !== "git.head") ||
     operation.relativePath !== "."
@@ -649,6 +677,9 @@ export async function executeNativeVerificationCommand(
   const initialMetadata = await resolveWorkspaceGitMetadata(
     request.workspace.root,
   );
+  if (options.signal?.aborted) {
+    return failure("WORKSPACE_COMMAND_CANCELLED");
+  }
   if (initialMetadata === null) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
@@ -659,7 +690,13 @@ export async function executeNativeVerificationCommand(
   } catch {
     return failure("WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED");
   }
+  if (options.signal?.aborted) {
+    return failure("WORKSPACE_COMMAND_CANCELLED");
+  }
   const metadata = await resolveWorkspaceGitMetadata(request.workspace.root);
+  if (options.signal?.aborted) {
+    return failure("WORKSPACE_COMMAND_CANCELLED");
+  }
   if (
     metadata === null ||
     metadata.gitDirectory !== initialMetadata.gitDirectory ||
@@ -673,5 +710,6 @@ export async function executeNativeVerificationCommand(
     metadata,
     operation.command,
     request.workspace.deniedPaths,
+    options.signal,
   );
 }

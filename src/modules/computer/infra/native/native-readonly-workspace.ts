@@ -17,6 +17,7 @@ import type {
 import type {
   ReadonlyWorkspace,
   ReadonlyWorkspaceErrorCode,
+  ReadonlyWorkspaceExecutionContext,
   ReadonlyWorkspaceRequest,
   ReadonlyWorkspaceResult,
   WorkspaceMatch,
@@ -122,10 +123,12 @@ type NativeRequest = Readonly<{
   testHook?: Readonly<{ phase: string; index: number | null }>;
 }>;
 
-export type NativeReadonlyWorkspaceTestOptions = Readonly<{
-  testHookRequest?: Readonly<{ phase: string; index: number | null }>;
-  testHook?: () => Promise<void>;
-}>;
+export type NativeReadonlyWorkspaceTestOptions =
+  ReadonlyWorkspaceExecutionContext &
+    Readonly<{
+      testHookRequest?: Readonly<{ phase: string; index: number | null }>;
+      testHook?: () => Promise<void>;
+    }>;
 
 type NativeReadonlyWorkspaceOptions = Readonly<{
   helperPath: string;
@@ -1101,6 +1104,7 @@ function mutationErrorCode(
     case "WORKSPACE_COMMAND_UNSUPPORTED":
     case "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE":
     case "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED":
+    case "WORKSPACE_COMMAND_CANCELLED":
     case "WORKSPACE_COMMAND_TIMEOUT":
     case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
     case "WORKSPACE_COMMAND_FAILED":
@@ -1153,7 +1157,12 @@ export class NativeReadonlyWorkspace
           },
         },
         validated.operation,
-        this.options.attestGit ? { attestGit: this.options.attestGit } : {},
+        {
+          ...(this.options.attestGit
+            ? { attestGit: this.options.attestGit }
+            : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
+        },
       );
     }
 

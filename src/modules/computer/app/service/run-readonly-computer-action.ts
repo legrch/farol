@@ -4,6 +4,7 @@ import type { ComputerApprovalRepository } from "../port/computer-approval-repos
 import type {
   ReadonlyWorkspace,
   ReadonlyWorkspaceErrorCode,
+  ReadonlyWorkspaceExecutionContext,
   ReadonlyWorkspaceOperation,
   ReadonlyWorkspaceOutput,
 } from "../port/readonly-workspace";
@@ -125,6 +126,7 @@ export class RunReadonlyComputerAction {
 
   async execute(
     request: ReadonlyComputerActionRequest,
+    context: ReadonlyWorkspaceExecutionContext = {},
   ): Promise<ReadonlyComputerActionResult> {
     let participant;
     try {
@@ -180,7 +182,7 @@ export class RunReadonlyComputerAction {
 
     let result;
     try {
-      result = await this.workspace.execute({
+      const workspaceRequest = {
         workspace: {
           workspaceId: request.workspaceId,
           root: scope.root,
@@ -191,7 +193,10 @@ export class RunReadonlyComputerAction {
           ),
         },
         operation: request.operation,
-      });
+      };
+      result = context.signal
+        ? await this.workspace.execute(workspaceRequest, context)
+        : await this.workspace.execute(workspaceRequest);
     } catch {
       return failure("WORKSPACE_HELPER_FAILED", "native-workspace");
     }

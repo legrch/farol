@@ -126,7 +126,7 @@ describe("read-only Computer MCP adapter", () => {
     });
     if (!critic.ok) throw new Error(critic.error.code);
 
-    const contract = new ReadonlyComputerContractHandler(
+    const handler = new ReadonlyComputerContractHandler(
       new RunReadonlyComputerAction(
         new InMemoryAuthorityRepository([
           main.value,
@@ -143,6 +143,13 @@ describe("read-only Computer MCP adapter", () => {
         { now: () => 1_000 },
       ),
     );
+    const executionSignals: (AbortSignal | undefined)[] = [];
+    const contract: ReadonlyComputerContract = {
+      execute(request, context) {
+        executionSignals.push(context?.signal);
+        return handler.execute(request, context);
+      },
+    };
     const server = createReadonlyComputerMcpServer(contract, {
       ownerId: "owner-preview",
       sessionId: "session-a",
@@ -271,6 +278,10 @@ describe("read-only Computer MCP adapter", () => {
         },
       });
       expect(spoofed.isError).toBe(true);
+      expect(executionSignals.length).toBeGreaterThan(0);
+      expect(
+        executionSignals.every((signal) => signal instanceof AbortSignal),
+      ).toBe(true);
     } finally {
       await client.close();
       await server.close();

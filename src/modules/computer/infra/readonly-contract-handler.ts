@@ -3,12 +3,16 @@ import {
   ReadonlyComputerCallRequestSchema,
   type ReadonlyComputerCallResponse,
   type ReadonlyComputerContract,
+  type ReadonlyComputerExecutionContext,
 } from "../contract/readonly-computer-contract";
 
 export class ReadonlyComputerContractHandler implements ReadonlyComputerContract {
   constructor(private readonly service: RunReadonlyComputerAction) {}
 
-  async execute(request: unknown): Promise<ReadonlyComputerCallResponse> {
+  async execute(
+    request: unknown,
+    context: ReadonlyComputerExecutionContext = {},
+  ): Promise<ReadonlyComputerCallResponse> {
     const parsed = ReadonlyComputerCallRequestSchema.safeParse(request);
     if (!parsed.success) {
       return {
@@ -21,7 +25,7 @@ export class ReadonlyComputerContractHandler implements ReadonlyComputerContract
         },
       };
     }
-    const result = await this.service.execute(parsed.data);
+    const result = await this.service.execute(parsed.data, context);
     if (!result.ok) {
       return {
         ok: false,

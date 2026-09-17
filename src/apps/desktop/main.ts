@@ -2375,6 +2375,8 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
     case "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE":
     case "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED":
       return configurationFailure("WORKSPACE_COMMAND_UNAVAILABLE");
+    case "WORKSPACE_COMMAND_CANCELLED":
+      return configurationFailure("WORKSPACE_COMMAND_CANCELLED");
     case "WORKSPACE_COMMAND_TIMEOUT":
       return configurationFailure("WORKSPACE_COMMAND_TIMEOUT");
     case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":

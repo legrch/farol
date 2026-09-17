@@ -157,6 +157,7 @@ const ComputerErrorCodeSchema = z.enum([
   "WORKSPACE_COMMAND_UNSUPPORTED",
   "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
   "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED",
+  "WORKSPACE_COMMAND_CANCELLED",
   "WORKSPACE_COMMAND_TIMEOUT",
   "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
   "WORKSPACE_COMMAND_FAILED",
@@ -206,6 +207,13 @@ export type ReadonlyComputerCallResponse = z.infer<
   typeof ReadonlyComputerCallResponseSchema
 >;
 
+export type ReadonlyComputerExecutionContext = Readonly<{
+  signal?: AbortSignal;
+}>;
+
 export interface ReadonlyComputerContract {
-  execute(request: unknown): Promise<ReadonlyComputerCallResponse>;
+  execute(
+    request: unknown,
+    context?: ReadonlyComputerExecutionContext,
+  ): Promise<ReadonlyComputerCallResponse>;
 }

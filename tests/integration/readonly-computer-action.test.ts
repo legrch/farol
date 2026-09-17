@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -169,6 +169,24 @@ afterEach(async () => {
 });
 
 describe("real read-only Computer action", () => {
+  it("propagates the caller cancellation signal to the native workspace boundary", async () => {
+    const chain = participants();
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: false,
+      error: { code: "WORKSPACE_HELPER_FAILED", retry: "never" },
+    }));
+    const computer = contract(Object.values(chain), approval(), { execute });
+    const controller = new AbortController();
+
+    await computer.execute(
+      request({ kind: "workspace.read", relativePath: "README.md" }),
+      { signal: controller.signal },
+    );
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+  });
+
   it("DAC-03/08/09 lets a delegated Critic discover and read an unknown file through both policies", async () => {
     const chain = participants();
     const computer = contract(Object.values(chain), approval());

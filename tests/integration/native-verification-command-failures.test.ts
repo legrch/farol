@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -22,7 +23,10 @@ import { executeNativeVerificationCommand } from "../../src/modules/computer/inf
 class FakeChild extends EventEmitter {
   readonly stdout = new EventEmitter();
   readonly stderr = new EventEmitter();
-  readonly pid = undefined;
+  constructor(readonly pid: number | undefined = undefined) {
+    super();
+  }
+
   readonly kill = vi.fn(() => {
     this.emit("close", null, "SIGKILL");
     return true;
@@ -51,16 +55,16 @@ function request(
 async function execute(
   attestGit?: () => Promise<string>,
   command: WorkspaceVerificationCommand = "git.status",
+  signal?: AbortSignal,
 ): Promise<Awaited<ReturnType<typeof executeNativeVerificationCommand>>> {
   const input = request(command);
   if (input.operation.kind !== "verification.run") {
     throw new Error("verification operation expected");
   }
-  return executeNativeVerificationCommand(
-    input,
-    input.operation,
-    attestGit ? { attestGit } : {},
-  );
+  return executeNativeVerificationCommand(input, input.operation, {
+    ...(attestGit ? { attestGit } : {}),
+    ...(signal ? { signal } : {}),
+  });
 }
 
 beforeEach(async () => {
@@ -75,6 +79,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
@@ -230,5 +235,50 @@ describe("native verification command process failures", () => {
       ok: false,
       error: { code: "WORKSPACE_COMMAND_TIMEOUT", retry: "never" },
     });
+  });
+
+  it("does not spawn a command when cancellation is already requested", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      execute(async () => "/usr/bin/git", "git.status", controller.signal),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_COMMAND_CANCELLED", retry: "never" },
+    });
+    expect(processMock.spawn).not.toHaveBeenCalled();
+  });
+
+  it("kills the detached process group and classifies in-flight cancellation", async () => {
+    const child = new FakeChild(43_210);
+    let markSpawned: (() => void) | undefined;
+    const spawned = new Promise<void>((resolve) => {
+      markSpawned = resolve;
+    });
+    processMock.spawn.mockImplementationOnce(() => {
+      markSpawned?.();
+      return child;
+    });
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      queueMicrotask(() => child.emit("close", null, "SIGKILL"));
+      return true;
+    });
+    const controller = new AbortController();
+
+    const result = execute(
+      async () => "/usr/bin/git",
+      "git.status",
+      controller.signal,
+    );
+    await spawned;
+    controller.abort();
+
+    await expect(result).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_COMMAND_CANCELLED", retry: "never" },
+    });
+    expect(kill).toHaveBeenCalledWith(-43_210, "SIGKILL");
+    expect(child.kill).not.toHaveBeenCalled();
   });
 });

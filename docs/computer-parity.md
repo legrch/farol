@@ -1,0 +1,71 @@
+# Computer parity and content lifecycle
+
+This inventory compares the actual Legacy Hub tool catalogue in
+`src/hub/catalog.mjs` with the selected Farol Next U2 product routes. It is not a
+claim that similarly named schemas are equivalent. `REAL_LOCAL` means the native
+boundary ran against an actual temporary macOS workspace or installed host;
+`FIXTURE_APP` means the assembled Electron product ran with the deterministic
+provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
+
+## Legacy-to-Next disposition
+
+| Legacy capability                                                                                                 | Farol Next disposition                                                                                                                                                                                                                                                                                                                                                                                     | Product consumer and evidence                                                                                                                                                               | Status                                                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `open_workspace`, `request_access`                                                                                | Owner-controlled Setup and Settings select folders, access mode, exclusions, command policy and revocation. A model cannot expand access. Every call is rechecked against both the task grant and the current Computer generation.                                                                                                                                                                         | `product-configuration.test.ts`, `readonly-computer-action.test.ts`, development/sealed product E2E                                                                                         | `REAL_LOCAL` + `FIXTURE_APP`                                                                   |
+| `read`, `ls`, `glob`, `grep`                                                                                      | Typed `workspace.read`, `workspace.list` and `workspace.search` operations replace free-form file discovery. Next deliberately exposes no caller-supplied glob grammar; list/search cover the selected product discovery flows.                                                                                                                                                                            | Settings verification, Computer MCP, Chat peer and Product Agent/Critic; `native-readonly-workspace.test.ts`, `readonly-computer-mcp.test.ts`, `codex-agent-computer.test.ts`               | `REAL_LOCAL` + `FIXTURE_APP`                                                                   |
+| `write`, `edit`                                                                                                   | Explicit write approval, exact source digest, descriptor-relative containment, atomic replace, conflict detection, stable operation ID and content-free durable receipt. An uncertain replace acknowledgement is never replayed. Product Agent assignments remain read/verify-only; the general delegated Computer boundary preserves write authority only when mutation ownership was explicitly granted. | Settings mutation flow and mutable Computer MCP; `native-mutable-workspace.test.ts`, `mutable-computer-action.test.ts`, `mutable-computer-mcp.test.ts`                                      | `REAL_LOCAL` + `FIXTURE_APP`                                                                   |
+| `bash`                                                                                                            | No arbitrary shell. The selected U2 profiles are fixed `git.status` and `git.head`; callers cannot select executable, arguments, cwd, environment or network.                                                                                                                                                                                                                                              | Settings buttons, Computer MCP and inherited Product Agent verification; `native-verification-command*.test.ts`, `readonly-computer-mcp.test.ts`, `codex-native-product-agent-host.test.ts` | `REAL_LOCAL` + `FIXTURE_APP`; arbitrary shell `NOT_SELECTED`                                   |
+| `guidance_search`, `guidance_fetch`                                                                               | Next has no model-visible guidance consumer on the blocked ChatGPT-to-native Route B. Selected owner context is instead explicit preview plus private retained continuity; that does not pretend to be the Legacy guidance catalogue.                                                                                                                                                                      | Route B native relay foundation is covered by `codex-caller-relay.test.ts` and `caller-relay-mcp.test.ts`.                                                                                  | `BLOCKED_OWNER`: approve or reject one-turn model-visible native relay capability; no fallback |
+| `codex_task_create`, `codex_task_status`                                                                          | Native Product Agent is a correlated child of the current task and is not relabelled as generic Handoff. Separate arbitrary Codex task creation is outside the selected U2 product route.                                                                                                                                                                                                                  | Product Agent task menu, private assignment journal, same-child wait/rejoin and parent delivery                                                                                             | `NOT_SELECTED_U2`; explicit parity gap retained                                                |
+| `claude_task_create`, `claude_task_status`                                                                        | No Claude handoff is hidden behind Codex Product Agent or Computer.                                                                                                                                                                                                                                                                                                                                        | None                                                                                                                                                                                        | `NOT_SELECTED_U2`; explicit parity gap retained                                                |
+| `farol_session_search`, `farol_session_read`, `farol_session_tail`                                                | The selected Next product semantics are exact task history, content-free Activity and private context continuity. Next does not expose a raw supplemental transcript-search tool to the model.                                                                                                                                                                                                             | Watch Rail task registry, Activity, private checkpoint store and three-cycle continuity/restart tests                                                                                       | Selected product semantics `REAL_LOCAL` + `FIXTURE_APP`; raw transcript tool `NOT_SELECTED_U2` |
+| `farol_caller_tools`                                                                                              | Ticket-bound native caller relay validates the exact host catalogue, turn, operation ID and at-most-once invoke. Making it model-visible in the production ChatGPT route is the same Route B owner decision above.                                                                                                                                                                                         | `codex-caller-relay.test.ts`, `caller-relay-mcp.test.ts`                                                                                                                                    | Foundation `REAL_LOCAL`; full Route B `BLOCKED_OWNER`                                          |
+| `farol_agent_sessions_list`, `farol_agent_history_search`, `farol_agent_session_read`, `farol_agent_session_tail` | Product Agent stores only the current task's bounded objective, lineage, terminal state and delivery evidence. General browsing of historical Codex/Claude transcripts is not exposed or implied.                                                                                                                                                                                                          | Task menu and Activity; `product-agent-store.test.ts`, `agent-persistence.test.ts`, built-app Product Agent flow                                                                            | Selected task lifecycle `REAL_LOCAL` + `FIXTURE_APP`; general history tools `NOT_SELECTED_U2`  |
+
+`NOT_SELECTED_U2` is not a compatibility claim. Those rows must remain visible in
+any later Legacy-replacement decision.
+
+## Fixed command contract
+
+Both profiles use the reviewed Apple Git chain and an exact argument vector:
+
+- `git.status`: `status --short --branch --untracked-files=no --ignore-submodules=all`;
+- `git.head`: `rev-parse --verify HEAD`.
+
+Execution is pinned to the approved workspace root with explicit `GIT_DIR`,
+`GIT_COMMON_DIR` and `GIT_WORK_TREE`, optional locks and repository monitors
+disabled, a fixed environment, Apple Seatbelt default-deny policy and `deny
+network*`. The detached process group is killed on the ten-second deadline, output
+overflow or MCP cancellation. Cancellation is checked before metadata resolution,
+after each attestation boundary and immediately after spawn; it returns
+`WORKSPACE_COMMAND_CANCELLED`, never a generic failure.
+
+| Workspace shape                                    | Disposition                                                     | Evidence                                                   |
+| -------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------- |
+| Regular repository                                 | Supported                                                       | real native status and HEAD tests                          |
+| Exact linked worktree                              | Supported with only its resolved worktree/common metadata roots | real native linked-worktree test plus parent canary denial |
+| Non-Git workspace                                  | Known refusal                                                   | `WORKSPACE_COMMAND_UNSUPPORTED` regression                 |
+| Arbitrary external, symlinked or writable metadata | Refused                                                         | native metadata refusal regressions                        |
+| Research denied-path metadata experiment           | Not rerouted after the explicit host refusal                    | `NOT_RUN`                                                  |
+
+Generic file operations continue to deny `.git`; command metadata access does not
+authorize reading the metadata parent through Computer. Credential-path denies are
+preserved for every command profile. Read/write containment, ancestor-swap races,
+mutation conflicts, current-generation checks and content-free receipts remain
+separate native boundaries.
+
+## Attachments and selected context
+
+The assembled deterministic Browser route stages private copies, verifies exact
+bytes, SHA-256 identity, supported MIME type and size, uploads image and document
+files through the page's real file-input contract, observes completed chips, submits
+once and removes staging data. Partial upload, missing reference, symlink,
+unsupported type, size overflow and cleanup failure are explicit. The context preview
+shows the owner-selected names/types/count and disclosure explanation, not file bytes
+or hidden local paths; workspace exclusions still apply to Computer and delegated
+Agent/Critic access.
+
+This is `FIXTURE_APP` provider evidence. It proves the product composition and byte
+contract, not that an authenticated owner account received the files. A real provider
+attachment row remains separately budgeted and must never be inferred from the
+fixture report.

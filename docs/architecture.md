@@ -103,18 +103,21 @@ installed browser profile is used.
 The explicit demo provider and Computer remain controlled fixtures. Ordinary product
 composition is separate: `ChatGptRoute` owns the isolated Next partition and bounded
 submission lifecycle, while `NativeReadonlyWorkspace` supplies descriptor-relative
-list/read/search, guarded edit operations, and one explicitly enabled fixed
-`git status` verifier under persisted Computer approval. Generic file tools deny
+list/read/search, guarded edit operations, and explicitly enabled fixed `git status`
+and exact `git head` verifiers under persisted Computer approval. Generic file tools deny
 `.git`. The verifier rechecks `verification.run` plus `commands=verification`
 against both the task grant and current Computer approval, attests the owner-safe
 workspace and signed Apple Git chain, then executes an exact argument vector inside
 an Apple Seatbelt profile with network denied, optional locks and repository
-file-system monitors disabled, fixed environment, timeout, and output limits. The
-caller cannot select an executable, argument, environment, working subpath, or
-network policy. Enabling or disabling command authority advances the Computer
-generation, invalidates stale verification and native-Agent proof, and requires a
-fresh workspace verification. Symlinked or external Git metadata is refused rather
-than followed. The
+file-system monitors disabled, fixed environment, timeout, cancellation, and output
+limits. Timeout, output overflow or caller cancellation kills the detached process
+group. The caller cannot select an executable, argument, environment, working
+subpath, or network policy. Enabling or disabling command authority advances the
+Computer generation, invalidates stale verification and native-Agent proof, and
+requires a fresh workspace verification. A regular repository and an exact linked
+worktree are supported; only the resolved worktree/common metadata roots are
+admitted. Arbitrary, symlinked or writable external metadata is refused, and metadata
+access never grants the parent directory to generic file tools. The
 development and sealed-package E2E routes use a synthetic provider site and temporary
 Mac workspace trees, so they prove product composition and containment without
 claiming the owner's authenticated provider account was exercised.
@@ -127,12 +130,14 @@ security boundary. Explicit owner narrowing, including do-not-inspect paths, is
 carried into the native read-only deny list. A delegate still cannot exceed the
 TaskGrant, underlying Computer approval, native host-task authority, or an explicit
 narrower owner instruction. Prompt text is never authority. A selected and attested
-Codex App Server can run one bounded compatibility assignment: the root spawns one
-correlated child, the child invokes one fixed content-free workspace probe through
-the current Computer policy, the root waits and reports exact authority evidence,
-and the product rejoins the same child before durable result acknowledgement. The
-probe exercises an allowed focus plus denied foreign scope and configured exclusions;
-it returns no workspace names or contents to the child.
+Codex App Server can run both the setup lineage assignment and one owner-written
+Product Agent objective for an admitted live task. The root spawns one correlated
+child, the child uses only inherited typed Computer read/search or fixed verification
+operations, the root waits and reports exact authority evidence, and the product
+rejoins the same child before durable result acknowledgement. The setup probe
+exercises an allowed focus plus denied foreign scope and configured exclusions; it
+returns no workspace names or contents to the child. Product Agent remains without
+mutation ownership or network authority.
 The read-only Computer response contract binds the full operation semantics, not
 only task/call/path identity; malformed or rebound responses remain terminal
 outcome-unknown rather than being mislabeled as a known refusal. The Agent app seam
@@ -140,10 +145,9 @@ persists assignment/child correlation in a private atomic store with exclusive f
 publication and process-serialized monotonic updates, rejoins only the same known
 running child after restart, and records result retention separately from an exact
 parent-delivery acknowledgement. The in-memory host remains for exhaustive negative
-tests, and the product runtime also selects the seam through the bounded native Codex
-compatibility check. That check is native Agent proof for its exact assignment, not a
-claim that arbitrary product Agent tasks, commands, network access, or live provider
-work are complete.
+tests, and the product runtime selects the seam through both the bounded native Codex
+lineage check and task-menu Product Agent. Neither grants arbitrary commands, network
+access, generic handoff, nor proof of authenticated provider work.
 
 The SSE stream is bounded and delivery-aware. Capacity pressure may discard only
 events already acknowledged by the receiving client. If the unacknowledged window

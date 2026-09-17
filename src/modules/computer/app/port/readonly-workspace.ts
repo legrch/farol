@@ -79,6 +79,7 @@ export type ReadonlyWorkspaceErrorCode =
   | "WORKSPACE_COMMAND_UNSUPPORTED"
   | "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"
   | "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED"
+  | "WORKSPACE_COMMAND_CANCELLED"
   | "WORKSPACE_COMMAND_TIMEOUT"
   | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
   | "WORKSPACE_COMMAND_FAILED"
@@ -94,6 +95,13 @@ export type ReadonlyWorkspaceResult =
       }>;
     }>;
 
+export type ReadonlyWorkspaceExecutionContext = Readonly<{
+  signal?: AbortSignal;
+}>;
+
 export interface ReadonlyWorkspace {
-  execute(request: ReadonlyWorkspaceRequest): Promise<ReadonlyWorkspaceResult>;
+  execute(
+    request: ReadonlyWorkspaceRequest,
+    context?: ReadonlyWorkspaceExecutionContext,
+  ): Promise<ReadonlyWorkspaceResult>;
 }

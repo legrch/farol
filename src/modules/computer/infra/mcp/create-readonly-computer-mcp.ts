@@ -228,6 +228,7 @@ async function execute(
   callId: string,
   workspaceId: string,
   operation: ReadonlyComputerCallRequest["operation"],
+  signal?: AbortSignal,
 ): Promise<CallToolResult> {
   const request: ReadonlyComputerCallRequest = {
     ...binding,
@@ -237,7 +238,7 @@ async function execute(
   };
   let response: unknown;
   try {
-    response = await contract.execute(request);
+    response = await contract.execute(request, signal ? { signal } : {});
   } catch {
     return failure("COMPUTER_CONTRACT_UNAVAILABLE");
   }
@@ -377,14 +378,22 @@ async function executeConnectorVerification(
   callId: string,
   challenge: string,
   workspaceId: string,
+  signal?: AbortSignal,
 ): Promise<CallToolResult> {
   if (!recorder.accepts(challenge)) {
     return failure("CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH");
   }
-  const result = await execute(contract, binding, callId, workspaceId, {
-    kind: "workspace.list",
-    relativePath: ".",
-  });
+  const result = await execute(
+    contract,
+    binding,
+    callId,
+    workspaceId,
+    {
+      kind: "workspace.list",
+      relativePath: ".",
+    },
+    signal,
+  );
   if (result.isError) return result;
   const parsed = ReadonlyComputerCallResponseSchema.safeParse({
     ok: true,
@@ -494,10 +503,17 @@ export function createReadonlyComputerMcpServer(
       annotations: READONLY_ANNOTATIONS,
     },
     async ({ workspaceId, relativePath }, context) =>
-      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
-        kind: "workspace.list",
-        relativePath,
-      }),
+      execute(
+        contract,
+        binding,
+        String(context.mcpReq.id),
+        workspaceId,
+        {
+          kind: "workspace.list",
+          relativePath,
+        },
+        context.mcpReq.signal,
+      ),
   );
   server.registerTool(
     "computer_workspace_read",
@@ -509,10 +525,17 @@ export function createReadonlyComputerMcpServer(
       annotations: READONLY_ANNOTATIONS,
     },
     async ({ workspaceId, relativePath }, context) =>
-      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
-        kind: "workspace.read",
-        relativePath,
-      }),
+      execute(
+        contract,
+        binding,
+        String(context.mcpReq.id),
+        workspaceId,
+        {
+          kind: "workspace.read",
+          relativePath,
+        },
+        context.mcpReq.signal,
+      ),
   );
   server.registerTool(
     "computer_workspace_search",
@@ -524,11 +547,18 @@ export function createReadonlyComputerMcpServer(
       annotations: READONLY_ANNOTATIONS,
     },
     async ({ workspaceId, relativePath, pattern }, context) =>
-      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
-        kind: "workspace.search",
-        relativePath,
-        pattern,
-      }),
+      execute(
+        contract,
+        binding,
+        String(context.mcpReq.id),
+        workspaceId,
+        {
+          kind: "workspace.search",
+          relativePath,
+          pattern,
+        },
+        context.mcpReq.signal,
+      ),
   );
   server.registerTool(
     "computer_workspace_git_status",
@@ -540,11 +570,18 @@ export function createReadonlyComputerMcpServer(
       annotations: READONLY_ANNOTATIONS,
     },
     async ({ workspaceId }, context) =>
-      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
-        kind: "verification.run",
-        command: "git.status",
-        relativePath: ".",
-      }),
+      execute(
+        contract,
+        binding,
+        String(context.mcpReq.id),
+        workspaceId,
+        {
+          kind: "verification.run",
+          command: "git.status",
+          relativePath: ".",
+        },
+        context.mcpReq.signal,
+      ),
   );
   server.registerTool(
     "computer_workspace_git_head",
@@ -556,11 +593,18 @@ export function createReadonlyComputerMcpServer(
       annotations: READONLY_ANNOTATIONS,
     },
     async ({ workspaceId }, context) =>
-      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
-        kind: "verification.run",
-        command: "git.head",
-        relativePath: ".",
-      }),
+      execute(
+        contract,
+        binding,
+        String(context.mcpReq.id),
+        workspaceId,
+        {
+          kind: "verification.run",
+          command: "git.head",
+          relativePath: ".",
+        },
+        context.mcpReq.signal,
+      ),
   );
 
   if (connectorVerification) {
@@ -581,6 +625,7 @@ export function createReadonlyComputerMcpServer(
           String(context.mcpReq.id),
           challenge,
           workspaceId,
+          context.mcpReq.signal,
         ),
     );
   }

@@ -23,9 +23,10 @@ verify its readiness, select real folders with the native picker, persist Comput
 approval and exclusions privately, and exercise descriptor-relative list/read/search
 through the product. An explicit access change enables guarded conflict-aware edits
 with durable content-free receipts. An independently persisted, off-by-default
-`Verified commands` setting enables only fixed no-network Apple Git status at a
-freshly verified workspace root; no arbitrary command, argument, environment, or
-working path is accepted, and command output is not retained. The Browser flow
+`Verified commands` setting enables only fixed no-network Apple Git status and exact
+HEAD verification at a freshly verified workspace root; no arbitrary command,
+argument, environment, or working path is accepted, command cancellation kills the
+detached process group, and command output is not retained. The Browser flow
 previews selected text, image, or document context before one submission, retains
 conversation and delivery state, and recovers a completed or outcome-unknown task
 after restart without blind resubmission.
@@ -33,15 +34,23 @@ The deterministic E2E site remains a fixture; its green report does not claim th
 owner's authenticated ChatGPT account completed a live call.
 
 Setup can also select and attest a Codex executable, run one bounded live App Server
-tool turn, and run one narrow native-Agent compatibility assignment. That assignment
-creates one genuine child, preserves the complete applicable read-only TaskGrant
-through Main -> Agent -> Critic, performs one content-free workspace enforcement
-probe through the current Computer policy, observes bounded running before rejoining
-the same child, retains the result, and acknowledges parent delivery. This proves the
-verification assignment only. General native Agent task admission, the
-ChatGPT-to-Computer connector, commands beyond the fixed Git status verifier,
-ordinary compaction continuity, network authority, and release readiness remain
-open.
+tool turn, and verify native-Agent lineage. After that verification, an ordinary live
+task's menu admits one owner-written Product Agent objective. Farol creates one
+genuine child, preserves the complete applicable read/verify TaskGrant through Main
+-> Agent -> Critic, lets that child discover relevant files beyond its initial focus,
+observes bounded running, rejoins the same child after restart, retains the result,
+and acknowledges parent delivery. Product Agent does not gain mutation or network
+authority from its role.
+
+Context continuity keeps the same retained conversation when available, uses a
+summary-only provider turn with no tools, stores a private bounded checkpoint before
+handoff, waits for exact host completion, advances one epoch and resumes after
+restart. Three ordinary compaction cycles and the exact installed host protocol have
+separate evidence. The model summary never renews authority or proves side effects.
+The model-visible ChatGPT-to-native caller route, arbitrary commands, network
+authority, authenticated attachment delivery, and release readiness remain separate
+acceptance rows. See [`docs/computer-parity.md`](docs/computer-parity.md) for the
+complete Legacy disposition and evidence boundary.
 
 The N2 authority core derives a task-bound `TaskGrant`, preserves it through
 main -> Agent -> Critic delegation, retains explicit owner narrowing including
@@ -52,8 +61,8 @@ outcome-unknown. The Agent app seam persists assignment correlation in a private
 atomic store with exclusive first publication and serialized monotonic updates,
 rejoins an already-known running child without another spawn, distinguishes a durable
 result from a memory-only result, and records exact parent delivery. The selected
-native Codex host and product UI now exercise this seam for the bounded compatibility
-check described above; broader Agent work remains a separate acceptance boundary.
+native Codex host and product UI exercise this seam for both the setup lineage check
+and bounded owner-written Product Agent objectives.
 
 ## Reproduce
 
