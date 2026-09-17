@@ -148,6 +148,186 @@ describe("native verification command", () => {
     });
   });
 
+  it("supports one exact linked worktree without authorizing its metadata parent", async () => {
+    const mainRoot = root;
+    const worktreeParent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-command-worktree-parent-"),
+    );
+    const linkedRoot = path.join(worktreeParent, "checkout");
+    const parentCanary = path.join(worktreeParent, "parent-canary");
+    try {
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        linkedRoot,
+      ]);
+      root = await fs.realpath(linkedRoot);
+      await fs.writeFile(parentCanary, "parent private\n", { mode: 0o600 });
+      await fs.writeFile(path.join(root, "README.md"), "linked change\n", {
+        mode: 0o600,
+      });
+
+      await expect(workspace().execute(request())).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          command: "git.status",
+          relativePath: ".",
+          stdout: expect.stringContaining("README.md"),
+          network: "none",
+        },
+      });
+
+      const parentReader = await compileCommandFixture(
+        "parent-reader",
+        `#include <fcntl.h>
+#include <stddef.h>
+#include <unistd.h>
+
+int main(void) {
+  const int descriptor = open(${JSON.stringify(parentCanary)}, O_RDONLY);
+  const char denied[] = "parent denied\\n";
+  const char readable[] = "parent readable\\n";
+  const char *output = descriptor < 0 ? denied : readable;
+  const size_t length = descriptor < 0 ? sizeof(denied) - 1 : sizeof(readable) - 1;
+  if (descriptor >= 0) {
+    close(descriptor);
+  }
+  const ssize_t written = write(STDOUT_FILENO, output, length);
+  return written == (ssize_t)length ? 0 : 1;
+}
+`,
+      );
+      await expect(
+        workspace(async () => parentReader).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          stdout: "parent denied\n",
+          network: "none",
+        },
+      });
+    } finally {
+      root = mainRoot;
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "remove",
+        "--force",
+        linkedRoot,
+      ]).catch(() => undefined);
+      await fs.rm(worktreeParent, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a linked worktree that redirects its Git file to arbitrary metadata", async () => {
+    const mainRoot = root;
+    const worktreeParent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-command-worktree-metadata-"),
+    );
+    const linkedRoot = path.join(worktreeParent, "checkout");
+    let originalGitFile = "";
+    try {
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        linkedRoot,
+      ]);
+      root = await fs.realpath(linkedRoot);
+      const gitFile = path.join(root, ".git");
+      originalGitFile = await fs.readFile(gitFile, "utf8");
+      await fs.writeFile(gitFile, `gitdir: ${path.join(mainRoot, ".git")}\n`, {
+        mode: 0o600,
+      });
+
+      await expect(workspace().execute(request())).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "WORKSPACE_COMMAND_UNSUPPORTED",
+          retry: "never",
+        },
+      });
+    } finally {
+      if (originalGitFile !== "") {
+        await fs
+          .writeFile(path.join(linkedRoot, ".git"), originalGitFile, {
+            mode: 0o600,
+          })
+          .catch(() => undefined);
+      }
+      root = mainRoot;
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "remove",
+        "--force",
+        linkedRoot,
+      ]).catch(() => undefined);
+      await fs.rm(worktreeParent, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects writable linked-worktree metadata", async () => {
+    const mainRoot = root;
+    const worktreeParent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-command-worktree-writable-"),
+    );
+    const linkedRoot = path.join(worktreeParent, "checkout");
+    let gitDirectory = "";
+    let originalMode = 0;
+    try {
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        linkedRoot,
+      ]);
+      root = await fs.realpath(linkedRoot);
+      const gitFile = await fs.readFile(path.join(root, ".git"), "utf8");
+      const gitDirectoryLine = /^gitdir: ([^\r\n]+)\n?$/u.exec(gitFile)?.[1];
+      expect(gitDirectoryLine).toBeDefined();
+      gitDirectory = path.resolve(root, gitDirectoryLine ?? "");
+      originalMode = (await fs.stat(gitDirectory)).mode & 0o777;
+      await fs.chmod(gitDirectory, originalMode | 0o022);
+
+      await expect(workspace().execute(request())).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "WORKSPACE_COMMAND_UNSUPPORTED",
+          retry: "never",
+        },
+      });
+    } finally {
+      if (gitDirectory !== "" && originalMode !== 0) {
+        await fs.chmod(gitDirectory, originalMode).catch(() => undefined);
+      }
+      root = mainRoot;
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "remove",
+        "--force",
+        linkedRoot,
+      ]).catch(() => undefined);
+      await fs.rm(worktreeParent, { recursive: true, force: true });
+    }
+  });
+
   it("refuses a linked Git directory instead of following command metadata outside the grant", async () => {
     const outside = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-command-gitdir-"),

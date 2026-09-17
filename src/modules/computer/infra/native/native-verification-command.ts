@@ -16,9 +16,14 @@ const XCRUN = "/usr/bin/xcrun";
 const CODESIGN = "/usr/bin/codesign";
 const MAX_OUTPUT_BYTES = 64 * 1_024;
 const MAX_STDERR_BYTES = 4 * 1_024;
+const MAX_GIT_METADATA_BYTES = 4 * 1_024;
 const COMMAND_TIMEOUT_MS = 10_000;
 const O_CLOEXEC =
   (Reflect.get(fsConstants, "O_CLOEXEC") as number | undefined) ?? 0;
+const O_DIRECTORY =
+  (Reflect.get(fsConstants, "O_DIRECTORY") as number | undefined) ?? 0;
+const O_NOFOLLOW =
+  (Reflect.get(fsConstants, "O_NOFOLLOW") as number | undefined) ?? 0;
 
 const REVIEWED_DEVELOPER_ROOTS = Object.freeze([
   "/Applications/Xcode.app/Contents/Developer",
@@ -41,6 +46,8 @@ const COMMAND_PROFILE = `(version 1)
   (literal "/dev/null")
   (literal "/dev/urandom")
   (subpath (param "FAROL_DEVELOPER"))
+  (subpath (param "FAROL_GIT_DIR"))
+  (subpath (param "FAROL_GIT_COMMON_DIR"))
   (subpath (param "FAROL_WORKSPACE")))
 (allow file-write-data
   (require-all
@@ -63,6 +70,10 @@ export type NativeVerificationCommandOptions = Readonly<{
 }>;
 
 type ExactResult = Readonly<{ stdout: string; stderr: string }>;
+type WorkspaceGitMetadata = Readonly<{
+  gitDirectory: string;
+  commonDirectory: string;
+}>;
 type CommandFailureCode =
   | "WORKSPACE_COMMAND_UNSUPPORTED"
   | "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"
@@ -137,7 +148,7 @@ async function systemExecutable(filePath: string): Promise<void> {
   try {
     handle = await open(
       filePath,
-      fsConstants.O_RDONLY | O_CLOEXEC | (fsConstants.O_NOFOLLOW ?? 0),
+      fsConstants.O_RDONLY | O_CLOEXEC | O_NOFOLLOW,
     );
     const opened = await handle.stat({ bigint: true });
     if (
@@ -210,28 +221,153 @@ async function defaultAttestGit(): Promise<string> {
   }
 }
 
-async function validateWorkspaceRoot(root: string): Promise<boolean> {
-  if (!plainPath(root)) return false;
-  const uid = process.getuid?.();
-  if (uid === undefined) return false;
+async function isOwnedDirectory(
+  directory: string,
+  uid: bigint,
+): Promise<boolean> {
+  if (!plainPath(directory)) return false;
+  let handle;
   try {
-    const physical = await realpath(root);
-    const listed = await lstat(root, { bigint: true });
-    const gitDirectory = await lstat(path.join(root, ".git"), { bigint: true });
+    const listed = await lstat(directory, { bigint: true });
+    handle = await open(
+      directory,
+      fsConstants.O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW,
+    );
+    const opened = await handle.stat({ bigint: true });
+    const physical = await realpath(directory);
     return (
-      physical === root &&
+      physical === directory &&
       !listed.isSymbolicLink() &&
       listed.isDirectory() &&
-      listed.uid === BigInt(uid) &&
-      (listed.mode & 0o022n) === 0n &&
-      !gitDirectory.isSymbolicLink() &&
-      gitDirectory.isDirectory() &&
-      gitDirectory.uid === BigInt(uid) &&
-      (gitDirectory.mode & 0o022n) === 0n
+      opened.isDirectory() &&
+      listed.dev === opened.dev &&
+      listed.ino === opened.ino &&
+      opened.uid === uid &&
+      (opened.mode & 0o022n) === 0n
     );
   } catch {
     return false;
+  } finally {
+    await handle?.close();
   }
+}
+
+async function readOwnedMetadataFile(
+  filePath: string,
+  uid: bigint,
+): Promise<string | null> {
+  if (!plainPath(filePath)) return null;
+  let handle;
+  try {
+    const listed = await lstat(filePath, { bigint: true });
+    handle = await open(
+      filePath,
+      fsConstants.O_RDONLY | O_CLOEXEC | O_NOFOLLOW,
+    );
+    const opened = await handle.stat({ bigint: true });
+    if (
+      listed.isSymbolicLink() ||
+      !listed.isFile() ||
+      !opened.isFile() ||
+      listed.dev !== opened.dev ||
+      listed.ino !== opened.ino ||
+      opened.uid !== uid ||
+      (opened.mode & 0o022n) !== 0n
+    ) {
+      return null;
+    }
+    const bytes = Buffer.alloc(MAX_GIT_METADATA_BYTES + 1);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead === bytes.length) return null;
+    return new TextDecoder("utf-8", { fatal: true }).decode(
+      bytes.subarray(0, bytesRead),
+    );
+  } catch {
+    return null;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function onePathLine(value: string): string | null {
+  const match = /^([^\0\r\n]+)\n?$/u.exec(value);
+  const line = match?.[1];
+  return line !== undefined && line.trim() === line ? line : null;
+}
+
+function resolveMetadataPath(base: string, value: string): string | null {
+  const candidate = path.resolve(base, value);
+  return plainPath(candidate) ? candidate : null;
+}
+
+async function resolveWorkspaceGitMetadata(
+  root: string,
+): Promise<WorkspaceGitMetadata | null> {
+  if (!plainPath(root)) return null;
+  const uid = process.getuid?.();
+  if (uid === undefined || !(await isOwnedDirectory(root, BigInt(uid)))) {
+    return null;
+  }
+  const gitEntry = path.join(root, ".git");
+  try {
+    const listed = await lstat(gitEntry, { bigint: true });
+    if (listed.isDirectory()) {
+      if (!(await isOwnedDirectory(gitEntry, BigInt(uid)))) return null;
+      return { gitDirectory: gitEntry, commonDirectory: gitEntry };
+    }
+    if (listed.isSymbolicLink() || !listed.isFile()) return null;
+  } catch {
+    return null;
+  }
+
+  const gitEntryText = await readOwnedMetadataFile(gitEntry, BigInt(uid));
+  const gitDirectoryLine =
+    gitEntryText === null
+      ? null
+      : (/^gitdir: ([^\0\r\n]+)\n?$/u.exec(gitEntryText)?.[1] ?? null);
+  if (
+    gitDirectoryLine === null ||
+    gitDirectoryLine.trim() !== gitDirectoryLine
+  ) {
+    return null;
+  }
+  const gitDirectory = resolveMetadataPath(root, gitDirectoryLine);
+  if (
+    gitDirectory === null ||
+    !(await isOwnedDirectory(gitDirectory, BigInt(uid)))
+  ) {
+    return null;
+  }
+
+  const commonLine = onePathLine(
+    (await readOwnedMetadataFile(
+      path.join(gitDirectory, "commondir"),
+      BigInt(uid),
+    )) ?? "",
+  );
+  if (commonLine === null) return null;
+  const commonDirectory = resolveMetadataPath(gitDirectory, commonLine);
+  if (
+    commonDirectory === null ||
+    !(await isOwnedDirectory(commonDirectory, BigInt(uid))) ||
+    path.basename(path.dirname(gitDirectory)) !== "worktrees" ||
+    path.dirname(path.dirname(gitDirectory)) !== commonDirectory
+  ) {
+    return null;
+  }
+
+  const backLinkLine = onePathLine(
+    (await readOwnedMetadataFile(
+      path.join(gitDirectory, "gitdir"),
+      BigInt(uid),
+    )) ?? "",
+  );
+  const backLink =
+    backLinkLine === null
+      ? null
+      : resolveMetadataPath(gitDirectory, backLinkLine);
+  if (backLink !== gitEntry) return null;
+  return { gitDirectory, commonDirectory };
 }
 
 function validDeniedPath(relative: string): boolean {
@@ -259,6 +395,35 @@ function deniedRules(root: string, deniedPaths: readonly string[]): string {
     .join("\n");
 }
 
+function metadataTraversalDirectories(
+  root: string,
+  metadata: WorkspaceGitMetadata,
+): readonly string[] {
+  const directories = new Set<string>();
+  for (const target of [
+    root,
+    metadata.gitDirectory,
+    metadata.commonDirectory,
+  ]) {
+    let current = path.dirname(target);
+    while (current !== "/") {
+      directories.add(current);
+      current = path.dirname(current);
+    }
+  }
+  if (directories.size > 128) {
+    throw new Error("Git metadata traversal is too deep");
+  }
+  return [...directories].sort();
+}
+
+function sandboxDeveloperRoot(git: string): string {
+  return (
+    REVIEWED_DEVELOPER_ROOTS.find((root) => git.startsWith(`${root}/`)) ??
+    "/System"
+  );
+}
+
 function killProcessGroup(child: ReturnType<typeof spawn>): void {
   if (child.pid !== undefined) {
     try {
@@ -274,21 +439,36 @@ function killProcessGroup(child: ReturnType<typeof spawn>): void {
 function runGitStatus(
   git: string,
   root: string,
+  metadata: WorkspaceGitMetadata,
   deniedPaths: readonly string[],
 ): Promise<ReadonlyWorkspaceResult> {
   let profile: string;
   let parameters: string[];
   try {
     const rules = deniedRules(root, deniedPaths);
-    profile = `${COMMAND_PROFILE}${rules === "" ? "" : `\n${rules}`}\n`;
+    const traversalDirectories = metadataTraversalDirectories(root, metadata);
+    const traversalRules = traversalDirectories
+      .map(
+        (_directory, index) =>
+          `(allow file-read-metadata (literal (param "FAROL_GIT_PARENT_${index}")))`,
+      )
+      .join("\n");
+    profile = `${COMMAND_PROFILE}\n${traversalRules}${rules === "" ? "" : `\n${rules}`}\n`;
     parameters = [
       "-D",
       `FAROL_GIT=${git}`,
       "-D",
-      `FAROL_DEVELOPER=${path.resolve(path.dirname(git), "../..")}`,
+      `FAROL_DEVELOPER=${sandboxDeveloperRoot(git)}`,
+      "-D",
+      `FAROL_GIT_DIR=${metadata.gitDirectory}`,
+      "-D",
+      `FAROL_GIT_COMMON_DIR=${metadata.commonDirectory}`,
       "-D",
       `FAROL_WORKSPACE=${root}`,
     ];
+    traversalDirectories.forEach((directory, index) => {
+      parameters.push("-D", `FAROL_GIT_PARENT_${index}=${directory}`);
+    });
     deniedPaths.forEach((relative, index) => {
       parameters.push(
         "-D",
@@ -333,10 +513,13 @@ function runGitStatus(
         env: {
           GIT_CEILING_DIRECTORIES: root,
           GIT_ATTR_NOSYSTEM: "1",
+          GIT_COMMON_DIR: metadata.commonDirectory,
           GIT_CONFIG_GLOBAL: "/dev/null",
           GIT_CONFIG_NOSYSTEM: "1",
+          GIT_DIR: metadata.gitDirectory,
           GIT_OPTIONAL_LOCKS: "0",
           GIT_TERMINAL_PROMPT: "0",
+          GIT_WORK_TREE: root,
           HOME: "/var/empty",
           LANG: "C",
           LC_ALL: "C",
@@ -435,11 +618,13 @@ export async function executeNativeVerificationCommand(
   operation: VerificationOperation,
   options: NativeVerificationCommandOptions = {},
 ): Promise<ReadonlyWorkspaceResult> {
-  if (
-    operation.command !== "git.status" ||
-    operation.relativePath !== "." ||
-    !(await validateWorkspaceRoot(request.workspace.root))
-  ) {
+  if (operation.command !== "git.status" || operation.relativePath !== ".") {
+    return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  }
+  const initialMetadata = await resolveWorkspaceGitMetadata(
+    request.workspace.root,
+  );
+  if (initialMetadata === null) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
   let git: string;
@@ -449,9 +634,18 @@ export async function executeNativeVerificationCommand(
   } catch {
     return failure("WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED");
   }
+  const metadata = await resolveWorkspaceGitMetadata(request.workspace.root);
+  if (
+    metadata === null ||
+    metadata.gitDirectory !== initialMetadata.gitDirectory ||
+    metadata.commonDirectory !== initialMetadata.commonDirectory
+  ) {
+    return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  }
   return runGitStatus(
     git,
     request.workspace.root,
+    metadata,
     request.workspace.deniedPaths,
   );
 }

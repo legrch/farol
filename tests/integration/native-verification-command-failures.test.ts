@@ -166,13 +166,17 @@ describe("native verification command process failures", () => {
 
   it("terminates and classifies a command that exceeds the fixed deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    processMock.spawn.mockImplementationOnce(() => new FakeChild());
+    let markSpawned: (() => void) | undefined;
+    const spawned = new Promise<void>((resolve) => {
+      markSpawned = resolve;
+    });
+    processMock.spawn.mockImplementationOnce(() => {
+      markSpawned?.();
+      return new FakeChild();
+    });
 
     const result = execute(async () => "/usr/bin/git");
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      if (processMock.spawn.mock.calls.length > 0) break;
-      await new Promise<void>((resolve) => setImmediate(resolve));
-    }
+    await spawned;
     expect(processMock.spawn).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(10_000);
 
