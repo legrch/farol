@@ -32,6 +32,7 @@ const command: AgentAssignmentCommand = {
   focus: {
     initialPaths: ["/workspace/farol/vnext/README.md"],
   },
+  intent: { kind: "compatibility" },
 };
 
 const authority: DelegatedAgentAuthority = {

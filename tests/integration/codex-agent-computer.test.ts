@@ -79,9 +79,7 @@ function authority(
         access: "read",
       },
     ],
-    excludedPaths: [
-      { workspaceId, path: "/workspace/primary/private" },
-    ],
+    excludedPaths: [{ workspaceId, path: "/workspace/primary/private" }],
     capabilities: ["workspace.list", "workspace.read", "workspace.search"],
     network: "none",
     commands: "none",
@@ -262,9 +260,7 @@ describe("Codex Agent Computer authority", () => {
     );
 
     await expect(
-      computer.execute(
-        request({ kind: "workspace.list", relativePath: "." }),
-      ),
+      computer.execute(request({ kind: "workspace.list", relativePath: "." })),
     ).resolves.toEqual({
       status: "failed",
       code: "AGENT_COMPUTER_BINDING_INVALID",

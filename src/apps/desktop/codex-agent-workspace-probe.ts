@@ -45,9 +45,7 @@ function relativePath(root: string, candidate: string): string | null {
   return inside(root, candidate) ? candidate.slice(root.length + 1) : null;
 }
 
-function participant(
-  request: AuthorityBoundRequest,
-): ParticipantAuthority {
+function participant(request: AuthorityBoundRequest): ParticipantAuthority {
   const authority = request.authority;
   return {
     participantId: authority.participantId,

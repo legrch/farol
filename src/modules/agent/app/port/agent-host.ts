@@ -4,10 +4,15 @@ import type {
 } from "../../domain/assignment";
 import type { DelegatedAgentAuthority } from "./execution-authority";
 
+export type AgentAssignmentIntent =
+  | Readonly<{ kind: "compatibility" }>
+  | Readonly<{ kind: "product"; objective: string }>;
+
 export type AgentSpawnRequest = Readonly<{
   identity: AssignmentIdentity;
   authority: DelegatedAgentAuthority;
   focus: Readonly<{ initialPaths: readonly string[] }>;
+  intent: AgentAssignmentIntent;
 }>;
 
 export type AgentSpawnReceipt =

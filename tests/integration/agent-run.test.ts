@@ -37,6 +37,7 @@ const command: AgentAssignmentCommand = {
     mutationOwnership: "task",
   },
   focus: { initialPaths: ["/workspace/farol/README.md"] },
+  intent: { kind: "compatibility" },
 };
 
 const delegatedAuthority: DelegatedAgentAuthority = {
@@ -113,6 +114,7 @@ class AgentHostDouble implements AgentHost {
     expect(received.identity).toEqual(command.identity);
     expect(received.authority).toEqual(delegatedAuthority);
     expect(received.focus).toEqual(command.focus);
+    expect(received.intent).toEqual(command.intent);
     if (this.spawned instanceof Error) throw this.spawned;
     return this.spawned;
   }
@@ -135,6 +137,23 @@ function createRunner(
 }
 
 describe("Agent app service", () => {
+  it("rejects an empty product objective before authority resolution or spawn", async () => {
+    const authority = new AuthorityDouble();
+    const host = new AgentHostDouble(new Error("must not spawn"), null);
+
+    await expect(
+      createRunner(host, new InMemoryAssignments(), authority).execute({
+        ...command,
+        intent: { kind: "product", objective: "   " },
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "AGENT_ASSIGNMENT_INVALID", retry: "never" },
+    });
+    expect(authority.calls).toBe(0);
+    expect(host.spawnCalls).toBe(0);
+  });
+
   it("spawns once, waits once and accepts only the same child result", async () => {
     const host = new AgentHostDouble(
       { status: "started", correlation: exactChild },

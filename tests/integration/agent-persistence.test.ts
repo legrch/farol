@@ -43,6 +43,7 @@ const command: AgentAssignmentCommand = {
     mutationOwnership: "task",
   },
   focus: { initialPaths: ["/workspace/farol/README.md"] },
+  intent: { kind: "compatibility" },
 };
 
 const authority: DelegatedAgentAuthority = {

@@ -234,6 +234,7 @@ export async function runCodexNativeAgentCheck(
       mutationOwnership: "none" as const,
     },
     focus: { initialPaths: [selectedWorkspace.root] },
+    intent: { kind: "compatibility" as const },
   };
   let boundedRunning = input.boundedRunningObserved ?? false;
   for (let cycle = 0; cycle < input.maximumWaitCycles; cycle += 1) {

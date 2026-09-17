@@ -8,6 +8,7 @@ import type {
   AgentSpawnRequest,
   AgentWaitReceipt,
 } from "../../app/port/agent-host";
+import type { AgentComputer } from "../../app/port/computer";
 import type { AgentWorkspaceProbe } from "../../app/port/workspace-probe";
 import type { ChildCorrelation } from "../../domain/assignment";
 
@@ -121,6 +122,60 @@ const workspaceArgumentsSchema = z.strictObject({
   proof: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
+const relativePathSchema = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) => {
+    if (value === ".") return true;
+    return (
+      !value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.includes("\\") &&
+      value
+        .split("/")
+        .every((part) => part !== "" && part !== "." && part !== "..") &&
+      [...value].every((character) => {
+        const code = character.codePointAt(0);
+        return code !== undefined && code >= 32 && code !== 127;
+      })
+    );
+  });
+
+const computerOperationSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("workspace.read"),
+    relativePath: relativePathSchema.refine((value) => value !== "."),
+  }),
+  z.strictObject({
+    kind: z.literal("workspace.list"),
+    relativePath: relativePathSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("workspace.search"),
+    relativePath: relativePathSchema,
+    pattern: z
+      .string()
+      .min(1)
+      .max(4_096)
+      .refine((value) =>
+        [...value].every((character) => {
+          const code = character.codePointAt(0);
+          return code !== undefined && code >= 32 && code !== 127;
+        }),
+      ),
+  }),
+]);
+
+const computerArgumentsSchema = z.strictObject({
+  assignmentId: boundedId,
+  authorityId: boundedId,
+  participantId: boundedId,
+  proof: z.string().regex(/^[a-f0-9]{64}$/u),
+  workspaceId: boundedId,
+  operation: computerOperationSchema,
+});
+
 const authorityCallSchema = z.strictObject({
   threadId: boundedId,
   turnId: boundedId,
@@ -137,6 +192,15 @@ const workspaceCallSchema = z.strictObject({
   namespace: z.string().nullable().optional(),
   tool: z.literal("farol_agent_workspace_probe"),
   arguments: workspaceArgumentsSchema,
+});
+
+const computerCallSchema = z.strictObject({
+  threadId: boundedId,
+  turnId: boundedId,
+  callId: boundedId,
+  namespace: z.string().nullable().optional(),
+  tool: z.literal("farol_agent_computer"),
+  arguments: computerArgumentsSchema,
 });
 
 const dynamicToolItemSchema = z
@@ -161,10 +225,22 @@ const workspaceDynamicToolItemSchema = z
   })
   .passthrough();
 
+const computerDynamicToolItemSchema = z
+  .object({
+    id: boundedId,
+    type: z.literal("dynamicToolCall"),
+    tool: z.literal("farol_agent_computer"),
+    status: z.enum(["inProgress", "completed", "failed"]),
+    success: z.boolean().nullable().optional(),
+    arguments: computerArgumentsSchema,
+  })
+  .passthrough();
+
 const historyItemSchema = z.union([
   collabItemSchema,
   dynamicToolItemSchema,
   workspaceDynamicToolItemSchema,
+  computerDynamicToolItemSchema,
 ]);
 
 const historyTurnSchema = z
@@ -206,6 +282,7 @@ type ActiveOperation = {
   delegationDigest: string;
   authorityToolCalls: number;
   workspaceToolCalls: number;
+  computerCallIds: Set<string>;
   fatalCode: string | null;
   resolveSpawn(childId: string): void;
   rejectSpawn(error: Error): void;
@@ -237,10 +314,27 @@ function workspaceProof(
   );
 }
 
-function childPrompt(request: AgentSpawnRequest): string {
+function computerProof(
+  input: Readonly<{
+    assignmentId: string;
+    authorityId: string;
+    participantId: string;
+  }>,
+): string {
+  return sha256(
+    JSON.stringify([
+      "farol-agent-computer-v1",
+      input.assignmentId,
+      input.authorityId,
+      input.participantId,
+    ]),
+  );
+}
+
+function assignmentEnvelope(request: AgentSpawnRequest) {
   const identity = request.identity;
   const authority = request.authority;
-  const envelope = {
+  return {
     schema: 1,
     kind: "farol_task_grant",
     assignment: {
@@ -287,6 +381,24 @@ function childPrompt(request: AgentSpawnRequest): string {
     },
     focus: { initialPaths: [...request.focus.initialPaths] },
   };
+}
+
+function childPrompt(request: AgentSpawnRequest): string {
+  const identity = request.identity;
+  const authority = request.authority;
+  const envelope = assignmentEnvelope(request);
+  if (request.intent.kind === "product") {
+    return [
+      "FAROL_NATIVE_AGENT_TASK_V2",
+      JSON.stringify({ ...envelope, objective: request.intent.objective }),
+      `Complete this exact owner assignment: ${request.intent.objective}`,
+      `For every workspace list, search, or read, call farol_agent_computer with assignmentId ${identity.assignmentId}, authorityId ${authority.authorityId}, participantId ${authority.participantId}, and computer proof ${computerProof({ assignmentId: identity.assignmentId, authorityId: authority.authorityId, participantId: authority.participantId })}.`,
+      "Use only workspace.list, workspace.search, and workspace.read operations allowed by the supplied TaskGrant.",
+      "Initial paths are focus, not the authority boundary. You may discover other relevant files inside a granted subtree without asking for per-file approval.",
+      "Do not inspect files directly, run commands, use the web, create descendants, or call any other tool.",
+      "Return a concise answer to the owner assignment.",
+    ].join("\n");
+  }
   return [
     "FAROL_NATIVE_AGENT_TASK_V1",
     JSON.stringify(envelope),
@@ -378,6 +490,11 @@ function compatible(
           return inside && selected && !excluded;
         }),
     );
+  const intentAllowed =
+    request.intent.kind === "compatibility" ||
+    (request.intent.objective.trim().length > 0 &&
+      request.intent.objective.length <= 8_000 &&
+      !request.intent.objective.includes("\0"));
   return (
     authority.ownerId === request.identity.ownerId &&
     authority.sessionId === request.identity.sessionId &&
@@ -413,6 +530,7 @@ function compatible(
     authority.capabilities.every((capability) =>
       permittedCapabilities.has(capability),
     ) &&
+    intentAllowed &&
     focusAllowed
   );
 }
@@ -424,6 +542,128 @@ function parseHistoryItems(turn: z.infer<typeof historyTurnSchema>) {
   });
 }
 
+function authorityDynamicTool() {
+  return {
+    type: "function",
+    name: "farol_agent_authority",
+    description:
+      "Confirm the exact Farol assignment authority after the parent waited for the correlated native child.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        assignmentId: { type: "string" },
+        authorityId: { type: "string" },
+        participantId: { type: "string" },
+        role: { type: "string", enum: ["agent", "critic"] },
+        proof: { type: "string" },
+      },
+      required: [
+        "assignmentId",
+        "authorityId",
+        "participantId",
+        "role",
+        "proof",
+      ],
+    },
+  };
+}
+
+function workspaceProbeDynamicTool() {
+  return {
+    type: "function",
+    name: "farol_agent_workspace_probe",
+    description:
+      "Run one fixed content-free Farol Computer workspace enforcement probe for the correlated native child.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        assignmentId: { type: "string" },
+        authorityId: { type: "string" },
+        participantId: { type: "string" },
+        proof: { type: "string" },
+      },
+      required: ["assignmentId", "authorityId", "participantId", "proof"],
+    },
+  };
+}
+
+function agentComputerDynamicTool() {
+  return {
+    type: "function",
+    name: "farol_agent_computer",
+    description:
+      "List, search, or read an approved Farol Computer workspace under the exact inherited TaskGrant.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        assignmentId: { type: "string" },
+        authorityId: { type: "string" },
+        participantId: { type: "string" },
+        proof: { type: "string" },
+        workspaceId: { type: "string" },
+        operation: {
+          oneOf: [
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { const: "workspace.read" },
+                relativePath: { type: "string" },
+              },
+              required: ["kind", "relativePath"],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { const: "workspace.list" },
+                relativePath: { type: "string" },
+              },
+              required: ["kind", "relativePath"],
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { const: "workspace.search" },
+                relativePath: { type: "string" },
+                pattern: { type: "string" },
+              },
+              required: ["kind", "relativePath", "pattern"],
+            },
+          ],
+        },
+      },
+      required: [
+        "assignmentId",
+        "authorityId",
+        "participantId",
+        "proof",
+        "workspaceId",
+        "operation",
+      ],
+    },
+  };
+}
+
+function dynamicTools(request: AgentSpawnRequest) {
+  return [
+    authorityDynamicTool(),
+    request.intent.kind === "compatibility"
+      ? workspaceProbeDynamicTool()
+      : agentComputerDynamicTool(),
+  ];
+}
+
+function baseInstructions(request: AgentSpawnRequest): string {
+  return request.intent.kind === "compatibility"
+    ? "This is a bounded Farol compatibility assignment. Neither parent nor child may inspect files directly, run commands, or use the web. A spawned child must not create descendants and may call only farol_agent_workspace_probe exactly once. Only the root thread may spawn one child and later call farol_agent_authority."
+    : "This is a bounded Farol product assignment. The root thread may spawn exactly one child and must wait for that same child before calling farol_agent_authority. The child must not create descendants and may call only farol_agent_computer. Neither thread may inspect workspaces directly, run commands, or use the web.";
+}
+
 export class CodexNativeAgentHost implements AgentHost {
   private active: ActiveOperation | null = null;
   private handlersInstalled = false;
@@ -433,6 +673,7 @@ export class CodexNativeAgentHost implements AgentHost {
     private readonly peer: CodexNativeAgentPeer,
     private readonly options: CodexNativeAgentHostOptions,
     private readonly workspaceProbe: AgentWorkspaceProbe,
+    private readonly computer?: AgentComputer,
   ) {
     if (
       !canonicalAbsolutePath(options.runtimeRoot) ||
@@ -447,6 +688,7 @@ export class CodexNativeAgentHost implements AgentHost {
   async spawn(request: AgentSpawnRequest): Promise<AgentSpawnReceipt> {
     if (
       this.active ||
+      (request.intent.kind === "product" && !this.computer) ||
       !compatible(request, this.options.now(), this.options.runtimeRoot)
     ) {
       return { status: "failed", code: "AGENT_SPAWN_REJECTED" };
@@ -473,6 +715,7 @@ export class CodexNativeAgentHost implements AgentHost {
       delegationDigest: sha256(exactChildPrompt),
       authorityToolCalls: 0,
       workspaceToolCalls: 0,
+      computerCallIds: new Set(),
       fatalCode: null,
       resolveSpawn,
       rejectSpawn,
@@ -494,56 +737,8 @@ export class CodexNativeAgentHost implements AgentHost {
           runtimeWorkspaceRoots: [],
           selectedCapabilityRoots: [],
           environments: [],
-          dynamicTools: [
-            {
-              type: "function",
-              name: "farol_agent_authority",
-              description:
-                "Confirm the exact Farol assignment authority after the parent waited for the correlated native child.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  assignmentId: { type: "string" },
-                  authorityId: { type: "string" },
-                  participantId: { type: "string" },
-                  role: { type: "string", enum: ["agent", "critic"] },
-                  proof: { type: "string" },
-                },
-                required: [
-                  "assignmentId",
-                  "authorityId",
-                  "participantId",
-                  "role",
-                  "proof",
-                ],
-              },
-            },
-            {
-              type: "function",
-              name: "farol_agent_workspace_probe",
-              description:
-                "Run one fixed content-free Farol Computer workspace enforcement probe for the correlated native child.",
-              inputSchema: {
-                type: "object",
-                additionalProperties: false,
-                properties: {
-                  assignmentId: { type: "string" },
-                  authorityId: { type: "string" },
-                  participantId: { type: "string" },
-                  proof: { type: "string" },
-                },
-                required: [
-                  "assignmentId",
-                  "authorityId",
-                  "participantId",
-                  "proof",
-                ],
-              },
-            },
-          ],
-          baseInstructions:
-            "This is a bounded Farol compatibility assignment. Neither parent nor child may inspect files directly, run commands, or use the web. A spawned child must not create descendants and may call only farol_agent_workspace_probe exactly once. Only the root thread may spawn one child and later call farol_agent_authority.",
+          dynamicTools: dynamicTools(request),
+          baseInstructions: baseInstructions(request),
         }),
       );
       if (
@@ -715,6 +910,14 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return this.handleWorkspaceCall(params);
     }
+    if (
+      params !== null &&
+      typeof params === "object" &&
+      "tool" in params &&
+      params.tool === "farol_agent_computer"
+    ) {
+      return this.handleComputerCall(params);
+    }
     return this.handleAuthorityCall(params);
   }
 
@@ -750,7 +953,12 @@ export class CodexNativeAgentHost implements AgentHost {
   private async handleWorkspaceCall(params: unknown): Promise<unknown> {
     const operation = this.active;
     const parsed = workspaceCallSchema.safeParse(params);
-    if (!operation || !parsed.success || !operation.childId) {
+    if (
+      !operation ||
+      operation.request.intent.kind !== "compatibility" ||
+      !parsed.success ||
+      !operation.childId
+    ) {
       throw this.fail("CODEX_AGENT_WORKSPACE_CORRELATION");
     }
     const call = parsed.data;
@@ -790,6 +998,81 @@ export class CodexNativeAgentHost implements AgentHost {
     return {
       success: true,
       contentItems: [{ type: "inputText", text: "FAROL_AGENT_WORKSPACE_OK" }],
+    };
+  }
+
+  private async handleComputerCall(params: unknown): Promise<unknown> {
+    const operation = this.active;
+    const parsed = computerCallSchema.safeParse(params);
+    if (
+      !operation ||
+      operation.request.intent.kind !== "product" ||
+      !this.computer ||
+      !parsed.success ||
+      !operation.childId
+    ) {
+      throw this.fail("CODEX_AGENT_COMPUTER_CORRELATION");
+    }
+    const call = parsed.data;
+    const authority = operation.request.authority;
+    const expectedProof = computerProof({
+      assignmentId: operation.request.identity.assignmentId,
+      authorityId: authority.authorityId,
+      participantId: authority.participantId,
+    });
+    if (
+      call.threadId !== operation.childId ||
+      operation.computerCallIds.size >= 32 ||
+      operation.computerCallIds.has(call.callId) ||
+      call.arguments.assignmentId !== operation.request.identity.assignmentId ||
+      call.arguments.authorityId !== authority.authorityId ||
+      call.arguments.participantId !== authority.participantId ||
+      call.arguments.proof !== expectedProof
+    ) {
+      throw this.fail("CODEX_AGENT_COMPUTER_CORRELATION");
+    }
+    operation.computerCallIds.add(call.callId);
+    let receipt;
+    try {
+      receipt = await this.computer.execute({
+        identity: operation.request.identity,
+        authority,
+        workspaceId: call.arguments.workspaceId,
+        operation: call.arguments.operation,
+        threadId: call.threadId,
+        turnId: call.turnId,
+        callId: call.callId,
+      });
+    } catch {
+      throw this.fail("CODEX_AGENT_COMPUTER_FAILED");
+    }
+    if (receipt.status === "failed") {
+      return {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: JSON.stringify({
+              status: "denied",
+              code: receipt.code,
+              source: receipt.source,
+              retry: receipt.retry,
+            }),
+          },
+        ],
+      };
+    }
+    return {
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({
+            status: "completed",
+            output: receipt.output,
+          }),
+        },
+      ],
     };
   }
 
@@ -909,60 +1192,6 @@ export class CodexNativeAgentHost implements AgentHost {
       return "invalid";
     }
     const childItems = child.turns.flatMap((turn) => turn.items);
-    const childWorkspaceCalls = childItems.flatMap((candidate) => {
-      const parsed = workspaceDynamicToolItemSchema.safeParse(candidate);
-      return parsed.success ? [parsed.data] : [];
-    });
-    const forbiddenChildTool = childItems.some(
-      (candidate) =>
-        candidate !== null &&
-        typeof candidate === "object" &&
-        "type" in candidate &&
-        (candidate.type === "collabAgentToolCall" ||
-          (candidate.type === "dynamicToolCall" &&
-            (!("tool" in candidate) ||
-              candidate.tool !== "farol_agent_workspace_probe"))),
-    );
-    const expectedWorkspaceProof = workspaceProof({
-      assignmentId: correlation.assignmentId,
-      authorityId: correlation.authorityId,
-      participantId: correlation.participantId,
-    });
-    if (
-      forbiddenChildTool ||
-      childWorkspaceCalls.length > 1 ||
-      childWorkspaceCalls.some(
-        (item) =>
-          item.status !== "completed" ||
-          item.success !== true ||
-          item.arguments.assignmentId !== correlation.assignmentId ||
-          item.arguments.authorityId !== correlation.authorityId ||
-          item.arguments.participantId !== correlation.participantId ||
-          item.arguments.proof !== expectedWorkspaceProof,
-      )
-    ) {
-      return "invalid";
-    }
-    const childFailed = child.turns.some(
-      (turn) => turn.status === "failed" || turn.status === "interrupted",
-    );
-    const parentFailed = parent.turns.some(
-      (turn) => turn.status === "failed" || turn.status === "interrupted",
-    );
-    if (
-      childFailed ||
-      parentFailed ||
-      child.status.type === "systemError" ||
-      parent.status.type === "systemError"
-    ) {
-      return "failed";
-    }
-    const childCompleted = child.turns.some(
-      (turn) => turn.status === "completed",
-    );
-    const parentCompleted = parent.turns.some(
-      (turn) => turn.status === "completed",
-    );
     const parentItems = parent.turns.flatMap(parseHistoryItems);
     const authorityCalls = parentItems.filter(
       (item) =>
@@ -995,12 +1224,132 @@ export class CodexNativeAgentHost implements AgentHost {
         item.receiverThreadIds.length === 1 &&
         item.receiverThreadIds[0] === correlation.childId,
     );
+    const durablePrompt = spawnItems[0]?.prompt;
+    const durableIntent =
+      typeof durablePrompt === "string" &&
+      durablePrompt.startsWith("FAROL_NATIVE_AGENT_TASK_V1\n")
+        ? "compatibility"
+        : typeof durablePrompt === "string" &&
+            durablePrompt.startsWith("FAROL_NATIVE_AGENT_TASK_V2\n")
+          ? "product"
+          : null;
+    const activeIntent =
+      this.active &&
+      this.active.parentThreadId === correlation.parentThreadId &&
+      this.active.childId === correlation.childId
+        ? this.active.request.intent.kind
+        : null;
+    const intent = activeIntent ?? durableIntent;
+    if (activeIntent && durableIntent && activeIntent !== durableIntent) {
+      return "invalid";
+    }
+    const childWorkspaceCalls = childItems.flatMap((candidate) => {
+      const parsed = workspaceDynamicToolItemSchema.safeParse(candidate);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const childComputerCalls = childItems.flatMap((candidate) => {
+      const parsed = computerDynamicToolItemSchema.safeParse(candidate);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const passiveChildItems = new Set([
+      "agentMessage",
+      "plan",
+      "reasoning",
+      "userMessage",
+    ]);
+    const expectedChildTool =
+      intent === "compatibility"
+        ? "farol_agent_workspace_probe"
+        : intent === "product"
+          ? "farol_agent_computer"
+          : null;
+    const forbiddenChildTool = childItems.some((candidate) => {
+      if (
+        candidate === null ||
+        typeof candidate !== "object" ||
+        !("type" in candidate) ||
+        typeof candidate.type !== "string"
+      ) {
+        return true;
+      }
+      if (passiveChildItems.has(candidate.type)) return false;
+      return !(
+        candidate.type === "dynamicToolCall" &&
+        "tool" in candidate &&
+        candidate.tool === expectedChildTool
+      );
+    });
+    const expectedWorkspaceProof = workspaceProof({
+      assignmentId: correlation.assignmentId,
+      authorityId: correlation.authorityId,
+      participantId: correlation.participantId,
+    });
+    const expectedComputerProof = computerProof({
+      assignmentId: correlation.assignmentId,
+      authorityId: correlation.authorityId,
+      participantId: correlation.participantId,
+    });
+    if (
+      forbiddenChildTool ||
+      childWorkspaceCalls.length > 1 ||
+      childComputerCalls.length > 32 ||
+      new Set(childComputerCalls.map((item) => item.id)).size !==
+        childComputerCalls.length ||
+      childWorkspaceCalls.some(
+        (item) =>
+          item.status !== "completed" ||
+          item.success !== true ||
+          item.arguments.assignmentId !== correlation.assignmentId ||
+          item.arguments.authorityId !== correlation.authorityId ||
+          item.arguments.participantId !== correlation.participantId ||
+          item.arguments.proof !== expectedWorkspaceProof,
+      ) ||
+      childComputerCalls.some(
+        (item) =>
+          item.status !== "completed" ||
+          typeof item.success !== "boolean" ||
+          item.arguments.assignmentId !== correlation.assignmentId ||
+          item.arguments.authorityId !== correlation.authorityId ||
+          item.arguments.participantId !== correlation.participantId ||
+          item.arguments.proof !== expectedComputerProof,
+      )
+    ) {
+      return "invalid";
+    }
+    const childFailed = child.turns.some(
+      (turn) => turn.status === "failed" || turn.status === "interrupted",
+    );
+    const parentFailed = parent.turns.some(
+      (turn) => turn.status === "failed" || turn.status === "interrupted",
+    );
+    if (
+      childFailed ||
+      parentFailed ||
+      child.status.type === "systemError" ||
+      parent.status.type === "systemError"
+    ) {
+      return "failed";
+    }
+    const childCompleted = child.turns.some(
+      (turn) => turn.status === "completed",
+    );
+    const parentCompleted = parent.turns.some(
+      (turn) => turn.status === "completed",
+    );
     if (!childCompleted || !parentCompleted) return "running";
     const spawnIndex = parentItems.indexOf(spawnItems[0]!);
     const waitIndex = parentItems.indexOf(waitItems.at(-1)!);
     const authorityIndex = parentItems.indexOf(authorityCalls[0]!);
+    const childEvidenceComplete =
+      intent === "compatibility"
+        ? childWorkspaceCalls.length === 1 && childComputerCalls.length === 0
+        : intent === "product"
+          ? childWorkspaceCalls.length === 0 &&
+            childComputerCalls.length > 0 &&
+            childComputerCalls.some((item) => item.success === true)
+          : false;
     return authorityCalls.length === 1 &&
-      childWorkspaceCalls.length === 1 &&
+      childEvidenceComplete &&
       spawnItems.length === 1 &&
       waitItems.length >= 1 &&
       spawnIndex >= 0 &&

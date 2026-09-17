@@ -4,6 +4,7 @@ import {
   type Result,
 } from "../../../../pkg/kernel/domain/result";
 import type { AgentHost } from "../port/agent-host";
+import type { AgentAssignmentIntent } from "../port/agent-host";
 import type {
   AgentAuthorityNarrowing,
   AgentAuthorityPort,
@@ -43,7 +44,17 @@ export type AgentAssignmentCommand = Readonly<{
     narrowing?: AgentAuthorityNarrowing;
   }>;
   focus: Readonly<{ initialPaths: readonly string[] }>;
+  intent: AgentAssignmentIntent;
 }>;
+
+function validIntent(intent: AgentAssignmentIntent): boolean {
+  if (intent.kind === "compatibility") return true;
+  return (
+    intent.objective.trim().length > 0 &&
+    intent.objective.length <= 8_000 &&
+    !intent.objective.includes("\0")
+  );
+}
 
 function canonicalAbsolutePath(value: string): boolean {
   if (
@@ -130,6 +141,9 @@ export class RunAgentAssignment {
   private async executeAdmitted(
     command: AgentAssignmentCommand,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
+    if (!validIntent(command.intent)) {
+      return failure("AGENT_ASSIGNMENT_INVALID");
+    }
     const delegated = await this.resolveAuthority(command);
     if (!delegated.ok) return delegated;
     const identity = command.identity;
@@ -184,6 +198,7 @@ export class RunAgentAssignment {
         identity,
         authority,
         focus: { initialPaths: [...command.focus.initialPaths] },
+        intent: command.intent,
       });
     } catch {
       return this.terminal(

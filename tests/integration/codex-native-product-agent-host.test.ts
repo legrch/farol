@@ -1,0 +1,528 @@
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+
+import type { AgentComputer } from "../../src/modules/agent/app/port/computer";
+import type { AgentSpawnRequest } from "../../src/modules/agent/app/port/agent-host";
+import type { DelegatedAgentAuthority } from "../../src/modules/agent/app/port/execution-authority";
+import {
+  CodexNativeAgentHost,
+  type CodexNativeAgentPeer,
+} from "../../src/modules/agent/infra/native/codex-native-agent-host";
+
+type RequestHandler = (params: unknown) => Promise<unknown>;
+type NotificationHandler = (params: unknown) => void;
+
+const authority: DelegatedAgentAuthority = {
+  authorityId: "authority-product-a",
+  participantId: "agent-product-a",
+  parentParticipantId: "main-product-a",
+  role: "agent",
+  mutationOwnership: "none",
+  ownerId: "owner-desktop",
+  sessionId: "session-product-a",
+  taskId: "task-product-a",
+  taskEpoch: 7,
+  computerId: "computer-product-a",
+  computerGeneration: 9,
+  workspaces: [
+    {
+      workspaceId: "workspace-product-a",
+      mode: "subtree",
+      root: "/workspace/product",
+      access: "read",
+    },
+  ],
+  excludedPaths: [
+    {
+      workspaceId: "workspace-product-a",
+      path: "/workspace/product/private",
+    },
+  ],
+  capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+  network: "none",
+  commands: "none",
+  expiresAt: 10_000,
+};
+
+const productObjective =
+  "Find the delegated continuity marker and report the related file path.";
+
+const request: AgentSpawnRequest = {
+  identity: {
+    assignmentId: "assignment-product-a",
+    ownerId: "owner-desktop",
+    sessionId: "session-product-a",
+    taskId: "task-product-a",
+    taskEpoch: 7,
+    generation: 1,
+  },
+  authority,
+  focus: { initialPaths: ["/workspace/product/README.md"] },
+  intent: {
+    kind: "product",
+    objective: productObjective,
+  },
+};
+
+class ProductPeer implements CodexNativeAgentPeer {
+  readonly requests: Readonly<{ method: string; params: unknown }>[] = [];
+  readonly handlers = new Map<string, RequestHandler>();
+  readonly notifications = new Map<string, NotificationHandler>();
+  childPrompt = "";
+  completed = false;
+  authorityCompleted = false;
+  computerItems: unknown[] = [];
+  extraChildItems: unknown[] = [];
+  private authorityProof = "";
+
+  handleServerRequest(method: string, handler: RequestHandler): () => void {
+    this.handlers.set(method, handler);
+    return () => this.handlers.delete(method);
+  }
+
+  handleNotification(method: string, handler: NotificationHandler): () => void {
+    this.notifications.set(method, handler);
+    return () => this.notifications.delete(method);
+  }
+
+  async request(method: string, params: unknown): Promise<unknown> {
+    this.requests.push({ method, params });
+    if (method === "thread/start") {
+      return {
+        model: "gpt-6-astra",
+        thread: { id: "parent-product-a", parentThreadId: null },
+      };
+    }
+    if (method === "turn/start") {
+      const text = (params as { input?: readonly { text?: string }[] })
+        .input?.[0]?.text;
+      this.authorityProof =
+        [...(text ?? "").matchAll(/proof ([a-z0-9-]+)/gu)].at(-1)?.[1] ?? "";
+      this.childPrompt =
+        /FAROL_CHILD_PROMPT_BEGIN\n([\s\S]*?)\nFAROL_CHILD_PROMPT_END/u.exec(
+          text ?? "",
+        )?.[1] ?? "";
+      queueMicrotask(() => this.emitSpawn());
+      return {
+        turn: { id: "parent-turn-product-a", status: "inProgress", items: [] },
+      };
+    }
+    if (method === "thread/read") {
+      const threadId = (params as { threadId?: string }).threadId;
+      if (threadId === "child-product-a") return this.childRead();
+      if (threadId === "parent-product-a") return this.parentRead();
+    }
+    throw new Error(`UNEXPECTED_REQUEST:${method}`);
+  }
+
+  async finish(): Promise<void> {
+    const handler = this.handlers.get("item/tool/call");
+    if (!handler) throw new Error("TOOL_HANDLER_MISSING");
+    const proof =
+      /computer proof ([a-f0-9]{64})/u.exec(this.childPrompt)?.[1] ?? "";
+    for (const [callId, operation] of [
+      [
+        "computer-search-a",
+        {
+          kind: "workspace.search",
+          relativePath: ".",
+          pattern: "continuity marker",
+        },
+      ],
+      [
+        "computer-read-a",
+        {
+          kind: "workspace.read",
+          relativePath: "notes/continuity.md",
+        },
+      ],
+    ] as const) {
+      const argumentsValue = {
+        assignmentId: request.identity.assignmentId,
+        authorityId: authority.authorityId,
+        participantId: authority.participantId,
+        proof,
+        workspaceId: "workspace-product-a",
+        operation,
+      };
+      await expect(
+        handler({
+          threadId: "child-product-a",
+          turnId: "child-turn-product-a",
+          callId,
+          tool: "farol_agent_computer",
+          arguments: argumentsValue,
+        }),
+      ).resolves.toMatchObject({ success: true });
+      this.computerItems.push({
+        id: callId,
+        type: "dynamicToolCall",
+        tool: "farol_agent_computer",
+        status: "completed",
+        success: true,
+        arguments: argumentsValue,
+      });
+    }
+
+    await expect(
+      handler({
+        threadId: "parent-product-a",
+        turnId: "parent-turn-product-a",
+        callId: "authority-product-a",
+        tool: "farol_agent_authority",
+        arguments: {
+          assignmentId: request.identity.assignmentId,
+          authorityId: authority.authorityId,
+          participantId: authority.participantId,
+          role: authority.role,
+          proof: this.authorityProof,
+        },
+      }),
+    ).resolves.toMatchObject({ success: true });
+    this.authorityCompleted = true;
+    this.completed = true;
+  }
+
+  private emitSpawn(): void {
+    this.notifications.get("item/completed")?.({
+      threadId: "parent-product-a",
+      turnId: "parent-turn-product-a",
+      item: {
+        id: "spawn-product-a",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: "parent-product-a",
+        receiverThreadIds: ["child-product-a"],
+        agentsStates: {},
+        model: "gpt-6-astra",
+        prompt: this.childPrompt,
+      },
+    });
+  }
+
+  private childRead(): unknown {
+    return {
+      thread: {
+        id: "child-product-a",
+        parentThreadId: "parent-product-a",
+        agentRole: "default",
+        source: {
+          subAgent: {
+            thread_spawn: {
+              parent_thread_id: "parent-product-a",
+              depth: 1,
+              agent_role: "default",
+            },
+          },
+        },
+        status: { type: this.completed ? "idle" : "active" },
+        turns: [
+          {
+            id: "child-turn-product-a",
+            status: this.completed ? "completed" : "inProgress",
+            items: this.completed
+              ? [
+                  ...this.computerItems,
+                  ...this.extraChildItems,
+                  {
+                    id: "answer-product-a",
+                    type: "agentMessage",
+                    text: "notes/continuity.md",
+                  },
+                ]
+              : [],
+          },
+        ],
+      },
+    };
+  }
+
+  private parentRead(): unknown {
+    const items = this.completed
+      ? [
+          {
+            id: "spawn-product-a",
+            type: "collabAgentToolCall",
+            tool: "spawnAgent",
+            status: "completed",
+            senderThreadId: "parent-product-a",
+            receiverThreadIds: ["child-product-a"],
+            agentsStates: {},
+            prompt: this.childPrompt,
+          },
+          {
+            id: "wait-product-a",
+            type: "collabAgentToolCall",
+            tool: "wait",
+            status: "completed",
+            senderThreadId: "parent-product-a",
+            receiverThreadIds: ["child-product-a"],
+            agentsStates: {},
+          },
+          ...(this.authorityCompleted
+            ? [
+                {
+                  id: "authority-product-a",
+                  type: "dynamicToolCall",
+                  tool: "farol_agent_authority",
+                  status: "completed",
+                  success: true,
+                  arguments: {
+                    assignmentId: request.identity.assignmentId,
+                    authorityId: authority.authorityId,
+                    participantId: authority.participantId,
+                    role: authority.role,
+                    proof: this.authorityProof,
+                  },
+                },
+              ]
+            : []),
+        ]
+      : [];
+    return {
+      thread: {
+        id: "parent-product-a",
+        parentThreadId: null,
+        agentRole: null,
+        source: "appServer",
+        status: { type: this.completed ? "idle" : "active" },
+        turns: [
+          {
+            id: "parent-turn-product-a",
+            status: this.completed ? "completed" : "inProgress",
+            items,
+          },
+        ],
+      },
+    };
+  }
+}
+
+describe("native Codex product Agent host", () => {
+  it("runs a bounded product objective through inherited Computer authority", async () => {
+    const peer = new ProductPeer();
+    const computer: AgentComputer = {
+      execute: vi.fn(async (input) =>
+        input.operation.kind === "workspace.search"
+          ? {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.matches" as const,
+                matches: [
+                  {
+                    path: "notes/continuity.md",
+                    line: 4,
+                    text: "delegated continuity marker",
+                    truncated: false,
+                  },
+                ],
+                resultLimited: false,
+                scanLimited: false,
+              },
+            }
+          : {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.text" as const,
+                text: "delegated continuity marker",
+                bytes: 27,
+              },
+            },
+      ),
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+
+    const spawned = await host.spawn(request);
+    expect(
+      (
+        peer.requests.find(({ method }) => method === "thread/start")
+          ?.params as { dynamicTools?: readonly { name?: string }[] }
+      ).dynamicTools?.map(({ name }) => name),
+    ).toEqual(["farol_agent_authority", "farol_agent_computer"]);
+    expect(peer.childPrompt).toContain("FAROL_NATIVE_AGENT_TASK_V2");
+    expect(peer.childPrompt).toContain(productObjective);
+    expect(peer.childPrompt).toContain('"mode":"subtree"');
+    expect(peer.childPrompt).toContain('"root":"/workspace/product"');
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+
+    await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "running",
+      correlation: spawned.correlation,
+    });
+    await peer.finish();
+    await expect(host.wait(spawned.correlation)).resolves.toEqual({
+      status: "completed",
+      correlation: {
+        ...spawned.correlation,
+        delegationDigest: createHash("sha256")
+          .update(peer.childPrompt)
+          .digest("hex"),
+      },
+      resultRef:
+        "codex-app-server://thread/child-product-a/turn/child-turn-product-a",
+      workspaceEnforcement: "verified",
+    });
+    expect(computer.execute).toHaveBeenCalledTimes(2);
+    expect(computer.execute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        identity: request.identity,
+        authority,
+        threadId: "child-product-a",
+        callId: "computer-search-a",
+        operation: {
+          kind: "workspace.search",
+          relativePath: ".",
+          pattern: "continuity marker",
+        },
+      }),
+    );
+    expect(computer.execute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        operation: {
+          kind: "workspace.read",
+          relativePath: "notes/continuity.md",
+        },
+      }),
+    );
+
+    host.dispose();
+    const rejoined = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "unused",
+        now: () => 2,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    await expect(rejoined.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "completed",
+      correlation: spawned.correlation,
+    });
+    expect(
+      peer.requests.filter(({ method }) => method === "thread/start"),
+    ).toHaveLength(1);
+  });
+
+  it("rejects foreign Computer correlation before inherited authority runs", async () => {
+    const peer = new ProductPeer();
+    const computer: AgentComputer = { execute: vi.fn() };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    const handler = peer.handlers.get("item/tool/call");
+    if (!handler) throw new Error("TOOL_HANDLER_MISSING");
+    const proof =
+      /computer proof ([a-f0-9]{64})/u.exec(peer.childPrompt)?.[1] ?? "";
+
+    await expect(
+      handler({
+        threadId: "child-product-a",
+        turnId: "child-turn-product-a",
+        callId: "foreign-call-a",
+        tool: "farol_agent_computer",
+        arguments: {
+          assignmentId: request.identity.assignmentId,
+          authorityId: authority.authorityId,
+          participantId: "foreign-agent",
+          proof,
+          workspaceId: "workspace-product-a",
+          operation: { kind: "workspace.list", relativePath: "." },
+        },
+      }),
+    ).rejects.toThrow("CODEX_AGENT_COMPUTER_CORRELATION");
+    expect(computer.execute).not.toHaveBeenCalled();
+    await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "outcome_unknown",
+      code: "AGENT_WAIT_ACK_LOST",
+    });
+  });
+
+  it("rejects completed child history containing a direct native command", async () => {
+    const peer = new ProductPeer();
+    const computer: AgentComputer = {
+      execute: vi.fn(async (input) =>
+        input.operation.kind === "workspace.search"
+          ? {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.matches" as const,
+                matches: [],
+                resultLimited: false,
+                scanLimited: false,
+              },
+            }
+          : {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.text" as const,
+                text: "marker",
+                bytes: 6,
+              },
+            },
+      ),
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.extraChildItems.push({
+      id: "direct-command-a",
+      type: "commandExecution",
+      command: "cat private/secret.txt",
+      status: "completed",
+    });
+    await peer.finish();
+
+    await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "outcome_unknown",
+      code: "AGENT_WAIT_ACK_LOST",
+    });
+  });
+});

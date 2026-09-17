@@ -63,6 +63,7 @@ const request: AgentSpawnRequest = {
   },
   authority,
   focus: { initialPaths: ["/workspace/farol/README.md"] },
+  intent: { kind: "compatibility" },
 };
 
 class NativeAgentPeer implements CodexNativeAgentPeer {
