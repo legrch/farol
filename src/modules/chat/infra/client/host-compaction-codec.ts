@@ -347,17 +347,22 @@ function retainedUserTail(
 
 function summaryMessage(checkpoint: CheckpointEnvelope): unknown {
   const marker = transportCheckpoint(checkpoint);
-  const rendered = JSON.stringify(checkpoint.content, null, 2);
   return {
     type: "message",
     role: "user",
     content: [
       {
         type: "input_text",
-        text: `${FAROL_CONTEXT_PREAMBLE}\n${marker}\n${rendered}`,
+        text: `${FAROL_CONTEXT_PREAMBLE}\n${marker}\n${JSON.stringify(checkpoint.content, null, 2)}`,
       },
     ],
   };
+}
+
+export function renderTrustedCheckpointContext(
+  checkpoint: CheckpointEnvelope,
+): string {
+  return `${FAROL_CONTEXT_PREAMBLE}\n${JSON.stringify(checkpoint.content, null, 2)}`;
 }
 
 export function buildHostCompactionHandoff(

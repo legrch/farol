@@ -220,6 +220,10 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
 
   it("round-trips one exact native tool call before resuming the same conversation", async () => {
     let observedToolOutput = "";
+    const prepareTurn = vi.fn().mockResolvedValue({
+      ok: true as const,
+      value: { trustedContext: null },
+    });
     const conversation: CodexChatGptConversation = {
       run: vi.fn(async (_input, observer) => {
         observedToolOutput = await observer.onToolCall({
@@ -246,6 +250,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       model: "farol-next/mind",
       token: "route-b-test-token",
       conversation,
+      compaction: { compact: vi.fn(), prepareTurn },
     });
 
     const initialBody = toolRequestBody();
@@ -375,6 +380,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       activeTurns: 0,
       toolCalls: 1,
     });
+    expect(prepareTurn).toHaveBeenCalledTimes(1);
   });
 
   it("routes unary and streamed host compaction through the summary-only adapter", async () => {

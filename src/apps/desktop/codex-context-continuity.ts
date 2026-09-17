@@ -11,6 +11,7 @@ import type {
   SourceRetirementRequest,
 } from "../../modules/chat/app/port/context-source-control";
 import { CompactContext } from "../../modules/chat/app/service/compact-context";
+import type { CheckpointEnvelope } from "../../modules/chat/domain/checkpoint";
 import {
   sameContextBinding,
   validContextBinding,
@@ -21,6 +22,7 @@ import {
 import {
   buildHostCompactionHandoff,
   parseHostCompactionRequest,
+  renderTrustedCheckpointContext,
   replayHostCheckpoint,
   type HostCompactionErrorCode,
   type HostCompactionHandoff,
@@ -118,6 +120,28 @@ function bindingFor(
     modelId: request.identity.modelId,
     mode: modeFromModel(request.identity.modelId),
   };
+}
+
+function preparedBindingFor(
+  request: z.infer<typeof preparedTurnSchema>,
+  options: Pick<CodexContextContinuityOptions, "ownerId" | "providerProfileId">,
+): ContextBinding {
+  return {
+    ownerId: options.ownerId,
+    taskId: request.client_metadata.thread_id,
+    hostThreadId: request.client_metadata.thread_id,
+    sessionId: request.client_metadata.thread_id,
+    providerProfileId: options.providerProfileId,
+    modelId: request.model,
+    mode: modeFromModel(request.model),
+  };
+}
+
+function sameCheckpointEnvelope(
+  left: CheckpointEnvelope,
+  right: CheckpointEnvelope,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function sourceMatchesRequest(
@@ -254,27 +278,77 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
 
   async prepareTurn(
     input: Parameters<NonNullable<CodexChatGptCompaction["prepareTurn"]>>[0],
-  ): Promise<Result<null, CodexChatGptCompactionErrorCode>> {
+  ): Promise<
+    Result<
+      Readonly<{ trustedContext: string | null }>,
+      CodexChatGptCompactionErrorCode
+    >
+  > {
     const parsed = preparedTurnSchema.safeParse(input.body);
     if (!parsed.success) {
       return failure("HOST_COMPACTION_REQUEST_INVALID");
     }
+    const binding = preparedBindingFor(parsed.data, this.options);
     const replayed = replayHostCheckpoint(
       parsed.data.input,
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
     if (!replayed.ok) {
-      return replayed.error.code === "HOST_CHECKPOINT_NOT_FOUND"
-        ? success(null)
-        : failure(replayed.error.code);
+      if (replayed.error.code !== "HOST_CHECKPOINT_NOT_FOUND") {
+        return failure(replayed.error.code);
+      }
+      let session: ContextSession | null;
+      try {
+        session = await this.options.store.load(binding);
+      } catch {
+        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      }
+      if (!session) return success({ trustedContext: null });
+      if (!sameContextBinding(session.binding, binding)) {
+        return failure("HOST_COMPACTION_BINDING_MISMATCH");
+      }
+      const classified = normalizeSessionFailure(session);
+      if (classified) return failure(classified);
+      return session.phase === "active"
+        ? success({ trustedContext: null })
+        : failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
     }
-    const checkpoint = replayed.value.checkpoint;
-    if (
-      checkpoint.binding.hostThreadId !==
-        parsed.data.client_metadata.thread_id ||
-      checkpoint.binding.modelId !== parsed.data.model
-    ) {
+    const transportedCheckpoint = replayed.value.checkpoint;
+    if (!sameContextBinding(transportedCheckpoint.binding, binding)) {
       return failure("HOST_COMPACTION_BINDING_MISMATCH");
+    }
+    let session: ContextSession | null;
+    let checkpoint: CheckpointEnvelope | null;
+    let source: StoredContextSource | null;
+    try {
+      session = await this.options.store.load(binding);
+      checkpoint = await this.options.store.get(
+        binding,
+        transportedCheckpoint.checkpointId,
+      );
+      source = await this.options.store.getSource(
+        binding,
+        transportedCheckpoint.operationId,
+      );
+    } catch {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    if (
+      !session ||
+      !sameContextBinding(session.binding, binding) ||
+      session.phase !== "handoff_offered" ||
+      session.operation?.checkpointId !== transportedCheckpoint.checkpointId ||
+      session.operation.operationId !== transportedCheckpoint.operationId ||
+      !checkpoint ||
+      !sameCheckpointEnvelope(checkpoint, transportedCheckpoint) ||
+      !source ||
+      !sameContextBinding(source.binding, binding) ||
+      source.operationId !== checkpoint.operationId ||
+      source.source !== checkpoint.source ||
+      source.sourceBoundary !== checkpoint.sourceBoundary ||
+      source.variant !== replayed.value.origin
+    ) {
+      return failure("HOST_CHECKPOINT_INVALID");
     }
     const hostContextRef = `host-${hash([
       parsed.data.client_metadata.thread_id,
@@ -309,7 +383,9 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
     }
     this.confirmations.delete(checkpoint.checkpointId);
-    return success(null);
+    return success({
+      trustedContext: renderTrustedCheckpointContext(checkpoint),
+    });
   }
 
   async confirmHostCompaction(

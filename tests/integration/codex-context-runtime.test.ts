@@ -14,7 +14,10 @@ import type { CodexChatGptConversation } from "../../src/apps/desktop/codex-chat
 import type { CheckpointContent } from "../../src/modules/chat/domain/checkpoint";
 import type { ProductTaskContext } from "../../src/modules/chat/contract/product-task";
 import type { ContextBinding } from "../../src/modules/chat/domain/context-continuity";
-import { replayHostCheckpoint } from "../../src/modules/chat/infra/client/host-compaction-codec";
+import {
+  HOST_CHECKPOINT_PREFIX,
+  replayHostCheckpoint,
+} from "../../src/modules/chat/infra/client/host-compaction-codec";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
 
 const token = "context-runtime-test-token";
@@ -479,6 +482,13 @@ describe("assembled Codex context runtime", () => {
 
     expect(operationIds).toHaveLength(3);
     expect(conversation.run).toHaveBeenCalledTimes(3);
+    for (const [input] of vi.mocked(conversation.run).mock.calls) {
+      expect(input.prompt).toContain(protectedFacts.earlyConstraint);
+      expect(input.prompt).toContain(protectedFacts.latestCorrection);
+      expect(input.prompt).toContain(protectedFacts.completedReceipt);
+      expect(input.prompt).toContain(protectedFacts.unknownOperation);
+      expect(input.prompt).not.toContain(HOST_CHECKPOINT_PREFIX);
+    }
     expect(summaryRoutes.createFallback).not.toHaveBeenCalled();
     expect(routes.slice(0, 3).map((route) => route.prompts.length)).toEqual([
       1, 1, 1,
@@ -507,6 +517,86 @@ describe("assembled Codex context runtime", () => {
         }),
       ]),
     );
+  });
+
+  it("projects a trusted streamed checkpoint into the actual next model input", async () => {
+    const root = await stateRoot();
+    const retained = new DeterministicSummaryRoute(
+      checkpoint(1),
+      "https://chatgpt.com/c/context-streamed-1",
+    );
+    const summaryRoutes = {
+      retained: vi.fn(() => retained),
+      createFallback: vi.fn(),
+    };
+    const controller = createCodexContextController({
+      ownerId: binding.ownerId,
+      providerProfileId: binding.providerProfileId,
+      stateRoot: root,
+      summaryRoutes,
+    });
+    const handoff = await controller.continuity.compact({
+      endpoint: "responses",
+      body: {
+        model,
+        stream: true,
+        input: [...history(1), { type: "compaction_trigger" }],
+      },
+      metadataHeader: JSON.stringify({
+        thread_id: threadId,
+        turn_id: "turn-streamed-compact",
+      }),
+    });
+    if (!handoff.ok || handoff.value.variant !== "streamed_compaction_item") {
+      throw new Error("EXPECTED_STREAMED_HANDOFF");
+    }
+    const conversation: CodexChatGptConversation = {
+      run: vi.fn(async (_input, observer) => {
+        await observer.onTextDelta({
+          sequence: 1,
+          delta: "Continued.",
+          text: "Continued.",
+          observedCharacters: 10,
+        });
+        return {
+          state: "completed" as const,
+          code: null,
+          outputText: "Continued.",
+          observedProvider: "deterministic-local",
+          observedModel: null,
+          observedMode: null,
+        };
+      }),
+    };
+    const runtime = await startCodexContextRuntime({
+      ownerId: binding.ownerId,
+      providerProfileId: binding.providerProfileId,
+      stateRoot: root,
+      model,
+      token,
+      conversation,
+      summaryRoutes,
+    });
+    runtimes.push(runtime);
+
+    const continued = await fetch(`${runtime.provider.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(ordinaryBody([handoff.value.item], 1)),
+    });
+    expect(continued.status).toBe(200);
+    await continued.text();
+    expect(conversation.run).toHaveBeenCalledTimes(1);
+    const prompt = vi.mocked(conversation.run).mock.calls[0]![0].prompt;
+    expect(prompt).toContain(protectedFacts.earlyConstraint);
+    expect(prompt).toContain(protectedFacts.latestCorrection);
+    expect(prompt).toContain(protectedFacts.completedReceipt);
+    expect(prompt).toContain(protectedFacts.unknownOperation);
+    expect(prompt).toContain("Continue ordinary cycle 1.");
+    expect(prompt).not.toContain(HOST_CHECKPOINT_PREFIX);
   });
 
   it("uses one isolated canonical-history fallback only when retained context is absent", async () => {

@@ -13,6 +13,7 @@ import { once } from "node:events";
 import { z } from "zod";
 import type { Result } from "../../pkg/kernel/domain/result";
 import {
+  HOST_CHECKPOINT_PREFIX,
   isHostCompactionRequestMetadata,
   type HostCompactionEndpoint,
   type HostCompactionErrorCode,
@@ -111,7 +112,12 @@ export type CodexChatGptCompaction = Readonly<{
   ): Promise<Result<HostCompactionHandoff, CodexChatGptCompactionErrorCode>>;
   prepareTurn?(
     input: Readonly<{ body: unknown }>,
-  ): Promise<Result<null, CodexChatGptCompactionErrorCode>>;
+  ): Promise<
+    Result<
+      Readonly<{ trustedContext: string | null }>,
+      CodexChatGptCompactionErrorCode
+    >
+  >;
 }>;
 
 export type CodexChatGptProviderRuntime = Readonly<{
@@ -323,16 +329,25 @@ function textFromContent(content: unknown): string[] {
   });
 }
 
-function promptFromInput(input: string | readonly unknown[]): string | null {
+function promptFromInput(
+  input: string | readonly unknown[],
+  trustedContext: string | null,
+): string | null {
   if (typeof input === "string") {
-    return input.length <= MAX_PROMPT_CHARACTERS ? input : null;
+    const prompt = trustedContext ? `${trustedContext}\n\n${input}` : input;
+    return prompt.length <= MAX_PROMPT_CHARACTERS ? prompt : null;
   }
   const messages = input.flatMap((item) => {
     if (!record(item) || item.type !== "message") return [];
     if (item.role !== "user") return [];
-    return textFromContent(item.content);
+    const content = textFromContent(item.content);
+    return content.some((text) => text.includes(HOST_CHECKPOINT_PREFIX))
+      ? []
+      : content;
   });
-  const prompt = messages.join("\n\n");
+  const prompt = [trustedContext, ...messages]
+    .filter((part): part is string => part !== null)
+    .join("\n\n");
   return prompt.length > 0 && prompt.length <= MAX_PROMPT_CHARACTERS
     ? prompt
     : null;
@@ -971,15 +986,6 @@ async function handleResponses(
     refusal(response, 422, "FAROL_NEXT_MODEL_UNAVAILABLE");
     return;
   }
-  if (options.compaction?.prepareTurn) {
-    const prepared = await options.compaction.prepareTurn({
-      body: structuredClone(raw),
-    });
-    if (!prepared.ok) {
-      refusal(response, 409, prepared.error.code);
-      return;
-    }
-  }
   const identity = identityFromRequest(parsed.data);
   const key = turnKey(identity);
   const existing = turns.get(key);
@@ -1025,7 +1031,18 @@ async function handleResponses(
     refusal(response, 503, "FAROL_NEXT_PROVIDER_BUSY");
     return;
   }
-  const prompt = promptFromInput(parsed.data.input);
+  let trustedContext: string | null = null;
+  if (options.compaction?.prepareTurn) {
+    const prepared = await options.compaction.prepareTurn({
+      body: structuredClone(raw),
+    });
+    if (!prepared.ok) {
+      refusal(response, 409, prepared.error.code);
+      return;
+    }
+    trustedContext = prepared.value.trustedContext;
+  }
+  const prompt = promptFromInput(parsed.data.input, trustedContext);
   if (prompt === null) {
     refusal(response, 422, "FAROL_NEXT_INPUT_UNSUPPORTED");
     return;
