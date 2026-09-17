@@ -1274,51 +1274,55 @@ async function configureProduct(
         ? "Verifying the exact tunnel-client executable and supported CLI surface…"
         : command.kind === "connector.configure"
           ? "Saving the tunnel ID and private runtime-key reference…"
-          : command.kind === "connector.start"
-            ? "Checking the profile, starting one owned connector, and waiting for loopback readiness…"
-            : command.kind === "connector.repair"
-              ? "Stopping the known connector, rebuilding its profile, and checking readiness once…"
-              : command.kind === "connector.stop"
-                ? "Stopping the owned connector and clearing runtime proof…"
-                : command.kind === "host.select-codex" ||
-                    command.kind === "host.verify-codex"
-                  ? "Verifying the selected Codex executable and bounded App Server contract…"
-                  : command.kind === "host.run-codex-smoke"
-                    ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
-                    : command.kind === "host.run-codex-agent-check"
-                      ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
-                      : command.kind === "host.remove-codex"
-                        ? "Removing the saved Codex host selection…"
-                        : command.kind === "chatgpt.prepare-attachment-task"
-                          ? "Validating and privately staging the selected attachments…"
-                          : command.kind === "chatgpt.submit-attachment-task"
-                            ? "Uploading the reviewed attachments and submitting once…"
-                            : command.kind === "chatgpt.cancel-attachment-task"
-                              ? "Removing the private attachment staging…"
-                              : command.kind === "chatgpt.prepare-readonly-task"
-                                ? "Reading the selected file for review…"
+          : command.kind === "connector.check-attachment"
+            ? "Checking the one-time connector receipt against this runtime, build, and Computer authority…"
+            : command.kind === "connector.start"
+              ? "Checking the profile, starting one owned connector, and waiting for loopback readiness…"
+              : command.kind === "connector.repair"
+                ? "Stopping the known connector, rebuilding its profile, and checking readiness once…"
+                : command.kind === "connector.stop"
+                  ? "Stopping the owned connector and clearing runtime proof…"
+                  : command.kind === "host.select-codex" ||
+                      command.kind === "host.verify-codex"
+                    ? "Verifying the selected Codex executable and bounded App Server contract…"
+                    : command.kind === "host.run-codex-smoke"
+                      ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
+                      : command.kind === "host.run-codex-agent-check"
+                        ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
+                        : command.kind === "host.remove-codex"
+                          ? "Removing the saved Codex host selection…"
+                          : command.kind === "chatgpt.prepare-attachment-task"
+                            ? "Validating and privately staging the selected attachments…"
+                            : command.kind === "chatgpt.submit-attachment-task"
+                              ? "Uploading the reviewed attachments and submitting once…"
+                              : command.kind ===
+                                  "chatgpt.cancel-attachment-task"
+                                ? "Removing the private attachment staging…"
                                 : command.kind ===
-                                    "chatgpt.submit-readonly-task"
-                                  ? "Submitting once and waiting for one ChatGPT result…"
+                                    "chatgpt.prepare-readonly-task"
+                                  ? "Reading the selected file for review…"
                                   : command.kind ===
-                                      "chatgpt.cancel-readonly-task"
-                                    ? "Discarding the prepared context…"
+                                      "chatgpt.submit-readonly-task"
+                                    ? "Submitting once and waiting for one ChatGPT result…"
                                     : command.kind ===
-                                        "chatgpt.reset-conversation"
-                                      ? "Clearing the retained conversation binding…"
+                                        "chatgpt.cancel-readonly-task"
+                                      ? "Discarding the prepared context…"
                                       : command.kind ===
-                                          "computer.prepare-workspace-edit"
-                                        ? "Reading the selected file and preparing a content-free edit review…"
+                                          "chatgpt.reset-conversation"
+                                        ? "Clearing the retained conversation binding…"
                                         : command.kind ===
-                                            "computer.run-git-status"
-                                          ? "Running fixed Apple Git status with no network access…"
+                                            "computer.prepare-workspace-edit"
+                                          ? "Reading the selected file and preparing a content-free edit review…"
                                           : command.kind ===
-                                              "computer.apply-workspace-edit"
-                                            ? "Applying this guarded edit once…"
+                                              "computer.run-git-status"
+                                            ? "Running fixed Apple Git status with no network access…"
                                             : command.kind ===
-                                                "computer.cancel-workspace-edit"
-                                              ? "Discarding the prepared edit…"
-                                              : "Saving and reading back…";
+                                                "computer.apply-workspace-edit"
+                                              ? "Applying this guarded edit once…"
+                                              : command.kind ===
+                                                  "computer.cancel-workspace-edit"
+                                                ? "Discarding the prepared edit…"
+                                                : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1360,9 +1364,15 @@ async function configureProduct(
           ? "Native Agent outcome unknown. Inspect the existing Codex task before any deliberate recovery."
           : parsed.data.error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
             ? "Connector readiness is unknown. Inspect the current connector before an explicit Repair."
-            : parsed.data.error === "CONNECTOR_STOP_REQUIRED"
-              ? "Stop the connector before changing Computer authority or connector identity."
-              : `Not applied · ${parsed.data.error}`;
+            : parsed.data.error === "CONNECTOR_ATTACHMENT_NOT_FOUND"
+              ? "No connector receipt exists yet. Attach this tunnel in ChatGPT, run the displayed one-time challenge, then check again."
+              : parsed.data.error === "CONNECTOR_ATTACHMENT_INVALID"
+                ? "The connector receipt does not match this runtime, build, workspace, or Computer authority. Stop and deliberately start a fresh challenge."
+                : parsed.data.error === "CONNECTOR_CHALLENGE_UNAVAILABLE"
+                  ? "No current connector challenge is available. Start the connector before checking its ChatGPT attachment."
+                  : parsed.data.error === "CONNECTOR_STOP_REQUIRED"
+                    ? "Stop the connector before changing Computer authority or connector identity."
+                    : `Not applied · ${parsed.data.error}`;
     settingsFeedbackError =
       !cancellation && parsed.data.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
@@ -1414,6 +1424,8 @@ async function configureProduct(
     settingsFeedback = `tunnel-client ${evidence.version} verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "connector.runtime") {
     settingsFeedback = `Connector ${evidence.state.replace("_", " ")} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · Computer generation ${evidence.computerGeneration}.`;
+  } else if (evidence?.kind === "connector.attachment") {
+    settingsFeedback = `ChatGPT attachment verified · workspace ${evidence.workspaceId.slice(0, 12)} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     shellOverlay = "context-preview";
@@ -1518,6 +1530,48 @@ async function configureProduct(
     });
   }
   return true;
+}
+
+function connectorChallengeCard(
+  settings: ReadySettings,
+): HTMLDivElement | null {
+  const connector = settings.connectors.secureMcp;
+  const challenge = connector.challenge;
+  if (!challenge) return null;
+  const verifiedWorkspaceId = settings.setup.computer.verified?.workspaceId;
+  const workspace =
+    settings.computer.workspaces.find(
+      (candidate) => candidate.workspaceId === verifiedWorkspaceId,
+    ) ?? settings.computer.workspaces[0];
+  if (!workspace) return null;
+
+  const card = document.createElement("div");
+  card.className = "connector-challenge";
+  card.dataset.connectorChallenge = "pending";
+  const title = document.createElement("strong");
+  title.textContent = "Verify from ChatGPT";
+  const instruction = document.createElement("p");
+  instruction.textContent = `Attach tunnel ${connector.tunnelId ?? "(not set)"} in ChatGPT Settings. Ask the connector to call farol_next_connector_verify once with:`;
+  const values = document.createElement("dl");
+  for (const [label, value] of [
+    ["challenge", challenge.value],
+    ["workspaceId", workspace.workspaceId],
+  ] as const) {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const detail = document.createElement("dd");
+    const code = document.createElement("code");
+    code.textContent = value;
+    detail.append(code);
+    row.append(term, detail);
+    values.append(row);
+  }
+  const note = document.createElement("small");
+  note.textContent =
+    "The one-time check lists only the approved workspace root and returns counts, never names or file contents.";
+  card.append(title, instruction, values, note);
+  return card;
 }
 
 function renderSettings(): void {
@@ -1817,19 +1871,30 @@ function renderSettings(): void {
         });
         const start = document.createElement("button");
         start.type = "button";
+        const attachmentCheckPending =
+          connector.runtime?.state === "ready" && connector.challenge !== null;
         start.textContent =
           connector.runtime?.state === "outcome_unknown"
             ? "Repair explicitly"
-            : connector.runtime?.state === "ready"
-              ? "Running"
-              : "Start & check";
+            : attachmentCheckPending
+              ? "Check attachment"
+              : connector.runtime?.state === "ready"
+                ? "Running"
+                : "Start & check";
         start.disabled =
           connector.tunnelClient === null ||
           connector.tunnelId === null ||
           connector.credential !== "stored" ||
           settings.computer.workspaces.length === 0 ||
-          connector.runtime?.state === "ready";
+          (connector.runtime?.state === "ready" && !attachmentCheckPending);
         start.addEventListener("click", () => {
+          if (attachmentCheckPending) {
+            void configureProduct(
+              { kind: "connector.check-attachment" },
+              "ChatGPT connector attachment verified.",
+            );
+            return;
+          }
           const repair = connector.runtime?.state === "outcome_unknown";
           void configureProduct(
             { kind: repair ? "connector.repair" : "connector.start" },
@@ -1850,6 +1915,8 @@ function renderSettings(): void {
         });
         actions.append(choose, start, stop);
         row.append(form, actions);
+        const challenge = connectorChallengeCard(settings);
+        if (challenge) row.append(challenge);
       } else if (label === "Native hosts") {
         const actions = document.createElement("span");
         actions.className = "connection-actions";
@@ -2117,6 +2184,8 @@ function renderSetup(): void {
     liveSummary.textContent = connector.tunnelClient
       ? readinessDetail(readiness)
       : "Choose the exact installed tunnel-client. Farol Next verifies its profile, doctor, and run surface before saving it.";
+    const challenge = connectorChallengeCard(settings);
+    if (challenge) liveSummary.append(challenge);
     if (
       connector.tunnelClient &&
       (connector.tunnelId === null || connector.credential === "missing")
@@ -2155,9 +2224,12 @@ function renderSetup(): void {
         : connector.runtime?.state === "outcome_unknown"
           ? "Repair explicitly"
           : connector.runtime?.state === "ready"
-            ? "Stop connector"
+            ? connector.challenge
+              ? "Check attachment"
+              : "Connection verified"
             : "Start & check";
-    livePrimary.disabled = false;
+    livePrimary.disabled =
+      connector.runtime?.state === "ready" && connector.challenge === null;
     setupPrimaryAction = async () => {
       if (!connector.tunnelClient) {
         await configureProduct(
@@ -2187,10 +2259,12 @@ function renderSetup(): void {
         return;
       }
       if (connector.runtime?.state === "ready") {
-        await configureProduct(
-          { kind: "connector.stop" },
-          "Connector stopped and runtime proof cleared.",
-        );
+        if (connector.challenge) {
+          await configureProduct(
+            { kind: "connector.check-attachment" },
+            "ChatGPT connector attachment verified.",
+          );
+        }
         return;
       }
       const repair = connector.runtime?.state === "outcome_unknown";

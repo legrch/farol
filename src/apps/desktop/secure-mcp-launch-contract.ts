@@ -8,7 +8,7 @@ import {
   ReadonlyComputerLaunchContractSchema,
   serializeReadonlyComputerLaunchContract,
   type ReadonlyComputerLaunchContract,
-} from "../computer-mcp/launch-contract";
+} from "../../modules/computer/infra/mcp/launch-contract";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -22,12 +22,17 @@ function launchError(code: string): never {
 
 export function createSecureMcpLaunchContract(
   settings: ProductSettings,
-  input: Readonly<{ now: number; runtimeId: string }>,
+  input: Readonly<{
+    now: number;
+    runtimeId: string;
+    challengeSha256: string;
+  }>,
 ): ReadonlyComputerLaunchContract {
   if (
     !Number.isSafeInteger(input.now) ||
     input.now <= 0 ||
-    !/^[0-9A-Za-z._:-]{1,64}$/u.test(input.runtimeId)
+    !/^[0-9A-Za-z._:-]{1,64}$/u.test(input.runtimeId) ||
+    !/^[a-f0-9]{64}$/u.test(input.challengeSha256)
   ) {
     launchError("SECURE_MCP_LAUNCH_INPUT_INVALID");
   }
@@ -105,6 +110,9 @@ export function createSecureMcpLaunchContract(
       participantId,
       turnId: `secure-mcp-turn-${input.runtimeId}`,
       generation: settings.computer.generation,
+    },
+    connectorVerification: {
+      challengeSha256: input.challengeSha256,
     },
   });
 }

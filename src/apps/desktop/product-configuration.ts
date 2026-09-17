@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -121,11 +121,27 @@ const secureMcpRuntimeInputSchema = z.strictObject({
 });
 
 const secureMcpAttachmentInputSchema = z.strictObject({
+  workspaceId: z
+    .string()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    ),
   runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
   computerGeneration: z.number().int().positive(),
   buildId: z.string().regex(/^[a-f0-9]{64}$/u),
   challengeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
   receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
+
+const secureMcpChallengeInputSchema = z.strictObject({
+  challenge: z
+    .string()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    ),
+  runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
+  computerGeneration: z.number().int().positive(),
+  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
 });
 
 function settingsError(error: unknown): ProductConfigurationSnapshot {
@@ -255,11 +271,18 @@ function invalidateStaleConnectorRuntime(
 ): ProductSettings {
   const connector = settings.connectors.secureMcp;
   const runtime = connector.runtime;
+  const challenge = connector.challenge;
   const attachment = connector.attachment;
   const runtimeCurrent =
     runtime === null ||
     (runtime.connectorGeneration === connector.generation &&
       runtime.computerGeneration === settings.computer.generation);
+  const challengeCurrent =
+    challenge === null ||
+    (runtime?.state === "ready" &&
+      challenge.runtimeGeneration === runtime.runtimeGeneration &&
+      challenge.computerGeneration === settings.computer.generation &&
+      challenge.buildId === runtime.buildId);
   const attachmentCurrent =
     attachment === null ||
     (runtime?.state === "ready" &&
@@ -268,12 +291,13 @@ function invalidateStaleConnectorRuntime(
       attachment.computerGeneration === settings.computer.generation &&
       attachment.buildId === runtime.buildId &&
       attachment.tunnelId === connector.tunnelId);
-  if (runtimeCurrent && attachmentCurrent) return settings;
+  if (runtimeCurrent && challengeCurrent && attachmentCurrent) return settings;
 
   const invalidated = {
     ...connector,
     generation: connector.generation + 1,
     runtime: null,
+    challenge: null,
     attachment: null,
   };
   return {
@@ -315,6 +339,7 @@ function defaultSettings(id: () => string): ProductSettings {
         tunnelClient: null,
         credential: "missing",
         runtime: null,
+        challenge: null,
         attachment: null,
       },
     },
@@ -531,6 +556,7 @@ export class ProductConfigurationService {
         generation: connector.generation + 1,
         tunnelClient: { ...parsed.data, verifiedAt: this.now() },
         runtime: null,
+        challenge: null,
         attachment: null,
       };
       return {
@@ -556,6 +582,7 @@ export class ProductConfigurationService {
         generation: connector.generation + 1,
         tunnelId: parsed.data.tunnelId,
         runtime: null,
+        challenge: null,
         attachment: null,
       };
       return {
@@ -583,6 +610,7 @@ export class ProductConfigurationService {
         generation: connector.generation + 1,
         credential: parsed.data,
         runtime: null,
+        challenge: null,
         attachment: null,
       };
       return {
@@ -619,7 +647,7 @@ export class ProductConfigurationService {
       };
       const ready = parsed.data.state === "ready";
       const outcomeUnknown = parsed.data.state === "outcome_unknown";
-      const next = { ...current, runtime, attachment: null };
+      const next = { ...current, runtime, challenge: null, attachment: null };
       return {
         ...settings,
         revision: settings.revision + 1,
@@ -650,6 +678,58 @@ export class ProductConfigurationService {
     });
   }
 
+  async recordSecureMcpChallenge(input: unknown): Promise<MutationResult> {
+    const parsed = secureMcpChallengeInputSchema.safeParse(input);
+    if (!parsed.success || this.current === null) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    const connector = this.current.connectors.secureMcp;
+    const runtime = connector.runtime;
+    if (
+      runtime?.state !== "ready" ||
+      runtime.connectorGeneration !== connector.generation ||
+      runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
+      runtime.computerGeneration !== parsed.data.computerGeneration ||
+      runtime.buildId !== parsed.data.buildId ||
+      parsed.data.computerGeneration !== this.current.computer.generation
+    ) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    return this.mutate((settings) => {
+      const current = settings.connectors.secureMcp;
+      const { challenge: value, ...proof } = parsed.data;
+      const challenge = {
+        ...proof,
+        value,
+        challengeSha256: createHash("sha256").update(value).digest("hex"),
+        preparedAt: this.now(),
+      };
+      return {
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: {
+          ...settings.connectors,
+          secureMcp: { ...current, challenge, attachment: null },
+        },
+        setup: {
+          ...settings.setup,
+          connect: {
+            ...settings.setup.connect,
+            visited: true,
+            skipped: false,
+            configured: true,
+            reachable: "reachable",
+            verified: null,
+            needsAction:
+              "Attach this connector in ChatGPT, run the one-time challenge, then check its receipt.",
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      };
+    });
+  }
+
   async recordSecureMcpAttachment(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpAttachmentInputSchema.safeParse(input);
     if (!parsed.success || this.current === null) {
@@ -657,6 +737,7 @@ export class ProductConfigurationService {
     }
     const connector = this.current.connectors.secureMcp;
     const runtime = connector.runtime;
+    const challenge = connector.challenge;
     if (
       connector.tunnelId === null ||
       connector.tunnelClient === null ||
@@ -665,6 +746,13 @@ export class ProductConfigurationService {
       runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
       runtime.computerGeneration !== parsed.data.computerGeneration ||
       runtime.buildId !== parsed.data.buildId ||
+      challenge?.challengeSha256 !== parsed.data.challengeSha256 ||
+      challenge.runtimeGeneration !== parsed.data.runtimeGeneration ||
+      challenge.computerGeneration !== parsed.data.computerGeneration ||
+      challenge.buildId !== parsed.data.buildId ||
+      !this.current.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === parsed.data.workspaceId,
+      ) ||
       parsed.data.computerGeneration !== this.current.computer.generation
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
@@ -683,7 +771,7 @@ export class ProductConfigurationService {
         revision: settings.revision + 1,
         connectors: {
           ...settings.connectors,
-          secureMcp: { ...current, attachment },
+          secureMcp: { ...current, challenge: null, attachment },
         },
         setup: {
           ...settings.setup,
@@ -696,7 +784,7 @@ export class ProductConfigurationService {
             verified: {
               profile: current.profile,
               configRevision: current.generation,
-              workspaceId: null,
+              workspaceId: parsed.data.workspaceId,
               runtimeGeneration: parsed.data.runtimeGeneration,
               buildId: parsed.data.buildId,
               protocol: current.tunnelClient?.protocol as string,
@@ -714,10 +802,19 @@ export class ProductConfigurationService {
   async recordSecureMcpStopped(): Promise<MutationResult> {
     return this.mutate((settings) => {
       const connector = settings.connectors.secureMcp;
-      if (connector.runtime === null && connector.attachment === null) {
+      if (
+        connector.runtime === null &&
+        connector.challenge === null &&
+        connector.attachment === null
+      ) {
         return settings;
       }
-      const next = { ...connector, runtime: null, attachment: null };
+      const next = {
+        ...connector,
+        runtime: null,
+        challenge: null,
+        attachment: null,
+      };
       return {
         ...settings,
         revision: settings.revision + 1,

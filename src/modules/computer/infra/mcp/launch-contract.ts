@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
 
-import type { ReadonlyWorkspace } from "../../modules/computer/app/port/readonly-workspace";
+import type { ReadonlyWorkspace } from "../../app/port/readonly-workspace";
 import {
   createParticipantAuthority,
   delegateParticipantAuthority,
@@ -12,8 +12,8 @@ import {
   type DelegationAdmission,
   type ParticipantAuthority,
   type TaskAdmission,
-} from "../../modules/computer/domain/execution-authority";
-import type { ReadonlyComputerMcpBinding } from "../../modules/computer/infra/mcp/create-readonly-computer-mcp";
+} from "../../domain/execution-authority";
+import type { ReadonlyComputerMcpBinding } from "./create-readonly-computer-mcp";
 
 export const READONLY_COMPUTER_LAUNCH_BASENAME = "computer-launch.json";
 
@@ -187,6 +187,9 @@ const BindingSchema = z.strictObject({
   turnId: IdentifierSchema,
   generation: z.number().int().nonnegative(),
 });
+const ConnectorVerificationSchema = z.strictObject({
+  challengeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+});
 
 function validateChain(
   value: Readonly<{
@@ -235,6 +238,7 @@ const ReadonlyLaunchContractSchema = z
     admission: ReadonlyTaskAdmissionSchema,
     delegationChain: z.array(ReadonlyParticipantSchema).min(1).max(16),
     binding: BindingSchema,
+    connectorVerification: ConnectorVerificationSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -245,6 +249,7 @@ const MutableLaunchContractSchema = z
     admission: MutableTaskAdmissionSchema,
     delegationChain: z.array(MutableParticipantSchema).min(1).max(16),
     binding: BindingSchema,
+    connectorVerification: ConnectorVerificationSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -371,6 +376,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   participants: readonly ParticipantAuthority[];
   binding: ReadonlyComputerMcpBinding;
   mutationEnabled: boolean;
+  connectorVerification: Readonly<{ challengeSha256: string }> | null;
 }>;
 
 export function materializeReadonlyComputerLaunch(
@@ -429,5 +435,6 @@ export function materializeReadonlyComputerLaunch(
       turnId: launch.binding.turnId,
       generation: launch.binding.generation,
     },
+    connectorVerification: launch.connectorVerification ?? null,
   };
 }

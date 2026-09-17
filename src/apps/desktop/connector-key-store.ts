@@ -30,7 +30,7 @@ function validateCredential(value: string): void {
   }
 }
 
-export class PrivateConnectorCredentialStore {
+export class PrivateConnectorKeyStore {
   constructor(
     private readonly options: StoreOptions,
     private readonly dependencies: StoreDependencies = {},

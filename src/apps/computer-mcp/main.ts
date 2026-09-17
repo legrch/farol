@@ -18,7 +18,8 @@ import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo
 import {
   loadReadonlyComputerLaunchContract,
   materializeReadonlyComputerLaunch,
-} from "./launch-contract";
+} from "../../modules/computer/infra/mcp/launch-contract";
+import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 
 function launchContractArgument(arguments_: readonly string[]): string {
   if (
@@ -64,12 +65,19 @@ async function main(): Promise<void> {
         ),
       )
     : undefined;
+  const connectorVerification = launch.connectorVerification
+    ? new PrivateConnectorVerificationRecorder({
+        root: path.dirname(launchFile),
+        challengeSha256: launch.connectorVerification.challengeSha256,
+      })
+    : undefined;
   const handle = serveStdio(
     () =>
       createReadonlyComputerMcpServer(
         contract,
         launch.binding,
         mutableContract,
+        connectorVerification,
       ),
     {
       legacy: "serve",

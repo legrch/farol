@@ -77,6 +77,19 @@ const SearchInputSchema = z.strictObject({
 const VerificationInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
 });
+const ConnectorVerificationInputSchema = z.strictObject({
+  challenge: z
+    .string()
+    .min(1)
+    .max(160)
+    .refine((value) =>
+      [...value].every((character) => {
+        const code = character.codePointAt(0);
+        return code !== undefined && code >= 33 && code <= 126;
+      }),
+    ),
+  workspaceId: IdentifierSchema,
+});
 const MutationTextSchema = z
   .string()
   .max(8 * 1_024 * 1_024)
@@ -120,6 +133,32 @@ const MUTATION_ANNOTATIONS = {
   idempotentHint: true,
   openWorldHint: false,
 } as const;
+
+const VERIFICATION_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+export interface ConnectorVerificationRecorder {
+  accepts(challenge: string): boolean;
+  record(
+    input: Readonly<{
+      challenge: string;
+      binding: ReadonlyComputerMcpBinding;
+      callId: string;
+      workspaceId: string;
+      entryCount: number;
+      truncated: boolean;
+    }>,
+  ): Promise<
+    Readonly<{
+      receipt: Readonly<{ challengeSha256: string }>;
+      receiptSha256: string;
+    }>
+  >;
+}
 
 function failure(code: string): CallToolResult {
   const value = {
@@ -319,10 +358,79 @@ async function executeMutation(
   };
 }
 
+async function executeConnectorVerification(
+  contract: ReadonlyComputerContract,
+  binding: ReadonlyComputerMcpBinding,
+  recorder: ConnectorVerificationRecorder,
+  callId: string,
+  challenge: string,
+  workspaceId: string,
+): Promise<CallToolResult> {
+  if (!recorder.accepts(challenge)) {
+    return failure("CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH");
+  }
+  const result = await execute(contract, binding, callId, workspaceId, {
+    kind: "workspace.list",
+    relativePath: ".",
+  });
+  if (result.isError) return result;
+  const parsed = ReadonlyComputerCallResponseSchema.safeParse({
+    ok: true,
+    value: result.structuredContent,
+  });
+  if (
+    !parsed.success ||
+    !parsed.data.ok ||
+    parsed.data.value.output.kind !== "workspace.entries"
+  ) {
+    return failure("COMPUTER_CONTRACT_INVALID");
+  }
+  const output = parsed.data.value.output;
+  try {
+    const recorded = await recorder.record({
+      challenge,
+      binding,
+      callId,
+      workspaceId,
+      entryCount: output.entries.length,
+      truncated: output.truncated,
+    });
+    const value = {
+      ok: true,
+      challengeSha256: recorded.receipt.challengeSha256,
+      receiptSha256: recorded.receiptSha256,
+      workspaceId,
+      operation: "workspace.list" as const,
+      entryCount: output.entries.length,
+      truncated: output.truncated,
+      correlation: {
+        taskId: binding.taskId,
+        participantId: binding.participantId,
+        turnId: binding.turnId,
+        generation: binding.generation,
+      },
+    };
+    return {
+      content: [{ type: "text", text: JSON.stringify(value) }],
+      structuredContent: value,
+    };
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "";
+    if (code === "CONNECTOR_VERIFICATION_ALREADY_RECORDED") {
+      return failure("CONNECTOR_VERIFICATION_ALREADY_RECORDED");
+    }
+    if (code === "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH") {
+      return failure("CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH");
+    }
+    return failure("CONNECTOR_VERIFICATION_RECEIPT_FAILED");
+  }
+}
+
 export function createReadonlyComputerMcpServer(
   contract: ReadonlyComputerContract,
   binding: ReadonlyComputerMcpBinding,
   mutableContract?: MutableComputerContract,
+  connectorVerification?: ConnectorVerificationRecorder,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -391,6 +499,28 @@ export function createReadonlyComputerMcpServer(
         relativePath: ".",
       }),
   );
+
+  if (connectorVerification) {
+    server.registerTool(
+      "farol_next_connector_verify",
+      {
+        title: "Verify the Farol Next Computer connector",
+        description:
+          "Consume one owner-visible challenge, list one approved workspace root through the current Computer TaskGrant, and retain only a content-free correlation receipt.",
+        inputSchema: ConnectorVerificationInputSchema,
+        annotations: VERIFICATION_ANNOTATIONS,
+      },
+      async ({ challenge, workspaceId }, context) =>
+        executeConnectorVerification(
+          contract,
+          binding,
+          connectorVerification,
+          String(context.mcpReq.id),
+          challenge,
+          workspaceId,
+        ),
+    );
+  }
 
   if (mutableContract) {
     server.registerTool(

@@ -10,7 +10,7 @@ import {
   READONLY_COMPUTER_LAUNCH_BASENAME,
   serializeReadonlyComputerLaunchContract,
   type ReadonlyComputerLaunchContract,
-} from "../../src/apps/computer-mcp/launch-contract";
+} from "../../src/modules/computer/infra/mcp/launch-contract";
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
 
 const workspaceRoot = "/Users/example/workspace";

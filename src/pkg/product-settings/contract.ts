@@ -95,8 +95,18 @@ const SecureMcpRuntimeSchema = z.strictObject({
   observedAt: CanonicalTimestampSchema,
 });
 
+const SecureMcpChallengeSchema = z.strictObject({
+  value: IdentifierSchema,
+  challengeSha256: Sha256Schema,
+  runtimeGeneration: Sha256Schema,
+  computerGeneration: z.number().int().positive(),
+  buildId: Sha256Schema,
+  preparedAt: CanonicalTimestampSchema,
+});
+
 const SecureMcpAttachmentSchema = z.strictObject({
   tunnelId: z.string().min(1).max(160),
+  workspaceId: IdentifierSchema,
   connectorGeneration: z.number().int().positive(),
   runtimeGeneration: Sha256Schema,
   computerGeneration: z.number().int().positive(),
@@ -118,6 +128,7 @@ export const SecureMcpConnectorSchema = z.strictObject({
   tunnelClient: SecureMcpTunnelClientSchema.nullable(),
   credential: z.enum(["missing", "stored"]),
   runtime: SecureMcpRuntimeSchema.nullable(),
+  challenge: SecureMcpChallengeSchema.nullable().default(null),
   attachment: SecureMcpAttachmentSchema.nullable(),
 });
 
@@ -128,6 +139,7 @@ const DefaultSecureMcpConnector = {
   tunnelClient: null,
   credential: "missing" as const,
   runtime: null,
+  challenge: null,
   attachment: null,
 };
 
@@ -350,6 +362,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("connector.start") }),
   z.strictObject({ kind: z.literal("connector.repair") }),
   z.strictObject({ kind: z.literal("connector.stop") }),
+  z.strictObject({ kind: z.literal("connector.check-attachment") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
   z.strictObject({ kind: z.literal("chatgpt.recover-task-result") }),
   z.strictObject({
@@ -473,6 +486,14 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     runtimeGeneration: Sha256Schema,
     computerGeneration: z.number().int().positive(),
     buildId: Sha256Schema,
+  }),
+  z.strictObject({
+    kind: z.literal("connector.attachment"),
+    runtimeGeneration: Sha256Schema,
+    computerGeneration: z.number().int().positive(),
+    workspaceId: IdentifierSchema,
+    challengeSha256: Sha256Schema,
+    receiptSha256: Sha256Schema,
   }),
   CodexAgentVerificationFieldsSchema.extend({
     kind: z.literal("host.codex-agent-lineage"),
@@ -832,6 +853,9 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
       "CONNECTOR_ALREADY_RUNNING",
       "CONNECTOR_STOP_REQUIRED",
+      "CONNECTOR_CHALLENGE_UNAVAILABLE",
+      "CONNECTOR_ATTACHMENT_NOT_FOUND",
+      "CONNECTOR_ATTACHMENT_INVALID",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

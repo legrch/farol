@@ -10,7 +10,7 @@ import {
 import {
   loadReadonlyComputerLaunchContract,
   materializeReadonlyComputerLaunch,
-} from "../../src/apps/computer-mcp/launch-contract";
+} from "../../src/modules/computer/infra/mcp/launch-contract";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
 
@@ -91,6 +91,7 @@ describe("secure MCP Computer launch contract", () => {
     const launch = createSecureMcpLaunchContract(settings(), {
       now: 1_789_516_800_000,
       runtimeId: "runtime-generation-01",
+      challengeSha256: "a".repeat(64),
     });
 
     expect(launch).toMatchObject({
@@ -152,6 +153,7 @@ describe("secure MCP Computer launch contract", () => {
         participantId: "secure-mcp-main-runtime-generation-01",
         generation: 7,
       },
+      connectorVerification: { challengeSha256: "a".repeat(64) },
     });
 
     const materialized = materializeReadonlyComputerLaunch(
@@ -159,6 +161,9 @@ describe("secure MCP Computer launch contract", () => {
       1_789_516_800_000,
     );
     expect(materialized.mutationEnabled).toBe(true);
+    expect(materialized.connectorVerification).toEqual({
+      challengeSha256: "a".repeat(64),
+    });
     expect(materialized.participants[0]?.grant.workspaces).toMatchObject(
       launch.admission.workspaces,
     );
@@ -170,6 +175,7 @@ describe("secure MCP Computer launch contract", () => {
     const launch = createSecureMcpLaunchContract(settings(), {
       now: 1_789_516_800_000,
       runtimeId: "runtime-generation-02",
+      challengeSha256: "b".repeat(64),
     });
 
     const file = await store.write(launch);
@@ -202,6 +208,7 @@ describe("secure MCP Computer launch contract", () => {
       createSecureMcpLaunchContract(empty, {
         now: 1_789_516_800_000,
         runtimeId: "runtime-empty",
+        challengeSha256: "c".repeat(64),
       }),
     ).toThrow("SECURE_MCP_WORKSPACE_REQUIRED");
 
@@ -217,6 +224,7 @@ describe("secure MCP Computer launch contract", () => {
       createSecureMcpLaunchContract(oversized, {
         now: 1_789_516_800_000,
         runtimeId: "runtime-oversized",
+        challengeSha256: "d".repeat(64),
       }),
     ).toThrow("SECURE_MCP_WORKSPACE_LIMIT");
   });

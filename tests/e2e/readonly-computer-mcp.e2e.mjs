@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +16,7 @@ const root = await fs.realpath(
 const launchRoot = path.join(root, "launch");
 const workspaceRoot = path.join(root, "workspace");
 const launchFile = path.join(launchRoot, "computer-launch.json");
+const verificationChallenge = "00000000-0000-4000-8000-000000000001";
 const arguments_ = process.argv.slice(2);
 if (
   arguments_.length > 1 ||
@@ -140,6 +142,11 @@ const launch = {
     turnId: "turn-e2e",
     generation: 5,
   },
+  connectorVerification: {
+    challengeSha256: createHash("sha256")
+      .update(verificationChallenge)
+      .digest("hex"),
+  },
 };
 await fs.writeFile(launchFile, `${canonical(launch)}\n`, {
   mode: 0o600,
@@ -169,15 +176,28 @@ try {
       "computer_workspace_read",
       "computer_workspace_search",
       "computer_workspace_git_status",
+      "farol_next_connector_verify",
     ],
   );
   assert.equal(
-    tools.tools.every(
-      (tool) =>
-        tool.annotations?.readOnlyHint === true &&
-        tool.annotations.destructiveHint === false,
-    ),
+    tools.tools
+      .filter((tool) => tool.name !== "farol_next_connector_verify")
+      .every(
+        (tool) =>
+          tool.annotations?.readOnlyHint === true &&
+          tool.annotations.destructiveHint === false,
+      ),
     true,
+  );
+  assert.deepEqual(
+    tools.tools.find((tool) => tool.name === "farol_next_connector_verify")
+      ?.annotations,
+    {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: false,
+    },
   );
 
   const searched = await client.callTool({
@@ -240,9 +260,38 @@ try {
     arguments: { workspaceId: "fixture", command: "sh -c whoami" },
   });
   assert.equal(injected.isError, true);
+  const verified = await client.callTool({
+    name: "farol_next_connector_verify",
+    arguments: {
+      challenge: verificationChallenge,
+      workspaceId: "fixture",
+    },
+  });
+  assert.equal(verified.isError, undefined);
+  assert.equal(verified.structuredContent?.operation, "workspace.list");
+  assert.equal(verified.structuredContent?.workspaceId, "fixture");
+  assert.equal(verified.structuredContent?.entryCount, 1);
+  assert.equal(
+    JSON.stringify(verified.structuredContent).includes("notes/review.txt"),
+    false,
+  );
+  const connectorReceipt = JSON.parse(
+    await fs.readFile(
+      path.join(launchRoot, "connector-verification-receipt.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(
+    connectorReceipt.challengeSha256,
+    launch.connectorVerification.challengeSha256,
+  );
+  assert.equal(connectorReceipt.participantId, "critic-e2e");
+  assert.equal(connectorReceipt.operation, "workspace.list");
+  assert.equal(connectorReceipt.entryCount, 1);
+  assert.equal(JSON.stringify(connectorReceipt).includes("review.txt"), false);
   assert.equal(stderr, "");
   process.stdout.write(
-    `${JSON.stringify({ tools: tools.tools.length, participant: "critic-e2e", transport: "stdio", runtime: packaged ? "sealed-package" : "development" })}\n`,
+    `${JSON.stringify({ tools: tools.tools.length, participant: "critic-e2e", connectorVerification: "content-free", transport: "stdio", runtime: packaged ? "sealed-package" : "development" })}\n`,
   );
 } catch (error) {
   throw new Error(

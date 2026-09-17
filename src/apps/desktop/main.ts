@@ -139,13 +139,17 @@ import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
 import { CodexAgentWorkspaceProbe } from "./codex-agent-workspace-probe";
 import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
-import { PrivateConnectorCredentialStore } from "./connector-credential-store";
+import { PrivateConnectorKeyStore } from "./connector-key-store";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import {
   PrivateSecureMcpLaunchStore,
   createSecureMcpLaunchContract,
 } from "./secure-mcp-launch-contract";
 import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
+import {
+  clearConnectorVerificationReceipt,
+  readConnectorVerificationReceipt,
+} from "../../modules/computer/infra/mcp/connector-verification-receipt";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -229,7 +233,7 @@ let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
-let connectorCredentialStore: PrivateConnectorCredentialStore | null = null;
+let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
@@ -1504,12 +1508,18 @@ async function startSecureMcpConnector(
     }
 
     const runtimeId = randomUUID();
+    const verificationChallenge = randomUUID();
+    const verificationChallengeSha256 = createHash("sha256")
+      .update(verificationChallenge)
+      .digest("hex");
     let launchFile: string;
     let launchContractSha256: string;
     try {
+      await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
       const contract = createSecureMcpLaunchContract(snapshot.settings, {
         now: Date.now(),
         runtimeId,
+        challengeSha256: verificationChallengeSha256,
       });
       launchFile = await new PrivateSecureMcpLaunchStore({
         root: secureMcpLaunchRoot(),
@@ -1600,15 +1610,126 @@ async function startSecureMcpConnector(
     if (started.state === "outcome_unknown") {
       return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
     }
+    const challenged = await configuration.recordSecureMcpChallenge({
+      challenge: verificationChallenge,
+      runtimeGeneration: started.runtimeGeneration,
+      computerGeneration: snapshot.settings.computer.generation,
+      buildId: buildIdentity.buildId,
+    });
+    if (!challenged.ok) {
+      await secureMcpConnectorRuntime.stop().catch(() => undefined);
+      await configuration.recordSecureMcpStopped().catch(() => undefined);
+      return ProductConfigurationResultSchema.parse(challenged);
+    }
     return ProductConfigurationResultSchema.parse({
       ok: true,
-      snapshot: configuration.snapshot(),
+      snapshot: challenged.snapshot,
       evidence: {
         kind: "connector.runtime",
         state: "ready",
         runtimeGeneration: started.runtimeGeneration,
         computerGeneration: snapshot.settings.computer.generation,
         buildId: buildIdentity.buildId,
+      },
+    });
+  } finally {
+    connectorTaskAdmission = false;
+  }
+}
+
+function connectorReceiptBindingIsCurrent(
+  receipt: NonNullable<
+    Awaited<ReturnType<typeof readConnectorVerificationReceipt>>
+  >,
+  computerGeneration: number,
+): boolean {
+  const participantPrefix = "secure-mcp-main-";
+  if (!receipt.participantId.startsWith(participantPrefix)) return false;
+  const runtimeId = receipt.participantId.slice(participantPrefix.length);
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      runtimeId,
+    ) &&
+    receipt.ownerId === "owner-desktop" &&
+    receipt.sessionId === `secure-mcp-session-${runtimeId}` &&
+    receipt.taskId === `secure-mcp-task-${runtimeId}` &&
+    receipt.turnId === `secure-mcp-turn-${runtimeId}` &&
+    receipt.taskEpoch === computerGeneration &&
+    receipt.generation === computerGeneration &&
+    receipt.operation === "workspace.list"
+  );
+}
+
+async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
+  if (!configuration || !secureMcpConnectorRuntime) {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  if (connectorTaskAdmission) {
+    return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+  }
+  connectorTaskAdmission = true;
+  try {
+    const snapshot = configuration.snapshot();
+    if (snapshot.status !== "ready") {
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    }
+    const connector = snapshot.settings.connectors.secureMcp;
+    const runtime = connector.runtime;
+    const challenge = connector.challenge;
+    if (
+      runtime?.state !== "ready" ||
+      challenge === null ||
+      !secureMcpConnectorRuntime.isRunning()
+    ) {
+      return configurationFailure("CONNECTOR_CHALLENGE_UNAVAILABLE");
+    }
+    let receipt;
+    try {
+      receipt = await readConnectorVerificationReceipt(secureMcpLaunchRoot());
+    } catch {
+      return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+    }
+    if (receipt === null) {
+      return configurationFailure("CONNECTOR_ATTACHMENT_NOT_FOUND");
+    }
+    const workspaceApproved = snapshot.settings.computer.workspaces.some(
+      (workspace) => workspace.workspaceId === receipt.workspaceId,
+    );
+    const recordedAt = Date.parse(receipt.recordedAt);
+    const preparedAt = Date.parse(challenge.preparedAt);
+    if (
+      receipt.challengeSha256 !== challenge.challengeSha256 ||
+      !connectorReceiptBindingIsCurrent(
+        receipt,
+        snapshot.settings.computer.generation,
+      ) ||
+      !workspaceApproved ||
+      !Number.isFinite(recordedAt) ||
+      recordedAt < preparedAt
+    ) {
+      return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+    }
+    const receiptSha256 = createHash("sha256")
+      .update(`${JSON.stringify(receipt, null, 2)}\n`)
+      .digest("hex");
+    const attached = await configuration.recordSecureMcpAttachment({
+      workspaceId: receipt.workspaceId,
+      runtimeGeneration: runtime.runtimeGeneration,
+      computerGeneration: runtime.computerGeneration,
+      buildId: runtime.buildId,
+      challengeSha256: receipt.challengeSha256,
+      receiptSha256,
+    });
+    if (!attached.ok) return ProductConfigurationResultSchema.parse(attached);
+    return ProductConfigurationResultSchema.parse({
+      ...attached,
+      evidence: {
+        kind: "connector.attachment",
+        runtimeGeneration: runtime.runtimeGeneration,
+        computerGeneration: runtime.computerGeneration,
+        workspaceId: receipt.workspaceId,
+        challengeSha256: receipt.challengeSha256,
+        receiptSha256,
       },
     });
   } finally {
@@ -1804,6 +1925,8 @@ async function configureProduct(
       return startSecureMcpConnector(false);
     case "connector.repair":
       return startSecureMcpConnector(true);
+    case "connector.check-attachment":
+      return checkSecureMcpAttachment();
     case "connector.stop": {
       if (!secureMcpConnectorRuntime) {
         return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -1814,9 +1937,14 @@ async function configureProduct(
       connectorTaskAdmission = true;
       try {
         await secureMcpConnectorRuntime.stop();
-        return ProductConfigurationResultSchema.parse(
-          await configuration.recordSecureMcpStopped(),
-        );
+        const stopped = await configuration.recordSecureMcpStopped();
+        if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
+        try {
+          await clearConnectorVerificationReceipt(secureMcpLaunchRoot());
+        } catch {
+          return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+        }
+        return ProductConfigurationResultSchema.parse(stopped);
       } finally {
         connectorTaskAdmission = false;
       }
@@ -4338,7 +4466,7 @@ async function main(): Promise<void> {
     }),
   );
   await configuration.initialize();
-  connectorCredentialStore = new PrivateConnectorCredentialStore({
+  connectorCredentialStore = new PrivateConnectorKeyStore({
     root: secureMcpCredentialRoot(),
   });
   secureMcpConnectorRuntime = new SecureMcpConnectorRuntime({

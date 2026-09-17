@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ProductConfigurationService,
@@ -156,6 +157,18 @@ describe("Farol Next product configuration", () => {
       },
     });
 
+    const approved = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (!approved.ok || approved.snapshot.status !== "ready") {
+      throw new Error("workspace approval failed");
+    }
+    const workspaceId =
+      approved.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    const computerGeneration = approved.snapshot.settings.computer.generation;
+
     await service.recordSecureMcpTunnelClient({
       executablePath: "/opt/homebrew/bin/tunnel-client",
       executableSha256: "a".repeat(64),
@@ -167,14 +180,69 @@ describe("Farol Next product configuration", () => {
     await service.recordSecureMcpRuntime({
       state: "ready",
       runtimeGeneration: "b".repeat(64),
-      computerGeneration: 1,
+      computerGeneration,
       buildId: "c".repeat(64),
     });
-    const attached = await service.recordSecureMcpAttachment({
+    const challenge = "00000000-0000-4000-8000-000000000099";
+    const challengeSha256 = createHash("sha256")
+      .update(challenge)
+      .digest("hex");
+    const challenged = await service.recordSecureMcpChallenge({
+      challenge,
       runtimeGeneration: "b".repeat(64),
-      computerGeneration: 1,
+      computerGeneration,
+      buildId: "c".repeat(64),
+    });
+    expect(challenged).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          connectors: {
+            secureMcp: {
+              challenge: {
+                value: challenge,
+                challengeSha256,
+                runtimeGeneration: "b".repeat(64),
+                computerGeneration,
+                buildId: "c".repeat(64),
+                preparedAt: "2026-09-16T10:00:00.000Z",
+              },
+            },
+          },
+        },
+      },
+    });
+    const wrongChallenge = await service.recordSecureMcpAttachment({
+      workspaceId,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
       buildId: "c".repeat(64),
       challengeSha256: "d".repeat(64),
+      receiptSha256: "e".repeat(64),
+    });
+    expect(wrongChallenge).toMatchObject({
+      ok: false,
+      error: "SETTINGS_INPUT_INVALID",
+    });
+    const wrongWorkspace = await service.recordSecureMcpAttachment({
+      workspaceId: "00000000-0000-4000-8000-000000000999",
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
+      buildId: "c".repeat(64),
+      challengeSha256,
+      receiptSha256: "e".repeat(64),
+    });
+    expect(wrongWorkspace).toMatchObject({
+      ok: false,
+      error: "SETTINGS_INPUT_INVALID",
+    });
+    const attached = await service.recordSecureMcpAttachment({
+      workspaceId,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
+      buildId: "c".repeat(64),
+      challengeSha256,
       receiptSha256: "e".repeat(64),
     });
 
@@ -192,17 +260,19 @@ describe("Farol Next product configuration", () => {
               runtime: {
                 state: "ready",
                 runtimeGeneration: "b".repeat(64),
-                computerGeneration: 1,
+                computerGeneration,
                 buildId: "c".repeat(64),
               },
               attachment: {
+                workspaceId,
                 runtimeGeneration: "b".repeat(64),
-                computerGeneration: 1,
+                computerGeneration,
                 buildId: "c".repeat(64),
-                challengeSha256: "d".repeat(64),
+                challengeSha256,
                 receiptSha256: "e".repeat(64),
                 verifiedAt: "2026-09-16T10:00:00.000Z",
               },
+              challenge: null,
             },
           },
           setup: {
@@ -215,7 +285,7 @@ describe("Farol Next product configuration", () => {
               verified: {
                 profile: "farol-next",
                 configRevision: 4,
-                workspaceId: null,
+                workspaceId,
                 runtimeGeneration: "b".repeat(64),
                 buildId: "c".repeat(64),
                 protocol: "openai-tunnel-client/v1",
@@ -248,6 +318,17 @@ describe("Farol Next product configuration", () => {
       dependencies(),
     );
     await service.initialize();
+    const approved = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (!approved.ok || approved.snapshot.status !== "ready") {
+      throw new Error("workspace approval failed");
+    }
+    const workspaceId =
+      approved.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    const computerGeneration = approved.snapshot.settings.computer.generation;
     await service.recordSecureMcpTunnelClient({
       executablePath: "/opt/homebrew/bin/tunnel-client",
       executableSha256: "a".repeat(64),
@@ -259,14 +340,25 @@ describe("Farol Next product configuration", () => {
     await service.recordSecureMcpRuntime({
       state: "ready",
       runtimeGeneration: "b".repeat(64),
-      computerGeneration: 1,
+      computerGeneration,
+      buildId: "c".repeat(64),
+    });
+    const authorityChallenge = "00000000-0000-4000-8000-000000000098";
+    const authorityChallengeSha256 = createHash("sha256")
+      .update(authorityChallenge)
+      .digest("hex");
+    await service.recordSecureMcpChallenge({
+      challenge: authorityChallenge,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
       buildId: "c".repeat(64),
     });
     await service.recordSecureMcpAttachment({
+      workspaceId,
       runtimeGeneration: "b".repeat(64),
-      computerGeneration: 1,
+      computerGeneration,
       buildId: "c".repeat(64),
-      challengeSha256: "d".repeat(64),
+      challengeSha256: authorityChallengeSha256,
       receiptSha256: "e".repeat(64),
     });
 
@@ -277,7 +369,7 @@ describe("Farol Next product configuration", () => {
       snapshot: {
         status: "ready",
         settings: {
-          computer: { generation: 2 },
+          computer: { generation: computerGeneration + 1 },
           connectors: {
             secureMcp: {
               generation: 5,
@@ -308,6 +400,17 @@ describe("Farol Next product configuration", () => {
       dependencies(),
     );
     await service.initialize();
+    const approved = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (!approved.ok || approved.snapshot.status !== "ready") {
+      throw new Error("workspace approval failed");
+    }
+    const workspaceId =
+      approved.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    const computerGeneration = approved.snapshot.settings.computer.generation;
     await service.recordSecureMcpTunnelClient({
       executablePath: "/opt/homebrew/bin/tunnel-client",
       executableSha256: "a".repeat(64),
@@ -319,14 +422,25 @@ describe("Farol Next product configuration", () => {
     await service.recordSecureMcpRuntime({
       state: "ready",
       runtimeGeneration: "b".repeat(64),
-      computerGeneration: 1,
+      computerGeneration,
+      buildId: "c".repeat(64),
+    });
+    const stopChallenge = "00000000-0000-4000-8000-000000000097";
+    const stopChallengeSha256 = createHash("sha256")
+      .update(stopChallenge)
+      .digest("hex");
+    await service.recordSecureMcpChallenge({
+      challenge: stopChallenge,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
       buildId: "c".repeat(64),
     });
     await service.recordSecureMcpAttachment({
+      workspaceId,
       runtimeGeneration: "b".repeat(64),
-      computerGeneration: 1,
+      computerGeneration,
       buildId: "c".repeat(64),
-      challengeSha256: "d".repeat(64),
+      challengeSha256: stopChallengeSha256,
       receiptSha256: "e".repeat(64),
     });
 
@@ -338,7 +452,11 @@ describe("Farol Next product configuration", () => {
         status: "ready",
         settings: {
           connectors: {
-            secureMcp: { runtime: null, attachment: null },
+            secureMcp: {
+              runtime: null,
+              challenge: null,
+              attachment: null,
+            },
           },
           setup: {
             connect: {
@@ -1532,6 +1650,11 @@ describe("Farol Next product configuration", () => {
     ).toBe(true);
     expect(
       ProductConfigurationCommandSchema.safeParse({
+        kind: "connector.check-attachment",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
         kind: "connector.configure",
         tunnelId: "not valid whitespace",
         runtimeKey: "sk-runtime-example-1234567890",
@@ -1564,5 +1687,15 @@ describe("Farol Next product configuration", () => {
         runtimeKey: "must-not-escape",
       }).success,
     ).toBe(false);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "connector.attachment",
+        runtimeGeneration: "b".repeat(64),
+        computerGeneration: 7,
+        workspaceId: "00000000-0000-4000-8000-000000000001",
+        challengeSha256: "c".repeat(64),
+        receiptSha256: "d".repeat(64),
+      }).success,
+    ).toBe(true);
   });
 });

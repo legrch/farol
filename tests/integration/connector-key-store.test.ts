@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { PrivateConnectorCredentialStore } from "../../src/apps/desktop/connector-credential-store";
+import { PrivateConnectorKeyStore } from "../../src/apps/desktop/connector-key-store";
 
 const roots: string[] = [];
 
@@ -26,7 +26,7 @@ async function stateRoot(): Promise<string> {
 describe("Farol Next connector credential store", () => {
   it("stores only a private file reference for tunnel-client", async () => {
     const root = await stateRoot();
-    const store = new PrivateConnectorCredentialStore({ root });
+    const store = new PrivateConnectorKeyStore({ root });
     const value = "sk-runtime-farol-next-example-1234567890";
 
     expect(await store.status()).toBe("missing");
@@ -53,7 +53,7 @@ describe("Farol Next connector credential store", () => {
 
   it("rejects unsafe values and filesystem aliases", async () => {
     const root = await stateRoot();
-    const store = new PrivateConnectorCredentialStore({ root });
+    const store = new PrivateConnectorKeyStore({ root });
 
     await expect(store.store("line-one\nline-two")).rejects.toThrow(
       "CONNECTOR_CREDENTIAL_INVALID",
@@ -76,9 +76,9 @@ describe("Farol Next connector credential store", () => {
 
   it("keeps the previous credential when atomic replacement is interrupted", async () => {
     const root = await stateRoot();
-    const stable = new PrivateConnectorCredentialStore({ root });
+    const stable = new PrivateConnectorKeyStore({ root });
     await stable.store("sk-runtime-original-example-1234567890");
-    const interrupted = new PrivateConnectorCredentialStore(
+    const interrupted = new PrivateConnectorKeyStore(
       { root },
       {
         beforeCommit: async () => {
