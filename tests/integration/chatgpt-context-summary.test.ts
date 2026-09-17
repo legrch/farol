@@ -339,6 +339,50 @@ describe("ChatGPT summary-only context driver", () => {
     expect(fallback.resetConversation).not.toHaveBeenCalled();
   });
 
+  it("retains a received fallback result and retries only local persistence", async () => {
+    const state = await store();
+    const putSummary = vi
+      .spyOn(state, "putSummary")
+      .mockRejectedValueOnce(new Error("synthetic summary store failure"));
+    const fallback = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => null,
+        createFallback: vi.fn().mockReturnValue(fallback),
+      },
+    });
+    const selectedSource = source("canonical_history");
+    const selectedRequest = {
+      ...request,
+      source: "canonical_history" as const,
+    };
+
+    await expect(
+      summary.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toBeNull();
+    expect(fallback.dispose).not.toHaveBeenCalled();
+
+    await expect(
+      summary.observe({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toMatchObject({ content });
+    expect(putSummary).toHaveBeenCalledTimes(2);
+    expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(fallback.dispose).not.toHaveBeenCalled();
+  });
+
   it("releases a definitely unsubmitted fallback before a clean later attempt", async () => {
     const state = await store();
     const first = route({

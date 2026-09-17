@@ -54,6 +54,18 @@ function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function operationKey(binding: ContextBinding, operationId: string): string {
+  return digest(
+    JSON.stringify([
+      binding.ownerId,
+      binding.taskId,
+      binding.hostThreadId,
+      binding.sessionId,
+      operationId,
+    ]),
+  );
+}
+
 function validInput(input: CodexContextSummaryInput): boolean {
   return (
     input.request.operationId === input.source.operationId &&
@@ -166,6 +178,7 @@ function withoutUnverifiedAttachmentAvailability(
 export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   private readonly routes = new Map<string, RouteLease>();
   private readonly dispatched = new Set<string>();
+  private readonly received = new Map<string, StoredContextSummary>();
   private readonly maximumPromptCharacters: number;
 
   constructor(private readonly options: ChatGptContextSummaryDriverOptions) {
@@ -330,16 +343,14 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       sourceCursor: `conversation:${digest(conversationUrl)}`,
       content: boundedContent,
     };
+    this.received.set(
+      operationKey(input.request.binding, input.request.operationId),
+      summary,
+    );
     try {
       await this.options.store.putSummary(summary);
     } catch {
-      if (!this.releaseOwnedLease(input.request.operationId)) {
-        return {
-          status: "blocked",
-          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
-        };
-      }
-      return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+      return completedReceipt(summary);
     }
     return completedReceipt(summary);
   }
@@ -349,6 +360,17 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   ): Promise<ContextSummaryReceipt> {
     if (!validInput(input)) {
       return { status: "blocked", code: "SUMMARY_CAPABILITY_INVALID" };
+    }
+    const key = operationKey(input.request.binding, input.request.operationId);
+    const received = this.received.get(key);
+    if (received) {
+      try {
+        await this.options.store.putSummary(received);
+      } catch {
+        // The exact received bytes and their source route remain owned in
+        // memory. A later observation retries only this local publication.
+      }
+      return completedReceipt(received);
     }
     try {
       const summary = await this.options.store.getSummary(
@@ -393,6 +415,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }
     this.routes.delete(input.operationId);
     this.dispatched.delete(input.operationId);
+    this.received.delete(operationKey(input.binding, input.operationId));
     return { status: "retired" };
   }
 
