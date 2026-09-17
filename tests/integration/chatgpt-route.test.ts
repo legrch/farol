@@ -49,7 +49,24 @@ function route(): ChatGptRoute {
   });
 }
 
-function taskRoute(executeJavaScript: ReturnType<typeof vi.fn>): ChatGptRoute {
+function routedExecutor(
+  executeJavaScript: ReturnType<typeof vi.fn>,
+  activity: unknown,
+) {
+  return vi.fn((script: string, userGesture: boolean) =>
+    script.includes("const running = [")
+      ? Promise.resolve(activity)
+      : Reflect.apply(executeJavaScript as unknown as Function, undefined, [
+          script,
+          userGesture,
+        ]),
+  );
+}
+
+function taskRoute(
+  executeJavaScript: ReturnType<typeof vi.fn>,
+  activity: unknown = { running: false },
+): ChatGptRoute {
   const candidate = route();
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
   vi.spyOn(candidate, "observe").mockResolvedValue({
@@ -59,7 +76,7 @@ function taskRoute(executeJavaScript: ReturnType<typeof vi.fn>): ChatGptRoute {
   Reflect.set(candidate, "routeWindow", {
     isDestroyed: () => false,
     webContents: {
-      executeJavaScript,
+      executeJavaScript: routedExecutor(executeJavaScript, activity),
       getURL: () => "https://chatgpt.com/",
     },
   });
@@ -69,6 +86,7 @@ function taskRoute(executeJavaScript: ReturnType<typeof vi.fn>): ChatGptRoute {
 function streamingTaskRoute(
   executeJavaScript: ReturnType<typeof vi.fn>,
   taskTimeoutMs = 1_000,
+  activity: unknown = { running: false },
 ): ChatGptRoute {
   const candidate = new ChatGptRoute({
     homeUrl: "https://chatgpt.com/",
@@ -86,7 +104,7 @@ function streamingTaskRoute(
   Reflect.set(candidate, "routeWindow", {
     isDestroyed: () => false,
     webContents: {
-      executeJavaScript,
+      executeJavaScript: routedExecutor(executeJavaScript, activity),
       getURL: () => "https://chatgpt.com/",
     },
   });
@@ -150,6 +168,34 @@ afterEach(() => {
 });
 
 describe("ChatGPT route submission boundary", () => {
+  it("blocks a busy retained page before touching the composer", async () => {
+    const executeJavaScript = vi.fn();
+
+    await expect(
+      taskRoute(executeJavaScript, { running: true }).runReadonlyTask(
+        "do not replace this turn",
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_IN_PROGRESS",
+    });
+    expect(executeJavaScript).not.toHaveBeenCalled();
+  });
+
+  it("blocks an indeterminate page activity probe before touching the composer", async () => {
+    const executeJavaScript = vi.fn();
+
+    await expect(
+      taskRoute(executeJavaScript, { malformed: true }).runReadonlyTask(
+        "do not risk a second turn",
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    });
+    expect(executeJavaScript).not.toHaveBeenCalled();
+  });
+
   it("keeps a lost send acknowledgement outcome unknown without retrying", async () => {
     let submissions = 0;
     const executeJavaScript = vi
@@ -544,7 +590,7 @@ describe("ChatGPT route streaming observation", () => {
     Reflect.set(candidate, "observedTaskRunning", true);
 
     await expect(candidate.cancelActiveTask()).resolves.toBe("cancelled");
-    expect(executeJavaScript).toHaveBeenCalledTimes(3);
+    expect(executeJavaScript).toHaveBeenCalledTimes(2);
   });
 });
 

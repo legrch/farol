@@ -604,6 +604,41 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      let activityCandidate: unknown;
+      try {
+        activityCandidate = await candidate.webContents.executeJavaScript(
+          activityProbe,
+          true,
+        );
+      } catch {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_UI_UNRECOGNIZED",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
+      const activity = activityProbeSchema.safeParse(activityCandidate);
+      if (!activity.success) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_UI_UNRECOGNIZED",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
+      this.recordTaskActivity(activity.data.running);
+      if (activity.data.running) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_TASK_IN_PROGRESS",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
       const prepared = preparedTaskSchema.safeParse(
         await candidate.webContents.executeJavaScript(
           prepareTaskScript(prompt),
