@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { build } from "esbuild";
 import {
   beginCompaction,
   createContextSession,
@@ -111,6 +114,20 @@ async function descendants(root: string): Promise<string[]> {
     }),
   );
   return nested.flat();
+}
+
+async function firstJsonLine(
+  stream: NodeJS.ReadableStream,
+): Promise<{ target: string }> {
+  stream.setEncoding("utf8");
+  let buffered = "";
+  for await (const chunk of stream) {
+    buffered += chunk;
+    const newline = buffered.indexOf("\n");
+    if (newline < 0) continue;
+    return JSON.parse(buffered.slice(0, newline)) as { target: string };
+  }
+  throw new Error("CONTEXT_CRASH_FIXTURE_SIGNAL_MISSING");
 }
 
 describe("private context persistence", () => {
@@ -714,6 +731,46 @@ describe("private context persistence", () => {
       await writer.releaseCompactionAdmission(acquired.lease);
     }
   });
+
+  it("recovers complete lease and admission records after writer termination", async () => {
+    const fixtureRoot = await root();
+    const bundle = path.join(fixtureRoot, "context-record-crash-writer.mjs");
+    await build({
+      entryPoints: [
+        path.resolve("tests/fixtures/context-record-crash-writer.ts"),
+      ],
+      outfile: bundle,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      logLevel: "silent",
+    });
+
+    for (const crashPoint of ["lease", "admission"] as const) {
+      const stateRoot = await root();
+      const child = spawn(process.execPath, [bundle, stateRoot, crashPoint], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (!child.stdout)
+        throw new Error("CONTEXT_CRASH_FIXTURE_STDOUT_MISSING");
+      const { target } = await firstJsonLine(child.stdout);
+      expect((await fs.lstat(target)).nlink).toBe(2);
+      expect(child.kill("SIGKILL")).toBe(true);
+      await once(child, "exit");
+      expect((await fs.lstat(target)).nlink).toBe(2);
+
+      const restarted = new PrivateContextStore({ root: stateRoot });
+      const recovered = await restarted.acquireCompactionAdmission(
+        binding,
+        1,
+        request,
+      );
+      expect(recovered.status).toBe("acquired");
+      if (recovered.status === "acquired") {
+        await restarted.releaseCompactionAdmission(recovered.lease);
+      }
+    }
+  }, 10_000);
 
   it("keeps the core session binding immutable", async () => {
     const stateRoot = await root();
