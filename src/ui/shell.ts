@@ -820,7 +820,7 @@ function renderTaskMenu(): void {
                   tone: "complete",
                   label: "Cancelled",
                   detail:
-                    "The exact native child and parent interruption was acknowledged. A new assignment still requires a new explicit Run Agent action.",
+                    "The exact native assignment stop was acknowledged. Any already-completed child work was not delivered, and a new assignment still requires an explicit Run Agent action.",
                 }
               : task.agent?.phase === "outcome_unknown"
                 ? {

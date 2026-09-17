@@ -969,7 +969,9 @@ export class CodexNativeAgentHost implements AgentHost {
         .reverse()
         .filter(
           (turn) =>
-            turn.status === "inProgress" || turn.status === "interrupted",
+            turn.status === "inProgress" ||
+            turn.status === "interrupted" ||
+            turn.status === "completed",
         )
         .slice(0, 1)
         .map((turn) => ({
@@ -981,7 +983,9 @@ export class CodexNativeAgentHost implements AgentHost {
         .reverse()
         .filter(
           (turn) =>
-            turn.status === "inProgress" || turn.status === "interrupted",
+            turn.status === "inProgress" ||
+            turn.status === "interrupted" ||
+            turn.status === "completed",
         )
         .slice(0, 1)
         .map((turn) => ({
@@ -1040,15 +1044,16 @@ export class CodexNativeAgentHost implements AgentHost {
         [child.id, child],
         [parent.id, parent],
       ]);
-      const interrupted = targets.every((target) =>
-        snapshots
-          .get(target.threadId)
-          ?.turns.some(
-            (turn) =>
-              turn.id === target.turnId && turn.status === "interrupted",
-          ),
+      const statuses = targets.map(
+        (target) =>
+          snapshots
+            .get(target.threadId)
+            ?.turns.find((turn) => turn.id === target.turnId)?.status,
       );
-      if (interrupted) {
+      const stopped = statuses.every(
+        (status) => status === "interrupted" || status === "completed",
+      );
+      if (stopped && statuses.some((status) => status === "interrupted")) {
         this.active = null;
         return { status: "cancelled", correlation };
       }

@@ -70,6 +70,7 @@ class ProductPeer implements CodexNativeAgentPeer {
   readonly notifications = new Map<string, NotificationHandler>();
   childPrompt = "";
   completed = false;
+  childCompleted = false;
   authorityCompleted = false;
   computerItems: unknown[] = [];
   extraChildItems: unknown[] = [];
@@ -224,7 +225,9 @@ class ProductPeer implements CodexNativeAgentPeer {
         },
         status: {
           type:
-            this.completed || this.interruptedThreads.has("child-product-a")
+            this.completed ||
+            this.childCompleted ||
+            this.interruptedThreads.has("child-product-a")
               ? "idle"
               : "active",
         },
@@ -233,9 +236,11 @@ class ProductPeer implements CodexNativeAgentPeer {
             id: "child-turn-product-a",
             status: this.completed
               ? "completed"
-              : this.interruptedThreads.has("child-product-a")
-                ? "interrupted"
-                : "inProgress",
+              : this.childCompleted
+                ? "completed"
+                : this.interruptedThreads.has("child-product-a")
+                  ? "interrupted"
+                  : "inProgress",
             items: this.completed
               ? [
                   ...this.computerItems,
@@ -373,6 +378,37 @@ describe("native Codex product Agent host", () => {
     const spawned = await host.spawn(request);
     if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
     peer.interruptedThreads.add("child-product-a");
+
+    await expect(host.cancel(spawned.correlation)).resolves.toEqual({
+      status: "cancelled",
+      correlation: spawned.correlation,
+    });
+    expect(
+      peer.requests
+        .filter(({ method }) => method === "turn/interrupt")
+        .map(({ params }) => (params as { threadId: string }).threadId),
+    ).toEqual(["parent-product-a"]);
+  });
+
+  it("interrupts the parent after the correlated child already completed", async () => {
+    const peer = new ProductPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      { execute: vi.fn() },
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.childCompleted = true;
 
     await expect(host.cancel(spawned.correlation)).resolves.toEqual({
       status: "cancelled",
