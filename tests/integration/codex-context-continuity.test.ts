@@ -223,6 +223,18 @@ describe("Codex host context continuity composition", () => {
     expect(summary.request).toHaveBeenCalledTimes(1);
     expect(summary.observe).not.toHaveBeenCalled();
     expect(summary.retire).toHaveBeenCalledTimes(1);
+    summary.selectSource.mockRejectedValueOnce(
+      new Error("source route was already retired"),
+    );
+    await expect(
+      restarted.compact({
+        endpoint: "responses_compact",
+        body: unaryBody(),
+        metadataHeader: metadata(),
+      }),
+    ).resolves.toEqual(handoff);
+    expect(summary.selectSource).toHaveBeenCalledTimes(1);
+    expect(summary.request).toHaveBeenCalledTimes(1);
     expect(phases).toEqual([
       "quiescing",
       "checkpoint_requested",
@@ -483,6 +495,21 @@ describe("Codex host context continuity composition", () => {
       ok: true,
       value: { phase: "active", epoch: 2 },
     });
+    summary.selectSource.mockRejectedValueOnce(
+      new Error("source route was already retired"),
+    );
+    await expect(
+      restarted.compact({
+        endpoint: "responses",
+        body: {
+          model: "farol-next/mind",
+          stream: true,
+          input: [...history(), { type: "compaction_trigger" }],
+        },
+        metadataHeader: metadata(),
+      }),
+    ).resolves.toEqual(handoff);
+    expect(summary.selectSource).toHaveBeenCalledTimes(1);
     expect(summary.request).toHaveBeenCalledTimes(1);
     expect(summary.retire).toHaveBeenCalledTimes(1);
   });

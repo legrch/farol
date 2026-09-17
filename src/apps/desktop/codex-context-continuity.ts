@@ -220,6 +220,37 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     const request = parsed.value;
     const binding = bindingFor(request, this.options);
     const selectedOperationId = operationId(request);
+    try {
+      const session = await this.options.store.load(binding);
+      if (
+        session?.phase === "active" &&
+        session.lastCompletedRequest?.operationId === selectedOperationId
+      ) {
+        const completed = session.lastCompletedRequest;
+        if (completed.sourceBoundary !== request.sourceBoundary) {
+          return failure("HOST_COMPACTION_SOURCE_MISMATCH");
+        }
+        const checkpoint = session.lastCheckpointId
+          ? await this.options.store.get(binding, session.lastCheckpointId)
+          : null;
+        if (
+          !checkpoint ||
+          !sameContextBinding(checkpoint.binding, binding) ||
+          checkpoint.operationId !== completed.operationId ||
+          checkpoint.source !== completed.source ||
+          checkpoint.sourceBoundary !== completed.sourceBoundary
+        ) {
+          return failure("HOST_CHECKPOINT_INVALID");
+        }
+        const replay = buildHostCompactionHandoff(request, checkpoint, {
+          maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
+          retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
+        });
+        return replay.ok ? replay : failure(replay.error.code);
+      }
+    } catch {
+      return failure("FAROL_NEXT_COMPACTION_SOURCE_STORE_FAILED");
+    }
     let source: StoredContextSource | null;
     try {
       source = await this.options.store.getSource(binding, selectedOperationId);
