@@ -1328,6 +1328,7 @@ async function runProductTaskCommand(
         selectedTaskId === command.data.taskId
           ? (tasks[0]?.taskId ?? "")
           : selectedTaskId;
+      shellOverlay = "none";
       publishTasksState();
       applyLayout();
       publishLayout();
