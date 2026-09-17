@@ -153,6 +153,7 @@ import { CancelAgentAssignment } from "../../modules/agent/app/service/cancel-ag
 import type { AgentHost } from "../../modules/agent/app/port/agent-host";
 import type { AgentRunReceipt } from "../../modules/agent/app/service/run-agent-assignment";
 import { runProductAgentAssignment } from "./product-agent-assignment";
+import { ProductAgentSessionReservation } from "./product-agent-session-reservation";
 import {
   PrivateProductAgentStore,
   type ProductAgentInput,
@@ -357,6 +358,8 @@ type ActiveProductAgentSession = {
   cancellation: Promise<ProductTaskCommandResult> | null;
 };
 let activeProductAgentSession: ActiveProductAgentSession | null = null;
+const productAgentSessionReservation =
+  new ProductAgentSessionReservation<ActiveProductAgentSession>();
 let persistedProductAgentExpiry: Readonly<{
   taskId: string;
   timer: NodeJS.Timeout;
@@ -1115,72 +1118,83 @@ async function openProductAgentSession(
     }
     throw new Error("PRODUCT_AGENT_SESSION_BUSY");
   }
-  const probe = await probeCodexHost({
-    executablePath: context.host.executablePath,
-    scratchRoot: codexHostProbeRoot(),
+  return productAgentSessionReservation.open(key, async () => {
+    if (activeProductAgentSession) {
+      if (
+        activeProductAgentSession.taskId === input.taskId &&
+        activeProductAgentSession.key === key
+      ) {
+        return activeProductAgentSession;
+      }
+      throw new Error("PRODUCT_AGENT_SESSION_BUSY");
+    }
+    const probe = await probeCodexHost({
+      executablePath: context.host.executablePath,
+      scratchRoot: codexHostProbeRoot(),
+    });
+    if (
+      probe.executableSha256 !== input.executableSha256 ||
+      probe.schemaSha256 !== input.schemaSha256 ||
+      probe.version !== context.host.version ||
+      probe.protocol !== context.host.protocol
+    ) {
+      throw new Error("PRODUCT_AGENT_HOST_CHANGED");
+    }
+    const runtimeRoot = await codexHostRuntimeRoot();
+    const configuredCodexHome = process.env.CODEX_HOME;
+    const client = await launchCodexAppServer({
+      executablePath: context.host.executablePath,
+      cwd: runtimeRoot,
+      homePath: app.getPath("home"),
+      tempPath: app.getPath("temp"),
+      clientVersion: buildIdentity.version,
+      toolProfile: "native-agent",
+      ...(configuredCodexHome &&
+      path.isAbsolute(configuredCodexHome) &&
+      !configuredCodexHome.includes("\0")
+        ? { codexHomePath: configuredCodexHome }
+        : {}),
+    });
+    try {
+      const computer = new CodexAgentWorkspaceProbe(
+        context.settings,
+        nativeWorkspace,
+        () => Date.now(),
+      );
+      const host = new CodexNativeAgentHost(
+        client,
+        {
+          model: "gpt-6-astra",
+          runtimeRoot,
+          spawnTimeoutMs: 120_000,
+          waitTimeoutMs: 250,
+          pollIntervalMs: 25,
+          nonce: randomUUID,
+          now: () => Date.now(),
+        },
+        computer,
+        computer,
+      );
+      const session: ActiveProductAgentSession = {
+        taskId: input.taskId,
+        key,
+        input,
+        assignments: new PrivateAssignmentStore({
+          root: codexAgentAssignmentRoot(),
+        }),
+        client,
+        host,
+        expiryTimer: null,
+        cancellation: null,
+      };
+      activeProductAgentSession = session;
+      if (scheduleExpiry) armProductAgentExpiry(session);
+      return session;
+    } catch (error) {
+      await client.close().catch(() => undefined);
+      throw error;
+    }
   });
-  if (
-    probe.executableSha256 !== input.executableSha256 ||
-    probe.schemaSha256 !== input.schemaSha256 ||
-    probe.version !== context.host.version ||
-    probe.protocol !== context.host.protocol
-  ) {
-    throw new Error("PRODUCT_AGENT_HOST_CHANGED");
-  }
-  const runtimeRoot = await codexHostRuntimeRoot();
-  const configuredCodexHome = process.env.CODEX_HOME;
-  const client = await launchCodexAppServer({
-    executablePath: context.host.executablePath,
-    cwd: runtimeRoot,
-    homePath: app.getPath("home"),
-    tempPath: app.getPath("temp"),
-    clientVersion: buildIdentity.version,
-    toolProfile: "native-agent",
-    ...(configuredCodexHome &&
-    path.isAbsolute(configuredCodexHome) &&
-    !configuredCodexHome.includes("\0")
-      ? { codexHomePath: configuredCodexHome }
-      : {}),
-  });
-  try {
-    const computer = new CodexAgentWorkspaceProbe(
-      context.settings,
-      nativeWorkspace,
-      () => Date.now(),
-    );
-    const host = new CodexNativeAgentHost(
-      client,
-      {
-        model: "gpt-6-astra",
-        runtimeRoot,
-        spawnTimeoutMs: 120_000,
-        waitTimeoutMs: 250,
-        pollIntervalMs: 25,
-        nonce: randomUUID,
-        now: () => Date.now(),
-      },
-      computer,
-      computer,
-    );
-    const session: ActiveProductAgentSession = {
-      taskId: input.taskId,
-      key,
-      input,
-      assignments: new PrivateAssignmentStore({
-        root: codexAgentAssignmentRoot(),
-      }),
-      client,
-      host,
-      expiryTimer: null,
-      cancellation: null,
-    };
-    activeProductAgentSession = session;
-    if (scheduleExpiry) armProductAgentExpiry(session);
-    return session;
-  } catch (error) {
-    await client.close().catch(() => undefined);
-    throw error;
-  }
 }
 
 async function closeProductAgentSession(
