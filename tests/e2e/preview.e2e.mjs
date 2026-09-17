@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import {
@@ -18,9 +19,14 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 
 const root = process.cwd();
 const development = process.argv.includes("--development");
+const lifecycleSoak = process.argv.includes("--lifecycle-soak");
 const evidenceRoot = path.join(
   root,
-  development ? "artifacts/e2e-dev" : "artifacts/e2e",
+  lifecycleSoak
+    ? "artifacts/lifecycle-soak"
+    : development
+      ? "artifacts/e2e-dev"
+      : "artifacts/e2e",
 );
 const metadataPath = path.join(root, "dist/package/artifact.json");
 const canonicalPackagePath = path.join(
@@ -2522,6 +2528,474 @@ async function completeSetup(
     }
   }
   await dialog.waitFor({ state: "hidden" });
+}
+
+const lifecycleSoakBudget = Object.freeze({
+  seed: 260_917,
+  warmupCycles: 5,
+  measuredCycles: 50,
+  batchSize: 5,
+  createTotalP95Ms: 2_500,
+  createLocalEstimateP95Ms: 1_000,
+  closeP95Ms: 750,
+  overlayP95Ms: 500,
+  finalWorkingSetDeltaKiB: 128 * 1_024,
+  workingSetSlopeKiBPerBatch: 8 * 1_024,
+  finalFdDelta: 32,
+  finalProcessDelta: 2,
+  finalActiveResourceDelta: 10,
+});
+
+function percentile(values, quantile) {
+  assert.ok(values.length > 0);
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[
+    Math.min(sorted.length - 1, Math.ceil(quantile * sorted.length) - 1)
+  ];
+}
+
+function linearSlope(values) {
+  if (values.length < 2) return 0;
+  const meanX = (values.length - 1) / 2;
+  const meanY =
+    values.reduce((total, value) => total + value, 0) / values.length;
+  let numerator = 0;
+  let denominator = 0;
+  values.forEach((value, index) => {
+    numerator += (index - meanX) * (value - meanY);
+    denominator += (index - meanX) ** 2;
+  });
+  return denominator === 0 ? 0 : numerator / denominator;
+}
+
+function fileDescriptorCount(pid) {
+  const result = spawnSync(
+    "/usr/sbin/lsof",
+    ["-n", "-P", "-a", "-p", String(pid), "-Ff"],
+    { encoding: "utf8" },
+  );
+  assert.equal(
+    result.status,
+    0,
+    `E2E_SOAK_LSOF_FAILED:${pid}:${result.stdout}${result.stderr}`,
+  );
+  return result.stdout
+    .split("\n")
+    .filter((line) => /^f(?:cwd|err|mem|rtd|txt|[0-9]+)$/u.test(line)).length;
+}
+
+async function lifecycleMetrics(instance) {
+  const providerOrigin = new URL(instance.chatGptFixture.url).origin;
+  const measured = await instance.application.evaluate(
+    ({ app, BrowserWindow, session, webContents }, expectedOrigin) => {
+      const windows = BrowserWindow.getAllWindows();
+      const primary = windows[0] ?? null;
+      const contents = webContents
+        .getAllWebContents()
+        .filter((candidate) => !candidate.isDestroyed());
+      const processMetrics = app.getAppMetrics().map((metric) => ({
+        pid: metric.pid,
+        type: metric.type,
+        name: metric.name,
+        workingSetSizeKiB: metric.memory?.workingSetSize ?? 0,
+        privateBytesKiB: metric.memory?.privateBytes ?? 0,
+      }));
+      const activeResources =
+        typeof process.getActiveResourcesInfo === "function"
+          ? process.getActiveResourcesInfo()
+          : [];
+      const activeResourceTypes = {};
+      for (const resource of activeResources) {
+        activeResourceTypes[resource] =
+          (activeResourceTypes[resource] ?? 0) + 1;
+      }
+      return {
+        windowCount: windows.length,
+        visibleWindowCount: windows.filter((candidate) => candidate.isVisible())
+          .length,
+        taskViewCount:
+          primary?.contentView.children.filter(
+            (candidate) =>
+              candidate &&
+              typeof candidate === "object" &&
+              "webContents" in candidate,
+          ).length ?? 0,
+        webContentsCount: contents.length,
+        providerSurfaceCount: contents.filter((candidate) => {
+          try {
+            return new URL(candidate.getURL()).origin === expectedOrigin;
+          } catch {
+            return false;
+          }
+        }).length,
+        downloadListenerCount: session
+          .fromPartition("persist:farol-next-chatgpt")
+          .listenerCount("will-download"),
+        processMetrics,
+        processCount: processMetrics.length,
+        runtimePids: processMetrics
+          .filter(
+            (metric) =>
+              metric.type === "Utility" && metric.name === "Farol Next Runtime",
+          )
+          .map((metric) => metric.pid),
+        workingSetSizeKiB: processMetrics.reduce(
+          (total, metric) => total + metric.workingSetSizeKiB,
+          0,
+        ),
+        privateBytesKiB: processMetrics.reduce(
+          (total, metric) => total + metric.privateBytesKiB,
+          0,
+        ),
+        activeResourceCount: activeResources.length,
+        activeResourceTypes,
+      };
+    },
+    providerOrigin,
+  );
+  const measuredPids = [
+    instance.application.process().pid,
+    ...measured.runtimePids,
+  ];
+  assert.equal(measured.runtimePids.length, 1, "E2E_SOAK_RUNTIME_COUNT");
+  return {
+    ...measured,
+    measuredFdPids: measuredPids.length,
+    fileDescriptorCount: measuredPids.reduce(
+      (total, pid) => total + fileDescriptorCount(pid),
+      0,
+    ),
+  };
+}
+
+async function providerNavigationDuration(instance, taskId) {
+  const expectedOrigin = new URL(instance.chatGptFixture.url).origin;
+  return instance.application.evaluate(
+    async ({ webContents }, input) => {
+      const target = webContents.getAllWebContents().find((candidate) => {
+        try {
+          const url = new URL(candidate.getURL());
+          return (
+            url.origin === input.origin &&
+            url.searchParams.get("farol-e2e-task") === input.taskId
+          );
+        } catch {
+          return false;
+        }
+      });
+      if (!target)
+        throw new Error(`E2E_SOAK_PROVIDER_SURFACE_MISSING:${input.taskId}`);
+      return target.executeJavaScript(
+        "performance.getEntriesByType('navigation')[0]?.duration ?? 0",
+        true,
+      );
+    },
+    { origin: expectedOrigin, taskId },
+  );
+}
+
+async function waitForLifecycleQuiescence(instance) {
+  const origin = new URL(instance.chatGptFixture.url).origin;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const state = await instance.application.evaluate(
+      ({ BrowserWindow, webContents }, expectedOrigin) => ({
+        taskViewCount:
+          BrowserWindow.getAllWindows()[0]?.contentView.children.filter(
+            (candidate) =>
+              candidate &&
+              typeof candidate === "object" &&
+              "webContents" in candidate,
+          ).length ?? 0,
+        providerSurfaceCount: webContents
+          .getAllWebContents()
+          .filter((candidate) => {
+            try {
+              return new URL(candidate.getURL()).origin === expectedOrigin;
+            } catch {
+              return false;
+            }
+          }).length,
+      }),
+      origin,
+    );
+    if (state.taskViewCount === 0 && state.providerSurfaceCount === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error("E2E_SOAK_QUIESCENCE_TIMEOUT");
+}
+
+async function lifecycleBatch(instance, count, timings, overlayKind = null) {
+  const taskIds = [];
+  for (let index = 0; index < count; index += 1) {
+    const startedAt = performance.now();
+    const created = await instance.window.evaluate(() =>
+      window.farolNext.task({ kind: "task.create-chatgpt" }),
+    );
+    const createTotalMs = performance.now() - startedAt;
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.ok(created.selectedTaskId);
+    taskIds.push(created.selectedTaskId);
+    const providerMs = await providerNavigationDuration(
+      instance,
+      created.selectedTaskId,
+    );
+    if (timings) {
+      timings.createTotalMs.push(createTotalMs);
+      timings.providerNavigationMs.push(providerMs);
+      timings.createLocalEstimateMs.push(
+        Math.max(0, createTotalMs - providerMs),
+      );
+    }
+  }
+  const admitted = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(admitted.tasks.length, count);
+  assert.equal(
+    await instance.application.evaluate(
+      ({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows()[0]?.contentView.children.filter(
+          (candidate) =>
+            candidate &&
+            typeof candidate === "object" &&
+            "webContents" in candidate,
+        ).length,
+    ),
+    count,
+  );
+  if (overlayKind) {
+    const startedAt = performance.now();
+    if (overlayKind === "quick-switcher") {
+      await instance.window.locator("#command-button").click();
+      await instance.window
+        .locator("#command-dialog")
+        .waitFor({ state: "visible" });
+      await instance.window.keyboard.press("Escape");
+      await instance.window
+        .locator("#command-dialog")
+        .waitFor({ state: "hidden" });
+    } else {
+      assert.equal(overlayKind, "task-menu");
+      await instance.window.locator("#task-menu-button").click();
+      await instance.window.locator("#task-menu").waitFor({ state: "visible" });
+      await instance.window.keyboard.press("Escape");
+      await instance.window.locator("#task-menu").waitFor({ state: "hidden" });
+    }
+    if (timings) timings.overlayMs.push(performance.now() - startedAt);
+  }
+  for (const taskId of taskIds.reverse()) {
+    const startedAt = performance.now();
+    const closed = await instance.window.evaluate(
+      (selectedTaskId) =>
+        window.farolNext.task({ kind: "task.close", taskId: selectedTaskId }),
+      taskId,
+    );
+    if (timings) timings.closeMs.push(performance.now() - startedAt);
+    assert.equal(closed.ok, true, JSON.stringify(closed));
+  }
+  await waitForLifecycleQuiescence(instance);
+  const quiescent = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.deepEqual(quiescent.tasks, []);
+}
+
+function assertQuiescentMetrics(metrics, baseline) {
+  assert.equal(metrics.windowCount, 1);
+  assert.equal(metrics.visibleWindowCount, 0);
+  assert.equal(metrics.taskViewCount, 0);
+  assert.equal(metrics.providerSurfaceCount, 0);
+  assert.equal(metrics.webContentsCount, baseline.webContentsCount);
+  assert.equal(metrics.downloadListenerCount, 1);
+  assert.equal(metrics.runtimePids.length, 1);
+  assert.ok(
+    metrics.processCount <=
+      baseline.processCount + lifecycleSoakBudget.finalProcessDelta,
+  );
+  assert.ok(
+    metrics.fileDescriptorCount <=
+      baseline.fileDescriptorCount + lifecycleSoakBudget.finalFdDelta,
+  );
+  assert.ok(
+    metrics.workingSetSizeKiB <=
+      baseline.workingSetSizeKiB + lifecycleSoakBudget.finalWorkingSetDeltaKiB,
+  );
+  assert.ok(
+    metrics.activeResourceCount <=
+      baseline.activeResourceCount +
+        lifecycleSoakBudget.finalActiveResourceDelta,
+  );
+}
+
+async function runLifecycleSoak() {
+  assert.equal(development, true, "E2E_SOAK_REQUIRES_DEVELOPMENT_BUILD");
+  const instance = await launch([], "hidden", "ordinary");
+  const samples = [];
+  const timings = {
+    createTotalMs: [],
+    providerNavigationMs: [],
+    createLocalEstimateMs: [],
+    closeMs: [],
+    overlayMs: [],
+  };
+  const recoveryBatches = new Set([3, 8]);
+  const recoveryEvents = [];
+  try {
+    await completeSetup(instance, false, false, true, false);
+    await lifecycleBatch(instance, lifecycleSoakBudget.warmupCycles, null);
+    const baseline = await lifecycleMetrics(instance);
+    assert.equal(baseline.downloadListenerCount, 1);
+    assert.equal(baseline.taskViewCount, 0);
+    assert.equal(baseline.providerSurfaceCount, 0);
+
+    const batches =
+      lifecycleSoakBudget.measuredCycles / lifecycleSoakBudget.batchSize;
+    for (let batch = 0; batch < batches; batch += 1) {
+      const batchNumber = batch + 1;
+      const overlayKind =
+        (lifecycleSoakBudget.seed + batchNumber) % 2 === 0
+          ? "quick-switcher"
+          : "task-menu";
+      await lifecycleBatch(
+        instance,
+        lifecycleSoakBudget.batchSize,
+        timings,
+        overlayKind,
+      );
+      if (recoveryBatches.has(batchNumber)) {
+        await restart(instance);
+        recoveryEvents.push({
+          batch: batchNumber,
+          kind: "application-restart",
+        });
+      }
+      const metrics = await lifecycleMetrics(instance);
+      assertQuiescentMetrics(metrics, baseline);
+      samples.push({
+        batch: batch + 1,
+        cycles: (batch + 1) * lifecycleSoakBudget.batchSize,
+        ...metrics,
+      });
+    }
+
+    const latency = {
+      createTotalMs: {
+        p50: percentile(timings.createTotalMs, 0.5),
+        p95: percentile(timings.createTotalMs, 0.95),
+      },
+      providerNavigationMs: {
+        p50: percentile(timings.providerNavigationMs, 0.5),
+        p95: percentile(timings.providerNavigationMs, 0.95),
+      },
+      createLocalEstimateMs: {
+        p50: percentile(timings.createLocalEstimateMs, 0.5),
+        p95: percentile(timings.createLocalEstimateMs, 0.95),
+      },
+      closeMs: {
+        p50: percentile(timings.closeMs, 0.5),
+        p95: percentile(timings.closeMs, 0.95),
+      },
+      overlayMs: {
+        p50: percentile(timings.overlayMs, 0.5),
+        p95: percentile(timings.overlayMs, 0.95),
+      },
+    };
+    assert.ok(
+      latency.createTotalMs.p95 <= lifecycleSoakBudget.createTotalP95Ms,
+    );
+    assert.ok(
+      latency.createLocalEstimateMs.p95 <=
+        lifecycleSoakBudget.createLocalEstimateP95Ms,
+    );
+    assert.ok(latency.closeMs.p95 <= lifecycleSoakBudget.closeP95Ms);
+    assert.ok(latency.overlayMs.p95 <= lifecycleSoakBudget.overlayP95Ms);
+    const workingSetSlopeKiBPerBatch = linearSlope(
+      samples.map((sample) => sample.workingSetSizeKiB),
+    );
+    assert.ok(
+      workingSetSlopeKiBPerBatch <=
+        lifecycleSoakBudget.workingSetSlopeKiBPerBatch,
+    );
+
+    await restart(instance);
+    const restarted = await instance.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.deepEqual(restarted.tasks, []);
+    const afterRestart = await lifecycleMetrics(instance);
+    assertQuiescentMetrics(afterRestart, baseline);
+
+    const report = {
+      schema: 1,
+      status: "PASS",
+      evidence: "FIXTURE_APP",
+      sourceCommit: expectedSource.commit,
+      sourceTreeDigest: expectedSource.treeDigest,
+      buildId: artifact.buildId,
+      builtAt: artifact.builtAt,
+      workload: {
+        seed: lifecycleSoakBudget.seed,
+        warmupCycles: lifecycleSoakBudget.warmupCycles,
+        measuredCycles: lifecycleSoakBudget.measuredCycles,
+        batchSize: lifecycleSoakBudget.batchSize,
+        maxConcurrentTasks: lifecycleSoakBudget.batchSize,
+        recoveryBatches: [...recoveryBatches],
+        overlaySequence: Array.from({ length: batches }, (_, batch) =>
+          (lifecycleSoakBudget.seed + batch + 1) % 2 === 0
+            ? "quick-switcher"
+            : "task-menu",
+        ),
+        provider: "deterministic local ChatGPT fixture",
+      },
+      budgets: lifecycleSoakBudget,
+      latency,
+      resources: {
+        baseline,
+        samples,
+        afterRestart,
+        recoveryEvents,
+        workingSetSlopeKiBPerBatch,
+        finalDelta: {
+          processCount: afterRestart.processCount - baseline.processCount,
+          workingSetSizeKiB:
+            afterRestart.workingSetSizeKiB - baseline.workingSetSizeKiB,
+          fileDescriptorCount:
+            afterRestart.fileDescriptorCount - baseline.fileDescriptorCount,
+          activeResourceCount:
+            afterRestart.activeResourceCount - baseline.activeResourceCount,
+        },
+      },
+      cases: [
+        "fifty-task-create-close-cycles",
+        "five-concurrent-task-surfaces",
+        "alternating-task-menu-and-quick-switcher-overlays",
+        "two-same-state-application-recoveries",
+        "zero-provider-surfaces-after-each-batch",
+        "single-shared-download-guard",
+        "single-runtime-process",
+        "bounded-process-fd-resource-and-memory-trend",
+        "zero-task-restart",
+      ],
+      host: {
+        platform: process.platform,
+        arch: process.arch,
+        release: os.release(),
+        logicalCpuCount: os.cpus().length,
+        totalMemoryBytes: os.totalmem(),
+      },
+    };
+    await fs.writeFile(
+      path.join(evidenceRoot, "report.json"),
+      `${JSON.stringify(report, null, 2)}\n`,
+    );
+  } finally {
+    await close(instance);
+  }
+}
+
+if (lifecycleSoak) {
+  await runLifecycleSoak();
+  process.exit(0);
 }
 
 await proveSecondLaunchDuringStartup();

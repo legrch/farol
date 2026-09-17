@@ -43,6 +43,18 @@ nonterminal wait, same-child completion, durable delivery, and invalidation afte
 Computer generation changes. Its model is synthetic; exact host selection and live
 model execution remain separately classified evidence.
 
+`task next:test:soak` is the separate hidden lifecycle/performance lane. It fixes the
+seed, performs five warm-up cycles, then fifty measured create/close cycles in batches
+of five ordinary task surfaces. Task-menu and Quick Switcher overlays alternate, and
+two fixed batches restart the application on the same private state before the final
+zero-task restart. The lane records provider navigation separately from local create,
+overlay, and close latency, plus windows, `WebContentsView` instances, renderer
+contents, the shared download listener, exact runtime process, main/runtime file
+descriptors, Electron working set, and main-process active resources. Its budgets are
+declared in the driver before measurement. Every batch must return to zero tasks and
+provider surfaces. The result is `artifacts/lifecycle-soak/report.json`; it is
+deterministic `FIXTURE_APP` evidence, not authenticated-provider performance.
+
 The final owner journey is separate from automation: `task next:run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector
 read is repeated around it, and the application is quit by its exact instance. This
