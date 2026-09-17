@@ -3872,14 +3872,14 @@ try {
   assert.equal(deliveredProductAgentInput.envelope.schema, 2);
   assert.deepEqual(deliveredProductAgentInput.envelope.input.scope, {
     mode: "exact",
-    root: workspaceRoot,
-    paths: [path.join(workspaceRoot, "README.md")],
+    root: ordinaryLiveTasks.workspaceRoot,
+    paths: [path.join(ordinaryLiveTasks.workspaceRoot, "README.md")],
   });
   assert.deepEqual(deliveredProductAgentInput.envelope.input.excludedPaths, []);
   assert.equal(cancelledProductAgentInput.envelope.schema, 2);
   assert.deepEqual(cancelledProductAgentInput.envelope.input.scope, {
     mode: "subtree",
-    root: workspaceRoot,
+    root: ordinaryLiveTasks.workspaceRoot,
   });
   assert.deepEqual(cancelledProductAgentInput.envelope.input.excludedPaths, []);
   assert.equal((await fs.stat(productAgentInputRoot)).mode & 0o777, 0o700);
