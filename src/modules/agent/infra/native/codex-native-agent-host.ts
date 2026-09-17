@@ -165,6 +165,11 @@ const computerOperationSchema = z.discriminatedUnion("kind", [
         }),
       ),
   }),
+  z.strictObject({
+    kind: z.literal("verification.run"),
+    command: z.enum(["git.status", "git.head"]),
+    relativePath: z.literal("."),
+  }),
 ]);
 
 const computerArgumentsSchema = z.strictObject({
@@ -388,14 +393,19 @@ function childPrompt(request: AgentSpawnRequest): string {
   const authority = request.authority;
   const envelope = assignmentEnvelope(request);
   if (request.intent.kind === "product") {
+    const operations = request.authority.capabilities.includes(
+      "verification.run",
+    )
+      ? "workspace.list, workspace.search, workspace.read, and fixed verification.run"
+      : "workspace.list, workspace.search, and workspace.read";
     return [
       "FAROL_NATIVE_AGENT_TASK_V2",
       JSON.stringify({ ...envelope, objective: request.intent.objective }),
       `Complete this exact owner assignment: ${request.intent.objective}`,
-      `For every workspace list, search, or read, call farol_agent_computer with assignmentId ${identity.assignmentId}, authorityId ${authority.authorityId}, participantId ${authority.participantId}, and computer proof ${computerProof({ assignmentId: identity.assignmentId, authorityId: authority.authorityId, participantId: authority.participantId })}.`,
-      "Use only workspace.list, workspace.search, and workspace.read operations allowed by the supplied TaskGrant.",
+      `For every workspace list, search, read, or fixed verification, call farol_agent_computer with assignmentId ${identity.assignmentId}, authorityId ${authority.authorityId}, participantId ${authority.participantId}, and computer proof ${computerProof({ assignmentId: identity.assignmentId, authorityId: authority.authorityId, participantId: authority.participantId })}.`,
+      `Use only ${operations} operations allowed by the supplied TaskGrant.`,
       "Initial paths are focus, not the authority boundary. You may discover other relevant files inside a granted subtree without asking for per-file approval.",
-      "Do not inspect files directly, run commands, use the web, create descendants, or call any other tool.",
+      "Do not inspect files directly, run native or arbitrary commands, use the web, create descendants, or call any other tool. verification.run is permitted only through farol_agent_computer and exposes no caller-controlled executable or arguments.",
       "Return a concise answer to the owner assignment.",
     ].join("\n");
   }
@@ -469,7 +479,15 @@ function compatible(
     "workspace.list",
     "workspace.read",
     "workspace.search",
+    "verification.run",
   ]);
+  const verificationEnabled =
+    authority.capabilities.includes("verification.run");
+  const commandsAllowed =
+    request.intent.kind === "product"
+      ? (authority.commands === "verification" && verificationEnabled) ||
+        (authority.commands === "none" && !verificationEnabled)
+      : authority.commands === "none" && !verificationEnabled;
   const focusAllowed =
     request.focus.initialPaths.length > 0 &&
     request.focus.initialPaths.length <= 256 &&
@@ -502,7 +520,7 @@ function compatible(
     authority.taskEpoch === request.identity.taskEpoch &&
     authority.mutationOwnership === "none" &&
     authority.network === "none" &&
-    authority.commands === "none" &&
+    commandsAllowed &&
     authority.expiresAt >= now &&
     authority.workspaces.length > 0 &&
     authority.workspaces.every(
@@ -594,7 +612,7 @@ function agentComputerDynamicTool() {
     type: "function",
     name: "farol_agent_computer",
     description:
-      "List, search, or read an approved Farol Computer workspace under the exact inherited TaskGrant.",
+      "List, search, read, or run a fixed no-network verification in an approved Farol Computer workspace under the exact inherited TaskGrant.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -634,6 +652,16 @@ function agentComputerDynamicTool() {
               },
               required: ["kind", "relativePath", "pattern"],
             },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { const: "verification.run" },
+                command: { enum: ["git.status", "git.head"] },
+                relativePath: { const: "." },
+              },
+              required: ["kind", "command", "relativePath"],
+            },
           ],
         },
       },
@@ -661,7 +689,7 @@ function dynamicTools(request: AgentSpawnRequest) {
 function baseInstructions(request: AgentSpawnRequest): string {
   return request.intent.kind === "compatibility"
     ? "This is a bounded Farol compatibility assignment. Neither parent nor child may inspect files directly, run commands, or use the web. A spawned child must not create descendants and may call only farol_agent_workspace_probe exactly once. Only the root thread may spawn one child and later call farol_agent_authority."
-    : "This is a bounded Farol product assignment. The root thread may spawn exactly one child and must wait for that same child before calling farol_agent_authority. The child must not create descendants and may call only farol_agent_computer. Neither thread may inspect workspaces directly, run commands, or use the web.";
+    : "This is a bounded Farol product assignment. The root thread may spawn exactly one child and must wait for that same child before calling farol_agent_authority. The child must not create descendants and may call only farol_agent_computer. Neither thread may inspect workspaces directly, run native or arbitrary commands, or use the web. Any permitted fixed verification runs only through farol_agent_computer under the inherited TaskGrant.";
 }
 
 export class CodexNativeAgentHost implements AgentHost {

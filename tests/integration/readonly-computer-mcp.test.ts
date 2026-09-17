@@ -33,6 +33,7 @@ const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
 const executeFile = promisify(execFile);
 let root = "";
 let git = "";
+let head = "";
 
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-mcp-"));
@@ -46,6 +47,20 @@ beforeEach(async () => {
     "export const protocol = 'mcp-boundary';\n",
     { mode: 0o600 },
   );
+  await executeFile(git, ["-C", root, "add", "src/discovered.ts"]);
+  await executeFile(git, [
+    "-C",
+    root,
+    "-c",
+    "user.name=Farol Test",
+    "-c",
+    "user.email=farol-test@invalid.example",
+    "commit",
+    "--quiet",
+    "-m",
+    "fixture",
+  ]);
+  head = (await executeFile(git, ["-C", root, "rev-parse", "HEAD"])).stdout;
 });
 
 afterEach(async () => {
@@ -151,6 +166,7 @@ describe("read-only Computer MCP adapter", () => {
         "computer_workspace_read",
         "computer_workspace_search",
         "computer_workspace_git_status",
+        "computer_workspace_git_head",
       ]);
       expect(
         listed.tools.every(
@@ -213,6 +229,28 @@ describe("read-only Computer MCP adapter", () => {
         output: {
           kind: "workspace.command",
           command: "git.status",
+          exitCode: 0,
+          network: "none",
+        },
+      });
+
+      const exactHead = await client.callTool({
+        name: "computer_workspace_git_head",
+        arguments: { workspaceId: "farol" },
+      });
+      expect(exactHead.isError).not.toBe(true);
+      expect(exactHead.structuredContent).toMatchObject({
+        participantId: "critic-a",
+        workspaceId: "farol",
+        operation: {
+          kind: "verification.run",
+          command: "git.head",
+          relativePath: ".",
+        },
+        output: {
+          kind: "workspace.command",
+          command: "git.head",
+          stdout: head,
           exitCode: 0,
           network: "none",
         },

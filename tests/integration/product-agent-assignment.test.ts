@@ -28,7 +28,7 @@ function readiness() {
   };
 }
 
-function settings(generation = 7) {
+function settings(generation = 7, commands: "none" | "verification" = "none") {
   return ProductSettingsSchema.parse({
     schema: 1,
     revision: 1,
@@ -41,6 +41,7 @@ function settings(generation = 7) {
       computerId: "00000000-0000-4000-8000-000000000010",
       generation,
       name: "This Mac",
+      commands,
       workspaces: [
         {
           workspaceId,
@@ -174,6 +175,29 @@ describe("product Agent assignment composition", () => {
       capabilities: ["workspace.list", "workspace.read", "workspace.search"],
       network: "none",
       commands: "none",
+    });
+  });
+
+  it("preserves owner-approved fixed verification authority for the product Agent", async () => {
+    const fixture = dependencies();
+
+    await expect(
+      runProductAgentAssignment(
+        settings(7, "verification"),
+        task,
+        input(),
+        fixture.value,
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
+    expect(request.authority).toMatchObject({
+      capabilities: [
+        "workspace.list",
+        "workspace.read",
+        "workspace.search",
+        "verification.run",
+      ],
+      commands: "verification",
     });
   });
 

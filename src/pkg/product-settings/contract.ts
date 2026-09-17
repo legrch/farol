@@ -435,6 +435,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
   }),
   z.strictObject({
+    kind: z.literal("computer.run-git-head"),
+    workspaceId: IdentifierSchema,
+  }),
+  z.strictObject({
     kind: z.literal("computer.prepare-workspace-edit"),
     workspaceId: IdentifierSchema,
   }),
@@ -707,7 +711,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("computer.workspace-command"),
     workspaceId: IdentifierSchema,
-    command: z.literal("git.status"),
+    command: z.enum(["git.status", "git.head"]),
     exitCode: z.literal(0),
     stdout: z.string().max(64 * 1_024),
     stderr: z.literal(""),

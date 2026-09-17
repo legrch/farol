@@ -54,7 +54,7 @@ const OperationSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("verification.run"),
-    command: z.literal("git.status"),
+    command: z.enum(["git.status", "git.head"]),
     relativePath: z.literal("."),
   }),
 ]);
@@ -104,7 +104,7 @@ const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("workspace.command"),
-    command: z.literal("git.status"),
+    command: z.enum(["git.status", "git.head"]),
     relativePath: z.literal("."),
     exitCode: z.literal(0),
     stdout: z.string().max(64 * 1_024),

@@ -1368,6 +1368,12 @@ describe("Farol Next product configuration", () => {
     ).toBe(true);
     expect(
       ProductConfigurationCommandSchema.safeParse({
+        kind: "computer.run-git-head",
+        workspaceId,
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
         kind: "computer.run-git-status",
         workspaceId,
         command: "sh -c whoami",
@@ -1382,6 +1388,18 @@ describe("Farol Next product configuration", () => {
         stdout: "## main\n",
         stderr: "",
         outputBytes: 8,
+        network: "none",
+      }).success,
+    ).toBe(true);
+    expect(
+      ProductConfigurationEvidenceSchema.safeParse({
+        kind: "computer.workspace-command",
+        workspaceId,
+        command: "git.head",
+        exitCode: 0,
+        stdout: `${"a".repeat(40)}\n`,
+        stderr: "",
+        outputBytes: 41,
         network: "none",
       }).success,
     ).toBe(true);

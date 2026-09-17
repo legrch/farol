@@ -472,6 +472,85 @@ describe("native Codex product Agent host", () => {
     });
   });
 
+  it("accepts only inherited fixed verification through Farol Computer", async () => {
+    const peer = new ProductPeer();
+    const verificationAuthority: DelegatedAgentAuthority = {
+      ...authority,
+      capabilities: [...authority.capabilities, "verification.run"],
+      commands: "verification",
+    };
+    const verificationRequest: AgentSpawnRequest = {
+      ...request,
+      authority: verificationAuthority,
+    };
+    const computer: AgentComputer = {
+      execute: vi.fn(async () => ({
+        status: "completed" as const,
+        output: {
+          kind: "workspace.command" as const,
+          command: "git.head" as const,
+          relativePath: "." as const,
+          exitCode: 0 as const,
+          stdout: `${"a".repeat(40)}\n`,
+          stderr: "" as const,
+          outputBytes: 41,
+          network: "none" as const,
+        },
+      })),
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(verificationRequest);
+    expect(spawned.status).toBe("started");
+    const handler = peer.handlers.get("item/tool/call");
+    if (!handler) throw new Error("TOOL_HANDLER_MISSING");
+    const proof =
+      /computer proof ([a-f0-9]{64})/u.exec(peer.childPrompt)?.[1] ?? "";
+
+    await expect(
+      handler({
+        threadId: "child-product-a",
+        turnId: "child-turn-product-a",
+        callId: "computer-head-a",
+        tool: "farol_agent_computer",
+        arguments: {
+          assignmentId: verificationRequest.identity.assignmentId,
+          authorityId: verificationAuthority.authorityId,
+          participantId: verificationAuthority.participantId,
+          proof,
+          workspaceId: "workspace-product-a",
+          operation: {
+            kind: "verification.run",
+            command: "git.head",
+            relativePath: ".",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ success: true });
+    expect(computer.execute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authority: verificationAuthority,
+        operation: {
+          kind: "verification.run",
+          command: "git.head",
+          relativePath: ".",
+        },
+      }),
+    );
+  });
+
   it("rejects completed child history containing a direct native command", async () => {
     const peer = new ProductPeer();
     const computer: AgentComputer = {

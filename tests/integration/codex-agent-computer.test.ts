@@ -21,7 +21,7 @@ function readiness() {
   };
 }
 
-function settings(generation = 7) {
+function settings(generation = 7, commands: "none" | "verification" = "none") {
   return ProductSettingsSchema.parse({
     schema: 1,
     revision: 1,
@@ -34,6 +34,7 @@ function settings(generation = 7) {
       computerId: "00000000-0000-4000-8000-000000000010",
       generation,
       name: "This Mac",
+      commands,
       workspaces: [
         {
           workspaceId,
@@ -261,6 +262,109 @@ describe("Codex Agent Computer authority", () => {
 
     await expect(
       computer.execute(request({ kind: "workspace.list", relativePath: "." })),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "AGENT_COMPUTER_BINDING_INVALID",
+      source: "owner-restriction",
+      retry: "never",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["agent", "critic"] as const)(
+    "runs inherited fixed Git HEAD verification for %s without exposing arbitrary commands",
+    async (role) => {
+      const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          command: "git.head",
+          relativePath: ".",
+          exitCode: 0,
+          stdout: `${"a".repeat(40)}\n`,
+          stderr: "",
+          outputBytes: 41,
+          network: "none",
+        },
+      }));
+      const computer = new CodexAgentWorkspaceProbe(
+        settings(7, "verification"),
+        { execute },
+        () => 1_000,
+      );
+      const delegated = authority({
+        role,
+        capabilities: [
+          "workspace.list",
+          "workspace.read",
+          "workspace.search",
+          "verification.run",
+        ],
+        commands: "verification",
+      });
+
+      await expect(
+        computer.execute(
+          request(
+            {
+              kind: "verification.run",
+              command: "git.head",
+              relativePath: ".",
+            },
+            delegated,
+          ),
+        ),
+      ).resolves.toEqual({
+        status: "completed",
+        output: {
+          kind: "workspace.command",
+          command: "git.head",
+          relativePath: ".",
+          exitCode: 0,
+          stdout: `${"a".repeat(40)}\n`,
+          stderr: "",
+          outputBytes: 41,
+          network: "none",
+        },
+      });
+      expect(execute).toHaveBeenCalledWith({
+        workspace: {
+          workspaceId,
+          root: "/workspace/primary",
+          deniedPaths: ["private"],
+        },
+        operation: {
+          kind: "verification.run",
+          command: "git.head",
+          relativePath: ".",
+        },
+      });
+    },
+  );
+
+  it("refuses fixed verification when current owner settings do not allow commands", async () => {
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>();
+    const computer = new CodexAgentWorkspaceProbe(
+      settings(),
+      { execute },
+      () => 1_000,
+    );
+
+    await expect(
+      computer.execute(
+        request(
+          { kind: "verification.run", command: "git.head", relativePath: "." },
+          authority({
+            capabilities: [
+              "workspace.list",
+              "workspace.read",
+              "workspace.search",
+              "verification.run",
+            ],
+            commands: "verification",
+          }),
+        ),
+      ),
     ).resolves.toEqual({
       status: "failed",
       code: "AGENT_COMPUTER_BINDING_INVALID",

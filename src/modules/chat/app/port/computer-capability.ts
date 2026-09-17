@@ -8,7 +8,7 @@ export type ChatComputerOperation =
     }>
   | Readonly<{
       kind: "verification.run";
-      command: "git.status";
+      command: "git.status" | "git.head";
       relativePath: ".";
     }>;
 
@@ -47,7 +47,7 @@ export type ChatComputerOutputValue =
     }>
   | Readonly<{
       kind: "workspace.command";
-      command: "git.status";
+      command: "git.status" | "git.head";
       relativePath: ".";
       exitCode: 0;
       stdout: string;

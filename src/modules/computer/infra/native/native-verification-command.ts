@@ -436,10 +436,36 @@ function killProcessGroup(child: ReturnType<typeof spawn>): void {
   child.kill("SIGKILL");
 }
 
-function runGitStatus(
+function gitArguments(
+  command: VerificationOperation["command"],
+): readonly string[] {
+  return command === "git.status"
+    ? [
+        "status",
+        "--short",
+        "--branch",
+        "--untracked-files=no",
+        "--ignore-submodules=all",
+      ]
+    : ["rev-parse", "--verify", "HEAD"];
+}
+
+function validGitOutput(
+  command: VerificationOperation["command"],
+  output: string,
+): boolean {
+  return (
+    !output.includes("\0") &&
+    (command === "git.status" ||
+      /^(?:[a-f0-9]{40}|[a-f0-9]{64})\n$/u.test(output))
+  );
+}
+
+function runGitVerification(
   git: string,
   root: string,
   metadata: WorkspaceGitMetadata,
+  command: VerificationOperation["command"],
   deniedPaths: readonly string[],
 ): Promise<ReadonlyWorkspaceResult> {
   let profile: string;
@@ -501,11 +527,7 @@ function runGitStatus(
         "core.quotepath=true",
         "-c",
         "submodule.recurse=false",
-        "status",
-        "--short",
-        "--branch",
-        "--untracked-files=no",
-        "--ignore-submodules=all",
+        ...gitArguments(command),
       ],
       {
         cwd: root,
@@ -589,7 +611,7 @@ function runGitStatus(
         const output = new TextDecoder("utf-8", { fatal: true }).decode(
           Buffer.concat(stdout),
         );
-        if (output.includes("\0")) {
+        if (!validGitOutput(command, output)) {
           finish(failure("WORKSPACE_COMMAND_FAILED"));
           return;
         }
@@ -597,7 +619,7 @@ function runGitStatus(
           ok: true,
           value: {
             kind: "workspace.command",
-            command: "git.status",
+            command,
             relativePath: ".",
             exitCode: 0,
             stdout: output,
@@ -618,7 +640,10 @@ export async function executeNativeVerificationCommand(
   operation: VerificationOperation,
   options: NativeVerificationCommandOptions = {},
 ): Promise<ReadonlyWorkspaceResult> {
-  if (operation.command !== "git.status" || operation.relativePath !== ".") {
+  if (
+    (operation.command !== "git.status" && operation.command !== "git.head") ||
+    operation.relativePath !== "."
+  ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
   const initialMetadata = await resolveWorkspaceGitMetadata(
@@ -642,10 +667,11 @@ export async function executeNativeVerificationCommand(
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
-  return runGitStatus(
+  return runGitVerification(
     git,
     request.workspace.root,
     metadata,
+    operation.command,
     request.workspace.deniedPaths,
   );
 }

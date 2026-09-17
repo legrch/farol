@@ -72,6 +72,14 @@ export async function runProductAgentAssignment(
   const readWorkspaces = settings.computer.workspaces.filter(
     (workspace) => workspace.access === "read",
   );
+  const capabilities: ComputerApproval["capabilities"] = [
+    "workspace.list",
+    "workspace.read",
+    "workspace.search",
+    ...(settings.computer.commands === "verification"
+      ? (["verification.run"] as const)
+      : []),
+  ];
   const approval: ComputerApproval = {
     ownerId: "owner-desktop",
     computerId: settings.computer.computerId,
@@ -87,9 +95,9 @@ export async function runProductAgentAssignment(
         path: excluded,
       })),
     ),
-    capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+    capabilities,
     network: "none",
-    commands: "none",
+    commands: settings.computer.commands,
     expiresAt: input.expiresAt,
   };
   const admission: TaskAdmission = {
@@ -112,9 +120,9 @@ export async function runProductAgentAssignment(
       workspaceId: selected.workspaceId,
       path: excluded,
     })),
-    capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+    capabilities,
     network: "none",
-    commands: "none",
+    commands: settings.computer.commands,
     expiresAt: input.expiresAt,
   };
   const grant = deriveTaskGrant(approval, admission, now);

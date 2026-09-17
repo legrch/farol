@@ -33,6 +33,21 @@ function request(): ReadonlyWorkspaceRequest {
   };
 }
 
+function headRequest(): ReadonlyWorkspaceRequest {
+  return {
+    workspace: {
+      workspaceId: "workspace-a",
+      root,
+      deniedPaths: ["private"],
+    },
+    operation: {
+      kind: "verification.run",
+      command: "git.head",
+      relativePath: ".",
+    },
+  } as unknown as ReadonlyWorkspaceRequest;
+}
+
 function workspace(
   attestGit: () => Promise<string> = async () => git,
 ): NativeReadonlyWorkspace {
@@ -145,6 +160,48 @@ describe("native verification command", () => {
         stderr: "",
         network: "none",
       },
+    });
+  });
+
+  it("reports the exact repository HEAD through a second fixed no-network profile", async () => {
+    const expected = (
+      await executeFile(git, ["-C", root, "rev-parse", "--verify", "HEAD"])
+    ).stdout;
+
+    await expect(workspace().execute(headRequest())).resolves.toMatchObject({
+      ok: true,
+      value: {
+        kind: "workspace.command",
+        command: "git.head",
+        relativePath: ".",
+        exitCode: 0,
+        stdout: expected,
+        stderr: "",
+        outputBytes: Buffer.byteLength(expected),
+        network: "none",
+      },
+    });
+  });
+
+  it("rejects a malformed repository identity from the fixed HEAD profile", async () => {
+    const malformedHead = await compileCommandFixture(
+      "malformed-head",
+      `#include <stddef.h>
+#include <unistd.h>
+
+int main(void) {
+  const char output[] = "not-a-commit\\n";
+  const ssize_t written = write(STDOUT_FILENO, output, sizeof(output) - 1);
+  return written == (ssize_t)(sizeof(output) - 1) ? 0 : 1;
+}
+`,
+    );
+
+    await expect(
+      workspace(async () => malformedHead).execute(headRequest()),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_COMMAND_FAILED", retry: "never" },
     });
   });
 

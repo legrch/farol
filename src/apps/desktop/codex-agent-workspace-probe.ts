@@ -95,6 +95,14 @@ function approval(
   const workspaces = settings.computer.workspaces.filter(
     (workspace) => workspace.access === "read",
   );
+  const capabilities: ComputerApproval["capabilities"] = [
+    "workspace.list",
+    "workspace.read",
+    "workspace.search",
+    ...(settings.computer.commands === "verification"
+      ? (["verification.run"] as const)
+      : []),
+  ];
   return {
     ownerId: authority.ownerId,
     computerId: settings.computer.computerId,
@@ -110,9 +118,9 @@ function approval(
         path: excluded,
       })),
     ),
-    capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+    capabilities,
     network: "none",
-    commands: "none",
+    commands: settings.computer.commands,
     expiresAt: authority.expiresAt,
   };
 }
@@ -308,12 +316,6 @@ export class CodexAgentWorkspaceProbe
     });
     if (!result.ok) {
       return computerFailure(result.error.code, result.error.source);
-    }
-    if (result.value.output.kind === "workspace.command") {
-      return computerFailure(
-        "AGENT_COMPUTER_OPERATION_INVALID",
-        "computer-policy",
-      );
     }
     return { status: "completed", output: result.value.output };
   }

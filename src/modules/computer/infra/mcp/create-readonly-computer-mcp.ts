@@ -546,6 +546,22 @@ export function createReadonlyComputerMcpServer(
         relativePath: ".",
       }),
   );
+  server.registerTool(
+    "computer_workspace_git_head",
+    {
+      title: "Read approved workspace Git HEAD",
+      description:
+        "Read the exact Git HEAD commit at one approved workspace root through a fixed no-network verifier. No executable, arguments, path, environment, or network access can be supplied by the caller.",
+      inputSchema: VerificationInputSchema,
+      annotations: READONLY_ANNOTATIONS,
+    },
+    async ({ workspaceId }, context) =>
+      execute(contract, binding, String(context.mcpReq.id), workspaceId, {
+        kind: "verification.run",
+        command: "git.head",
+        relativePath: ".",
+      }),
+  );
 
   if (connectorVerification) {
     server.registerTool(

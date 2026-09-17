@@ -4,6 +4,8 @@ export type ReadonlyWorkspaceDescriptor = Readonly<{
   deniedPaths: readonly string[];
 }>;
 
+export type WorkspaceVerificationCommand = "git.status" | "git.head";
+
 export type ReadonlyWorkspaceOperation =
   | Readonly<{ kind: "workspace.read"; relativePath: string }>
   | Readonly<{ kind: "workspace.list"; relativePath: string }>
@@ -14,7 +16,7 @@ export type ReadonlyWorkspaceOperation =
     }>
   | Readonly<{
       kind: "verification.run";
-      command: "git.status";
+      command: WorkspaceVerificationCommand;
       relativePath: ".";
     }>;
 
@@ -51,7 +53,7 @@ export type WorkspaceMatches = Readonly<{
 
 export type WorkspaceCommandOutput = Readonly<{
   kind: "workspace.command";
-  command: "git.status";
+  command: WorkspaceVerificationCommand;
   relativePath: ".";
   exitCode: 0;
   stdout: string;

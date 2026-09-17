@@ -4212,7 +4212,7 @@ try {
   await normal.window
     .locator("#computer-feedback")
     .getByText(
-      "Fixed no-network Git status enabled. Verify the workspace again before use.",
+      "Fixed no-network Git status and HEAD enabled. Verify the workspace again before use.",
       { exact: true },
     )
     .waitFor();
@@ -4247,6 +4247,32 @@ try {
       /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
     )
     .waitFor();
+  const expectedHeadResult = spawnSync(
+    "/usr/bin/xcrun",
+    ["git", "-C", normal.workspaceRoot, "rev-parse", "--verify", "HEAD"],
+    { encoding: "utf8" },
+  );
+  assert.equal(expectedHeadResult.status, 0, expectedHeadResult.stderr);
+  const gitHead = workspaceCard.getByRole("button", {
+    name: "Git HEAD",
+    exact: true,
+  });
+  assert.equal(await gitHead.isEnabled(), true);
+  await gitHead.click();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/Git HEAD · exit 0 · \d+ bytes · network none/u)
+    .waitFor();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(expectedHeadResult.stdout.trim(), { exact: true })
+    .waitFor();
+  await normal.window
+    .locator("#computer-feedback")
+    .getByText(
+      /^Fixed Git HEAD completed · exit 0 · \d+ bytes · network none\.$/u,
+    )
+    .waitFor();
   const commandConfiguration = await normal.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -4258,6 +4284,7 @@ try {
     "workspace-command-disabled-by-default",
     "workspace-command-authority-explicit",
     "workspace-command-fixed-no-network",
+    "workspace-command-exact-head",
   );
 
   const exclusionInput = normal.window.getByLabel(

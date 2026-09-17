@@ -8,6 +8,11 @@ export type AgentComputerOperation =
       kind: "workspace.search";
       relativePath: string;
       pattern: string;
+    }>
+  | Readonly<{
+      kind: "verification.run";
+      command: "git.status" | "git.head";
+      relativePath: ".";
     }>;
 
 export type AgentComputerOutput =
@@ -31,6 +36,16 @@ export type AgentComputerOutput =
       }>[];
       resultLimited: boolean;
       scanLimited: boolean;
+    }>
+  | Readonly<{
+      kind: "workspace.command";
+      command: "git.status" | "git.head";
+      relativePath: ".";
+      exitCode: 0;
+      stdout: string;
+      stderr: "";
+      outputBytes: number;
+      network: "none";
     }>;
 
 export type AgentComputerRequest = Readonly<{

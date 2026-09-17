@@ -316,7 +316,8 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   } else if (operation.kind === "verification.run") {
     if (
       !exactKeys(operation, ["kind", "command", "relativePath"]) ||
-      operation.command !== "git.status" ||
+      (operation.command !== "git.status" &&
+        operation.command !== "git.head") ||
       operation.relativePath !== "."
     ) {
       return null;

@@ -167,6 +167,7 @@ try {
         "computer_workspace_read",
         "computer_workspace_search",
         "computer_workspace_git_status",
+        "computer_workspace_git_head",
         "computer_workspace_write",
         "computer_workspace_edit",
       ],

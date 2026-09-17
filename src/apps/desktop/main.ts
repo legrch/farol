@@ -3855,7 +3855,10 @@ async function configureProduct(
         },
       });
     }
-    case "computer.run-git-status": {
+    case "computer.run-git-status":
+    case "computer.run-git-head": {
+      const verificationCommand =
+        command.kind === "computer.run-git-status" ? "git.status" : "git.head";
       const snapshot = configuration.snapshot();
       if (snapshot.status !== "ready") {
         return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -3890,7 +3893,7 @@ async function configureProduct(
         workspaceId: selected.workspace.workspaceId,
         operation: {
           kind: "verification.run",
-          command: "git.status",
+          command: verificationCommand,
           relativePath: ".",
         },
       });

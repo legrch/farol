@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
+import type {
+  ReadonlyWorkspaceRequest,
+  WorkspaceVerificationCommand,
+} from "../../src/modules/computer/app/port/readonly-workspace";
 
 const processMock = vi.hoisted(() => ({
   spawn: vi.fn(),
@@ -28,7 +31,9 @@ class FakeChild extends EventEmitter {
 
 let root = "";
 
-function request(): ReadonlyWorkspaceRequest {
+function request(
+  command: WorkspaceVerificationCommand = "git.status",
+): ReadonlyWorkspaceRequest {
   return {
     workspace: {
       workspaceId: "workspace-a",
@@ -37,7 +42,7 @@ function request(): ReadonlyWorkspaceRequest {
     },
     operation: {
       kind: "verification.run",
-      command: "git.status",
+      command,
       relativePath: ".",
     },
   };
@@ -45,8 +50,9 @@ function request(): ReadonlyWorkspaceRequest {
 
 async function execute(
   attestGit?: () => Promise<string>,
+  command: WorkspaceVerificationCommand = "git.status",
 ): Promise<Awaited<ReturnType<typeof executeNativeVerificationCommand>>> {
-  const input = request();
+  const input = request(command);
   if (input.operation.kind !== "verification.run") {
     throw new Error("verification operation expected");
   }
@@ -160,6 +166,46 @@ describe("native verification command process failures", () => {
       error: {
         code: "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
         retry: "never",
+      },
+    });
+  });
+
+  it("pins the exact HEAD command, workspace and Git metadata environment", async () => {
+    processMock.spawn.mockImplementationOnce(() => {
+      const child = new FakeChild();
+      queueMicrotask(() => {
+        child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+
+    await expect(
+      execute(async () => "/usr/bin/git", "git.head"),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        kind: "workspace.command",
+        command: "git.head",
+        network: "none",
+      },
+    });
+    const invocation = processMock.spawn.mock.calls[0];
+    const arguments_ = invocation?.[1] as string[];
+    const options = invocation?.[2] as {
+      cwd: string;
+      detached: boolean;
+      env: Record<string, string>;
+    };
+    expect(arguments_.slice(-3)).toEqual(["rev-parse", "--verify", "HEAD"]);
+    expect(options).toMatchObject({
+      cwd: root,
+      detached: true,
+      env: {
+        GIT_DIR: path.join(root, ".git"),
+        GIT_COMMON_DIR: path.join(root, ".git"),
+        GIT_WORK_TREE: root,
+        GIT_TERMINAL_PROMPT: "0",
       },
     });
   });

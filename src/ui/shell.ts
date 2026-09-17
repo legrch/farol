@@ -1063,7 +1063,7 @@ function renderComputerConfiguration(): void {
   commandTitle.textContent = "Verified commands";
   commandDetail.textContent =
     settings.computer.commands === "verification"
-      ? "Fixed Git status only · Apple Git · no network · bounded output"
+      ? "Fixed Git status and HEAD · Apple Git · no network · bounded output"
       : "Off · no command authority is granted";
   commandCopy.append(commandTitle, commandDetail);
   const updateCommands = document.createElement("button");
@@ -1076,7 +1076,7 @@ function renderComputerConfiguration(): void {
     void configureProduct(
       { kind: "computer.update-commands", commands },
       commands === "verification"
-        ? "Fixed no-network Git status enabled. Verify the workspace again before use."
+        ? "Fixed no-network Git status and HEAD enabled. Verify the workspace again before use."
         : "Command authority removed.",
     );
   });
@@ -1283,7 +1283,27 @@ function renderComputerConfiguration(): void {
           `${workspace.label} Git status completed without network access.`,
         );
       });
-      query.append(gitStatus);
+      const gitHead = document.createElement("button");
+      gitHead.type = "button";
+      gitHead.textContent = "Git HEAD";
+      gitHead.disabled =
+        !verified || settings.computer.commands !== "verification";
+      gitHead.title =
+        settings.computer.commands !== "verification"
+          ? "Enable Verified commands above"
+          : verified
+            ? "Read the exact Git HEAD commit through the fixed no-network verifier"
+            : "Verify this workspace again first";
+      gitHead.addEventListener("click", () => {
+        void configureProduct(
+          {
+            kind: "computer.run-git-head",
+            workspaceId: workspace.workspaceId,
+          },
+          `${workspace.label} Git HEAD read without network access.`,
+        );
+      });
+      query.append(gitStatus, gitHead);
       if (workspace.access === "write") {
         const edit = document.createElement("button");
         edit.type = "button";
@@ -1343,12 +1363,13 @@ function renderComputerConfiguration(): void {
           }
           evidence.append(heading, matches);
         } else if (workspaceEvidence.kind === "computer.workspace-command") {
-          heading.textContent = `Git status · exit ${workspaceEvidence.exitCode} · ${workspaceEvidence.outputBytes} bytes · network ${workspaceEvidence.network}`;
+          const status = workspaceEvidence.command === "git.status";
+          heading.textContent = `${status ? "Git status" : "Git HEAD"} · exit ${workspaceEvidence.exitCode} · ${workspaceEvidence.outputBytes} bytes · network ${workspaceEvidence.network}`;
           const output = document.createElement("pre");
           output.textContent =
-            workspaceEvidence.stdout === ""
+            status && workspaceEvidence.stdout === ""
               ? "Clean working tree"
-              : workspaceEvidence.stdout;
+              : workspaceEvidence.stdout.trimEnd();
           evidence.append(heading, output);
         } else if (
           workspaceEvidence.kind === "computer.workspace-edit-preview"
@@ -1522,12 +1543,15 @@ async function configureProduct(
                                               "computer.run-git-status"
                                             ? "Running fixed Apple Git status with no network access…"
                                             : command.kind ===
-                                                "computer.apply-workspace-edit"
-                                              ? "Applying this guarded edit once…"
+                                                "computer.run-git-head"
+                                              ? "Reading exact Git HEAD with fixed Apple Git and no network access…"
                                               : command.kind ===
-                                                  "computer.cancel-workspace-edit"
-                                                ? "Discarding the prepared edit…"
-                                                : "Saving and reading back…";
+                                                  "computer.apply-workspace-edit"
+                                                ? "Applying this guarded edit once…"
+                                                : command.kind ===
+                                                    "computer.cancel-workspace-edit"
+                                                  ? "Discarding the prepared edit…"
+                                                  : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   const parsed = ProductConfigurationResultSchema.safeParse(
@@ -1601,7 +1625,7 @@ async function configureProduct(
     settingsFeedback = `Found ${evidence.matches.length} ${evidence.matches.length === 1 ? "match" : "matches"} for "${evidence.pattern}"${evidence.resultLimited || evidence.scanLimited ? " (result limited)" : ""}.`;
   } else if (evidence?.kind === "computer.workspace-command") {
     workspaceEvidence = evidence;
-    settingsFeedback = `Fixed Git status completed · exit ${evidence.exitCode} · ${evidence.outputBytes} bytes · network ${evidence.network}.`;
+    settingsFeedback = `Fixed ${evidence.command === "git.status" ? "Git status" : "Git HEAD"} completed · exit ${evidence.exitCode} · ${evidence.outputBytes} bytes · network ${evidence.network}.`;
   } else if (evidence?.kind === "computer.workspace-edit-preview") {
     workspaceEvidence = evidence;
     settingsFeedback = `Review one exact replacement in ${evidence.relativePath}. Nothing has been changed.`;

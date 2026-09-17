@@ -73,6 +73,22 @@ await fs.writeFile(
   "delegated critic reached the native workspace\n",
   { mode: 0o600 },
 );
+await executeFile(git, ["-C", workspaceRoot, "add", "notes/review.txt"]);
+await executeFile(git, [
+  "-C",
+  workspaceRoot,
+  "-c",
+  "user.name=Farol E2E",
+  "-c",
+  "user.email=farol-e2e@invalid.example",
+  "commit",
+  "--quiet",
+  "-m",
+  "fixture",
+]);
+const head = (
+  await executeFile(git, ["-C", workspaceRoot, "rev-parse", "HEAD"])
+).stdout;
 
 const now = Date.now();
 const launch = {
@@ -176,6 +192,7 @@ try {
       "computer_workspace_read",
       "computer_workspace_search",
       "computer_workspace_git_status",
+      "computer_workspace_git_head",
       "farol_next_connector_verify",
     ],
   );
@@ -254,6 +271,28 @@ try {
   assert.equal(status.structuredContent?.output?.command, "git.status");
   assert.equal(status.structuredContent?.output?.exitCode, 0);
   assert.equal(status.structuredContent?.output?.network, "none");
+
+  const exactHead = await client.callTool({
+    name: "computer_workspace_git_head",
+    arguments: { workspaceId: "fixture" },
+  });
+  assert.equal(exactHead.isError, undefined);
+  assert.equal(exactHead.structuredContent?.participantId, "critic-e2e");
+  assert.deepEqual(exactHead.structuredContent?.operation, {
+    kind: "verification.run",
+    command: "git.head",
+    relativePath: ".",
+  });
+  assert.deepEqual(exactHead.structuredContent?.output, {
+    kind: "workspace.command",
+    command: "git.head",
+    relativePath: ".",
+    exitCode: 0,
+    stdout: head,
+    stderr: "",
+    outputBytes: Buffer.byteLength(head),
+    network: "none",
+  });
 
   const injected = await client.callTool({
     name: "computer_workspace_git_status",
