@@ -284,12 +284,23 @@ describe("private context persistence", () => {
       turnAssistantId: null,
     };
     await first.putSummaryAttempt(prepared);
-    await first.putSummaryAttempt({
+    const possibleSend = {
       ...prepared,
-      phase: "possible_send",
+      phase: "possible_send" as const,
       conversationUrl: "https://chatgpt.com/c/context-atlantic",
       turnUserId: "summary-user-atlantic",
-    });
+    };
+    await first.putSummaryAttempt(possibleSend);
+    await expect(
+      first.putSummaryAttempt(possibleSend),
+    ).resolves.toBeUndefined();
+    await expect(
+      first.putSummaryAttempt({
+        ...possibleSend,
+        turnUserId: null,
+        turnAssistantId: "summary-assistant-atlantic",
+      }),
+    ).rejects.toThrow("CONTEXT_SUMMARY_ATTEMPT_INVALID");
 
     const restarted = new PrivateContextStore({ root: stateRoot });
     await expect(
@@ -313,8 +324,17 @@ describe("private context persistence", () => {
     ).rejects.toThrow("CONTEXT_SUMMARY_ATTEMPT_CONFLICT");
     await restarted.deleteSummaryAttempt(binding, request.operationId);
     await expect(
+      restarted.deleteSummaryAttempt(binding, request.operationId),
+    ).resolves.toBeUndefined();
+    await expect(
       restarted.getSummaryAttempt(binding, request.operationId),
     ).resolves.toBeNull();
+    await expect(restarted.getSummaryAttempt(binding, "")).rejects.toThrow(
+      "CONTEXT_SUMMARY_ATTEMPT_ID_INVALID",
+    );
+    await expect(restarted.deleteSummaryAttempt(binding, "")).rejects.toThrow(
+      "CONTEXT_SUMMARY_ATTEMPT_ID_INVALID",
+    );
   });
 
   it("fences concurrent coordinators through the shared filesystem", async () => {
