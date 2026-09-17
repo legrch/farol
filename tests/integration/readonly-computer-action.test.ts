@@ -100,6 +100,33 @@ function participants(): Readonly<{
   return { main: main.value, agent: agent.value, critic: critic.value };
 }
 
+function exactParticipant(paths: readonly string[]): ParticipantAuthority {
+  const grant = deriveTaskGrant(
+    approval(),
+    {
+      ...admission(),
+      workspaces: [
+        {
+          workspaceId: "farol",
+          mode: "exact",
+          root,
+          paths,
+          access: "read",
+        },
+      ],
+    },
+    clock.now(),
+  );
+  if (!grant.ok) throw new Error(grant.error.code);
+  const participant = createParticipantAuthority(grant.value, {
+    participantId: "agent-exact-files",
+    role: "agent",
+    mutationOwnership: "none",
+  });
+  if (!participant.ok) throw new Error(participant.error.code);
+  return participant.value;
+}
+
 function request(
   operation:
     | Readonly<{ kind: "workspace.read"; relativePath: string }>
@@ -318,6 +345,90 @@ describe("real read-only Computer action", () => {
         retry: "never",
       },
     });
+  });
+
+  it("AUTH-03 searches an exact regular file without promoting an exact directory", async () => {
+    const participant = exactParticipant([`${root}/README.md`, `${root}/src`]);
+    const computer = contract([participant], approval());
+
+    await expect(
+      computer.execute(
+        request(
+          {
+            kind: "workspace.search",
+            relativePath: "README.md",
+            pattern: "Farol read target",
+          },
+          participant.participantId,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        output: {
+          kind: "workspace.matches",
+          matches: [{ path: "README.md", line: 1 }],
+        },
+      },
+    });
+    await expect(
+      computer.execute(
+        request(
+          {
+            kind: "workspace.search",
+            relativePath: "src",
+            pattern: "authority-continuity",
+          },
+          participant.participantId,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_NOT_A_FILE", source: "native-workspace" },
+    });
+    await expect(
+      computer.execute(
+        request(
+          { kind: "workspace.list", relativePath: "src" },
+          participant.participantId,
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_PATH_DENIED", source: "task-grant" },
+    });
+  });
+
+  it("AUTH-03 refuses when an exact file becomes a directory before search", async () => {
+    const selected = `${root}/README.md`;
+    const participant = exactParticipant([selected]);
+    const computer = contract([participant], approval());
+    await fs.rename(selected, `${root}/README.original.md`);
+    await fs.mkdir(selected, { mode: 0o700 });
+    await fs.writeFile(
+      path.join(selected, "nested.txt"),
+      "nested-directory-secret-value\n",
+      { mode: 0o600 },
+    );
+
+    const result = await computer.execute(
+      request(
+        {
+          kind: "workspace.search",
+          relativePath: "README.md",
+          pattern: "secret",
+        },
+        participant.participantId,
+      ),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_NOT_A_FILE", source: "native-workspace" },
+    });
+    expect(JSON.stringify(result)).not.toContain(
+      "nested-directory-secret-value",
+    );
   });
 
   it("DAC-06 hides an explicitly excluded subtree from delegated search and read", async () => {

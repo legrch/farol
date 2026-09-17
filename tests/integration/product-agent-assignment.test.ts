@@ -207,7 +207,7 @@ describe("product Agent assignment composition", () => {
     });
   });
 
-  it("limits explicit exact-file narrowing to non-recursive reads", async () => {
+  it("limits exact-file narrowing to non-recursive file reads and searches", async () => {
     const fixture = dependencies();
     const narrowed = input({
       scope: {
@@ -241,7 +241,7 @@ describe("product Agent assignment composition", () => {
           access: "read",
         },
       ],
-      capabilities: ["workspace.read"],
+      capabilities: ["workspace.read", "workspace.search"],
       network: "none",
       commands: "none",
     });

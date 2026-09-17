@@ -13,6 +13,7 @@ import {
   authorizeTaskIdentity,
   type AuthorityErrorCode,
   type AuthorityFailureSource,
+  type ExactWorkspaceScope,
   type WorkspaceScope,
 } from "../../domain/execution-authority";
 
@@ -116,6 +117,13 @@ function relativeExcludedPaths(
   );
 }
 
+function relativeExactFilePaths(scope: ExactWorkspaceScope): readonly string[] {
+  const prefix = scope.root === "/" ? "/" : `${scope.root}/`;
+  return scope.paths.map((selected) =>
+    selected === scope.root ? "." : selected.slice(prefix.length),
+  );
+}
+
 export class RunReadonlyComputerAction {
   constructor(
     private readonly authorities: AuthorityRepository,
@@ -152,7 +160,6 @@ export class RunReadonlyComputerAction {
     if (target === null) {
       return failure("COMPUTER_PATH_INVALID", "task-grant");
     }
-
     let approval;
     try {
       approval = await this.approvals.get(participant.grant.computerId);
@@ -179,6 +186,9 @@ export class RunReadonlyComputerAction {
       this.clock.now(),
     );
     if (!authorized.ok) return authorized;
+    if (scope.mode === "exact" && request.operation.kind === "workspace.list") {
+      return failure("AUTHORITY_PATH_DENIED", "task-grant");
+    }
 
     let result;
     try {
@@ -191,6 +201,9 @@ export class RunReadonlyComputerAction {
             request.workspaceId,
             participant.grant.excludedPaths,
           ),
+          ...(scope.mode === "exact"
+            ? { exactFilePaths: relativeExactFilePaths(scope) }
+            : {}),
         },
         operation: request.operation,
       };

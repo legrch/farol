@@ -83,7 +83,7 @@ export async function runProductAgentAssignment(
   );
   const exactFilesOnly = input.scope.mode === "exact";
   const capabilities: ComputerApproval["capabilities"] = exactFilesOnly
-    ? ["workspace.read"]
+    ? ["workspace.read", "workspace.search"]
     : [
         "workspace.list",
         "workspace.read",

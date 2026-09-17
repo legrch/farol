@@ -2,6 +2,7 @@ export type ReadonlyWorkspaceDescriptor = Readonly<{
   workspaceId: string;
   root: string;
   deniedPaths: readonly string[];
+  exactFilePaths?: readonly string[];
 }>;
 
 export type WorkspaceVerificationCommand = "git.status" | "git.head";

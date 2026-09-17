@@ -1509,6 +1509,8 @@ def _open_grep_scope(request, root_fd, relative):
     parts = _search_relative(relative)
     _refuse_if_denied(parts)
     if not parts:
+        if request.get("fileOnly"):
+            refuse(EXIT_NOT_A_FILE)
         directory = os.dup(root_fd)
         return "directory", directory, "", _load_ignore_rules(directory, "", [])
 
@@ -1530,6 +1532,8 @@ def _open_grep_scope(request, root_fd, relative):
         if stat.S_ISLNK(listed.st_mode):
             refuse(EXIT_PATH_REFUSED)
         if stat.S_ISDIR(listed.st_mode):
+            if request.get("fileOnly"):
+                refuse(EXIT_NOT_A_FILE)
             descriptor = _opened_child_directory(parent, leaf, explicit=True)
             rules = _load_ignore_rules(descriptor, root_relative, rules)
             _test_hook(request, "after-search-directory", len(parts) - 1)
@@ -1692,6 +1696,7 @@ def _dispatch(request):
         "denied",
         "writeDenied",
         "edits",
+        "fileOnly",
         "testHook",
     }:
         refuse(EXIT_INVALID)
@@ -1740,6 +1745,10 @@ def _dispatch(request):
         if "pattern" not in request:
             refuse(EXIT_INVALID)
     elif "pattern" in request:
+        refuse(EXIT_INVALID)
+    if "fileOnly" in request and (
+        operation != "grep" or request.get("fileOnly") is not True
+    ):
         refuse(EXIT_INVALID)
     if operation == "write":
         if (

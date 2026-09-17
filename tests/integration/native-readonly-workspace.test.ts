@@ -127,6 +127,71 @@ describe("native readonly Computer workspace", () => {
     });
   });
 
+  it("AUTH-03 binds exact-file requests to one regular file", async () => {
+    const workspace = reader();
+    const exact = (
+      operation: ReadonlyWorkspaceRequest["operation"],
+      exactFilePaths: readonly string[],
+    ): ReadonlyWorkspaceRequest => ({
+      workspace: {
+        workspaceId: "workspace-a",
+        root,
+        deniedPaths: [".secrets", ".env"],
+        exactFilePaths,
+      },
+      operation,
+    });
+
+    await expect(
+      workspace.execute(
+        exact(
+          {
+            kind: "workspace.search",
+            relativePath: "README.md",
+            pattern: "Farol native workspace",
+          },
+          ["README.md"],
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        kind: "workspace.matches",
+        matches: [{ path: "README.md", line: 1 }],
+      },
+    });
+    await expect(
+      workspace.execute(
+        exact(
+          {
+            kind: "workspace.search",
+            relativePath: "src/related.ts",
+            pattern: "watch-rail",
+          },
+          ["README.md"],
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+    });
+    await expect(
+      workspace.execute(
+        exact(
+          {
+            kind: "workspace.search",
+            relativePath: "src",
+            pattern: "watch-rail",
+          },
+          ["src"],
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_NOT_A_FILE", retry: "never" },
+    });
+  });
+
   it("refuses symlink leaves, symlink ancestors and denied credential paths", async () => {
     const outside = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-outside-"),

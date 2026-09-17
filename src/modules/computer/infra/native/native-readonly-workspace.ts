@@ -31,8 +31,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "03429f94bed786effe8de920a398cedbf827321757f7160d4354e3fad37b6c98",
-  size: 62_789,
+  sha256: "b04743550ab8bf6c8512feb502dea8f63622e934c387cc1558c0ddcb1f07a9bc",
+  size: 63_099,
   mode: 0o644,
 });
 
@@ -120,6 +120,7 @@ type NativeRequest = Readonly<{
   content?: string;
   edits?: readonly Readonly<{ oldText: string; newText: string }>[];
   expectedSha256?: string | null;
+  fileOnly?: boolean;
   testHook?: Readonly<{ phase: string; index: number | null }>;
 }>;
 
@@ -272,7 +273,19 @@ function validWorkspaceId(value: unknown): value is string {
 function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   if (!exactKeys(value, ["workspace", "operation"])) return null;
   const candidate = value as Readonly<Record<string, unknown>>;
-  if (!exactKeys(candidate.workspace, ["workspaceId", "root", "deniedPaths"])) {
+  const hasExactFilePaths =
+    candidate.workspace !== null &&
+    typeof candidate.workspace === "object" &&
+    !Array.isArray(candidate.workspace) &&
+    Object.prototype.hasOwnProperty.call(candidate.workspace, "exactFilePaths");
+  if (
+    !exactKeys(
+      candidate.workspace,
+      hasExactFilePaths
+        ? ["workspaceId", "root", "deniedPaths", "exactFilePaths"]
+        : ["workspaceId", "root", "deniedPaths"],
+    )
+  ) {
     return null;
   }
   const workspace = candidate.workspace as Readonly<Record<string, unknown>>;
@@ -281,7 +294,16 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
     !canonicalAbsolutePath(workspace.root) ||
     !Array.isArray(workspace.deniedPaths) ||
     workspace.deniedPaths.length > 256 ||
-    !workspace.deniedPaths.every((entry) => canonicalRelativePath(entry))
+    !workspace.deniedPaths.every((entry) => canonicalRelativePath(entry)) ||
+    (hasExactFilePaths &&
+      (!Array.isArray(workspace.exactFilePaths) ||
+        workspace.exactFilePaths.length < 1 ||
+        workspace.exactFilePaths.length > 32 ||
+        !workspace.exactFilePaths.every((entry) =>
+          canonicalRelativePath(entry, { root: true }),
+        ) ||
+        workspace.exactFilePaths.length !==
+          new Set(workspace.exactFilePaths).size))
   ) {
     return null;
   }
@@ -326,6 +348,16 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
       return null;
     }
   } else {
+    return null;
+  }
+  if (
+    hasExactFilePaths &&
+    (operation.kind === "workspace.list" ||
+      operation.kind === "verification.run" ||
+      !(workspace.exactFilePaths as readonly string[]).includes(
+        operation.relativePath as string,
+      ))
+  ) {
     return null;
   }
   return value as ReadonlyWorkspaceRequest;
@@ -509,6 +541,7 @@ function nativeRequest(
         ...common,
         operation: "grep",
         pattern: request.operation.pattern,
+        ...(request.workspace.exactFilePaths ? { fileOnly: true } : {}),
       };
     case "verification.run":
       throw new WorkspaceRefusal("WORKSPACE_INVALID_REQUEST");
