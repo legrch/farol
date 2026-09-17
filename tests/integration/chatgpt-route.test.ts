@@ -29,6 +29,7 @@ const prepared = {
   ready: true,
   baselineAssistantCount: 0,
   baselineUserCount: 0,
+  baselineMessageIds: [],
 } as const;
 
 const attachment: StagedChatGptAttachment = {
@@ -67,6 +68,7 @@ function taskRoute(executeJavaScript: ReturnType<typeof vi.fn>): ChatGptRoute {
 
 function streamingTaskRoute(
   executeJavaScript: ReturnType<typeof vi.fn>,
+  taskTimeoutMs = 1_000,
 ): ChatGptRoute {
   const candidate = new ChatGptRoute({
     homeUrl: "https://chatgpt.com/",
@@ -74,7 +76,7 @@ function streamingTaskRoute(
     e2eOrigin: null,
     parent: () => null,
     taskPollMs: 1,
-    taskTimeoutMs: 1_000,
+    taskTimeoutMs,
   });
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
   vi.spyOn(candidate, "observe").mockResolvedValue({
@@ -239,10 +241,25 @@ describe("ChatGPT route streaming observation", () => {
     assistantCharacters: assistantText.length,
     assistantText,
     userCount: 1,
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
     busy: input.busy,
     sendVisible: input.sendVisible,
     signInVisible: false,
     errorVisible: false,
+  });
+  const correlatedProbe = (
+    assistantText: string,
+    input: Readonly<{
+      busy: boolean;
+      sendVisible: boolean;
+      turnUserId: string | null;
+      turnAssistantId: string | null;
+    }>,
+  ) => ({
+    ...probe(assistantText, input),
+    turnUserId: input.turnUserId,
+    turnAssistantId: input.turnAssistantId,
   });
 
   it("classifies only explicit provider limit messages", () => {
@@ -353,6 +370,76 @@ describe("ChatGPT route streaming observation", () => {
       outputText: "Alpha",
     });
     expect(deltas).toHaveLength(1);
+  });
+
+  it("continues the same logical provider turn after history remounts", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValueOnce(
+        correlatedProbe("Hel", {
+          busy: true,
+          sendVisible: false,
+          turnUserId: "user-current",
+          turnAssistantId: "assistant-current",
+        }),
+      )
+      .mockResolvedValueOnce(
+        correlatedProbe("", {
+          busy: true,
+          sendVisible: false,
+          turnUserId: null,
+          turnAssistantId: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        correlatedProbe("Hello", {
+          busy: true,
+          sendVisible: false,
+          turnUserId: "user-current",
+          turnAssistantId: "assistant-current",
+        }),
+      )
+      .mockResolvedValue(
+        correlatedProbe("Hello", {
+          busy: false,
+          sendVisible: true,
+          turnUserId: "user-current",
+          turnAssistantId: "assistant-current",
+        }),
+      );
+
+    await expect(
+      streamingTaskRoute(executeJavaScript).runReadonlyTask("reply once"),
+    ).resolves.toMatchObject({
+      state: "completed",
+      code: null,
+      outputText: "Hello",
+    });
+  });
+
+  it("does not accept an uncorrelated late response as the current turn", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(
+        correlatedProbe("Late response from an older turn", {
+          busy: false,
+          sendVisible: true,
+          turnUserId: null,
+          turnAssistantId: null,
+        }),
+      );
+
+    await expect(
+      streamingTaskRoute(executeJavaScript, 20).runReadonlyTask("new turn"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+      outputText: "",
+    });
   });
 
   it("keeps a provider error after streamed text outcome-unknown", async () => {

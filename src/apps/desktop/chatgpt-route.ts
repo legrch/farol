@@ -25,6 +25,11 @@ const preparedTaskSchema = z.strictObject({
   ready: z.boolean(),
   baselineAssistantCount: z.number().int().nonnegative(),
   baselineUserCount: z.number().int().nonnegative(),
+  baselineMessageIds: z
+    .array(z.string().min(1).max(256))
+    .max(512)
+    .optional()
+    .default([]),
 });
 
 const activatedTaskSchema = z.strictObject({ activated: z.boolean() });
@@ -34,6 +39,8 @@ const taskProbeSchema = z.strictObject({
   assistantCharacters: z.number().int().nonnegative(),
   assistantText: z.string().max(256 * 1_024),
   userCount: z.number().int().nonnegative(),
+  turnUserId: z.string().min(1).max(256).nullable(),
+  turnAssistantId: z.string().min(1).max(256).nullable(),
   busy: z.boolean(),
   sendVisible: z.boolean(),
   signInVisible: z.boolean(),
@@ -129,8 +136,13 @@ function prepareTaskScript(prompt: string): string {
     ].find(visible);
     const baselineAssistantCount = document.querySelectorAll('[data-message-author-role="assistant"]').length;
     const baselineUserCount = document.querySelectorAll('[data-message-author-role="user"]').length;
+    const baselineMessageIds = [...new Set(
+      [...document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]')]
+        .map((element) => element.closest('[data-message-id]')?.getAttribute('data-message-id') ?? null)
+        .filter((value) => typeof value === 'string' && value.length > 0 && value.length <= 256)
+    )].slice(-512);
     if (!(composer instanceof HTMLElement)) {
-      return { ready: false, baselineAssistantCount, baselineUserCount };
+      return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
@@ -145,7 +157,7 @@ function prepareTaskScript(prompt: string): string {
       data: prompt,
       inputType: "insertText"
     }));
-    return { ready: true, baselineAssistantCount, baselineUserCount };
+    return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds };
   })()`;
 }
 
@@ -166,8 +178,13 @@ const activateTaskScript = `(() => {
   return { activated: true };
 })()`;
 
-function taskProbeScript(baselineAssistantCount: number): string {
+function taskProbeScript(
+  prompt: string,
+  baselineMessageIds: readonly string[],
+): string {
   return `(() => {
+    const prompt = ${JSON.stringify(prompt)};
+    const baselineMessageIds = new Set(${JSON.stringify(baselineMessageIds)});
     const usageLimitPattern = new RegExp(${JSON.stringify(chatGptUsageLimitPattern.source)}, ${JSON.stringify(chatGptUsageLimitPattern.flags)});
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
@@ -175,8 +192,31 @@ function taskProbeScript(baselineAssistantCount: number): string {
       const box = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
     };
-    const assistants = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
-    const current = assistants.slice(${baselineAssistantCount}).at(-1);
+    const messages = [...document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]')];
+    const assistants = messages.filter((element) => element.getAttribute('data-message-author-role') === 'assistant');
+    const messageId = (element) => element?.closest('[data-message-id]')?.getAttribute('data-message-id') ?? null;
+    const users = messages.filter((element) => element.getAttribute('data-message-author-role') === 'user');
+    const currentUser = [...users].reverse().find((element) => {
+      const id = messageId(element);
+      return id !== null && !baselineMessageIds.has(id) && (element.textContent || '').trim() === prompt.trim();
+    }) ?? null;
+    const turnUserId = messageId(currentUser);
+    let currentAssistant = null;
+    if (currentUser && turnUserId !== null) {
+      const userIndex = messages.indexOf(currentUser);
+      for (const element of messages.slice(userIndex + 1)) {
+        const role = element.getAttribute('data-message-author-role');
+        if (role === 'user') break;
+        if (role !== 'assistant') continue;
+        const id = messageId(element);
+        if (id === null) continue;
+        const parentId = element.closest('[data-parent-message-id]')?.getAttribute('data-parent-message-id') ?? null;
+        if (parentId !== null && parentId !== turnUserId) continue;
+        currentAssistant = element;
+        break;
+      }
+    }
+    const turnAssistantId = messageId(currentAssistant);
     const explicitSignIn = [
       document.querySelector('[data-testid="login-button"]'),
       document.querySelector('a[href*="/auth/login"]'),
@@ -205,12 +245,14 @@ function taskProbeScript(baselineAssistantCount: number): string {
       usageLimitPattern.test((element.textContent || "").trim())
     );
     const errorVisible = errors.length > 0;
-    const assistantText = current instanceof HTMLElement ? current.innerText : "";
+    const assistantText = currentAssistant instanceof HTMLElement ? currentAssistant.innerText : "";
     return {
       assistantCount: assistants.length,
       assistantCharacters: assistantText.length,
       assistantText,
       userCount: document.querySelectorAll('[data-message-author-role="user"]').length,
+      turnUserId,
+      turnAssistantId,
       busy,
       sendVisible,
       signInVisible: explicitSignIn || labelledSignIn,
@@ -610,6 +652,8 @@ export class ChatGptRoute {
 
       let accepted = false;
       let stablePolls = 0;
+      let correlatedUserId: string | null = null;
+      let correlatedAssistantId: string | null = null;
       const pollMs = this.options.taskPollMs ?? 250;
       const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       while (Date.now() < deadline) {
@@ -635,7 +679,7 @@ export class ChatGptRoute {
         }
         const probe = taskProbeSchema.safeParse(
           await active.webContents.executeJavaScript(
-            taskProbeScript(prepared.data.baselineAssistantCount),
+            taskProbeScript(prompt, prepared.data.baselineMessageIds),
             true,
           ),
         );
@@ -661,11 +705,56 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        accepted ||=
-          probe.data.userCount > prepared.data.baselineUserCount ||
-          probe.data.assistantCount > prepared.data.baselineAssistantCount ||
-          probe.data.busy;
-        if (probe.data.assistantText !== observedText) {
+        if (probe.data.turnUserId !== null) {
+          if (correlatedUserId === null) {
+            correlatedUserId = probe.data.turnUserId;
+          } else if (probe.data.turnUserId !== correlatedUserId) {
+            return {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_OUTPUT_CHANGED",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+        }
+        if (probe.data.turnAssistantId !== null) {
+          if (
+            probe.data.turnUserId === null ||
+            probe.data.turnUserId !== correlatedUserId
+          ) {
+            return {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_OUTPUT_CHANGED",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+          if (correlatedAssistantId === null) {
+            correlatedAssistantId = probe.data.turnAssistantId;
+          } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
+            return {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_OUTPUT_CHANGED",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+        }
+        accepted ||= correlatedUserId !== null;
+        const correlated =
+          correlatedUserId !== null &&
+          correlatedAssistantId !== null &&
+          probe.data.turnUserId === correlatedUserId &&
+          probe.data.turnAssistantId === correlatedAssistantId;
+        if (correlated && probe.data.assistantText !== observedText) {
+          if (observedText.startsWith(probe.data.assistantText)) {
+            stablePolls = 0;
+            await delay(pollMs);
+            continue;
+          }
           if (!probe.data.assistantText.startsWith(observedText)) {
             return {
               state: "outcome_unknown",
@@ -688,7 +777,7 @@ export class ChatGptRoute {
           });
           stablePolls = 0;
         } else if (
-          accepted &&
+          correlated &&
           observedCharacters > 0 &&
           !probe.data.busy &&
           probe.data.sendVisible
@@ -699,6 +788,7 @@ export class ChatGptRoute {
         }
         if (
           accepted &&
+          correlated &&
           observedCharacters > 0 &&
           probe.data.sendVisible &&
           stablePolls >= 3

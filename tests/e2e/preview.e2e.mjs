@@ -665,10 +665,13 @@ async function startChatGptFixture() {
               const user = document.createElement('article');
               user.className = 'message';
               user.dataset.messageAuthorRole = 'user';
+              user.dataset.messageId = saved.userMessageId || 'user-' + conversationId + '-restored';
               user.textContent = saved.user;
               const assistant = document.createElement('article');
               assistant.className = 'message';
               assistant.dataset.messageAuthorRole = 'assistant';
+              assistant.dataset.messageId = saved.assistantMessageId || 'assistant-' + conversationId + '-restored';
+              assistant.dataset.parentMessageId = user.dataset.messageId;
               assistant.textContent = saved.assistant;
               conversation.append(user, assistant);
             } catch {
@@ -732,10 +735,13 @@ async function startChatGptFixture() {
             const user = document.createElement('article');
             user.className = 'message';
             user.dataset.messageAuthorRole = 'user';
+            user.dataset.messageId = 'user-' + conversationId + '-' + window.__farolSubmitCount;
             user.textContent = userText;
             const assistant = document.createElement('article');
             assistant.className = 'message';
             assistant.dataset.messageAuthorRole = 'assistant';
+            assistant.dataset.messageId = 'assistant-' + conversationId + '-' + window.__farolSubmitCount;
+            assistant.dataset.parentMessageId = user.dataset.messageId;
             conversation.append(user, assistant);
             composer.textContent = '';
             attachmentInput.value = '';
@@ -779,7 +785,9 @@ async function startChatGptFixture() {
                 ];
             localStorage.setItem(conversationStorageKey, JSON.stringify({
               user: userText,
-              assistant: chunks.join('')
+              assistant: chunks.join(''),
+              userMessageId: user.dataset.messageId,
+              assistantMessageId: assistant.dataset.messageId
             }));
             const chunkDelay = userText.includes('cancellation canary') ? 1000 : 150;
             chunks.forEach((chunk, index) => {
