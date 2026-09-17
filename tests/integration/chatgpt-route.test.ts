@@ -21,6 +21,7 @@ vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
 
 import {
   ChatGptRoute,
+  classifyChatGptProviderError,
   type ChatGptRouteSurfaceFactory,
 } from "../../src/apps/desktop/chatgpt-route";
 
@@ -242,6 +243,42 @@ describe("ChatGPT route streaming observation", () => {
     sendVisible: input.sendVisible,
     signInVisible: false,
     errorVisible: false,
+  });
+
+  it("classifies only explicit provider limit messages", () => {
+    expect(
+      classifyChatGptProviderError("You have reached your usage limit"),
+    ).toBe("usage_limited");
+    expect(classifyChatGptProviderError("Too many requests; try later")).toBe(
+      "usage_limited",
+    );
+    expect(
+      classifyChatGptProviderError("The network connection was lost"),
+    ).toBe("generic");
+  });
+
+  it("classifies an explicit provider usage limit without a retry", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValueOnce({
+        ...probe("", { busy: false, sendVisible: true }),
+        errorVisible: true,
+        errorKind: "usage_limited",
+      });
+
+    await expect(
+      streamingTaskRoute(executeJavaScript).runReadonlyTask(
+        "preserve this context",
+      ),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_USAGE_LIMITED",
+      deltaCount: 0,
+      observedCharacters: 0,
+    });
+    expect(executeJavaScript).toHaveBeenCalledTimes(3);
   });
 
   it("delivers exact incremental text before the terminal result", async () => {

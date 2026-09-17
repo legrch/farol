@@ -300,6 +300,76 @@ describe("assembled Codex context runtime", () => {
     });
   });
 
+  it("keeps the current epoch and one submission when summary usage is limited", async () => {
+    const root = await stateRoot();
+    const retained = {
+      runReadonlyTask: vi.fn(async () => ({
+        state: "outcome_unknown" as const,
+        code: "CHATGPT_USAGE_LIMITED" as const,
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: "",
+      })),
+      currentConversationUrl: vi
+        .fn()
+        .mockReturnValue("https://chatgpt.com/c/context-usage-limited"),
+      retainedConversationUrl: vi
+        .fn()
+        .mockReturnValue("https://chatgpt.com/c/context-usage-limited"),
+      resetConversation: vi.fn(),
+      dispose: vi.fn(),
+    } satisfies ChatGptContextSummaryRoute;
+    const runtime = await startCodexContextRuntime({
+      ownerId: binding.ownerId,
+      providerProfileId: binding.providerProfileId,
+      stateRoot: root,
+      model,
+      token,
+      conversation: { run: vi.fn() },
+      summaryRoutes: {
+        retained: () => retained,
+        createFallback: vi.fn(),
+      },
+    });
+    runtimes.push(runtime);
+    const request = () =>
+      fetch(`${runtime.provider.baseUrl}/v1/responses/compact`, {
+        method: "POST",
+        headers: compactionHeaders("turn-usage-limited"),
+        body: JSON.stringify({ model, input: history(1) }),
+      });
+
+    const first = await request();
+    expect(first.status).toBe(422);
+    await expect(first.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED" },
+    });
+    const repeated = await request();
+    expect(repeated.status).toBe(422);
+    await expect(repeated.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED" },
+    });
+
+    const session = await new PrivateContextStore({ root }).load(binding);
+    expect(session).toMatchObject({
+      phase: "blocked",
+      epoch: 1,
+      blockedCode: "SUMMARY_USAGE_LIMITED",
+      operation: {
+        source: "retained_agent",
+      },
+    });
+    expect(toProductTaskContext(session!)).toEqual({
+      epoch: 1,
+      phase: "blocked",
+      source: "retained_agent",
+      code: "SUMMARY_USAGE_LIMITED",
+    });
+    expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(retained.resetConversation).not.toHaveBeenCalled();
+    expect(retained.dispose).not.toHaveBeenCalled();
+  });
+
   it("runs three ordinary retained compactions across restart without losing protected facts", async () => {
     const root = await stateRoot();
     const routes = [1, 2, 3, 4].map(

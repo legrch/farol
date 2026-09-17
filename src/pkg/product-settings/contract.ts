@@ -550,6 +550,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
         "CHATGPT_SUBMIT_UNAVAILABLE",
         "CHATGPT_TASK_PAGE_LOST",
         "CHATGPT_TASK_ERROR",
+        "CHATGPT_USAGE_LIMITED",
         "CHATGPT_TASK_TIMEOUT",
       ])
       .nullable(),
@@ -604,6 +605,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
         "CHATGPT_SUBMIT_UNAVAILABLE",
         "CHATGPT_TASK_PAGE_LOST",
         "CHATGPT_TASK_ERROR",
+        "CHATGPT_USAGE_LIMITED",
         "CHATGPT_TASK_TIMEOUT",
         "CHATGPT_ATTACHMENT_CONTROL_UNAVAILABLE",
         "CHATGPT_ATTACHMENT_UPLOAD_FAILED",

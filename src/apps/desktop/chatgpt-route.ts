@@ -38,9 +38,24 @@ const taskProbeSchema = z.strictObject({
   sendVisible: z.boolean(),
   signInVisible: z.boolean(),
   errorVisible: z.boolean(),
+  errorKind: z
+    .enum(["none", "usage_limited", "generic"])
+    .optional()
+    .default("none"),
 });
 
 const activityProbeSchema = z.strictObject({ running: z.boolean() });
+
+export type ChatGptProviderErrorKind = "usage_limited" | "generic";
+
+const chatGptUsageLimitPattern =
+  /(?:usage|message|rate)\s+limit|limit\s+(?:has\s+been\s+)?reached|reached\s+(?:your|the)\s+(?:usage|message|rate)?\s*limit|too\s+many\s+requests/iu;
+
+export function classifyChatGptProviderError(
+  text: string,
+): ChatGptProviderErrorKind {
+  return chatGptUsageLimitPattern.test(text) ? "usage_limited" : "generic";
+}
 
 const hardenedRouteSessions = new WeakSet<Session>();
 
@@ -153,6 +168,7 @@ const activateTaskScript = `(() => {
 
 function taskProbeScript(baselineAssistantCount: number): string {
   return `(() => {
+    const usageLimitPattern = new RegExp(${JSON.stringify(chatGptUsageLimitPattern.source)}, ${JSON.stringify(chatGptUsageLimitPattern.flags)});
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -178,10 +194,17 @@ function taskProbeScript(baselineAssistantCount: number): string {
       document.querySelector('button[aria-label="Send prompt"]'),
       document.querySelector('button[aria-label="Send message"]')
     ].some(visible);
-    const errorVisible = [
+    const errors = [
       document.querySelector('[data-testid="conversation-turn-error"]'),
-      document.querySelector('[data-testid="network-error"]')
-    ].some(visible);
+      document.querySelector('[data-testid="network-error"]'),
+      document.querySelector('[data-testid="usage-limit-message"]'),
+      document.querySelector('[data-testid="rate-limit-error"]'),
+      ...document.querySelectorAll('[role="alert"]')
+    ].filter(visible);
+    const usageLimited = errors.some((element) =>
+      usageLimitPattern.test((element.textContent || "").trim())
+    );
+    const errorVisible = errors.length > 0;
     const assistantText = current instanceof HTMLElement ? current.innerText : "";
     return {
       assistantCount: assistants.length,
@@ -191,7 +214,8 @@ function taskProbeScript(baselineAssistantCount: number): string {
       busy,
       sendVisible,
       signInVisible: explicitSignIn || labelledSignIn,
-      errorVisible
+      errorVisible,
+      errorKind: usageLimited ? "usage_limited" : errorVisible ? "generic" : "none"
     };
   })()`;
 }
@@ -252,6 +276,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_SUBMIT_UNAVAILABLE"
     | "CHATGPT_TASK_PAGE_LOST"
     | "CHATGPT_TASK_ERROR"
+    | "CHATGPT_USAGE_LIMITED"
     | "CHATGPT_TASK_OUTPUT_CHANGED"
     | "CHATGPT_TASK_TIMEOUT"
     | "CHATGPT_ATTACHMENT_CONTROL_UNAVAILABLE"
@@ -628,7 +653,9 @@ export class ChatGptRoute {
             state: "outcome_unknown",
             code: probe.data.signInVisible
               ? "CHATGPT_TASK_PAGE_LOST"
-              : "CHATGPT_TASK_ERROR",
+              : probe.data.errorKind === "usage_limited"
+                ? "CHATGPT_USAGE_LIMITED"
+                : "CHATGPT_TASK_ERROR",
             deltaCount,
             observedCharacters,
             outputText: observedText,

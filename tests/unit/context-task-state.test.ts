@@ -80,6 +80,22 @@ describe("context task state", () => {
     expect(context.code).toBe("SUMMARY_SUBMISSION_UNRESOLVED");
   });
 
+  it("shows an explicit usage-limit remedy without calling it a failed task", () => {
+    expect(
+      contextTaskPresentation({
+        epoch: 1,
+        phase: "blocked",
+        source: "canonical_history",
+        code: "SUMMARY_USAGE_LIMITED",
+      }),
+    ).toEqual({
+      tone: "unavailable",
+      label: "Context usage limited",
+      attention: true,
+      locked: true,
+    });
+  });
+
   it("does not override ordinary task presentation while context is active", () => {
     expect(
       contextTaskPresentation(

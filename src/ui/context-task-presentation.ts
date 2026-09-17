@@ -12,19 +12,28 @@ export function contextTaskPresentation(
 ): ContextTaskPresentation | null {
   if (!context || context.phase === "active") return null;
   if (context.phase === "blocked") {
-    return context.code === "SUMMARY_SIGN_IN_REQUIRED"
-      ? {
-          tone: "unavailable",
-          label: "Context needs sign-in",
-          attention: true,
-          locked: true,
-        }
-      : {
-          tone: "failed",
-          label: "Context blocked",
-          attention: true,
-          locked: true,
-        };
+    if (context.code === "SUMMARY_SIGN_IN_REQUIRED") {
+      return {
+        tone: "unavailable",
+        label: "Context needs sign-in",
+        attention: true,
+        locked: true,
+      };
+    }
+    if (context.code === "SUMMARY_USAGE_LIMITED") {
+      return {
+        tone: "unavailable",
+        label: "Context usage limited",
+        attention: true,
+        locked: true,
+      };
+    }
+    return {
+      tone: "failed",
+      label: "Context blocked",
+      attention: true,
+      locked: true,
+    };
   }
   if (context.phase === "outcome_unknown") {
     return {

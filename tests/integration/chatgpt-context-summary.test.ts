@@ -271,6 +271,41 @@ describe("ChatGPT summary-only context driver", () => {
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks on an explicit usage limit and releases only an owned fallback", async () => {
+    const state = await store();
+    const fallback = route({
+      state: "outcome_unknown",
+      code: "CHATGPT_USAGE_LIMITED",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => null,
+        createFallback: vi.fn().mockReturnValue(fallback),
+      },
+    });
+    const selectedSource = source("canonical_history");
+    const selectedRequest = {
+      ...request,
+      source: "canonical_history" as const,
+    };
+
+    await expect(
+      summary.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toEqual({
+      status: "blocked",
+      code: "SUMMARY_USAGE_LIMITED",
+    });
+    expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(fallback.dispose).toHaveBeenCalledTimes(1);
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toBeNull();
+  });
+
   it("observes an unresolved fallback operation instead of dispatching it twice", async () => {
     const state = await store();
     const fallback = route({

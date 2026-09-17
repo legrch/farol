@@ -225,6 +225,17 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
+    if (result.code === "CHATGPT_USAGE_LIMITED") {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      this.routes.delete(input.request.operationId);
+      this.dispatched.delete(input.request.operationId);
+      return { status: "blocked", code: "SUMMARY_USAGE_LIMITED" };
+    }
     if (result.state === "failed_before_submit") {
       if (!this.releaseOwnedLease(input.request.operationId)) {
         return {
