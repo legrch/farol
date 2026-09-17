@@ -2763,6 +2763,15 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
     ),
     count,
   );
+  assert.equal(
+    await instance.application.evaluate(({ session }) =>
+      session
+        .fromPartition("persist:farol-next-chatgpt")
+        .listenerCount("will-download"),
+    ),
+    1,
+    "E2E_SOAK_LIVE_DOWNLOAD_GUARD",
+  );
   if (overlayKind) {
     const startedAt = performance.now();
     if (overlayKind === "quick-switcher") {
@@ -2806,7 +2815,7 @@ function assertQuiescentMetrics(metrics, baseline) {
   assert.equal(metrics.taskViewCount, 0);
   assert.equal(metrics.providerSurfaceCount, 0);
   assert.equal(metrics.webContentsCount, baseline.webContentsCount);
-  assert.equal(metrics.downloadListenerCount, 1);
+  assert.ok(metrics.downloadListenerCount <= 1);
   assert.equal(metrics.runtimePids.length, 1);
   assert.ok(
     metrics.processCount <=
