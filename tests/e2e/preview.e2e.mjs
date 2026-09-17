@@ -1748,8 +1748,8 @@ async function liveChatGptSurfaces(application, expectedOrigin) {
           composerVisible: document.querySelector('#prompt-textarea')?.hidden === false,
           sendDisabled: document.querySelector('[data-testid="send-button"]')?.disabled ?? null,
           stopVisible: document.querySelector('[data-testid="stop-button"]')?.hidden === false,
-          userText: document.querySelector('[data-message-author-role="user"]')?.textContent ?? "",
-          assistantText: document.querySelector('[data-message-author-role="assistant"]')?.textContent ?? "",
+          userText: [...document.querySelectorAll('[data-message-author-role="user"]')].at(-1)?.textContent ?? "",
+          assistantText: [...document.querySelectorAll('[data-message-author-role="assistant"]')].at(-1)?.textContent ?? "",
           submitCount: Number(window.__farolSubmitCount ?? 0)
         }))()`);
       surfaces.push({
