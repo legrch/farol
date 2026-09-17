@@ -730,11 +730,13 @@ function createLiveChatGptRoute(
   label: string,
   initialUrl = chatGptHomeUrl,
 ): ChatGptRoute {
+  let routeHomeUrl = chatGptHomeUrl;
   let routeInitialUrl = initialUrl;
-  if (chatGptE2eOrigin !== null && initialUrl === chatGptHomeUrl) {
-    const fixtureUrl = new URL(initialUrl);
+  if (chatGptE2eOrigin !== null) {
+    const fixtureUrl = new URL(chatGptHomeUrl);
     fixtureUrl.searchParams.set("farol-e2e-task", taskId);
-    routeInitialUrl = fixtureUrl.href;
+    routeHomeUrl = fixtureUrl.href;
+    if (initialUrl === chatGptHomeUrl) routeInitialUrl = routeHomeUrl;
   }
   const recordConversationUrl = (conversationUrl: string | null) => {
     if (!liveTaskRegistry.get(taskId)) return;
@@ -758,7 +760,7 @@ function createLiveChatGptRoute(
     setLiveTaskLifecycle(taskId, lifecycle);
   };
   return new ChatGptRoute({
-    homeUrl: chatGptHomeUrl,
+    homeUrl: routeHomeUrl,
     initialUrl: routeInitialUrl,
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
