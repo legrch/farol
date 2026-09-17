@@ -240,6 +240,35 @@ describe("private context persistence", () => {
     ).rejects.toThrow("CONTEXT_SOURCE_OVERSIZED");
   });
 
+  it("retains one exact completed summary receipt for observation after restart", async () => {
+    const stateRoot = await root();
+    const first = new PrivateContextStore({ root: stateRoot });
+    const summary = {
+      schemaVersion: 1 as const,
+      operationId: "compact-atlantic-1",
+      binding,
+      providerOperationId: "provider-summary-1",
+      sourceCursor: "conversation:sha256-summary-1",
+      content,
+    };
+    await first.putSummary(summary);
+
+    const restarted = new PrivateContextStore({ root: stateRoot });
+    await expect(
+      restarted.getSummary(binding, summary.operationId),
+    ).resolves.toEqual(summary);
+    await expect(
+      restarted.putSummary({
+        ...summary,
+        providerOperationId: "provider-summary-forged",
+      }),
+    ).rejects.toThrow("CONTEXT_SUMMARY_ID_CONFLICT");
+    await restarted.deleteSummary(binding, summary.operationId);
+    await expect(
+      restarted.getSummary(binding, summary.operationId),
+    ).resolves.toBeNull();
+  });
+
   it("fences concurrent coordinators through the shared filesystem", async () => {
     const stateRoot = await root();
     const first = new PrivateContextStore({ root: stateRoot });

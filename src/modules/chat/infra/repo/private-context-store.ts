@@ -11,7 +11,9 @@ import type {
   ContextRepository,
 } from "../../app/port/context-repository";
 import {
+  validateCheckpointContent,
   validateCheckpointEnvelope,
+  type CheckpointContent,
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 import {
@@ -112,6 +114,21 @@ const contextSourceRecordSchema = z.strictObject({
   source: contextSourceSchema,
 });
 
+const contextSummarySchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  operationId: z.string().min(1).max(160),
+  binding: bindingSchema,
+  providerOperationId: z.string().min(1).max(160),
+  sourceCursor: z.string().min(1).max(512),
+  content: z.unknown(),
+});
+
+const contextSummaryRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_summary"),
+  summary: contextSummarySchema,
+});
+
 const admissionSchema = z.strictObject({
   binding: bindingSchema,
   sourceEpoch: z.number().int().positive(),
@@ -139,9 +156,19 @@ const DEFAULT_SESSION_BYTES = 64 * 1_024;
 const DEFAULT_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 const DEFAULT_CHECKPOINT_RECORD_BYTES = 384 * 1_024;
 const DEFAULT_SOURCE_RECORD_BYTES = 1 * 1_024 * 1_024;
+const DEFAULT_SUMMARY_RECORD_BYTES = 384 * 1_024;
 const DEFAULT_RETENTION = 8;
 
 export type StoredContextSource = Readonly<z.infer<typeof contextSourceSchema>>;
+
+export type StoredContextSummary = Readonly<{
+  schemaVersion: 1;
+  operationId: string;
+  binding: ContextBinding;
+  providerOperationId: string;
+  sourceCursor: string;
+  content: CheckpointContent;
+}>;
 
 export type PrivateContextStoreOptions = Readonly<{
   root: string;
@@ -149,6 +176,7 @@ export type PrivateContextStoreOptions = Readonly<{
   maximumCheckpointContentBytes?: number;
   maximumCheckpointRecordBytes?: number;
   maximumSourceRecordBytes?: number;
+  maximumSummaryRecordBytes?: number;
   maxCheckpointsPerTask?: number;
 }>;
 
@@ -211,6 +239,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private readonly maximumCheckpointContentBytes: number;
   private readonly maximumCheckpointRecordBytes: number;
   private readonly maximumSourceRecordBytes: number;
+  private readonly maximumSummaryRecordBytes: number;
   private readonly maxCheckpointsPerTask: number;
 
   constructor(
@@ -235,6 +264,10 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     this.maximumSourceRecordBytes = positiveInteger(
       options.maximumSourceRecordBytes ?? DEFAULT_SOURCE_RECORD_BYTES,
       "CONTEXT_SOURCE_BUDGET_INVALID",
+    );
+    this.maximumSummaryRecordBytes = positiveInteger(
+      options.maximumSummaryRecordBytes ?? DEFAULT_SUMMARY_RECORD_BYTES,
+      "CONTEXT_SUMMARY_BUDGET_INVALID",
     );
     this.maxCheckpointsPerTask = positiveInteger(
       options.maxCheckpointsPerTask ?? DEFAULT_RETENTION,
@@ -478,6 +511,73 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  async putSummary(candidate: StoredContextSummary): Promise<void> {
+    const parsed = contextSummarySchema.safeParse(candidate);
+    if (!parsed.success) throw new Error("CONTEXT_SUMMARY_INVALID");
+    const content = validateCheckpointContent(
+      parsed.data.content,
+      this.maximumCheckpointContentBytes,
+    );
+    if (!content.ok) throw new Error(content.error.code);
+    const summary: StoredContextSummary = {
+      ...parsed.data,
+      content: content.value,
+    };
+    const directory = await this.ensureSummaryDirectory(summary.binding);
+    const file = path.join(
+      directory,
+      `${checkpointKey(summary.operationId)}.json`,
+    );
+    const existing = await this.readSummaryFile(file, summary.binding);
+    if (existing) {
+      if (JSON.stringify(existing) === JSON.stringify(summary)) return;
+      throw new Error("CONTEXT_SUMMARY_ID_CONFLICT");
+    }
+    await this.atomicWrite(
+      file,
+      { schemaVersion: 1, kind: "context_summary", summary },
+      this.maximumSummaryRecordBytes,
+      "CONTEXT_SUMMARY_OVERSIZED",
+    );
+  }
+
+  async getSummary(
+    binding: ContextBinding,
+    operationId: string,
+  ): Promise<StoredContextSummary | null> {
+    if (!operationId || operationId.length > 160) {
+      throw new Error("CONTEXT_SUMMARY_ID_INVALID");
+    }
+    const file = path.join(
+      this.summaryDirectory(binding),
+      `${checkpointKey(operationId)}.json`,
+    );
+    const summary = await this.readSummaryFile(file, binding);
+    if (summary && summary.operationId !== operationId) {
+      throw new Error("CONTEXT_SUMMARY_ID_MISMATCH");
+    }
+    return summary;
+  }
+
+  async deleteSummary(
+    binding: ContextBinding,
+    operationId: string,
+  ): Promise<void> {
+    if (!operationId || operationId.length > 160) {
+      throw new Error("CONTEXT_SUMMARY_ID_INVALID");
+    }
+    const file = path.join(
+      this.summaryDirectory(binding),
+      `${checkpointKey(operationId)}.json`,
+    );
+    try {
+      await fs.unlink(file);
+      await this.syncDirectory(path.dirname(file));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
   async deleteTask(binding: ContextBinding): Promise<void> {
     await this.ensureRoot();
     const directory = this.taskDirectory(binding);
@@ -652,6 +752,31 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return structuredClone(parsed.data.source);
   }
 
+  private async readSummaryFile(
+    file: string,
+    binding: ContextBinding,
+  ): Promise<StoredContextSummary | null> {
+    const record = await this.readRecord(
+      file,
+      this.maximumSummaryRecordBytes,
+      "CONTEXT_SUMMARY",
+    );
+    if (!record) return null;
+    const parsed = contextSummaryRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_SUMMARY");
+    }
+    if (!sameContextBinding(parsed.data.summary.binding, binding)) {
+      throw new Error("CONTEXT_SUMMARY_BINDING_MISMATCH");
+    }
+    const content = validateCheckpointContent(
+      parsed.data.summary.content,
+      this.maximumCheckpointContentBytes,
+    );
+    if (!content.ok) throw new Error(content.error.code);
+    return structuredClone({ ...parsed.data.summary, content: content.value });
+  }
+
   private async pruneCheckpoints(
     directory: string,
     binding: ContextBinding,
@@ -700,6 +825,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       | "CONTEXT_ADMISSION"
       | "CONTEXT_LEASE"
       | "CONTEXT_SOURCE"
+      | "CONTEXT_SUMMARY"
       | "CONTEXT_STATE",
   ): Promise<ParsedRecord | null> {
     let handle;
@@ -851,6 +977,15 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return directory;
   }
 
+  private async ensureSummaryDirectory(
+    binding: ContextBinding,
+  ): Promise<string> {
+    const task = await this.ensureTaskDirectory(binding);
+    const directory = path.join(task, "summaries");
+    await this.ensurePrivateDirectory(directory);
+    return directory;
+  }
+
   private async ensureAdmissionDirectories(task: string): Promise<
     Readonly<{
       boundaries: string;
@@ -936,6 +1071,10 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
 
   private sourceDirectory(binding: ContextBinding): string {
     return path.join(this.taskDirectory(binding), "sources");
+  }
+
+  private summaryDirectory(binding: ContextBinding): string {
+    return path.join(this.taskDirectory(binding), "summaries");
   }
 
   private sessionFile(binding: ContextBinding): string {
