@@ -3345,7 +3345,12 @@ try {
     (await fs.readdir(path.join(contextTaskDirectory, "summaries"))).length,
     0,
   );
-  await ordinaryLiveTasks.window.locator("#dossier-route").click();
+  const freshContextSurface = await ordinaryLiveTasks.window.evaluate(
+    (taskId) => window.farolNext.task({ kind: "task.activate", taskId }),
+    pinnedTask.taskId,
+  );
+  assert.equal(freshContextSurface.ok, true);
+  assert.equal(freshContextSurface.selectedTaskId, pinnedTask.taskId);
   await waitForLiveChatGptSurface(
     ordinaryLiveTasks,
     pinnedTask.taskId,
