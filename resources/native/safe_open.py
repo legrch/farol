@@ -826,16 +826,37 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
         elif not _same_path_identity(parent_fd, leaf, previous):
             refuse(EXIT_RACE)
 
-        try:
-            os.replace(
-                temporary,
-                leaf,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-            )
-        except OSError:
-            refuse(EXIT_RACE)
-        temporary = None
+        _test_hook(request, "before-publish", None)
+        if previous is None:
+            try:
+                os.link(
+                    temporary,
+                    leaf,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except OSError:
+                refuse(EXIT_RACE)
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+            except OSError:
+                # The destination link already exists and the private link may
+                # still exist.  This is an acted mutation whose final link
+                # count and durability are not yet known to the caller.
+                refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+            temporary = None
+        else:
+            try:
+                os.replace(
+                    temporary,
+                    leaf,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+            except OSError:
+                refuse(EXIT_RACE)
+            temporary = None
         try:
             _test_hook(request, "after-replace", None)
             os.fsync(parent_fd)

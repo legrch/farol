@@ -100,6 +100,7 @@ describe("native mutable Computer workspace", () => {
     expect(await fs.readFile(path.join(root, "created.txt"), "utf8")).toBe(
       "created\n",
     );
+    expect((await fs.stat(path.join(root, "created.txt"))).nlink).toBe(1);
 
     await expect(
       native.mutate(
@@ -117,6 +118,36 @@ describe("native mutable Computer workspace", () => {
         afterSha256: digest("after\n"),
       },
     });
+  });
+
+  it("AUTH-04 never clobbers a destination created at the publication boundary", async () => {
+    const destination = path.join(root, "created-race.txt");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "created-race.txt",
+        content: "farol-candidate\n",
+        expectedSha256: null,
+      }),
+      {
+        testHookRequest: { phase: "before-publish", index: null },
+        testHook: async () => {
+          await fs.writeFile(destination, "competing-writer\n", {
+            mode: 0o600,
+            flag: "wx",
+          });
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_CONFLICT", retry: "never" },
+    });
+    expect(await fs.readFile(destination, "utf8")).toBe("competing-writer\n");
+    expect(
+      (await fs.readdir(root)).some((entry) => entry.startsWith(".farol-tmp-")),
+    ).toBe(false);
   });
 
   it("edits one unique match and rejects stale or ambiguous input", async () => {
