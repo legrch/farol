@@ -487,6 +487,66 @@ describe("private context persistence", () => {
     await recovering.releaseCompactionAdmission(recovered.lease);
   });
 
+  it("does not let a delayed stale reclaimer remove a live successor", async () => {
+    const stateRoot = await root();
+    const abandoned = new PrivateContextStore({ root: stateRoot });
+    const original = await abandoned.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (original.status !== "acquired") {
+      throw new Error(`EXPECTED_ORIGINAL_ADMISSION_${original.status}`);
+    }
+
+    let observed!: () => void;
+    const staleObserved = new Promise<void>((resolve) => {
+      observed = resolve;
+    });
+    let resume!: () => void;
+    const mayRepair = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    let successorInstalled = false;
+    const delayed = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        isProcessAlive: () => successorInstalled,
+        afterStaleLeaseRead: async () => {
+          observed();
+          await mayRepair;
+        },
+      },
+    );
+    const delayedAdmission = delayed.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    await staleObserved;
+
+    const successor = new PrivateContextStore(
+      { root: stateRoot },
+      { isProcessAlive: () => false },
+    );
+    const current = await successor.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (current.status !== "acquired") {
+      throw new Error(`EXPECTED_SUCCESSOR_ADMISSION_${current.status}`);
+    }
+    successorInstalled = true;
+    resume();
+
+    await expect(delayedAdmission).resolves.toEqual({ status: "busy" });
+    await expect(
+      successor.save(requestedSession(), current.lease),
+    ).resolves.toBeUndefined();
+    await successor.releaseCompactionAdmission(current.lease);
+  });
+
   it("keeps the core session binding immutable", async () => {
     const stateRoot = await root();
     const store = new PrivateContextStore({ root: stateRoot });

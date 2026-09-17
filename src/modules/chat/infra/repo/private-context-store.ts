@@ -207,7 +207,34 @@ export type PrivateContextStoreOptions = Readonly<{
 export type AtomicWriteHooks = Readonly<{
   beforeCommit?: (target: string) => Promise<void>;
   isProcessAlive?: (processId: number) => boolean | Promise<boolean>;
+  afterStaleLeaseRead?: (target: string) => Promise<void>;
 }>;
+
+// The product constructs this store only in the Electron primary process after
+// requestSingleInstanceLock succeeds. This keyed queue is the corresponding
+// same-process repair authority; test stores share it just like product stores.
+const leaseRepairOperations = new Map<string, Promise<void>>();
+
+async function withLeaseRepairOperation<Value>(
+  key: string,
+  operation: () => Promise<Value>,
+): Promise<Value> {
+  const previous = leaseRepairOperations.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  leaseRepairOperations.set(key, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (leaseRepairOperations.get(key) === current) {
+      leaseRepairOperations.delete(key);
+    }
+  }
+}
 
 type ParsedRecord = Readonly<{
   value: unknown;
@@ -771,20 +798,31 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         throw this.schemaError(record.value, "CONTEXT_LEASE");
       }
       if (await this.processIsAlive(parsed.data.processId)) return null;
+      await this.hooks.afterStaleLeaseRead?.(file);
+      const repaired = await withLeaseRepairOperation(file, async () => {
+        const current = await this.readRecord(
+          file,
+          this.maximumSessionBytes,
+          "CONTEXT_LEASE",
+        );
+        if (!current || current.serialized !== record.serialized) return false;
 
-      const stale = path.join(
-        taskDirectory,
-        `.admission.lock.stale-${randomBytes(8).toString("hex")}`,
-      );
-      try {
-        await fs.rename(file, stale);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw error;
-      }
-      await this.syncDirectory(taskDirectory);
-      await fs.unlink(stale);
-      await this.syncDirectory(taskDirectory);
+        const stale = path.join(
+          taskDirectory,
+          `.admission.lock.stale-${randomBytes(8).toString("hex")}`,
+        );
+        try {
+          await fs.rename(file, stale);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw error;
+        }
+        await this.syncDirectory(taskDirectory);
+        await fs.unlink(stale);
+        await this.syncDirectory(taskDirectory);
+        return true;
+      });
+      if (!repaired) continue;
     }
     throw new Error("CONTEXT_ADMISSION_CONTENTION");
   }
