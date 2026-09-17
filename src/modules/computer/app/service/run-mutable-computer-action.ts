@@ -340,6 +340,40 @@ export class RunMutableComputerAction {
       return this.recoverExisting(request, admission.record, requestDigest);
     }
 
+    // Durable admission is intentionally awaitable. Revalidate the same
+    // authority snapshot at the execution handoff so time spent committing
+    // the operation record cannot carry an expired grant into the native
+    // mutation boundary. There is no await between this decision and calling
+    // mutate; that call is the documented execution linearization point.
+    const executionHandoff = authorizeComputerAction(
+      participant,
+      approval,
+      {
+        ownerId: request.ownerId,
+        sessionId: request.sessionId,
+        taskId: request.taskId,
+        taskEpoch: request.taskEpoch,
+        operation: {
+          kind: "workspace.write",
+          workspaceId: request.workspaceId,
+          path: target,
+        },
+      },
+      this.clock.now(),
+    );
+    if (!executionHandoff.ok) {
+      const terminal: StoredWorkspaceMutation = {
+        ...prepared,
+        phase: "failed",
+        outcome: {
+          code: executionHandoff.error.code,
+          source: executionHandoff.error.source,
+        },
+      };
+      await this.trySave(terminal);
+      return executionHandoff;
+    }
+
     let result: Awaited<ReturnType<MutableWorkspace["mutate"]>>;
     try {
       result = await this.workspace.mutate({

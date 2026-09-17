@@ -3,6 +3,16 @@ import type {
   WorkspaceMutationOperation,
   WorkspaceMutationReceipt,
 } from "./mutable-workspace";
+import type {
+  AuthorityErrorCode,
+  AuthorityFailureSource,
+} from "../../domain/execution-authority";
+
+export type StoredWorkspaceMutationFailureCode =
+  WorkspaceMutationErrorCode | AuthorityErrorCode;
+
+export type StoredWorkspaceMutationFailureSource =
+  "native-workspace" | "operation-store" | AuthorityFailureSource;
 
 export type WorkspaceMutationIdentity = Readonly<{
   operationId: string;
@@ -31,8 +41,8 @@ export type StoredWorkspaceMutation =
       Readonly<{
         phase: "failed" | "outcome_unknown";
         outcome: Readonly<{
-          code: WorkspaceMutationErrorCode;
-          source: "native-workspace" | "operation-store";
+          code: StoredWorkspaceMutationFailureCode;
+          source: StoredWorkspaceMutationFailureSource;
         }>;
       }>);
 

@@ -54,6 +54,29 @@ const mutationErrorCodeSchema = z.enum([
   "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
 ]);
 
+const authorityErrorCodeSchema = z.enum([
+  "AUTHORITY_OWNER_MISMATCH",
+  "AUTHORITY_TASK_MISMATCH",
+  "AUTHORITY_COMPUTER_MISMATCH",
+  "AUTHORITY_EXPIRED",
+  "AUTHORITY_INFLATION_DENIED",
+  "AUTHORITY_CAPABILITY_DENIED",
+  "AUTHORITY_PATH_DENIED",
+  "AUTHORITY_NETWORK_DENIED",
+  "AUTHORITY_COMMAND_DENIED",
+  "AUTHORITY_MUTATION_OWNERSHIP_DENIED",
+]);
+
+const authorityFailureSourceSchema = z.enum([
+  "computer-approval",
+  "task-admission",
+  "task-grant",
+  "owner-restriction",
+  "role",
+  "computer-policy",
+  "native-host",
+]);
+
 const commonSchema = z.strictObject({
   identity: identitySchema,
   workspaceId: boundedId,
@@ -69,10 +92,14 @@ const storedMutationSchema = z.discriminatedUnion("phase", [
   commonSchema.extend({
     phase: z.literal("failed"),
     outcome: z.strictObject({
-      code: mutationErrorCodeSchema.exclude([
-        "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+      code: z.union([
+        mutationErrorCodeSchema.exclude(["WORKSPACE_MUTATION_OUTCOME_UNKNOWN"]),
+        authorityErrorCodeSchema,
       ]),
-      source: z.enum(["native-workspace", "operation-store"]),
+      source: z.union([
+        z.enum(["native-workspace", "operation-store"]),
+        authorityFailureSourceSchema,
+      ]),
     }),
   }),
   commonSchema.extend({

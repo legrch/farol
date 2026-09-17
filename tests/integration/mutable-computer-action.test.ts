@@ -492,6 +492,48 @@ describe("authorized mutable Computer action", () => {
     expect(calls).toBe(1);
   });
 
+  it("refuses a mutation when authority expires during durable admission", async () => {
+    let now = 9_999;
+    const native = successfulWorkspace();
+    const stored = new InMemoryWorkspaceMutationRepository();
+    const mutations: WorkspaceMutationRepository = {
+      load: (identity) => stored.load(identity),
+      save: (record) => stored.save(record),
+      async admit(record) {
+        const admitted = await stored.admit(record);
+        now = 10_001;
+        return admitted;
+      },
+    };
+    const runner = new RunMutableComputerAction(
+      new InMemoryAuthorityRepository(participants()),
+      new InMemoryComputerApprovalRepository([approval()]),
+      mutations,
+      new Sha256WorkspaceMutationDigester(),
+      native.workspace,
+      { now: () => now },
+    );
+
+    await expect(runner.execute(request())).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHORITY_EXPIRED",
+        source: "task-grant",
+        retry: "never",
+      },
+    });
+    expect(native.calls()).toBe(0);
+    await expect(runner.execute(request())).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHORITY_EXPIRED",
+        source: "task-grant",
+        retry: "never",
+      },
+    });
+    expect(native.calls()).toBe(0);
+  });
+
   it("classifies pre-admission infrastructure and authority failures without mutation", async () => {
     const native = successfulWorkspace();
     const unavailableAuthorities: AuthorityRepository = {
