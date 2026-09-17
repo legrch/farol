@@ -220,12 +220,19 @@ export async function startCodexCallerRelay(
         ) {
           return refuse("CALLER_RELAY_OUTPUT_INVALID");
         }
-        return {
+        const response: CodexCallerRelayResponse = {
           ok: true,
           operation: "invoke",
           operationId: request.operationId,
           output,
         };
+        if (
+          Buffer.byteLength(`${JSON.stringify(response)}\n`, "utf8") >
+          CALLER_RELAY_MAX_FRAME_BYTES
+        ) {
+          return refuse("CALLER_RELAY_OUTPUT_TOO_LARGE");
+        }
+        return response;
       })
       .catch(() => refuse("CALLER_RELAY_NATIVE_TOOL_FAILED"))
       .finally(() => {
@@ -247,7 +254,18 @@ export async function startCodexCallerRelay(
     const reply = (response: CodexCallerRelayResponse) => {
       if (socket.destroyed) return;
       const parsed = CodexCallerRelayResponseSchema.parse(response);
-      socket.end(`${JSON.stringify(parsed)}\n`);
+      const encoded = `${JSON.stringify(parsed)}\n`;
+      if (Buffer.byteLength(encoded, "utf8") > CALLER_RELAY_MAX_FRAME_BYTES) {
+        socket.end(
+          `${JSON.stringify(
+            CodexCallerRelayResponseSchema.parse(
+              refuse("CALLER_RELAY_RESPONSE_TOO_LARGE"),
+            ),
+          )}\n`,
+        );
+        return;
+      }
+      socket.end(encoded);
     };
     socket.on("data", (chunk: Buffer) => {
       if (handled) return;

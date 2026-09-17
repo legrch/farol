@@ -279,4 +279,39 @@ describe("Farol Next Codex caller relay", () => {
       }),
     ).rejects.toThrow("CALLER_RELAY_REQUEST_TOO_LARGE");
   });
+
+  it("caches a bounded refusal when multibyte tool output exceeds the frame", async () => {
+    const relay = await start();
+    const invoke = vi.fn(async () => "😀".repeat(200_000));
+    const turn = relay.openTurn({
+      identity: {
+        sessionId: "session-output",
+        threadId: "thread-output",
+        turnId: "turn-output",
+        rootTurnId: "turn-output",
+      },
+      tools: [command],
+      invoke,
+    });
+    const client = new CodexCallerRelayClient(relay.endpoint);
+    const request = {
+      operation: "invoke" as const,
+      ticket: turn.ticket,
+      binding: turn.binding,
+      operationId: "multibyte-output",
+      name: "get_goal",
+      namespace: null,
+      arguments: {},
+    };
+
+    await expect(client.request(request)).resolves.toEqual({
+      ok: false,
+      error: { code: "CALLER_RELAY_OUTPUT_TOO_LARGE", retry: "never" },
+    });
+    await expect(client.request(request)).resolves.toEqual({
+      ok: false,
+      error: { code: "CALLER_RELAY_OUTPUT_TOO_LARGE", retry: "never" },
+    });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
 });
