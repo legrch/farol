@@ -870,6 +870,36 @@ describe("private context persistence", () => {
     ).resolves.toMatchObject({ checkpointId: "checkpoint-harbor" });
   });
 
+  it("pins the last good and newly written checkpoints across clock rollback", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({
+      root: stateRoot,
+      maxCheckpointsPerTask: 2,
+    });
+    await store.save({
+      ...createContextSession(binding),
+      epoch: 2,
+      lastCheckpointId: "checkpoint-1",
+      lastCompletedOperationId: "operation-checkpoint-1",
+      lastCompletedRequest: {
+        operationId: "operation-checkpoint-1",
+        source: "retained_agent",
+        sourceBoundary: "message-operation-checkpoint-1",
+      },
+    });
+    await store.put(checkpoint("checkpoint-1", 3_000));
+    await store.put(checkpoint("checkpoint-2", 2_000));
+    await store.put(checkpoint("checkpoint-3", 1_000));
+
+    await expect(store.get(binding, "checkpoint-1")).resolves.toMatchObject({
+      checkpointId: "checkpoint-1",
+    });
+    await expect(store.get(binding, "checkpoint-3")).resolves.toMatchObject({
+      checkpointId: "checkpoint-3",
+    });
+    await expect(store.get(binding, "checkpoint-2")).resolves.toBeNull();
+  });
+
   it("rejects conflicting or over-budget checkpoint replacement", async () => {
     const stateRoot = await root();
     const store = new PrivateContextStore({

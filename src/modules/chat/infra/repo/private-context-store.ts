@@ -509,7 +509,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       this.maximumCheckpointRecordBytes,
       "CHECKPOINT_RECORD_OVERSIZED",
     );
-    await this.pruneCheckpoints(directory, validated.binding);
+    await this.pruneCheckpoints(
+      directory,
+      validated.binding,
+      validated.checkpointId,
+    );
   }
 
   async get(
@@ -1024,7 +1028,16 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private async pruneCheckpoints(
     directory: string,
     binding: ContextBinding,
+    newlyWrittenCheckpointId: string,
   ): Promise<void> {
+    const protectedCheckpointIds = new Set([newlyWrittenCheckpointId]);
+    const session = await this.load(binding);
+    if (session?.lastCheckpointId) {
+      protectedCheckpointIds.add(session.lastCheckpointId);
+    }
+    if (session?.operation?.checkpointId) {
+      protectedCheckpointIds.add(session.operation.checkpointId);
+    }
     const names = (await fs.readdir(directory)).filter((name) =>
       /^[a-f0-9]{64}\.json$/u.test(name),
     );
@@ -1054,7 +1067,18 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
               left.checkpoint.checkpointId,
             );
       });
-    const expired = ordered.slice(this.maxCheckpointsPerTask);
+    const protectedCount = ordered.filter((record) =>
+      protectedCheckpointIds.has(record.checkpoint.checkpointId),
+    ).length;
+    const unprotectedCapacity = Math.max(
+      0,
+      this.maxCheckpointsPerTask - protectedCount,
+    );
+    const expired = ordered
+      .filter(
+        (record) => !protectedCheckpointIds.has(record.checkpoint.checkpointId),
+      )
+      .slice(unprotectedCapacity);
     await Promise.all(
       expired.map((record) => fs.unlink(path.join(directory, record.name))),
     );
