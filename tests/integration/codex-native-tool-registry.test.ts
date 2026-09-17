@@ -64,6 +64,39 @@ describe("Codex native tool registry", () => {
       name: "wait_agent",
       namespace: "multi_agent_v1",
     });
+    expect(registry.inventory()).toEqual([
+      { name: "exec_command", namespace: null },
+      { name: "wait_agent", namespace: "multi_agent_v1" },
+    ]);
+    expect(registry.describe()).toEqual({
+      fingerprint: registry.fingerprint,
+      tools: [
+        {
+          name: "exec_command",
+          namespace: null,
+          description: "Run one command.",
+          parameters: command.parameters,
+        },
+        {
+          name: "wait_agent",
+          namespace: "multi_agent_v1",
+          description: null,
+          parameters: {
+            type: "object",
+            properties: {
+              targets: {
+                type: "array",
+                items: { type: "string", minLength: 1 },
+                minItems: 1,
+              },
+            },
+            required: ["targets"],
+            additionalProperties: false,
+          },
+        },
+      ],
+      unsupported: [],
+    });
 
     expect(() =>
       registry.resolve({
@@ -123,5 +156,21 @@ describe("Codex native tool registry", () => {
     ]);
     expect(initial.fingerprint).toMatch(/^[a-f0-9]{64}$/u);
     expect(changed.fingerprint).not.toBe(initial.fingerprint);
+  });
+
+  it("reports unsupported host entries without granting them", () => {
+    const registry = CodexNativeToolRegistry.parse([
+      command,
+      { type: "web_search", name: "search" },
+      { type: "local_shell" },
+    ]);
+
+    expect(registry.describe().unsupported).toEqual([
+      { type: "web_search", name: "search" },
+      { type: "local_shell", name: null },
+    ]);
+    expect(() => registry.resolve({ name: "search", arguments: {} })).toThrow(
+      "CODEX_TOOL_NOT_ADVERTISED",
+    );
   });
 });

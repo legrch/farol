@@ -92,6 +92,11 @@ describe("secure MCP Computer launch contract", () => {
       now: 1_789_516_800_000,
       runtimeId: "runtime-generation-01",
       challengeSha256: "a".repeat(64),
+      callerRelay: {
+        protocol: "farol-next-caller-relay/v1",
+        socketPath: "/private/tmp/farol-next-caller/relay.sock",
+        token: "a-private-relay-token-that-is-long-enough",
+      },
     });
 
     expect(launch).toMatchObject({
@@ -154,6 +159,10 @@ describe("secure MCP Computer launch contract", () => {
         generation: 7,
       },
       connectorVerification: { challengeSha256: "a".repeat(64) },
+      callerRelay: {
+        protocol: "farol-next-caller-relay/v1",
+        socketPath: "/private/tmp/farol-next-caller/relay.sock",
+      },
     });
 
     const materialized = materializeReadonlyComputerLaunch(
@@ -163,6 +172,11 @@ describe("secure MCP Computer launch contract", () => {
     expect(materialized.mutationEnabled).toBe(true);
     expect(materialized.connectorVerification).toEqual({
       challengeSha256: "a".repeat(64),
+    });
+    expect(materialized.callerRelay).toEqual({
+      protocol: "farol-next-caller-relay/v1",
+      socketPath: "/private/tmp/farol-next-caller/relay.sock",
+      token: "a-private-relay-token-that-is-long-enough",
     });
     expect(materialized.participants[0]?.grant.workspaces).toMatchObject(
       launch.admission.workspaces,

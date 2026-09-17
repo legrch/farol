@@ -11,6 +11,11 @@ import {
   type ReadonlyComputerCallRequest,
   type ReadonlyComputerContract,
 } from "../../contract/readonly-computer-contract";
+import {
+  CodexCallerRelayOperationSchema,
+  type CodexCallerRelayResponse,
+} from "../../../../pkg/caller-relay/protocol";
+import type { CodexCallerRelayPort } from "./codex-caller-relay-port";
 
 export type ReadonlyComputerMcpBinding = Readonly<{
   ownerId: string;
@@ -139,6 +144,13 @@ const VERIFICATION_ANNOTATIONS = {
   destructiveHint: false,
   idempotentHint: false,
   openWorldHint: false,
+} as const;
+
+const CALLER_RELAY_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
 } as const;
 
 export interface ConnectorVerificationRecorder {
@@ -426,11 +438,46 @@ async function executeConnectorVerification(
   }
 }
 
+async function executeCallerRelay(
+  relay: CodexCallerRelayPort,
+  operation: z.infer<typeof CodexCallerRelayOperationSchema>,
+): Promise<CallToolResult> {
+  let response: CodexCallerRelayResponse;
+  try {
+    response = await relay.request(operation);
+  } catch {
+    response = {
+      ok: false,
+      error: { code: "CALLER_RELAY_UNAVAILABLE", retry: "never" },
+    };
+  }
+  if (!response.ok) {
+    return {
+      content: [{ type: "text", text: JSON.stringify(response) }],
+      structuredContent: response,
+      isError: true,
+    };
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          response.operation === "invoke"
+            ? response.output
+            : JSON.stringify(response.catalogue),
+      },
+    ],
+    structuredContent: response,
+  };
+}
+
 export function createReadonlyComputerMcpServer(
   contract: ReadonlyComputerContract,
   binding: ReadonlyComputerMcpBinding,
   mutableContract?: MutableComputerContract,
   connectorVerification?: ConnectorVerificationRecorder,
+  callerRelay?: CodexCallerRelayPort,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -519,6 +566,20 @@ export function createReadonlyComputerMcpServer(
           challenge,
           workspaceId,
         ),
+    );
+  }
+
+  if (callerRelay) {
+    server.registerTool(
+      "farol_next_caller_tools",
+      {
+        title: "Use the active Codex task's native tools",
+        description:
+          "Describe or invoke only the exact native host tools bound to one opaque Farol Next turn ticket. The relay validates the current host schema, turn binding, stable operation ID, and at-most-once delivery before the host can execute anything.",
+        inputSchema: CodexCallerRelayOperationSchema,
+        annotations: CALLER_RELAY_ANNOTATIONS,
+      },
+      async (operation) => executeCallerRelay(callerRelay, operation),
     );
   }
 

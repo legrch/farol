@@ -63,8 +63,28 @@ const schemaKeywords = new Set([
 type ToolDescriptor = Readonly<{
   name: string;
   namespace: string | null;
+  description: string | null;
   parameters: unknown;
   validator: z.ZodType;
+}>;
+
+export type CodexNativeToolInventoryEntry = Readonly<{
+  name: string;
+  namespace: string | null;
+}>;
+
+export type CodexNativeToolCatalogue = Readonly<{
+  fingerprint: string;
+  tools: Readonly<{
+    name: string;
+    namespace: string | null;
+    description: string | null;
+    parameters: unknown;
+  }>[];
+  unsupported: Readonly<{
+    type: string;
+    name: string | null;
+  }>[];
 }>;
 
 export type CodexNativeToolRequest = Readonly<{
@@ -202,6 +222,7 @@ function descriptor(
   return {
     name: raw.name,
     namespace,
+    description: typeof raw.description === "string" ? raw.description : null,
     parameters: structuredClone(raw.parameters),
     validator: compile(raw.parameters),
   };
@@ -211,6 +232,10 @@ export class CodexNativeToolRegistry {
   private constructor(
     readonly fingerprint: string,
     private readonly descriptors: ReadonlyMap<string, ToolDescriptor>,
+    private readonly unsupported: readonly Readonly<{
+      type: string;
+      name: string | null;
+    }>[],
   ) {}
 
   static parse(tools: readonly unknown[]): CodexNativeToolRegistry {
@@ -222,6 +247,7 @@ export class CodexNativeToolRegistry {
       registryError("CODEX_TOOL_CATALOGUE_TOO_LARGE");
     }
     const descriptors = new Map<string, ToolDescriptor>();
+    const unsupported: Readonly<{ type: string; name: string | null }>[] = [];
     let count = 0;
     const add = (candidate: ToolDescriptor): void => {
       count += 1;
@@ -237,7 +263,21 @@ export class CodexNativeToolRegistry {
         add(descriptor(entry, null));
         continue;
       }
-      if (entry.type !== "namespace") continue;
+      if (entry.type !== "namespace") {
+        if (
+          typeof entry.type !== "string" ||
+          !TOOL_NAME.test(entry.type) ||
+          (entry.name !== undefined &&
+            (typeof entry.name !== "string" || !TOOL_NAME.test(entry.name)))
+        ) {
+          registryError("CODEX_TOOL_DESCRIPTOR_INVALID");
+        }
+        unsupported.push({
+          type: entry.type,
+          name: typeof entry.name === "string" ? entry.name : null,
+        });
+        continue;
+      }
       if (
         typeof entry.name !== "string" ||
         !TOOL_NAME.test(entry.name) ||
@@ -254,7 +294,30 @@ export class CodexNativeToolRegistry {
     return new CodexNativeToolRegistry(
       createHash("sha256").update(encoded).digest("hex"),
       descriptors,
+      unsupported,
     );
+  }
+
+  inventory(): readonly CodexNativeToolInventoryEntry[] {
+    return [...this.descriptors.values()].map(({ name, namespace }) => ({
+      name,
+      namespace,
+    }));
+  }
+
+  describe(): CodexNativeToolCatalogue {
+    return {
+      fingerprint: this.fingerprint,
+      tools: [...this.descriptors.values()].map(
+        ({ name, namespace, description, parameters }) => ({
+          name,
+          namespace,
+          description,
+          parameters: structuredClone(parameters),
+        }),
+      ),
+      unsupported: this.unsupported.map((entry) => ({ ...entry })),
+    };
   }
 
   resolve(request: CodexNativeToolRequest): ResolvedCodexNativeToolCall {

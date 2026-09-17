@@ -10,6 +10,7 @@ import {
   type ReadonlyComputerLaunchContract,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
+import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
@@ -26,6 +27,7 @@ export function createSecureMcpLaunchContract(
     now: number;
     runtimeId: string;
     challengeSha256: string;
+    callerRelay?: CodexCallerRelayEndpoint;
   }>,
 ): ReadonlyComputerLaunchContract {
   if (
@@ -114,6 +116,9 @@ export function createSecureMcpLaunchContract(
     connectorVerification: {
       challengeSha256: input.challengeSha256,
     },
+    ...(input.callerRelay === undefined
+      ? {}
+      : { callerRelay: input.callerRelay }),
   });
 }
 

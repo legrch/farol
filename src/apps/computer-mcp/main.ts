@@ -20,6 +20,7 @@ import {
   materializeReadonlyComputerLaunch,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import { CodexCallerRelayClient } from "./codex-caller-relay-client";
 
 function launchContractArgument(arguments_: readonly string[]): string {
   if (
@@ -71,6 +72,9 @@ async function main(): Promise<void> {
         challengeSha256: launch.connectorVerification.challengeSha256,
       })
     : undefined;
+  const callerRelay = launch.callerRelay
+    ? new CodexCallerRelayClient(launch.callerRelay)
+    : undefined;
   const handle = serveStdio(
     () =>
       createReadonlyComputerMcpServer(
@@ -78,6 +82,7 @@ async function main(): Promise<void> {
         launch.binding,
         mutableContract,
         connectorVerification,
+        callerRelay,
       ),
     {
       legacy: "serve",

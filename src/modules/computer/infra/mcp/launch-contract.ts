@@ -14,6 +14,10 @@ import {
   type TaskAdmission,
 } from "../../domain/execution-authority";
 import type { ReadonlyComputerMcpBinding } from "./create-readonly-computer-mcp";
+import {
+  CodexCallerRelayEndpointSchema,
+  type CodexCallerRelayEndpoint,
+} from "../../../../pkg/caller-relay/protocol";
 
 export const READONLY_COMPUTER_LAUNCH_BASENAME = "computer-launch.json";
 
@@ -190,6 +194,9 @@ const BindingSchema = z.strictObject({
 const ConnectorVerificationSchema = z.strictObject({
   challengeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
+const CallerRelayEndpointSchema = CodexCallerRelayEndpointSchema.refine(
+  (value) => canonicalAbsolutePath(value.socketPath),
+);
 
 function validateChain(
   value: Readonly<{
@@ -239,6 +246,7 @@ const ReadonlyLaunchContractSchema = z
     delegationChain: z.array(ReadonlyParticipantSchema).min(1).max(16),
     binding: BindingSchema,
     connectorVerification: ConnectorVerificationSchema.optional(),
+    callerRelay: CallerRelayEndpointSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -250,6 +258,7 @@ const MutableLaunchContractSchema = z
     delegationChain: z.array(MutableParticipantSchema).min(1).max(16),
     binding: BindingSchema,
     connectorVerification: ConnectorVerificationSchema.optional(),
+    callerRelay: CallerRelayEndpointSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -377,6 +386,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   binding: ReadonlyComputerMcpBinding;
   mutationEnabled: boolean;
   connectorVerification: Readonly<{ challengeSha256: string }> | null;
+  callerRelay: CodexCallerRelayEndpoint | null;
 }>;
 
 export function materializeReadonlyComputerLaunch(
@@ -436,5 +446,6 @@ export function materializeReadonlyComputerLaunch(
       generation: launch.binding.generation,
     },
     connectorVerification: launch.connectorVerification ?? null,
+    callerRelay: launch.callerRelay ?? null,
   };
 }
