@@ -334,6 +334,22 @@ describe("ChatGPT embedded task surface", () => {
     );
   });
 
+  it("clears the durable conversation binding when the source is retired", () => {
+    const onConversationChanged = vi.fn();
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/c/task-owned-before-retirement",
+      e2eOrigin: null,
+      parent: () => null,
+      onConversationChanged,
+    });
+
+    candidate.resetConversation();
+
+    expect(candidate.retainedConversationUrl()).toBeNull();
+    expect(onConversationChanged).toHaveBeenCalledExactlyOnceWith(null);
+  });
+
   it("uses the injected task-owned surface without creating a separate window", async () => {
     const surface = embeddedSurface();
     const surfaceFactory = vi.fn(() => surface);

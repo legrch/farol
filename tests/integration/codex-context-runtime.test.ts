@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  createCodexContextController,
   startCodexContextRuntime,
   type CodexContextRuntime,
 } from "../../src/apps/desktop/codex-context-runtime";
@@ -266,6 +267,38 @@ describe("assembled Codex context runtime", () => {
     roots.push(root);
     return root;
   }
+
+  it("composes continuity without starting the model-visible provider", async () => {
+    const root = await stateRoot();
+    const retained = new DeterministicSummaryRoute(
+      checkpoint(1),
+      "https://chatgpt.com/c/context-controller-1",
+    );
+    const controller = createCodexContextController({
+      ownerId: binding.ownerId,
+      providerProfileId: binding.providerProfileId,
+      stateRoot: root,
+      summaryRoutes: {
+        retained: () => retained,
+        createFallback: vi.fn(),
+      },
+    });
+
+    const compacted = await controller.continuity.compact({
+      endpoint: "responses_compact",
+      body: { model, input: history(1) },
+      metadataHeader: JSON.stringify({
+        thread_id: binding.hostThreadId,
+        turn_id: "turn-controller-compact",
+      }),
+    });
+
+    expect(compacted.ok).toBe(true);
+    expect(await controller.store.load(binding)).toMatchObject({
+      phase: "handoff_offered",
+      epoch: 1,
+    });
+  });
 
   it("runs three ordinary retained compactions across restart without losing protected facts", async () => {
     const root = await stateRoot();

@@ -11,16 +11,25 @@ import {
 } from "./codex-chatgpt-provider";
 import { CodexContextContinuity } from "./codex-context-continuity";
 
-export type CodexContextRuntimeOptions = Readonly<{
+export type CodexContextControllerOptions = Readonly<{
   ownerId: string;
   providerProfileId: string;
   stateRoot: string;
-  model: "farol-next/mind" | "farol-next/drive";
-  token: string;
-  conversation: CodexChatGptConversation;
   summaryRoutes: ChatGptContextSummaryRoutes;
   maximumSummaryPromptCharacters?: number;
   onContextStateChanged?: (session: ContextSession) => void | Promise<void>;
+}>;
+
+export type CodexContextRuntimeOptions = CodexContextControllerOptions &
+  Readonly<{
+    model: "farol-next/mind" | "farol-next/drive";
+    token: string;
+    conversation: CodexChatGptConversation;
+  }>;
+
+export type CodexContextController = Readonly<{
+  store: PrivateContextStore;
+  continuity: CodexContextContinuity;
 }>;
 
 export type CodexContextRuntime = Readonly<{
@@ -28,9 +37,9 @@ export type CodexContextRuntime = Readonly<{
   close(): Promise<void>;
 }>;
 
-export async function startCodexContextRuntime(
-  options: CodexContextRuntimeOptions,
-): Promise<CodexContextRuntime> {
+export function createCodexContextController(
+  options: CodexContextControllerOptions,
+): CodexContextController {
   const store = new PrivateContextStore({ root: options.stateRoot });
   const summary = new ChatGptContextSummaryDriver({
     store,
@@ -50,11 +59,18 @@ export async function startCodexContextRuntime(
       ? {}
       : { onStateChanged: options.onContextStateChanged }),
   });
+  return { store, continuity };
+}
+
+export async function startCodexContextRuntime(
+  options: CodexContextRuntimeOptions,
+): Promise<CodexContextRuntime> {
+  const controller = createCodexContextController(options);
   const provider = await startCodexChatGptProvider({
     model: options.model,
     token: options.token,
     conversation: options.conversation,
-    compaction: continuity,
+    compaction: controller.continuity,
   });
   let closed = false;
 

@@ -784,6 +784,7 @@ export class ChatGptRoute {
     this.routeWindow = null;
     this.load = "failed";
     this.disposing = false;
+    this.options.onConversationChanged?.(null);
   }
 
   dispose(): void {
