@@ -2993,16 +2993,11 @@ try {
   );
   await ordinaryLiveTasks.window.waitForTimeout(350);
   await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
-    const state = await window.farolNext.bootstrap();
-    const agent = state.tasks.find((task) => task.taskId === taskId)?.agent;
-    return (
-      agent?.phase === "completed" &&
-      agent.parentDelivery === "acknowledged" &&
-      agent.workspaceEnforcement === "verified" &&
-      agent.resultAvailable === true
-    );
-  }, pinnedTask.taskId);
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-agent-state small")?.textContent ===
+      "Delivered",
+  );
   const productAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
