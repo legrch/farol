@@ -129,7 +129,7 @@ describe("Codex native tool registry", () => {
           },
         },
       ]),
-    ).toThrow("CODEX_TOOL_SCHEMA_UNSUPPORTED");
+    ).toThrow("CODEX_TOOL_SCHEMA_UNSUPPORTED_UNEVALUATEDPROPERTIES");
     expect(() =>
       CodexNativeToolRegistry.parse([
         {
@@ -172,5 +172,73 @@ describe("Codex native tool registry", () => {
     expect(() => registry.resolve({ name: "search", arguments: {} })).toThrow(
       "CODEX_TOOL_NOT_ADVERTISED",
     );
+  });
+
+  it("accepts a bounded installed-host catalogue without widening one schema", () => {
+    const catalogue = Array.from({ length: 96 }, (_value, index) => ({
+      ...command,
+      name: `native_tool_${index}`,
+      description: `Native host tool ${index}. ${"x".repeat(3_000)}`,
+    }));
+
+    expect(CodexNativeToolRegistry.parse(catalogue).inventory()).toHaveLength(
+      96,
+    );
+
+    const oversized = Array.from({ length: 100 }, (_value, index) => ({
+      ...command,
+      name: `oversized_tool_${index}`,
+      description: "x".repeat(8_000),
+    }));
+    expect(() => CodexNativeToolRegistry.parse(oversized)).toThrow(
+      "CODEX_TOOL_CATALOGUE_TOO_LARGE",
+    );
+  });
+
+  it("validates recursive 2020-12 host schemas through local refs", () => {
+    const registry = CodexNativeToolRegistry.parse([
+      {
+        type: "function",
+        name: "create_tree",
+        parameters: {
+          $defs: {
+            node: {
+              type: "object",
+              properties: {
+                value: { type: "string" },
+                children: {
+                  type: "array",
+                  items: { $ref: "#/$defs/node" },
+                },
+              },
+              required: ["value"],
+              additionalProperties: false,
+            },
+          },
+          type: "object",
+          properties: { root: { $ref: "#/$defs/node" } },
+          required: ["root"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+
+    expect(
+      registry.resolve({
+        name: "create_tree",
+        arguments: {
+          root: {
+            value: "root",
+            children: [{ value: "child", children: [] }],
+          },
+        },
+      }),
+    ).toMatchObject({ name: "create_tree" });
+    expect(() =>
+      registry.resolve({
+        name: "create_tree",
+        arguments: { root: { value: "root", children: [{ value: 7 }] } },
+      }),
+    ).toThrow("CODEX_TOOL_ARGUMENTS_INVALID");
   });
 });

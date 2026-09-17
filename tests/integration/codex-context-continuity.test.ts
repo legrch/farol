@@ -265,6 +265,76 @@ describe("Codex host context continuity composition", () => {
     );
   });
 
+  it("uses an exact host item and turn receipt when the next request hides the checkpoint", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    const firstStore = new PrivateContextStore({ root });
+    const first = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: firstStore,
+      summary,
+    });
+    const handoff = await first.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok || handoff.value.variant !== "streamed_compaction_item") {
+      throw new Error("EXPECTED_STREAMED_HANDOFF");
+    }
+
+    const restartedStore = new PrivateContextStore({ root });
+    const restarted = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: restartedStore,
+      summary,
+    });
+    await expect(
+      restarted.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId: "thread-context-1",
+        turnId: "turn-foreign",
+        itemId: "host-context-compaction-1",
+        signal: "turn_completed",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED" },
+    });
+    await expect(
+      restarted.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId: "thread-context-1",
+        turnId: "turn-context-compact-1",
+        itemId: "host-context-compaction-1",
+        signal: "turn_completed",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+    await expect(
+      restarted.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId: "thread-context-1",
+        turnId: "turn-context-compact-1",
+        itemId: "host-context-compaction-1",
+        signal: "turn_completed",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+    expect(summary.request).toHaveBeenCalledTimes(1);
+    expect(summary.retire).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves an unknown summary outcome without a second submission after restart", async () => {
     const root = await stateRoot();
     const summary = driver();

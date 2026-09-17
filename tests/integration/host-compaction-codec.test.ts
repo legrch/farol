@@ -130,6 +130,43 @@ describe("native host compaction codec", () => {
       ok: true,
       value: { variant: "streamed_compaction_item", history: baseInput },
     });
+    const installedMetadata = JSON.stringify({
+      thread_id: "thread-atlantic",
+      turn_id: "turn-compact-installed",
+      compaction: {
+        implementation: "responses",
+        phase: "standalone_turn",
+        reason: "user_requested",
+        strategy: "memento",
+        trigger: "manual",
+      },
+      request_kind: "compaction",
+    });
+    const installed = parseHostCompactionRequest(
+      "responses",
+      {
+        model: "chatgpt-web/high",
+        stream: true,
+        input: baseInput,
+        client_metadata: {
+          thread_id: "thread-atlantic",
+          turn_id: "turn-compact-installed",
+          "x-codex-turn-metadata": installedMetadata,
+        },
+      },
+      undefined,
+    );
+    expect(installed).toMatchObject({
+      ok: true,
+      value: {
+        variant: "streamed_compaction_item",
+        history: baseInput,
+        identity: {
+          threadId: "thread-atlantic",
+          turnId: "turn-compact-installed",
+        },
+      },
+    });
     if (unary.ok && streamed.ok) {
       expect(unary.value.sourceBoundary).not.toBe(
         streamed.value.sourceBoundary,
@@ -171,6 +208,36 @@ describe("native host compaction codec", () => {
     ).toMatchObject({
       ok: false,
       error: { code: "HOST_COMPACTION_IDENTITY_MISSING" },
+    });
+    expect(
+      parseHostCompactionRequest(
+        "responses",
+        {
+          model: "chatgpt-web/high",
+          stream: true,
+          input: baseInput,
+          client_metadata: {
+            thread_id: "thread-atlantic",
+            turn_id: "turn-not-compaction",
+            "x-codex-turn-metadata": JSON.stringify({
+              thread_id: "thread-atlantic",
+              turn_id: "turn-not-compaction",
+              compaction: {
+                implementation: "responses",
+                phase: "standalone_turn",
+                reason: "user_requested",
+                strategy: "memento",
+                trigger: "automatic",
+              },
+              request_kind: "compaction",
+            }),
+          },
+        },
+        undefined,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "HOST_COMPACTION_TRIGGER_MISSING" },
     });
   });
 
@@ -232,7 +299,11 @@ describe("native host compaction codec", () => {
     );
     expect(handoff).toMatchObject({
       variant: "streamed_compaction_item",
-      item: { type: "compaction", encrypted_content: expect.any(String) },
+      item: {
+        id: expect.stringMatching(/^cmp_[a-f0-9]{32}$/u),
+        type: "compaction",
+        encrypted_content: expect.any(String),
+      },
     });
     if (handoff.variant !== "streamed_compaction_item") return;
     expect(handoff.item.encrypted_content).toMatch(

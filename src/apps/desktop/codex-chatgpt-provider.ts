@@ -12,10 +12,11 @@ import {
 import { once } from "node:events";
 import { z } from "zod";
 import type { Result } from "../../pkg/kernel/domain/result";
-import type {
-  HostCompactionEndpoint,
-  HostCompactionErrorCode,
-  HostCompactionHandoff,
+import {
+  isHostCompactionRequestMetadata,
+  type HostCompactionEndpoint,
+  type HostCompactionErrorCode,
+  type HostCompactionHandoff,
 } from "../../modules/chat/infra/client/host-compaction-codec";
 import {
   canonicalJson,
@@ -127,6 +128,13 @@ export type CodexChatGptProviderRuntime = Readonly<{
     toolCalls: number;
     compactionRequests: number;
     lastRefusalCode: string | null;
+    lastInputKinds: readonly string[];
+    lastMetadataKeys: readonly string[];
+    lastTurnMetadataKeys: readonly string[];
+    lastCompactionMarkerKind: string;
+    lastCompactionMarkerShape: readonly string[];
+    lastRequestKindCompaction: boolean;
+    lastRequestKindShape: readonly string[];
   }>;
   close(): Promise<void>;
 }>;
@@ -154,7 +162,8 @@ function streamedCompactionRequest(candidate: unknown): boolean {
   return (
     record(candidate) &&
     Array.isArray(candidate.input) &&
-    compactionTrigger(candidate.input.at(-1))
+    (compactionTrigger(candidate.input.at(-1)) ||
+      embeddedCompactionRequest(candidate))
   );
 }
 
@@ -163,6 +172,102 @@ function compactionMetadataHeader(
 ): string | undefined {
   const value = request.headers["x-codex-turn-metadata"];
   return typeof value === "string" ? value : undefined;
+}
+
+function inputKinds(candidate: unknown): string[] {
+  if (!record(candidate)) return [];
+  if (typeof candidate.input === "string") return ["string"];
+  if (!Array.isArray(candidate.input)) return [];
+  return candidate.input.map((item) =>
+    record(item) && typeof item.type === "string" ? item.type : "unknown",
+  );
+}
+
+function metadataKeys(candidate: unknown): string[] {
+  if (!record(candidate) || !record(candidate.client_metadata)) return [];
+  return Object.keys(candidate.client_metadata).sort();
+}
+
+function decodedTurnMetadata(
+  candidate: unknown,
+): Record<string, unknown> | null {
+  if (!record(candidate) || !record(candidate.client_metadata)) return null;
+  const raw = candidate.client_metadata["x-codex-turn-metadata"];
+  let decoded: unknown = raw;
+  if (typeof raw === "string") {
+    try {
+      decoded = JSON.parse(raw) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return record(decoded) ? decoded : null;
+}
+
+function embeddedCompactionRequest(candidate: unknown): boolean {
+  return isHostCompactionRequestMetadata(decodedTurnMetadata(candidate));
+}
+
+function compactionMarkerKind(candidate: unknown): string {
+  const metadata = decodedTurnMetadata(candidate);
+  if (!metadata || !("compaction" in metadata)) return "absent";
+  if (metadata.compaction === true) return "true";
+  if (metadata.compaction === false) return "false";
+  return typeof metadata.compaction;
+}
+
+function requestKindCompaction(candidate: unknown): boolean {
+  return decodedTurnMetadata(candidate)?.request_kind === "compaction";
+}
+
+function controlShape(value: unknown): string[] {
+  if (
+    typeof value === "string" &&
+    /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(value)
+  ) {
+    return [`string:${value}`];
+  }
+  if (!record(value)) return [Array.isArray(value) ? "array" : typeof value];
+  return Object.entries(value)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, entry]) => {
+      if (typeof entry === "boolean") return `${key}:boolean:${entry}`;
+      if (
+        typeof entry === "string" &&
+        [
+          "implementation",
+          "kind",
+          "mode",
+          "name",
+          "phase",
+          "reason",
+          "request_type",
+          "strategy",
+          "trigger",
+          "type",
+        ].includes(key) &&
+        /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(entry)
+      ) {
+        return `${key}:string:${entry}`;
+      }
+      if (record(entry)) {
+        return `${key}:object:${Object.keys(entry).sort().join(",")}`;
+      }
+      return `${key}:${Array.isArray(entry) ? "array" : typeof entry}`;
+    });
+}
+
+function compactionMarkerShape(candidate: unknown): string[] {
+  return controlShape(decodedTurnMetadata(candidate)?.compaction);
+}
+
+function requestKindShape(candidate: unknown): string[] {
+  return controlShape(decodedTurnMetadata(candidate)?.request_kind);
+}
+
+function turnMetadataKeys(candidate: unknown): string[] {
+  const decoded = decodedTurnMetadata(candidate);
+  return decoded ? Object.keys(decoded).sort() : [];
 }
 
 function authorized(request: IncomingMessage, token: string): boolean {
@@ -376,14 +481,13 @@ function currentCallEntry(value: unknown, tag: string): boolean {
   );
 }
 
-function bindingFingerprint(data: ResponseRequest, tag: string): string {
-  const normalized = {
-    ...data,
-    input: Array.isArray(data.input)
-      ? data.input.filter((item) => !currentCallEntry(item, tag))
-      : data.input,
-  };
-  return digest(canonicalJson(normalized));
+function bindingFingerprint(data: ResponseRequest): string {
+  return digest(
+    canonicalJson({
+      model: data.model,
+      identity: identityFromRequest(data),
+    }),
+  );
 }
 
 function outputText(value: unknown): string | null {
@@ -605,7 +709,7 @@ class ActiveProviderTurn {
   ) {
     this.key = turnKey(input.identity);
     this.tag = turnTag(input.identity);
-    this.binding = bindingFingerprint(data, this.tag);
+    this.binding = bindingFingerprint(data);
     this.registry = CodexNativeToolRegistry.parse(data.tools);
     this.lifetime = setTimeout(
       () => this.cancel("FAROL_NEXT_TURN_EXPIRED"),
@@ -766,14 +870,17 @@ class ActiveProviderTurn {
     output: string;
     outputCanonical: string;
   }> {
-    if (
-      this.state !== "running" ||
-      !this.pending ||
-      turnKey(identityFromRequest(data)) !== this.key ||
-      bindingFingerprint(data, this.tag) !== this.binding ||
-      !Array.isArray(data.input)
-    ) {
-      throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+    if (this.state !== "running" || !this.pending) {
+      throw new Error("FAROL_NEXT_CONTINUATION_STATE_INVALID");
+    }
+    if (turnKey(identityFromRequest(data)) !== this.key) {
+      throw new Error("FAROL_NEXT_CONTINUATION_IDENTITY_INVALID");
+    }
+    if (bindingFingerprint(data) !== this.binding) {
+      throw new Error("FAROL_NEXT_CONTINUATION_BINDING_INVALID");
+    }
+    if (!Array.isArray(data.input)) {
+      throw new Error("FAROL_NEXT_CONTINUATION_INPUT_INVALID");
     }
     const calls = new Map<string, Record<string, unknown>>();
     const outputs = new Map<string, Record<string, unknown>>();
@@ -782,12 +889,12 @@ class ActiveProviderTurn {
       const callId = String(item.call_id);
       const target = item.type === "function_call" ? calls : outputs;
       if (target.has(callId)) {
-        throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+        throw new Error("FAROL_NEXT_CONTINUATION_CARDINALITY_INVALID");
       }
       target.set(callId, item);
     }
     if (calls.size !== this.issued.size || outputs.size !== this.issued.size) {
-      throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+      throw new Error("FAROL_NEXT_CONTINUATION_CARDINALITY_INVALID");
     }
     let pendingOutput: string | null = null;
     let pendingCanonical: string | null = null;
@@ -802,22 +909,22 @@ class ActiveProviderTurn {
         call.arguments !== issued.encodedArguments ||
         (call.namespace ?? null) !== issued.namespace
       ) {
-        throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+        throw new Error("FAROL_NEXT_CONTINUATION_CALL_INVALID");
       }
       const normalized = outputText(output.output);
       if (normalized === null) {
-        throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+        throw new Error("FAROL_NEXT_CONTINUATION_OUTPUT_INVALID");
       }
       const canonical = canonicalJson(output.output);
       if (issued === this.pending) {
         pendingOutput = normalized;
         pendingCanonical = canonical;
       } else if (issued.outputCanonical !== canonical) {
-        throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+        throw new Error("FAROL_NEXT_CONTINUATION_REPLAY_INVALID");
       }
     }
     if (pendingOutput === null || pendingCanonical === null) {
-      throw new Error("FAROL_NEXT_CONTINUATION_INVALID");
+      throw new Error("FAROL_NEXT_CONTINUATION_OUTPUT_INVALID");
     }
     return {
       callId: this.pending.callId,
@@ -856,6 +963,7 @@ async function handleResponses(
 ): Promise<void> {
   const parsed = responseRequestSchema.safeParse(raw);
   if (!parsed.success) {
+    onRefusal("FAROL_NEXT_REQUEST_INVALID");
     refusal(response, 400, "FAROL_NEXT_REQUEST_INVALID");
     return;
   }
@@ -884,6 +992,11 @@ async function handleResponses(
       await existing.serveContinuation(response, parsed.data);
     } catch (error) {
       if (error instanceof Error && !response.headersSent) {
+        onRefusal(
+          /^FAROL_NEXT_CONTINUATION_[A-Z_]+$/u.test(error.message)
+            ? error.message
+            : "FAROL_NEXT_CONTINUATION_INVALID",
+        );
         refusal(response, 409, "FAROL_NEXT_CONTINUATION_INVALID");
         return;
       }
@@ -1059,6 +1172,13 @@ export async function startCodexChatGptProvider(
   let toolCalls = 0;
   let compactionRequests = 0;
   let lastRefusalCode: string | null = null;
+  let lastInputKinds: string[] = [];
+  let lastMetadataKeys: string[] = [];
+  let lastTurnMetadataKeys: string[] = [];
+  let lastCompactionMarkerKind = "absent";
+  let lastCompactionMarkerShape: string[] = [];
+  let lastRequestKindCompaction = false;
+  let lastRequestKindShape: string[] = [];
   const turns = new Map<string, ActiveProviderTurn>();
   const server = createServer((request, response) => {
     void (async () => {
@@ -1083,6 +1203,13 @@ export async function startCodexChatGptProvider(
       ) {
         const body = await readProviderBody(request, response);
         if (!body.ok) return;
+        lastInputKinds = inputKinds(body.value);
+        lastMetadataKeys = metadataKeys(body.value);
+        lastTurnMetadataKeys = turnMetadataKeys(body.value);
+        lastCompactionMarkerKind = compactionMarkerKind(body.value);
+        lastCompactionMarkerShape = compactionMarkerShape(body.value);
+        lastRequestKindCompaction = requestKindCompaction(body.value);
+        lastRequestKindShape = requestKindShape(body.value);
         const endpoint =
           url.pathname === "/v1/responses/compact"
             ? "responses_compact"
@@ -1147,6 +1274,13 @@ export async function startCodexChatGptProvider(
       toolCalls,
       compactionRequests,
       lastRefusalCode,
+      lastInputKinds: [...lastInputKinds],
+      lastMetadataKeys: [...lastMetadataKeys],
+      lastTurnMetadataKeys: [...lastTurnMetadataKeys],
+      lastCompactionMarkerKind,
+      lastCompactionMarkerShape: [...lastCompactionMarkerShape],
+      lastRequestKindCompaction,
+      lastRequestKindShape: [...lastRequestKindShape],
     }),
     close: async () => {
       for (const turn of [...turns.values()]) {

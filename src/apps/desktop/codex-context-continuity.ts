@@ -11,10 +11,12 @@ import type {
   SourceRetirementRequest,
 } from "../../modules/chat/app/port/context-source-control";
 import { CompactContext } from "../../modules/chat/app/service/compact-context";
-import type {
-  ContextBinding,
-  ContextSession,
-  ContextSource,
+import {
+  sameContextBinding,
+  validContextBinding,
+  type ContextBinding,
+  type ContextSession,
+  type ContextSource,
 } from "../../modules/chat/domain/context-continuity";
 import {
   buildHostCompactionHandoff,
@@ -83,11 +85,19 @@ function hash(value: unknown): string {
 }
 
 function operationId(request: ParsedHostCompaction): string {
-  return `compact-${hash([
+  return operationIdFor(
     request.identity.threadId,
     request.identity.turnId,
     request.sourceBoundary,
-  ]).slice(0, 40)}`;
+  );
+}
+
+function operationIdFor(
+  threadId: string,
+  turnId: string,
+  sourceBoundary: string,
+): string {
+  return `compact-${hash([threadId, turnId, sourceBoundary]).slice(0, 40)}`;
 }
 
 function modeFromModel(model: string): string {
@@ -300,6 +310,117 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     }
     this.confirmations.delete(checkpoint.checkpointId);
     return success(null);
+  }
+
+  async confirmHostCompaction(
+    input: Readonly<{
+      modelId: string;
+      threadId: string;
+      turnId: string;
+      itemId: string | null;
+      signal: "turn_completed" | "thread_compacted";
+    }>,
+  ): Promise<Result<ContextSession, CodexChatGptCompactionErrorCode>> {
+    const binding: ContextBinding = {
+      ownerId: this.options.ownerId,
+      taskId: input.threadId,
+      hostThreadId: input.threadId,
+      sessionId: input.threadId,
+      providerProfileId: this.options.providerProfileId,
+      modelId: input.modelId,
+      mode: modeFromModel(input.modelId),
+    };
+    if (
+      !validContextBinding(binding) ||
+      input.turnId.length < 1 ||
+      input.turnId.length > 160 ||
+      (input.signal === "turn_completed" && input.itemId === null) ||
+      (input.itemId !== null &&
+        (input.itemId.length < 1 || input.itemId.length > 160))
+    ) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+
+    let session: ContextSession | null;
+    try {
+      session = await this.options.store.load(binding);
+    } catch {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    if (!session || !sameContextBinding(session.binding, binding)) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    const request = session.operation ?? session.lastCompletedRequest;
+    if (
+      !request ||
+      operationIdFor(input.threadId, input.turnId, request.sourceBoundary) !==
+        request.operationId
+    ) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    const checkpointId =
+      session.operation?.checkpointId ?? session.lastCheckpointId;
+    if (!checkpointId) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    let checkpoint;
+    try {
+      checkpoint = await this.options.store.get(binding, checkpointId);
+    } catch {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    if (
+      !checkpoint ||
+      !sameContextBinding(checkpoint.binding, binding) ||
+      checkpoint.operationId !== request.operationId ||
+      checkpoint.sourceBoundary !== request.sourceBoundary
+    ) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    if (
+      session.phase === "active" &&
+      session.lastCompletedOperationId === request.operationId
+    ) {
+      try {
+        await this.options.store.deleteSource(binding, request.operationId);
+      } catch {
+        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      }
+      this.confirmations.delete(checkpoint.checkpointId);
+      return success(session);
+    }
+    if (!session.operation) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+
+    const hostContextRef = `host-${hash([
+      input.threadId,
+      input.turnId,
+      input.itemId,
+      input.signal,
+      checkpoint.checkpointId,
+    ]).slice(0, 40)}`;
+    this.confirmations.set(checkpoint.checkpointId, hostContextRef);
+    const compacted = await this.service.execute({
+      binding,
+      operationId: session.operation.operationId,
+      source: session.operation.source,
+      sourceBoundary: session.operation.sourceBoundary,
+    });
+    if (
+      !compacted.ok ||
+      compacted.value.session.phase !== "active" ||
+      compacted.value.session.lastCompletedOperationId !== request.operationId
+    ) {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    try {
+      await this.options.store.deleteSource(binding, request.operationId);
+    } catch {
+      return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+    }
+    this.confirmations.delete(checkpoint.checkpointId);
+    return success(compacted.value.session);
   }
 
   private async summarize(

@@ -50,6 +50,7 @@ export type UnaryCompactionHandoff = Readonly<{
 export type StreamedCompactionHandoff = Readonly<{
   variant: "streamed_compaction_item";
   item: Readonly<{
+    id: string;
     type: "compaction";
     /** Host protocol field name. Farol's payload is transparent, not encrypted. */
     encrypted_content: string;
@@ -78,7 +79,32 @@ const requestSchema = z.looseObject({
 const metadataSchema = z.looseObject({
   thread_id: z.string().min(1).max(160),
   turn_id: z.string().min(1).max(160),
+  compaction: z.unknown().optional(),
+  request_kind: z.string().min(1).max(80).optional(),
 });
+
+const streamedCompactionMetadataSchema = z.looseObject({
+  request_kind: z.literal("compaction"),
+  compaction: z.looseObject({
+    implementation: z.literal("responses"),
+    phase: z.literal("standalone_turn"),
+    reason: z.literal("user_requested"),
+    strategy: z.literal("memento"),
+    trigger: z.literal("manual"),
+  }),
+});
+
+const compactionRequestMetadataSchema = z.looseObject({
+  request_kind: z.literal("compaction"),
+});
+
+export function isHostCompactionRequestMetadata(candidate: unknown): boolean {
+  return compactionRequestMetadataSchema.safeParse(candidate).success;
+}
+
+export function isStreamedHostCompactionMetadata(candidate: unknown): boolean {
+  return streamedCompactionMetadataSchema.safeParse(candidate).success;
+}
 
 function parseMetadata(candidate: unknown) {
   if (typeof candidate !== "string" || candidate.length === 0) return null;
@@ -149,6 +175,15 @@ export function parseHostCompactionRequest(
   }
   const identity = headerIdentity ?? embeddedIdentity;
   if (!identity) return failure("HOST_COMPACTION_IDENTITY_MISSING");
+  const outerThreadId = parsed.data.client_metadata?.thread_id;
+  const outerTurnId = parsed.data.client_metadata?.turn_id;
+  if (
+    (typeof outerThreadId === "string" &&
+      outerThreadId !== identity.thread_id) ||
+    (typeof outerTurnId === "string" && outerTurnId !== identity.turn_id)
+  ) {
+    return failure("HOST_COMPACTION_IDENTITY_MISMATCH");
+  }
 
   let variant: HostCompactionVariant;
   let history: readonly unknown[];
@@ -166,10 +201,14 @@ export function parseHostCompactionRequest(
       return failure("HOST_COMPACTION_VARIANT_UNSUPPORTED");
     }
     const last = parsed.data.input.at(-1);
-    if (!isCompactionTrigger(last)) {
+    const explicitTrigger = isCompactionTrigger(last);
+    const embeddedTrigger = isStreamedHostCompactionMetadata(embeddedIdentity);
+    if (!explicitTrigger && !embeddedTrigger) {
       return failure("HOST_COMPACTION_TRIGGER_MISSING");
     }
-    history = parsed.data.input.slice(0, -1);
+    history = explicitTrigger
+      ? parsed.data.input.slice(0, -1)
+      : parsed.data.input;
     if (history.some(isCompactionTrigger)) {
       return failure("HOST_COMPACTION_TRIGGER_INVALID");
     }
@@ -200,6 +239,15 @@ function transportCheckpoint(checkpoint: CheckpointEnvelope): string {
     JSON.stringify(checkpoint),
     "utf8",
   ).toString("base64url")}`;
+}
+
+function hostCompactionItemId(checkpoint: CheckpointEnvelope): string {
+  return `cmp_${createHash("sha256")
+    .update(checkpoint.checkpointId)
+    .update("\0")
+    .update(checkpoint.sourceBoundary)
+    .digest("hex")
+    .slice(0, 32)}`;
 }
 
 function decodeTransportCheckpoint(
@@ -339,6 +387,7 @@ export function buildHostCompactionHandoff(
     return success({
       variant: request.variant,
       item: {
+        id: hostCompactionItemId(checkpoint),
         type: "compaction",
         encrypted_content: transportCheckpoint(checkpoint),
       },

@@ -245,8 +245,8 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
 
     const continuationBody = {
       ...initialBody,
+      tools: [],
       input: [
-        ...initialBody.input,
         toolCall,
         {
           type: "function_call_output",
@@ -254,6 +254,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
           output: "FAROL_NEXT_NATIVE_TOOL_OK",
         },
       ],
+      previous_response_id: null,
     };
     const foreign = await fetch(`${runtime.baseUrl}/v1/responses`, {
       method: "POST",
@@ -293,6 +294,9 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(changedCall.status).toBe(409);
     await expect(changedCall.json()).resolves.toEqual({
       error: { code: "FAROL_NEXT_CONTINUATION_INVALID" },
+    });
+    expect(runtime.diagnostics()).toMatchObject({
+      lastRefusalCode: "FAROL_NEXT_CONTINUATION_CALL_INVALID",
     });
     expect(observedToolOutput).toBe("");
     expect(conversation.run).toHaveBeenCalledTimes(1);
@@ -372,10 +376,26 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         value: {
           variant: "streamed_compaction_item" as const,
           item: {
+            id: "cmp_fixture",
             type: "compaction" as const,
             encrypted_content: "farol-next-checkpoint-v1:fixture",
           },
         },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          variant: "streamed_compaction_item" as const,
+          item: {
+            id: "cmp_fixture_native",
+            type: "compaction" as const,
+            encrypted_content: "farol-next-checkpoint-v1:fixture-native",
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: { code: "HOST_COMPACTION_TRIGGER_MISSING" },
       });
     const options = {
       model: "farol-next/mind",
@@ -429,6 +449,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       type: "response.output_item.done",
       output_index: 0,
       item: {
+        id: "cmp_fixture",
         type: "compaction",
         encrypted_content: "farol-next-checkpoint-v1:fixture",
       },
@@ -439,11 +460,89 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         status: "completed",
         output: [
           {
+            id: "cmp_fixture",
             type: "compaction",
             encrypted_content: "farol-next-checkpoint-v1:fixture",
           },
         ],
       },
+    });
+
+    const installedMetadata = JSON.stringify({
+      thread_id: "thread-route-b",
+      turn_id: "turn-compact-installed",
+      compaction: {
+        implementation: "responses",
+        phase: "standalone_turn",
+        reason: "user_requested",
+        strategy: "memento",
+        trigger: "manual",
+      },
+      request_kind: "compaction",
+    });
+    const installedBody = {
+      model: "farol-next/mind",
+      stream: true,
+      input: compactionHistory(),
+      tools: [],
+      client_metadata: {
+        session_id: "session-route-b",
+        thread_id: "thread-route-b",
+        turn_id: "turn-compact-installed",
+        "x-codex-turn-metadata": installedMetadata,
+      },
+    };
+    const installed = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(installedBody),
+    });
+    expect(installed.status).toBe(200);
+    const installedStream = new SseReader(installed);
+    await expect(
+      installedStream.until("response.output_item.done"),
+    ).resolves.toMatchObject({
+      item: {
+        id: "cmp_fixture_native",
+        type: "compaction",
+        encrypted_content: "farol-next-checkpoint-v1:fixture-native",
+      },
+    });
+
+    const unsupportedMetadata = JSON.stringify({
+      thread_id: "thread-route-b",
+      turn_id: "turn-compact-unsupported",
+      compaction: {
+        implementation: "responses",
+        phase: "standalone_turn",
+        reason: "user_requested",
+        strategy: "memento",
+        trigger: "automatic",
+      },
+      request_kind: "compaction",
+    });
+    const unsupportedBody = {
+      ...installedBody,
+      client_metadata: {
+        ...installedBody.client_metadata,
+        turn_id: "turn-compact-unsupported",
+        "x-codex-turn-metadata": unsupportedMetadata,
+      },
+    };
+    const unsupported = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(unsupportedBody),
+    });
+    expect(unsupported.status).toBe(422);
+    await expect(unsupported.json()).resolves.toEqual({
+      error: { code: "HOST_COMPACTION_TRIGGER_MISSING" },
     });
 
     expect(compact).toHaveBeenNthCalledWith(1, {
@@ -455,6 +554,16 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       endpoint: "responses",
       body: streamedBody,
       metadataHeader: compactionMetadata(),
+    });
+    expect(compact).toHaveBeenNthCalledWith(3, {
+      endpoint: "responses",
+      body: installedBody,
+      metadataHeader: undefined,
+    });
+    expect(compact).toHaveBeenNthCalledWith(4, {
+      endpoint: "responses",
+      body: unsupportedBody,
+      metadataHeader: undefined,
     });
     expect(conversation.run).not.toHaveBeenCalled();
   });

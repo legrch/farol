@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 
 const MAX_DESCRIPTOR_BYTES = 256 * 1_024;
+// Keep catalogue parsing below the provider's 1 MiB request boundary while
+// reserving space for prompt, identity, and continuation metadata. Individual
+// schemas retain the narrower descriptor limit above.
+const MAX_CATALOGUE_BYTES = 768 * 1_024;
 const MAX_SCHEMA_DEPTH = 32;
 const MAX_SCHEMA_NODES = 4_096;
 const MAX_TOOL_COUNT = 512;
@@ -104,6 +108,18 @@ function registryError(code: string): never {
   throw new Error(code);
 }
 
+function unsupportedKeywordCode(keyword: string): string {
+  const suffix = keyword.toUpperCase().replace(/[^A-Z]+/gu, "_");
+  return suffix.length > 0
+    ? `CODEX_TOOL_SCHEMA_UNSUPPORTED_${suffix}`
+    : "CODEX_TOOL_SCHEMA_UNSUPPORTED";
+}
+
+function toolNameCode(name: string): string {
+  const suffix = name.toUpperCase().replace(/[^A-Z]+/gu, "_");
+  return suffix.length > 0 ? suffix : "UNKNOWN";
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -134,13 +150,13 @@ function inspectSchema(schema: unknown): void {
   const visit = (candidate: unknown, depth: number): void => {
     nodes += 1;
     if (nodes > MAX_SCHEMA_NODES || depth > MAX_SCHEMA_DEPTH) {
-      registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED");
+      registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED_COMPLEXITY");
     }
     if (typeof candidate === "boolean") return;
     if (!record(candidate)) registryError("CODEX_TOOL_SCHEMA_INVALID");
     for (const key of Object.keys(candidate)) {
       if (!schemaKeywords.has(key)) {
-        registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED");
+        registryError(unsupportedKeywordCode(key));
       }
     }
     const reference = candidate.$ref;
@@ -148,11 +164,11 @@ function inspectSchema(schema: unknown): void {
       reference !== undefined &&
       (typeof reference !== "string" || !reference.startsWith("#/"))
     ) {
-      registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED");
+      registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED_EXTERNAL_REF");
     }
     const pattern = candidate.pattern;
     if (typeof pattern === "string" && pattern.length > 1_024) {
-      registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED");
+      registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED_PATTERN");
     }
     for (const key of [
       "not",
@@ -193,9 +209,11 @@ function compile(parameters: unknown): z.ZodType {
   }
   inspectSchema(parameters);
   try {
-    return z.fromJSONSchema(parameters as never, { defaultTarget: "draft-7" });
+    const defaultTarget =
+      record(parameters) && "$defs" in parameters ? "draft-2020-12" : "draft-7";
+    return z.fromJSONSchema(parameters as never, { defaultTarget });
   } catch {
-    registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED");
+    registryError("CODEX_TOOL_SCHEMA_UNSUPPORTED_CONVERSION");
   }
 }
 
@@ -219,12 +237,24 @@ function descriptor(
   ) {
     registryError("CODEX_TOOL_DESCRIPTOR_INVALID");
   }
+  let validator: z.ZodType;
+  try {
+    validator = compile(raw.parameters);
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /^CODEX_TOOL_SCHEMA_[A-Z_]+$/u.test(error.message)
+    ) {
+      registryError(`${error.message}_TOOL_${toolNameCode(raw.name)}`);
+    }
+    throw error;
+  }
   return {
     name: raw.name,
     namespace,
     description: typeof raw.description === "string" ? raw.description : null,
     parameters: structuredClone(raw.parameters),
-    validator: compile(raw.parameters),
+    validator,
   };
 }
 
@@ -243,7 +273,7 @@ export class CodexNativeToolRegistry {
       registryError("CODEX_TOOL_CATALOGUE_INVALID");
     }
     const encoded = canonicalJson(tools);
-    if (Buffer.byteLength(encoded) > MAX_DESCRIPTOR_BYTES) {
+    if (Buffer.byteLength(encoded) > MAX_CATALOGUE_BYTES) {
       registryError("CODEX_TOOL_CATALOGUE_TOO_LARGE");
     }
     const descriptors = new Map<string, ToolDescriptor>();

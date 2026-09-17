@@ -5,12 +5,18 @@ import path from "node:path";
 import process from "node:process";
 
 import { launchCodexAppServer } from "../src/apps/desktop/codex-app-server-process";
+import { compactCodexHostThread } from "../src/apps/desktop/codex-host-compaction";
 import { probeCodexHost } from "../src/apps/desktop/codex-host-probe";
-import { runCodexChatGptHostRoute } from "../src/apps/desktop/codex-chatgpt-host-route";
+import {
+  continueCodexChatGptHostThread,
+  runCodexChatGptHostRoute,
+} from "../src/apps/desktop/codex-chatgpt-host-route";
 import {
   startCodexChatGptProvider,
   type CodexChatGptConversation,
 } from "../src/apps/desktop/codex-chatgpt-provider";
+import { createCodexContextController } from "../src/apps/desktop/codex-context-runtime";
+import type { ContextBinding } from "../src/modules/chat/domain/context-continuity";
 
 function argument(name: string): string | null {
   const index = process.argv.indexOf(name);
@@ -36,6 +42,7 @@ const scratch = await fs.mkdtemp(
 );
 const privateHome = path.join(scratch, "home");
 const runtimeRoot = path.join(scratch, "runtime");
+const contextRoot = path.join(scratch, "context");
 await fs.mkdir(privateHome, { recursive: true, mode: 0o700 });
 await fs.mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
 let toolCount = 0;
@@ -44,6 +51,70 @@ let toolNames: string[] = [];
 let nativeToolRoundTrips = 0;
 let nativeToolOutputSha256 = "";
 let nativeToolErrorCode: string | null = null;
+let summarySubmissions = 0;
+let summaryResets = 0;
+let summaryConversationUrl: string | null =
+  "https://chatgpt.com/c/farol-next-native-context";
+const checkpointContent = {
+  goal: "Preserve the deterministic native context route.",
+  activeConstraints: ["No paid or external provider fallback."],
+  latestCorrections: ["Continue on the exact compacted native thread."],
+  keyDecisions: ["Use ordinary one-cycle context compaction."],
+  completedWork: [
+    {
+      description: "The initial native-local provider turn completed.",
+      evidenceRefs: ["receipt:native-route-initial"],
+    },
+  ],
+  unfinishedWork: ["Confirm the first post-compaction continuation."],
+  unresolvedQuestions: [],
+  unknownOutcomes: [
+    {
+      operationRef: "operation:external-not-run",
+      description: "No external provider action was attempted.",
+    },
+  ],
+  artifactRefs: [
+    { reference: "artifact:native-route-probe", availability: "available" },
+  ],
+  attachmentRefs: [
+    { reference: "attachment:not-provided", availability: "unavailable" },
+  ],
+  nextSafeStep: "Continue the same native thread once.",
+} as const;
+const summaryRoute = {
+  runReadonlyTask: async () => {
+    summarySubmissions += 1;
+    const outputText = JSON.stringify(checkpointContent);
+    return {
+      state: "completed" as const,
+      code: null,
+      deltaCount: 1,
+      observedCharacters: outputText.length,
+      outputText,
+    };
+  },
+  currentConversationUrl: () => summaryConversationUrl,
+  retainedConversationUrl: () => summaryConversationUrl,
+  resetConversation: () => {
+    summaryResets += 1;
+    summaryConversationUrl = null;
+  },
+  dispose: () => {
+    summaryConversationUrl = null;
+  },
+};
+const context = createCodexContextController({
+  ownerId: "owner-native-route-probe",
+  providerProfileId: "profile-native-route-probe",
+  stateRoot: contextRoot,
+  summaryRoutes: {
+    retained: () => summaryRoute,
+    createFallback: () => {
+      throw new Error("NATIVE_ROUTE_FALLBACK_UNEXPECTED");
+    },
+  },
+});
 const conversation: CodexChatGptConversation = {
   run: async (input, observer) => {
     toolCount = input.tools.length;
@@ -119,6 +190,7 @@ const provider = await startCodexChatGptProvider({
   model: "farol-next/mind",
   token,
   conversation,
+  compaction: context.continuity,
 });
 let client: Awaited<ReturnType<typeof launchCodexAppServer>> | null = null;
 
@@ -162,6 +234,108 @@ try {
     );
     throw error;
   }
+  let compacted;
+  try {
+    compacted = await compactCodexHostThread(client, {
+      threadId: result.threadId,
+      timeoutMs: 30_000,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `${JSON.stringify({
+        stage: "native-host-compaction",
+        error: error instanceof Error ? error.message : "UNKNOWN",
+        summarySubmissions,
+        summaryResets,
+        provider: provider.diagnostics(),
+      })}\n`,
+    );
+    throw error;
+  }
+  const confirmed = await context.continuity.confirmHostCompaction({
+    modelId: "farol-next/mind",
+    ...compacted,
+  });
+  if (!confirmed.ok) {
+    process.stderr.write(
+      `${JSON.stringify({
+        stage: "native-host-confirmation",
+        error: confirmed.error.code,
+        compaction: compacted,
+        summarySubmissions,
+        summaryResets,
+        provider: provider.diagnostics(),
+      })}\n`,
+    );
+    throw new Error(confirmed.error.code);
+  }
+  let continuation;
+  try {
+    continuation = await continueCodexChatGptHostThread(client, {
+      model: "farol-next/mind",
+      threadId: result.threadId,
+      prompt: "Continue after compaction and return FAROL_NEXT_ROUTE_B_OK.",
+      timeoutMs: 30_000,
+    });
+  } catch (error) {
+    process.stderr.write(
+      `${JSON.stringify({
+        stage: "native-host-continuation",
+        error: error instanceof Error ? error.message : "UNKNOWN",
+        compaction: compacted,
+        summarySubmissions,
+        summaryResets,
+        provider: provider.diagnostics(),
+      })}\n`,
+    );
+    throw error;
+  }
+  const contextBinding: ContextBinding = {
+    ownerId: "owner-native-route-probe",
+    taskId: result.threadId,
+    hostThreadId: result.threadId,
+    sessionId: result.threadId,
+    providerProfileId: "profile-native-route-probe",
+    modelId: "farol-next/mind",
+    mode: "mind",
+  };
+  const contextSession = await context.store.load(contextBinding);
+  if (
+    !contextSession ||
+    contextSession.phase !== "active" ||
+    contextSession.epoch !== 2 ||
+    contextSession.lastCompletedOperationId === null ||
+    contextSession.lastCheckpointId === null ||
+    summarySubmissions !== 1 ||
+    summaryResets !== 1
+  ) {
+    process.stderr.write(
+      `${JSON.stringify({
+        stage: "native-context-state",
+        context: contextSession
+          ? {
+              phase: contextSession.phase,
+              epoch: contextSession.epoch,
+              hasOperation: contextSession.operation !== null,
+              hasCompletedOperation:
+                contextSession.lastCompletedOperationId !== null,
+              hasCheckpoint: contextSession.lastCheckpointId !== null,
+            }
+          : null,
+        summarySubmissions,
+        summaryResets,
+        provider: provider.diagnostics(),
+      })}\n`,
+    );
+    throw new Error("NATIVE_CONTEXT_CONTINUITY_NOT_CONFIRMED");
+  }
+  const retainedSource = await context.store.getSource(
+    contextBinding,
+    contextSession.lastCompletedOperationId,
+  );
+  if (retainedSource !== null) {
+    throw new Error("NATIVE_CONTEXT_SOURCE_NOT_RETIRED");
+  }
   process.stdout.write(
     `${JSON.stringify(
       {
@@ -172,6 +346,19 @@ try {
           schemaSha256: host.schemaSha256,
         },
         ...result,
+        compaction: {
+          ...compacted,
+          nextTurnId: continuation.turnId,
+          nextTurnDeltaCount: continuation.deltaCount,
+          epoch: contextSession.epoch,
+          phase: contextSession.phase,
+          summarySubmissions,
+          summaryResets,
+          sourceRetired: true,
+          checkpointSha256: createHash("sha256")
+            .update(JSON.stringify(checkpointContent))
+            .digest("hex"),
+        },
         toolCount,
         toolCatalogueSha256,
         nativeToolRoundTrips,

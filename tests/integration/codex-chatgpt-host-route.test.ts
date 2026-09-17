@@ -16,6 +16,7 @@ class FakePeer implements CodexChatGptHostPeer {
     private readonly options: Readonly<{
       observedModel?: string;
       observedProvider?: string;
+      staleTerminalBeforeTurnResponse?: boolean;
       terminalBeforeDelta?: boolean;
     }> = {},
   ) {}
@@ -33,6 +34,12 @@ class FakePeer implements CodexChatGptHostPeer {
       };
     }
     if (method === "turn/start") {
+      if (this.options.staleTerminalBeforeTurnResponse) {
+        this.notify("turn/completed", {
+          threadId: "thread-route-b",
+          turn: { id: "turn-compaction", status: "completed" },
+        });
+      }
       queueMicrotask(() => {
         if (this.options.terminalBeforeDelta) {
           this.notify("turn/completed", {
@@ -180,5 +187,24 @@ describe("isolated Codex to ChatGPT host route", () => {
         timeoutMs: 1_000,
       }),
     ).rejects.toThrow("CODEX_CHATGPT_INCREMENTAL_DELIVERY_MISSING");
+  });
+
+  it("ignores a stale same-thread terminal while correlating the new turn", async () => {
+    await expect(
+      runCodexChatGptHostRoute(
+        new FakePeer({ staleTerminalBeforeTurnResponse: true }),
+        {
+          model: "farol-next/mind",
+          cwd: "/private/tmp/farol-route-b",
+          prompt: "Say hello",
+          timeoutMs: 1_000,
+        },
+      ),
+    ).resolves.toMatchObject({
+      threadId: "thread-route-b",
+      turnId: "turn-route-b",
+      deltaCount: 2,
+      retainedResult: true,
+    });
   });
 });
