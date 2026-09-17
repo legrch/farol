@@ -150,6 +150,75 @@ describe("native mutable Computer workspace", () => {
     ).toBe(false);
   });
 
+  it("AUTH-05 validates create-only content before creating parent directories", async () => {
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "invalid/nested/file.txt",
+        content: "\ud800",
+        expectedSha256: null,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+    });
+    await expect(fs.stat(path.join(root, "invalid"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("AUTH-05 keeps successful nested create-only writes available", async () => {
+    await expect(
+      workspace().mutate(
+        request({
+          kind: "workspace.write",
+          relativePath: "created/nested/file.txt",
+          content: "nested-success\n",
+          expectedSha256: null,
+        }),
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        relativePath: "created/nested/file.txt",
+        beforeSha256: null,
+        afterSha256: digest("nested-success\n"),
+      },
+    });
+    expect(
+      await fs.readFile(path.join(root, "created/nested/file.txt"), "utf8"),
+    ).toBe("nested-success\n");
+  });
+
+  it("AUTH-05 reports created parents when a competing writer keeps them in use", async () => {
+    const destination = path.join(root, "shared", "nested", "created.txt");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "shared/nested/created.txt",
+        content: "farol-candidate\n",
+        expectedSha256: null,
+      }),
+      {
+        testHookRequest: { phase: "before-publish", index: null },
+        testHook: async () => {
+          await fs.writeFile(destination, "competing-writer\n", {
+            mode: 0o600,
+            flag: "wx",
+          });
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    });
+    expect(await fs.readFile(destination, "utf8")).toBe("competing-writer\n");
+  });
+
   it("edits one unique match and rejects stale or ambiguous input", async () => {
     const native = workspace();
     await expect(

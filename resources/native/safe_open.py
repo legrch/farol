@@ -240,31 +240,47 @@ def _walk_parent(request, root_fd):
 def _open_or_create_directory(parent_fd, name):
     """Open one real directory, creating that exact component when absent."""
     try:
-        return _open_directory(parent_fd, name)
+        return _open_directory(parent_fd, name), False
     except Refusal as error:
         if error.status != EXIT_NOT_FOUND:
             raise
+    created = False
     try:
         os.mkdir(name, mode=0o755, dir_fd=parent_fd)
+        created = True
     except OSError as error:
         if error.errno != errno.EEXIST:
             _map_open_error(error, parent_fd, name)
-    return _open_directory(parent_fd, name)
+    try:
+        return _open_directory(parent_fd, name), created
+    except BaseException:
+        if created:
+            refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+        raise
 
 
 def _walk_parent_for_write(request, root_fd):
     parts = _components(request.get("relative"), absolute=False)
     _refuse_if_denied(parts)
     descriptor = os.dup(root_fd)
+    created_any = False
     try:
         for index, part in enumerate(parts[:-1]):
-            child = _open_or_create_directory(descriptor, part)
+            child, created = _open_or_create_directory(descriptor, part)
+            created_any = created_any or created
             os.close(descriptor)
             descriptor = child
             _test_hook(request, "after-relative-directory", index)
-        return descriptor, parts[-1]
+        return descriptor, parts[-1], created_any
+    except Refusal as error:
+        os.close(descriptor)
+        if created_any and error.status != EXIT_MUTATION_OUTCOME_UNKNOWN:
+            refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+        raise
     except BaseException:
         os.close(descriptor)
+        if created_any:
+            refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
         raise
 
 
@@ -902,11 +918,9 @@ def _payload_sha256(payload):
     return hashlib.sha256(payload).hexdigest()
 
 
-def _write_regular(request, parent_fd, leaf):
+def _write_regular(request, parent_fd, leaf, expected, payload):
     if not _safe_output_name(leaf):
         refuse(EXIT_PATH_REFUSED)
-    expected = _expected_sha256(request, allow_absent=True)
-    payload = _mutation_text(request.get("content"))
     descriptor, previous = _existing_regular(parent_fd, leaf, required=False)
     try:
         before_sha256 = None
@@ -1771,6 +1785,7 @@ def _dispatch(request):
         operation != "grep" or request.get("fileOnly") is not True
     ):
         refuse(EXIT_INVALID)
+    write_input = None
     if operation == "write":
         if (
             "content" not in request
@@ -1778,6 +1793,10 @@ def _dispatch(request):
             or "expectedSha256" not in request
         ):
             refuse(EXIT_INVALID)
+        write_input = (
+            _expected_sha256(request, allow_absent=True),
+            _mutation_text(request.get("content")),
+        )
     elif operation == "edit":
         if (
             "edits" not in request
@@ -1812,18 +1831,35 @@ def _dispatch(request):
             return _glob_search(request, root_fd)
         if operation == "grep":
             return _grep_search(request, root_fd)
-        parent_fd, leaf = (
-            _walk_parent_for_write(request, root_fd)
-            if operation == "write" and request.get("expectedSha256") is None
-            else _walk_parent(request, root_fd)
-        )
+        parents_created = False
+        if operation == "write" and request.get("expectedSha256") is None:
+            parent_fd, leaf, parents_created = _walk_parent_for_write(
+                request, root_fd
+            )
+        else:
+            parent_fd, leaf = _walk_parent(request, root_fd)
         try:
             if operation == "read":
                 return _read_regular(request, parent_fd, leaf, ceiling)
             if operation == "read-window":
                 return _read_window(request, parent_fd, leaf)
             if operation == "write":
-                return _write_regular(request, parent_fd, leaf)
+                try:
+                    expected, payload = write_input
+                    return _write_regular(
+                        request, parent_fd, leaf, expected, payload
+                    )
+                except Refusal as error:
+                    if (
+                        parents_created
+                        and error.status != EXIT_MUTATION_OUTCOME_UNKNOWN
+                    ):
+                        refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+                    raise
+                except BaseException:
+                    if parents_created:
+                        refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+                    raise
             if operation == "edit":
                 return _edit_regular(request, parent_fd, leaf)
             return _assert_directory(request, parent_fd, leaf)
