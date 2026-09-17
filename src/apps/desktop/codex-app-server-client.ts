@@ -72,6 +72,7 @@ export class CodexAppServerClient {
   private buffer = "";
   private closed = false;
   private initialized = false;
+  private ready = false;
 
   constructor(
     private readonly process: CodexAppServerProcess,
@@ -94,7 +95,9 @@ export class CodexAppServerClient {
     process.on("error", () => this.fail("CODEX_APP_SERVER_FAILED", true));
   }
 
-  async initialize(): Promise<unknown> {
+  async initialize(
+    options: Readonly<{ deferReady?: boolean }> = {},
+  ): Promise<unknown> {
     if (this.initialized) {
       throw protocolError("CODEX_APP_SERVER_ALREADY_INITIALIZED");
     }
@@ -103,9 +106,17 @@ export class CodexAppServerClient {
       capabilities: { experimentalApi: true },
     });
     if (this.closed) throw protocolError("CODEX_APP_SERVER_CLOSED");
-    this.notify("initialized", {});
     this.initialized = true;
+    if (!options.deferReady) this.markReady();
     return result;
+  }
+
+  markReady(): void {
+    if (!this.initialized || this.ready || this.closed) {
+      throw protocolError("CODEX_APP_SERVER_READINESS_INVALID");
+    }
+    this.notify("initialized", {});
+    this.ready = true;
   }
 
   request(method: string, params: unknown): Promise<unknown> {

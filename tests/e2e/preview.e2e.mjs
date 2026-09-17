@@ -942,10 +942,24 @@ if (args.length === 1 && args[0] === "--version") {
   process.stdout.write("codex-cli 9.8.7-e2e\\n");
   process.exit(0);
 }
-if (args.join(" ") === "app-server --stdio") {
+if (args[0] === "app-server" && args[1] === "--stdio") {
   const readline = require("node:readline");
   const lines = readline.createInterface({ input: process.stdin });
   const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
+  const disabledFeatures = new Set(args.flatMap((value, index) =>
+    value === "--disable" ? [args[index + 1]] : []
+  ));
+  const enabledFeatures = new Set(args.flatMap((value, index) =>
+    value === "--enable" ? [args[index + 1]] : []
+  ));
+  const boundedToolProfile =
+    args.includes('web_search="disabled"') &&
+    disabledFeatures.has("shell_tool") &&
+    disabledFeatures.has("apps") &&
+    disabledFeatures.has("browser_use") &&
+    disabledFeatures.has("computer_use") &&
+    disabledFeatures.has("plugins") &&
+    enabledFeatures.has("skip_host_skill_discovery");
   let agentChildPrompt = null;
   let agentAuthority = null;
   let agentWorkspace = null;
@@ -964,6 +978,17 @@ if (args.join(" ") === "app-server --stdio") {
       return;
     }
     if (message.method === "initialized") return;
+    if (message.method === "config/read") {
+      send({ id: message.id, result: { config: {
+        web_search: args.includes('web_search="disabled"') ? "disabled" : null,
+        features: Object.fromEntries([
+          ...[...disabledFeatures].map((name) => [name, false]),
+          ...[...enabledFeatures].map((name) => [name, true])
+        ]),
+        mcp_servers: {}
+      } } });
+      return;
+    }
     if (message.method === "model/list") {
       send({ id: message.id, result: { data: [{ id: "gpt-6-astra" }], nextCursor: null } });
       return;
@@ -987,6 +1012,8 @@ if (args.join(" ") === "app-server --stdio") {
         message.params?.approvalPolicy === "never" &&
         Array.isArray(message.params?.runtimeWorkspaceRoots) &&
         message.params.runtimeWorkspaceRoots.length === 0 &&
+        boundedToolProfile &&
+        enabledFeatures.has("multi_agent") === agentThread &&
         validDynamicTools;
       if (!valid) {
         send({ id: message.id, error: { code: -32000, message: "unsafe thread" } });

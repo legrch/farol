@@ -1082,6 +1082,7 @@ async function openProductAgentSession(
     homePath: app.getPath("home"),
     tempPath: app.getPath("temp"),
     clientVersion: buildIdentity.version,
+    toolProfile: "native-agent",
     ...(configuredCodexHome &&
     path.isAbsolute(configuredCodexHome) &&
     !configuredCodexHome.includes("\0")
@@ -2600,6 +2601,7 @@ async function configureProduct(
           homePath: app.getPath("home"),
           tempPath: app.getPath("temp"),
           clientVersion: buildIdentity.version,
+          toolProfile: "dynamic-only",
           ...(configuredCodexHome &&
           path.isAbsolute(configuredCodexHome) &&
           !configuredCodexHome.includes("\0")
@@ -2767,6 +2769,7 @@ async function configureProduct(
             homePath: app.getPath("home"),
             tempPath: app.getPath("temp"),
             clientVersion: buildIdentity.version,
+            toolProfile: "native-agent",
             ...(configuredCodexHome &&
             path.isAbsolute(configuredCodexHome) &&
             !configuredCodexHome.includes("\0")

@@ -109,4 +109,110 @@ lines.on("line", (line) => {
     ]);
     await client.close();
   });
+
+  it("attests a native Agent process with built-in tools and ambient MCP disabled before readiness", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-codex-agent-process-"),
+    );
+    roots.push(root);
+    const executablePath = path.join(root, "codex-fixture");
+    await fs.writeFile(
+      executablePath,
+      `#!${process.execPath}
+const readline = require("node:readline");
+const args = process.argv.slice(2);
+const disabled = new Set(args.flatMap((value, index) => value === "--disable" ? [args[index + 1]] : []));
+const enabled = new Set(args.flatMap((value, index) => value === "--enable" ? [args[index + 1]] : []));
+const qmdDisabled = args.includes("mcp_servers.qmd.enabled=false");
+let ready = false;
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: { userAgent: "codex-fixture/1" } }) + "\\n");
+  } else if (message.method === "initialized") {
+    ready = true;
+  } else if (message.method === "config/read") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: { config: {
+      web_search: args.includes('web_search="disabled"') ? "disabled" : null,
+      features: Object.fromEntries([
+        ...[...disabled].map((name) => [name, false]),
+        ...[...enabled].map((name) => [name, true])
+      ]),
+      mcp_servers: { qmd: { command: "qmd", enabled: !qmdDisabled } }
+    } } }) + "\\n");
+  } else if (message.method === "model/list") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: {
+      args,
+      ready,
+      qmdDisabled
+    } }) + "\\n");
+  }
+});
+`,
+      { mode: 0o700 },
+    );
+
+    const client = await launchCodexAppServer({
+      executablePath,
+      cwd: root,
+      homePath: root,
+      tempPath: os.tmpdir(),
+      clientVersion: "0.1.0-preview.0",
+      toolProfile: "native-agent",
+    });
+    const observed = (await client.request("model/list", {})) as {
+      args: string[];
+      ready: boolean;
+      qmdDisabled: boolean;
+    };
+    expect(observed.ready).toBe(true);
+    expect(observed.qmdDisabled).toBe(true);
+    expect(observed.args).toContain("mcp_servers.qmd.enabled=false");
+    expect(observed.args).toContain("shell_tool");
+    expect(observed.args).toContain("apps");
+    expect(observed.args).toContain("browser_use");
+    expect(observed.args).toContain("computer_use");
+    expect(observed.args).toContain("plugins");
+    expect(observed.args).toContain("multi_agent");
+    expect(observed.args).toContain("skip_host_skill_discovery");
+    await client.close();
+  });
+
+  it("fails closed before readiness when an ambient MCP name cannot be disabled safely", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-codex-agent-denied-process-"),
+    );
+    roots.push(root);
+    const executablePath = path.join(root, "codex-fixture");
+    await fs.writeFile(
+      executablePath,
+      `#!${process.execPath}
+const readline = require("node:readline");
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+  } else if (message.method === "config/read") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: { config: {
+      mcp_servers: { "unsafe.name": { command: "fixture" } }
+    } } }) + "\\n");
+  }
+});
+`,
+      { mode: 0o700 },
+    );
+
+    await expect(
+      launchCodexAppServer({
+        executablePath,
+        cwd: root,
+        homePath: root,
+        tempPath: os.tmpdir(),
+        clientVersion: "0.1.0-preview.0",
+        toolProfile: "native-agent",
+      }),
+    ).rejects.toThrow("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  });
 });

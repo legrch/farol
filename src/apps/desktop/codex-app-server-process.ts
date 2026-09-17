@@ -12,6 +12,127 @@ const SAFE_PATH = [
   "/sbin",
 ].join(":");
 
+export type CodexAppServerToolProfile = "dynamic-only" | "native-agent";
+
+const BOUNDED_DISABLED_FEATURES = [
+  "apps",
+  "auth_elicitation",
+  "browser_use",
+  "browser_use_external",
+  "browser_use_full_cdp_access",
+  "code_mode",
+  "code_mode_host",
+  "code_mode_only",
+  "computer_use",
+  "goals",
+  "hooks",
+  "image_generation",
+  "in_app_browser",
+  "in_app_local_automation",
+  "memories",
+  "multi_agent_v2",
+  "plugins",
+  "recommended_plugins",
+  "remote_plugin",
+  "request_permissions_tool",
+  "shell_snapshot",
+  "shell_tool",
+  "skill_mcp_dependency_install",
+  "skill_search",
+  "sleep_tool",
+  "standalone_web_search",
+  "tool_call_mcp_elicitation",
+  "tool_suggest",
+  "unified_exec",
+  "view_image",
+  "workspace_dependencies",
+] as const;
+
+const MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,120}$/u;
+
+function record(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function boundedArguments(
+  profile: CodexAppServerToolProfile,
+  mcpServerNames: readonly string[],
+): string[] {
+  return [
+    "-c",
+    'web_search="disabled"',
+    "--enable",
+    "skip_host_skill_discovery",
+    profile === "native-agent" ? "--enable" : "--disable",
+    "multi_agent",
+    ...BOUNDED_DISABLED_FEATURES.flatMap((feature) => ["--disable", feature]),
+    ...mcpServerNames.flatMap((name) => [
+      "-c",
+      `mcp_servers.${name}.enabled=false`,
+    ]),
+  ];
+}
+
+function effectiveConfig(value: unknown): Record<string, unknown> {
+  if (!record(value) || !record(value.config)) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+  return value.config;
+}
+
+function configuredMcpServerNames(value: unknown): string[] {
+  const config = effectiveConfig(value);
+  const candidate = config.mcp_servers;
+  if (candidate === undefined || candidate === null) return [];
+  if (!record(candidate)) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+  const names = Object.keys(candidate).sort();
+  if (names.some((name) => !MCP_SERVER_NAME.test(name))) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+  return names;
+}
+
+function verifyBoundedConfig(
+  value: unknown,
+  profile: CodexAppServerToolProfile,
+  expectedMcpServerNames: readonly string[],
+): void {
+  const config = effectiveConfig(value);
+  if (config.web_search !== "disabled" || !record(config.features)) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+  const features = config.features;
+  if (
+    features.skip_host_skill_discovery !== true ||
+    features.multi_agent !== (profile === "native-agent") ||
+    BOUNDED_DISABLED_FEATURES.some((feature) => features[feature] !== false)
+  ) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+  const actualMcpServerNames = configuredMcpServerNames(value);
+  if (
+    actualMcpServerNames.length !== expectedMcpServerNames.length ||
+    actualMcpServerNames.some(
+      (name, index) => name !== expectedMcpServerNames[index],
+    )
+  ) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+  const servers = config.mcp_servers;
+  if (
+    expectedMcpServerNames.some(
+      (name) =>
+        !record(servers) ||
+        !record(servers[name]) ||
+        servers[name].enabled !== false,
+    )
+  ) {
+    throw new Error("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+  }
+}
+
 function absolutePath(value: string): boolean {
   return path.isAbsolute(value) && !value.includes("\0");
 }
@@ -63,6 +184,7 @@ export async function launchCodexAppServer(
     clientVersion: string;
     codexHomePath?: string;
     providerRoute?: Readonly<{ baseUrl: string; token: string }>;
+    toolProfile?: CodexAppServerToolProfile;
   }>,
 ): Promise<CodexAppServerClient> {
   if (
@@ -73,6 +195,9 @@ export async function launchCodexAppServer(
     (input.codexHomePath !== undefined && !absolutePath(input.codexHomePath)) ||
     (input.providerRoute !== undefined &&
       !providerRouteValid(input.providerRoute)) ||
+    (input.toolProfile !== undefined &&
+      input.toolProfile !== "dynamic-only" &&
+      input.toolProfile !== "native-agent") ||
     !/^[0-9A-Za-z.+-]{1,80}$/u.test(input.clientVersion)
   ) {
     throw new Error("CODEX_APP_SERVER_LAUNCH_INPUT_INVALID");
@@ -91,30 +216,71 @@ export async function launchCodexAppServer(
     environment.FAROL_NEXT_PROVIDER_TOKEN = input.providerRoute.token;
   }
 
-  const arguments_ = [
+  const provider = input.providerRoute
+    ? providerArguments(input.providerRoute.baseUrl)
+    : [];
+  const start = (arguments_: readonly string[]): CodexAppServerClient => {
+    const child = spawn(input.executablePath, [...arguments_], {
+      cwd: input.cwd,
+      env: environment,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    child.stderr.resume();
+    return new CodexAppServerClient(child, {
+      clientInfo: { name: "farol-next", version: input.clientVersion },
+      requestTimeoutMs: 30_000,
+    });
+  };
+
+  let mcpServerNames: string[] = [];
+  if (input.toolProfile) {
+    const discovery = start([
+      "app-server",
+      "--stdio",
+      ...provider,
+      ...boundedArguments(input.toolProfile, []),
+    ]);
+    try {
+      await discovery.initialize({ deferReady: true });
+      mcpServerNames = configuredMcpServerNames(
+        await discovery.request("config/read", {
+          cwd: input.cwd,
+          includeLayers: false,
+        }),
+      );
+    } finally {
+      await discovery.close().catch(() => undefined);
+    }
+  }
+
+  const client = start([
     "app-server",
     "--stdio",
-    ...(input.providerRoute
-      ? providerArguments(input.providerRoute.baseUrl)
+    ...provider,
+    ...(input.toolProfile
+      ? boundedArguments(input.toolProfile, mcpServerNames)
       : []),
-  ];
-
-  const child = spawn(input.executablePath, arguments_, {
-    cwd: input.cwd,
-    env: environment,
-    stdio: ["pipe", "pipe", "pipe"],
-    windowsHide: true,
-  });
-  child.stderr.resume();
-  const client = new CodexAppServerClient(child, {
-    clientInfo: { name: "farol-next", version: input.clientVersion },
-    requestTimeoutMs: 30_000,
-  });
+  ]);
   try {
-    await client.initialize();
+    await client.initialize({ deferReady: input.toolProfile !== undefined });
+    if (input.toolProfile) {
+      verifyBoundedConfig(
+        await client.request("config/read", {
+          cwd: input.cwd,
+          includeLayers: false,
+        }),
+        input.toolProfile,
+        mcpServerNames,
+      );
+      client.markReady();
+    }
     return client;
-  } catch {
+  } catch (cause) {
     await client.close().catch(() => undefined);
-    throw new Error("CODEX_APP_SERVER_START_FAILED");
+    throw cause instanceof Error &&
+      cause.message === "CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED"
+      ? cause
+      : new Error("CODEX_APP_SERVER_START_FAILED");
   }
 }
