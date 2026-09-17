@@ -2556,6 +2556,45 @@ async function runLiveTaskPersistenceFaultProof() {
     assert.equal(created.ok, true, JSON.stringify(created));
     assert.ok(created.selectedTaskId);
     const taskId = created.selectedTaskId;
+    await instance.application.evaluate(
+      async ({ BrowserWindow }, selectedTaskId) => {
+        const host = BrowserWindow.getAllWindows().find(
+          (candidate) => candidate.getTitle() === "Farol Next Preview",
+        );
+        const view = (host?.contentView.children ?? [])
+          .filter((candidate) => "webContents" in candidate)
+          .find((candidate) =>
+            candidate.webContents
+              .getURL()
+              .includes(`farol-e2e-task=${selectedTaskId}`),
+          );
+        if (!view) throw new Error("LIVE_TASK_PERSISTENCE_SURFACE_MISSING");
+        await view.webContents.executeJavaScript(
+          `history.replaceState(null, "", ${JSON.stringify(`/chatgpt/c/${selectedTaskId}`)})`,
+          true,
+        );
+      },
+      taskId,
+    );
+    await waitForLiveChatGptSurface(
+      instance,
+      taskId,
+      (surface) => new URL(surface.url).pathname === `/chatgpt/c/${taskId}`,
+      "idle conversation URL changes before persistence fails",
+    );
+    await instance.window.waitForFunction(
+      async (selectedTaskId) =>
+        (await window.farolNext.bootstrap()).tasks.find(
+          (task) => task.taskId === selectedTaskId,
+        )?.lifecycle === "outcome_unknown",
+      taskId,
+      { timeout: 5_000 },
+    );
+    await instance.window.waitForFunction(
+      () =>
+        document.querySelector("#dossier-state b")?.textContent ===
+        "OUTCOME UNKNOWN",
+    );
     assert.equal(
       await submitLiveChatGptTask(
         instance,
@@ -2572,14 +2611,6 @@ async function runLiveTaskPersistenceFaultProof() {
         surface.state.stopVisible === false &&
         surface.state.assistantText.length > 0,
       "provider completion after live task persistence failure",
-    );
-    await instance.window.waitForFunction(
-      async (selectedTaskId) =>
-        (await window.farolNext.bootstrap()).tasks.find(
-          (task) => task.taskId === selectedTaskId,
-        )?.lifecycle === "outcome_unknown",
-      taskId,
-      { timeout: 5_000 },
     );
     assert.equal(
       await instance.window.locator("#dossier-state b").innerText(),
