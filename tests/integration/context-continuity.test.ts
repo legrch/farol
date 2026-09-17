@@ -918,6 +918,35 @@ describe("context continuity transaction", () => {
     expect(test.retire).not.toHaveBeenCalled();
   });
 
+  it("fails closed when a recovered validated checkpoint cannot be read", async () => {
+    const test = harness({ initial: storedSession("validated") });
+    vi.spyOn(test.checkpoints, "get").mockRejectedValueOnce(
+      new Error("synthetic checkpoint read failure"),
+    );
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CHECKPOINT_STORE_FAILED" },
+    });
+
+    expect(test.observe).not.toHaveBeenCalled();
+    expect(test.offer).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a recovered durable checkpoint transition is not persisted", async () => {
+    const test = harness({ initial: storedSession("validated") });
+    await seedCheckpoint(test);
+    failSaveAt(test, 1);
+
+    await expect(test.service.execute(command)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "CONTEXT_REPOSITORY_FAILED" },
+    });
+
+    expect(test.observe).not.toHaveBeenCalled();
+    expect(test.offer).not.toHaveBeenCalled();
+  });
+
   it("handles failures while resuming a validated summary", async () => {
     const observationFailure = harness({
       initial: storedSession("validated"),
