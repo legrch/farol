@@ -25,6 +25,7 @@ import {
   ProductTaskCommandSchema,
   ProductTasksStateSchema,
   type ProductTask,
+  type ProductTaskAgent,
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry } from "./live-task-registry";
@@ -139,6 +140,13 @@ import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
 import { CodexAgentWorkspaceProbe } from "./codex-agent-workspace-probe";
 import { CodexNativeAgentHost } from "../../modules/agent/infra/native/codex-native-agent-host";
 import { PrivateAssignmentStore } from "../../modules/agent/infra/repo/private-assignment-store";
+import { AcknowledgeAgentResult } from "../../modules/agent/app/service/acknowledge-agent-result";
+import type { AgentRunReceipt } from "../../modules/agent/app/service/run-agent-assignment";
+import { runProductAgentAssignment } from "./product-agent-assignment";
+import {
+  PrivateProductAgentStore,
+  type ProductAgentInput,
+} from "./product-agent-store";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import {
@@ -241,6 +249,7 @@ const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
+let productAgentStore: PrivateProductAgentStore | null = null;
 let liveTaskPersistence: Promise<void> = Promise.resolve();
 let taskMutationInFlight = false;
 let chatGptHomeUrl = CHATGPT_HOME;
@@ -314,6 +323,34 @@ type ActiveCodexAgentCheck = Readonly<{
   boundedRunningObserved: boolean;
 }>;
 let activeCodexAgentCheck: ActiveCodexAgentCheck | null = null;
+type ActiveProductAgentSession = Readonly<{
+  taskId: string;
+  key: string;
+  client: Awaited<ReturnType<typeof launchCodexAppServer>>;
+  host: CodexNativeAgentHost;
+}>;
+let activeProductAgentSession: ActiveProductAgentSession | null = null;
+
+function pendingProductAgentTaskId(): string | null {
+  return (
+    liveTaskRegistry
+      .snapshot()
+      .tasks.find(
+        (task) =>
+          task.agent?.phase === "running" ||
+          (task.agent?.phase === "completed" &&
+            task.agent.parentDelivery !== "acknowledged"),
+      )?.taskId ?? null
+  );
+}
+
+function codexAgentOperationActive(): boolean {
+  return (
+    activeCodexAgentCheck !== null ||
+    activeProductAgentSession !== null ||
+    pendingProductAgentTaskId() !== null
+  );
+}
 
 function chatGptReadonlyTaskPreview(
   pending: PendingChatGptReadonlyTask,
@@ -597,7 +634,7 @@ function bootstrap() {
     chatgptConversationState: chatGptConversationState(),
     updateChannel: buildIdentity.updateChannel,
     nativeFilesystem: true,
-    nativeAgent: false,
+    nativeAgent: productAgentCapabilityAvailable(),
     liveProvider: false,
     windowState: currentWindowState(),
   };
@@ -803,6 +840,321 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
   }
 }
 
+type ProductAgentContext = Readonly<{
+  settings: ProductSettings;
+  host: NonNullable<ProductSettings["nativeHosts"]["codex"]>;
+  workspace: ApprovedProductWorkspace;
+}>;
+
+function productAgentContext(workspaceId: string): ProductAgentContext | null {
+  const snapshot = configuration?.snapshot();
+  if (snapshot?.status !== "ready" || !productAgentStore) return null;
+  const settings = snapshot.settings;
+  const selected = settings.nativeHosts.codex;
+  const live = selected?.liveVerification;
+  const agent = selected?.agentVerification;
+  const workspace = settings.computer.workspaces.find(
+    (candidate) => candidate.workspaceId === workspaceId,
+  );
+  const verified = settings.setup.computer.verified;
+  if (
+    !selected ||
+    !live ||
+    live.executableSha256 !== selected.executableSha256 ||
+    live.schemaSha256 !== selected.schemaSha256 ||
+    live.buildId !== buildIdentity.buildId ||
+    !agent ||
+    agent.executableSha256 !== selected.executableSha256 ||
+    agent.schemaSha256 !== selected.schemaSha256 ||
+    agent.buildId !== buildIdentity.buildId ||
+    agent.workspaceId !== workspaceId ||
+    agent.computerGeneration !== settings.computer.generation ||
+    agent.workspaceEnforcement !== "verified" ||
+    workspace?.access !== "read" ||
+    !verified ||
+    verified.workspaceId !== workspace.workspaceId ||
+    verified.configRevision !== settings.computer.generation ||
+    verified.buildId !== buildIdentity.buildId ||
+    settings.setup.computer.reachable !== "reachable" ||
+    settings.setup.computer.outcomeUnknown
+  ) {
+    return null;
+  }
+  return { settings, host: selected, workspace };
+}
+
+function productAgentCapabilityAvailable(): boolean {
+  const snapshot = configuration?.snapshot();
+  if (snapshot?.status !== "ready") return false;
+  const workspaceId = snapshot.settings.setup.computer.verified?.workspaceId;
+  return workspaceId ? productAgentContext(workspaceId) !== null : false;
+}
+
+function productAgentInput(
+  task: ProductTask,
+  context: ProductAgentContext,
+  objective: string,
+): ProductAgentInput {
+  const now = Date.now();
+  return {
+    taskId: task.taskId,
+    sessionId: task.sessionId,
+    assignmentId: randomUUID(),
+    authorityId: randomUUID(),
+    parentParticipantId: randomUUID(),
+    agentParticipantId: randomUUID(),
+    taskEpoch: context.settings.computer.generation,
+    generation: 1,
+    workspaceId: context.workspace.workspaceId,
+    focusPath: context.workspace.root,
+    objective,
+    computerGeneration: context.settings.computer.generation,
+    executableSha256: context.host.executableSha256,
+    schemaSha256: context.host.schemaSha256,
+    buildId: buildIdentity.buildId,
+    expiresAt: now + 30 * 60_000,
+    createdAt: new Date(now).toISOString(),
+  };
+}
+
+function productAgentSessionKey(input: ProductAgentInput): string {
+  return JSON.stringify([
+    input.taskId,
+    input.assignmentId,
+    input.executableSha256,
+    input.schemaSha256,
+    input.buildId,
+    input.computerGeneration,
+  ]);
+}
+
+function productAgentInputMatchesContext(
+  input: ProductAgentInput,
+  context: ProductAgentContext,
+): boolean {
+  return (
+    input.computerGeneration === context.settings.computer.generation &&
+    input.workspaceId === context.workspace.workspaceId &&
+    input.focusPath === context.workspace.root &&
+    input.executableSha256 === context.host.executableSha256 &&
+    input.schemaSha256 === context.host.schemaSha256 &&
+    input.buildId === buildIdentity.buildId
+  );
+}
+
+async function openProductAgentSession(
+  input: ProductAgentInput,
+  context: ProductAgentContext,
+): Promise<ActiveProductAgentSession> {
+  const key = productAgentSessionKey(input);
+  if (activeProductAgentSession) {
+    if (
+      activeProductAgentSession.taskId === input.taskId &&
+      activeProductAgentSession.key === key
+    ) {
+      return activeProductAgentSession;
+    }
+    throw new Error("PRODUCT_AGENT_SESSION_BUSY");
+  }
+  const probe = await probeCodexHost({
+    executablePath: context.host.executablePath,
+    scratchRoot: codexHostProbeRoot(),
+  });
+  if (
+    probe.executableSha256 !== input.executableSha256 ||
+    probe.schemaSha256 !== input.schemaSha256 ||
+    probe.version !== context.host.version ||
+    probe.protocol !== context.host.protocol
+  ) {
+    throw new Error("PRODUCT_AGENT_HOST_CHANGED");
+  }
+  const runtimeRoot = await codexHostRuntimeRoot();
+  const configuredCodexHome = process.env.CODEX_HOME;
+  const client = await launchCodexAppServer({
+    executablePath: context.host.executablePath,
+    cwd: runtimeRoot,
+    homePath: app.getPath("home"),
+    tempPath: app.getPath("temp"),
+    clientVersion: buildIdentity.version,
+    ...(configuredCodexHome &&
+    path.isAbsolute(configuredCodexHome) &&
+    !configuredCodexHome.includes("\0")
+      ? { codexHomePath: configuredCodexHome }
+      : {}),
+  });
+  try {
+    const computer = new CodexAgentWorkspaceProbe(
+      context.settings,
+      nativeWorkspace,
+      () => Date.now(),
+    );
+    const host = new CodexNativeAgentHost(
+      client,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot,
+        spawnTimeoutMs: 120_000,
+        waitTimeoutMs: 250,
+        pollIntervalMs: 25,
+        nonce: randomUUID,
+        now: () => Date.now(),
+      },
+      computer,
+      computer,
+    );
+    const session = { taskId: input.taskId, key, client, host };
+    activeProductAgentSession = session;
+    return session;
+  } catch (error) {
+    await client.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function closeProductAgentSession(
+  session: ActiveProductAgentSession,
+): Promise<void> {
+  session.host.dispose();
+  await session.client.close().catch(() => undefined);
+  if (activeProductAgentSession === session) {
+    activeProductAgentSession = null;
+  }
+}
+
+function productAgentSummary(
+  input: ProductAgentInput,
+  receipt: AgentRunReceipt,
+): ProductTaskAgent {
+  const phase = receipt.assignment.phase;
+  if (phase === "prepared") {
+    throw new Error("PRODUCT_AGENT_STATE_INVALID");
+  }
+  return {
+    phase,
+    workspaceId: input.workspaceId,
+    parentDelivery: receipt.parentDelivery,
+    workspaceEnforcement: receipt.workspaceEnforcement ?? "not_applicable",
+    resultAvailable: receipt.resultRef !== null,
+  };
+}
+
+async function persistProductAgentSummary(
+  taskId: string,
+  summary: ProductTaskAgent,
+): Promise<boolean> {
+  if (!liveTaskRegistry.setAgent(taskId, summary)) return false;
+  await persistLiveTaskState();
+  publishTasksState();
+  return true;
+}
+
+async function executeProductAgent(
+  task: ProductTask,
+  input: ProductAgentInput,
+  context: ProductAgentContext,
+): Promise<ProductTaskCommandResult> {
+  if (!productAgentInputMatchesContext(input, context)) {
+    return taskFailure("AGENT_NOT_READY");
+  }
+  let session: ActiveProductAgentSession;
+  try {
+    session = await openProductAgentSession(input, context);
+  } catch (error) {
+    await persistProductAgentSummary(task.taskId, {
+      phase: "failed",
+      workspaceId: input.workspaceId,
+      parentDelivery: "not_applicable",
+      workspaceEnforcement: "not_applicable",
+      resultAvailable: false,
+    }).catch(() => undefined);
+    return taskFailure(
+      error instanceof Error && error.message === "PRODUCT_AGENT_SESSION_BUSY"
+        ? "AGENT_ALREADY_RUNNING"
+        : "AGENT_NOT_READY",
+    );
+  }
+  const assignments = new PrivateAssignmentStore({
+    root: codexAgentAssignmentRoot(),
+  });
+  let result;
+  try {
+    result = await runProductAgentAssignment(context.settings, task, input, {
+      host: session.host,
+      assignments,
+      now: () => Date.now(),
+    });
+  } catch {
+    await persistProductAgentSummary(task.taskId, {
+      phase: "outcome_unknown",
+      workspaceId: input.workspaceId,
+      parentDelivery: "not_applicable",
+      workspaceEnforcement: "not_applicable",
+      resultAvailable: false,
+    }).catch(() => undefined);
+    await closeProductAgentSession(session);
+    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+  }
+  if (!result.ok) {
+    await persistProductAgentSummary(task.taskId, {
+      phase: "failed",
+      workspaceId: input.workspaceId,
+      parentDelivery: "not_applicable",
+      workspaceEnforcement: "not_applicable",
+      resultAvailable: false,
+    }).catch(() => undefined);
+    await closeProductAgentSession(session);
+    return taskFailure("AGENT_ASSIGNMENT_FAILED");
+  }
+  const receipt = result.value;
+  const summary = productAgentSummary(input, receipt);
+  try {
+    if (!(await persistProductAgentSummary(task.taskId, summary))) {
+      await closeProductAgentSession(session);
+      return taskFailure("TASK_NOT_FOUND");
+    }
+  } catch {
+    return taskFailure("TASK_STATE_UNAVAILABLE");
+  }
+  if (receipt.assignment.phase === "running") {
+    return taskSuccess(task.taskId);
+  }
+  await closeProductAgentSession(session);
+  if (receipt.assignment.phase === "outcome_unknown") {
+    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+  }
+  if (receipt.assignment.phase === "failed" || !receipt.resultRef) {
+    return taskFailure("AGENT_ASSIGNMENT_FAILED");
+  }
+  const assignment = receipt.assignment;
+  const acknowledged = await new AcknowledgeAgentResult(assignments).execute({
+    correlation: {
+      ...assignment.identity,
+      authorityId: assignment.authority.authorityId,
+      participantId: assignment.authority.participantId,
+      role: assignment.authority.role,
+      parentThreadId: assignment.parentThreadId!,
+      childId: assignment.childId!,
+      hostRole: assignment.hostRole,
+      delegationDigest: assignment.delegationDigest!,
+    },
+    parentParticipantId: assignment.authority.parentParticipantId,
+    resultRef: receipt.resultRef,
+  });
+  if (!acknowledged.ok) return taskFailure("AGENT_DELIVERY_FAILED");
+  try {
+    await persistProductAgentSummary(
+      task.taskId,
+      productAgentSummary(input, {
+        ...receipt,
+        parentDelivery: acknowledged.value.parentDelivery,
+      }),
+    );
+  } catch {
+    return taskFailure("AGENT_DELIVERY_FAILED");
+  }
+  return taskSuccess(task.taskId);
+}
+
 async function runProductTaskCommand(
   value: unknown,
 ): Promise<ProductTaskCommandResult> {
@@ -834,6 +1186,86 @@ async function runProductTaskCommand(
   taskMutationInFlight = true;
   const before = liveTaskRegistry.snapshot();
   try {
+    if (
+      command.data.kind === "task.start-agent" ||
+      command.data.kind === "task.rejoin-agent"
+    ) {
+      const task = liveTaskRegistry.get(command.data.taskId);
+      if (!task || task.provider !== "chatgpt") {
+        return taskFailure("TASK_NOT_FOUND");
+      }
+      if (
+        activeProductAgentSession &&
+        activeProductAgentSession.taskId !== task.taskId
+      ) {
+        return taskFailure("AGENT_ALREADY_RUNNING");
+      }
+      const pendingTaskId = pendingProductAgentTaskId();
+      if (pendingTaskId && pendingTaskId !== task.taskId) {
+        return taskFailure("AGENT_ALREADY_RUNNING");
+      }
+
+      let input: ProductAgentInput;
+      let context: ProductAgentContext | null;
+      if (command.data.kind === "task.start-agent") {
+        if (task.agent?.phase === "outcome_unknown") {
+          return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+        }
+        if (
+          task.agent?.phase === "running" ||
+          (task.agent?.phase === "completed" &&
+            task.agent.parentDelivery !== "acknowledged")
+        ) {
+          return taskFailure("AGENT_ALREADY_RUNNING");
+        }
+        context = productAgentContext(command.data.workspaceId);
+        if (!context) return taskFailure("AGENT_NOT_READY");
+        input = productAgentInput(task, context, command.data.objective);
+        try {
+          await productAgentStore!.save(input);
+        } catch {
+          return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
+        }
+        if (
+          !liveTaskRegistry.setAgent(task.taskId, {
+            phase: "running",
+            workspaceId: input.workspaceId,
+            parentDelivery: "not_applicable",
+            workspaceEnforcement: "not_applicable",
+            resultAvailable: false,
+          })
+        ) {
+          return taskFailure("TASK_NOT_FOUND");
+        }
+        try {
+          await persistLiveTaskState();
+        } catch {
+          liveTaskRegistry.rollback(before);
+          await productAgentStore!.remove(task.taskId).catch(() => undefined);
+          return taskFailure("TASK_STATE_UNAVAILABLE");
+        }
+        publishTasksState();
+      } else {
+        const rejoinable =
+          task.agent?.phase === "running" ||
+          (task.agent?.phase === "completed" &&
+            task.agent.parentDelivery === "pending" &&
+            task.agent.resultAvailable);
+        if (!rejoinable) return taskFailure("AGENT_REJOIN_UNAVAILABLE");
+        try {
+          const stored = await productAgentStore!.load(task.taskId);
+          if (!stored) return taskFailure("AGENT_REJOIN_UNAVAILABLE");
+          input = stored;
+        } catch {
+          return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
+        }
+        context = productAgentContext(input.workspaceId);
+        if (!context || !productAgentInputMatchesContext(input, context)) {
+          return taskFailure("AGENT_NOT_READY");
+        }
+      }
+      return executeProductAgent(task, input, context);
+    }
     if (command.data.kind === "task.rename") {
       if (!liveTaskRegistry.rename(command.data.taskId, command.data.label)) {
         return taskFailure("TASK_NOT_FOUND");
@@ -866,6 +1298,19 @@ async function runProductTaskCommand(
       return taskSuccess(command.data.taskId);
     }
     if (command.data.kind === "task.close") {
+      const task = liveTaskRegistry.get(command.data.taskId);
+      if (
+        task?.agent?.phase === "running" ||
+        (task?.agent?.phase === "completed" &&
+          task.agent.parentDelivery !== "acknowledged")
+      ) {
+        return taskFailure("AGENT_ALREADY_RUNNING");
+      }
+      try {
+        await productAgentStore?.remove(command.data.taskId);
+      } catch {
+        return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
+      }
       const removed = liveTaskRegistry.remove(command.data.taskId);
       if (!removed) return taskFailure("TASK_NOT_FOUND");
       try {
@@ -891,6 +1336,13 @@ async function runProductTaskCommand(
     if (command.data.kind === "task.cancel") {
       const task = liveTaskRegistry.get(command.data.taskId);
       if (!task) return taskFailure("TASK_NOT_FOUND");
+      if (
+        task.agent?.phase === "running" ||
+        (task.agent?.phase === "completed" &&
+          task.agent.parentDelivery !== "acknowledged")
+      ) {
+        return taskFailure("AGENT_ALREADY_RUNNING");
+      }
       const route = liveTaskRoutes.get(command.data.taskId);
       if (!route) return taskFailure("TASK_NOT_FOUND");
       const result = await route.cancelActiveTask();
@@ -1081,6 +1533,14 @@ function codexAgentAssignmentRoot(): string {
     app.getPath("userData"),
     "farol-next-state",
     "native-agent-assignments",
+  );
+}
+
+function productAgentInputRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "product-agent-inputs",
   );
 }
 
@@ -1871,7 +2331,7 @@ async function configureProduct(
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
   if (
-    activeCodexAgentCheck &&
+    codexAgentOperationActive() &&
     agentCheckConfigurationMutations.has(command.kind)
   ) {
     return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
@@ -1950,7 +2410,7 @@ async function configureProduct(
       }
     }
     case "host.select-codex": {
-      if (activeCodexAgentCheck) {
+      if (codexAgentOperationActive()) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const selected = await selectedCodexExecutable();
@@ -1963,7 +2423,7 @@ async function configureProduct(
       return verifyCodexExecutable(selected);
     }
     case "host.verify-codex": {
-      if (activeCodexAgentCheck) {
+      if (codexAgentOperationActive()) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -1975,7 +2435,7 @@ async function configureProduct(
       );
     }
     case "host.run-codex-smoke": {
-      if (codexHostTaskAdmission || activeCodexAgentCheck) {
+      if (codexHostTaskAdmission || codexAgentOperationActive()) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -2086,7 +2546,11 @@ async function configureProduct(
       }
     }
     case "host.run-codex-agent-check": {
-      if (codexHostTaskAdmission) {
+      if (
+        codexHostTaskAdmission ||
+        activeProductAgentSession ||
+        pendingProductAgentTaskId()
+      ) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       const snapshot = configuration.snapshot();
@@ -2300,7 +2764,7 @@ async function configureProduct(
       }
     }
     case "host.remove-codex":
-      if (activeCodexAgentCheck) {
+      if (codexAgentOperationActive()) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       return ProductConfigurationResultSchema.parse(
@@ -2326,7 +2790,7 @@ async function configureProduct(
             },
             capabilities: {
               nativeFilesystem: true,
-              nativeAgent: false,
+              nativeAgent: productAgentCapabilityAvailable(),
               liveProvider: false,
             },
             tasks: {
@@ -4466,6 +4930,9 @@ async function main(): Promise<void> {
     }),
   );
   await configuration.initialize();
+  productAgentStore = new PrivateProductAgentStore({
+    root: productAgentInputRoot(),
+  });
   connectorCredentialStore = new PrivateConnectorKeyStore({
     root: secureMcpCredentialRoot(),
   });
@@ -4577,6 +5044,10 @@ async function main(): Promise<void> {
     activeCodexAgentCheck = null;
     agentCheck?.host.dispose();
     if (agentCheck) void agentCheck.client.close().catch(() => undefined);
+    const productAgent = activeProductAgentSession;
+    activeProductAgentSession = null;
+    productAgent?.host.dispose();
+    if (productAgent) void productAgent.client.close().catch(() => undefined);
     void secureMcpConnectorRuntime?.stop();
     disposeChatGptRoutes();
     disposeTaskViews("runtime");

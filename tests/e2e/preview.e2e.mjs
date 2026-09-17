@@ -888,6 +888,7 @@ if (args.join(" ") === "app-server --stdio") {
   let agentChildPrompt = null;
   let agentAuthority = null;
   let agentWorkspace = null;
+  let agentProduct = false;
   let agentWorkspaceComplete = false;
   let agentChildComplete = false;
   let agentComplete = false;
@@ -911,10 +912,13 @@ if (args.join(" ") === "app-server --stdio") {
         ? message.params.dynamicTools.map((tool) => tool?.name)
         : [];
       const agentThread = dynamicTools.includes("farol_agent_authority");
+      const productAgentThread = dynamicTools.includes("farol_agent_computer");
       const validDynamicTools = agentThread
         ? dynamicTools.length === 2 &&
           dynamicTools[0] === "farol_agent_authority" &&
-          dynamicTools[1] === "farol_agent_workspace_probe"
+          dynamicTools[1] === (productAgentThread
+            ? "farol_agent_computer"
+            : "farol_agent_workspace_probe")
         : dynamicTools.length === 1 && dynamicTools[0] === "farol_next_ping";
       const valid = message.params?.model === "gpt-6-astra" &&
         message.params?.allowProviderModelFallback === false &&
@@ -927,6 +931,7 @@ if (args.join(" ") === "app-server --stdio") {
         send({ id: message.id, error: { code: -32000, message: "unsafe thread" } });
         return;
       }
+      agentProduct = productAgentThread;
       const threadId = agentThread
         ? agentParentThreadId
         : "thread-e2e-parent";
@@ -946,13 +951,27 @@ if (args.join(" ") === "app-server --stdio") {
         const role = /role (agent|critic),/u.exec(text)?.[1];
         const proof = [...text.matchAll(/proof ([a-z0-9-]+)/gu)].at(-1)?.[1];
         const workspaceProof = /workspace proof ([a-f0-9]{64})/u.exec(text)?.[1];
-        if (start < 0 || finish < 0 || !assignmentId || !authorityId || !participantId || !role || !proof || !workspaceProof) {
+        const computerProof = /computer proof ([a-f0-9]{64})/u.exec(text)?.[1];
+        const workspaceId = /"workspaceId":"([^"]+)"/u.exec(text)?.[1];
+        const validChildEvidence = agentProduct
+          ? computerProof && workspaceId
+          : workspaceProof;
+        if (start < 0 || finish < 0 || !assignmentId || !authorityId || !participantId || !role || !proof || !validChildEvidence) {
           send({ id: message.id, error: { code: -32001, message: "invalid agent prompt" } });
           return;
         }
         agentChildPrompt = text.slice(start + begin.length, finish);
         agentAuthority = { assignmentId, authorityId, participantId, role, proof };
-        agentWorkspace = { assignmentId, authorityId, participantId, proof: workspaceProof };
+        agentWorkspace = agentProduct
+          ? {
+              assignmentId,
+              authorityId,
+              participantId,
+              proof: computerProof,
+              workspaceId,
+              operation: { kind: "workspace.read", relativePath: "README.md" }
+            }
+          : { assignmentId, authorityId, participantId, proof: workspaceProof };
         send({ id: message.id, result: { turn: { id: agentParentTurnId, status: "inProgress", items: [] } } });
         setTimeout(() => {
           send({ method: "item/completed", params: { threadId: agentParentThreadId, turnId: agentParentTurnId, item: {
@@ -972,7 +991,7 @@ if (args.join(" ") === "app-server --stdio") {
             threadId: agentChildThreadId,
             turnId: agentChildTurnId,
             callId: "call-e2e-agent-workspace",
-            tool: "farol_agent_workspace_probe",
+            tool: agentProduct ? "farol_agent_computer" : "farol_agent_workspace_probe",
             arguments: agentWorkspace
           } });
         }, 50);
@@ -1008,7 +1027,7 @@ if (args.join(" ") === "app-server --stdio") {
         const items = agentWorkspaceComplete ? [{
           id: "item-e2e-agent-workspace",
           type: "dynamicToolCall",
-          tool: "farol_agent_workspace_probe",
+          tool: agentProduct ? "farol_agent_computer" : "farol_agent_workspace_probe",
           status: "completed",
           success: true,
           arguments: agentWorkspace
@@ -2521,7 +2540,7 @@ try {
 
 const ordinaryLiveTasks = await launch([], "secondary-visible", "ordinary");
 try {
-  await completeSetup(ordinaryLiveTasks, false, false, true, false);
+  await completeSetup(ordinaryLiveTasks, false, true, true, true);
   const newTask = ordinaryLiveTasks.window.locator("#new-task");
   await newTask.waitFor({ state: "visible" });
   assert.equal(await newTask.isEnabled(), true);
@@ -2929,6 +2948,139 @@ try {
     1,
   );
 
+  await ordinaryLiveTasks.window
+    .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
+    .click();
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  const productWorkspaceId =
+    admittedState.configuration.settings.computer.workspaces[0].workspaceId;
+  assert.equal(
+    await ordinaryLiveTasks.window
+      .locator("#task-agent-workspace")
+      .inputValue(),
+    productWorkspaceId,
+  );
+  await ordinaryLiveTasks.window
+    .locator("#task-agent-objective")
+    .fill(
+      "Read README.md inside the approved subtree and report its boundary marker.",
+    );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-agent").isEnabled(),
+    true,
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent ===
+      "Agent assignment admitted.",
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-agent span").innerText(),
+    "Rejoin Agent",
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window
+      .locator("#task-menu-close-task")
+      .isDisabled(),
+    true,
+  );
+  await ordinaryLiveTasks.window.waitForTimeout(350);
+  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
+    const state = await window.farolNext.bootstrap();
+    const agent = state.tasks.find((task) => task.taskId === taskId)?.agent;
+    return (
+      agent?.phase === "completed" &&
+      agent.parentDelivery === "acknowledged" &&
+      agent.workspaceEnforcement === "verified" &&
+      agent.resultAvailable === true
+    );
+  }, pinnedTask.taskId);
+  const productAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  const productAgentTask = productAgentBootstrap.tasks.find(
+    (task) => task.taskId === pinnedTask.taskId,
+  );
+  assert.ok(productAgentTask);
+  assert.deepEqual(productAgentTask.agent, {
+    phase: "completed",
+    workspaceId: productWorkspaceId,
+    parentDelivery: "acknowledged",
+    workspaceEnforcement: "verified",
+    resultAvailable: true,
+  });
+  assert.equal(productAgentBootstrap.nativeAgent, true);
+  assert.equal(
+    await ordinaryLiveTasks.window
+      .locator("#task-agent-state small")
+      .innerText(),
+    "Delivered",
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-close-task").isEnabled(),
+    true,
+  );
+  await ordinaryLiveTasks.window.screenshot({
+    path: path.join(evidenceRoot, "live-task-native-agent-delivered.png"),
+  });
+  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+
+  const productAgentInputRoot = path.join(
+    ordinaryLiveTasks.userData,
+    "farol-next-state",
+    "product-agent-inputs",
+  );
+  const productAgentInputFiles = (
+    await fs.readdir(productAgentInputRoot)
+  ).filter((entry) => entry.endsWith(".json"));
+  assert.equal(productAgentInputFiles.length, 1);
+  const productAgentInputPath = path.join(
+    productAgentInputRoot,
+    productAgentInputFiles[0],
+  );
+  const productAgentInputText = await fs.readFile(
+    productAgentInputPath,
+    "utf8",
+  );
+  assert.match(
+    productAgentInputText,
+    /Read README\.md inside the approved subtree/u,
+  );
+  assert.equal((await fs.stat(productAgentInputRoot)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(productAgentInputPath)).mode & 0o777, 0o600);
+
+  const assignmentRoot = path.join(
+    ordinaryLiveTasks.userData,
+    "farol-next-state",
+    "native-agent-assignments",
+  );
+  const assignmentFiles = (await fs.readdir(assignmentRoot)).filter((entry) =>
+    entry.endsWith(".json"),
+  );
+  const productAssignmentRecords = await Promise.all(
+    assignmentFiles.map(async (entry) => {
+      const target = path.join(assignmentRoot, entry);
+      return {
+        target,
+        record: JSON.parse(await fs.readFile(target, "utf8")).record,
+      };
+    }),
+  );
+  const productAssignment = productAssignmentRecords.find(
+    ({ record }) => record.assignment.identity.taskId === pinnedTask.taskId,
+  );
+  assert.ok(productAssignment);
+  assert.equal(productAssignment.record.assignment.phase, "completed");
+  assert.equal(productAssignment.record.parentDelivery, "acknowledged");
+  assert.equal(productAssignment.record.workspaceEnforcement, "verified");
+  assert.match(productAssignment.record.resultRef, /^codex-app-server:\/\//u);
+  assert.equal((await fs.stat(productAssignment.target)).mode & 0o777, 0o600);
+
   const liveTaskRoot = path.join(
     ordinaryLiveTasks.userData,
     "farol-next-state",
@@ -2944,6 +3096,7 @@ try {
   assert.equal(liveTaskRecord.tasks[0].label, "Pinned continuity task");
   assert.equal(liveTaskRecord.tasks[0].pinned, true);
   assert.equal(liveTaskRecord.tasks[0].lifecycle, "completed");
+  assert.deepEqual(liveTaskRecord.tasks[0].agent, productAgentTask.agent);
   assert.equal(
     liveTaskRecord.tasks[0].conversationUrl,
     retainedLiveConversationUrl,
@@ -2958,6 +3111,7 @@ try {
     "cancelled",
   );
   assert.deepEqual(Object.keys(liveTaskRecord.tasks[0]).sort(), [
+    "agent",
     "conversationUrl",
     "hasComputer",
     "label",
@@ -2974,7 +3128,7 @@ try {
   ]);
   assert.doesNotMatch(
     liveTaskText,
-    /continuity canary|cancellation canary|bounded workspace verification/iu,
+    /continuity canary|cancellation canary|bounded workspace verification|Read README\.md inside the approved subtree/iu,
   );
   assert.equal((await fs.stat(liveTaskRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
@@ -3036,6 +3190,11 @@ try {
     "shared-chatgpt-session-single-download-guard",
     "idle-live-task-cancel-refused-truthfully",
     "running-live-task-cancel-confirmed-once",
+    "live-task-native-agent-product-objective",
+    "live-task-native-agent-same-child-rejoin",
+    "live-task-native-agent-result-delivery-acknowledged",
+    "live-task-native-agent-private-input",
+    "live-task-native-agent-content-free-recovery",
   );
 } finally {
   await close(ordinaryLiveTasks);

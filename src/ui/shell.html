@@ -465,6 +465,32 @@
           />
           <button id="task-menu-rename" type="button">Rename</button>
         </div>
+        <section class="task-agent-panel" aria-labelledby="task-agent-title">
+          <div class="task-agent-heading">
+            <strong id="task-agent-title">Agent assignment</strong>
+            <span class="task-agent-state" id="task-agent-state">
+              <i class="state-lamp unavailable" aria-hidden="true"></i
+              ><small>Not configured</small>
+            </span>
+          </div>
+          <label for="task-agent-workspace">Approved workspace</label>
+          <select id="task-agent-workspace"></select>
+          <label for="task-agent-objective">Objective</label>
+          <textarea
+            id="task-agent-objective"
+            maxlength="8000"
+            rows="4"
+            spellcheck="true"
+            placeholder="Describe one bounded read-only assignment"
+          ></textarea>
+          <button class="task-agent-run" id="task-menu-agent" type="button">
+            <span>Run Agent</span><small>Read-only</small>
+          </button>
+          <p class="task-agent-detail" id="task-agent-detail">
+            Requires a verified native host and one verified read-only
+            workspace.
+          </p>
+        </section>
         <button class="task-menu-action" id="task-menu-pin" type="button">
           <span>Pin task</span><small>Keep first</small>
         </button>

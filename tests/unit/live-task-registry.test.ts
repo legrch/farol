@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
+import { ProductTaskCommandSchema } from "../../src/modules/chat/contract/product-task";
 
 function candidate(index: number) {
   return {
@@ -19,6 +20,36 @@ function candidate(index: number) {
 }
 
 describe("live task registry", () => {
+  it("accepts only bounded explicit Product Agent commands", () => {
+    expect(
+      ProductTaskCommandSchema.parse({
+        kind: "task.start-agent",
+        taskId: "task-1",
+        workspaceId: "workspace-a",
+        objective: "Inspect the approved workspace and summarize the risk.",
+      }),
+    ).toEqual({
+      kind: "task.start-agent",
+      taskId: "task-1",
+      workspaceId: "workspace-a",
+      objective: "Inspect the approved workspace and summarize the risk.",
+    });
+    expect(
+      ProductTaskCommandSchema.parse({
+        kind: "task.rejoin-agent",
+        taskId: "task-1",
+      }),
+    ).toEqual({ kind: "task.rejoin-agent", taskId: "task-1" });
+    expect(
+      ProductTaskCommandSchema.safeParse({
+        kind: "task.start-agent",
+        taskId: "task-1",
+        workspaceId: "workspace-a",
+        objective: "\0",
+      }).success,
+    ).toBe(false);
+  });
+
   it("admits caller-owned opaque task identities and advances its revision", () => {
     const registry = new LiveTaskRegistry(5);
 

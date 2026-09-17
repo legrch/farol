@@ -2,6 +2,12 @@ import { z } from "zod";
 
 const ProductTaskIdentifierSchema = z.string().min(1).max(120);
 const ProductTaskCapabilityLabelSchema = z.string().trim().min(1).max(120);
+const ProductAgentObjectiveSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(8_000)
+  .refine((value) => !value.includes("\0"));
 
 export const ProductTaskLifecycleSchema = z.enum([
   "event_driven",
@@ -66,6 +72,16 @@ export const ProductTaskCommandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("task.cancel"),
     taskId: ProductTaskIdentifierSchema,
   }),
+  z.strictObject({
+    kind: z.literal("task.start-agent"),
+    taskId: ProductTaskIdentifierSchema,
+    workspaceId: ProductTaskIdentifierSchema,
+    objective: ProductAgentObjectiveSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("task.rejoin-agent"),
+    taskId: ProductTaskIdentifierSchema,
+  }),
 ]);
 
 export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
@@ -88,6 +104,13 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
       "TASK_STATE_UNAVAILABLE",
       "TASK_NOT_RUNNING",
       "TASK_CANCEL_FAILED",
+      "AGENT_NOT_READY",
+      "AGENT_ALREADY_RUNNING",
+      "AGENT_INPUT_STATE_UNAVAILABLE",
+      "AGENT_ASSIGNMENT_FAILED",
+      "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+      "AGENT_DELIVERY_FAILED",
+      "AGENT_REJOIN_UNAVAILABLE",
     ]),
     state: ProductTasksStateSchema,
   }),

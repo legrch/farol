@@ -68,7 +68,7 @@ const bootstrapSchema = z.strictObject({
   ]),
   updateChannel: z.literal("local-preview-only"),
   nativeFilesystem: z.literal(true),
-  nativeAgent: z.literal(false),
+  nativeAgent: z.boolean(),
   liveProvider: z.literal(false),
   windowState: WindowStateSchema,
 });
@@ -190,6 +190,7 @@ let taskAdmissionFeedback = "";
 let taskMenuFeedback = "";
 let taskMenuFeedbackError = false;
 let taskMenuBusy = false;
+let taskAgentDraftTaskId = "";
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
@@ -278,6 +279,25 @@ function taskState(taskId: string): TaskState {
   }
   const task = taskById(taskId);
   if (task?.provider === "chatgpt") {
+    if (task.agent?.phase === "running") {
+      return { tone: "running", label: "Agent running", attention: false };
+    }
+    if (
+      task.agent?.phase === "completed" &&
+      task.agent.parentDelivery === "pending"
+    ) {
+      return { tone: "waiting", label: "Agent result ready", attention: true };
+    }
+    if (task.agent?.phase === "outcome_unknown") {
+      return {
+        tone: "unknown",
+        label: "Agent outcome unknown",
+        attention: true,
+      };
+    }
+    if (task.agent?.phase === "failed") {
+      return { tone: "failed", label: "Agent failed", attention: true };
+    }
     if (task.lifecycle === "running") {
       return { tone: "running", label: "Running", attention: false };
     }
@@ -292,6 +312,12 @@ function taskState(taskId: string): TaskState {
     }
     if (task.lifecycle === "failed") {
       return { tone: "failed", label: "Needs attention", attention: true };
+    }
+    if (
+      task.agent?.phase === "completed" &&
+      task.agent.parentDelivery === "acknowledged"
+    ) {
+      return { tone: "complete", label: "Agent complete", attention: false };
     }
     return { tone: "complete", label: "Ready", attention: false };
   }
@@ -521,7 +547,9 @@ function renderSignals(): void {
           activity: {
             tone: states.some((state) => state.tone === "unknown")
               ? ("unknown" as const)
-              : ("failed" as const),
+              : states.some((state) => state.tone === "failed")
+                ? ("failed" as const)
+                : ("waiting" as const),
             count: String(attention),
             text: `${attention} ${attention === 1 ? "task needs" : "tasks need"} attention`,
           },
@@ -615,6 +643,67 @@ function renderDossier(): void {
   taskMenuComputer.disabled = !unresolvedComputerRequest(selectedTaskId);
 }
 
+type ProductAgentReadiness =
+  | Readonly<{
+      ready: true;
+      workspace: ReadySettings["computer"]["workspaces"][number];
+    }>
+  | Readonly<{ ready: false; reason: string }>;
+
+function productAgentReadiness(): ProductAgentReadiness {
+  if (bootstrap.configuration.status !== "ready") {
+    return { ready: false, reason: "Repair Settings before running Agent." };
+  }
+  const settings = bootstrap.configuration.settings;
+  const host = settings.nativeHosts.codex;
+  if (!host) {
+    return { ready: false, reason: "Choose and verify a native Codex host." };
+  }
+  const live = host.liveVerification;
+  if (
+    !live ||
+    live.executableSha256 !== host.executableSha256 ||
+    live.schemaSha256 !== host.schemaSha256 ||
+    live.buildId !== bootstrap.build.buildId
+  ) {
+    return { ready: false, reason: "Run the exact-build native host check." };
+  }
+  const proof = host.agentVerification;
+  if (
+    !proof ||
+    proof.executableSha256 !== host.executableSha256 ||
+    proof.schemaSha256 !== host.schemaSha256 ||
+    proof.buildId !== bootstrap.build.buildId ||
+    proof.computerGeneration !== settings.computer.generation ||
+    proof.workspaceEnforcement !== "verified"
+  ) {
+    return {
+      ready: false,
+      reason: "Verify native Agent lineage and workspace enforcement first.",
+    };
+  }
+  const workspace = settings.computer.workspaces.find(
+    (candidate) =>
+      candidate.workspaceId === proof.workspaceId &&
+      candidate.access === "read",
+  );
+  const computer = settings.setup.computer;
+  if (
+    !workspace ||
+    computer.reachable !== "reachable" ||
+    computer.outcomeUnknown ||
+    computer.verified?.workspaceId !== workspace.workspaceId ||
+    computer.verified.configRevision !== settings.computer.generation ||
+    computer.verified.buildId !== bootstrap.build.buildId
+  ) {
+    return {
+      ready: false,
+      reason: "Verify the same read-only workspace for this exact build.",
+    };
+  }
+  return { ready: true, workspace };
+}
+
 function renderTaskMenu(): void {
   const task = taskById(selectedTaskId);
   const live = task?.provider === "chatgpt";
@@ -627,11 +716,115 @@ function renderTaskMenu(): void {
   const pin = required<HTMLButtonElement>("#task-menu-pin");
   const cancel = required<HTMLButtonElement>("#task-menu-cancel");
   const close = required<HTMLButtonElement>("#task-menu-close-task");
+  const workspace = required<HTMLSelectElement>("#task-agent-workspace");
+  const objective = required<HTMLTextAreaElement>("#task-agent-objective");
+  const runAgent = required<HTMLButtonElement>("#task-menu-agent");
+  const agentState = required<HTMLElement>("#task-agent-state");
+  const agentLamp = required<HTMLElement>("#task-agent-state .state-lamp");
+  const agentLabel = required<HTMLElement>("#task-agent-state small");
+  const agentDetail = required<HTMLElement>("#task-agent-detail");
+  const readiness = productAgentReadiness();
+  const previousWorkspace = workspace.value;
+  if (readiness.ready) {
+    const option = document.createElement("option");
+    option.value = readiness.workspace.workspaceId;
+    option.textContent = readiness.workspace.label;
+    workspace.replaceChildren(option);
+    workspace.value =
+      previousWorkspace === readiness.workspace.workspaceId
+        ? previousWorkspace
+        : readiness.workspace.workspaceId;
+  } else {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No verified read-only workspace";
+    workspace.replaceChildren(option);
+  }
+  const needsRejoin =
+    task.agent?.phase === "running" ||
+    (task.agent?.phase === "completed" &&
+      task.agent.parentDelivery === "pending" &&
+      task.agent.resultAvailable);
+  const uncertain = task.agent?.phase === "outcome_unknown";
+  const agentLocked = needsRejoin;
   name.disabled = taskMenuBusy;
   rename.disabled = taskMenuBusy;
   pin.disabled = taskMenuBusy;
-  cancel.disabled = taskMenuBusy || task.lifecycle !== "running";
-  close.disabled = taskMenuBusy;
+  cancel.disabled = taskMenuBusy || task.lifecycle !== "running" || agentLocked;
+  close.disabled = taskMenuBusy || agentLocked;
+  workspace.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  objective.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  runAgent.disabled =
+    taskMenuBusy ||
+    !readiness.ready ||
+    uncertain ||
+    (!needsRejoin && objective.value.trim().length === 0);
+  runAgent.querySelector("span")!.textContent =
+    task.agent?.phase === "running"
+      ? "Rejoin Agent"
+      : task.agent?.phase === "completed" &&
+          task.agent.parentDelivery === "pending"
+        ? "Deliver result"
+        : "Run Agent";
+  runAgent.querySelector("small")!.textContent = needsRejoin
+    ? task.agent?.phase === "running"
+      ? "Same child"
+      : "Durable result"
+    : "Read-only";
+
+  const agentPresentation =
+    task.agent?.phase === "running"
+      ? {
+          tone: "running",
+          label: "Running",
+          detail:
+            "Rejoin checks the same native child without submitting another model turn.",
+        }
+      : task.agent?.phase === "completed" &&
+          task.agent.parentDelivery === "pending"
+        ? {
+            tone: "waiting",
+            label: "Result ready",
+            detail:
+              "The result is retained durably and still needs exact parent delivery acknowledgement.",
+          }
+        : task.agent?.phase === "completed"
+          ? {
+              tone: "complete",
+              label: "Delivered",
+              detail:
+                "The previous Agent result was retained and acknowledged by the parent task.",
+            }
+          : task.agent?.phase === "failed"
+            ? {
+                tone: "failed",
+                label: "Failed",
+                detail:
+                  "The native host confirmed failure. A new assignment requires a new explicit Run Agent action.",
+              }
+            : task.agent?.phase === "outcome_unknown"
+              ? {
+                  tone: "unknown",
+                  label: "Outcome unknown",
+                  detail:
+                    "Farol will not retry this assignment. Inspect the native task before starting elsewhere.",
+                }
+              : readiness.ready
+                ? {
+                    tone: "complete",
+                    label: "Ready",
+                    detail:
+                      "One verified read-only workspace will be delegated without per-file reapproval.",
+                  }
+                : {
+                    tone: "unavailable",
+                    label: "Unavailable",
+                    detail: readiness.reason,
+                  };
+  agentState.dataset.tone = agentPresentation.tone;
+  agentLamp.className = `state-lamp ${agentPresentation.tone}`;
+  agentLabel.textContent = agentPresentation.label;
+  agentDetail.textContent = agentPresentation.detail;
   pin.querySelector("span")!.textContent = task.pinned
     ? "Unpin task"
     : "Pin task";
@@ -643,9 +836,13 @@ function renderTaskMenu(): void {
   note.dataset.error = String(taskMenuFeedbackError);
   note.textContent =
     taskMenuFeedback ||
-    (task.lifecycle === "running"
-      ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
-      : "Close removes this local task and its window. It does not cancel provider work.");
+    (agentLocked
+      ? "Agent state is retained before native execution. Closing and provider cancellation stay unavailable until the same assignment is reconciled."
+      : uncertain
+        ? "Outcome unknown is not Failed. Farol will not submit this Agent assignment again."
+        : task.lifecycle === "running"
+          ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
+          : "Close removes this local task and its window. It does not cancel provider work.");
 }
 
 function pendingComputerTask(): PreviewTask | null {
@@ -2698,6 +2895,10 @@ function openTaskMenu(): void {
   taskMenuFeedbackError = false;
   if (task?.provider === "chatgpt") {
     required<HTMLInputElement>("#task-menu-name").value = task.label;
+    if (taskAgentDraftTaskId !== task.taskId) {
+      taskAgentDraftTaskId = task.taskId;
+      required<HTMLTextAreaElement>("#task-agent-objective").value = "";
+    }
   }
   sidebarOverlayOpen = false;
   shellOverlay = "task-menu";
@@ -2725,6 +2926,27 @@ function taskMenuErrorMessage(
   }
   if (error === "TASK_COMMAND_INVALID") {
     return "Enter a task name between 1 and 80 characters.";
+  }
+  if (error === "AGENT_NOT_READY") {
+    return "Verify the exact native host, Agent lineage, and read-only workspace first.";
+  }
+  if (error === "AGENT_ALREADY_RUNNING") {
+    return "This Agent assignment must be reconciled before changing or closing the task.";
+  }
+  if (error === "AGENT_INPUT_STATE_UNAVAILABLE") {
+    return "Private Agent input could not be retained safely. Nothing was submitted.";
+  }
+  if (error === "AGENT_ASSIGNMENT_FAILED") {
+    return "The native host confirmed that the Agent assignment failed.";
+  }
+  if (error === "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN") {
+    return "The Agent outcome is unknown. Farol will not retry it automatically.";
+  }
+  if (error === "AGENT_DELIVERY_FAILED") {
+    return "The result is retained, but parent delivery was not acknowledged. Use Deliver result.";
+  }
+  if (error === "AGENT_REJOIN_UNAVAILABLE") {
+    return "No exact running child or retained result is available to rejoin.";
   }
   return "The task operation is unavailable.";
 }
@@ -3070,6 +3292,46 @@ async function start(): Promise<void> {
       if (event.key !== "Enter") return;
       event.preventDefault();
       renameLiveTask();
+    },
+  );
+  required<HTMLTextAreaElement>("#task-agent-objective").addEventListener(
+    "input",
+    renderTaskMenu,
+  );
+  required<HTMLButtonElement>("#task-menu-agent").addEventListener(
+    "click",
+    () => {
+      const task = taskById(selectedTaskId);
+      if (task?.provider !== "chatgpt") return;
+      const needsRejoin =
+        task.agent?.phase === "running" ||
+        (task.agent?.phase === "completed" &&
+          task.agent.parentDelivery === "pending" &&
+          task.agent.resultAvailable);
+      if (needsRejoin) {
+        void runTaskMenuCommand(
+          { kind: "task.rejoin-agent", taskId: task.taskId },
+          task.agent?.phase === "running"
+            ? "Agent state refreshed."
+            : "Agent result delivered.",
+        );
+        return;
+      }
+      const workspaceId = required<HTMLSelectElement>(
+        "#task-agent-workspace",
+      ).value;
+      const objective = required<HTMLTextAreaElement>(
+        "#task-agent-objective",
+      ).value.trim();
+      void runTaskMenuCommand(
+        {
+          kind: "task.start-agent",
+          taskId: task.taskId,
+          workspaceId,
+          objective,
+        },
+        "Agent assignment admitted.",
+      );
     },
   );
   required<HTMLButtonElement>("#task-menu-pin").addEventListener(
