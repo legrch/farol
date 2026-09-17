@@ -2925,6 +2925,9 @@ try {
       !document.querySelector(`#task-tabs .task-tab[data-task-id="${taskId}"]`),
     closingTask.taskId,
   );
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "hidden" });
   await waitForWindowCount(ordinaryLiveTasks.application, 1);
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "4 / 5");
