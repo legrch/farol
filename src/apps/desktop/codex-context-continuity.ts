@@ -53,6 +53,10 @@ const preparedTurnSchema = z
 
 const MAXIMUM_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
 const RETAINED_TAIL_MAXIMUM_BYTES = 64 * 1_024;
+// This is a conservative encoded transport ceiling, not a token estimate.
+// The ordinary provider separately enforces its complete 128 Ki-character
+// prompt boundary when the checkpoint is consumed.
+const MAXIMUM_HOST_HANDOFF_BYTES = 128 * 1_024;
 
 export type CodexContextSummaryInput = Readonly<{
   request: ContextSummaryRequest;
@@ -159,6 +163,9 @@ function normalizeSessionFailure(
   session: ContextSession,
 ): CodexChatGptCompactionErrorCode | null {
   if (session.phase === "blocked") {
+    if (session.blockedCode === "COMPACTION_BUDGET_EXCEEDED") {
+      return "COMPACTION_BUDGET_EXCEEDED";
+    }
     return "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED";
   }
   if (session.phase === "outcome_unknown") {
@@ -169,6 +176,11 @@ function normalizeSessionFailure(
 
 export class CodexContextContinuity implements CodexChatGptCompaction {
   private readonly confirmations = new Map<string, string>();
+  private readonly compactionRequests = new Map<string, ParsedHostCompaction>();
+  private readonly handoffPreflights = new Map<
+    string,
+    Result<HostCompactionHandoff, HostCompactionErrorCode>
+  >();
   private readonly service: CompactContext;
 
   constructor(private readonly options: CodexContextContinuityOptions) {
@@ -188,6 +200,24 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       options.store,
       options.store,
       {
+        preflight: async (checkpoint) => {
+          const request = this.compactionRequests.get(checkpoint.operationId);
+          if (!request) {
+            return {
+              status: "blocked",
+              code: "HOST_COMPACTION_REQUEST_INVALID",
+            };
+          }
+          const handoff = buildHostCompactionHandoff(request, checkpoint, {
+            maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
+            retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
+            maximumHandoffBytes: MAXIMUM_HOST_HANDOFF_BYTES,
+          });
+          this.handoffPreflights.set(checkpoint.operationId, handoff);
+          return handoff.ok
+            ? { status: "ready" }
+            : { status: "blocked", code: handoff.error.code };
+        },
         offer: async () => ({ status: "awaiting_confirmation" }),
         reconcile: async (checkpoint) => {
           const hostContextRef = this.confirmations.get(
@@ -245,6 +275,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
         const replay = buildHostCompactionHandoff(request, checkpoint, {
           maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
           retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
+          maximumHandoffBytes: MAXIMUM_HOST_HANDOFF_BYTES,
         });
         return replay.ok ? replay : failure(replay.error.code);
       }
@@ -282,28 +313,40 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       return failure("HOST_COMPACTION_SOURCE_MISMATCH");
     }
 
-    const compacted = await this.service.execute({
-      binding,
-      operationId: selectedOperationId,
-      source: source.source,
-      sourceBoundary: source.sourceBoundary,
-    });
+    this.compactionRequests.set(selectedOperationId, request);
+    this.handoffPreflights.delete(selectedOperationId);
+    let compacted;
+    try {
+      compacted = await this.service.execute({
+        binding,
+        operationId: selectedOperationId,
+        source: source.source,
+        sourceBoundary: source.sourceBoundary,
+      });
+    } finally {
+      this.compactionRequests.delete(selectedOperationId);
+    }
+    const preflight = this.handoffPreflights.get(selectedOperationId);
+    this.handoffPreflights.delete(selectedOperationId);
     if (!compacted.ok) {
       return failure("FAROL_NEXT_COMPACTION_STATE_FAILED");
     }
     const classified = normalizeSessionFailure(compacted.value.session);
-    if (classified) return failure(classified);
+    if (classified) {
+      return preflight && !preflight.ok
+        ? failure(preflight.error.code)
+        : failure(classified);
+    }
     if (!compacted.value.checkpoint) {
       return failure("HOST_CHECKPOINT_NOT_FOUND");
     }
-    const handoff = buildHostCompactionHandoff(
-      request,
-      compacted.value.checkpoint,
-      {
+    const handoff =
+      preflight ??
+      buildHostCompactionHandoff(request, compacted.value.checkpoint, {
         maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
         retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
-      },
-    );
+        maximumHandoffBytes: MAXIMUM_HOST_HANDOFF_BYTES,
+      });
     return handoff.ok ? handoff : failure(handoff.error.code);
   }
 

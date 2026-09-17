@@ -399,8 +399,15 @@ export function buildHostCompactionHandoff(
   options: Readonly<{
     maximumCheckpointContentBytes: number;
     retainedTailMaximumBytes: number;
+    maximumHandoffBytes: number;
   }>,
 ): Result<HostCompactionHandoff, HostCompactionErrorCode> {
+  if (
+    !Number.isSafeInteger(options.maximumHandoffBytes) ||
+    options.maximumHandoffBytes < 1
+  ) {
+    return failure("COMPACTION_BUDGET_EXCEEDED");
+  }
   const parsed = validateCheckpointEnvelope(
     candidate,
     options.maximumCheckpointContentBytes,
@@ -417,26 +424,34 @@ export function buildHostCompactionHandoff(
     return failure("HOST_COMPACTION_SOURCE_MISMATCH");
   }
   if (request.variant === "streamed_compaction_item") {
-    return success({
+    const handoff: HostCompactionHandoff = {
       variant: request.variant,
       item: {
         id: hostCompactionItemId(checkpoint),
         type: "compaction",
         encrypted_content: transportCheckpoint(checkpoint),
       },
-    });
+    };
+    return Buffer.byteLength(JSON.stringify(handoff), "utf8") <=
+      options.maximumHandoffBytes
+      ? success(handoff)
+      : failure("COMPACTION_BUDGET_EXCEEDED");
   }
   const retained = retainedUserTail(
     request.history,
     options.retainedTailMaximumBytes,
   );
   if (!retained.ok) return retained;
-  return success({
+  const handoff: HostCompactionHandoff = {
     variant: request.variant,
     response: {
       output: [...retained.value, summaryMessage(checkpoint)],
     },
-  });
+  };
+  return Buffer.byteLength(JSON.stringify(handoff), "utf8") <=
+    options.maximumHandoffBytes
+    ? success(handoff)
+    : failure("COMPACTION_BUDGET_EXCEEDED");
 }
 
 export function replayHostCheckpoint(

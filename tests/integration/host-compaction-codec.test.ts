@@ -254,6 +254,7 @@ describe("native host compaction codec", () => {
       buildHostCompactionHandoff(parsed, checkpoint, {
         maximumCheckpointContentBytes: 16_384,
         retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 64 * 1_024,
       }),
     );
     expect(handoff).toMatchObject({
@@ -295,6 +296,7 @@ describe("native host compaction codec", () => {
       buildHostCompactionHandoff(parsed, checkpoint, {
         maximumCheckpointContentBytes: 16_384,
         retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 64 * 1_024,
       }),
     );
     expect(handoff).toMatchObject({
@@ -346,6 +348,7 @@ describe("native host compaction codec", () => {
         {
           maximumCheckpointContentBytes: 16_384,
           retainedTailMaximumBytes: 16_384,
+          maximumHandoffBytes: 64 * 1_024,
         },
       ),
     ).toMatchObject({
@@ -359,6 +362,7 @@ describe("native host compaction codec", () => {
         {
           maximumCheckpointContentBytes: 16_384,
           retainedTailMaximumBytes: 16_384,
+          maximumHandoffBytes: 64 * 1_024,
         },
       ),
     ).toMatchObject({
@@ -369,6 +373,27 @@ describe("native host compaction codec", () => {
       buildHostCompactionHandoff(parsed, checkpoint, {
         maximumCheckpointContentBytes: 16_384,
         retainedTailMaximumBytes: 8,
+        maximumHandoffBytes: 64 * 1_024,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "COMPACTION_BUDGET_EXCEEDED" },
+    });
+    expect(
+      buildHostCompactionHandoff(parsed, checkpoint, {
+        maximumCheckpointContentBytes: 16_384,
+        retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 1,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "COMPACTION_BUDGET_EXCEEDED" },
+    });
+    expect(
+      buildHostCompactionHandoff(parsed, checkpoint, {
+        maximumCheckpointContentBytes: 16_384,
+        retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 0,
       }),
     ).toMatchObject({
       ok: false,
@@ -379,6 +404,7 @@ describe("native host compaction codec", () => {
       buildHostCompactionHandoff(parsed, checkpoint, {
         maximumCheckpointContentBytes: 16_384,
         retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 64 * 1_024,
       }),
     );
     if (handoff.variant !== "unary_replacement_history") return;

@@ -167,6 +167,9 @@ function harness(
     status: "confirmed",
     hostContextRef: "host-context-2",
   });
+  const preflight = vi
+    .fn<HostContextBridge["preflight"]>()
+    .mockResolvedValue({ status: "ready" });
   const retire = vi
     .fn<ContextSourceControl["retire"]>()
     .mockResolvedValue({ status: "retired" });
@@ -174,7 +177,7 @@ function harness(
     { request, observe },
     sessions,
     checkpoints,
-    { offer, reconcile },
+    { preflight, offer, reconcile },
     { retire },
     { now: options.now ?? (() => 1_000) },
     { nextCheckpointId: () => "checkpoint-1" },
@@ -186,6 +189,7 @@ function harness(
     checkpoints,
     request,
     observe,
+    preflight,
     offer,
     reconcile,
     retire,
@@ -740,6 +744,28 @@ describe("context continuity transaction", () => {
   });
 
   it("keeps an offered checkpoint until the host confirms installation", async () => {
+    const preflightBlocked = harness({
+      initial: storedSession("durably_stored"),
+    });
+    await seedCheckpoint(preflightBlocked);
+    preflightBlocked.preflight.mockResolvedValueOnce({
+      status: "blocked",
+      code: "COMPACTION_BUDGET_EXCEEDED",
+    });
+    await expect(
+      preflightBlocked.service.execute(command),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        session: {
+          phase: "blocked",
+          blockedCode: "COMPACTION_BUDGET_EXCEEDED",
+        },
+      },
+    });
+    expect(preflightBlocked.offer).not.toHaveBeenCalled();
+    expect(preflightBlocked.retire).not.toHaveBeenCalled();
+
     const waiting = harness({ initial: storedSession("durably_stored") });
     await seedCheckpoint(waiting);
     waiting.offer.mockResolvedValueOnce({ status: "awaiting_confirmation" });

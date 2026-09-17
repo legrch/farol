@@ -66,6 +66,18 @@ function unaryBody() {
   };
 }
 
+function contextBinding() {
+  return {
+    ownerId: "owner-preview",
+    taskId: "thread-context-1",
+    hostThreadId: "thread-context-1",
+    sessionId: "thread-context-1",
+    providerProfileId: "profile-isolated-next",
+    modelId: "farol-next/mind",
+    mode: "mind",
+  };
+}
+
 function driver(
   selected: "retained_agent" | "canonical_history" = "retained_agent",
 ): CodexContextSummaryDriver & {
@@ -427,6 +439,60 @@ describe("Codex host context continuity composition", () => {
         }),
       }),
     );
+  });
+
+  it("rejects an oversized encoded handoff before offering or retiring it", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    summary.request.mockResolvedValueOnce({
+      status: "completed",
+      providerOperationId: "summary-provider-oversized",
+      sourceCursor: "summary-cursor-oversized",
+      content: {
+        ...checkpointContent,
+        activeConstraints: Array.from({ length: 20 }, () => "🙂".repeat(2_000)),
+      },
+    });
+    const store = new PrivateContextStore({ root });
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary,
+    });
+
+    await expect(
+      continuity.compact({
+        endpoint: "responses_compact",
+        body: unaryBody(),
+        metadataHeader: metadata(),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "COMPACTION_BUDGET_EXCEEDED" },
+    });
+    await expect(store.load(contextBinding())).resolves.toMatchObject({
+      phase: "blocked",
+      blockedCode: "COMPACTION_BUDGET_EXCEEDED",
+    });
+    const restarted = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: new PrivateContextStore({ root }),
+      summary,
+    });
+    await expect(
+      restarted.compact({
+        endpoint: "responses_compact",
+        body: unaryBody(),
+        metadataHeader: metadata(),
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "COMPACTION_BUDGET_EXCEEDED" },
+    });
+    expect(summary.request).toHaveBeenCalledTimes(1);
+    expect(summary.retire).not.toHaveBeenCalled();
   });
 
   it("uses an exact host item and turn receipt when the next request hides the checkpoint", async () => {

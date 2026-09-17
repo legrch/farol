@@ -5298,6 +5298,7 @@ async function runContextFixtureControl(
     {
       maximumCheckpointContentBytes: 256 * 1_024,
       retainedTailMaximumBytes: 64 * 1_024,
+      maximumHandoffBytes: 128 * 1_024,
     },
   );
   if (!handoff.ok) return { error: handoff.error.code };

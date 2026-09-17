@@ -505,6 +505,23 @@ export class CompactContext {
     if (session.phase === "durably_stored") {
       const checkpoint = await this.requiredCheckpoint(session);
       if (!checkpoint.ok) return checkpoint;
+      let preflight: Awaited<ReturnType<HostContextBridge["preflight"]>>;
+      try {
+        preflight = await this.host.preflight(checkpoint.value);
+      } catch {
+        preflight = {
+          status: "blocked",
+          code: "HOST_HANDOFF_PREFLIGHT_FAILED",
+        };
+      }
+      if (preflight.status === "blocked") {
+        return this.persistClassified(
+          session,
+          preflight.code,
+          "blocked",
+          lease,
+        );
+      }
       const offered = offerCheckpointHandoff(session);
       if (!offered.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = offered.value;
