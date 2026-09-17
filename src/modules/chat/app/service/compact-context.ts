@@ -32,6 +32,7 @@ import {
   offerCheckpointHandoff,
   recordValidatedCheckpoint,
   requestCheckpoint,
+  resumeSourceRetirementCleanup,
   restoreActiveBeforeSummaryDispatch,
   restoreStoredBeforeHostOffer,
   sameCompactionRequest,
@@ -406,7 +407,12 @@ export class CompactContext {
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
     let session = current;
     if (session.phase === "blocked" || session.phase === "outcome_unknown") {
-      return success({ session, checkpoint: null });
+      const resumed = resumeSourceRetirementCleanup(session);
+      if (!resumed.ok) return success({ session, checkpoint: null });
+      session = resumed.value;
+      if (!(await this.persist(session))) {
+        return failure("CONTEXT_REPOSITORY_FAILED");
+      }
     }
     if (session.phase === "durably_stored") {
       const checkpoint = await this.requiredCheckpoint(session);

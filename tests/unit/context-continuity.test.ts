@@ -12,6 +12,7 @@ import {
   offerCheckpointHandoff,
   recordValidatedCheckpoint,
   requestCheckpoint,
+  resumeSourceRetirementCleanup,
   restoreActiveBeforeSummaryDispatch,
   restoreStoredBeforeHostOffer,
   type ContextBinding,
@@ -365,5 +366,53 @@ describe("context continuity domain", () => {
       value: { phase: "durably_stored" },
     });
     expect(confirmHostContext(state, "")).toMatchObject({ ok: false });
+  });
+
+  it("resumes only idempotent local cleanup after host confirmation", () => {
+    let state = expectValue(
+      beginCompaction(createContextSession(binding), command),
+    );
+    state = expectValue(requestCheckpoint(state));
+    state = expectValue(markSummaryDispatchObserved(state));
+    const parsed = validateCheckpointContent(content, 16_384);
+    if (!parsed.ok) throw new Error(parsed.error.code);
+    const checkpoint = createCheckpointEnvelope(state, parsed.value, {
+      checkpointId: "checkpoint-atlantic-cleanup",
+      providerOperationId: "provider-summary-cleanup",
+      parentCheckpointId: null,
+      sourceCursor: "cursor-cleanup",
+      createdAt: 1_000,
+    });
+    state = expectValue(recordValidatedCheckpoint(state, checkpoint));
+    state = expectValue(markCheckpointStored(state));
+    state = expectValue(offerCheckpointHandoff(state));
+    state = expectValue(confirmHostContext(state, "host-context-cleanup"));
+    const unknown = expectValue(
+      markContextOutcomeUnknown(state, "SOURCE_RETIREMENT_UNKNOWN"),
+    );
+
+    expect(resumeSourceRetirementCleanup(unknown)).toMatchObject({
+      ok: true,
+      value: {
+        phase: "host_context_confirmed",
+        blockedCode: null,
+      },
+    });
+    const blocked = expectValue(
+      blockContext(state, "CONTEXT_SUMMARY_CLEANUP_FAILED"),
+    );
+    expect(resumeSourceRetirementCleanup(blocked)).toMatchObject({
+      ok: true,
+      value: {
+        phase: "host_context_confirmed",
+        blockedCode: null,
+      },
+    });
+    expect(
+      resumeSourceRetirementCleanup({
+        ...unknown,
+        blockedCode: "SUMMARY_SUBMISSION_UNRESOLVED",
+      }),
+    ).toMatchObject({ ok: false });
   });
 });

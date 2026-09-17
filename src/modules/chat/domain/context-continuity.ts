@@ -389,3 +389,23 @@ export function markContextOutcomeUnknown(
     blockedCode: code,
   });
 }
+
+export function resumeSourceRetirementCleanup(
+  session: ContextSession,
+): Result<ContextSession, ContextErrorCode> {
+  if (
+    (session.phase !== "blocked" && session.phase !== "outcome_unknown") ||
+    session.operation === null ||
+    session.operation.checkpointId === null ||
+    session.operation.hostContextRef === null ||
+    (session.blockedCode !== "SOURCE_RETIREMENT_UNKNOWN" &&
+      session.blockedCode !== "CONTEXT_SUMMARY_CLEANUP_FAILED")
+  ) {
+    return failure("CONTEXT_INVALID_TRANSITION");
+  }
+  return success({
+    ...session,
+    phase: "host_context_confirmed",
+    blockedCode: null,
+  });
+}

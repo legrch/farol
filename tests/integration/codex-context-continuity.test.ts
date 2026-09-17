@@ -335,6 +335,75 @@ describe("Codex host context continuity composition", () => {
     expect(summary.retire).toHaveBeenCalledTimes(1);
   });
 
+  it("retries only local source cleanup after an exact host confirmation", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    summary.retire
+      .mockRejectedValueOnce(new Error("old page cleanup interrupted"))
+      .mockResolvedValueOnce({ status: "retired" });
+    const store = new PrivateContextStore({ root });
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary,
+    });
+    const handoff = await continuity.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok || handoff.value.variant !== "streamed_compaction_item") {
+      throw new Error("EXPECTED_STREAMED_HANDOFF");
+    }
+    const receipt = {
+      modelId: "farol-next/mind",
+      threadId: "thread-context-1",
+      turnId: "turn-context-compact-1",
+      itemId: "host-context-compaction-cleanup",
+      signal: "turn_completed" as const,
+    };
+
+    await expect(
+      continuity.confirmHostCompaction(receipt),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED" },
+    });
+    const replayed = replayHostCheckpoint([handoff.value.item], 262_144);
+    if (!replayed.ok) throw new Error(replayed.error.code);
+    await expect(
+      store.load(replayed.value.checkpoint.binding),
+    ).resolves.toMatchObject({
+      phase: "outcome_unknown",
+      epoch: 1,
+      blockedCode: "SOURCE_RETIREMENT_UNKNOWN",
+      lastCheckpointId: null,
+    });
+    await expect(
+      store.get(
+        replayed.value.checkpoint.binding,
+        replayed.value.checkpoint.checkpointId,
+      ),
+    ).resolves.toMatchObject({
+      checkpointId: replayed.value.checkpoint.checkpointId,
+    });
+
+    await expect(
+      continuity.confirmHostCompaction(receipt),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+    expect(summary.request).toHaveBeenCalledTimes(1);
+    expect(summary.observe).not.toHaveBeenCalled();
+    expect(summary.retire).toHaveBeenCalledTimes(2);
+  });
+
   it("preserves an unknown summary outcome without a second submission after restart", async () => {
     const root = await stateRoot();
     const summary = driver();
