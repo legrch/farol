@@ -354,6 +354,49 @@ describe("ChatGPT route streaming observation", () => {
     });
     expect(deltas).toHaveLength(1);
   });
+
+  it("keeps a provider error after streamed text outcome-unknown", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValueOnce(
+        probe("Partial", { busy: true, sendVisible: false }),
+      )
+      .mockResolvedValueOnce({
+        ...probe("Partial", { busy: false, sendVisible: true }),
+        errorVisible: true,
+        errorKind: "generic",
+      });
+    const deltas: unknown[] = [];
+
+    await expect(
+      streamingTaskRoute(executeJavaScript).runReadonlyTask("reply once", [], {
+        onTextDelta: (delta) => void deltas.push(delta),
+      }),
+    ).resolves.toEqual({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+      deltaCount: 1,
+      observedCharacters: 7,
+      outputText: "Partial",
+    });
+    expect(deltas).toHaveLength(1);
+  });
+
+  it("waits through an interim missing stop control before cancelling", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce({ activated: false })
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValueOnce({ running: false });
+    const candidate = taskRoute(executeJavaScript);
+    Reflect.set(candidate, "load", "loaded");
+    Reflect.set(candidate, "observedTaskRunning", true);
+
+    await expect(candidate.cancelActiveTask()).resolves.toBe("cancelled");
+    expect(executeJavaScript).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("ChatGPT embedded task surface", () => {

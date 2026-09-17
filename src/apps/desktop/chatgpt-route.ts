@@ -763,12 +763,22 @@ export class ChatGptRoute {
       return "not_running";
     }
     try {
-      const activated = activatedTaskSchema.safeParse(
-        await candidate.webContents.executeJavaScript(cancelTaskScript, true),
-      );
-      if (!activated.success || !activated.data.activated) {
-        return "not_running";
+      const wasObservedRunning = this.observedTaskRunning === true;
+      const activationAttempts = wasObservedRunning ? 5 : 1;
+      let stopActivated = false;
+      for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
+        const activated = activatedTaskSchema.safeParse(
+          await candidate.webContents.executeJavaScript(cancelTaskScript, true),
+        );
+        if (!activated.success) return "outcome_unknown";
+        if (activated.data.activated) {
+          stopActivated = true;
+          break;
+        }
+        if (!wasObservedRunning) return "not_running";
+        await delay(100);
       }
+      if (!stopActivated) return "outcome_unknown";
       for (let attempt = 0; attempt < 20; attempt += 1) {
         await delay(100);
         if (candidate.isDestroyed()) return "outcome_unknown";
