@@ -1937,9 +1937,16 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
 
 async function activateForNativeFocusProof(application) {
   if (process.platform === "darwin") {
-    const activation = spawnSync("/usr/bin/open", ["-a", appPath], {
-      encoding: "utf8",
-    });
+    const applicationPid = application.process().pid;
+    assert.ok(applicationPid, "E2E_APPLICATION_PID_MISSING");
+    const activation = spawnSync(
+      "/usr/bin/osascript",
+      [
+        "-e",
+        `tell application "System Events" to set frontmost of first process whose unix id is ${applicationPid} to true`,
+      ],
+      { encoding: "utf8" },
+    );
     assert.equal(
       activation.status,
       0,
