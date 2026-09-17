@@ -153,6 +153,7 @@ function completedReceipt(
 
 export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   private readonly routes = new Map<string, RouteLease>();
+  private readonly dispatched = new Set<string>();
   private readonly maximumPromptCharacters: number;
 
   constructor(private readonly options: ChatGptContextSummaryDriverOptions) {
@@ -185,6 +186,9 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     if (!validInput(input)) {
       return { status: "blocked", code: "SUMMARY_CAPABILITY_INVALID" };
     }
+    if (this.dispatched.has(input.request.operationId)) {
+      return this.observe(input);
+    }
     const prepared = summaryPrompt(input.source);
     if (!prepared.ok) return { status: "blocked", code: prepared.code };
     if (prepared.prompt.length > this.maximumPromptCharacters) {
@@ -212,6 +216,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }
 
     let result: ChatGptReadonlyTaskResult;
+    this.dispatched.add(input.request.operationId);
     try {
       result = await lease.route.runReadonlyTask(prepared.prompt);
     } catch {
@@ -221,12 +226,26 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     if (result.state === "failed_before_submit") {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      this.dispatched.delete(input.request.operationId);
       return {
         status: "not_submitted",
         code: result.code ?? "SUMMARY_NOT_SUBMITTED",
       };
     }
     if (result.state === "not_authenticated") {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      this.dispatched.delete(input.request.operationId);
       return { status: "blocked", code: "SUMMARY_SIGN_IN_REQUIRED" };
     }
     if (result.state === "outcome_unknown") {
@@ -240,15 +259,35 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     try {
       candidate = JSON.parse(result.outputText ?? "");
     } catch {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
       return { status: "blocked", code: "CHECKPOINT_CONTENT_INVALID" };
     }
     const content = validateCheckpointContent(
       candidate,
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
-    if (!content.ok) return { status: "blocked", code: content.error.code };
+    if (!content.ok) {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      return { status: "blocked", code: content.error.code };
+    }
     const conversationUrl = lease.route.currentConversationUrl();
     if (!conversationUrl) {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
       return { status: "blocked", code: "SUMMARY_SOURCE_CURSOR_MISSING" };
     }
     const summary: StoredContextSummary = {
@@ -268,6 +307,12 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     try {
       await this.options.store.putSummary(summary);
     } catch {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
       return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
     }
     return completedReceipt(summary);
@@ -321,6 +366,19 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       return { status: "blocked", code: "CONTEXT_SUMMARY_CLEANUP_FAILED" };
     }
     this.routes.delete(input.operationId);
+    this.dispatched.delete(input.operationId);
     return { status: "retired" };
+  }
+
+  private releaseOwnedLease(operationId: string): boolean {
+    const lease = this.routes.get(operationId);
+    if (!lease?.owned) return true;
+    try {
+      lease.route.dispose();
+    } catch {
+      return false;
+    }
+    this.routes.delete(operationId);
+    return true;
   }
 }

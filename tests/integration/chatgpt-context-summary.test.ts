@@ -271,6 +271,80 @@ describe("ChatGPT summary-only context driver", () => {
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
   });
 
+  it("observes an unresolved fallback operation instead of dispatching it twice", async () => {
+    const state = await store();
+    const fallback = route({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+      deltaCount: 1,
+      observedCharacters: 12,
+      outputText: "partial json",
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => null,
+        createFallback: vi.fn().mockReturnValue(fallback),
+      },
+    });
+    const selectedSource = source("canonical_history");
+    const selectedRequest = {
+      ...request,
+      source: "canonical_history" as const,
+    };
+
+    await expect(
+      summary.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "outcome_unknown" });
+    await expect(
+      summary.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "outcome_unknown" });
+    expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(fallback.dispose).not.toHaveBeenCalled();
+    expect(fallback.resetConversation).not.toHaveBeenCalled();
+  });
+
+  it("releases a definitely unsubmitted fallback before a clean later attempt", async () => {
+    const state = await store();
+    const first = route({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    const second = route({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    const createFallback = vi
+      .fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => null, createFallback },
+    });
+    const selectedSource = source("canonical_history");
+    const selectedRequest = {
+      ...request,
+      source: "canonical_history" as const,
+    };
+
+    await expect(
+      summary.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "not_submitted" });
+    await expect(
+      summary.request({ request: selectedRequest, source: selectedSource }),
+    ).resolves.toMatchObject({ status: "not_submitted" });
+    expect(createFallback).toHaveBeenCalledTimes(2);
+    expect(first.dispose).toHaveBeenCalledTimes(1);
+    expect(second.dispose).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects malformed summary output without replacing durable context", async () => {
     const state = await store();
     const retained = route({
