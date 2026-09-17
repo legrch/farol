@@ -642,6 +642,7 @@ async function startChatGptFixture() {
           const conversationId = existingConversationId || requestedTask || 'farol-next-e2e';
           const conversationPath = '/chatgpt/c/' + conversationId;
           const conversationStorageKey = 'farol-next-e2e-conversation:' + conversationPath;
+          const messageSequenceStorageKey = 'farol-next-e2e-message-sequence:' + conversationPath;
           window.__farolTaskProgress = [];
           window.__farolSubmitCount = 0;
           window.__farolAttachmentProof = [];
@@ -726,6 +727,11 @@ async function startChatGptFixture() {
             if (send.disabled) return;
             const activeGeneration = ++responseGeneration;
             window.__farolSubmitCount += 1;
+            const storedMessageSequence = Number(localStorage.getItem(messageSequenceStorageKey) || '0');
+            const messageSequence = Number.isSafeInteger(storedMessageSequence) && storedMessageSequence >= 0
+              ? storedMessageSequence + 1
+              : 1;
+            localStorage.setItem(messageSequenceStorageKey, String(messageSequence));
             if (location.pathname === '/chatgpt') {
               history.replaceState(null, '', conversationPath);
             }
@@ -735,12 +741,12 @@ async function startChatGptFixture() {
             const user = document.createElement('article');
             user.className = 'message';
             user.dataset.messageAuthorRole = 'user';
-            user.dataset.messageId = 'user-' + conversationId + '-' + window.__farolSubmitCount;
+            user.dataset.messageId = 'user-' + conversationId + '-' + messageSequence;
             user.textContent = userText;
             const assistant = document.createElement('article');
             assistant.className = 'message';
             assistant.dataset.messageAuthorRole = 'assistant';
-            assistant.dataset.messageId = 'assistant-' + conversationId + '-' + window.__farolSubmitCount;
+            assistant.dataset.messageId = 'assistant-' + conversationId + '-' + messageSequence;
             assistant.dataset.parentMessageId = user.dataset.messageId;
             conversation.append(user, assistant);
             composer.textContent = '';
