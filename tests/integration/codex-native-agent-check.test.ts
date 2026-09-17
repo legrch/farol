@@ -154,6 +154,9 @@ function completingHost() {
             workspaceEnforcement: "verified" as const,
           };
     }),
+    cancel: vi.fn(async () => {
+      throw new Error("unexpected cancel");
+    }),
   };
   return {
     host,
@@ -251,6 +254,9 @@ describe("desktop native Agent lineage check", () => {
       wait: vi.fn(async () => {
         throw new Error("must not wait");
       }),
+      cancel: vi.fn(async () => {
+        throw new Error("must not cancel");
+      }),
     };
     const redelivered = await runCodexNativeAgentCheck({
       host: redeliveryHost,
@@ -326,6 +332,7 @@ describe("desktop native Agent lineage check", () => {
         code: "AGENT_SPAWN_ACK_LOST" as const,
       })),
       wait: vi.fn(),
+      cancel: vi.fn(),
     };
 
     const result = await runCodexNativeAgentCheck({

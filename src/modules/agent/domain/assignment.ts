@@ -14,6 +14,7 @@ export type AssignmentErrorCode =
   | "AGENT_ALREADY_STARTED"
   | "AGENT_TERMINAL"
   | "AGENT_ADMISSION_FAILED"
+  | "AGENT_CANCELLATION_UNAVAILABLE"
   | "AGENT_DELIVERY_CORRELATION"
   | "AGENT_DELIVERY_UNAVAILABLE";
 
@@ -59,7 +60,13 @@ export type AssignmentTerminalReason = Readonly<{
 export type Assignment = Readonly<{
   identity: AssignmentIdentity;
   authority: AssignmentAuthority;
-  phase: "prepared" | "running" | "completed" | "failed" | "outcome_unknown";
+  phase:
+    | "prepared"
+    | "running"
+    | "completed"
+    | "cancelled"
+    | "failed"
+    | "outcome_unknown";
   parentThreadId: string | null;
   childId: string | null;
   hostRole: string | null;
@@ -200,7 +207,7 @@ export function markSpawnOutcomeUnknown(
 function finishChild(
   assignment: Assignment,
   correlation: ChildCorrelation,
-  phase: "failed" | "outcome_unknown",
+  phase: "cancelled" | "failed" | "outcome_unknown",
   terminalReason: AssignmentTerminalReason,
 ): Result<Assignment, AssignmentErrorCode> {
   if (assignment.terminal) return failure("AGENT_TERMINAL");
@@ -223,6 +230,18 @@ export function failChildAssignment(
   },
 ): Result<Assignment, AssignmentErrorCode> {
   return finishChild(assignment, correlation, "failed", terminalReason);
+}
+
+export function cancelChildAssignment(
+  assignment: Assignment,
+  correlation: ChildCorrelation,
+  terminalReason: AssignmentTerminalReason = {
+    code: "AGENT_CANCELLED",
+    source: "native-host",
+    retry: "never",
+  },
+): Result<Assignment, AssignmentErrorCode> {
+  return finishChild(assignment, correlation, "cancelled", terminalReason);
 }
 
 export function markChildOutcomeUnknown(

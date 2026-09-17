@@ -137,6 +137,10 @@ class RejoinHost implements AgentHost {
       workspaceEnforcement: "verified",
     };
   }
+
+  async cancel(): Promise<never> {
+    throw new Error("UNEXPECTED_CANCEL");
+  }
 }
 
 async function descendants(root: string): Promise<string[]> {

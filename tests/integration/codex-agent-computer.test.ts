@@ -113,6 +113,41 @@ function request(
 }
 
 describe("Codex Agent Computer authority", () => {
+  it("forwards cancellation to the native workspace boundary", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: true,
+      value: {
+        kind: "workspace.entries",
+        entries: [],
+        truncated: false,
+      },
+    }));
+    const computer = new CodexAgentWorkspaceProbe(
+      settings(),
+      { execute },
+      () => 1_000,
+    );
+
+    await expect(
+      computer.execute({
+        ...request({ kind: "workspace.list", relativePath: "." }),
+        signal: controller.signal,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(execute).toHaveBeenCalledWith(
+      {
+        workspace: {
+          workspaceId,
+          root: "/workspace/primary",
+          deniedPaths: ["private"],
+        },
+        operation: { kind: "workspace.list", relativePath: "." },
+      },
+      { signal: controller.signal },
+    );
+  });
+
   it("DAC-03 discovers and reads a relevant file that was not in initial focus", async () => {
     const execute = vi.fn<ReadonlyWorkspace["execute"]>(async (input) => {
       if (input.operation.kind === "workspace.search") {

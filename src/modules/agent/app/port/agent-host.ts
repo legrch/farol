@@ -42,7 +42,15 @@ export type AgentWaitReceipt =
       code: "AGENT_WAIT_ACK_LOST";
     }>;
 
+export type AgentCancelReceipt =
+  | Exclude<AgentWaitReceipt, Readonly<{ status: "running" }>>
+  | Readonly<{
+      status: "cancelled";
+      correlation: ChildCorrelation;
+    }>;
+
 export interface AgentHost {
   spawn(request: AgentSpawnRequest): Promise<AgentSpawnReceipt>;
   wait(correlation: ChildCorrelation): Promise<AgentWaitReceipt>;
+  cancel(correlation: ChildCorrelation): Promise<AgentCancelReceipt>;
 }

@@ -299,6 +299,9 @@ function taskState(taskId: string): TaskState {
     if (task.agent?.phase === "failed") {
       return { tone: "failed", label: "Agent failed", attention: true };
     }
+    if (task.agent?.phase === "cancelled") {
+      return { tone: "complete", label: "Agent cancelled", attention: false };
+    }
     const context = contextTaskPresentation(task.context);
     if (context) return context;
     if (task.lifecycle === "running") {
@@ -749,13 +752,17 @@ function renderTaskMenu(): void {
       task.agent.parentDelivery === "pending" &&
       task.agent.resultAvailable);
   const uncertain = task.agent?.phase === "outcome_unknown";
+  const agentRunning = task.agent?.phase === "running";
   const context = contextTaskPresentation(task.context);
   const contextLocked = context?.locked ?? false;
   const agentLocked = needsRejoin || contextLocked;
   name.disabled = taskMenuBusy;
   rename.disabled = taskMenuBusy;
   pin.disabled = taskMenuBusy;
-  cancel.disabled = taskMenuBusy || task.lifecycle !== "running" || agentLocked;
+  cancel.disabled =
+    taskMenuBusy ||
+    contextLocked ||
+    (!agentRunning && (task.lifecycle !== "running" || agentLocked));
   close.disabled = taskMenuBusy || agentLocked;
   workspace.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   objective.disabled = taskMenuBusy || agentLocked || !readiness.ready;
@@ -808,25 +815,32 @@ function renderTaskMenu(): void {
                 detail:
                   "The native host confirmed failure. A new assignment requires a new explicit Run Agent action.",
               }
-            : task.agent?.phase === "outcome_unknown"
+            : task.agent?.phase === "cancelled"
               ? {
-                  tone: "unknown",
-                  label: "Outcome unknown",
+                  tone: "complete",
+                  label: "Cancelled",
                   detail:
-                    "Farol will not retry this assignment. Inspect the native task before starting elsewhere.",
+                    "The exact native child and parent interruption was acknowledged. A new assignment still requires a new explicit Run Agent action.",
                 }
-              : readiness.ready
+              : task.agent?.phase === "outcome_unknown"
                 ? {
-                    tone: "complete",
-                    label: "Ready",
+                    tone: "unknown",
+                    label: "Outcome unknown",
                     detail:
-                      "One verified read-only workspace will be delegated without per-file reapproval.",
+                      "Farol will not retry this assignment. Inspect the native task before starting elsewhere.",
                   }
-                : {
-                    tone: "unavailable",
-                    label: "Unavailable",
-                    detail: readiness.reason,
-                  };
+                : readiness.ready
+                  ? {
+                      tone: "complete",
+                      label: "Ready",
+                      detail:
+                        "One verified read-only workspace will be delegated without per-file reapproval.",
+                    }
+                  : {
+                      tone: "unavailable",
+                      label: "Unavailable",
+                      detail: readiness.reason,
+                    };
   agentState.dataset.tone = agentPresentation.tone;
   agentLamp.className = `state-lamp ${agentPresentation.tone}`;
   agentLabel.textContent = agentPresentation.label;
@@ -845,7 +859,9 @@ function renderTaskMenu(): void {
     (contextLocked
       ? `${context?.label ?? "Context transition"} is still active. Farol will not cancel, close, or delegate this task until the exact context operation is reconciled.`
       : agentLocked
-        ? "Agent state is retained before native execution. Closing and provider cancellation stay unavailable until the same assignment is reconciled."
+        ? agentRunning
+          ? "Agent state is retained before native execution. Cancel interrupts this exact native child; Close stays unavailable until cancellation or delivery is reconciled."
+          : "Agent state is retained before native execution. Closing and provider cancellation stay unavailable until the same assignment is reconciled."
         : uncertain
           ? "Outcome unknown is not Failed. Farol will not submit this Agent assignment again."
           : task.lifecycle === "running"
@@ -2974,6 +2990,9 @@ function taskMenuErrorMessage(
   if (error === "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN") {
     return "The Agent outcome is unknown. Farol will not retry it automatically.";
   }
+  if (error === "AGENT_CANCEL_RACED_COMPLETION") {
+    return "The Agent completed before cancellation was confirmed. Its retained result still needs delivery.";
+  }
   if (error === "AGENT_DELIVERY_FAILED") {
     return "The result is retained, but parent delivery was not acknowledged. Use Deliver result.";
   }
@@ -3384,7 +3403,9 @@ async function start(): Promise<void> {
       if (task?.provider !== "chatgpt") return;
       void runTaskMenuCommand(
         { kind: "task.cancel", taskId: task.taskId },
-        "Provider stop confirmed.",
+        task.agent?.phase === "running"
+          ? "Agent cancellation confirmed."
+          : "Provider stop confirmed.",
       );
     },
   );

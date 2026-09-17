@@ -56,6 +56,7 @@ export type AgentComputerRequest = Readonly<{
   threadId: string;
   turnId: string;
   callId: string;
+  signal?: AbortSignal;
 }>;
 
 export type AgentComputerReceipt =

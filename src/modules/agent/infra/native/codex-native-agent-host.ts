@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import type {
   AgentHost,
+  AgentCancelReceipt,
   AgentSpawnReceipt,
   AgentSpawnRequest,
   AgentWaitReceipt,
@@ -30,6 +31,7 @@ export type CodexNativeAgentHostOptions = Readonly<{
   spawnTimeoutMs: number;
   waitTimeoutMs: number;
   pollIntervalMs: number;
+  cancelTimeoutMs?: number;
   nonce(): string;
   now(): number;
 }>;
@@ -288,6 +290,7 @@ type ActiveOperation = {
   authorityToolCalls: number;
   workspaceToolCalls: number;
   computerCallIds: Set<string>;
+  controller: AbortController;
   fatalCode: string | null;
   resolveSpawn(childId: string): void;
   rejectSpawn(error: Error): void;
@@ -707,7 +710,9 @@ export class CodexNativeAgentHost implements AgentHost {
       !canonicalAbsolutePath(options.runtimeRoot) ||
       !validDuration(options.spawnTimeoutMs) ||
       !validDuration(options.waitTimeoutMs) ||
-      !validDuration(options.pollIntervalMs)
+      !validDuration(options.pollIntervalMs) ||
+      (options.cancelTimeoutMs !== undefined &&
+        !validDuration(options.cancelTimeoutMs))
     ) {
       throw error("CODEX_AGENT_OPTIONS_INVALID");
     }
@@ -744,6 +749,7 @@ export class CodexNativeAgentHost implements AgentHost {
       authorityToolCalls: 0,
       workspaceToolCalls: 0,
       computerCallIds: new Set(),
+      controller: new AbortController(),
       fatalCode: null,
       resolveSpawn,
       rejectSpawn,
@@ -888,7 +894,7 @@ export class CodexNativeAgentHost implements AgentHost {
           workspaceEnforcement: "verified",
         };
       }
-      if (observed === "failed") {
+      if (observed === "failed" || observed === "interrupted") {
         return {
           status: "failed",
           correlation,
@@ -907,7 +913,161 @@ export class CodexNativeAgentHost implements AgentHost {
     }
   }
 
+  async cancel(correlation: ChildCorrelation): Promise<AgentCancelReceipt> {
+    if (this.active) {
+      const activeCorrelation: ChildCorrelation = {
+        ...this.active.request.identity,
+        authorityId: this.active.request.authority.authorityId,
+        participantId: this.active.request.authority.participantId,
+        role: this.active.request.authority.role,
+        parentThreadId: this.active.parentThreadId ?? "",
+        childId: this.active.childId ?? "",
+        hostRole: correlation.hostRole,
+        delegationDigest: this.active.delegationDigest,
+      };
+      if (!sameCorrelation(activeCorrelation, correlation)) {
+        return {
+          status: "outcome_unknown",
+          correlation,
+          code: "AGENT_WAIT_ACK_LOST",
+        };
+      }
+      this.active.controller.abort();
+    }
+
+    let child: ThreadSnapshot;
+    let parent: ThreadSnapshot;
+    try {
+      [child, parent] = await Promise.all([
+        this.readThread(correlation.childId),
+        this.readThread(correlation.parentThreadId),
+      ]);
+    } catch {
+      return {
+        status: "outcome_unknown",
+        correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      };
+    }
+    const before = this.observeCompletion(correlation, child, parent);
+    if (before === "completed") {
+      return this.completedReceipt(correlation, child);
+    }
+    if (before === "failed") {
+      return { status: "failed", correlation, code: "AGENT_CHILD_FAILED" };
+    }
+    if (before === "invalid") {
+      return {
+        status: "outcome_unknown",
+        correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      };
+    }
+
+    const targets = [
+      ...[...child.turns]
+        .reverse()
+        .filter(
+          (turn) =>
+            turn.status === "inProgress" || turn.status === "interrupted",
+        )
+        .slice(0, 1)
+        .map((turn) => ({
+          threadId: child.id,
+          turnId: turn.id,
+          status: turn.status,
+        })),
+      ...[...parent.turns]
+        .reverse()
+        .filter(
+          (turn) =>
+            turn.status === "inProgress" || turn.status === "interrupted",
+        )
+        .slice(0, 1)
+        .map((turn) => ({
+          threadId: parent.id,
+          turnId: turn.id,
+          status: turn.status,
+        })),
+    ];
+    if (targets.length !== 2) {
+      return {
+        status: "outcome_unknown",
+        correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      };
+    }
+    try {
+      for (const { threadId, turnId, status } of targets) {
+        if (status === "inProgress") {
+          await this.peer.request("turn/interrupt", { threadId, turnId });
+        }
+      }
+    } catch {
+      return {
+        status: "outcome_unknown",
+        correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      };
+    }
+
+    const deadline = Date.now() + (this.options.cancelTimeoutMs ?? 5_000);
+    for (;;) {
+      try {
+        [child, parent] = await Promise.all([
+          this.readThread(correlation.childId),
+          this.readThread(correlation.parentThreadId),
+        ]);
+      } catch {
+        return {
+          status: "outcome_unknown",
+          correlation,
+          code: "AGENT_WAIT_ACK_LOST",
+        };
+      }
+      const observed = this.observeCompletion(correlation, child, parent);
+      if (observed === "invalid") {
+        return {
+          status: "outcome_unknown",
+          correlation,
+          code: "AGENT_WAIT_ACK_LOST",
+        };
+      }
+      if (observed === "completed") {
+        return this.completedReceipt(correlation, child);
+      }
+      const snapshots = new Map([
+        [child.id, child],
+        [parent.id, parent],
+      ]);
+      const interrupted = targets.every((target) =>
+        snapshots
+          .get(target.threadId)
+          ?.turns.some(
+            (turn) =>
+              turn.id === target.turnId && turn.status === "interrupted",
+          ),
+      );
+      if (interrupted) {
+        this.active = null;
+        return { status: "cancelled", correlation };
+      }
+      if (observed === "failed") {
+        return { status: "failed", correlation, code: "AGENT_CHILD_FAILED" };
+      }
+      if (Date.now() >= deadline) {
+        return {
+          status: "outcome_unknown",
+          correlation,
+          code: "AGENT_WAIT_ACK_LOST",
+        };
+      }
+      await sleep(this.options.pollIntervalMs);
+    }
+  }
+
   dispose(): void {
+    this.active?.controller.abort();
     for (const remove of this.removers.splice(0)) remove();
     this.handlersInstalled = false;
     this.active = null;
@@ -1070,6 +1230,7 @@ export class CodexNativeAgentHost implements AgentHost {
         threadId: call.threadId,
         turnId: call.turnId,
         callId: call.callId,
+        signal: operation.controller.signal,
       });
     } catch {
       throw this.fail("CODEX_AGENT_COMPUTER_FAILED");
@@ -1187,11 +1348,29 @@ export class CodexNativeAgentHost implements AgentHost {
     return parsed.data.thread;
   }
 
+  private completedReceipt(
+    correlation: ChildCorrelation,
+    child: ThreadSnapshot,
+  ): Extract<AgentCancelReceipt, Readonly<{ status: "completed" }>> {
+    const completedTurn = [...child.turns]
+      .reverse()
+      .find((turn) => turn.status === "completed");
+    if (!completedTurn) {
+      throw error("CODEX_AGENT_THREAD_INVALID");
+    }
+    return {
+      status: "completed",
+      correlation,
+      resultRef: `codex-app-server://thread/${correlation.childId}/turn/${completedTurn.id}`,
+      workspaceEnforcement: "verified",
+    };
+  }
+
   private observeCompletion(
     correlation: ChildCorrelation,
     child: ThreadSnapshot,
     parent: ThreadSnapshot,
-  ): "running" | "completed" | "failed" | "invalid" {
+  ): "running" | "completed" | "interrupted" | "failed" | "invalid" {
     const source = z
       .object({
         subAgent: z.object({
@@ -1344,12 +1523,15 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       return "invalid";
     }
-    const childFailed = child.turns.some(
-      (turn) => turn.status === "failed" || turn.status === "interrupted",
+    const childInterrupted = child.turns.some(
+      (turn) => turn.status === "interrupted",
     );
-    const parentFailed = parent.turns.some(
-      (turn) => turn.status === "failed" || turn.status === "interrupted",
+    const parentInterrupted = parent.turns.some(
+      (turn) => turn.status === "interrupted",
     );
+    if (childInterrupted || parentInterrupted) return "interrupted";
+    const childFailed = child.turns.some((turn) => turn.status === "failed");
+    const parentFailed = parent.turns.some((turn) => turn.status === "failed");
     if (
       childFailed ||
       parentFailed ||

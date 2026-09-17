@@ -302,18 +302,21 @@ export class CodexAgentWorkspaceProbe
       this.workspace,
       { now: this.now },
     );
-    const result = await action.execute({
-      ownerId: request.identity.ownerId,
-      sessionId: request.identity.sessionId,
-      taskId: request.identity.taskId,
-      taskEpoch: request.identity.taskEpoch,
-      participantId: request.authority.participantId,
-      turnId: request.turnId,
-      generation: request.identity.generation,
-      callId: request.callId,
-      workspaceId: request.workspaceId,
-      operation: request.operation,
-    });
+    const result = await action.execute(
+      {
+        ownerId: request.identity.ownerId,
+        sessionId: request.identity.sessionId,
+        taskId: request.identity.taskId,
+        taskEpoch: request.identity.taskEpoch,
+        participantId: request.authority.participantId,
+        turnId: request.turnId,
+        generation: request.identity.generation,
+        callId: request.callId,
+        workspaceId: request.workspaceId,
+        operation: request.operation,
+      },
+      request.signal ? { signal: request.signal } : {},
+    );
     if (!result.ok) {
       return computerFailure(result.error.code, result.error.source);
     }

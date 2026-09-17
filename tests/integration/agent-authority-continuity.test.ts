@@ -112,6 +112,9 @@ function host(): AgentHost & { spawn: ReturnType<typeof vi.fn> } {
       resultRef: "result-a",
       workspaceEnforcement: "verified" as const,
     })),
+    cancel: vi.fn(async () => {
+      throw new Error("unexpected cancel");
+    }),
   };
 }
 

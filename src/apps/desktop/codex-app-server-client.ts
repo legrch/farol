@@ -239,11 +239,12 @@ export class CodexAppServerClient {
       timer = setTimeout(() => resolve(false), this.shutdownTimeoutMs);
       timer.unref?.();
     });
-    return Promise.race([this.exited.then(() => true as const), timeout]).finally(
-      () => {
-        if (timer) clearTimeout(timer);
-      },
-    );
+    return Promise.race([
+      this.exited.then(() => true as const),
+      timeout,
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   private write(message: unknown): void {

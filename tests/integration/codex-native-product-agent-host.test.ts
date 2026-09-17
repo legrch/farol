@@ -73,6 +73,7 @@ class ProductPeer implements CodexNativeAgentPeer {
   authorityCompleted = false;
   computerItems: unknown[] = [];
   extraChildItems: unknown[] = [];
+  readonly interruptedThreads = new Set<string>();
   private authorityProof = "";
 
   handleServerRequest(method: string, handler: RequestHandler): () => void {
@@ -111,6 +112,11 @@ class ProductPeer implements CodexNativeAgentPeer {
       const threadId = (params as { threadId?: string }).threadId;
       if (threadId === "child-product-a") return this.childRead();
       if (threadId === "parent-product-a") return this.parentRead();
+    }
+    if (method === "turn/interrupt") {
+      const threadId = (params as { threadId?: string }).threadId;
+      if (threadId) this.interruptedThreads.add(threadId);
+      return {};
     }
     throw new Error(`UNEXPECTED_REQUEST:${method}`);
   }
@@ -216,11 +222,20 @@ class ProductPeer implements CodexNativeAgentPeer {
             },
           },
         },
-        status: { type: this.completed ? "idle" : "active" },
+        status: {
+          type:
+            this.completed || this.interruptedThreads.has("child-product-a")
+              ? "idle"
+              : "active",
+        },
         turns: [
           {
             id: "child-turn-product-a",
-            status: this.completed ? "completed" : "inProgress",
+            status: this.completed
+              ? "completed"
+              : this.interruptedThreads.has("child-product-a")
+                ? "interrupted"
+                : "inProgress",
             items: this.completed
               ? [
                   ...this.computerItems,
@@ -286,11 +301,20 @@ class ProductPeer implements CodexNativeAgentPeer {
         parentThreadId: null,
         agentRole: null,
         source: "appServer",
-        status: { type: this.completed ? "idle" : "active" },
+        status: {
+          type:
+            this.completed || this.interruptedThreads.has("parent-product-a")
+              ? "idle"
+              : "active",
+        },
         turns: [
           {
             id: "parent-turn-product-a",
-            status: this.completed ? "completed" : "inProgress",
+            status: this.completed
+              ? "completed"
+              : this.interruptedThreads.has("parent-product-a")
+                ? "interrupted"
+                : "inProgress",
             items,
           },
         ],
@@ -300,6 +324,130 @@ class ProductPeer implements CodexNativeAgentPeer {
 }
 
 describe("native Codex product Agent host", () => {
+  it("interrupts the exact running child and parent before confirming cancellation", async () => {
+    const peer = new ProductPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      { execute: vi.fn() },
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+
+    await expect(host.cancel(spawned.correlation)).resolves.toEqual({
+      status: "cancelled",
+      correlation: spawned.correlation,
+    });
+    expect(
+      peer.requests
+        .filter(({ method }) => method === "turn/interrupt")
+        .map(({ params }) => (params as { threadId: string }).threadId),
+    ).toEqual(["child-product-a", "parent-product-a"]);
+  });
+
+  it("finishes an exact cancellation after a previously interrupted child", async () => {
+    const peer = new ProductPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      { execute: vi.fn() },
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    peer.interruptedThreads.add("child-product-a");
+
+    await expect(host.cancel(spawned.correlation)).resolves.toEqual({
+      status: "cancelled",
+      correlation: spawned.correlation,
+    });
+    expect(
+      peer.requests
+        .filter(({ method }) => method === "turn/interrupt")
+        .map(({ params }) => (params as { threadId: string }).threadId),
+    ).toEqual(["parent-product-a"]);
+  });
+
+  it("aborts an in-flight Computer call before interrupt confirmation", async () => {
+    const peer = new ProductPeer();
+    let executionSignal: AbortSignal | undefined;
+    const computer: AgentComputer = {
+      execute: vi.fn<AgentComputer["execute"]>(
+        (input) =>
+          new Promise<never>((_, reject) => {
+            executionSignal = input.signal;
+            input.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("COMPUTER_ABORTED")),
+              { once: true },
+            );
+          }),
+      ),
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    const handler = peer.handlers.get("item/tool/call");
+    if (!handler) throw new Error("TOOL_HANDLER_MISSING");
+    const proof =
+      /computer proof ([a-f0-9]{64})/u.exec(peer.childPrompt)?.[1] ?? "";
+    const inFlight = handler({
+      threadId: "child-product-a",
+      turnId: "child-turn-product-a",
+      callId: "computer-cancel-a",
+      tool: "farol_agent_computer",
+      arguments: {
+        assignmentId: request.identity.assignmentId,
+        authorityId: authority.authorityId,
+        participantId: authority.participantId,
+        proof,
+        workspaceId: "workspace-product-a",
+        operation: { kind: "workspace.read", relativePath: "README.md" },
+      },
+    });
+    await vi.waitFor(() => expect(executionSignal).toBeInstanceOf(AbortSignal));
+    const rejectedComputerCall = expect(inFlight).rejects.toThrow(
+      "CODEX_AGENT_COMPUTER_FAILED",
+    );
+
+    await expect(host.cancel(spawned.correlation)).resolves.toEqual({
+      status: "cancelled",
+      correlation: spawned.correlation,
+    });
+    expect(executionSignal?.aborted).toBe(true);
+    await rejectedComputerCall;
+  });
+
   it("runs a bounded product objective through inherited Computer authority", async () => {
     const peer = new ProductPeer();
     const computer: AgentComputer = {

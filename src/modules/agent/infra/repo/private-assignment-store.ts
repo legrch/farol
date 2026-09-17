@@ -43,6 +43,7 @@ const assignmentSchema = z.strictObject({
     "prepared",
     "running",
     "completed",
+    "cancelled",
     "failed",
     "outcome_unknown",
   ]),
@@ -261,7 +262,8 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         record.workspaceEnforcement === "verified" &&
         (record.parentDelivery === "pending" ||
           record.parentDelivery === "acknowledged")) ||
-      ((assignment.phase === "failed" ||
+      ((assignment.phase === "cancelled" ||
+        assignment.phase === "failed" ||
         assignment.phase === "outcome_unknown") &&
         assignment.terminal &&
         assignment.terminalReason !== null &&

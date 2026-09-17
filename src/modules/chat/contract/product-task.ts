@@ -20,7 +20,13 @@ export const ProductTaskLifecycleSchema = z.enum([
 ]);
 
 export const ProductTaskAgentSchema = z.strictObject({
-  phase: z.enum(["running", "completed", "failed", "outcome_unknown"]),
+  phase: z.enum([
+    "running",
+    "completed",
+    "cancelled",
+    "failed",
+    "outcome_unknown",
+  ]),
   workspaceId: ProductTaskIdentifierSchema,
   parentDelivery: z.enum(["not_applicable", "pending", "acknowledged"]),
   workspaceEnforcement: z.enum(["not_applicable", "verified"]),
@@ -128,6 +134,7 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
       "AGENT_INPUT_STATE_UNAVAILABLE",
       "AGENT_ASSIGNMENT_FAILED",
       "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+      "AGENT_CANCEL_RACED_COMPLETION",
       "AGENT_DELIVERY_FAILED",
       "AGENT_REJOIN_UNAVAILABLE",
     ]),

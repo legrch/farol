@@ -126,6 +126,10 @@ class AgentHostDouble implements AgentHost {
     if (this.waited instanceof Error) throw this.waited;
     return this.waited;
   }
+
+  async cancel(): Promise<never> {
+    throw new Error("UNEXPECTED_CANCEL");
+  }
 }
 
 function createRunner(
@@ -301,6 +305,9 @@ describe("Agent app service", () => {
               resultRef: "result-preview-rejoined",
               workspaceEnforcement: "verified" as const,
             };
+      },
+      async cancel() {
+        throw new Error("UNEXPECTED_CANCEL");
       },
     };
     const runner = createRunner(host);

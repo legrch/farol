@@ -967,6 +967,8 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   let agentWorkspaceComplete = false;
   let agentChildComplete = false;
   let agentComplete = false;
+  let agentChildInterrupted = false;
+  let agentParentInterrupted = false;
   const agentParentThreadId = "thread-e2e-agent-parent";
   const agentParentTurnId = "turn-e2e-agent-parent";
   const agentChildThreadId = "thread-e2e-agent-child";
@@ -1110,6 +1112,26 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
       send({ id: "tool-e2e", method: "item/tool/call", params: { threadId: "thread-e2e-parent", turnId: "turn-e2e-parent", callId: "call-e2e-ping", tool: "farol_next_ping", arguments: { nonce } } });
       return;
     }
+    if (message.method === "turn/interrupt") {
+      if (
+        message.params?.threadId === agentChildThreadId &&
+        message.params?.turnId === agentChildTurnId
+      ) {
+        agentChildInterrupted = true;
+        send({ id: message.id, result: {} });
+        return;
+      }
+      if (
+        message.params?.threadId === agentParentThreadId &&
+        message.params?.turnId === agentParentTurnId
+      ) {
+        agentParentInterrupted = true;
+        send({ id: message.id, result: {} });
+        return;
+      }
+      send({ id: message.id, error: { code: -32003, message: "turn missing" } });
+      return;
+    }
     if (message.method === "thread/read") {
       if (message.params?.threadId === agentChildThreadId) {
         const items = agentWorkspaceComplete ? [{
@@ -1125,8 +1147,8 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
           parentThreadId: agentParentThreadId,
           agentRole: "default",
           source: { subAgent: { thread_spawn: { parent_thread_id: agentParentThreadId, depth: 1, agent_role: "default" } } },
-          status: { type: agentChildComplete ? "idle" : "active" },
-          turns: [{ id: agentChildTurnId, status: agentChildComplete ? "completed" : "inProgress", items }]
+          status: { type: agentChildComplete || agentChildInterrupted ? "idle" : "active" },
+          turns: [{ id: agentChildTurnId, status: agentChildInterrupted ? "interrupted" : agentChildComplete ? "completed" : "inProgress", items }]
         } } });
         return;
       }
@@ -1168,8 +1190,8 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
           parentThreadId: null,
           agentRole: null,
           source: { appServer: true },
-          status: { type: agentComplete ? "idle" : "active" },
-          turns: [{ id: agentParentTurnId, status: agentComplete ? "completed" : "inProgress", items }]
+          status: { type: agentComplete || agentParentInterrupted ? "idle" : "active" },
+          turns: [{ id: agentParentTurnId, status: agentParentInterrupted ? "interrupted" : agentComplete ? "completed" : "inProgress", items }]
         } } });
         return;
       }
@@ -3472,9 +3494,12 @@ try {
     window.farolNext.bootstrap(),
   );
   const pinnedTask = admittedState.tasks[4];
+  const agentCancellationTask = admittedState.tasks[1];
   const cancellableTask = admittedState.tasks[2];
   const closingTask = admittedState.tasks[3];
-  assert.ok(pinnedTask && cancellableTask && closingTask);
+  assert.ok(
+    pinnedTask && agentCancellationTask && cancellableTask && closingTask,
+  );
   await ordinaryLiveTasks.window.locator("#task-menu-button").click();
   await ordinaryLiveTasks.window
     .locator("#task-menu")
@@ -3744,6 +3769,71 @@ try {
   });
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
 
+  await ordinaryLiveTasks.window
+    .locator(
+      `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
+    )
+    .click();
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  await ordinaryLiveTasks.window
+    .locator("#task-agent-objective")
+    .fill(
+      "Hold the approved read-only workspace while Farol proves exact native cancellation.",
+    );
+  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent ===
+      "Agent assignment admitted.",
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-cancel").isEnabled(),
+    true,
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window
+      .locator("#task-menu-close-task")
+      .isDisabled(),
+    true,
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent ===
+      "Agent cancellation confirmed.",
+  );
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-agent-state small")?.textContent ===
+      "Cancelled",
+  );
+  const cancelledAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.deepEqual(
+    cancelledAgentBootstrap.tasks.find(
+      (task) => task.taskId === agentCancellationTask.taskId,
+    )?.agent,
+    {
+      phase: "cancelled",
+      workspaceId: productWorkspaceId,
+      parentDelivery: "not_applicable",
+      workspaceEnforcement: "not_applicable",
+      resultAvailable: false,
+    },
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-close-task").isEnabled(),
+    true,
+  );
+  await ordinaryLiveTasks.window.screenshot({
+    path: path.join(evidenceRoot, "live-task-native-agent-cancelled.png"),
+  });
+  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+
   const productAgentInputRoot = path.join(
     ordinaryLiveTasks.userData,
     "farol-next-state",
@@ -3752,21 +3842,35 @@ try {
   const productAgentInputFiles = (
     await fs.readdir(productAgentInputRoot)
   ).filter((entry) => entry.endsWith(".json"));
-  assert.equal(productAgentInputFiles.length, 1);
-  const productAgentInputPath = path.join(
-    productAgentInputRoot,
-    productAgentInputFiles[0],
+  assert.equal(productAgentInputFiles.length, 2);
+  const productAgentInputs = await Promise.all(
+    productAgentInputFiles.map(async (entry) => {
+      const target = path.join(productAgentInputRoot, entry);
+      return { target, text: await fs.readFile(target, "utf8") };
+    }),
   );
-  const productAgentInputText = await fs.readFile(
-    productAgentInputPath,
-    "utf8",
+  const deliveredProductAgentInput = productAgentInputs.find(({ text }) =>
+    /Read README\.md inside the approved subtree/u.test(text),
   );
+  const cancelledProductAgentInput = productAgentInputs.find(({ text }) =>
+    /proves exact native cancellation/u.test(text),
+  );
+  assert.ok(deliveredProductAgentInput);
+  assert.ok(cancelledProductAgentInput);
   assert.match(
-    productAgentInputText,
+    deliveredProductAgentInput.text,
     /Read README\.md inside the approved subtree/u,
   );
   assert.equal((await fs.stat(productAgentInputRoot)).mode & 0o777, 0o700);
-  assert.equal((await fs.stat(productAgentInputPath)).mode & 0o777, 0o600);
+  assert.ok(
+    (
+      await Promise.all(
+        productAgentInputs.map(async ({ target }) =>
+          fs.stat(target).then((entry) => entry.mode & 0o777),
+        ),
+      )
+    ).every((mode) => mode === 0o600),
+  );
 
   const assignmentRoot = path.join(
     ordinaryLiveTasks.userData,
@@ -3795,6 +3899,22 @@ try {
   assert.equal(productAssignment.record.workspaceEnforcement, "verified");
   assert.match(productAssignment.record.resultRef, /^codex-app-server:\/\//u);
   assert.equal((await fs.stat(productAssignment.target)).mode & 0o777, 0o600);
+  const cancelledProductAssignment = productAssignmentRecords.find(
+    ({ record }) =>
+      record.assignment.identity.taskId === agentCancellationTask.taskId,
+  );
+  assert.ok(cancelledProductAssignment);
+  assert.equal(cancelledProductAssignment.record.assignment.phase, "cancelled");
+  assert.equal(cancelledProductAssignment.record.assignment.terminal, true);
+  assert.equal(
+    cancelledProductAssignment.record.assignment.terminalReason.code,
+    "AGENT_CANCELLED",
+  );
+  assert.equal(cancelledProductAssignment.record.resultRef, null);
+  assert.equal(
+    (await fs.stat(cancelledProductAssignment.target)).mode & 0o777,
+    0o600,
+  );
 
   const liveTaskRoot = path.join(
     ordinaryLiveTasks.userData,
@@ -3825,6 +3945,12 @@ try {
       ?.lifecycle,
     "cancelled",
   );
+  assert.equal(
+    liveTaskRecord.tasks.find(
+      (task) => task.taskId === agentCancellationTask.taskId,
+    )?.agent?.phase,
+    "cancelled",
+  );
   assert.deepEqual(Object.keys(liveTaskRecord.tasks[0]).sort(), [
     "agent",
     "conversationUrl",
@@ -3843,7 +3969,7 @@ try {
   ]);
   assert.doesNotMatch(
     liveTaskText,
-    /continuity canary|cancellation canary|bounded workspace verification|Read README\.md inside the approved subtree/iu,
+    /continuity canary|cancellation canary|bounded workspace verification|Read README\.md inside the approved subtree|proves exact native cancellation/iu,
   );
   assert.equal((await fs.stat(liveTaskRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
@@ -3945,20 +4071,99 @@ try {
     0o600,
   );
 
+  await ordinaryLiveTasks.window
+    .locator(
+      `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
+    )
+    .click();
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  await ordinaryLiveTasks.window
+    .locator("#task-agent-objective")
+    .fill(
+      "Remain active until the persisted authority expires across an application restart.",
+    );
+  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () =>
+      document.querySelector("#task-menu-note")?.textContent ===
+      "Agent assignment admitted.",
+  );
+  const expiringAgentState = await ordinaryLiveTasks.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(
+    expiringAgentState.tasks.find(
+      (task) => task.taskId === agentCancellationTask.taskId,
+    )?.agent?.phase,
+    "running",
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+  const expiringInputEnvelope = JSON.parse(
+    await fs.readFile(cancelledProductAgentInput.target, "utf8"),
+  );
+  assert.equal(
+    expiringInputEnvelope.input.taskId,
+    agentCancellationTask.taskId,
+  );
+  assert.match(
+    expiringInputEnvelope.input.objective,
+    /persisted authority expires/u,
+  );
+  expiringInputEnvelope.input.expiresAt = Date.now() - 1_000;
+  await fs.writeFile(
+    cancelledProductAgentInput.target,
+    `${JSON.stringify(expiringInputEnvelope, null, 2)}\n`,
+    { mode: 0o600 },
+  );
+  assert.equal(
+    (await fs.stat(cancelledProductAgentInput.target)).mode & 0o777,
+    0o600,
+  );
+
   await restart(ordinaryLiveTasks);
   await ordinaryLiveTasks.window.waitForFunction(
     () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
   );
+  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
+    const state = await window.farolNext.bootstrap();
+    return (
+      state.tasks.find((task) => task.taskId === taskId)?.agent?.phase ===
+      "cancelled"
+    );
+  }, agentCancellationTask.taskId);
   await waitForWindowCount(ordinaryLiveTasks.application, 1);
   const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
-  assert.equal(recoveredState.taskRevision, handoffLiveTaskRecord.revision);
+  assert.ok(recoveredState.taskRevision > handoffLiveTaskRecord.revision);
   assert.deepEqual(
     recoveredState.tasks,
     handoffLiveTaskRecord.tasks.map(
       ({ conversationUrl: _conversationUrl, ...task }) => task,
     ),
+  );
+  const expiredAssignmentFiles = (await fs.readdir(assignmentRoot)).filter(
+    (entry) => entry.endsWith(".json"),
+  );
+  const expiredAssignmentRecords = await Promise.all(
+    expiredAssignmentFiles.map(async (entry) =>
+      JSON.parse(await fs.readFile(path.join(assignmentRoot, entry), "utf8")),
+    ),
+  );
+  const expiredAssignment = expiredAssignmentRecords.find(
+    ({ record }) =>
+      record.assignment.identity.assignmentId ===
+      expiringInputEnvelope.input.assignmentId,
+  );
+  assert.ok(expiredAssignment);
+  assert.equal(expiredAssignment.record.assignment.phase, "cancelled");
+  assert.equal(expiredAssignment.record.assignment.terminal, true);
+  assert.equal(
+    expiredAssignment.record.assignment.terminalReason.code,
+    "AGENT_CANCELLED",
   );
   const recoveredNewTask = ordinaryLiveTasks.window.locator("#new-task");
   assert.equal(await recoveredNewTask.isEnabled(), true);

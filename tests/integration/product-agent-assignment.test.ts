@@ -124,6 +124,9 @@ function dependencies() {
       resultRef: "codex-app-server://thread/child-a/turn/turn-a",
       workspaceEnforcement: "verified" as const,
     })),
+    cancel: vi.fn(async () => {
+      throw new Error("unexpected cancel");
+    }),
   };
   return {
     value: {
