@@ -337,6 +337,19 @@ function deniedPaths(
   ];
 }
 
+function verificationDeniedPaths(
+  request: Readonly<{
+    workspace: Readonly<{ deniedPaths: readonly string[] }>;
+  }>,
+): readonly string[] {
+  return [
+    ...new Set([
+      ...DEFAULT_DENIED_PATHS.filter((relative) => relative !== ".git"),
+      ...request.workspace.deniedPaths,
+    ]),
+  ];
+}
+
 function validSha256(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
 }
@@ -1131,7 +1144,13 @@ export class NativeReadonlyWorkspace
 
     if (validated.operation.kind === "verification.run") {
       return executeNativeVerificationCommand(
-        validated,
+        {
+          ...validated,
+          workspace: {
+            ...validated.workspace,
+            deniedPaths: verificationDeniedPaths(validated),
+          },
+        },
         validated.operation,
         this.options.attestGit ? { attestGit: this.options.attestGit } : {},
       );

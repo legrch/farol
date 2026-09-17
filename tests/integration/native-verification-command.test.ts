@@ -367,6 +367,44 @@ int main(void) {
     await expect(fs.stat(canary)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("keeps default credential paths denied for verification commands", async () => {
+    const credential = path.join(root, ".env");
+    await fs.writeFile(credential, "PRIVATE_VALUE=never-read\n", {
+      mode: 0o600,
+    });
+    const credentialReader = await compileCommandFixture(
+      "credential-reader",
+      `#include <fcntl.h>
+#include <stddef.h>
+#include <unistd.h>
+
+int main(void) {
+  const int descriptor = open(${JSON.stringify(credential)}, O_RDONLY);
+  const char denied[] = "credential denied\\n";
+  const char readable[] = "credential readable\\n";
+  const char *output = descriptor < 0 ? denied : readable;
+  const size_t length = descriptor < 0 ? sizeof(denied) - 1 : sizeof(readable) - 1;
+  if (descriptor >= 0) {
+    close(descriptor);
+  }
+  const ssize_t written = write(STDOUT_FILENO, output, length);
+  return written == (ssize_t)length ? 0 : 1;
+}
+`,
+    );
+
+    await expect(
+      workspace(async () => credentialReader).execute(request()),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        kind: "workspace.command",
+        stdout: "credential denied\n",
+        network: "none",
+      },
+    });
+  });
+
   it("fails closed when Git attestation is missing or malformed", async () => {
     await expect(
       workspace(async () => {
