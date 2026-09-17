@@ -6,6 +6,7 @@ import {
 
 export type AssignmentErrorCode =
   | "AGENT_CORRELATION"
+  | "AGENT_ASSIGNMENT_CONFLICT"
   | "AGENT_ASSIGNMENT_INVALID"
   | "AGENT_FOCUS_DENIED"
   | "AGENT_AUTHORITY_CORRELATION"
@@ -63,6 +64,7 @@ export type AssignmentTerminalReason = Readonly<{
 export type Assignment = Readonly<{
   identity: AssignmentIdentity;
   authority: AssignmentAuthority;
+  commandFingerprint: string | null;
   phase:
     | "prepared"
     | "running"
@@ -83,10 +85,12 @@ export type Assignment = Readonly<{
 export function createAssignment(
   identity: AssignmentIdentity,
   authority: AssignmentAuthority,
+  commandFingerprint: string | null = null,
 ): Assignment {
   return {
     identity: { ...identity },
     authority: { ...authority },
+    commandFingerprint,
     phase: "prepared",
     parentThreadId: null,
     childId: null,

@@ -8,6 +8,7 @@ import {
   type AgentRunReceipt,
 } from "../../modules/agent/app/service/run-agent-assignment";
 import type { AssignmentErrorCode } from "../../modules/agent/domain/assignment";
+import { Sha256AgentCommandDigester } from "../../modules/agent/infra/native/sha256-agent-command-digester";
 import { ComputerExecutionAuthorityPeer } from "../../modules/agent/infra/peer/computer-execution-authority-peer";
 import { DelegateExecutionAuthority } from "../../modules/computer/app/service/delegate-execution-authority";
 import {
@@ -158,6 +159,7 @@ export async function runProductAgentAssignment(
     new ComputerExecutionAuthorityPeer(
       new ExecutionAuthorityContractHandler(delegate),
     ),
+    new Sha256AgentCommandDigester(),
   );
   const narrowedWorkspace =
     input.scope.mode === "subtree"

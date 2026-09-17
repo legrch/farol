@@ -12,7 +12,10 @@ import {
   type AgentAssignmentCommand,
 } from "../../src/modules/agent/app/service/run-agent-assignment";
 import { InMemoryAssignments } from "../../src/modules/agent/infra/repo/in-memory-assignments";
+import { Sha256AgentCommandDigester } from "../../src/modules/agent/infra/native/sha256-agent-command-digester";
 import { createAssignment } from "../../src/modules/agent/domain/assignment";
+
+const commandDigester = new Sha256AgentCommandDigester();
 
 const command: AgentAssignmentCommand = {
   identity: {
@@ -128,6 +131,7 @@ describe("Agent delegated-authority continuity", () => {
       nativeHost,
       new InMemoryAssignments(),
       delegated,
+      commandDigester,
     );
 
     await expect(runner.execute(command)).resolves.toMatchObject({
@@ -158,6 +162,7 @@ describe("Agent delegated-authority continuity", () => {
       nativeHost,
       new InMemoryAssignments(),
       authorityPort(),
+      commandDigester,
     ).execute(command);
 
     const spawned = nativeHost.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
@@ -190,6 +195,7 @@ describe("Agent delegated-authority continuity", () => {
         nativeHost,
         new InMemoryAssignments(),
         delegated,
+        commandDigester,
       ).execute(command),
     ).resolves.toMatchObject({
       ok: false,
@@ -214,6 +220,7 @@ describe("Agent delegated-authority continuity", () => {
         nativeHost,
         new InMemoryAssignments(),
         delegated,
+        commandDigester,
       ).execute(command),
     ).resolves.toEqual({
       ok: false,
@@ -268,6 +275,7 @@ describe("Agent delegated-authority continuity", () => {
       host(),
       new InMemoryAssignments(),
       delegated,
+      commandDigester,
     ).execute(narrowed);
     expect(delegated.delegate).toHaveBeenCalledWith({
       identity: narrowed.identity,
@@ -292,6 +300,7 @@ describe("Agent delegated-authority continuity", () => {
           nativeHost,
           new InMemoryAssignments(),
           authorityPort(),
+          commandDigester,
         ).execute({
           ...command,
           focus: { initialPaths: [initialPath] },
@@ -327,6 +336,7 @@ describe("Agent delegated-authority continuity", () => {
         nativeHost,
         new InMemoryAssignments(),
         exact,
+        commandDigester,
       ).execute({
         ...command,
         focus: { initialPaths: ["/workspace/farol/package.json"] },
@@ -355,6 +365,7 @@ describe("Agent delegated-authority continuity", () => {
         nativeHost,
         new InMemoryAssignments(),
         excluded,
+        commandDigester,
       ).execute({
         ...command,
         focus: { initialPaths: ["/workspace/farol/private/secret.txt"] },
@@ -378,6 +389,7 @@ describe("Agent delegated-authority continuity", () => {
         nativeHost,
         new InMemoryAssignments(),
         unavailable,
+        commandDigester,
       ).execute(command),
     ).resolves.toEqual({
       ok: false,
@@ -401,9 +413,12 @@ describe("Agent delegated-authority continuity", () => {
     });
     const nativeHost = host();
     await expect(
-      new RunAgentAssignment(nativeHost, repository, authorityPort()).execute(
-        command,
-      ),
+      new RunAgentAssignment(
+        nativeHost,
+        repository,
+        authorityPort(),
+        commandDigester,
+      ).execute(command),
     ).resolves.toEqual({
       ok: false,
       error: { code: "AGENT_AUTHORITY_CORRELATION", retry: "never" },

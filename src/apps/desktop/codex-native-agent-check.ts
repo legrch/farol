@@ -3,6 +3,7 @@ import type { AgentHost } from "../../modules/agent/app/port/agent-host";
 import type { AssignmentRepository } from "../../modules/agent/app/port/assignment-repository";
 import { AcknowledgeAgentResult } from "../../modules/agent/app/service/acknowledge-agent-result";
 import { RunAgentAssignment } from "../../modules/agent/app/service/run-agent-assignment";
+import { Sha256AgentCommandDigester } from "../../modules/agent/infra/native/sha256-agent-command-digester";
 import { ComputerExecutionAuthorityPeer } from "../../modules/agent/infra/peer/computer-execution-authority-peer";
 import { DelegateExecutionAuthority } from "../../modules/computer/app/service/delegate-execution-authority";
 import {
@@ -224,6 +225,7 @@ export async function runCodexNativeAgentCheck(
     new ComputerExecutionAuthorityPeer(
       new ExecutionAuthorityContractHandler(delegator),
     ),
+    new Sha256AgentCommandDigester(),
   );
   const command = {
     identity,

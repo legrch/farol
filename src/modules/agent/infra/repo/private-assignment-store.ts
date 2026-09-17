@@ -39,6 +39,7 @@ const terminalReasonSchema = z.strictObject({
 const assignmentSchema = z.strictObject({
   identity: identitySchema,
   authority: authoritySchema,
+  commandFingerprint: sha256Digest.nullable().default(null),
   phase: z.enum([
     "prepared",
     "running",
@@ -294,7 +295,9 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       !sameValue(
         existing.assignment.authority,
         replacement.assignment.authority,
-      )
+      ) ||
+      existing.assignment.commandFingerprint !==
+        replacement.assignment.commandFingerprint
     ) {
       throw new Error("AGENT_ASSIGNMENT_BINDING_MISMATCH");
     }

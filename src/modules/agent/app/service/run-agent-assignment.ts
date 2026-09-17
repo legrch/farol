@@ -4,6 +4,7 @@ import {
   type Result,
 } from "../../../../pkg/kernel/domain/result";
 import type { AgentHost } from "../port/agent-host";
+import type { AgentCommandDigester } from "../port/agent-command-digester";
 import type { AgentAssignmentIntent } from "../port/agent-host";
 import type {
   AgentAuthorityNarrowing,
@@ -47,6 +48,30 @@ export type AgentAssignmentCommand = Readonly<{
   intent: AgentAssignmentIntent;
   admission?: "new" | "rejoin";
 }>;
+
+export function agentAssignmentCommandFingerprint(
+  command: AgentAssignmentCommand,
+  digester: AgentCommandDigester,
+): string {
+  return digester.digest(
+    JSON.stringify([
+      "farol-agent-command-v1",
+      command.identity.assignmentId,
+      command.identity.ownerId,
+      command.identity.sessionId,
+      command.identity.taskId,
+      command.identity.taskEpoch,
+      command.identity.generation,
+      command.delegation.parentParticipantId,
+      command.delegation.participantId,
+      command.delegation.role,
+      command.delegation.mutationOwnership,
+      command.delegation.narrowing ?? null,
+      command.focus.initialPaths,
+      command.intent,
+    ]),
+  );
+}
 
 function validIntent(intent: AgentAssignmentIntent): boolean {
   if (intent.kind === "compatibility") return true;
@@ -109,18 +134,32 @@ function focusAllowed(
 export class RunAgentAssignment {
   private readonly inFlight = new Map<
     string,
-    Promise<Result<AgentRunReceipt, AssignmentErrorCode>>
+    Readonly<{
+      commandFingerprint: string;
+      execution: Promise<Result<AgentRunReceipt, AssignmentErrorCode>>;
+    }>
   >();
 
   constructor(
     private readonly host: AgentHost,
     private readonly assignments: AssignmentRepository,
     private readonly authority: AgentAuthorityPort,
+    private readonly commandDigester: AgentCommandDigester,
   ) {}
 
-  execute(
+  async execute(
     command: AgentAssignmentCommand,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
+    if (!validIntent(command.intent)) {
+      return failure("AGENT_ASSIGNMENT_INVALID");
+    }
+    const delegated = await this.resolveAuthority(command);
+    if (!delegated.ok) return delegated;
+    const authority = delegated.value;
+    if (!focusAllowed(command.focus.initialPaths, authority)) {
+      return failure("AGENT_FOCUS_DENIED");
+    }
+
     const identity = command.identity;
     const key = JSON.stringify([
       identity.assignmentId,
@@ -130,28 +169,35 @@ export class RunAgentAssignment {
       identity.taskEpoch,
       identity.generation,
     ]);
+    const commandFingerprint = agentAssignmentCommandFingerprint(
+      command,
+      this.commandDigester,
+    );
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
-    const execution = this.executeAdmitted(command).finally(() => {
-      this.inFlight.delete(key);
+    if (existing) {
+      return existing.commandFingerprint === commandFingerprint
+        ? existing.execution
+        : failure("AGENT_ASSIGNMENT_CONFLICT");
+    }
+    const execution = this.executeAdmitted(
+      command,
+      authority,
+      commandFingerprint,
+    ).finally(() => {
+      if (this.inFlight.get(key)?.execution === execution) {
+        this.inFlight.delete(key);
+      }
     });
-    this.inFlight.set(key, execution);
+    this.inFlight.set(key, { commandFingerprint, execution });
     return execution;
   }
 
   private async executeAdmitted(
     command: AgentAssignmentCommand,
+    authority: DelegatedAgentAuthority,
+    commandFingerprint: string,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
-    if (!validIntent(command.intent)) {
-      return failure("AGENT_ASSIGNMENT_INVALID");
-    }
-    const delegated = await this.resolveAuthority(command);
-    if (!delegated.ok) return delegated;
     const identity = command.identity;
-    const authority = delegated.value;
-    if (!focusAllowed(command.focus.initialPaths, authority)) {
-      return failure("AGENT_FOCUS_DENIED");
-    }
     const assignmentAuthority: AssignmentAuthority = {
       authorityId: authority.authorityId,
       participantId: authority.participantId,
@@ -159,7 +205,11 @@ export class RunAgentAssignment {
       role: authority.role,
       mutationOwnership: authority.mutationOwnership,
     };
-    const prepared = createAssignment(identity, assignmentAuthority);
+    const prepared = createAssignment(
+      identity,
+      assignmentAuthority,
+      commandFingerprint,
+    );
     let admission: Awaited<ReturnType<AssignmentRepository["admit"]>>;
     try {
       if (command.admission === "rejoin") {
@@ -181,6 +231,9 @@ export class RunAgentAssignment {
         return failure("AGENT_AUTHORITY_CORRELATION");
       }
       const recovered = admission.record.assignment;
+      if (recovered.commandFingerprint !== commandFingerprint) {
+        return failure("AGENT_ASSIGNMENT_CONFLICT");
+      }
       if (
         !recovered.terminal &&
         recovered.phase === "running" &&

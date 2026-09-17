@@ -11,6 +11,7 @@ import type {
 } from "../../src/modules/agent/app/port/execution-authority";
 import type { AssignmentRepository } from "../../src/modules/agent/app/port/assignment-repository";
 import {
+  agentAssignmentCommandFingerprint,
   RunAgentAssignment,
   type AgentAssignmentCommand,
 } from "../../src/modules/agent/app/service/run-agent-assignment";
@@ -20,6 +21,7 @@ import {
   createAssignment,
   startAssignment,
 } from "../../src/modules/agent/domain/assignment";
+import { Sha256AgentCommandDigester } from "../../src/modules/agent/infra/native/sha256-agent-command-digester";
 
 const command: AgentAssignmentCommand = {
   identity: {
@@ -80,6 +82,8 @@ const assignmentAuthority = {
   mutationOwnership: delegatedAuthority.mutationOwnership,
 } as const;
 
+const commandDigester = new Sha256AgentCommandDigester();
+
 const exactChild: ChildCorrelation = {
   ...command.identity,
   authorityId: delegatedAuthority.authorityId,
@@ -139,7 +143,7 @@ function createRunner(
   repository: AssignmentRepository = new InMemoryAssignments(),
   authority: AgentAuthorityPort = new AuthorityDouble(),
 ): RunAgentAssignment {
-  return new RunAgentAssignment(host, repository, authority);
+  return new RunAgentAssignment(host, repository, authority, commandDigester);
 }
 
 describe("Agent app service", () => {
@@ -257,6 +261,60 @@ describe("Agent app service", () => {
     expect(host.waitCalls).toBe(1);
   });
 
+  it("rejects changed intent while the same assignment is in flight", async () => {
+    let releaseSpawn!: () => void;
+    let announceSpawn!: () => void;
+    const spawnEntered = new Promise<void>((resolve) => {
+      announceSpawn = resolve;
+    });
+    const spawnReleased = new Promise<void>((resolve) => {
+      releaseSpawn = resolve;
+    });
+    const host: AgentHost & { spawnCalls: number } = {
+      spawnCalls: 0,
+      async spawn() {
+        this.spawnCalls += 1;
+        announceSpawn();
+        await spawnReleased;
+        return { status: "started", correlation: exactChild };
+      },
+      async wait(correlation) {
+        return {
+          status: "completed",
+          correlation,
+          resultRef: "result-preview-a",
+          workspaceEnforcement: "verified" as const,
+        };
+      },
+      async cancel() {
+        throw new Error("UNEXPECTED_CANCEL");
+      },
+    };
+    const runner = createRunner(host);
+    const original = {
+      ...command,
+      intent: { kind: "product" as const, objective: "Inspect alpha" },
+    };
+    const first = runner.execute(original);
+    await spawnEntered;
+
+    const conflict = runner.execute({
+      ...original,
+      intent: { kind: "product", objective: "Inspect beta" },
+    });
+    releaseSpawn();
+
+    await expect(conflict).resolves.toEqual({
+      ok: false,
+      error: { code: "AGENT_ASSIGNMENT_CONFLICT", retry: "never" },
+    });
+    await expect(first).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "completed" } },
+    });
+    expect(host.spawnCalls).toBe(1);
+  });
+
   it("returns a stored terminal receipt without spawning again", async () => {
     const repository = new InMemoryAssignments();
     const host = new AgentHostDouble(
@@ -277,10 +335,71 @@ describe("Agent app service", () => {
     expect(host.waitCalls).toBe(1);
   });
 
+  it("rejects changed focus or intent when replaying a durable assignment", async () => {
+    const repository = new InMemoryAssignments();
+    const host: AgentHost & { spawnCalls: number; waitCalls: number } = {
+      spawnCalls: 0,
+      waitCalls: 0,
+      async spawn() {
+        this.spawnCalls += 1;
+        return { status: "started", correlation: exactChild };
+      },
+      async wait(correlation) {
+        this.waitCalls += 1;
+        return {
+          status: "completed",
+          correlation,
+          resultRef: "result-preview-a",
+          workspaceEnforcement: "verified" as const,
+        };
+      },
+      async cancel() {
+        throw new Error("UNEXPECTED_CANCEL");
+      },
+    };
+    const original = {
+      ...command,
+      intent: { kind: "product" as const, objective: "Inspect alpha" },
+    };
+    await expect(
+      createRunner(host, repository).execute(original),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "completed" } },
+    });
+
+    for (const changed of [
+      {
+        ...original,
+        intent: { kind: "product" as const, objective: "Inspect beta" },
+      },
+      {
+        ...original,
+        focus: { initialPaths: ["/workspace/farol/package.json"] },
+      },
+    ]) {
+      await expect(
+        createRunner(
+          new AgentHostDouble(new Error("must not spawn"), null),
+          repository,
+        ).execute(changed),
+      ).resolves.toEqual({
+        ok: false,
+        error: { code: "AGENT_ASSIGNMENT_CONFLICT", retry: "never" },
+      });
+    }
+    expect(host.spawnCalls).toBe(1);
+    expect(host.waitCalls).toBe(1);
+  });
+
   it("tombstones a prepared record recovered without a known child", async () => {
     const preparedRepository = new InMemoryAssignments();
     await preparedRepository.admit({
-      assignment: createAssignment(command.identity, assignmentAuthority),
+      assignment: createAssignment(
+        command.identity,
+        assignmentAuthority,
+        agentAssignmentCommandFingerprint(command, commandDigester),
+      ),
       resultRef: null,
       parentDelivery: "not_applicable",
     });
@@ -346,7 +465,11 @@ describe("Agent app service", () => {
   it("rejoins the exact running child after restart without spawning again", async () => {
     const runningRepository = new InMemoryAssignments();
     const running = startAssignment(
-      createAssignment(command.identity, assignmentAuthority),
+      createAssignment(
+        command.identity,
+        assignmentAuthority,
+        agentAssignmentCommandFingerprint(command, commandDigester),
+      ),
       exactChild,
     );
     if (!running.ok) throw new Error("RUNNING_FIXTURE_INVALID");

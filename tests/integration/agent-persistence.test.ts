@@ -13,6 +13,7 @@ import type {
   DelegatedAgentAuthority,
 } from "../../src/modules/agent/app/port/execution-authority";
 import {
+  agentAssignmentCommandFingerprint,
   RunAgentAssignment,
   type AgentAssignmentCommand,
 } from "../../src/modules/agent/app/service/run-agent-assignment";
@@ -26,6 +27,7 @@ import {
   type ChildCorrelation,
 } from "../../src/modules/agent/domain/assignment";
 import { PrivateAssignmentStore } from "../../src/modules/agent/infra/repo/private-assignment-store";
+import { Sha256AgentCommandDigester } from "../../src/modules/agent/infra/native/sha256-agent-command-digester";
 
 const command: AgentAssignmentCommand = {
   identity: {
@@ -81,6 +83,8 @@ const assignmentAuthority: AssignmentAuthority = {
   mutationOwnership: authority.mutationOwnership,
 };
 
+const commandDigester = new Sha256AgentCommandDigester();
+
 const child: ChildCorrelation = {
   ...command.identity,
   authorityId: authority.authorityId,
@@ -96,7 +100,11 @@ const child: ChildCorrelation = {
 
 function preparedRecord() {
   return {
-    assignment: createAssignment(command.identity, assignmentAuthority),
+    assignment: createAssignment(
+      command.identity,
+      assignmentAuthority,
+      agentAssignmentCommandFingerprint(command, commandDigester),
+    ),
     resultRef: null,
     parentDelivery: "not_applicable" as const,
     workspaceEnforcement: "not_applicable" as const,
@@ -208,6 +216,7 @@ describe("private Agent assignment persistence", () => {
       host,
       new PrivateAssignmentStore({ root }),
       new AuthorityDouble(),
+      commandDigester,
     );
     await expect(restarted.execute(command)).resolves.toMatchObject({
       ok: true,
@@ -236,6 +245,7 @@ describe("private Agent assignment persistence", () => {
         retainedHost,
         new PrivateAssignmentStore({ root }),
         new AuthorityDouble(),
+        commandDigester,
       ).execute(command),
     ).resolves.toMatchObject({
       ok: true,
