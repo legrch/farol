@@ -169,10 +169,91 @@ export class CompactContext {
     } catch {
       return failure("CONTEXT_REPOSITORY_FAILED");
     }
+    const inspected = await this.inspectSession(command, session);
+    if (inspected) return inspected;
+
+    const sourceEpoch = session.operation?.sourceEpoch ?? session.epoch;
+    let admission;
+    try {
+      admission = await this.sessions.acquireCompactionAdmission(
+        command.binding,
+        sourceEpoch,
+        compactionRequest(command),
+      );
+    } catch {
+      return failure("CONTEXT_REPOSITORY_FAILED");
+    }
+    if (admission.status === "busy") {
+      return failure("CONTEXT_OPERATION_IN_PROGRESS");
+    }
+    if (admission.status === "conflict") {
+      return failure(
+        admission.reason === "binding"
+          ? "CONTEXT_BINDING_CONFLICT"
+          : "CONTEXT_ADMISSION_CONFLICT",
+      );
+    }
+
+    return this.executeAdmitted(
+      command,
+      admission.admission.sourceEpoch,
+      admission.lease,
+    );
+  }
+
+  private async executeAdmitted(
+    command: CompactContextCommand,
+    admittedSourceEpoch: number,
+    lease: ContextAdmissionLease,
+  ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
+    let result: Result<CompactContextReceipt, CompactContextErrorCode>;
+    try {
+      result = await this.executeOwned(command, admittedSourceEpoch, lease);
+    } catch (error) {
+      try {
+        await this.sessions.releaseCompactionAdmission(lease);
+      } catch {
+        // Keep the original unexpected failure; the durable lease fails closed.
+      }
+      throw error;
+    }
+    try {
+      await this.sessions.releaseCompactionAdmission(lease);
+    } catch {
+      return failure("CONTEXT_REPOSITORY_FAILED");
+    }
+    return result;
+  }
+
+  private async executeOwned(
+    command: CompactContextCommand,
+    admittedSourceEpoch: number,
+    lease: ContextAdmissionLease,
+  ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
+    let session: ContextSession;
+    try {
+      session =
+        (await this.sessions.load(command.binding)) ??
+        createContextSession(command.binding);
+    } catch {
+      return failure("CONTEXT_REPOSITORY_FAILED");
+    }
+    const inspected = await this.inspectSession(command, session);
+    if (inspected) return inspected;
+    const currentSourceEpoch = session.operation?.sourceEpoch ?? session.epoch;
+    if (currentSourceEpoch !== admittedSourceEpoch) {
+      return failure("CONTEXT_ADMISSION_CONFLICT");
+    }
+    return this.advance(command, session, lease);
+  }
+
+  private async inspectSession(
+    command: CompactContextCommand,
+    session: ContextSession,
+  ): Promise<Result<CompactContextReceipt, CompactContextErrorCode> | null> {
     if (!sameContextBinding(session.binding, command.binding)) {
       return failure("CONTEXT_BINDING_CONFLICT");
     }
-
     if (session.phase !== "active") {
       if (session.operation === null) {
         return failure("CONTEXT_TRANSITION_FAILED");
@@ -181,7 +262,6 @@ export class CompactContext {
         return failure("CONTEXT_ADMISSION_CONFLICT");
       }
     }
-
     if (session.phase === "active" && session.lastCompletedRequest) {
       if (!sameCompactionRequest(session.lastCompletedRequest, command)) {
         if (
@@ -206,59 +286,13 @@ export class CompactContext {
     ) {
       return failure("CONTEXT_ADMISSION_CONFLICT");
     }
-
-    const sourceEpoch = session.operation?.sourceEpoch ?? session.epoch;
-    let admission;
-    try {
-      admission = await this.sessions.acquireCompactionAdmission(
-        command.binding,
-        sourceEpoch,
-        compactionRequest(command),
-      );
-    } catch {
-      return failure("CONTEXT_REPOSITORY_FAILED");
-    }
-    if (admission.status === "busy") {
-      return failure("CONTEXT_OPERATION_IN_PROGRESS");
-    }
-    if (admission.status === "conflict") {
-      return failure(
-        admission.reason === "binding"
-          ? "CONTEXT_BINDING_CONFLICT"
-          : "CONTEXT_ADMISSION_CONFLICT",
-      );
-    }
-
-    return this.executeAdmitted(command, session, admission.lease);
-  }
-
-  private async executeAdmitted(
-    command: CompactContextCommand,
-    initial: ContextSession,
-    lease: ContextAdmissionLease,
-  ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
-    let result: Result<CompactContextReceipt, CompactContextErrorCode>;
-    try {
-      result = await this.advance(command, initial);
-    } catch (error) {
-      try {
-        await this.sessions.releaseCompactionAdmission(lease);
-      } catch {
-        // Keep the original unexpected failure; the durable lease fails closed.
-      }
-      throw error;
-    }
-    try {
-      await this.sessions.releaseCompactionAdmission(lease);
-    } catch {
-      return failure("CONTEXT_REPOSITORY_FAILED");
-    }
-    return result;
+    return null;
   }
 
   private async advance(
     command: CompactContextCommand,
     initial: ContextSession,
+    lease: ContextAdmissionLease,
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
     let session = initial;
     let shouldStartSummary = false;
@@ -266,7 +300,7 @@ export class CompactContext {
       const started = beginCompaction(session, compactionRequest(command));
       if (!started.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = started.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
     }
@@ -274,7 +308,7 @@ export class CompactContext {
       const requested = requestCheckpoint(session);
       if (!requested.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = requested.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
       shouldStartSummary = true;
@@ -294,7 +328,7 @@ export class CompactContext {
           code: "SUMMARY_OBSERVATION_FAILED",
         };
       }
-      const handled = await this.handleSummary(session, summary);
+      const handled = await this.handleSummary(session, summary, lease);
       if (!handled.ok) return handled;
       session = handled.value.session;
       if (handled.value.checkpoint === null) return handled;
@@ -319,7 +353,7 @@ export class CompactContext {
         const stored = markCheckpointStored(session);
         if (!stored.ok) return failure("CONTEXT_TRANSITION_FAILED");
         session = stored.value;
-        if (!(await this.persist(session))) {
+        if (!(await this.persist(session, lease))) {
           return failure("CONTEXT_REPOSITORY_FAILED");
         }
       } else {
@@ -331,14 +365,14 @@ export class CompactContext {
         } catch {
           return failure("CHECKPOINT_STORE_FAILED");
         }
-        const handled = await this.handleSummary(session, observed);
+        const handled = await this.handleSummary(session, observed, lease);
         if (!handled.ok) return handled;
         session = handled.value.session;
         if (handled.value.checkpoint === null) return handled;
       }
     }
 
-    return this.advanceHandoff(session);
+    return this.advanceHandoff(session, lease);
   }
 
   private summaryRequest(
@@ -364,11 +398,12 @@ export class CompactContext {
   private async handleSummary(
     current: ContextSession,
     receipt: ContextSummaryReceipt,
+    lease: ContextAdmissionLease,
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
     if (receipt.status === "not_submitted") {
       const restored = restoreActiveBeforeSummaryDispatch(current);
       if (!restored.ok) return failure("CONTEXT_TRANSITION_FAILED");
-      if (!(await this.persist(restored.value))) {
+      if (!(await this.persist(restored.value, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
       return success({ session: restored.value, checkpoint: null });
@@ -379,15 +414,20 @@ export class CompactContext {
       const observed = markSummaryDispatchObserved(session);
       if (!observed.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = observed.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
     }
     if (receipt.status === "blocked") {
-      return this.persistClassified(session, receipt.code, "blocked");
+      return this.persistClassified(session, receipt.code, "blocked", lease);
     }
     if (receipt.status === "outcome_unknown") {
-      return this.persistClassified(session, receipt.code, "outcome_unknown");
+      return this.persistClassified(
+        session,
+        receipt.code,
+        "outcome_unknown",
+        lease,
+      );
     }
 
     const parsed = validateCheckpointContent(
@@ -395,7 +435,12 @@ export class CompactContext {
       this.maximumCheckpointBytes,
     );
     if (!parsed.ok) {
-      return this.persistClassified(session, parsed.error.code, "blocked");
+      return this.persistClassified(
+        session,
+        parsed.error.code,
+        "blocked",
+        lease,
+      );
     }
     const existingCheckpointId = session.operation?.checkpointId;
     const checkpoint = createCheckpointEnvelope(session, parsed.value, {
@@ -409,7 +454,7 @@ export class CompactContext {
       const validated = recordValidatedCheckpoint(session, checkpoint);
       if (!validated.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = validated.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
     }
@@ -421,7 +466,7 @@ export class CompactContext {
     const stored = markCheckpointStored(session);
     if (!stored.ok) return failure("CONTEXT_TRANSITION_FAILED");
     session = stored.value;
-    if (!(await this.persist(session))) {
+    if (!(await this.persist(session, lease))) {
       return failure("CONTEXT_REPOSITORY_FAILED");
     }
     return success({ session, checkpoint });
@@ -431,13 +476,14 @@ export class CompactContext {
     session: ContextSession,
     code: string,
     classification: "blocked" | "outcome_unknown",
+    lease: ContextAdmissionLease,
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
     const result =
       classification === "blocked"
         ? blockContext(session, code)
         : markContextOutcomeUnknown(session, code);
     if (!result.ok) return failure("CONTEXT_TRANSITION_FAILED");
-    if (!(await this.persist(result.value))) {
+    if (!(await this.persist(result.value, lease))) {
       return failure("CONTEXT_REPOSITORY_FAILED");
     }
     return success({ session: result.value, checkpoint: null });
@@ -445,13 +491,14 @@ export class CompactContext {
 
   private async advanceHandoff(
     current: ContextSession,
+    lease: ContextAdmissionLease,
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
     let session = current;
     if (session.phase === "blocked" || session.phase === "outcome_unknown") {
       const resumed = resumeSourceRetirementCleanup(session);
       if (!resumed.ok) return success({ session, checkpoint: null });
       session = resumed.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
     }
@@ -461,7 +508,7 @@ export class CompactContext {
       const offered = offerCheckpointHandoff(session);
       if (!offered.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = offered.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
       let receipt: HostContextReceipt;
@@ -474,6 +521,7 @@ export class CompactContext {
         session,
         checkpoint.value,
         receipt,
+        lease,
       );
       if (
         !handled.ok ||
@@ -494,15 +542,16 @@ export class CompactContext {
       if (receipt.status === "not_offered") {
         const restored = restoreStoredBeforeHostOffer(session);
         if (!restored.ok) return failure("CONTEXT_TRANSITION_FAILED");
-        if (!(await this.persist(restored.value))) {
+        if (!(await this.persist(restored.value, lease))) {
           return failure("CONTEXT_REPOSITORY_FAILED");
         }
-        return this.advanceHandoff(restored.value);
+        return this.advanceHandoff(restored.value, lease);
       }
       const handled = await this.handleHostReceipt(
         session,
         checkpoint.value,
         receipt,
+        lease,
       );
       if (
         !handled.ok ||
@@ -532,25 +581,31 @@ export class CompactContext {
         };
       }
       if (retirement.status === "blocked") {
-        return this.persistClassified(session, retirement.code, "blocked");
+        return this.persistClassified(
+          session,
+          retirement.code,
+          "blocked",
+          lease,
+        );
       }
       if (retirement.status === "outcome_unknown") {
         return this.persistClassified(
           session,
           retirement.code,
           "outcome_unknown",
+          lease,
         );
       }
       const retired = markOldEpochRetired(session);
       if (!retired.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = retired.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
       const activated = activateNextEpoch(session);
       if (!activated.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = activated.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
       return success({ session, checkpoint: checkpoint.value });
@@ -560,7 +615,7 @@ export class CompactContext {
       const activated = activateNextEpoch(session);
       if (!activated.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = activated.value;
-      if (!(await this.persist(session))) {
+      if (!(await this.persist(session, lease))) {
         return failure("CONTEXT_REPOSITORY_FAILED");
       }
       const checkpoint = await this.loadCheckpoint(
@@ -577,6 +632,7 @@ export class CompactContext {
     session: ContextSession,
     checkpoint: CheckpointEnvelope,
     receipt: HostContextReceipt,
+    lease: ContextAdmissionLease,
   ): Promise<Result<CompactContextReceipt, CompactContextErrorCode>> {
     if (
       receipt.status === "awaiting_confirmation" ||
@@ -585,14 +641,19 @@ export class CompactContext {
       return success({ session, checkpoint });
     }
     if (receipt.status === "blocked") {
-      return this.persistClassified(session, receipt.code, "blocked");
+      return this.persistClassified(session, receipt.code, "blocked", lease);
     }
     if (receipt.status === "outcome_unknown") {
-      return this.persistClassified(session, receipt.code, "outcome_unknown");
+      return this.persistClassified(
+        session,
+        receipt.code,
+        "outcome_unknown",
+        lease,
+      );
     }
     const confirmed = confirmHostContext(session, receipt.hostContextRef);
     if (!confirmed.ok) return failure("CONTEXT_TRANSITION_FAILED");
-    if (!(await this.persist(confirmed.value))) {
+    if (!(await this.persist(confirmed.value, lease))) {
       return failure("CONTEXT_REPOSITORY_FAILED");
     }
     return success({ session: confirmed.value, checkpoint });
@@ -620,9 +681,12 @@ export class CompactContext {
     }
   }
 
-  private async persist(session: ContextSession): Promise<boolean> {
+  private async persist(
+    session: ContextSession,
+    lease: ContextAdmissionLease,
+  ): Promise<boolean> {
     try {
-      await this.sessions.save(session);
+      await this.sessions.save(session, lease);
     } catch {
       return false;
     }

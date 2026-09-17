@@ -67,7 +67,23 @@ export class InMemoryContextSessions implements ContextRepository {
     return structuredClone(session);
   }
 
-  async save(session: ContextSession): Promise<void> {
+  async save(
+    session: ContextSession,
+    lease?: ContextAdmissionLease,
+  ): Promise<void> {
+    const sessionKey = key(session.binding);
+    const currentLease = this.leases.get(sessionKey);
+    if (lease?.sessionKey !== undefined && lease.sessionKey !== sessionKey) {
+      throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
+    }
+    if (currentLease !== undefined) {
+      if (!lease) throw new Error("CONTEXT_ADMISSION_LEASE_REQUIRED");
+      if (currentLease !== lease.token) {
+        throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
+      }
+    } else if (lease) {
+      throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
+    }
     this.saveSync(session);
   }
 

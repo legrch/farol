@@ -309,6 +309,47 @@ describe("private context persistence", () => {
     await second.releaseCompactionAdmission(persisted.lease);
   });
 
+  it("rejects a previously valid owner after the admission lease changes", async () => {
+    const stateRoot = await root();
+    const stale = new PrivateContextStore({ root: stateRoot });
+    const current = new PrivateContextStore({ root: stateRoot });
+    const first = await stale.acquireCompactionAdmission(binding, 1, request);
+    if (first.status !== "acquired") {
+      throw new Error(`EXPECTED_FIRST_ADMISSION_${first.status}`);
+    }
+    await stale.save(createContextSession(binding), first.lease);
+    await stale.releaseCompactionAdmission(first.lease);
+
+    const second = await current.acquireCompactionAdmission(
+      binding,
+      1,
+      request,
+    );
+    if (second.status !== "acquired") {
+      throw new Error(`EXPECTED_SECOND_ADMISSION_${second.status}`);
+    }
+    const requested = requestedSession();
+    await expect(current.save(requested)).rejects.toThrow(
+      "CONTEXT_ADMISSION_LEASE_REQUIRED",
+    );
+    await expect(
+      current.save(
+        { ...requested, binding: { ...binding, sessionId: "session-foreign" } },
+        second.lease,
+      ),
+    ).rejects.toThrow("CONTEXT_ADMISSION_LEASE_MISMATCH");
+    await current.save(requested, second.lease);
+
+    await expect(
+      stale.save(createContextSession(binding), first.lease),
+    ).rejects.toThrow("CONTEXT_ADMISSION_LEASE_MISMATCH");
+    await expect(current.load(binding)).resolves.toEqual(requested);
+    await current.releaseCompactionAdmission(second.lease);
+    await expect(current.save(requested, second.lease)).rejects.toThrow(
+      "CONTEXT_ADMISSION_LEASE_MISSING",
+    );
+  });
+
   it("rejects binding, epoch, and request changes against durable admission", async () => {
     const stateRoot = await root();
     const store = new PrivateContextStore({ root: stateRoot });

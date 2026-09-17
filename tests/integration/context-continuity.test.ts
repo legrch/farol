@@ -5,6 +5,7 @@ import type {
 } from "../../src/modules/chat/app/port/context-summarizer";
 import type { HostContextBridge } from "../../src/modules/chat/app/port/host-context-bridge";
 import type { ContextSourceControl } from "../../src/modules/chat/app/port/context-source-control";
+import type { ContextRepository } from "../../src/modules/chat/app/port/context-repository";
 import { CompactContext } from "../../src/modules/chat/app/service/compact-context";
 import {
   activateNextEpoch,
@@ -144,13 +145,14 @@ function harness(
     initial?: ContextSession;
     now?: () => number;
     summary?: ContextSummaryReceipt;
-    sessions?: InMemoryContextSessions;
+    sessions?: ContextRepository;
+    checkpoints?: InMemoryCheckpoints;
   }> = {},
 ) {
   const sessions =
     options.sessions ??
     new InMemoryContextSessions(options.initial ? [options.initial] : []);
-  const checkpoints = new InMemoryCheckpoints();
+  const checkpoints = options.checkpoints ?? new InMemoryCheckpoints();
   const request = vi
     .fn<ContextSummarizer["request"]>()
     .mockResolvedValue(options.summary ?? completedSummary);
@@ -197,10 +199,10 @@ async function seedCheckpoint(test: ReturnType<typeof harness>): Promise<void> {
 function failSaveAt(test: ReturnType<typeof harness>, target: number): void {
   const save = test.sessions.save.bind(test.sessions);
   let saves = 0;
-  vi.spyOn(test.sessions, "save").mockImplementation(async (session) => {
+  vi.spyOn(test.sessions, "save").mockImplementation(async (session, lease) => {
     saves += 1;
     if (saves === target) throw new Error(`synthetic save failure ${target}`);
-    await save(session);
+    await save(session, lease);
   });
 }
 
@@ -304,6 +306,47 @@ describe("context continuity transaction", () => {
     expect(
       first.request.mock.calls.length + second.request.mock.calls.length,
     ).toBe(1);
+  });
+
+  it("reloads the durable session after a delayed admission and reuses the completed result", async () => {
+    const sessions = new InMemoryContextSessions();
+    const checkpoints = new InMemoryCheckpoints();
+    let announceAcquire!: () => void;
+    let resumeAcquire!: () => void;
+    const acquireStarted = new Promise<void>((resolve) => {
+      announceAcquire = resolve;
+    });
+    const acquireAllowed = new Promise<void>((resolve) => {
+      resumeAcquire = resolve;
+    });
+    const delayedSessions: ContextRepository = {
+      load: (selected) => sessions.load(selected),
+      save: (session, lease) => sessions.save(session, lease),
+      acquireCompactionAdmission: async (...args) => {
+        announceAcquire();
+        await acquireAllowed;
+        return sessions.acquireCompactionAdmission(...args);
+      },
+      releaseCompactionAdmission: (lease) =>
+        sessions.releaseCompactionAdmission(lease),
+    };
+    const first = harness({ sessions, checkpoints });
+    const delayed = harness({ sessions: delayedSessions, checkpoints });
+
+    const delayedExecution = delayed.service.execute(command);
+    await acquireStarted;
+    const firstResult = await first.service.execute(command);
+    resumeAcquire();
+    const delayedResult = await delayedExecution;
+
+    expect(firstResult).toMatchObject({
+      ok: true,
+      value: { session: { phase: "active", epoch: 2 } },
+    });
+    expect(delayedResult).toEqual(firstResult);
+    expect(first.request).toHaveBeenCalledTimes(1);
+    expect(delayed.request).not.toHaveBeenCalled();
+    expect(delayed.observe).not.toHaveBeenCalled();
   });
 
   it("fails closed when the durable admission lease cannot be released", async () => {

@@ -296,9 +296,13 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     });
   }
 
-  async save(session: ContextSession): Promise<void> {
+  async save(
+    session: ContextSession,
+    lease?: ContextAdmissionLease,
+  ): Promise<void> {
     const parsed = sessionSchema.safeParse(session);
     if (!parsed.success) throw new Error("CONTEXT_STATE_INVALID");
+    await this.assertAdmissionLease(session.binding, lease);
     const existing = await this.load(session.binding);
     if (existing && !sameContextBinding(existing.binding, session.binding)) {
       throw new Error("CONTEXT_STATE_BINDING_MISMATCH");
@@ -316,6 +320,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       },
       this.maximumSessionBytes,
       "CONTEXT_STATE_OVERSIZED",
+      () => this.assertAdmissionLease(session.binding, lease),
     );
   }
 
@@ -671,6 +676,32 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  private async assertAdmissionLease(
+    binding: ContextBinding,
+    lease?: ContextAdmissionLease,
+  ): Promise<void> {
+    if (lease && lease.sessionKey !== bindingKey(binding)) {
+      throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
+    }
+    const record = await this.readRecord(
+      this.admissionLeaseFile(bindingKey(binding)),
+      this.maximumSessionBytes,
+      "CONTEXT_LEASE",
+    );
+    if (!record) {
+      if (lease) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
+      return;
+    }
+    const parsed = admissionLeaseRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_LEASE");
+    }
+    if (!lease) throw new Error("CONTEXT_ADMISSION_LEASE_REQUIRED");
+    if (parsed.data.token !== lease.token) {
+      throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
+    }
+  }
+
   private async createAdmission(
     file: string,
     admission: ContextAdmission,
@@ -871,6 +902,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     value: unknown,
     maximumBytes: number,
     oversizedCode: string,
+    beforePublish?: () => Promise<void>,
   ): Promise<void> {
     const serialized = `${JSON.stringify(value)}\n`;
     if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
@@ -899,6 +931,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         await handle.close();
       }
       await this.hooks.beforeCommit?.(target);
+      await beforePublish?.();
       await fs.rename(temporary, target);
       temporaryExists = false;
       await this.syncDirectory(directory);

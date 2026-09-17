@@ -29,7 +29,7 @@ export type ContextAdmissionResult =
 
 export interface ContextRepository {
   load(binding: ContextBinding): Promise<ContextSession | null>;
-  save(session: ContextSession): Promise<void>;
+  save(session: ContextSession, lease?: ContextAdmissionLease): Promise<void>;
   acquireCompactionAdmission(
     binding: ContextBinding,
     sourceEpoch: number,
