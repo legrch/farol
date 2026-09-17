@@ -208,30 +208,32 @@ export type AtomicWriteHooks = Readonly<{
   beforeCommit?: (target: string) => Promise<void>;
   isProcessAlive?: (processId: number) => boolean | Promise<boolean>;
   afterStaleLeaseRead?: (target: string) => Promise<void>;
+  afterExclusiveCreate?: (target: string) => Promise<void>;
+  afterExclusivePublish?: (target: string) => Promise<void>;
 }>;
 
 // The product constructs this store only in the Electron primary process after
 // requestSingleInstanceLock succeeds. This keyed queue is the corresponding
-// same-process repair authority; test stores share it just like product stores.
-const leaseRepairOperations = new Map<string, Promise<void>>();
+// same-process record authority; test stores share it just like product stores.
+const exclusiveRecordOperations = new Map<string, Promise<void>>();
 
-async function withLeaseRepairOperation<Value>(
+async function withExclusiveRecordOperation<Value>(
   key: string,
   operation: () => Promise<Value>,
 ): Promise<Value> {
-  const previous = leaseRepairOperations.get(key) ?? Promise.resolve();
+  const previous = exclusiveRecordOperations.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>((resolve) => {
     release = resolve;
   });
-  leaseRepairOperations.set(key, current);
+  exclusiveRecordOperations.set(key, current);
   await previous;
   try {
     return await operation();
   } finally {
     release();
-    if (leaseRepairOperations.get(key) === current) {
-      leaseRepairOperations.delete(key);
+    if (exclusiveRecordOperations.get(key) === current) {
+      exclusiveRecordOperations.delete(key);
     }
   }
 }
@@ -799,7 +801,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       }
       if (await this.processIsAlive(parsed.data.processId)) return null;
       await this.hooks.afterStaleLeaseRead?.(file);
-      const repaired = await withLeaseRepairOperation(file, async () => {
+      const repaired = await withExclusiveRecordOperation(file, async () => {
         const current = await this.readRecord(
           file,
           this.maximumSessionBytes,
@@ -1045,30 +1047,103 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       | "CONTEXT_SUMMARY_ATTEMPT"
       | "CONTEXT_STATE",
   ): Promise<ParsedRecord | null> {
-    let handle;
-    try {
-      handle = await fs.open(
-        file,
-        fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw error;
-    }
-    try {
-      const info = await handle.stat();
-      this.assertPrivateFile(info, maximumBytes, `${code}_UNSAFE`);
-      const serialized = await handle.readFile("utf8");
-      let value: unknown;
+    const createOnly = code === "CONTEXT_ADMISSION" || code === "CONTEXT_LEASE";
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let handle;
       try {
-        value = JSON.parse(serialized);
-      } catch {
-        throw new Error(`${code}_CORRUPT`);
+        handle = await fs.open(
+          file,
+          fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw error;
       }
-      return { value, serialized };
-    } finally {
-      await handle.close();
+      try {
+        const info = await handle.stat();
+        if (createOnly && info.nlink === 2) {
+          await handle.close();
+          handle = undefined;
+          await this.finishExclusivePublication(
+            file,
+            maximumBytes,
+            `${code}_PUBLICATION_INCOMPLETE`,
+          );
+          continue;
+        }
+        this.assertPrivateFile(info, maximumBytes, `${code}_UNSAFE`);
+        const serialized = await handle.readFile("utf8");
+        let value: unknown;
+        try {
+          value = JSON.parse(serialized);
+        } catch {
+          throw new Error(`${code}_CORRUPT`);
+        }
+        return { value, serialized };
+      } finally {
+        await handle?.close();
+      }
     }
+    throw new Error(`${code}_PUBLICATION_INCOMPLETE`);
+  }
+
+  private async finishExclusivePublication(
+    target: string,
+    maximumBytes: number,
+    incompleteCode: string,
+  ): Promise<void> {
+    await withExclusiveRecordOperation(target, async () => {
+      let handle;
+      try {
+        handle = await fs.open(
+          target,
+          fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      try {
+        let info = await handle.stat();
+        if (info.nlink === 1) return;
+        this.assertPrivateFile(info, maximumBytes, incompleteCode, 2);
+        const directory = path.dirname(target);
+        const prefix = `.${path.basename(target)}.tmp-`;
+        const matches: string[] = [];
+        for (const name of await fs.readdir(directory)) {
+          if (!name.startsWith(prefix)) continue;
+          const temporary = path.join(directory, name);
+          try {
+            const candidate = await fs.lstat(temporary);
+            if (
+              candidate.isFile() &&
+              !candidate.isSymbolicLink() &&
+              candidate.dev === info.dev &&
+              candidate.ino === info.ino
+            ) {
+              matches.push(temporary);
+            }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+        }
+        if (matches.length !== 1) {
+          info = await handle.stat();
+          if (info.nlink === 1) return;
+          throw new Error(incompleteCode);
+        }
+        try {
+          await fs.unlink(matches[0]!);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        await this.syncDirectory(directory);
+        info = await handle.stat();
+        if (info.nlink !== 1) throw new Error(incompleteCode);
+      } finally {
+        await handle.close();
+      }
+    });
   }
 
   private schemaError(value: unknown, code: string): Error {
@@ -1138,32 +1213,49 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
       throw new Error(oversizedCode);
     }
-    let handle;
+    const directory = path.dirname(target);
+    const temporary = path.join(
+      directory,
+      `.${path.basename(target)}.tmp-${randomBytes(8).toString("hex")}`,
+    );
+    const handle = await fs.open(
+      temporary,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+      0o600,
+    );
+    let temporaryExists = true;
     try {
-      handle = await fs.open(
-        target,
-        fsConstants.O_WRONLY |
-          fsConstants.O_CREAT |
-          fsConstants.O_EXCL |
-          NO_FOLLOW |
-          CLOSE_ON_EXEC,
-        0o600,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
-      throw error;
-    }
-    let complete = false;
-    try {
-      await handle.writeFile(serialized, "utf8");
-      await handle.sync();
-      complete = true;
+      try {
+        await this.hooks.afterExclusiveCreate?.(target);
+        await handle.writeFile(serialized, "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await fs.link(temporary, target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw error;
+      }
+      await this.hooks.afterExclusivePublish?.(target);
+      try {
+        await fs.unlink(temporary);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      temporaryExists = false;
+      await this.syncDirectory(directory);
+      return true;
     } finally {
-      await handle.close();
-      if (!complete) await fs.unlink(target).catch(() => undefined);
+      if (temporaryExists) {
+        await fs.unlink(temporary).catch(() => undefined);
+      }
     }
-    await this.syncDirectory(path.dirname(target));
-    return true;
   }
 
   private async ensureRoot(): Promise<void> {
@@ -1257,10 +1349,12 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     info: Stats,
     maximumBytes: number,
     code: string,
+    maximumLinks = 1,
   ): void {
     if (
       !info.isFile() ||
-      info.nlink !== 1 ||
+      info.nlink < 1 ||
+      info.nlink > maximumLinks ||
       info.size < 1 ||
       info.size > maximumBytes ||
       (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||

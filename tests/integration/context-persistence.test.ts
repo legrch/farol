@@ -547,6 +547,82 @@ describe("private context persistence", () => {
     await successor.releaseCompactionAdmission(current.lease);
   });
 
+  it("does not expose a create-only record before its bytes are durable", async () => {
+    const stateRoot = await root();
+    let created!: (target: string) => void;
+    const privateRecordCreated = new Promise<string>((resolve) => {
+      created = resolve;
+    });
+    let resume!: () => void;
+    const mayWrite = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const store = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        afterExclusiveCreate: async (target) => {
+          created(target);
+          await mayWrite;
+        },
+      },
+    );
+    const admission = store.acquireCompactionAdmission(binding, 1, request);
+    const publicTarget = await privateRecordCreated;
+    let targetExists = true;
+    try {
+      await fs.lstat(publicTarget);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      targetExists = false;
+    } finally {
+      resume();
+    }
+
+    const acquired = await admission;
+    expect(targetExists).toBe(false);
+    expect(acquired.status).toBe("acquired");
+    if (acquired.status === "acquired") {
+      await store.releaseCompactionAdmission(acquired.lease);
+    }
+  });
+
+  it("finalizes a complete hardlink publication before reading it", async () => {
+    const stateRoot = await root();
+    let published!: (target: string) => void;
+    const recordPublished = new Promise<string>((resolve) => {
+      published = resolve;
+    });
+    let resume!: () => void;
+    const mayFinish = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const writer = new PrivateContextStore(
+      { root: stateRoot },
+      {
+        afterExclusivePublish: async (target) => {
+          published(target);
+          await mayFinish;
+        },
+      },
+    );
+    const admission = writer.acquireCompactionAdmission(binding, 1, request);
+    const publicTarget = await recordPublished;
+    expect((await fs.lstat(publicTarget)).nlink).toBe(2);
+
+    const restarted = new PrivateContextStore({ root: stateRoot });
+    await expect(
+      restarted.acquireCompactionAdmission(binding, 1, request),
+    ).resolves.toEqual({ status: "busy" });
+    expect((await fs.lstat(publicTarget)).nlink).toBe(1);
+    resume();
+
+    const acquired = await admission;
+    expect(acquired.status).toBe("acquired");
+    if (acquired.status === "acquired") {
+      await writer.releaseCompactionAdmission(acquired.lease);
+    }
+  });
+
   it("keeps the core session binding immutable", async () => {
     const stateRoot = await root();
     const store = new PrivateContextStore({ root: stateRoot });
