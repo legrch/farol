@@ -209,6 +209,12 @@ describe("private context persistence", () => {
       }),
     ).rejects.toThrow("CONTEXT_SOURCE_ID_CONFLICT");
 
+    await restarted.deleteSource(binding, source.operationId);
+    await expect(
+      restarted.getSource(binding, source.operationId),
+    ).resolves.toBeNull();
+    await restarted.putSource(source);
+
     await restarted.deleteTask(binding);
     await expect(
       restarted.getSource(binding, source.operationId),

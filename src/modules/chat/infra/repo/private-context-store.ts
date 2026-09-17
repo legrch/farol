@@ -459,6 +459,25 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return source;
   }
 
+  async deleteSource(
+    binding: ContextBinding,
+    operationId: string,
+  ): Promise<void> {
+    if (!operationId || operationId.length > 160) {
+      throw new Error("CONTEXT_SOURCE_ID_INVALID");
+    }
+    const file = path.join(
+      this.sourceDirectory(binding),
+      `${checkpointKey(operationId)}.json`,
+    );
+    try {
+      await fs.unlink(file);
+      await this.syncDirectory(path.dirname(file));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+
   async deleteTask(binding: ContextBinding): Promise<void> {
     await this.ensureRoot();
     const directory = this.taskDirectory(binding);

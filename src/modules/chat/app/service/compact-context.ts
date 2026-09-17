@@ -69,6 +69,14 @@ export interface CheckpointIds {
   nextCheckpointId(): string;
 }
 
+function compactionRequest(command: CompactContextCommand): CompactionRequest {
+  return {
+    operationId: command.operationId,
+    source: command.source,
+    sourceBoundary: command.sourceBoundary,
+  };
+}
+
 export class CompactContext {
   private readonly inFlight = new Map<
     string,
@@ -184,7 +192,7 @@ export class CompactContext {
       admission = await this.sessions.acquireCompactionAdmission(
         command.binding,
         sourceEpoch,
-        command,
+        compactionRequest(command),
       );
     } catch {
       return failure("CONTEXT_REPOSITORY_FAILED");
@@ -234,7 +242,7 @@ export class CompactContext {
     let session = initial;
     let shouldStartSummary = false;
     if (session.phase === "active") {
-      const started = beginCompaction(session, command);
+      const started = beginCompaction(session, compactionRequest(command));
       if (!started.ok) return failure("CONTEXT_TRANSITION_FAILED");
       session = started.value;
       if (!(await this.persist(session))) {

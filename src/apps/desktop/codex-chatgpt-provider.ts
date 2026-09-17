@@ -91,6 +91,15 @@ export type CodexChatGptConversation = Readonly<{
   ): Promise<CodexChatGptConversationResult>;
 }>;
 
+export type CodexChatGptCompactionErrorCode =
+  | HostCompactionErrorCode
+  | "FAROL_NEXT_COMPACTION_SOURCE_STORE_FAILED"
+  | "FAROL_NEXT_COMPACTION_SOURCE_UNAVAILABLE"
+  | "FAROL_NEXT_COMPACTION_SUMMARY_BLOCKED"
+  | "FAROL_NEXT_COMPACTION_SUMMARY_OUTCOME_UNKNOWN"
+  | "FAROL_NEXT_COMPACTION_STATE_FAILED"
+  | "FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED";
+
 export type CodexChatGptCompaction = Readonly<{
   compact(
     input: Readonly<{
@@ -98,7 +107,10 @@ export type CodexChatGptCompaction = Readonly<{
       body: unknown;
       metadataHeader: string | undefined;
     }>,
-  ): Promise<Result<HostCompactionHandoff, HostCompactionErrorCode>>;
+  ): Promise<Result<HostCompactionHandoff, CodexChatGptCompactionErrorCode>>;
+  prepareTurn?(
+    input: Readonly<{ body: unknown }>,
+  ): Promise<Result<null, CodexChatGptCompactionErrorCode>>;
 }>;
 
 export type CodexChatGptProviderRuntime = Readonly<{
@@ -850,6 +862,15 @@ async function handleResponses(
   if (parsed.data.model !== options.model) {
     refusal(response, 422, "FAROL_NEXT_MODEL_UNAVAILABLE");
     return;
+  }
+  if (options.compaction?.prepareTurn) {
+    const prepared = await options.compaction.prepareTurn({
+      body: structuredClone(raw),
+    });
+    if (!prepared.ok) {
+      refusal(response, 409, prepared.error.code);
+      return;
+    }
   }
   const identity = identityFromRequest(parsed.data);
   const key = turnKey(identity);
