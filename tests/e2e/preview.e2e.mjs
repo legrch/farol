@@ -1937,6 +1937,15 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
 
 async function activateForNativeFocusProof(application) {
   if (process.platform === "darwin") {
+    await application.evaluate(async ({ app, BrowserWindow }) => {
+      const targetWindow = BrowserWindow.getAllWindows()[0];
+      if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+      app.setActivationPolicy("regular");
+      await app.dock.show();
+      targetWindow.setFocusable(true);
+      targetWindow.show();
+      targetWindow.moveTop();
+    });
     const applicationPid = application.process().pid;
     assert.ok(applicationPid, "E2E_APPLICATION_PID_MISSING");
     const activation = spawnSync(
