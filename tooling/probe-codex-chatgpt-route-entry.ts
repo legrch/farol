@@ -40,6 +40,10 @@ await fs.mkdir(privateHome, { recursive: true, mode: 0o700 });
 await fs.mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
 let toolCount = 0;
 let toolCatalogueSha256 = "";
+let toolNames: string[] = [];
+let nativeToolRoundTrips = 0;
+let nativeToolOutputSha256 = "";
+let nativeToolErrorCode: string | null = null;
 const conversation: CodexChatGptConversation = {
   run: async (input, observer) => {
     toolCount = input.tools.length;
@@ -48,6 +52,45 @@ const conversation: CodexChatGptConversation = {
     }
     toolCatalogueSha256 = createHash("sha256")
       .update(JSON.stringify(input.tools))
+      .digest("hex");
+    toolNames = input.tools.flatMap((tool) => {
+      if (typeof tool !== "object" || tool === null || Array.isArray(tool)) {
+        return [];
+      }
+      const name = (tool as { name?: unknown }).name;
+      const type = (tool as { type?: unknown }).type;
+      return typeof name === "string" && typeof type === "string"
+        ? [`${type}:${name}`]
+        : [];
+    });
+    const nativeTool = input.tools.find(
+      (tool) =>
+        typeof tool === "object" &&
+        tool !== null &&
+        !Array.isArray(tool) &&
+        (tool as { type?: unknown }).type === "function" &&
+        (tool as { name?: unknown }).name === "get_goal",
+    );
+    if (!nativeTool) {
+      throw new Error("CODEX_CHATGPT_NATIVE_GOAL_TOOL_MISSING");
+    }
+    let nativeOutput: string;
+    try {
+      nativeOutput = await observer.onToolCall({
+        name: "get_goal",
+        arguments: {},
+      });
+    } catch (error) {
+      nativeToolErrorCode =
+        error instanceof Error ? error.message : "NATIVE_TOOL_REQUEST_FAILED";
+      throw error;
+    }
+    if (nativeOutput.trim().length === 0) {
+      throw new Error("CODEX_CHATGPT_NATIVE_TOOL_RESULT_INVALID");
+    }
+    nativeToolRoundTrips += 1;
+    nativeToolOutputSha256 = createHash("sha256")
+      .update(nativeOutput)
       .digest("hex");
     const parts = ["FAROL", "_NEXT_ROUTE_", "B_OK"];
     let text = "";
@@ -112,6 +155,8 @@ try {
       `${JSON.stringify({
         stage: "native-host-route",
         listedModels: Array.isArray(listed.data) ? listed.data.length : null,
+        toolNames,
+        nativeToolErrorCode,
         provider: provider.diagnostics(),
       })}\n`,
     );
@@ -129,6 +174,8 @@ try {
         ...result,
         toolCount,
         toolCatalogueSha256,
+        nativeToolRoundTrips,
+        nativeToolOutputSha256,
         provider: provider.diagnostics(),
       },
       null,

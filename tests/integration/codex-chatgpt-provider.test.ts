@@ -60,6 +60,26 @@ function requestBody(model = "farol-next/mind") {
   };
 }
 
+function toolRequestBody() {
+  return {
+    ...requestBody(),
+    tools: [
+      {
+        type: "function",
+        name: "exec_command",
+        description: "Run one command through the exact native host registry.",
+        parameters: {
+          type: "object",
+          properties: { cmd: { type: "string", minLength: 1 } },
+          required: ["cmd"],
+          additionalProperties: false,
+        },
+        strict: true,
+      },
+    ],
+  };
+}
+
 describe("Farol Next Codex to ChatGPT provider transport", () => {
   let runtime: CodexChatGptProviderRuntime | null = null;
 
@@ -152,6 +172,161 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       },
     });
     expect(conversation.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("round-trips one exact native tool call before resuming the same conversation", async () => {
+    let observedToolOutput = "";
+    const conversation: CodexChatGptConversation = {
+      run: vi.fn(async (_input, observer) => {
+        observedToolOutput = await observer.onToolCall({
+          name: "exec_command",
+          arguments: { cmd: "printf FAROL_NEXT_NATIVE_TOOL_OK" },
+        });
+        await observer.onTextDelta({
+          sequence: 1,
+          delta: "Tool result retained.",
+          text: "Tool result retained.",
+          observedCharacters: 21,
+        });
+        return {
+          state: "completed" as const,
+          code: null,
+          outputText: "Tool result retained.",
+          observedProvider: "chatgpt-web",
+          observedModel: "gpt-6-astra",
+          observedMode: "high",
+        };
+      }),
+    };
+    runtime = await startCodexChatGptProvider({
+      model: "farol-next/mind",
+      token: "route-b-test-token",
+      conversation,
+    });
+
+    const initialBody = toolRequestBody();
+    const initial = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(initialBody),
+    });
+    const initialStream = new SseReader(initial);
+    const toolTerminal = await initialStream.until("response.completed");
+    const toolCall = (
+      toolTerminal.response as { output: Readonly<Record<string, unknown>>[] }
+    ).output[0];
+    expect(toolCall).toMatchObject({
+      type: "function_call",
+      name: "exec_command",
+      arguments: JSON.stringify({ cmd: "printf FAROL_NEXT_NATIVE_TOOL_OK" }),
+      call_id: expect.stringMatching(/^farol_next_call_[a-f0-9]{32}$/u),
+    });
+    expect(observedToolOutput).toBe("");
+
+    const continuationBody = {
+      ...initialBody,
+      input: [
+        ...initialBody.input,
+        toolCall,
+        {
+          type: "function_call_output",
+          call_id: toolCall?.call_id,
+          output: "FAROL_NEXT_NATIVE_TOOL_OK",
+        },
+      ],
+    };
+    const foreign = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...continuationBody,
+        client_metadata: {
+          ...continuationBody.client_metadata,
+          turn_id: "turn-route-foreign",
+          root_turn_id: "turn-route-foreign",
+        },
+      }),
+    });
+    expect(foreign.status).toBe(409);
+    await expect(foreign.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_CONTINUATION_FOREIGN" },
+    });
+
+    const changedCall = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        ...continuationBody,
+        input: continuationBody.input.map((item) =>
+          item === toolCall
+            ? { ...toolCall, arguments: JSON.stringify({ cmd: "changed" }) }
+            : item,
+        ),
+      }),
+    });
+    expect(changedCall.status).toBe(409);
+    await expect(changedCall.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_CONTINUATION_INVALID" },
+    });
+    expect(observedToolOutput).toBe("");
+    expect(conversation.run).toHaveBeenCalledTimes(1);
+
+    const continuation = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(continuationBody),
+    });
+    const continuationStream = new SseReader(continuation);
+    await expect(
+      continuationStream.until("response.output_text.delta"),
+    ).resolves.toMatchObject({ delta: "Tool result retained." });
+    await expect(
+      continuationStream.until("response.completed"),
+    ).resolves.toMatchObject({
+      response: {
+        status: "completed",
+        output: [
+          expect.objectContaining({
+            type: "message",
+            content: [{ type: "output_text", text: "Tool result retained." }],
+          }),
+        ],
+      },
+    });
+    expect(observedToolOutput).toBe("FAROL_NEXT_NATIVE_TOOL_OK");
+    expect(conversation.run).toHaveBeenCalledTimes(1);
+    expect(runtime.diagnostics()).toMatchObject({ responseRequests: 4 });
+
+    const duplicate = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(continuationBody),
+    });
+    expect(duplicate.status).toBe(409);
+    await expect(duplicate.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_CONTINUATION_NOT_FOUND" },
+    });
+    expect(conversation.run).toHaveBeenCalledTimes(1);
+    expect(runtime.diagnostics()).toMatchObject({
+      responseRequests: 5,
+      activeTurns: 0,
+      toolCalls: 1,
+    });
   });
 
   it("refuses unauthenticated and unsupported-model requests before dispatch", async () => {
