@@ -210,7 +210,17 @@ describe("Codex host context continuity composition", () => {
     expect(summary.request).toHaveBeenCalledTimes(1);
     expect(summary.observe).not.toHaveBeenCalled();
     expect(summary.retire).toHaveBeenCalledTimes(1);
-    expect(phases).toEqual(["handoff_offered", "active"]);
+    expect(phases).toEqual([
+      "quiescing",
+      "checkpoint_requested",
+      "checkpoint_requested",
+      "validated",
+      "durably_stored",
+      "handoff_offered",
+      "host_context_confirmed",
+      "old_epoch_retired",
+      "active",
+    ]);
   });
 
   it("uses exact canonical history when the retained source is definitely unavailable", async () => {

@@ -170,6 +170,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       { now: () => Date.now() },
       { nextCheckpointId: () => `checkpoint-${randomUUID()}` },
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
+      options.onStateChanged ?? null,
     );
   }
 
@@ -225,7 +226,6 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     if (!compacted.ok) {
       return failure("FAROL_NEXT_COMPACTION_STATE_FAILED");
     }
-    await this.options.onStateChanged?.(compacted.value.session);
     const classified = normalizeSessionFailure(compacted.value.session);
     if (classified) return failure(classified);
     if (!compacted.value.checkpoint) {
@@ -281,7 +281,6 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     if (!compacted.ok) {
       return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
     }
-    await this.options.onStateChanged?.(compacted.value.session);
     const classified = normalizeSessionFailure(compacted.value.session);
     if (classified) return failure(classified);
     if (

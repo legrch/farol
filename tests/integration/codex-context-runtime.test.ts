@@ -7,9 +7,11 @@ import {
   startCodexContextRuntime,
   type CodexContextRuntime,
 } from "../../src/apps/desktop/codex-context-runtime";
+import { toProductTaskContext } from "../../src/apps/desktop/context-task-state";
 import type { ChatGptContextSummaryRoute } from "../../src/apps/desktop/chatgpt-context-summary";
 import type { CodexChatGptConversation } from "../../src/apps/desktop/codex-chatgpt-provider";
 import type { CheckpointContent } from "../../src/modules/chat/domain/checkpoint";
+import type { ProductTaskContext } from "../../src/modules/chat/contract/product-task";
 import type { ContextBinding } from "../../src/modules/chat/domain/context-continuity";
 import { replayHostCheckpoint } from "../../src/modules/chat/infra/client/host-compaction-codec";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
@@ -301,6 +303,7 @@ describe("assembled Codex context runtime", () => {
       retained: vi.fn(() => retained),
       createFallback: vi.fn(),
     };
+    const visibleContextStates: ProductTaskContext[] = [];
     const start = () =>
       startCodexContextRuntime({
         ownerId: binding.ownerId,
@@ -310,6 +313,9 @@ describe("assembled Codex context runtime", () => {
         token,
         conversation,
         summaryRoutes,
+        onContextStateChanged: (session) => {
+          visibleContextStates.push(toProductTaskContext(session));
+        },
       });
     let runtime = await start();
     runtimes.push(runtime);
@@ -379,6 +385,25 @@ describe("assembled Codex context runtime", () => {
         "Execution tools are unavailable for this operation.",
       );
     }
+    expect(visibleContextStates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          epoch: 1,
+          phase: "checkpoint_requested",
+          source: "retained_agent",
+        }),
+        expect.objectContaining({
+          epoch: 1,
+          phase: "handoff_offered",
+          source: "retained_agent",
+        }),
+        expect.objectContaining({
+          epoch: 4,
+          phase: "active",
+          source: "retained_agent",
+        }),
+      ]),
+    );
   });
 
   it("uses one isolated canonical-history fallback only when retained context is absent", async () => {

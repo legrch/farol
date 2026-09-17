@@ -97,6 +97,8 @@ export class CompactContext {
     private readonly clock: Clock,
     private readonly ids: CheckpointIds,
     private readonly maximumCheckpointBytes: number,
+    private readonly onStatePersisted:
+      ((session: ContextSession) => void | Promise<void>) | null = null,
   ) {}
 
   execute(
@@ -574,9 +576,15 @@ export class CompactContext {
   private async persist(session: ContextSession): Promise<boolean> {
     try {
       await this.sessions.save(session);
-      return true;
     } catch {
       return false;
     }
+    try {
+      await this.onStatePersisted?.(session);
+    } catch {
+      // The private session is already durable. Presentation failures are
+      // observed by their owning adapter and cannot roll this transition back.
+    }
+    return true;
   }
 }
