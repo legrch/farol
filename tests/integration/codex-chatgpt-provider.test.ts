@@ -9,6 +9,7 @@ import {
 class SseReader {
   private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
   private readonly decoder = new TextDecoder();
+  private readonly pending: Readonly<Record<string, unknown>>[] = [];
   private carry = "";
   readonly events: Readonly<Record<string, unknown>>[] = [];
 
@@ -19,6 +20,12 @@ class SseReader {
 
   async until(type: string): Promise<Readonly<Record<string, unknown>>> {
     for (;;) {
+      while (this.pending.length > 0) {
+        const event = this.pending.shift();
+        if (!event) continue;
+        this.events.push(event);
+        if (event.type === type) return event;
+      }
       const chunk = await this.reader.read();
       if (chunk.done) throw new Error(`SSE_ENDED_BEFORE:${type}`);
       this.carry += this.decoder.decode(chunk.value, { stream: true });
@@ -30,9 +37,9 @@ class SseReader {
           .find((line) => line.startsWith("data: "))
           ?.slice(6);
         if (!data) continue;
-        const event = JSON.parse(data) as Readonly<Record<string, unknown>>;
-        this.events.push(event);
-        if (event.type === type) return event;
+        this.pending.push(
+          JSON.parse(data) as Readonly<Record<string, unknown>>,
+        );
       }
     }
   }
@@ -103,6 +110,26 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
   afterEach(async () => {
     await runtime?.close();
     runtime = null;
+  });
+
+  it("retains coalesced SSE frames between sequential expectations", async () => {
+    const payload = [
+      'event: first\ndata: {"type":"first"}\n\n',
+      'event: second\ndata: {"type":"second"}\n\n',
+    ].join("");
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(payload));
+          controller.close();
+        },
+      }),
+    );
+    const stream = new SseReader(response);
+
+    await expect(stream.until("first")).resolves.toEqual({ type: "first" });
+    await expect(stream.until("second")).resolves.toEqual({ type: "second" });
+    expect(stream.events).toEqual([{ type: "first" }, { type: "second" }]);
   });
 
   it("delivers observed text deltas before the terminal host response", async () => {
