@@ -55,6 +55,13 @@ declared in the driver before measurement. Every batch must return to zero tasks
 provider surfaces. The result is `artifacts/lifecycle-soak/report.json`; it is
 deterministic `FIXTURE_APP` evidence, not authenticated-provider performance.
 
+`task next:test:persistence-fault` is a separate hidden `SIMULATED_FAULT` lane.
+It admits one task durably, then rejects every later live-task store commit while
+the provider URL and lifecycle continue changing. The task must become visibly
+outcome-unknown, a later owner mutation must fail closed, and the retained file
+must remain at the last successful snapshot. Its exact-head report is
+`artifacts/persistence-fault/report.json`.
+
 The final owner journey is separate from automation: `task next:run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector
 read is repeated around it, and the application is quit by its exact instance. This

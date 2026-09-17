@@ -20,13 +20,21 @@ import { runBoundedProcess } from "./bounded-process.mjs";
 const root = process.cwd();
 const development = process.argv.includes("--development");
 const lifecycleSoak = process.argv.includes("--lifecycle-soak");
+const persistenceFault = process.argv.includes("--persistence-fault");
+assert.equal(
+  lifecycleSoak && persistenceFault,
+  false,
+  "E2E_EXCLUSIVE_SPECIAL_MODE",
+);
 const evidenceRoot = path.join(
   root,
   lifecycleSoak
     ? "artifacts/lifecycle-soak"
-    : development
-      ? "artifacts/e2e-dev"
-      : "artifacts/e2e",
+    : persistenceFault
+      ? "artifacts/persistence-fault"
+      : development
+        ? "artifacts/e2e-dev"
+        : "artifacts/e2e",
 );
 const metadataPath = path.join(root, "dist/package/artifact.json");
 const canonicalPackagePath = path.join(
@@ -1168,6 +1176,7 @@ if (args.join(" ") === "app-server --stdio") {
     ...extraArgs,
   ];
   const launchEnvironment = {
+    ...(options.environment ?? {}),
     FAROL_NEXT_E2E: "1",
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
@@ -2530,6 +2539,114 @@ async function completeSetup(
   await dialog.waitFor({ state: "hidden" });
 }
 
+async function runLiveTaskPersistenceFaultProof() {
+  assert.equal(
+    development,
+    true,
+    "E2E_PERSISTENCE_FAULT_REQUIRES_DEVELOPMENT_BUILD",
+  );
+  const instance = await launch([], "hidden", "ordinary", {
+    environment: { FAROL_NEXT_E2E_LIVE_TASK_SAVE_SUCCESSES: "1" },
+  });
+  try {
+    await completeSetup(instance, false, false, true, false);
+    const created = await instance.window.evaluate(() =>
+      window.farolNext.task({ kind: "task.create-chatgpt" }),
+    );
+    assert.equal(created.ok, true, JSON.stringify(created));
+    assert.ok(created.selectedTaskId);
+    const taskId = created.selectedTaskId;
+    assert.equal(
+      await submitLiveChatGptTask(
+        instance,
+        taskId,
+        "Farol live persistence failure canary",
+      ),
+      1,
+    );
+    await waitForLiveChatGptSurface(
+      instance,
+      taskId,
+      (surface) =>
+        surface.state.submitCount === 1 &&
+        surface.state.stopVisible === false &&
+        surface.state.assistantText.length > 0,
+      "provider completion after live task persistence failure",
+    );
+    await instance.window.waitForFunction(
+      async (selectedTaskId) =>
+        (await window.farolNext.bootstrap()).tasks.find(
+          (task) => task.taskId === selectedTaskId,
+        )?.lifecycle === "outcome_unknown",
+      taskId,
+      { timeout: 5_000 },
+    );
+    assert.equal(
+      await instance.window.locator("#dossier-state b").innerText(),
+      "OUTCOME UNKNOWN",
+    );
+    assert.match(
+      await instance.window
+        .locator('.nav-item[data-section="activity"] .nav-signal small')
+        .innerText(),
+      /1 task needs attention/u,
+    );
+
+    const rename = await instance.window.evaluate(
+      ({ selectedTaskId }) =>
+        window.farolNext.task({
+          kind: "task.rename",
+          taskId: selectedTaskId,
+          label: "Must not look durable",
+        }),
+      { selectedTaskId: taskId },
+    );
+    assert.equal(rename.ok, false);
+    assert.equal(rename.error, "TASK_STATE_UNAVAILABLE");
+    assert.equal(rename.state.tasks[0]?.label, "ChatGPT task 1");
+    assert.equal(rename.state.tasks[0]?.lifecycle, "outcome_unknown");
+
+    const persistedPath = path.join(
+      instance.userData,
+      "farol-next-state",
+      "live-tasks",
+      "live-tasks.json",
+    );
+    const persisted = JSON.parse(await fs.readFile(persistedPath, "utf8"));
+    assert.equal(persisted.revision, 1);
+    assert.equal(persisted.tasks.length, 1);
+    assert.equal(persisted.tasks[0].label, "ChatGPT task 1");
+    assert.equal(persisted.tasks[0].lifecycle, "idle");
+    assert.equal(persisted.tasks[0].conversationUrl, null);
+
+    await fs.writeFile(
+      path.join(evidenceRoot, "report.json"),
+      `${JSON.stringify(
+        {
+          schema: 1,
+          status: "PASS",
+          evidence: "SIMULATED_FAULT",
+          sourceCommit: expectedSource.commit,
+          sourceTreeDigest: expectedSource.treeDigest,
+          buildId: artifact.buildId,
+          builtAt: artifact.builtAt,
+          fault: "live task store rejects every commit after initial admission",
+          cases: [
+            "conversation-url-save-failure-is-visible",
+            "lifecycle-save-failure-is-outcome-unknown",
+            "later-mutation-fails-closed",
+            "last-durable-snapshot-is-not-advanced",
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } finally {
+    await close(instance);
+  }
+}
+
 const lifecycleSoakBudget = Object.freeze({
   seed: 260_917,
   warmupCycles: 5,
@@ -3004,6 +3121,11 @@ async function runLifecycleSoak() {
 
 if (lifecycleSoak) {
   await runLifecycleSoak();
+  process.exit(0);
+}
+
+if (persistenceFault) {
+  await runLiveTaskPersistenceFaultProof();
   process.exit(0);
 }
 

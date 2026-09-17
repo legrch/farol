@@ -836,7 +836,28 @@ function initializeCodexContextController(): void {
 }
 
 async function initializeLiveTaskState(): Promise<void> {
-  const store = new PrivateLiveTaskStore({ root: liveTaskStoreRoot() });
+  let e2eSaveAttempts = 0;
+  const e2eSuccessfulSaves =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_NEXT_E2E_LIVE_TASK_SAVE_SUCCESSES
+      : undefined;
+  const store = new PrivateLiveTaskStore(
+    { root: liveTaskStoreRoot() },
+    e2eSuccessfulSaves === undefined
+      ? {}
+      : {
+          beforeCommit: async () => {
+            const successfulSaves = Number(e2eSuccessfulSaves);
+            if (!Number.isSafeInteger(successfulSaves) || successfulSaves < 0) {
+              throw new Error("LIVE_TASK_E2E_SAVE_FAULT_INVALID");
+            }
+            e2eSaveAttempts += 1;
+            if (e2eSaveAttempts > successfulSaves) {
+              throw new Error("LIVE_TASK_E2E_SAVE_FAULT");
+            }
+          },
+        },
+  );
   const stagedRoutes = new Map<string, ChatGptRoute>();
   const stagedConversationUrls = new Map<string, string | null>();
   let record: LiveTaskStoreRecord | null;
