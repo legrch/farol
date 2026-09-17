@@ -64,6 +64,32 @@ function taskRoute(executeJavaScript: ReturnType<typeof vi.fn>): ChatGptRoute {
   return candidate;
 }
 
+function streamingTaskRoute(
+  executeJavaScript: ReturnType<typeof vi.fn>,
+): ChatGptRoute {
+  const candidate = new ChatGptRoute({
+    homeUrl: "https://chatgpt.com/",
+    initialUrl: "https://chatgpt.com/",
+    e2eOrigin: null,
+    parent: () => null,
+    taskPollMs: 1,
+    taskTimeoutMs: 1_000,
+  });
+  vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+  vi.spyOn(candidate, "observe").mockResolvedValue({
+    state: "authenticated",
+    code: null,
+  });
+  Reflect.set(candidate, "routeWindow", {
+    isDestroyed: () => false,
+    webContents: {
+      executeJavaScript,
+      getURL: () => "https://chatgpt.com/",
+    },
+  });
+  return candidate;
+}
+
 function harden(
   routeCandidate: ChatGptRoute,
   sharedSession: EventEmitter,
@@ -200,6 +226,96 @@ describe("ChatGPT route submission boundary", () => {
     expect(attachmentMock.upload).toHaveBeenCalledTimes(1);
     expect(submissions).toBe(1);
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("ChatGPT route streaming observation", () => {
+  const probe = (
+    assistantText: string,
+    input: Readonly<{ busy: boolean; sendVisible: boolean }>,
+  ) => ({
+    assistantCount: 1,
+    assistantCharacters: assistantText.length,
+    assistantText,
+    userCount: 1,
+    busy: input.busy,
+    sendVisible: input.sendVisible,
+    signInVisible: false,
+    errorVisible: false,
+  });
+
+  it("delivers exact incremental text before the terminal result", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValueOnce(probe("Hel", { busy: true, sendVisible: false }))
+      .mockResolvedValueOnce(probe("Hello", { busy: true, sendVisible: false }))
+      .mockResolvedValueOnce(probe("Hello", { busy: false, sendVisible: true }))
+      .mockResolvedValueOnce(probe("Hello", { busy: false, sendVisible: true }))
+      .mockResolvedValueOnce(
+        probe("Hello", { busy: false, sendVisible: true }),
+      );
+    const deltas: unknown[] = [];
+
+    await expect(
+      streamingTaskRoute(executeJavaScript).runReadonlyTask(
+        "reply with a greeting",
+        [],
+        {
+          onTextDelta: (delta) => {
+            deltas.push(delta);
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      state: "completed",
+      code: null,
+      deltaCount: 2,
+      observedCharacters: 5,
+      outputText: "Hello",
+    });
+    expect(deltas).toEqual([
+      {
+        sequence: 1,
+        delta: "Hel",
+        text: "Hel",
+        observedCharacters: 3,
+      },
+      {
+        sequence: 2,
+        delta: "lo",
+        text: "Hello",
+        observedCharacters: 5,
+      },
+    ]);
+  });
+
+  it("refuses a non-prefix rewrite after text was delivered", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValueOnce(probe("Alpha", { busy: true, sendVisible: false }))
+      .mockResolvedValueOnce(
+        probe("Omega", { busy: true, sendVisible: false }),
+      );
+    const deltas: unknown[] = [];
+
+    await expect(
+      streamingTaskRoute(executeJavaScript).runReadonlyTask("reply once", [], {
+        onTextDelta: (delta) => {
+          deltas.push(delta);
+        },
+      }),
+    ).resolves.toEqual({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_OUTPUT_CHANGED",
+      deltaCount: 1,
+      observedCharacters: 5,
+      outputText: "Alpha",
+    });
+    expect(deltas).toHaveLength(1);
   });
 });
 

@@ -32,6 +32,7 @@ const activatedTaskSchema = z.strictObject({ activated: z.boolean() });
 const taskProbeSchema = z.strictObject({
   assistantCount: z.number().int().nonnegative(),
   assistantCharacters: z.number().int().nonnegative(),
+  assistantText: z.string().max(256 * 1_024),
   userCount: z.number().int().nonnegative(),
   busy: z.boolean(),
   sendVisible: z.boolean(),
@@ -181,9 +182,11 @@ function taskProbeScript(baselineAssistantCount: number): string {
       document.querySelector('[data-testid="conversation-turn-error"]'),
       document.querySelector('[data-testid="network-error"]')
     ].some(visible);
+    const assistantText = current instanceof HTMLElement ? current.innerText : "";
     return {
       assistantCount: assistants.length,
-      assistantCharacters: current instanceof HTMLElement ? current.innerText.length : 0,
+      assistantCharacters: assistantText.length,
+      assistantText,
       userCount: document.querySelectorAll('[data-message-author-role="user"]').length,
       busy,
       sendVisible,
@@ -249,6 +252,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_SUBMIT_UNAVAILABLE"
     | "CHATGPT_TASK_PAGE_LOST"
     | "CHATGPT_TASK_ERROR"
+    | "CHATGPT_TASK_OUTPUT_CHANGED"
     | "CHATGPT_TASK_TIMEOUT"
     | "CHATGPT_ATTACHMENT_CONTROL_UNAVAILABLE"
     | "CHATGPT_ATTACHMENT_UPLOAD_FAILED"
@@ -256,6 +260,18 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | null;
   deltaCount: number;
   observedCharacters: number;
+  outputText?: string;
+}>;
+
+export type ChatGptTaskTextDelta = Readonly<{
+  sequence: number;
+  delta: string;
+  text: string;
+  observedCharacters: number;
+}>;
+
+export type ChatGptTaskObserver = Readonly<{
+  onTextDelta?: (delta: ChatGptTaskTextDelta) => void | Promise<void>;
 }>;
 
 export class ChatGptRoute {
@@ -441,6 +457,7 @@ export class ChatGptRoute {
   async runReadonlyTask(
     prompt: string,
     attachments: readonly StagedChatGptAttachment[] = [],
+    observer: ChatGptTaskObserver = {},
   ): Promise<ChatGptReadonlyTaskResult> {
     if (this.taskInFlight) {
       return {
@@ -448,6 +465,7 @@ export class ChatGptRoute {
         code: "CHATGPT_TASK_IN_PROGRESS",
         deltaCount: 0,
         observedCharacters: 0,
+        outputText: "",
       };
     }
     this.taskInFlight = true;
@@ -456,6 +474,8 @@ export class ChatGptRoute {
       "not_attempted";
     let deltaCount = 0;
     let observedCharacters = 0;
+    let observedText = "";
+    let sequence = 0;
     try {
       const opened = await this.open();
       if (opened.status !== "opened") {
@@ -464,6 +484,7 @@ export class ChatGptRoute {
           code: "CHATGPT_PAGE_UNREACHABLE",
           deltaCount,
           observedCharacters,
+          outputText: observedText,
         };
       }
       const readiness = await this.observe();
@@ -473,6 +494,7 @@ export class ChatGptRoute {
           code: "CHATGPT_SIGN_IN_REQUIRED",
           deltaCount,
           observedCharacters,
+          outputText: observedText,
         };
       }
       if (readiness.state !== "authenticated") {
@@ -484,6 +506,7 @@ export class ChatGptRoute {
               : "CHATGPT_UI_UNRECOGNIZED",
           deltaCount,
           observedCharacters,
+          outputText: observedText,
         };
       }
       const candidate = this.routeWindow;
@@ -493,6 +516,7 @@ export class ChatGptRoute {
           code: "CHATGPT_COMPOSER_UNAVAILABLE",
           deltaCount,
           observedCharacters,
+          outputText: observedText,
         };
       }
       const prepared = preparedTaskSchema.safeParse(
@@ -520,6 +544,7 @@ export class ChatGptRoute {
             code: uploaded.code,
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
       }
@@ -538,6 +563,7 @@ export class ChatGptRoute {
             code: "CHATGPT_TASK_ERROR",
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
         if (activated.data.activated) {
@@ -553,6 +579,7 @@ export class ChatGptRoute {
           code: "CHATGPT_SUBMIT_UNAVAILABLE",
           deltaCount,
           observedCharacters,
+          outputText: observedText,
         };
       }
 
@@ -568,6 +595,7 @@ export class ChatGptRoute {
             code: "CHATGPT_TASK_PAGE_LOST",
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
         const currentUrl = active.webContents.getURL();
@@ -577,6 +605,7 @@ export class ChatGptRoute {
             code: "CHATGPT_TASK_PAGE_LOST",
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
         const probe = taskProbeSchema.safeParse(
@@ -591,6 +620,7 @@ export class ChatGptRoute {
             code: "CHATGPT_TASK_ERROR",
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
         if (probe.data.signInVisible || probe.data.errorVisible) {
@@ -601,15 +631,34 @@ export class ChatGptRoute {
               : "CHATGPT_TASK_ERROR",
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
         accepted ||=
           probe.data.userCount > prepared.data.baselineUserCount ||
           probe.data.assistantCount > prepared.data.baselineAssistantCount ||
           probe.data.busy;
-        if (probe.data.assistantCharacters > observedCharacters) {
-          observedCharacters = probe.data.assistantCharacters;
+        if (probe.data.assistantText !== observedText) {
+          if (!probe.data.assistantText.startsWith(observedText)) {
+            return {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_OUTPUT_CHANGED",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+          const delta = probe.data.assistantText.slice(observedText.length);
+          observedText = probe.data.assistantText;
+          observedCharacters = observedText.length;
           deltaCount += 1;
+          sequence += 1;
+          await observer.onTextDelta?.({
+            sequence,
+            delta,
+            text: observedText,
+            observedCharacters,
+          });
           stablePolls = 0;
         } else if (
           accepted &&
@@ -632,6 +681,7 @@ export class ChatGptRoute {
             code: null,
             deltaCount,
             observedCharacters,
+            outputText: observedText,
           };
         }
         await delay(pollMs);
@@ -641,6 +691,7 @@ export class ChatGptRoute {
         code: "CHATGPT_TASK_TIMEOUT",
         deltaCount,
         observedCharacters,
+        outputText: observedText,
       };
     } catch {
       const submissionMayHaveOccurred =
@@ -655,6 +706,7 @@ export class ChatGptRoute {
           : "CHATGPT_SUBMIT_UNAVAILABLE",
         deltaCount,
         observedCharacters,
+        outputText: observedText,
       };
     } finally {
       this.taskInFlight = false;
