@@ -13,6 +13,14 @@ export const ProductTaskLifecycleSchema = z.enum([
   "outcome_unknown",
 ]);
 
+export const ProductTaskAgentSchema = z.strictObject({
+  phase: z.enum(["running", "completed", "failed", "outcome_unknown"]),
+  workspaceId: ProductTaskIdentifierSchema,
+  parentDelivery: z.enum(["not_applicable", "pending", "acknowledged"]),
+  workspaceEnforcement: z.enum(["not_applicable", "verified"]),
+  resultAvailable: z.boolean(),
+});
+
 export const ProductTaskSchema = z.strictObject({
   taskId: ProductTaskIdentifierSchema,
   sessionId: ProductTaskIdentifierSchema,
@@ -26,6 +34,7 @@ export const ProductTaskSchema = z.strictObject({
   hasComputer: z.boolean(),
   pinned: z.boolean(),
   lifecycle: ProductTaskLifecycleSchema,
+  agent: ProductTaskAgentSchema.nullable().optional(),
 });
 
 export const ProductTasksStateSchema = z.strictObject({
@@ -86,6 +95,7 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
 
 export type ProductTask = z.infer<typeof ProductTaskSchema>;
 export type ProductTaskLifecycle = z.infer<typeof ProductTaskLifecycleSchema>;
+export type ProductTaskAgent = z.infer<typeof ProductTaskAgentSchema>;
 export type ProductTasksState = z.infer<typeof ProductTasksStateSchema>;
 export type ProductTaskCommand = z.infer<typeof ProductTaskCommandSchema>;
 export type ProductTaskCommandResult = z.infer<

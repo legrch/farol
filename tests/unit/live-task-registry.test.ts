@@ -73,6 +73,30 @@ describe("live task registry", () => {
     });
   });
 
+  it("stores only content-free Agent state on the visible task", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    const agent = {
+      phase: "running" as const,
+      workspaceId: "workspace-a",
+      parentDelivery: "not_applicable" as const,
+      workspaceEnforcement: "not_applicable" as const,
+      resultAvailable: false,
+    };
+
+    expect(registry.setAgent("missing", agent)).toBe(false);
+    expect(registry.setAgent("task-1", agent)).toBe(true);
+    expect(registry.snapshot()).toEqual({
+      revision: 2,
+      tasks: [{ ...candidate(1), agent }],
+    });
+    expect(JSON.stringify(registry.snapshot())).not.toMatch(
+      /objective|assignmentId|authorityId|participantId/iu,
+    );
+    expect(registry.setAgent("task-1", agent)).toBe(true);
+    expect(registry.snapshot().revision).toBe(2);
+  });
+
   it("renames, pins, and closes tasks without changing their identities", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));
