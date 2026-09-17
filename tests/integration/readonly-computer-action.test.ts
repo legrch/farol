@@ -402,6 +402,60 @@ describe("real read-only Computer action", () => {
     });
   });
 
+  it("AUTH-02 refuses an excluded case alias before native execution", async () => {
+    const currentApproval: ComputerApproval = {
+      ...approval(),
+      excludedPaths: [{ workspaceId: "farol", path: `${root}/private` }],
+    };
+    const grant = deriveTaskGrant(
+      currentApproval,
+      {
+        ...admission(),
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "subtree",
+            root: `${root}/PRIVATE`,
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.read"],
+      },
+      clock.now(),
+    );
+    if (!grant.ok) throw new Error(grant.error.code);
+    const participant = createParticipantAuthority(grant.value, {
+      participantId: "agent-alias",
+      role: "agent",
+      mutationOwnership: "none",
+    });
+    if (!participant.ok) throw new Error(participant.error.code);
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: true,
+      value: { kind: "workspace.text", text: "must not run", bytes: 12 },
+    }));
+    const computer = contract([participant.value], currentApproval, {
+      execute,
+    });
+
+    await expect(
+      computer.execute(
+        request(
+          { kind: "workspace.read", relativePath: "secret.txt" },
+          "agent-alias",
+        ),
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "AUTHORITY_PATH_DENIED",
+        source: "computer-approval",
+        retry: "never",
+      },
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("attributes foreign identity and malformed paths without fallback execution", async () => {
     const chain = participants();
     const computer = contract(Object.values(chain), approval());

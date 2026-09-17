@@ -219,6 +219,29 @@ function isWithin(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(`${root}/`);
 }
 
+const exclusionPathComponentCollator = new Intl.Collator("en-US", {
+  usage: "search",
+  sensitivity: "base",
+});
+
+function comparableWithin(root: string, candidate: string): boolean {
+  if (!isCanonicalAbsolutePath(root) || !isCanonicalAbsolutePath(candidate)) {
+    return false;
+  }
+  const rootParts = root.split("/");
+  const candidateParts = candidate.split("/");
+  return (
+    rootParts.length <= candidateParts.length &&
+    rootParts.every(
+      (part, index) =>
+        exclusionPathComponentCollator.compare(
+          part,
+          candidateParts[index] ?? "",
+        ) === 0,
+    )
+  );
+}
+
 function accessIncludes(
   parent: WorkspaceAccess,
   requested: WorkspaceAccess,
@@ -333,11 +356,11 @@ function exclusionAffectsScope(
   if (exclusion.workspaceId !== scope.workspaceId) return false;
   if (scope.mode === "subtree") {
     return (
-      isWithin(scope.root, exclusion.path) ||
-      isWithin(exclusion.path, scope.root)
+      comparableWithin(scope.root, exclusion.path) ||
+      comparableWithin(exclusion.path, scope.root)
     );
   }
-  return scope.paths.some((path) => isWithin(exclusion.path, path));
+  return scope.paths.some((path) => comparableWithin(exclusion.path, path));
 }
 
 function relevantExclusions(
@@ -372,7 +395,8 @@ function deniedBy<Exclusion extends WorkspaceExclusion>(
   return (
     exclusions.find(
       (exclusion) =>
-        exclusion.workspaceId === workspaceId && isWithin(exclusion.path, path),
+        exclusion.workspaceId === workspaceId &&
+        comparableWithin(exclusion.path, path),
     ) ?? null
   );
 }

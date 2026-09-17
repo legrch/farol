@@ -439,6 +439,167 @@ describe("delegated execution authority", () => {
     });
   });
 
+  it("AUTH-02 preserves case and Unicode aliases of exclusions through narrowing", () => {
+    const approvalWithExclusions: ComputerApproval = {
+      ...approval,
+      excludedPaths: [
+        { workspaceId: "farol", path: "/workspace/farol/private" },
+        { workspaceId: "farol", path: "/workspace/farol/Caf\u00e9" },
+      ],
+    };
+    const grant = deriveTaskGrant(
+      approvalWithExclusions,
+      {
+        ...admission,
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "subtree",
+            root: "/workspace/farol/PRIVATE",
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.read"],
+        commands: "none",
+      },
+      1_000,
+    );
+    if (!grant.ok) throw new Error(grant.error.code);
+    expect(grant.value.excludedPaths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "/workspace/farol/private",
+          restrictionSource: "computer-approval",
+        }),
+      ]),
+    );
+    const participant = createParticipantAuthority(grant.value, {
+      participantId: "alias-main",
+      role: "main",
+      mutationOwnership: "none",
+    });
+    if (!participant.ok) throw new Error(participant.error.code);
+    expect(
+      authorizeTaskAction(
+        participant.value,
+        action({
+          kind: "workspace.read",
+          workspaceId: "farol",
+          path: "/workspace/farol/PRIVATE/secret.txt",
+        }),
+        1_000,
+      ),
+    ).toEqual({
+      ok: false,
+      error: {
+        code: "AUTHORITY_PATH_DENIED",
+        source: "computer-approval",
+        retry: "never",
+      },
+    });
+
+    const fullGrant = deriveTaskGrant(approvalWithExclusions, admission, 1_000);
+    if (!fullGrant.ok) throw new Error(fullGrant.error.code);
+    const fullParticipant = createParticipantAuthority(fullGrant.value, {
+      participantId: "unicode-main",
+      role: "main",
+      mutationOwnership: "task",
+    });
+    if (!fullParticipant.ok) throw new Error(fullParticipant.error.code);
+    const narrowed = delegateParticipantAuthority(fullParticipant.value, {
+      participantId: "unicode-agent",
+      role: "agent",
+      mutationOwnership: "none",
+      narrowing: {
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "subtree",
+            root: "/workspace/farol/Cafe\u0301",
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.read"],
+        network: "none",
+        commands: "none",
+      },
+    });
+    if (!narrowed.ok) throw new Error(narrowed.error.code);
+    expect(narrowed.value.grant.excludedPaths).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "/workspace/farol/Caf\u00e9" }),
+      ]),
+    );
+    expect(
+      authorizeTaskAction(
+        narrowed.value,
+        action({
+          kind: "workspace.read",
+          workspaceId: "farol",
+          path: "/workspace/farol/Cafe\u0301/secret.md",
+        }),
+        1_000,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_PATH_DENIED" },
+    });
+
+    const sibling = delegateParticipantAuthority(fullParticipant.value, {
+      participantId: "case-sensitive-sibling",
+      role: "agent",
+      mutationOwnership: "none",
+      narrowing: {
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "subtree",
+            root: "/workspace/farol/PRIVATE-docs",
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.read"],
+        network: "none",
+        commands: "none",
+      },
+    });
+    if (!sibling.ok) throw new Error(sibling.error.code);
+    expect(
+      authorizeTaskAction(
+        sibling.value,
+        action({
+          kind: "workspace.read",
+          workspaceId: "farol",
+          path: "/workspace/farol/PRIVATE-docs/readme.md",
+        }),
+        1_000,
+      ),
+    ).toMatchObject({ ok: true });
+
+    expect(
+      deriveTaskGrant(
+        approvalWithExclusions,
+        {
+          ...admission,
+          workspaces: [
+            {
+              workspaceId: "farol",
+              mode: "subtree",
+              root: "/workspace/FAROL",
+              access: "read",
+            },
+          ],
+          capabilities: ["workspace.read"],
+          commands: "none",
+        },
+        1_000,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_INFLATION_DENIED" },
+    });
+  });
+
   it("DAC-07 intersects native host authority instead of upgrading it to Computer authority", () => {
     const nativeHost: NativeHostAuthority = {
       hostTaskId: "host-task-a",
