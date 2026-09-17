@@ -31,6 +31,7 @@ export type CodexAppServerClientOptions = Readonly<{
   clientInfo: Readonly<{ name: string; version: string }>;
   requestTimeoutMs?: number;
   maxFrameBytes?: number;
+  shutdownTimeoutMs?: number;
 }>;
 
 type ServerRequestHandler = (params: unknown) => Promise<unknown>;
@@ -38,6 +39,7 @@ type ServerNotificationHandler = (params: unknown) => void;
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_FRAME_BYTES = 2 * 1_024 * 1_024;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 1_000;
 
 function protocolError(code: string): Error {
   return new Error(code);
@@ -68,11 +70,17 @@ export class CodexAppServerClient {
   >();
   private readonly requestTimeoutMs: number;
   private readonly maxFrameBytes: number;
+  private readonly shutdownTimeoutMs: number;
+  private readonly exited: Promise<void>;
+  private resolveExit!: () => void;
   private nextId = 1;
   private buffer = "";
   private closed = false;
   private initialized = false;
   private ready = false;
+  private processExited = false;
+  private forcedKillIssued = false;
+  private closing: Promise<void> | null = null;
 
   constructor(
     private readonly process: CodexAppServerProcess,
@@ -81,17 +89,28 @@ export class CodexAppServerClient {
     this.requestTimeoutMs =
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+    this.shutdownTimeoutMs =
+      options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this.exited = new Promise((resolve) => {
+      this.resolveExit = resolve;
+    });
     if (
       !Number.isSafeInteger(this.requestTimeoutMs) ||
       this.requestTimeoutMs < 1 ||
       !Number.isSafeInteger(this.maxFrameBytes) ||
-      this.maxFrameBytes < 64
+      this.maxFrameBytes < 64 ||
+      !Number.isSafeInteger(this.shutdownTimeoutMs) ||
+      this.shutdownTimeoutMs < 1
     ) {
       throw protocolError("CODEX_APP_SERVER_OPTIONS_INVALID");
     }
     process.stdout.setEncoding("utf8");
     process.stdout.on("data", (chunk: string) => this.receive(chunk));
-    process.on("exit", () => this.fail("CODEX_APP_SERVER_EXITED", false));
+    process.on("exit", () => {
+      this.processExited = true;
+      this.resolveExit();
+      this.fail("CODEX_APP_SERVER_EXITED", false);
+    });
     process.on("error", () => this.fail("CODEX_APP_SERVER_FAILED", true));
   }
 
@@ -186,11 +205,45 @@ export class CodexAppServerClient {
   }
 
   async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    this.rejectPending("CODEX_APP_SERVER_CLOSED");
-    this.process.stdin.end();
-    this.process.kill("SIGTERM");
+    if (!this.closing) this.closing = this.shutdown();
+    return this.closing;
+  }
+
+  private async shutdown(): Promise<void> {
+    const wasClosed = this.closed;
+    if (!this.closed) {
+      this.closed = true;
+      this.rejectPending("CODEX_APP_SERVER_CLOSED");
+      this.process.stdin.end();
+    }
+    if (this.processExited) return;
+    if (wasClosed) {
+      this.forcedKillIssued = true;
+      this.process.kill("SIGKILL");
+    } else {
+      this.process.kill("SIGTERM");
+    }
+    if (await this.waitForExit()) return;
+    if (!this.forcedKillIssued) {
+      this.forcedKillIssued = true;
+      this.process.kill("SIGKILL");
+    }
+    if (await this.waitForExit()) return;
+    throw protocolError("CODEX_APP_SERVER_SHUTDOWN_UNCONFIRMED");
+  }
+
+  private waitForExit(): Promise<boolean> {
+    if (this.processExited) return Promise.resolve(true);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), this.shutdownTimeoutMs);
+      timer.unref?.();
+    });
+    return Promise.race([this.exited.then(() => true as const), timeout]).finally(
+      () => {
+        if (timer) clearTimeout(timer);
+      },
+    );
   }
 
   private write(message: unknown): void {
@@ -299,7 +352,10 @@ export class CodexAppServerClient {
     if (this.closed) return;
     this.closed = true;
     this.rejectPending(code);
-    if (kill) this.process.kill("SIGKILL");
+    if (kill) {
+      this.forcedKillIssued = true;
+      this.process.kill("SIGKILL");
+    }
   }
 
   private rejectPending(code: string): void {

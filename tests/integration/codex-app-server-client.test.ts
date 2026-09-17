@@ -13,10 +13,21 @@ class FakeProcess extends EventEmitter implements CodexAppServerProcess {
   readonly stderr = new PassThrough();
   readonly pid = 42;
   killed = false;
+  readonly signals: NodeJS.Signals[] = [];
 
-  kill(): boolean {
+  kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
     this.killed = true;
-    this.emit("exit", 0, "SIGTERM");
+    this.signals.push(signal);
+    this.emit("exit", 0, signal);
+    return true;
+  }
+}
+
+class StubbornProcess extends FakeProcess {
+  override kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
+    this.killed = true;
+    this.signals.push(signal);
+    if (signal === "SIGKILL") this.emit("exit", null, signal);
     return true;
   }
 }
@@ -79,6 +90,19 @@ describe("Codex App Server client", () => {
 
     await client.close();
     expect(process.killed).toBe(true);
+  });
+
+  it("waits for exit and escalates a stuck native host from TERM to KILL", async () => {
+    const process = new StubbornProcess();
+    const client = new CodexAppServerClient(process, {
+      requestTimeoutMs: 1_000,
+      shutdownTimeoutMs: 5,
+      clientInfo: { name: "farol-next", version: "0.1.0" },
+    });
+
+    await client.close();
+
+    expect(process.signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 
   it("answers one exactly correlated dynamic tool request", async () => {
