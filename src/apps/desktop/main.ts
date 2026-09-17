@@ -20,6 +20,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
+import type { ContextBinding } from "../../modules/chat/domain/context-continuity";
+import { buildHostCompactionHandoff } from "../../modules/chat/infra/client/host-compaction-codec";
 import {
   ProductTaskCommandResultSchema,
   ProductTaskCommandSchema,
@@ -29,6 +31,11 @@ import {
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry } from "./live-task-registry";
+import { toProductTaskContext } from "./context-task-state";
+import {
+  createCodexContextController,
+  type CodexContextController,
+} from "./codex-context-runtime";
 import { channels } from "../../pkg/ipc/channels";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
@@ -176,6 +183,9 @@ const startupDelayMs = previewStartupDelay(
   process.env.FAROL_NEXT_E2E === "1",
 );
 const demoMode = process.argv.includes("--demo");
+const contextOwnerId = "owner-desktop";
+const contextProviderProfileId = "profile-isolated-next";
+const contextModel = "farol-next/mind" as const;
 const windowMode = parsePreviewWindowMode(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
 const demoTasks = [
@@ -222,7 +232,12 @@ const readySchema = z.strictObject({
 });
 const controlSchema = z.strictObject({
   taskId: z.string(),
-  action: z.enum(["release-tool", "finish-demo"]),
+  action: z.enum([
+    "release-tool",
+    "finish-demo",
+    "compact-context-fixture",
+    "confirm-context-fixture",
+  ]),
 });
 
 type RuntimeReady = z.infer<typeof readySchema>;
@@ -245,6 +260,7 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
+let codexContextController: CodexContextController | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const liveTaskConversationUrls = new Map<string, string | null>();
@@ -757,6 +773,63 @@ function createLiveChatGptRoute(
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
+  });
+}
+
+function contextBinding(taskId: string): ContextBinding {
+  return {
+    ownerId: contextOwnerId,
+    taskId,
+    hostThreadId: taskId,
+    sessionId: taskId,
+    providerProfileId: contextProviderProfileId,
+    modelId: contextModel,
+    mode: "mind",
+  };
+}
+
+function createContextSummaryFallbackRoute(
+  binding: ContextBinding,
+): ChatGptRoute {
+  let initialUrl = chatGptHomeUrl;
+  if (chatGptE2eOrigin !== null) {
+    const fixtureUrl = new URL(initialUrl);
+    fixtureUrl.searchParams.set("farol-e2e-task", `context-${binding.taskId}`);
+    initialUrl = fixtureUrl.href;
+  }
+  return new ChatGptRoute({
+    homeUrl: chatGptHomeUrl,
+    initialUrl,
+    e2eOrigin: chatGptE2eOrigin,
+    parent: () => window,
+    title: "Context recovery · Farol Next",
+    ...(process.env.FAROL_NEXT_E2E === "1"
+      ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
+      : {}),
+  });
+}
+
+function initializeCodexContextController(): void {
+  codexContextController = createCodexContextController({
+    ownerId: contextOwnerId,
+    providerProfileId: contextProviderProfileId,
+    stateRoot: contextContinuityRoot(),
+    summaryRoutes: {
+      retained: (binding) => liveTaskRoutes.get(binding.taskId) ?? null,
+      createFallback: createContextSummaryFallbackRoute,
+    },
+    onContextStateChanged: async (session) => {
+      if (
+        !liveTaskRegistry.setContext(
+          session.binding.taskId,
+          toProductTaskContext(session),
+        )
+      ) {
+        return;
+      }
+      await persistLiveTaskState();
+      publishTasksState();
+    },
   });
 }
 
@@ -1499,6 +1572,14 @@ function chatGptConversationStoreRoot(): string {
 
 function liveTaskStoreRoot(): string {
   return path.join(app.getPath("userData"), "farol-next-state", "live-tasks");
+}
+
+function contextContinuityRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "context-continuity",
+  );
 }
 
 function secureMcpConnectorRoot(): string {
@@ -4664,6 +4745,132 @@ async function runtimeJson(
   return response.ok ? value : { ok: false, status: response.status, value };
 }
 
+function contextFixtureHistory(epoch: number): readonly unknown[] {
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "Keep every change local until owner review.",
+        },
+      ],
+    },
+    {
+      type: "function_call_output",
+      call_id: `context-receipt-${epoch}`,
+      output: `receipt-context-epoch-${epoch}`,
+    },
+    {
+      type: "function_call_output",
+      call_id: `context-unknown-${epoch}`,
+      output: "outcome_unknown",
+    },
+    {
+      type: "message",
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: "Use report-v2.md; report-v1.md is obsolete. Never publish, push, sign, or release.",
+        },
+      ],
+    },
+  ];
+}
+
+async function runContextFixtureControl(
+  taskId: string,
+  action: "compact-context-fixture" | "confirm-context-fixture",
+): Promise<unknown> {
+  if (process.env.FAROL_NEXT_E2E !== "1" || demoMode) {
+    return { error: "IPC_CONTROL_INVALID" };
+  }
+  const task = liveTaskRegistry.get(taskId);
+  const controller = codexContextController;
+  if (!task || task.provider !== "chatgpt" || !controller) {
+    return { error: "CONTEXT_FIXTURE_UNAVAILABLE" };
+  }
+  const binding = contextBinding(taskId);
+  if (action === "compact-context-fixture") {
+    const epoch = task.context?.phase === "active" ? task.context.epoch : 1;
+    const compacted = await controller.continuity.compact({
+      endpoint: "responses_compact",
+      body: {
+        model: contextModel,
+        input: contextFixtureHistory(epoch),
+      },
+      metadataHeader: JSON.stringify({
+        thread_id: taskId,
+        turn_id: `${task.turnId}-context-compact-${epoch}`,
+      }),
+    });
+    return compacted.ok
+      ? {
+          ok: true,
+          phase: liveTaskRegistry.get(taskId)?.context?.phase ?? null,
+        }
+      : { error: compacted.error.code };
+  }
+
+  const session = await controller.store.load(binding);
+  const operation = session?.operation;
+  if (
+    !session ||
+    session.phase !== "handoff_offered" ||
+    !operation?.checkpointId
+  ) {
+    return { error: "CONTEXT_FIXTURE_CONFIRMATION_UNAVAILABLE" };
+  }
+  const [checkpoint, source] = await Promise.all([
+    controller.store.get(binding, operation.checkpointId),
+    controller.store.getSource(binding, operation.operationId),
+  ]);
+  if (!checkpoint || !source) {
+    return { error: "CONTEXT_FIXTURE_CONFIRMATION_UNAVAILABLE" };
+  }
+  const handoff = buildHostCompactionHandoff(
+    {
+      variant: source.variant,
+      identity: {
+        threadId: taskId,
+        turnId: `${task.turnId}-context-compact-${session.epoch}`,
+        modelId: contextModel,
+      },
+      sourceBoundary: source.sourceBoundary,
+      history: source.history,
+    },
+    checkpoint,
+    {
+      maximumCheckpointContentBytes: 256 * 1_024,
+      retainedTailMaximumBytes: 64 * 1_024,
+    },
+  );
+  if (!handoff.ok) return { error: handoff.error.code };
+  const input =
+    handoff.value.variant === "unary_replacement_history"
+      ? handoff.value.response.output
+      : [handoff.value.item];
+  const confirmed = await controller.continuity.prepareTurn({
+    body: {
+      model: contextModel,
+      input,
+      client_metadata: {
+        session_id: taskId,
+        thread_id: taskId,
+        turn_id: `${task.turnId}-context-confirm-${session.epoch}`,
+      },
+    },
+  });
+  return confirmed.ok
+    ? {
+        ok: true,
+        phase: liveTaskRegistry.get(taskId)?.context?.phase ?? null,
+      }
+    : { error: confirmed.error.code };
+}
+
 function installIpc(): void {
   ipcMain.handle(channels.bootstrap, (event) =>
     event.sender === window?.webContents
@@ -4689,6 +4896,13 @@ function installIpc(): void {
     if (event.sender !== window?.webContents)
       return { error: "IPC_SENDER_DENIED" };
     const parsed = controlSchema.safeParse(value);
+    if (
+      parsed.success &&
+      (parsed.data.action === "compact-context-fixture" ||
+        parsed.data.action === "confirm-context-fixture")
+    ) {
+      return runContextFixtureControl(parsed.data.taskId, parsed.data.action);
+    }
     if (
       !parsed.success ||
       !expectedTasks.some((task) => task.taskId === parsed.data.taskId)
@@ -5020,6 +5234,7 @@ async function main(): Promise<void> {
       : {}),
   });
   await initializeLiveTaskState();
+  initializeCodexContextController();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
     section = configured.settings.general.openAtLaunch;

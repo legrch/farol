@@ -727,11 +727,42 @@ async function startChatGptFixture() {
             attachmentInput.value = '';
             attachmentChips.replaceChildren();
             stop.hidden = false;
-            const chunks = [
-              'The selected file reports a bounded workspace verification. ',
-              'It contains one concrete status line. ',
-              'Action: keep the read-only boundary in place.'
-            ];
+            const contextSummary = userText.startsWith('Preserve the current task context for a safe continuation.');
+            const checkpoint = {
+              goal: 'Complete the context continuity acceptance safely.',
+              activeConstraints: [
+                'Keep every change local until owner review.',
+                'Never publish, push, sign, or release.'
+              ],
+              latestCorrections: ['Use report-v2.md; report-v1.md is obsolete.'],
+              keyDecisions: ['Observe unknown external effects before another mutation.'],
+              completedWork: [{
+                description: 'Retained the completed local checkpoint receipt.',
+                evidenceRefs: ['receipt-context-epoch-1']
+              }],
+              unfinishedWork: ['Confirm the host handoff and continue safely.'],
+              unresolvedQuestions: ['Did the unknown external operation complete?'],
+              unknownOutcomes: [{
+                operationRef: 'context-unknown-1',
+                description: 'The external effect remains unknown and must not be repeated.'
+              }],
+              artifactRefs: [{
+                reference: 'artifact:report-v2.md',
+                availability: 'available'
+              }],
+              attachmentRefs: [{
+                reference: 'attachment:context-evidence-1',
+                availability: 'unavailable'
+              }],
+              nextSafeStep: 'Confirm the exact host context, then observe the unknown operation.'
+            };
+            const chunks = contextSummary
+              ? [JSON.stringify(checkpoint)]
+              : [
+                  'The selected file reports a bounded workspace verification. ',
+                  'It contains one concrete status line. ',
+                  'Action: keep the read-only boundary in place.'
+                ];
             localStorage.setItem(conversationStorageKey, JSON.stringify({
               user: userText,
               assistant: chunks.join('')
@@ -3132,6 +3163,101 @@ try {
   assert.equal((await fs.stat(liveTaskRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(liveTaskPath)).mode & 0o777, 0o600);
 
+  await ordinaryLiveTasks.window.evaluate((taskId) => {
+    window.__farolContextFixtureResult = null;
+    void window.farolNext
+      .control(taskId, "compact-context-fixture")
+      .then((result) => {
+        window.__farolContextFixtureResult = result;
+      });
+  }, pinnedTask.taskId);
+  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
+    const state = await window.farolNext.bootstrap();
+    return (
+      state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
+        "checkpoint_requested" &&
+      document.querySelector("#dossier-state b")?.textContent ===
+        "PRESERVING CONTEXT"
+    );
+  }, pinnedTask.taskId);
+  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
+    const state = await window.farolNext.bootstrap();
+    return (
+      window.__farolContextFixtureResult !== null &&
+      state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
+        "handoff_offered"
+    );
+  }, pinnedTask.taskId);
+  assert.deepEqual(
+    await ordinaryLiveTasks.window.evaluate(
+      () => window.__farolContextFixtureResult,
+    ),
+    { ok: true, phase: "handoff_offered" },
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#dossier-state b").innerText(),
+    "INSTALLING CONTEXT",
+  );
+  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+  await ordinaryLiveTasks.window
+    .locator("#task-menu")
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await ordinaryLiveTasks.window
+      .locator("#task-menu-close-task")
+      .isDisabled(),
+    true,
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#task-menu-agent").isDisabled(),
+    true,
+  );
+  assert.match(
+    await ordinaryLiveTasks.window.locator("#task-menu-note").innerText(),
+    /Installing context is still active/u,
+  );
+  await ordinaryLiveTasks.window.screenshot({
+    path: path.join(evidenceRoot, "live-task-context-handoff.png"),
+  });
+  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+
+  const handoffLiveTaskText = await fs.readFile(liveTaskPath, "utf8");
+  const handoffLiveTaskRecord = JSON.parse(handoffLiveTaskText);
+  const handoffTask = handoffLiveTaskRecord.tasks.find(
+    (task) => task.taskId === pinnedTask.taskId,
+  );
+  assert.ok(handoffTask);
+  assert.deepEqual(handoffTask.context, {
+    epoch: 1,
+    phase: "handoff_offered",
+    source: "retained_agent",
+    code: null,
+  });
+  assert.equal(handoffTask.conversationUrl, retainedLiveConversationUrl);
+  assert.doesNotMatch(
+    handoffLiveTaskText,
+    /Keep every change local|report-v2\.md|unknown external operation/iu,
+  );
+  const contextRoot = path.join(
+    ordinaryLiveTasks.userData,
+    "farol-next-state",
+    "context-continuity",
+  );
+  const contextTaskRoot = path.join(contextRoot, "tasks");
+  const contextTaskDirectories = await fs.readdir(contextTaskRoot);
+  assert.equal(contextTaskDirectories.length, 1);
+  const contextTaskDirectory = path.join(
+    contextTaskRoot,
+    contextTaskDirectories[0],
+  );
+  assert.equal((await fs.stat(contextRoot)).mode & 0o777, 0o700);
+  assert.equal((await fs.stat(contextTaskDirectory)).mode & 0o777, 0o700);
+  assert.equal(
+    (await fs.stat(path.join(contextTaskDirectory, "session.json"))).mode &
+      0o777,
+    0o600,
+  );
+
   await restart(ordinaryLiveTasks);
   await ordinaryLiveTasks.window.waitForFunction(
     () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
@@ -3140,10 +3266,10 @@ try {
   const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
-  assert.equal(recoveredState.taskRevision, liveTaskRecord.revision);
+  assert.equal(recoveredState.taskRevision, handoffLiveTaskRecord.revision);
   assert.deepEqual(
     recoveredState.tasks,
-    liveTaskRecord.tasks.map(
+    handoffLiveTaskRecord.tasks.map(
       ({ conversationUrl: _conversationUrl, ...task }) => task,
     ),
   );
@@ -3157,22 +3283,75 @@ try {
     (surface) =>
       surface.url === retainedLiveConversationUrl &&
       surface.hostVisible &&
-      surface.state.userText === continuityPrompt &&
-      surface.state.assistantText.includes(
-        "keep the read-only boundary in place",
-      ),
-    "retained embedded task after process restart",
+      surface.state.userText.startsWith(
+        "Preserve the current task context for a safe continuation.",
+      ) &&
+      surface.state.assistantText.includes('"nextSafeStep"'),
+    "retained context handoff after process restart",
   );
-  assert.equal(reopenedContinuitySurface.state.userText, continuityPrompt);
+  assert.match(
+    reopenedContinuitySurface.state.userText,
+    /^Preserve the current task context for a safe continuation\./u,
+  );
   assert.match(
     reopenedContinuitySurface.state.assistantText,
-    /keep the read-only boundary in place/u,
+    /"unknownOutcomes"/u,
   );
   assert.equal(
     await ordinaryLiveTasks.application.evaluate(
       ({ BrowserWindow }) => BrowserWindow.getAllWindows().length,
     ),
     1,
+  );
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#dossier-state b").innerText(),
+    "INSTALLING CONTEXT",
+  );
+  const confirmedContext = await ordinaryLiveTasks.window.evaluate(
+    (taskId) => window.farolNext.control(taskId, "confirm-context-fixture"),
+    pinnedTask.taskId,
+  );
+  assert.deepEqual(confirmedContext, { ok: true, phase: "active" });
+  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
+    const state = await window.farolNext.bootstrap();
+    const task = state.tasks.find((candidate) => candidate.taskId === taskId);
+    return task?.context?.phase === "active" && task.context.epoch === 2;
+  }, pinnedTask.taskId);
+  assert.equal(
+    await ordinaryLiveTasks.window.locator("#dossier-state b").innerText(),
+    "COMPLETE",
+  );
+  const activeLiveTaskRecord = JSON.parse(
+    await fs.readFile(liveTaskPath, "utf8"),
+  );
+  const activeContextTask = activeLiveTaskRecord.tasks.find(
+    (task) => task.taskId === pinnedTask.taskId,
+  );
+  assert.ok(activeContextTask);
+  assert.deepEqual(activeContextTask.context, {
+    epoch: 2,
+    phase: "active",
+    source: "retained_agent",
+    code: null,
+  });
+  assert.equal(activeContextTask.conversationUrl, null);
+  assert.equal(
+    (await fs.readdir(path.join(contextTaskDirectory, "sources"))).length,
+    0,
+  );
+  assert.equal(
+    (await fs.readdir(path.join(contextTaskDirectory, "summaries"))).length,
+    0,
+  );
+  await ordinaryLiveTasks.window.locator("#dossier-route").click();
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    pinnedTask.taskId,
+    (surface) =>
+      surface.hostVisible &&
+      new URL(surface.url).pathname === "/chatgpt" &&
+      !surface.state.userText.includes("Preserve the current task context"),
+    "retired context source opens a fresh provider page",
   );
   cases.push(
     "ordinary-new-task-opens-actual-chatgpt-surface",
@@ -3194,6 +3373,9 @@ try {
     "live-task-native-agent-result-delivery-acknowledged",
     "live-task-native-agent-private-input",
     "live-task-native-agent-content-free-recovery",
+    "live-task-context-preservation-visible",
+    "live-task-context-handoff-survives-restart",
+    "live-task-context-confirmation-retires-source",
   );
 } finally {
   await close(ordinaryLiveTasks);
