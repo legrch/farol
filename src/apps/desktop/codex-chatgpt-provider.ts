@@ -11,6 +11,12 @@ import {
 } from "node:crypto";
 import { once } from "node:events";
 import { z } from "zod";
+import type { Result } from "../../pkg/kernel/domain/result";
+import type {
+  HostCompactionEndpoint,
+  HostCompactionErrorCode,
+  HostCompactionHandoff,
+} from "../../modules/chat/infra/client/host-compaction-codec";
 import {
   canonicalJson,
   CodexNativeToolRegistry,
@@ -85,6 +91,16 @@ export type CodexChatGptConversation = Readonly<{
   ): Promise<CodexChatGptConversationResult>;
 }>;
 
+export type CodexChatGptCompaction = Readonly<{
+  compact(
+    input: Readonly<{
+      endpoint: HostCompactionEndpoint;
+      body: unknown;
+      metadataHeader: string | undefined;
+    }>,
+  ): Promise<Result<HostCompactionHandoff, HostCompactionErrorCode>>;
+}>;
+
 export type CodexChatGptProviderRuntime = Readonly<{
   providerId: "farol-next";
   model: string;
@@ -97,6 +113,7 @@ export type CodexChatGptProviderRuntime = Readonly<{
     failedRequests: number;
     activeTurns: number;
     toolCalls: number;
+    compactionRequests: number;
     lastRefusalCode: string | null;
   }>;
   close(): Promise<void>;
@@ -106,10 +123,34 @@ type ProviderOptions = Readonly<{
   model: string;
   token: string;
   conversation: CodexChatGptConversation;
+  compaction?: CodexChatGptCompaction;
 }>;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function compactionTrigger(candidate: unknown): boolean {
+  return (
+    record(candidate) &&
+    Object.keys(candidate).length === 1 &&
+    candidate.type === "compaction_trigger"
+  );
+}
+
+function streamedCompactionRequest(candidate: unknown): boolean {
+  return (
+    record(candidate) &&
+    Array.isArray(candidate.input) &&
+    compactionTrigger(candidate.input.at(-1))
+  );
+}
+
+function compactionMetadataHeader(
+  request: IncomingMessage,
+): string | undefined {
+  const value = request.headers["x-codex-turn-metadata"];
+  return typeof value === "string" ? value : undefined;
 }
 
 function authorized(request: IncomingMessage, token: string): boolean {
@@ -794,32 +835,13 @@ class ActiveProviderTurn {
 }
 
 async function handleResponses(
-  request: IncomingMessage,
+  raw: unknown,
   response: ServerResponse,
   options: ProviderOptions,
   turns: Map<string, ActiveProviderTurn>,
   onToolCallObserved: () => void,
   onRefusal: (code: string) => void,
 ): Promise<void> {
-  if (
-    request.headers["content-type"]?.split(";", 1)[0] !== "application/json"
-  ) {
-    refusal(response, 415, "FAROL_NEXT_CONTENT_TYPE_INVALID");
-    return;
-  }
-  let raw: unknown;
-  try {
-    raw = await readBody(request);
-  } catch (error) {
-    const code =
-      error instanceof Error ? error.message : "FAROL_NEXT_REQUEST_INVALID";
-    refusal(
-      response,
-      code === "FAROL_NEXT_REQUEST_TOO_LARGE" ? 413 : 400,
-      code,
-    );
-    return;
-  }
   const parsed = responseRequestSchema.safeParse(raw);
   if (!parsed.success) {
     refusal(response, 400, "FAROL_NEXT_REQUEST_INVALID");
@@ -906,6 +928,97 @@ async function handleResponses(
   }
 }
 
+async function handleCompaction(
+  endpoint: HostCompactionEndpoint,
+  raw: unknown,
+  request: IncomingMessage,
+  response: ServerResponse,
+  options: ProviderOptions,
+): Promise<void> {
+  if (!options.compaction) {
+    refusal(response, 501, "FAROL_NEXT_COMPACTION_UNAVAILABLE");
+    return;
+  }
+  const result = await options.compaction.compact({
+    endpoint,
+    body: structuredClone(raw),
+    metadataHeader: compactionMetadataHeader(request),
+  });
+  if (!result.ok) {
+    refusal(response, 422, result.error.code);
+    return;
+  }
+  const handoff = result.value;
+  if (
+    (endpoint === "responses_compact" &&
+      handoff.variant !== "unary_replacement_history") ||
+    (endpoint === "responses" && handoff.variant !== "streamed_compaction_item")
+  ) {
+    refusal(response, 500, "FAROL_NEXT_COMPACTION_RESULT_INVALID");
+    return;
+  }
+  if (handoff.variant === "unary_replacement_history") {
+    json(response, 200, handoff.response);
+    return;
+  }
+
+  const responseId = `resp_${randomUUID()}`;
+  startStream(response);
+  await writeEvent(response, "response.created", {
+    type: "response.created",
+    response: {
+      id: responseId,
+      model: options.model,
+      status: "in_progress",
+      output: [],
+    },
+  });
+  await writeEvent(response, "response.output_item.added", {
+    type: "response.output_item.added",
+    output_index: 0,
+    item: handoff.item,
+  });
+  await writeEvent(response, "response.output_item.done", {
+    type: "response.output_item.done",
+    output_index: 0,
+    item: handoff.item,
+  });
+  await writeEvent(response, "response.completed", {
+    type: "response.completed",
+    response: {
+      id: responseId,
+      model: options.model,
+      status: "completed",
+      output: [handoff.item],
+    },
+  });
+  response.end();
+}
+
+async function readProviderBody(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<Readonly<{ ok: true; value: unknown }> | Readonly<{ ok: false }>> {
+  if (
+    request.headers["content-type"]?.split(";", 1)[0] !== "application/json"
+  ) {
+    refusal(response, 415, "FAROL_NEXT_CONTENT_TYPE_INVALID");
+    return { ok: false };
+  }
+  try {
+    return { ok: true, value: await readBody(request) };
+  } catch (error) {
+    const code =
+      error instanceof Error ? error.message : "FAROL_NEXT_REQUEST_INVALID";
+    refusal(
+      response,
+      code === "FAROL_NEXT_REQUEST_TOO_LARGE" ? 413 : 400,
+      code,
+    );
+    return { ok: false };
+  }
+}
+
 export async function startCodexChatGptProvider(
   options: ProviderOptions,
 ): Promise<CodexChatGptProviderRuntime> {
@@ -923,6 +1036,7 @@ export async function startCodexChatGptProvider(
   let unauthorizedRequests = 0;
   let failedRequests = 0;
   let toolCalls = 0;
+  let compactionRequests = 0;
   let lastRefusalCode: string | null = null;
   const turns = new Map<string, ActiveProviderTurn>();
   const server = createServer((request, response) => {
@@ -941,10 +1055,33 @@ export async function startCodexChatGptProvider(
         });
         return;
       }
-      if (request.method === "POST" && url.pathname === "/v1/responses") {
+      if (
+        request.method === "POST" &&
+        (url.pathname === "/v1/responses" ||
+          url.pathname === "/v1/responses/compact")
+      ) {
+        const body = await readProviderBody(request, response);
+        if (!body.ok) return;
+        const endpoint =
+          url.pathname === "/v1/responses/compact"
+            ? "responses_compact"
+            : streamedCompactionRequest(body.value)
+              ? "responses"
+              : null;
+        if (endpoint !== null) {
+          compactionRequests += 1;
+          await handleCompaction(
+            endpoint,
+            body.value,
+            request,
+            response,
+            options,
+          );
+          return;
+        }
         responseRequests += 1;
         await handleResponses(
-          request,
+          body.value,
           response,
           options,
           turns,
@@ -987,6 +1124,7 @@ export async function startCodexChatGptProvider(
       failedRequests,
       activeTurns: turns.size,
       toolCalls,
+      compactionRequests,
       lastRefusalCode,
     }),
     close: async () => {

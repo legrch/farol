@@ -80,6 +80,23 @@ function toolRequestBody() {
   };
 }
 
+function compactionHistory() {
+  return [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "Keep the latest constraint." }],
+    },
+  ];
+}
+
+function compactionMetadata() {
+  return JSON.stringify({
+    thread_id: "thread-route-b",
+    turn_id: "turn-compact-1",
+  });
+}
+
 describe("Farol Next Codex to ChatGPT provider transport", () => {
   let runtime: CodexChatGptProviderRuntime | null = null;
 
@@ -327,6 +344,119 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       activeTurns: 0,
       toolCalls: 1,
     });
+  });
+
+  it("routes unary and streamed host compaction through the summary-only adapter", async () => {
+    const conversation: CodexChatGptConversation = { run: vi.fn() };
+    const compact = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          variant: "unary_replacement_history" as const,
+          response: {
+            output: [
+              {
+                type: "message",
+                role: "user",
+                content: [
+                  { type: "input_text", text: "Validated compact context" },
+                ],
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          variant: "streamed_compaction_item" as const,
+          item: {
+            type: "compaction" as const,
+            encrypted_content: "farol-next-checkpoint-v1:fixture",
+          },
+        },
+      });
+    const options = {
+      model: "farol-next/mind",
+      token: "route-b-test-token",
+      conversation,
+      compaction: { compact },
+    };
+    runtime = await startCodexChatGptProvider(options);
+
+    const unaryBody = {
+      model: "farol-next/mind",
+      input: compactionHistory(),
+    };
+    const unary = await fetch(`${runtime.baseUrl}/v1/responses/compact`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+        "x-codex-turn-metadata": compactionMetadata(),
+      },
+      body: JSON.stringify(unaryBody),
+    });
+    expect(unary.status).toBe(200);
+    await expect(unary.json()).resolves.toEqual({
+      output: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Validated compact context" }],
+        },
+      ],
+    });
+
+    const streamedBody = {
+      model: "farol-next/mind",
+      stream: true,
+      input: [...compactionHistory(), { type: "compaction_trigger" }],
+    };
+    const streamed = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+        "x-codex-turn-metadata": compactionMetadata(),
+      },
+      body: JSON.stringify(streamedBody),
+    });
+    expect(streamed.status).toBe(200);
+    const stream = new SseReader(streamed);
+    await expect(stream.until("response.output_item.done")).resolves.toEqual({
+      type: "response.output_item.done",
+      output_index: 0,
+      item: {
+        type: "compaction",
+        encrypted_content: "farol-next-checkpoint-v1:fixture",
+      },
+    });
+    await expect(stream.until("response.completed")).resolves.toMatchObject({
+      response: {
+        model: "farol-next/mind",
+        status: "completed",
+        output: [
+          {
+            type: "compaction",
+            encrypted_content: "farol-next-checkpoint-v1:fixture",
+          },
+        ],
+      },
+    });
+
+    expect(compact).toHaveBeenNthCalledWith(1, {
+      endpoint: "responses_compact",
+      body: unaryBody,
+      metadataHeader: compactionMetadata(),
+    });
+    expect(compact).toHaveBeenNthCalledWith(2, {
+      endpoint: "responses",
+      body: streamedBody,
+      metadataHeader: compactionMetadata(),
+    });
+    expect(conversation.run).not.toHaveBeenCalled();
   });
 
   it("refuses unauthenticated and unsupported-model requests before dispatch", async () => {
