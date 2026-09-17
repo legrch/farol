@@ -3183,7 +3183,8 @@ try {
   await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
     const state = await window.farolNext.bootstrap();
     return (
-      window.__farolContextFixtureResult !== null &&
+      window.__farolContextFixtureResult?.ok === true &&
+      window.__farolContextFixtureResult?.phase === "handoff_offered" &&
       state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
         "handoff_offered"
     );
