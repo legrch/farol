@@ -4151,11 +4151,13 @@ try {
   const expiringAgentState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
-  assert.equal(
-    expiringAgentState.tasks.find(
-      (task) => task.taskId === agentCancellationTask.taskId,
-    )?.agent?.phase,
-    "running",
+  const expiringAgentTask = expiringAgentState.tasks.find(
+    (task) => task.taskId === agentCancellationTask.taskId,
+  );
+  assert.equal(expiringAgentTask?.agent?.phase, "running");
+  assert.match(
+    expiringAgentTask.agent.assignmentBindingSha256,
+    /^[a-f0-9]{64}$/u,
   );
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
   const expiringInputEnvelope = JSON.parse(
@@ -4168,6 +4170,19 @@ try {
   assert.match(
     expiringInputEnvelope.input.objective,
     /persisted authority expires/u,
+  );
+  assert.equal(
+    createHash("sha256")
+      .update(
+        JSON.stringify([
+          "farol-product-agent-binding-v1",
+          expiringInputEnvelope.input.taskId,
+          expiringInputEnvelope.input.sessionId,
+          expiringInputEnvelope.input.assignmentId,
+        ]),
+      )
+      .digest("hex"),
+    expiringAgentTask.agent.assignmentBindingSha256,
   );
   expiringInputEnvelope.input.expiresAt = Date.now() - 1_000;
   await fs.writeFile(
@@ -4199,7 +4214,17 @@ try {
   assert.deepEqual(
     recoveredState.tasks,
     handoffLiveTaskRecord.tasks.map(
-      ({ conversationUrl: _conversationUrl, ...task }) => task,
+      ({ conversationUrl: _conversationUrl, ...task }) =>
+        task.taskId === agentCancellationTask.taskId
+          ? {
+              ...task,
+              agent: {
+                ...task.agent,
+                assignmentBindingSha256:
+                  expiringAgentTask.agent.assignmentBindingSha256,
+              },
+            }
+          : task,
     ),
   );
   const expiredAssignmentFiles = (await fs.readdir(assignmentRoot)).filter(
