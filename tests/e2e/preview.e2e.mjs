@@ -4131,7 +4131,8 @@ try {
     error: "TASK_NOT_RUNNING",
     state: idleCancel.state,
   });
-  assert.equal(idleCancel.state.revision, 7);
+  // The same nine durable mutations the pin above counts.
+  assert.equal(idleCancel.state.revision, 9);
   await ordinaryLiveTasks.window.locator("#task-menu-close").click();
   await waitForLiveChatGptSurface(
     ordinaryLiveTasks,
