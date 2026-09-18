@@ -179,6 +179,74 @@ lines.on("line", (line) => {
     await client.close();
   });
 
+  it("AUTH-08 fails closed before readiness when the host does not apply the requested profile", async () => {
+    for (const violation of [
+      "mcp-still-enabled",
+      "unadvertised-mcp",
+      "builtin-tool-enabled",
+      "web-search-enabled",
+    ] as const) {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-codex-agent-violation-"),
+      );
+      roots.push(root);
+      const executablePath = path.join(root, "codex-fixture");
+      const received = path.join(root, "received.log");
+      await fs.writeFile(
+        executablePath,
+        `#!${process.execPath}
+const fs = require("node:fs");
+const readline = require("node:readline");
+const violation = ${JSON.stringify(violation)};
+const args = process.argv.slice(2);
+// Discovery runs without the bounded profile; execution carries it.
+const execution = args.includes("mcp_servers.qmd.enabled=false");
+const disabled = new Set(args.flatMap((value, index) => value === "--disable" ? [args[index + 1]] : []));
+const enabled = new Set(args.flatMap((value, index) => value === "--enable" ? [args[index + 1]] : []));
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const message = JSON.parse(line);
+  if (execution) fs.appendFileSync(${JSON.stringify(received)}, message.method + "\\n");
+  if (message.method === "initialize") {
+    process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+  } else if (message.method === "config/read") {
+    const features = Object.fromEntries([
+      ...[...disabled].map((name) => [name, false]),
+      ...[...enabled].map((name) => [name, true])
+    ]);
+    if (execution && violation === "builtin-tool-enabled") features.shell_tool = true;
+    const servers = { qmd: { command: "qmd", enabled: !execution || violation === "mcp-still-enabled" } };
+    if (execution && violation === "unadvertised-mcp") servers.extra = { command: "extra", enabled: true };
+    process.stdout.write(JSON.stringify({ id: message.id, result: { config: {
+      web_search: execution && violation !== "web-search-enabled" ? "disabled" : null,
+      features,
+      mcp_servers: servers
+    } } }) + "\\n");
+  }
+});
+`,
+        { mode: 0o700 },
+      );
+
+      await expect(
+        launchCodexAppServer({
+          executablePath,
+          cwd: root,
+          homePath: root,
+          tempPath: os.tmpdir(),
+          clientVersion: "0.1.0-preview.0",
+          toolProfile: "native-agent",
+        }),
+        violation,
+      ).rejects.toThrow("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");
+      // The execution process was never told it is ready for work.
+      expect(
+        (await fs.readFile(received, "utf8")).split("\n").filter(Boolean),
+        violation,
+      ).toEqual(["initialize", "config/read"]);
+    }
+  });
+
   it("fails closed before readiness when an ambient MCP name cannot be disabled safely", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-codex-agent-denied-process-"),

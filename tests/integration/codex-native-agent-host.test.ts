@@ -449,6 +449,55 @@ describe("native Codex Agent host", () => {
     expect(peer.notifications.size).toBe(0);
   });
 
+  it("LIF-11 refuses before any turn when the host cannot start the required thread profile", async () => {
+    for (const refusal of ["rejected", "substituted-model"] as const) {
+      class RefusingPeer extends NativeAgentPeer {
+        override async request(method: string, params: unknown) {
+          if (method === "thread/start") {
+            this.requests.push({ method, params });
+            if (refusal === "rejected") {
+              throw new Error("unsupported historyMode: paginated");
+            }
+            return {
+              model: "gpt-fallback",
+              thread: { id: "parent-thread-a", parentThreadId: null },
+            };
+          }
+          return super.request(method, params);
+        }
+      }
+      const peer = new RefusingPeer();
+      const host = new CodexNativeAgentHost(
+        peer,
+        {
+          model: "gpt-6-astra",
+          runtimeRoot: "/private/tmp/farol-agent-runtime",
+          spawnTimeoutMs: 1_000,
+          waitTimeoutMs: 5,
+          pollIntervalMs: 1,
+          nonce: () => "proof-a",
+          now: () => 1,
+        },
+        verifiedWorkspaceProbe(),
+      );
+
+      await expect(host.spawn(request), refusal).resolves.toEqual({
+        status: "failed",
+        code: "AGENT_SPAWN_REJECTED",
+      });
+      // One exact thread request: no turn was submitted and no other history
+      // mode or model was tried.
+      expect(
+        peer.requests.map(({ method }) => method),
+        refusal,
+      ).toEqual(["thread/start"]);
+      expect(peer.requests[0]?.params, refusal).toMatchObject({
+        historyMode: "paginated",
+        allowProviderModelFallback: false,
+      });
+    }
+  });
+
   it("rejects a malformed proof nonce before starting a native thread", async () => {
     const peer = new NativeAgentPeer();
     const host = new CodexNativeAgentHost(
