@@ -177,13 +177,24 @@ export async function observeAttempt({
   };
 
   // Watch until the attempt is bound, ended, and observed once more after
-  // its terminal receipt, or until the deadline.
+  // its terminal receipt, or until the deadline. Only an attempt that
+  // started after this observer did can be bound through the lane's latest
+  // pointer: the pointer still names the previous run until the new one
+  // opens, and that run was not watched.
   let afterTerminal = 0;
   for (;;) {
     if (!bound) {
       const latest = readJson(path.join(laneRoot, "latest.json"));
       if (latest && ATTEMPT_ID.test(latest.attemptId ?? "")) {
-        bound = latest.attemptId;
+        const candidateStart = readJson(
+          path.join(laneRoot, "attempts", latest.attemptId, "started.json"),
+        )?.startedAt;
+        if (
+          typeof candidateStart === "string" &&
+          Date.parse(candidateStart) >= Date.parse(startedAt)
+        ) {
+          bound = latest.attemptId;
+        }
       }
     }
     sample();
