@@ -123,6 +123,12 @@ import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/i
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
 import { configurationAdmission } from "./configuration-admission";
 import {
+  startRouteBRuntime,
+  type RouteBRuntime,
+  type RouteBSurfaceAdmission,
+  type RouteBTaskSurfaces,
+} from "./route-b-runtime";
+import {
   applyWorkspaceEdit,
   desktopMutableWorkspaceAction,
   observeWorkspaceEdit,
@@ -279,6 +285,7 @@ let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
 let codexContextController: CodexContextController | null = null;
+let routeBRuntime: RouteBRuntime | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
@@ -738,6 +745,98 @@ function createContextSummaryFallbackRoute(
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
+}
+
+// A Codex host thread runs in the Farol task with the same identity, the
+// identity continuity binds its checkpoints to. The first turn of a thread
+// admits that task under the same gates and capacity as a new Browser task;
+// later turns reuse its ChatGPT conversation.
+async function routeBSurfaceFor(
+  threadId: string,
+): Promise<RouteBSurfaceAdmission> {
+  const existing = liveTaskRoutes.get(threadId);
+  if (existing) {
+    setLiveTaskLifecycle(threadId, "running");
+    return { ok: true, surface: existing };
+  }
+  if (taskMutationInFlight) return { ok: false, code: "TASK_ROUTE_BUSY" };
+  if (!chatGptTaskAdmissionReady()) {
+    return { ok: false, code: "CHATGPT_CONNECTION_NOT_VERIFIED" };
+  }
+  if (threadId.length < 1 || threadId.length > 120) {
+    return { ok: false, code: "TASK_IDENTITY_INVALID" };
+  }
+  taskMutationInFlight = true;
+  try {
+    const before = liveTaskRegistry.snapshot();
+    const labels = new Set(before.tasks.map((candidate) => candidate.label));
+    let ordinal = 1;
+    while (labels.has(`Codex task ${ordinal}`)) ordinal += 1;
+    const task: ProductTask = {
+      taskId: threadId,
+      sessionId: threadId,
+      turnId: randomUUID(),
+      label: `Codex task ${ordinal}`,
+      provider: "chatgpt",
+      requestedModel: "Account default",
+      observedModel: null,
+      requestedMode: "Account default",
+      observedMode: null,
+      hasComputer: false,
+      pinned: false,
+      lifecycle: "running",
+    };
+    const admitted = liveTaskRegistry.admit(task);
+    if (admitted.status === "capacity") {
+      return { ok: false, code: "TASK_CAPACITY_REACHED" };
+    }
+    if (admitted.status !== "admitted") {
+      return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
+    }
+    const route = createLiveChatGptRoute(task.taskId, task.label);
+    liveTaskConversationUrls.set(task.taskId, null);
+    try {
+      await persistLiveTaskState();
+    } catch {
+      liveTaskRegistry.rollback(before);
+      liveTaskConversationUrls.delete(task.taskId);
+      route.dispose();
+      return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
+    }
+    liveTaskRoutes.set(task.taskId, route);
+    publishTasksState();
+    if (!(await openLiveTaskSurface(task.taskId))) {
+      return { ok: false, code: "TASK_SURFACE_UNREACHABLE" };
+    }
+    return { ok: true, surface: route };
+  } finally {
+    taskMutationInFlight = false;
+  }
+}
+
+const routeBTaskSurfaces: RouteBTaskSurfaces = {
+  surfaceFor: routeBSurfaceFor,
+  settled: (threadId, state) => {
+    setLiveTaskLifecycle(
+      threadId,
+      state === "outcome_unknown" ? "outcome_unknown" : "idle",
+    );
+  },
+};
+
+async function initializeRouteBRuntime(): Promise<void> {
+  const controller = codexContextController;
+  if (!controller || routeBRuntime) return;
+  try {
+    routeBRuntime = await startRouteBRuntime({
+      stateRoot: path.join(app.getPath("userData"), "farol-next-state"),
+      surfaces: routeBTaskSurfaces,
+      compaction: controller.continuity,
+    });
+  } catch {
+    // Route B stays unavailable; ordinary Browser tasks are unaffected.
+    routeBRuntime = null;
+  }
 }
 
 function initializeCodexContextController(): void {
@@ -5758,6 +5857,7 @@ async function main(): Promise<void> {
   await initializeLiveTaskState();
   await recoverProductAgentExpiry();
   initializeCodexContextController();
+  await initializeRouteBRuntime();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
     section = configured.settings.general.openAtLaunch;
@@ -5796,6 +5896,9 @@ async function main(): Promise<void> {
     productAgent?.host.dispose();
     if (productAgent) void productAgent.client.close().catch(() => undefined);
     void secureMcpConnectorRuntime?.stop();
+    const routeB = routeBRuntime;
+    routeBRuntime = null;
+    void routeB?.close().catch(() => undefined);
     disposeChatGptRoutes();
     disposeTaskViews("runtime");
     stopRuntime();
