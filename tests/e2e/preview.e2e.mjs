@@ -4106,7 +4106,9 @@ try {
   assert.equal(managedState.tasks[0].taskId, pinnedTask.taskId);
   assert.equal(managedState.tasks[0].label, "Pinned continuity task");
   assert.equal(managedState.tasks[0].pinned, true);
-  assert.equal(managedState.taskRevision, 7);
+  // Seven durable task mutations of this run, plus the two renames the
+  // UX measurement block made and undid.
+  assert.equal(managedState.taskRevision, 9);
   assert.equal(
     (
       await waitForLiveChatGptSurface(
