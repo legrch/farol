@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -144,27 +145,57 @@ function productSettings(value) {
   return { pendingEdit: { operationId: pending.operationId } };
 }
 
+// Every read carries the digest of the bytes it saw, so two reads of the same
+// state can be compared without keeping the content.
 async function readState(file, shape) {
   let text;
   try {
     text = await fs.readFile(file, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") return { status: "absent" };
-    return { status: "unreadable" };
+    if (error?.code === "ENOENT") return { status: "absent", digest: null };
+    return { status: "unreadable", digest: null };
   }
+  const digest = createHash("sha256").update(text).digest("hex");
   if (Buffer.byteLength(text) > MAX_STATE_BYTES)
-    return { status: "unreadable" };
+    return { status: "unreadable", digest };
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { status: "unreadable" };
+    return { status: "unreadable", digest };
   }
   const value = shape(parsed);
-  return value ? { status: "read", value } : { status: "unreadable" };
+  return value
+    ? { status: "read", value, digest }
+    : { status: "unreadable", digest };
 }
 
-export async function activationObligations(userData) {
+const STATE_FILES = Object.freeze([
+  ["live-tasks", ["live-tasks", "live-tasks.json"], liveTasks],
+  [
+    "chatgpt-task-journal",
+    ["chatgpt-task-journal", "chatgpt-task-journal.json"],
+    taskJournal,
+  ],
+  ["product-settings", ["product-settings.json"], productSettings],
+  ["last-quit", ["last-quit.json"], quitReceipt],
+]);
+
+async function readStateFiles(state) {
+  const read = {};
+  for (const [name, segments, shape] of STATE_FILES) {
+    read[name] = await readState(path.join(state, ...segments), shape);
+  }
+  return read;
+}
+
+// The four state files are read one after another, so a generation that
+// admits a turn between two of those reads could be classified from a mix of
+// its before and after. The files are therefore read twice and the decision
+// is taken only on a state whose bytes did not change between the two reads;
+// `options.beforeConfirmation` is the seam between them, used by tests to
+// change the state meanwhile.
+export async function activationObligations(userData, options = {}) {
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_USER_DATA_NOT_ABSOLUTE");
   }
@@ -172,10 +203,14 @@ export async function activationObligations(userData) {
   const obligations = [];
   const unreadable = [];
 
-  const tasks = await readState(
-    path.join(state, "live-tasks", "live-tasks.json"),
-    liveTasks,
+  const first = await readStateFiles(state);
+  await options.beforeConfirmation?.();
+  const confirmed = await readStateFiles(state);
+  const changed = STATE_FILES.map(([name]) => name).filter(
+    (name) => first[name].digest !== confirmed[name].digest,
   );
+
+  const tasks = confirmed["live-tasks"];
   if (tasks.status === "unreadable") unreadable.push("live-tasks");
   else if (tasks.status === "read") {
     const list = tasks.value.tasks;
@@ -199,10 +234,7 @@ export async function activationObligations(userData) {
     }
   }
 
-  const journal = await readState(
-    path.join(state, "chatgpt-task-journal", "chatgpt-task-journal.json"),
-    taskJournal,
-  );
+  const journal = confirmed["chatgpt-task-journal"];
   if (journal.status === "unreadable") unreadable.push("chatgpt-task-journal");
   else if (journal.status === "read") {
     const phase = journal.value.phase;
@@ -213,10 +245,7 @@ export async function activationObligations(userData) {
     }
   }
 
-  const settings = await readState(
-    path.join(state, "product-settings.json"),
-    productSettings,
-  );
+  const settings = confirmed["product-settings"];
   if (settings.status === "unreadable") unreadable.push("product-settings");
   else if (settings.status === "read" && settings.value.pendingEdit) {
     obligations.push(
@@ -224,7 +253,7 @@ export async function activationObligations(userData) {
     );
   }
 
-  const quit = await readState(path.join(state, "last-quit.json"), quitReceipt);
+  const quit = confirmed["last-quit"];
   if (quit.status === "unreadable") unreadable.push("last-quit");
   else if (quit.status === "read" && !quit.value.drained) {
     obligations.push(
@@ -237,8 +266,13 @@ export async function activationObligations(userData) {
     userData,
     obligations,
     unreadable,
-    // Only a state that could be read in full and owes nothing is drained.
-    drained: obligations.length === 0 && unreadable.length === 0,
+    changed,
+    // Only a state that could be read in full, held still while it was read,
+    // and owes nothing is drained.
+    drained:
+      obligations.length === 0 &&
+      unreadable.length === 0 &&
+      changed.length === 0,
   };
 }
 
@@ -259,6 +293,9 @@ export function assertActivationDrained(report) {
     throw new Error(
       `PROMOTION_STATE_UNREADABLE:${report.unreadable.join(",")}`,
     );
+  }
+  if ((report.changed ?? []).length > 0) {
+    throw new Error(`PROMOTION_STATE_CHANGED:${report.changed.join(",")}`);
   }
   if (report.obligations.length > 0) {
     throw new Error(`PROMOTION_DRAIN_REQUIRED:${report.obligations.join(",")}`);

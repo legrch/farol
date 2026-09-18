@@ -364,4 +364,27 @@ describe("Q-08 activation obligations", () => {
       "PROMOTION_USER_DATA_NOT_ABSOLUTE",
     );
   });
+  it("refuses a state that changed while it was being read", async () => {
+    const root = await userData();
+    await writeTasks(root, [task()]);
+    await fs.writeFile(
+      path.join(root, "farol-next-state", "last-quit.json"),
+      JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
+    );
+    // Idle when first read; a turn is admitted before the confirming read.
+    const report = await activationObligations(root, {
+      beforeConfirmation: () =>
+        writeTasks(root, [task({ lifecycle: "running" })]),
+    });
+    expect(report).toMatchObject({ drained: false, changed: ["live-tasks"] });
+    expect(() => assertActivationDrained(report)).toThrow(
+      "PROMOTION_STATE_CHANGED:live-tasks",
+    );
+    // Held still, the same root is classified from what it now owes.
+    await expect(activationObligations(root)).resolves.toMatchObject({
+      changed: [],
+      obligations: ["TASK_RUNNING:1"],
+      drained: false,
+    });
+  });
 });
