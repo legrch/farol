@@ -7,6 +7,14 @@ import { ROUTE_B_MODEL } from "./route-b-runtime";
 export const ROUTE_B_CHECK_PROMPT =
   "This is a Farol Next connection check. Reply with the single word READY and nothing else.";
 
+// The check's host runs under the launcher's bounded profile: built-in tools,
+// web search and every configured MCP server are disabled and the effective
+// configuration is verified before the host is ready, so the prompt's intent
+// of touching no tool is enforced rather than hoped for. The thread itself
+// offers no dynamic tools. Ordinary Route B hosts are the owner's own and
+// keep their explicitly approved tools; this profile is the check's alone.
+export const ROUTE_B_CHECK_TOOL_PROFILE = "dynamic-only";
+
 export type RouteBHostClient = Readonly<{ close(): Promise<void> }>;
 
 export type RouteBHostLaunchInput = Readonly<{
@@ -17,6 +25,7 @@ export type RouteBHostLaunchInput = Readonly<{
   clientVersion: string;
   codexHomePath: string;
   providerRoute: Readonly<{ baseUrl: string; token: string }>;
+  toolProfile: typeof ROUTE_B_CHECK_TOOL_PROFILE;
 }>;
 
 export type RouteBHostRouteResult = Readonly<{
@@ -53,9 +62,11 @@ export type RouteBHostCheckResult =
  * Proves Route B end to end with a host this process launches: an isolated
  * Codex App Server whose own Codex home lives in Next's private runtime
  * directory (never the owner's), whose model provider is the running Route B
- * endpoint, and which runs one harmless turn through it. Once the host is
- * running, a failure may follow a submitted model request, so it is reported
- * as an unknown outcome and never retried here.
+ * endpoint, whose capabilities are bounded and verified before readiness,
+ * and which runs one harmless turn through it. A host that does not apply
+ * the bounded profile fails to start, before any model request. Once the
+ * host is running, a failure may follow a submitted model request, so it is
+ * reported as an unknown outcome and never retried here.
  */
 export async function runRouteBHostCheck<Client extends RouteBHostClient>(
   input: Readonly<{
@@ -84,6 +95,7 @@ export async function runRouteBHostCheck<Client extends RouteBHostClient>(
       clientVersion: input.clientVersion,
       codexHomePath,
       providerRoute: input.endpoint,
+      toolProfile: ROUTE_B_CHECK_TOOL_PROFILE,
     });
   } catch {
     return { status: "failed", code: "ROUTE_B_HOST_START_FAILED" };
