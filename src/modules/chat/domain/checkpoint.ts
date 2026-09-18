@@ -140,13 +140,100 @@ export function validateCheckpointContent(
 
 const UNVERIFIED_PREFIX = "Unverified, no receipt exists: ";
 
+// The schema's list and reference bounds, which every reconciled checkpoint
+// has to fit however many compactions came before it.
+const MAXIMUM_LIST_ITEMS = 64;
+const MAXIMUM_EVIDENCE_REFS = 32;
+const MAXIMUM_FOLDED_DESCRIPTION = 1_024;
+const FOLDED_WORK_PREFIX =
+  "Completed earlier, carried from a previous checkpoint: ";
+
+type EvidenceItem = CheckpointContent["completedWork"][number];
+
+// Earlier work the summary no longer cites. It stays one entry per item while
+// that fits; otherwise it is folded into entries that keep the receipts, the
+// newest first, and what still does not fit is the oldest.
+function carriedEntries(
+  carried: readonly Readonly<{
+    description: string;
+    evidenceRefs: readonly string[];
+  }>[],
+  room: number,
+): EvidenceItem[] {
+  if (carried.length <= room) {
+    return carried.map((item) => ({
+      description: item.description,
+      evidenceRefs: [...item.evidenceRefs],
+    }));
+  }
+  const folded: EvidenceItem[] = [];
+  let refs: string[] = [];
+  let descriptions: string[] = [];
+  const flush = () => {
+    if (refs.length === 0) return;
+    folded.push({
+      description: `${FOLDED_WORK_PREFIX}${descriptions.join("; ")}`.slice(
+        0,
+        MAXIMUM_FOLDED_DESCRIPTION,
+      ),
+      evidenceRefs: refs,
+    });
+    refs = [];
+    descriptions = [];
+  };
+  const seen = new Set<string>();
+  for (const item of carried) {
+    const fresh = item.evidenceRefs.filter((ref) => !seen.has(ref));
+    if (fresh.length === 0) continue;
+    if (refs.length + fresh.length > MAXIMUM_EVIDENCE_REFS) flush();
+    if (folded.length === room) break;
+    for (const ref of fresh.slice(0, MAXIMUM_EVIDENCE_REFS)) {
+      seen.add(ref);
+      refs.push(ref);
+    }
+    descriptions.push(item.description);
+  }
+  if (folded.length < room) flush();
+  return folded;
+}
+
+// Questions the summary asked come first; claims it could not prove follow,
+// and those that do not fit share the last entry.
+function questionsWith(
+  asked: readonly string[],
+  unverified: readonly string[],
+): string[] {
+  const questions = [...asked];
+  const claims = unverified.map((description) =>
+    `${UNVERIFIED_PREFIX}${description}`.slice(0, 4_096),
+  );
+  const room = MAXIMUM_LIST_ITEMS - questions.length;
+  if (claims.length <= room) return [...questions, ...claims];
+  if (room > 0) {
+    questions.push(...claims.slice(0, room - 1));
+    questions.push(
+      `${UNVERIFIED_PREFIX}${unverified.slice(room - 1).join("; ")}`.slice(
+        0,
+        4_096,
+      ),
+    );
+    return questions;
+  }
+  const last = questions.pop() ?? "";
+  questions.push(
+    `${last}\n${UNVERIFIED_PREFIX}${unverified.join("; ")}`.slice(0, 4_096),
+  );
+  return questions;
+}
+
 /**
  * A model summary is lossy and can be wrong in the ways that matter most, so
  * the facts the host record proves override it: every call whose result never
  * arrived stays an unknown outcome even if the summary forgot it, completed
  * work may cite only receipts that exist, and work an earlier checkpoint proved
- * stays cited. A claim whose every cited receipt is absent is kept as an
- * unverified question, never as completed work.
+ * stays cited, folded once there is more of it than the schema holds. A
+ * claim whose every cited receipt is absent is kept as an unverified question,
+ * never as completed work.
  */
 export function reconcileCheckpointContent(
   content: CheckpointContent,
@@ -154,8 +241,8 @@ export function reconcileCheckpointContent(
   maximumBytes: number,
 ): Result<CheckpointContent, CheckpointErrorCode> {
   const receipts = new Set(facts.receipts);
-  const completedWork: CheckpointContent["completedWork"][number][] = [];
-  const unresolvedQuestions = [...content.unresolvedQuestions];
+  const completedWork: EvidenceItem[] = [];
+  const unverified: string[] = [];
   for (const item of content.completedWork) {
     if (item.evidenceRefs.length === 0) {
       completedWork.push(item);
@@ -165,20 +252,24 @@ export function reconcileCheckpointContent(
     if (evidenceRefs.length > 0) {
       completedWork.push({ ...item, evidenceRefs });
     } else {
-      unresolvedQuestions.push(
-        `${UNVERIFIED_PREFIX}${item.description}`.slice(0, 4_096),
-      );
+      unverified.push(item.description);
     }
   }
+  const unresolvedQuestions = questionsWith(
+    content.unresolvedQuestions,
+    unverified,
+  );
   const cited = new Set(completedWork.flatMap((item) => item.evidenceRefs));
-  for (const item of facts.carriedWork) {
-    if (item.evidenceRefs.some((ref) => cited.has(ref))) continue;
-    completedWork.push({
-      description: item.description,
-      evidenceRefs: [...item.evidenceRefs],
-    });
-    for (const ref of item.evidenceRefs) cited.add(ref);
-  }
+  const carried = carriedEntries(
+    facts.carriedWork.filter(
+      (item) => !item.evidenceRefs.some((ref) => cited.has(ref)),
+    ),
+    Math.max(0, MAXIMUM_LIST_ITEMS - completedWork.length),
+  );
+  // Unknown outcomes are never dropped to make room: more of them than the
+  // schema holds is a refusal. A receipt is not proof that a listed operation
+  // ended, because a tool's own output may name it; the host history retires
+  // an earlier unknown only when that call's result arrives.
   const unknownOutcomes = [...content.unknownOutcomes];
   const known = new Set(unknownOutcomes.map((entry) => entry.operationRef));
   for (const entry of facts.unresolved) {
@@ -186,10 +277,26 @@ export function reconcileCheckpointContent(
     known.add(entry.operationRef);
     unknownOutcomes.push({ ...entry });
   }
-  return validateCheckpointContent(
-    { ...content, completedWork, unresolvedQuestions, unknownOutcomes },
-    maximumBytes,
-  );
+  // The byte budget is the last bound: carried work gives way, oldest first,
+  // and nothing else is removed to fit it.
+  for (let kept = carried.length; ; kept -= 1) {
+    const reconciled = validateCheckpointContent(
+      {
+        ...content,
+        completedWork: [...completedWork, ...carried.slice(0, kept)],
+        unresolvedQuestions,
+        unknownOutcomes,
+      },
+      maximumBytes,
+    );
+    if (
+      reconciled.ok ||
+      reconciled.error.code !== "CHECKPOINT_CONTENT_OVERSIZED" ||
+      kept === 0
+    ) {
+      return reconciled;
+    }
+  }
 }
 
 export function validateCheckpointEnvelope(

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  authoritativeHistoryFacts,
   buildHostCompactionHandoff,
   parseHostCompactionRequest,
   replayHostCheckpoint,
@@ -239,6 +240,41 @@ describe("native host compaction codec", () => {
       ok: false,
       error: { code: "HOST_COMPACTION_TRIGGER_MISSING" },
     });
+  });
+
+  it("retires a carried unknown outcome once its result is delivered", () => {
+    const parsed = value(
+      parseHostCompactionRequest(
+        "responses_compact",
+        { model: "chatgpt-web/high", input: baseInput },
+        metadata,
+      ),
+    );
+    const handoff = value(
+      buildHostCompactionHandoff(parsed, checkpointFor(parsed), {
+        maximumCheckpointContentBytes: 16_384,
+        retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 64 * 1_024,
+      }),
+    );
+    if (handoff.variant !== "unary_replacement_history") {
+      throw new Error("unexpected variant");
+    }
+    const history = handoff.response.output;
+    // The previous checkpoint carries write-17 as unknown until its result
+    // arrives in the history.
+    expect(authoritativeHistoryFacts(history, 16_384).unresolved).toEqual([
+      expect.objectContaining({ operationRef: "write-17" }),
+    ]);
+    const facts = authoritativeHistoryFacts(
+      [
+        ...history,
+        { type: "function_call_output", call_id: "write-17", output: "ok" },
+      ],
+      16_384,
+    );
+    expect(facts.unresolved).toEqual([]);
+    expect(facts.receipts).toContain("write-17");
   });
 
   it("builds and replays the exact unary checkpoint with a bounded user tail", () => {

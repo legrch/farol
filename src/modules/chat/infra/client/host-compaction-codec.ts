@@ -453,6 +453,8 @@ export function authoritativeHistoryFacts(
       if (token !== null) receipts.add(token);
     }
   }
+  // An earlier checkpoint's unknown outcome ends when its result arrives.
+  for (const callId of delivered) unresolved.delete(callId.slice(0, 160));
   for (const [callId, name] of calls) {
     if (delivered.has(callId) || unresolved.has(callId.slice(0, 160))) continue;
     unresolved.set(
