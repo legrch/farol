@@ -14,6 +14,7 @@ import {
   type CodexChatGptProviderRuntime,
 } from "./codex-chatgpt-provider";
 import { PrivateProviderTurnJournal } from "./provider-turn-journal";
+import { failure } from "../../pkg/kernel/domain/result";
 
 // The ChatGPT conversation of one Farol task, as a Route B turn uses it.
 export type RouteBConversationSurface = Readonly<{
@@ -109,35 +110,38 @@ function toolRelayInstruction(ticket: string, binding: string): string {
   ].join(" ");
 }
 
-// Threads whose context is being summarized, and the relay turn each thread
-// has open. A summary must never reach the host's tools, whatever its history
-// asks for, so this is enforced here rather than by the summary prompt.
-export class RouteBToolFence {
-  private readonly summarizing = new Map<string, number>();
-  private readonly open = new Map<string, Readonly<{ close(): void }>>();
+// One admission owner per host thread: an ordinary turn and a context summary
+// of the same thread never overlap. A summary is refused while a turn of its
+// thread is running (so the running turn keeps its tools and its result is
+// delivered), and a new turn is refused while its thread is being summarized,
+// so no relay turn is ever open during a summary: the summary reaches no host
+// tool whatever its history asks for. Other threads are not affected.
+export class RouteBAdmission {
+  private readonly running = new Set<string>();
+  private readonly summarizing = new Set<string>();
 
-  summarizes(threadId: string): boolean {
-    return (this.summarizing.get(threadId) ?? 0) > 0;
+  beginTurn(threadId: string): boolean {
+    if (this.summarizing.has(threadId) || this.running.has(threadId)) {
+      return false;
+    }
+    this.running.add(threadId);
+    return true;
   }
 
-  beginSummary(threadId: string): void {
-    this.summarizing.set(threadId, (this.summarizing.get(threadId) ?? 0) + 1);
-    this.open.get(threadId)?.close();
-    this.open.delete(threadId);
+  endTurn(threadId: string): void {
+    this.running.delete(threadId);
+  }
+
+  beginSummary(threadId: string): boolean {
+    if (this.running.has(threadId) || this.summarizing.has(threadId)) {
+      return false;
+    }
+    this.summarizing.add(threadId);
+    return true;
   }
 
   endSummary(threadId: string): void {
-    const count = (this.summarizing.get(threadId) ?? 1) - 1;
-    if (count > 0) this.summarizing.set(threadId, count);
-    else this.summarizing.delete(threadId);
-  }
-
-  opened(threadId: string, turn: Readonly<{ close(): void }>): void {
-    this.open.set(threadId, turn);
-  }
-
-  closed(threadId: string, turn: Readonly<{ close(): void }>): void {
-    if (this.open.get(threadId) === turn) this.open.delete(threadId);
+    this.summarizing.delete(threadId);
   }
 }
 
@@ -163,19 +167,21 @@ function compactionThread(
   return null;
 }
 
-// Host compaction for a thread fences its tools for the whole summary.
-export function fencedCompaction(
+// Host compaction for a thread owns that thread for the whole summary.
+export function admittedCompaction(
   inner: CodexChatGptCompaction,
-  fence: RouteBToolFence,
+  admission: RouteBAdmission,
 ): CodexChatGptCompaction {
   return {
     compact: async (input) => {
       const threadId = compactionThread(input);
-      if (threadId) fence.beginSummary(threadId);
+      if (threadId && !admission.beginSummary(threadId)) {
+        return failure("FAROL_NEXT_COMPACTION_TURN_ACTIVE");
+      }
       try {
         return await inner.compact(input);
       } finally {
-        if (threadId) fence.endSummary(threadId);
+        if (threadId) admission.endSummary(threadId);
       }
     },
     ...(inner.prepareTurn
@@ -194,73 +200,81 @@ export function fencedCompaction(
 export function chatGptTaskConversation(
   surfaces: RouteBTaskSurfaces,
   relay?: RouteBToolRelay,
-  fence: RouteBToolFence = new RouteBToolFence(),
+  admission: RouteBAdmission = new RouteBAdmission(),
 ): CodexChatGptConversation {
   return {
     run: async (input, observer) => {
       const threadId = input.identity.threadId;
-      const admitted = await surfaces.surfaceFor(threadId);
-      if (!admitted.ok) return refusedBeforeSubmit(admitted.code);
-      let toolTurn: ReturnType<RouteBToolRelay["openTurn"]> | null = null;
-      // Every path after admission reports how the turn ended, so the task
-      // never stays running after a refusal.
-      const settle = async (result: CodexChatGptConversationResult) => {
-        if (toolTurn) {
-          toolTurn.close();
-          fence.closed(threadId, toolTurn);
-        }
-        await surfaces.settled?.(threadId, result.state);
-        return result;
-      };
-      let prompt = input.prompt;
-      if (input.tools.length > 0) {
-        if (!relay) {
-          return settle(refusedBeforeSubmit("ROUTE_B_TOOL_RELAY_UNAVAILABLE"));
-        }
-        if (fence.summarizes(threadId)) {
-          return settle(
-            refusedBeforeSubmit("ROUTE_B_CONTEXT_SUMMARY_IN_PROGRESS"),
-          );
-        }
-        try {
-          toolTurn = relay.openTurn({
-            identity: input.identity,
-            tools: input.tools,
-            invoke: (resolved) =>
-              observer.onToolCall({
-                name: resolved.name,
-                ...(resolved.namespace === null
-                  ? {}
-                  : { namespace: resolved.namespace }),
-                arguments: resolved.arguments,
-              }),
-          });
-        } catch {
-          return settle(refusedBeforeSubmit("ROUTE_B_TOOL_RELAY_REFUSED"));
-        }
-        fence.opened(threadId, toolTurn);
-        prompt = `${prompt}\n\n${toolRelayInstruction(toolTurn.ticket, toolTurn.binding)}`;
+      if (!admission.beginTurn(threadId)) {
+        return refusedBeforeSubmit("ROUTE_B_THREAD_BUSY");
       }
-      let result: CodexChatGptConversationResult;
       try {
-        result = conversationResult(
-          await admitted.surface.runReadonlyTask(prompt, [], {
-            onTextDelta: (delta) => observer.onTextDelta(delta),
-          }),
-        );
-      } catch {
-        result = {
-          state: "outcome_unknown",
-          code: "CHATGPT_TASK_ERROR",
-          outputText: "",
-          observedProvider: "chatgpt-web",
-          observedModel: null,
-          observedMode: null,
-        };
+        return await runAdmitted(surfaces, relay, threadId, input, observer);
+      } finally {
+        admission.endTurn(threadId);
       }
-      return settle(result);
     },
   };
+}
+
+async function runAdmitted(
+  surfaces: RouteBTaskSurfaces,
+  relay: RouteBToolRelay | undefined,
+  threadId: string,
+  input: Parameters<CodexChatGptConversation["run"]>[0],
+  observer: Parameters<CodexChatGptConversation["run"]>[1],
+): Promise<CodexChatGptConversationResult> {
+  const admitted = await surfaces.surfaceFor(threadId);
+  if (!admitted.ok) return refusedBeforeSubmit(admitted.code);
+  let toolTurn: ReturnType<RouteBToolRelay["openTurn"]> | null = null;
+  // Every path after admission reports how the turn ended, so the task
+  // never stays running after a refusal.
+  const settle = async (result: CodexChatGptConversationResult) => {
+    toolTurn?.close();
+    await surfaces.settled?.(threadId, result.state);
+    return result;
+  };
+  let prompt = input.prompt;
+  if (input.tools.length > 0) {
+    if (!relay) {
+      return settle(refusedBeforeSubmit("ROUTE_B_TOOL_RELAY_UNAVAILABLE"));
+    }
+    try {
+      toolTurn = relay.openTurn({
+        identity: input.identity,
+        tools: input.tools,
+        invoke: (resolved) =>
+          observer.onToolCall({
+            name: resolved.name,
+            ...(resolved.namespace === null
+              ? {}
+              : { namespace: resolved.namespace }),
+            arguments: resolved.arguments,
+          }),
+      });
+    } catch {
+      return settle(refusedBeforeSubmit("ROUTE_B_TOOL_RELAY_REFUSED"));
+    }
+    prompt = `${prompt}\n\n${toolRelayInstruction(toolTurn.ticket, toolTurn.binding)}`;
+  }
+  let result: CodexChatGptConversationResult;
+  try {
+    result = conversationResult(
+      await admitted.surface.runReadonlyTask(prompt, [], {
+        onTextDelta: (delta) => observer.onTextDelta(delta),
+      }),
+    );
+  } catch {
+    result = {
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+      outputText: "",
+      observedProvider: "chatgpt-web",
+      observedModel: null,
+      observedMode: null,
+    };
+  }
+  return settle(result);
 }
 
 export async function startRouteBRuntime(
@@ -271,16 +285,16 @@ export async function startRouteBRuntime(
   }
   // A fresh token per start: only a host this process launched knows it.
   const token = randomBytes(32).toString("base64url");
-  const fence = new RouteBToolFence();
+  const admission = new RouteBAdmission();
   const provider = await startCodexChatGptProvider({
     model: ROUTE_B_MODEL,
     token,
     conversation: chatGptTaskConversation(
       options.surfaces,
       options.relay,
-      fence,
+      admission,
     ),
-    compaction: fencedCompaction(options.compaction, fence),
+    compaction: admittedCompaction(options.compaction, admission),
     turns: new PrivateProviderTurnJournal({
       root: path.join(options.stateRoot, "provider-turns"),
     }),
