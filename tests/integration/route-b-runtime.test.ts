@@ -14,6 +14,7 @@ import {
   type CodexCallerRelayRuntime,
 } from "../../src/apps/desktop/codex-caller-relay";
 import { createCodexContextController } from "../../src/apps/desktop/codex-context-runtime";
+import type { ProviderTurnJournal } from "../../src/apps/desktop/provider-turn-journal";
 import {
   startRouteBRuntime,
   type RouteBRuntime,
@@ -125,6 +126,7 @@ describe("Route B runtime composed as the product composes it", () => {
     surfaces: RouteBTaskSurfaces,
     task: ChatGptContextSummaryRoute,
     relay?: CodexCallerRelayRuntime,
+    journal?: ProviderTurnJournal,
   ) {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-route-b-")),
@@ -144,6 +146,7 @@ describe("Route B runtime composed as the product composes it", () => {
       surfaces,
       compaction: controller.continuity,
       ...(relay ? { relay } : {}),
+      ...(journal ? { journal } : {}),
     });
     return { root, controller, runtime };
   }
@@ -688,6 +691,68 @@ describe("Route B runtime composed as the product composes it", () => {
     release();
     expect(await (await running).text()).toContain("response.completed");
     expect(route.owns(threadId)).toBe(false);
+  });
+
+  it("HR-007 owns a thread from its turn's preparation through durable admission until the turn runs, and not after a refusal", async () => {
+    const task = new TaskConversation();
+    const admitted = new Map<string, string>();
+    let admitting = false;
+    let releaseAdmission: () => void = () => undefined;
+    const admission = new Promise<void>((resolve) => {
+      releaseAdmission = resolve;
+    });
+    const journal: ProviderTurnJournal = {
+      admit: async (key, intentSha256) => {
+        admitting = true;
+        await admission;
+        const existing = admitted.get(key);
+        if (existing === undefined) {
+          admitted.set(key, intentSha256);
+          return "admitted";
+        }
+        return existing === intentSha256 ? "replayed" : "conflict";
+      },
+      release: async (key) => {
+        admitted.delete(key);
+      },
+    };
+    const surfaceFor = vi.fn(async (_threadId: string) => ({
+      ok: true as const,
+      surface: task,
+    }));
+    const { runtime: route } = await compose(
+      { surfaceFor },
+      task,
+      undefined,
+      journal,
+    );
+
+    const running = post(
+      route,
+      "/responses",
+      initialRequest("turn-owned-1", "Hold the thread."),
+    );
+    await vi.waitFor(() => expect(admitting).toBe(true));
+    // Prepared, not yet durably admitted, not yet running: still owned.
+    expect(route.owns(threadId)).toBe(true);
+    expect(surfaceFor).not.toHaveBeenCalled();
+    releaseAdmission();
+    expect(await (await running).text()).toContain("response.completed");
+    expect(route.owns(threadId)).toBe(false);
+
+    // The same identity with another intent is refused before anything
+    // runs, and the refusal leaves nothing owned.
+    const conflict = await post(
+      route,
+      "/responses",
+      initialRequest("turn-owned-1", "Another request entirely."),
+    );
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_TURN_INTENT_CONFLICT" },
+    });
+    expect(route.owns(threadId)).toBe(false);
+    expect(task.prompts).toHaveLength(1);
   });
 
   it("refuses an unknown caller and a thread that cannot get a task", async () => {

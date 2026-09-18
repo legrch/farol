@@ -1,0 +1,383 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type {
+  ChatGptReadonlyTaskResult,
+  ChatGptTaskObserver,
+} from "../../src/apps/desktop/chatgpt-route";
+import { createCodexContextController } from "../../src/apps/desktop/codex-context-runtime";
+import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
+import {
+  PrivateProviderTurnJournal,
+  type ProviderTurnJournal,
+} from "../../src/apps/desktop/provider-turn-journal";
+import {
+  startRouteBRuntime,
+  type RouteBRuntime,
+} from "../../src/apps/desktop/route-b-runtime";
+import {
+  createRouteBTaskLifecycle,
+  type RouteBTaskLifecycle,
+} from "../../src/apps/desktop/route-b-task-lifecycle";
+import { deleteTaskContext } from "../../src/apps/desktop/task-context-cleanup";
+import type {
+  ProductTask,
+  ProductTasksState,
+} from "../../src/modules/chat/contract/product-task";
+import {
+  createContextSession,
+  type ContextBinding,
+} from "../../src/modules/chat/domain/context-continuity";
+
+const threadA = "0199c0de-0000-7000-8000-00000000c001";
+const threadB = "0199c0de-0000-7000-8000-00000000c002";
+
+// One task's ChatGPT conversation surface, as the product's route exposes it
+// to a Route B turn: it answers, and it can be disposed exactly once.
+class TaskSurface {
+  readonly prompts: string[] = [];
+  disposed = 0;
+
+  async runReadonlyTask(
+    prompt: string,
+    _attachments: readonly [],
+    observer: ChatGptTaskObserver,
+  ): Promise<ChatGptReadonlyTaskResult> {
+    if (this.disposed > 0) throw new Error("SURFACE_DISPOSED");
+    this.prompts.push(prompt);
+    const text = `Answer ${this.prompts.length}.`;
+    await observer.onTextDelta?.({
+      sequence: 1,
+      delta: text,
+      text,
+      observedCharacters: text.length,
+    });
+    return {
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: text.length,
+      outputText: text,
+    };
+  }
+
+  dispose(): void {
+    this.disposed += 1;
+  }
+}
+
+function productTask(threadId: string, label: string): ProductTask {
+  return {
+    taskId: threadId,
+    sessionId: threadId,
+    turnId: randomUUID(),
+    label,
+    provider: "chatgpt",
+    requestedModel: "Account default",
+    observedModel: null,
+    requestedMode: "Account default",
+    observedMode: null,
+    hasComputer: false,
+    pinned: false,
+    lifecycle: "running",
+  };
+}
+
+function binding(taskId: string): ContextBinding {
+  return {
+    ownerId: "owner-desktop",
+    taskId,
+    hostThreadId: taskId,
+    sessionId: taskId,
+    providerProfileId: "profile-isolated-next",
+    modelId: "farol-next/mind",
+    mode: "mind",
+  };
+}
+
+function initialRequest(threadId: string, turnId: string, text: string) {
+  return {
+    model: "farol-next/mind",
+    stream: true,
+    store: false,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+      },
+    ],
+    tools: [],
+    client_metadata: {
+      session_id: threadId,
+      thread_id: threadId,
+      turn_id: turnId,
+      root_turn_id: turnId,
+    },
+  };
+}
+
+// A named barrier: the gated operation reports that it was reached and then
+// waits until the test releases it.
+function gate() {
+  let reach!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => {
+    reach = resolve;
+  });
+  const opened = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    reached,
+    release,
+    open: () => reach(),
+    wait: () => opened,
+  };
+}
+
+describe("Route B task lifecycle composed as the product composes it", () => {
+  const roots: string[] = [];
+  let runtime: RouteBRuntime | null = null;
+
+  afterEach(async () => {
+    await runtime?.close();
+    runtime = null;
+    await Promise.all(
+      roots
+        .splice(0)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
+  });
+
+  async function compose(
+    hooks: Readonly<{
+      // Stops the durable admission of each request of this thread in turn,
+      // one gate per request, until the gates run out.
+      admission?: Readonly<{
+        threadId: string;
+        gates: ReturnType<typeof gate>[];
+      }>;
+      // Stops a close of this task after it has begun.
+      removal?: Readonly<{ taskId: string; gate: ReturnType<typeof gate> }>;
+    }> = {},
+  ) {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-task-lifecycle-")),
+    );
+    roots.push(root);
+    const controller = createCodexContextController({
+      ownerId: "owner-desktop",
+      providerProfileId: "profile-isolated-next",
+      stateRoot: path.join(root, "context-continuity"),
+      summaryRoutes: { retained: () => null, createFallback: vi.fn() },
+    });
+    const registry = new LiveTaskRegistry(5);
+    const routes = new Map<string, TaskSurface>();
+    const persist = vi.fn(async () => undefined);
+    const admitTask = vi.fn(async (threadId: string) => {
+      const admitted = registry.admit(
+        productTask(threadId, `Codex task ${routes.size + 1}`),
+      );
+      if (admitted.status !== "admitted") {
+        return { ok: false as const, code: "TASK_CAPACITY_REACHED" };
+      }
+      const surface = new TaskSurface();
+      routes.set(threadId, surface);
+      return { ok: true as const, surface };
+    });
+    const journal = new PrivateProviderTurnJournal({
+      root: path.join(root, "provider-turns"),
+    });
+    const gatedJournal: ProviderTurnJournal = {
+      admit: async (key, intentSha256) => {
+        const next =
+          hooks.admission && key.includes(hooks.admission.threadId)
+            ? hooks.admission.gates.shift()
+            : undefined;
+        if (next) {
+          next.open();
+          await next.wait();
+        }
+        return journal.admit(key, intentSha256);
+      },
+      release: (key) => journal.release(key),
+    };
+    let route: RouteBRuntime | null = null;
+    const lifecycle: RouteBTaskLifecycle =
+      createRouteBTaskLifecycle<ProductTasksState>({
+        owns: (taskId) => route?.owns(taskId) ?? false,
+        existingSurface: (taskId) => routes.get(taskId) ?? null,
+        markRunning: (taskId) => {
+          registry.setLifecycle(taskId, "running");
+        },
+        mutationInFlight: () => false,
+        admissionReady: () => true,
+        admitTask,
+        removeAgentInput: async (taskId) => {
+          if (hooks.removal && hooks.removal.taskId === taskId) {
+            hooks.removal.gate.open();
+            await hooks.removal.gate.wait();
+          }
+        },
+        snapshotTasks: () => registry.snapshot(),
+        removeTask: (taskId) => registry.remove(taskId) !== null,
+        rollbackTasks: (snapshot) => registry.rollback(snapshot),
+        persist,
+        deleteContext: (taskId) =>
+          deleteTaskContext(controller.store, binding(taskId)),
+        disposeRoute: (taskId) => {
+          const surface = routes.get(taskId);
+          routes.delete(taskId);
+          surface?.dispose();
+        },
+      });
+    route = await startRouteBRuntime({
+      stateRoot: root,
+      surfaces: {
+        surfaceFor: (threadId) => lifecycle.surfaceFor(threadId),
+        settled: (threadId, state) => {
+          registry.setLifecycle(
+            threadId,
+            state === "outcome_unknown" ? "outcome_unknown" : "idle",
+          );
+        },
+      },
+      compaction: controller.continuity,
+      journal: gatedJournal,
+    });
+    runtime = route;
+    return { controller, registry, routes, admitTask, lifecycle, route };
+  }
+
+  function post(route: RouteBRuntime, body: unknown) {
+    return fetch(`${route.endpoint.baseUrl}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${route.endpoint.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("HR-007 keeps a task owned from its turn's preparation through durable admission, so a close waits and nothing is resurrected", async () => {
+    const firstAdmission = gate();
+    const admission = gate();
+    const { controller, registry, routes, admitTask, lifecycle, route } =
+      await compose({
+        admission: { threadId: threadA, gates: [firstAdmission, admission] },
+      });
+
+    // A first turn admits the task; its gate is released at once.
+    const first = post(route, initialRequest(threadA, "turn-a-1", "Start A."));
+    await firstAdmission.reached;
+    firstAdmission.release();
+    expect(await (await first).text()).toContain("response.completed");
+    expect(admitTask).toHaveBeenCalledTimes(1);
+    const surfaceA = routes.get(threadA)!;
+    await controller.store.save(createContextSession(binding(threadA)));
+
+    // The next turn of A is prepared and waits in durable admission.
+    const second = post(
+      route,
+      initialRequest(threadA, "turn-a-2", "Continue A."),
+    );
+    await admission.reached;
+    expect(route.owns(threadA)).toBe(true);
+
+    // Closing A now must wait: its thread is between preparation and its
+    // conversation run, not idle.
+    await expect(lifecycle.close(threadA)).resolves.toEqual({
+      ok: false,
+      code: "TASK_OPERATION_IN_PROGRESS",
+    });
+    expect(registry.get(threadA)).not.toBeNull();
+    expect(surfaceA.disposed).toBe(0);
+
+    // A neighbour is not held by A.
+    const neighbour = await post(
+      route,
+      initialRequest(threadB, "turn-b-1", "Work on B."),
+    );
+    expect(await neighbour.text()).toContain("response.completed");
+    expect(admitTask).toHaveBeenCalledTimes(2);
+
+    admission.release();
+    expect(await (await second).text()).toContain("response.completed");
+    expect(surfaceA.prompts).toHaveLength(2);
+    expect(surfaceA.prompts[1]).toContain("Continue A.");
+    // The turn ran on the task's own surface; no second admission of A.
+    expect(admitTask).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(route.owns(threadA)).toBe(false));
+
+    // Once the turn settled, the close succeeds and removes everything once.
+    await expect(lifecycle.close(threadA)).resolves.toEqual({
+      ok: true,
+      contextDeletion: "deleted",
+    });
+    expect(registry.get(threadA)).toBeNull();
+    expect(registry.get(threadB)).not.toBeNull();
+    await expect(controller.store.load(binding(threadA))).resolves.toBeNull();
+    expect(routes.has(threadA)).toBe(false);
+    expect(surfaceA.disposed).toBe(1);
+    expect(lifecycle.closing(threadA)).toBe(false);
+  });
+
+  it("HR-007 refuses a turn on a task whose close has begun, and disposes that surface only after the refusal", async () => {
+    const removal = gate();
+    const { registry, routes, admitTask, lifecycle, route } = await compose({
+      removal: { taskId: threadA, gate: removal },
+    });
+    const first = await post(
+      route,
+      initialRequest(threadA, "turn-a-1", "Start A."),
+    );
+    expect(await first.text()).toContain("response.completed");
+    const surfaceA = routes.get(threadA)!;
+
+    // The close wins ownership and pauses inside its asynchronous cleanup.
+    const closing = lifecycle.close(threadA);
+    await removal.reached;
+    expect(lifecycle.closing(threadA)).toBe(true);
+
+    // A turn arriving now is refused before anything reaches the surface
+    // that is about to be disposed; a second close is refused too.
+    const during = await post(
+      route,
+      initialRequest(threadA, "turn-a-2", "Continue A."),
+    );
+    const stream = await during.text();
+    expect(stream).toContain("TASK_CLOSING");
+    expect(stream).not.toContain("response.completed");
+    expect(surfaceA.prompts).toHaveLength(1);
+    expect(admitTask).toHaveBeenCalledTimes(1);
+    await expect(lifecycle.close(threadA)).resolves.toEqual({
+      ok: false,
+      code: "TASK_OPERATION_IN_PROGRESS",
+    });
+
+    removal.release();
+    await expect(closing).resolves.toEqual({
+      ok: true,
+      contextDeletion: "deleted",
+    });
+    expect(registry.get(threadA)).toBeNull();
+    expect(surfaceA.disposed).toBe(1);
+    expect(lifecycle.closing(threadA)).toBe(false);
+
+    // The refused turn was released before submission: repeated after the
+    // close, it is a first turn again and admits a new task on a new surface.
+    const repeated = await post(
+      route,
+      initialRequest(threadA, "turn-a-2", "Continue A."),
+    );
+    expect(await repeated.text()).toContain("response.completed");
+    expect(admitTask).toHaveBeenCalledTimes(2);
+    expect(surfaceA.prompts).toHaveLength(1);
+    expect(routes.get(threadA)!.prompts).toEqual(["Continue A."]);
+  });
+});

@@ -156,6 +156,77 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(stream.events).toEqual([{ type: "first" }, { type: "second" }]);
   });
 
+  it("HR-007 holds an initial request's thread until its first round is served, and releases it after a refusal", async () => {
+    const holds: string[] = [];
+    let released = 0;
+    let releaseRun!: () => void;
+    const running = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    const conversation: CodexChatGptConversation = {
+      run: async (_input, observer) => {
+        await running;
+        await observer.onTextDelta({
+          sequence: 1,
+          delta: "Held.",
+          text: "Held.",
+          observedCharacters: 5,
+        });
+        return {
+          state: "completed" as const,
+          code: null,
+          outputText: "Held.",
+          observedProvider: "chatgpt-web",
+          observedModel: null,
+          observedMode: null,
+        };
+      },
+    };
+    runtime = await startCodexChatGptProvider({
+      model: "farol-next/mind",
+      token: "route-b-test-token",
+      conversation,
+      turns: memoryJournal(),
+      threads: {
+        hold: (identity) => {
+          holds.push(identity.threadId);
+          return () => {
+            released += 1;
+          };
+        },
+      },
+    });
+    const post = (body: unknown) =>
+      fetch(`${runtime!.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer route-b-test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+    const first = post(requestBody());
+    await vi.waitFor(() => expect(holds).toEqual(["thread-route-b"]));
+    expect(released).toBe(0);
+    releaseRun();
+    expect(await (await first).text()).toContain("response.completed");
+    expect(released).toBe(1);
+
+    // Refused before the hold: no hold, nothing to release.
+    const wrongModel = await post(requestBody("farol-next/other"));
+    expect(wrongModel.status).toBe(422);
+    expect(holds).toHaveLength(1);
+    // Refused after the hold, before anything runs: released again.
+    const replayed = await post(requestBody());
+    expect(replayed.status).toBe(409);
+    await expect(replayed.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+    });
+    expect(holds).toHaveLength(2);
+    expect(released).toBe(2);
+  });
+
   it("delivers observed text deltas before the terminal host response", async () => {
     let releaseCompletion!: () => void;
     const completionGate = new Promise<void>((resolve) => {

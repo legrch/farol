@@ -144,6 +144,7 @@ import {
   type QuitDrainReceipt,
 } from "./quit-drain";
 import { deleteTaskContext } from "./task-context-cleanup";
+import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
@@ -785,25 +786,12 @@ function createContextSummaryFallbackRoute(
   });
 }
 
-// A Codex host thread runs in the Farol task with the same identity, the
-// identity continuity binds its checkpoints to. The first turn of a thread
-// admits that task under the same gates and capacity as a new Browser task;
-// later turns reuse its ChatGPT conversation.
-async function routeBSurfaceFor(
+// The first turn of a Codex host thread admits its task like a new Browser
+// task: a route, a saved task and an opened surface. The lifecycle above it
+// decides when a thread reaches this path.
+async function admitRouteBTask(
   threadId: string,
 ): Promise<RouteBSurfaceAdmission> {
-  const existing = liveTaskRoutes.get(threadId);
-  if (existing) {
-    setLiveTaskLifecycle(threadId, "running");
-    return { ok: true, surface: existing };
-  }
-  if (taskMutationInFlight) return { ok: false, code: "TASK_ROUTE_BUSY" };
-  if (!chatGptTaskAdmissionReady()) {
-    return { ok: false, code: "CHATGPT_CONNECTION_NOT_VERIFIED" };
-  }
-  if (threadId.length < 1 || threadId.length > 120) {
-    return { ok: false, code: "TASK_IDENTITY_INVALID" };
-  }
   taskMutationInFlight = true;
   try {
     const before = liveTaskRegistry.snapshot();
@@ -852,8 +840,34 @@ async function routeBSurfaceFor(
   }
 }
 
+const routeBTaskLifecycle = createRouteBTaskLifecycle({
+  owns: (taskId) => routeBRuntime?.owns(taskId) ?? false,
+  existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
+  markRunning: (taskId) => setLiveTaskLifecycle(taskId, "running"),
+  mutationInFlight: () => taskMutationInFlight,
+  admissionReady: () => chatGptTaskAdmissionReady(),
+  admitTask: admitRouteBTask,
+  removeAgentInput: async (taskId) => {
+    await productAgentStore?.remove(taskId);
+  },
+  snapshotTasks: () => liveTaskRegistry.snapshot(),
+  removeTask: (taskId) => liveTaskRegistry.remove(taskId) !== null,
+  rollbackTasks: (snapshot) => liveTaskRegistry.rollback(snapshot),
+  persist: () => persistLiveTaskState(),
+  deleteContext: (taskId) =>
+    codexContextController
+      ? deleteTaskContext(codexContextController.store, contextBinding(taskId))
+      : Promise.resolve("none"),
+  disposeRoute: (taskId) => {
+    const route = liveTaskRoutes.get(taskId);
+    liveTaskRoutes.delete(taskId);
+    liveTaskConversationUrls.delete(taskId);
+    route?.dispose();
+  },
+});
+
 const routeBTaskSurfaces: RouteBTaskSurfaces = {
-  surfaceFor: routeBSurfaceFor,
+  surfaceFor: (threadId) => routeBTaskLifecycle.surfaceFor(threadId),
   settled: (threadId, state) => {
     setLiveTaskLifecycle(
       threadId,
@@ -1948,36 +1962,8 @@ async function runProductTaskCommand(
         clearTimeout(persistedProductAgentExpiry.timer);
         persistedProductAgentExpiry = null;
       }
-      // A turn, summary or turn preparation of this task's thread is using
-      // its private context right now.
-      if (task && routeBRuntime?.owns(command.data.taskId)) {
-        return taskFailure("TASK_OPERATION_IN_PROGRESS");
-      }
-      try {
-        await productAgentStore?.remove(command.data.taskId);
-      } catch {
-        return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
-      }
-      const removed = liveTaskRegistry.remove(command.data.taskId);
-      if (!removed) return taskFailure("TASK_NOT_FOUND");
-      try {
-        await persistLiveTaskState();
-      } catch {
-        liveTaskRegistry.rollback(before);
-        return taskFailure("TASK_STATE_UNAVAILABLE");
-      }
-      // Only once the removal is saved: a failed deletion then leaves private
-      // state of a closed task, not an open task without its context.
-      if (task && codexContextController) {
-        await deleteTaskContext(
-          codexContextController.store,
-          contextBinding(command.data.taskId),
-        );
-      }
-      const route = liveTaskRoutes.get(command.data.taskId);
-      liveTaskRoutes.delete(command.data.taskId);
-      liveTaskConversationUrls.delete(command.data.taskId);
-      route?.dispose();
+      const closed = await routeBTaskLifecycle.close(command.data.taskId);
+      if (!closed.ok) return taskFailure(closed.code);
       const tasks = liveTaskRegistry.snapshot().tasks;
       selectedTaskId =
         selectedTaskId === command.data.taskId

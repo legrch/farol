@@ -13,7 +13,10 @@ import {
   type CodexChatGptConversationResult,
   type CodexChatGptProviderRuntime,
 } from "./codex-chatgpt-provider";
-import { PrivateProviderTurnJournal } from "./provider-turn-journal";
+import {
+  PrivateProviderTurnJournal,
+  type ProviderTurnJournal,
+} from "./provider-turn-journal";
 import { failure } from "../../pkg/kernel/domain/result";
 
 // The ChatGPT conversation of one Farol task, as a Route B turn uses it.
@@ -51,6 +54,9 @@ export type RouteBRuntimeOptions = Readonly<{
   surfaces: RouteBTaskSurfaces;
   compaction: CodexChatGptCompaction;
   relay?: RouteBToolRelay;
+  // The durable journal of admitted initial requests: the private one under
+  // the state root unless a test supplies one that stops at an exact point.
+  journal?: ProviderTurnJournal;
 }>;
 
 export type RouteBRuntime = Readonly<{
@@ -58,7 +64,8 @@ export type RouteBRuntime = Readonly<{
   endpoint: Readonly<{ baseUrl: string; token: string }>;
   provider: CodexChatGptProviderRuntime;
   // True while this process is running a turn of the thread, summarizing it
-  // or preparing a turn of it, so its private context is in use.
+  // or holding an initial request of it from its preparation until its turn
+  // runs, so its private context is in use.
   owns(threadId: string): boolean;
   close(): Promise<void>;
 }>;
@@ -122,26 +129,30 @@ function toolRelayInstruction(ticket: string, binding: string): string {
 export class RouteBAdmission {
   private readonly running = new Set<string>();
   private readonly summarizing = new Set<string>();
-  // Turns being prepared, which may confirm a context handoff. They do not
-  // exclude each other or a turn; they only mark the thread as in use.
-  private readonly preparing = new Map<string, number>();
+  // Initial requests held from their preparation (which may confirm a
+  // context handoff) through durable admission until their turn runs. They
+  // do not exclude each other or a turn; they only mark the thread as in
+  // use, so it is continuously owned and cannot be closed in between.
+  private readonly held = new Map<string, number>();
 
   owns(threadId: string): boolean {
     return (
       this.running.has(threadId) ||
       this.summarizing.has(threadId) ||
-      (this.preparing.get(threadId) ?? 0) > 0
+      (this.held.get(threadId) ?? 0) > 0
     );
   }
 
-  beginPrepare(threadId: string): void {
-    this.preparing.set(threadId, (this.preparing.get(threadId) ?? 0) + 1);
-  }
-
-  endPrepare(threadId: string): void {
-    const remaining = (this.preparing.get(threadId) ?? 1) - 1;
-    if (remaining > 0) this.preparing.set(threadId, remaining);
-    else this.preparing.delete(threadId);
+  hold(threadId: string): () => void {
+    this.held.set(threadId, (this.held.get(threadId) ?? 0) + 1);
+    let holding = true;
+    return () => {
+      if (!holding) return;
+      holding = false;
+      const remaining = (this.held.get(threadId) ?? 1) - 1;
+      if (remaining > 0) this.held.set(threadId, remaining);
+      else this.held.delete(threadId);
+    };
   }
 
   beginTurn(threadId: string): boolean {
@@ -191,7 +202,9 @@ function compactionThread(
   return null;
 }
 
-// Host compaction for a thread owns that thread for the whole summary.
+// Host compaction for a thread owns that thread for the whole summary. Turn
+// preparation needs no owner of its own: the provider holds the thread of an
+// initial request from before its preparation until its turn runs.
 export function admittedCompaction(
   inner: CodexChatGptCompaction,
   admission: RouteBAdmission,
@@ -209,20 +222,7 @@ export function admittedCompaction(
       }
     },
     ...(inner.prepareTurn
-      ? {
-          prepareTurn: async (input) => {
-            const threadId = compactionThread({
-              metadataHeader: undefined,
-              body: input.body,
-            });
-            if (threadId) admission.beginPrepare(threadId);
-            try {
-              return await inner.prepareTurn!(input);
-            } finally {
-              if (threadId) admission.endPrepare(threadId);
-            }
-          },
-        }
+      ? { prepareTurn: (input) => inner.prepareTurn!(input) }
       : {}),
   };
 }
@@ -332,9 +332,12 @@ export async function startRouteBRuntime(
       admission,
     ),
     compaction: admittedCompaction(options.compaction, admission),
-    turns: new PrivateProviderTurnJournal({
-      root: path.join(options.stateRoot, "provider-turns"),
-    }),
+    threads: { hold: (identity) => admission.hold(identity.threadId) },
+    turns:
+      options.journal ??
+      new PrivateProviderTurnJournal({
+        root: path.join(options.stateRoot, "provider-turns"),
+      }),
   });
   return {
     endpoint: { baseUrl: `${provider.baseUrl}/v1`, token },

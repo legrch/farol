@@ -161,6 +161,13 @@ type ProviderOptions = Readonly<{
   // Durable identity of every admitted initial request; see EV-05 in
   // handleResponses.
   turns: ProviderTurnJournal;
+  // Marks the thread of an initial request as in use from before its context
+  // is prepared until its first round has been served, which is after its
+  // durable admission and the start of its conversation run, or until the
+  // request is refused first. Releasing twice is harmless.
+  threads?: Readonly<{
+    hold(identity: CodexChatGptTurnInput["identity"]): () => void;
+  }>;
 }>;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -1069,6 +1076,38 @@ async function handleResponses(
     refusal(response, 503, "FAROL_NEXT_PROVIDER_BUSY");
     return;
   }
+  // From here the thread is in use: its context is prepared, the request is
+  // admitted durably and its conversation run starts before the hold ends,
+  // so nothing closes the task in between.
+  const release = options.threads?.hold(identity) ?? (() => undefined);
+  try {
+    await serveInitialRequest(
+      raw,
+      parsed.data,
+      identity,
+      key,
+      response,
+      options,
+      turns,
+      onToolCallObserved,
+      onRefusal,
+    );
+  } finally {
+    release();
+  }
+}
+
+async function serveInitialRequest(
+  raw: unknown,
+  data: ResponseRequest,
+  identity: CodexChatGptTurnInput["identity"],
+  key: string,
+  response: ServerResponse,
+  options: ProviderOptions,
+  turns: Map<string, ActiveProviderTurn>,
+  onToolCallObserved: () => void,
+  onRefusal: (code: string) => void,
+): Promise<void> {
   let trustedContext: string | null = null;
   let contextDelivered: (() => void) | undefined;
   if (options.compaction?.prepareTurn) {
@@ -1082,13 +1121,13 @@ async function handleResponses(
     trustedContext = prepared.value.trustedContext;
     contextDelivered = prepared.value.delivered;
   }
-  const prompt = promptFromInput(parsed.data.input, trustedContext);
+  const prompt = promptFromInput(data.input, trustedContext);
   if (prompt === null) {
     refusal(response, 422, "FAROL_NEXT_INPUT_UNSUPPORTED");
     return;
   }
   try {
-    CodexNativeToolRegistry.parse(parsed.data.tools);
+    CodexNativeToolRegistry.parse(data.tools);
   } catch (error) {
     onRefusal(
       error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
@@ -1110,9 +1149,9 @@ async function handleResponses(
       key,
       digest(
         canonicalJson({
-          model: parsed.data.model,
-          input: parsed.data.input,
-          tools: parsed.data.tools,
+          model: data.model,
+          input: data.input,
+          tools: data.tools,
         }),
       ),
     );
@@ -1135,12 +1174,12 @@ async function handleResponses(
   let turn: ActiveProviderTurn;
   try {
     turn = new ActiveProviderTurn(
-      parsed.data,
+      data,
       {
-        requestedModel: parsed.data.model,
+        requestedModel: data.model,
         prompt,
         identity,
-        tools: structuredClone(parsed.data.tools),
+        tools: structuredClone(data.tools),
       },
       options.conversation,
       onToolCallObserved,
