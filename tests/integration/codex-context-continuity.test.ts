@@ -580,6 +580,221 @@ describe("Codex host context continuity composition", () => {
     expect(summary.retire).toHaveBeenCalledTimes(1);
   });
 
+  function markerlessTurn(turnId: string, threadId = "thread-context-1") {
+    return {
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Continue the task." }],
+          },
+        ],
+        tools: [],
+        client_metadata: {
+          session_id: threadId,
+          thread_id: threadId,
+          turn_id: turnId,
+        },
+      },
+    };
+  }
+
+  it("HR-009/F1 restores the epoch's exact checkpoint into a markerless turn after an exact host confirmation, across restarts, once per delivery", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    const first = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: new PrivateContextStore({ root }),
+      summary,
+    });
+    const handoff = await first.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok) throw new Error(handoff.error.code);
+    await expect(
+      first.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId: "thread-context-1",
+        turnId: "turn-context-compact-1",
+        itemId: "host-context-compaction-1",
+        signal: "turn_completed",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+
+    // F1-01: the host hid the marker; the next turn still carries the
+    // protected constraint and the unresolved operation from the checkpoint.
+    const prepared = await first.prepareTurn(markerlessTurn("turn-after-1"));
+    if (!prepared.ok) throw new Error(prepared.error.code);
+    expect(prepared.value.trustedContext).toContain(
+      "Do not repeat an unknown write.",
+    );
+    expect(prepared.value.trustedContext).toContain("write-17");
+    expect(prepared.value.delivered).toBeTypeOf("function");
+    expect(summary.request).toHaveBeenCalledTimes(1);
+
+    // F1-05: once a carrying turn completed, the same epoch does not repeat
+    // the checkpoint; a restart redelivers it once (F1-02).
+    prepared.value.delivered?.();
+    await expect(
+      first.prepareTurn(markerlessTurn("turn-after-2")),
+    ).resolves.toEqual({
+      ok: true,
+      value: expect.objectContaining({ trustedContext: null }),
+    });
+    const restarted = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: new PrivateContextStore({ root }),
+      summary,
+    });
+    const redelivered = await restarted.prepareTurn(
+      markerlessTurn("turn-after-3"),
+    );
+    if (!redelivered.ok) throw new Error(redelivered.error.code);
+    expect(redelivered.value.trustedContext).toContain("write-17");
+
+    // F1-07: a task that never compacted keeps first-turn rules; the
+    // neighbour's restoration is unaffected by it.
+    await expect(
+      restarted.prepareTurn(markerlessTurn("turn-fresh-1", "thread-fresh")),
+    ).resolves.toEqual({ ok: true, value: { trustedContext: null } });
+    expect(summary.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("HR-009/F1-03 keeps the checkpoint undelivered after a marker-carrying turn was refused before submission, and restores it to a later markerless turn", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    const store = new PrivateContextStore({ root });
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary,
+    });
+    const handoff = await continuity.compact({
+      endpoint: "responses_compact",
+      body: unaryBody(),
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok || handoff.value.variant !== "unary_replacement_history") {
+      throw new Error("EXPECTED_UNARY_HANDOFF");
+    }
+    // The marker-carrying turn reconciles the handoff, then is refused
+    // before anything reaches the conversation: `delivered` is never called.
+    const carrying = await continuity.prepareTurn({
+      body: {
+        ...markerlessTurn("turn-carrying").body,
+        input: [
+          ...handoff.value.response.output,
+          ...markerlessTurn("turn-carrying").body.input,
+        ],
+      },
+    });
+    if (!carrying.ok) throw new Error(carrying.error.code);
+    expect(carrying.value.trustedContext).toContain("write-17");
+    await expect(store.load(contextBinding())).resolves.toMatchObject({
+      phase: "active",
+      epoch: 2,
+    });
+
+    const later = await continuity.prepareTurn(markerlessTurn("turn-later"));
+    if (!later.ok) throw new Error(later.error.code);
+    expect(later.value.trustedContext).toContain(
+      "Do not repeat an unknown write.",
+    );
+    expect(summary.request).toHaveBeenCalledTimes(1);
+    expect(summary.retire).toHaveBeenCalledTimes(1);
+  });
+
+  it("HR-009/F1-06 refuses a markerless turn whose active epoch names a missing or inconsistent checkpoint instead of falling back to a fresh session", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    const store = new PrivateContextStore({ root });
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary,
+    });
+    const handoff = await continuity.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok) throw new Error(handoff.error.code);
+    await expect(
+      continuity.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId: "thread-context-1",
+        turnId: "turn-context-compact-1",
+        itemId: "host-context-compaction-1",
+        signal: "turn_completed",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+    const active = await store.load(contextBinding());
+    if (!active) throw new Error("EXPECTED_ACTIVE_SESSION");
+
+    await store.save({ ...active, lastCheckpointId: "checkpoint-missing" });
+    await expect(
+      continuity.prepareTurn(markerlessTurn("turn-missing")),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "HOST_CHECKPOINT_INVALID" },
+    });
+
+    // A record whose epoch or completed request no longer matches the
+    // checkpoint it names is refused too: no older or looser checkpoint is
+    // ever selected in its place.
+    await store.save({ ...active, epoch: active.epoch + 1 });
+    await expect(
+      continuity.prepareTurn(markerlessTurn("turn-stale-epoch")),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "HOST_CHECKPOINT_INVALID" },
+    });
+    if (!active.lastCompletedRequest) throw new Error("EXPECTED_REQUEST");
+    await store.save({
+      ...active,
+      lastCompletedRequest: {
+        ...active.lastCompletedRequest,
+        sourceBoundary: "turn-other-boundary",
+      },
+    });
+    await expect(
+      continuity.prepareTurn(markerlessTurn("turn-inconsistent")),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "HOST_CHECKPOINT_INVALID" },
+    });
+
+    // The consistent record restores again; nothing was summarized anew.
+    await store.save(active);
+    const restored = await continuity.prepareTurn(markerlessTurn("turn-ok"));
+    if (!restored.ok) throw new Error(restored.error.code);
+    expect(restored.value.trustedContext).toContain("write-17");
+    expect(summary.request).toHaveBeenCalledTimes(1);
+  });
+
   it("retries only local source cleanup after an exact host confirmation", async () => {
     const root = await stateRoot();
     const summary = driver();

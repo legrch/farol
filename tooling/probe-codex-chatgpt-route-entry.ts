@@ -116,8 +116,19 @@ const context = createCodexContextController({
     },
   },
 });
+// The protected constraint lives only in the checkpoint, never in a user
+// message: the continuation's actual prompt must carry it (F1-08).
+const protectedConstraint = checkpointContent.activeConstraints[0];
+let continuationCarriedCheckpoint: boolean | null = null;
 const conversation: CodexChatGptConversation = {
   run: async (input, observer) => {
+    if (input.prompt.includes("Continue after compaction")) {
+      continuationCarriedCheckpoint =
+        input.prompt.includes(protectedConstraint);
+      if (!continuationCarriedCheckpoint) {
+        throw new Error("NATIVE_CONTEXT_NOT_IN_NEXT_PROMPT");
+      }
+    }
     toolCount = input.tools.length;
     if (toolCount < 1) {
       throw new Error("CODEX_CHATGPT_NATIVE_TOOL_CATALOGUE_MISSING");
@@ -311,7 +322,8 @@ try {
     contextSession.lastCompletedOperationId === null ||
     contextSession.lastCheckpointId === null ||
     summarySubmissions !== 1 ||
-    summaryResets !== 1
+    summaryResets !== 1 ||
+    continuationCarriedCheckpoint !== true
   ) {
     process.stderr.write(
       `${JSON.stringify({
@@ -328,6 +340,7 @@ try {
           : null,
         summarySubmissions,
         summaryResets,
+        continuationCarriedCheckpoint,
         provider: provider.diagnostics(),
       })}\n`,
     );
@@ -359,6 +372,7 @@ try {
           summarySubmissions,
           summaryResets,
           sourceRetired: true,
+          continuationCarriedCheckpoint,
           checkpointSha256: createHash("sha256")
             .update(JSON.stringify(checkpointContent))
             .digest("hex"),

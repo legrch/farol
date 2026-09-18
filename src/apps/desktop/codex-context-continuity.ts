@@ -408,9 +408,44 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       }
       const classified = normalizeSessionFailure(session);
       if (classified) return failure(classified);
-      return session.phase === "active"
-        ? success({ trustedContext: null })
-        : failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      if (session.phase !== "active") {
+        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      }
+      // A session that never completed a compaction admits the turn under
+      // first-turn rules: there is no checkpoint to carry.
+      if (session.lastCheckpointId === null) {
+        return success({ trustedContext: null });
+      }
+      // The epoch began with a compaction whose marker this request does not
+      // carry: a host that kept its exact confirmation to itself, or a turn
+      // after a marker-carrying one was refused before submission. Being
+      // active proves nothing about the model's context, so the exact
+      // durable checkpoint of this epoch is restored through the same
+      // delivery as a transported one, or the turn is refused before
+      // anything is sent. Nothing older or looser is ever selected.
+      let checkpoint: CheckpointEnvelope | null;
+      try {
+        checkpoint = await this.options.store.get(
+          binding,
+          session.lastCheckpointId,
+        );
+      } catch {
+        return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
+      }
+      const completed = session.lastCompletedRequest;
+      if (
+        !checkpoint ||
+        !completed ||
+        !sameContextBinding(checkpoint.binding, binding) ||
+        checkpoint.operationId !== session.lastCompletedOperationId ||
+        checkpoint.operationId !== completed.operationId ||
+        checkpoint.source !== completed.source ||
+        checkpoint.sourceBoundary !== completed.sourceBoundary ||
+        checkpoint.epoch + 1 !== session.epoch
+      ) {
+        return failure("HOST_CHECKPOINT_INVALID");
+      }
+      return success(this.deliverable(checkpoint));
     }
     const transportedCheckpoint = replayed.value.checkpoint;
     if (!sameContextBinding(transportedCheckpoint.binding, binding)) {

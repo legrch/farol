@@ -246,6 +246,78 @@ describe("Route B runtime composed as the product composes it", () => {
     ).resolves.toMatchObject({ phase: "active", epoch: 2 });
   });
 
+  it("HR-009/F1 sends the epoch's checkpoint in the actual next prompt when the host omits the marker after an exact confirmation", async () => {
+    const task = new TaskConversation();
+    const { controller, runtime: route } = await compose(
+      { surfaceFor: async () => ({ ok: true as const, surface: task }) },
+      task,
+    );
+    const first = await post(
+      route,
+      "/responses",
+      initialRequest("turn-hidden-1", "Say hello through Route B."),
+    );
+    expect(await first.text()).toContain("response.completed");
+    const compacted = await post(
+      route,
+      "/responses/compact",
+      {
+        model: "farol-next/mind",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "Say hello through Route B." },
+            ],
+          },
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Answer 1." }],
+          },
+        ],
+      },
+      {
+        "x-codex-turn-metadata": JSON.stringify({
+          thread_id: threadId,
+          turn_id: "turn-hidden-compact",
+        }),
+      },
+    );
+    expect(compacted.status).toBe(200);
+    // The host confirms the compaction exactly and keeps the marker to
+    // itself; the next ordinary request carries only the new message.
+    await expect(
+      controller.continuity.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId,
+        turnId: "turn-hidden-compact",
+        itemId: null,
+        signal: "thread_compacted",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+    const summaries = task.prompts.length;
+
+    const next = await post(
+      route,
+      "/responses",
+      initialRequest("turn-hidden-2", "Continue after the hidden marker."),
+    );
+    expect(next.status).toBe(200);
+    expect(await next.text()).toContain("response.completed");
+    expect(task.prompts).toHaveLength(summaries + 1);
+    expect(task.prompts[summaries]).toContain(
+      "Continue after the hidden marker.",
+    );
+    // The constraint lives only in the checkpoint, never in the new message.
+    expect(task.prompts[summaries]).toContain("Keep every change local.");
+    expect(task.prompts[summaries]).toContain("Use the second draft.");
+  });
+
   it("correlates one host tool that ChatGPT invokes through the caller relay", async () => {
     const relayRoot = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-relay-")),
