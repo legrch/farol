@@ -1,4 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  listEvidenceAttempts,
+  openEvidenceAttempt,
+} from "../../tooling/evidence-attempt.mjs";
 import { EVIDENCE_LANES } from "../../tooling/evidence-cases.mjs";
 import {
   evaluateEligibility,
@@ -13,10 +21,12 @@ const candidate = Object.freeze({
 });
 
 const attemptId = "20260918T090000000Z-0000000a";
+const TERMINAL_SHA256 = "e".repeat(64);
 
 // A complete attempt as the loader returns it: receipts that name this
-// attempt and lane, recorded outputs the loader re-read unchanged, and the
-// interval its receipts span.
+// attempt and lane, recorded outputs the loader re-read unchanged, the
+// interval its receipts span, and the loader's own hash of the terminal
+// receipt's current bytes.
 function passingAttempt(lane, terminalOverrides = {}, extra = {}) {
   const cases = [...EVIDENCE_LANES[lane].cases];
   const byproducts =
@@ -46,12 +56,15 @@ function passingAttempt(lane, terminalOverrides = {}, extra = {}) {
       ...terminalOverrides,
     },
     exit: { attemptId, exitCode: 0 },
+    terminalSha256: TERMINAL_SHA256,
     verification: { receipts: [], byproducts: [] },
     ...extra,
   };
 }
 
-// An observer that watched exactly this run.
+// An observer that watched exactly this run: its own inventory of the
+// attempt's byproducts and the last sha256 it sampled of terminal.json,
+// both consistent with `passingAttempt`'s defaults above.
 const observer = Object.freeze({
   healthy: true,
   lane: "sealed-package",
@@ -63,6 +76,10 @@ const observer = Object.freeze({
   interval: {
     startedAt: "2026-09-18T08:59:00.000Z",
     endedAt: "2026-09-18T09:11:00.000Z",
+  },
+  effects: {
+    byproducts: [{ path: "report.json", bytes: 10, sha256: "d".repeat(64) }],
+    terminalSha256: TERMINAL_SHA256,
   },
 });
 
@@ -322,22 +339,34 @@ describe("EV-03/EV-08 evidence eligibility", () => {
         ),
       }).reasons,
     ).toEqual(["RECEIPT_LANE_MISMATCH:hunt"]);
+    // Both cases below deliberately hand the observer a matching inventory,
+    // so only the missing-required-output check under test fires.
+    const otherByproducts = [
+      { path: "other.json", bytes: 4, sha256: "d".repeat(64) },
+    ];
     expect(
       evaluate({
         attempt: passingAttempt("sealed-package", {
-          byproducts: [
-            { path: "other.json", bytes: 4, sha256: "d".repeat(64) },
-          ],
+          byproducts: otherByproducts,
         }),
+        observer: {
+          ...observer,
+          effects: { ...observer.effects, byproducts: otherByproducts },
+        },
       }).reasons,
     ).toEqual(["BYPRODUCT_REQUIRED_MISSING:report.json"]);
+    const emptyByproducts = [
+      { path: "report.json", bytes: 0, sha256: "d".repeat(64) },
+    ];
     expect(
       evaluate({
         attempt: passingAttempt("sealed-package", {
-          byproducts: [
-            { path: "report.json", bytes: 0, sha256: "d".repeat(64) },
-          ],
+          byproducts: emptyByproducts,
         }),
+        observer: {
+          ...observer,
+          effects: { ...observer.effects, byproducts: emptyByproducts },
+        },
       }).reasons,
     ).toEqual(["BYPRODUCT_REQUIRED_MISSING:report.json"]);
   });
@@ -443,5 +472,150 @@ describe("EV-03/EV-08 evidence eligibility", () => {
         reasons: ["NO_WITNESS_DECLARED"],
       },
     ]);
+  });
+});
+
+// P2 (independent review, Tests/Infra — evidence integrity): a coordinated
+// post-run replacement of a lane's report.json together with a consistent
+// rewrite of terminal.json must not slip past acceptance just because the
+// two files still agree with each other. The observer's own inventory,
+// hashed independently while it watched, is the thing that must still agree
+// with what the attempt claims now.
+describe("P2 observer inventory binds byproducts and the terminal receipt", () => {
+  const roots = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      roots
+        .splice(0)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
+  });
+
+  async function sealedAttempt() {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-eligibility-"),
+    );
+    roots.push(root);
+    const laneRoot = path.join(root, "artifacts", "e2e");
+    const opened = await openEvidenceAttempt(laneRoot, {
+      lane: "sealed-package",
+      input: { ...candidate },
+    });
+    await fs.writeFile(
+      path.join(opened.directory, "report.json"),
+      JSON.stringify({ status: "PASS" }),
+    );
+    await opened.finish("PASS", {
+      cases: [...EVIDENCE_LANES["sealed-package"].cases],
+    });
+    // Mirrors the exit receipt a real runner process writes on exit, so the
+    // unrelated EXIT_RECEIPT_MISSING reason never crowds out what this
+    // describe block is testing.
+    await fs.writeFile(
+      path.join(opened.directory, "exit.json"),
+      JSON.stringify({
+        schema: "farol.next.evidence-attempt/v1",
+        attemptId: opened.attemptId,
+        exitCode: 0,
+        exitedAt: new Date().toISOString(),
+      }),
+    );
+    return {
+      laneRoot,
+      attemptId: opened.attemptId,
+      directory: opened.directory,
+    };
+  }
+
+  // The observer receipt a healthy run would actually have produced: its
+  // own inventory of the byproducts and the last sha256 it sampled of
+  // terminal.json, both read from the attempt before any tamper below.
+  async function healthyObserverFor(laneRoot, attemptIdentifier) {
+    const [loaded] = await listEvidenceAttempts(laneRoot);
+    return {
+      healthy: true,
+      lane: "sealed-package",
+      attemptId: attemptIdentifier,
+      subject: { ...candidate },
+      interval: {
+        startedAt: "2000-01-01T00:00:00.000Z",
+        endedAt: "2100-01-01T00:00:00.000Z",
+      },
+      effects: {
+        byproducts: loaded.terminal.byproducts,
+        terminalSha256: loaded.terminalSha256,
+      },
+    };
+  }
+
+  async function evaluateLoaded(laneRoot, observerReceipt) {
+    const [loaded] = await listEvidenceAttempts(laneRoot);
+    return evaluateEligibility({
+      lane: "sealed-package",
+      attempt: loaded,
+      candidate,
+      review: {
+        reviewer: "independent",
+        verdict: "ACCEPT",
+        subject: { ...candidate },
+      },
+      observer: observerReceipt,
+    });
+  }
+
+  it("(a) refuses a coordinated post-run replacement of report.json and a consistent rewrite of terminal.json", async () => {
+    const {
+      laneRoot,
+      attemptId: identifier,
+      directory,
+    } = await sealedAttempt();
+    const observerReceipt = await healthyObserverFor(laneRoot, identifier);
+
+    // Coordinated tamper: replace report.json, then rewrite terminal.json's
+    // own byproduct record to match the new bytes -- the loader's
+    // self-consistency check (byproductReasons in evidence-attempt.mjs)
+    // sees nothing wrong, because both files were rewritten together.
+    const reportPath = path.join(directory, "report.json");
+    const newReport = JSON.stringify({ status: "PASS", tampered: true });
+    await fs.writeFile(reportPath, newReport);
+    const newHash = createHash("sha256")
+      .update(Buffer.from(newReport))
+      .digest("hex");
+
+    const terminalPath = path.join(directory, "terminal.json");
+    const terminal = JSON.parse(await fs.readFile(terminalPath, "utf8"));
+    terminal.byproducts = terminal.byproducts.map((record) =>
+      record.path === "report.json"
+        ? { ...record, bytes: Buffer.byteLength(newReport), sha256: newHash }
+        : record,
+    );
+    await fs.writeFile(terminalPath, JSON.stringify(terminal));
+
+    const [loaded] = await listEvidenceAttempts(laneRoot);
+    expect(loaded.verification).toEqual({ receipts: [], byproducts: [] });
+
+    const result = await evaluateLoaded(laneRoot, observerReceipt);
+    expect(result.acceptable).toBe(false);
+    expect(result.reasons).toContain("OBSERVER_BYPRODUCT_MISMATCH:report.json");
+    expect(result.reasons).toContain("OBSERVER_TERMINAL_MISMATCH");
+  });
+
+  it("(b) accepts an untouched attempt against the observer's own inventory", async () => {
+    const { laneRoot, attemptId: identifier } = await sealedAttempt();
+    const observerReceipt = await healthyObserverFor(laneRoot, identifier);
+    expect(await evaluateLoaded(laneRoot, observerReceipt)).toMatchObject({
+      acceptable: true,
+      reasons: [],
+    });
+  });
+
+  it("(c) refuses an observer receipt that never sealed a terminal digest", async () => {
+    const { laneRoot, attemptId: identifier } = await sealedAttempt();
+    const observerReceipt = await healthyObserverFor(laneRoot, identifier);
+    delete observerReceipt.effects.terminalSha256;
+    const result = await evaluateLoaded(laneRoot, observerReceipt);
+    expect(result.acceptable).toBe(false);
+    expect(result.reasons).toEqual(["OBSERVER_TERMINAL_UNSEALED"]);
   });
 });

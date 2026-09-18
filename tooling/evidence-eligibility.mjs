@@ -9,7 +9,12 @@ import { listEvidenceAttempts } from "./evidence-attempt.mjs";
 // (PASS, FAIL, BLOCKED, INTERRUPTED, NOT_RUN, ...) and whether that evidence is
 // eligible for the current claim (CURRENT, WRONG_SUBJECT, WRONG_BOUNDARY,
 // INCOMPLETE, UNVERIFIED).  A green label is never enough by itself: every
-// refusal below names the missing fact instead.
+// refusal below names the missing fact instead. Where a lane requires an
+// effect observer, eligibility additionally binds the observer's own
+// independently hashed inventory (`effects.byproducts`,
+// `effects.terminalSha256`) against the attempt's current byproducts and
+// terminal.json bytes, so a coordinated post-run rewrite of both together
+// cannot pass merely because they still agree with each other.
 
 const SUBJECT_FIELDS = Object.freeze([
   "sourceCommit",
@@ -94,7 +99,14 @@ function timestamp(value) {
 // this attempt, this candidate, over an interval that covers the attempt
 // from its start to its terminal receipt, and healthy throughout. A receipt
 // that says `healthy: true` about another run, or about no run in
-// particular, is not an observation of this one.
+// particular, is not an observation of this one. Beyond that binding, the
+// observer's own inventory -- `effects.byproducts`, hashed independently of
+// the attempt's own receipts, and `effects.terminalSha256`, its last
+// sampled digest of terminal.json's bytes -- must still agree with what the
+// attempt claims now. Without this, a coordinated post-run replacement of a
+// byproduct together with a consistent rewrite of terminal.json passes the
+// loader's self-consistency check (both files still agree with each other)
+// even though neither agrees with what the observer actually watched.
 function observerReasons(lane, observer, attempt, candidate) {
   if (!observer) return ["OBSERVER_MISSING"];
   const reasons = [];
@@ -130,6 +142,50 @@ function observerReasons(lane, observer, attempt, candidate) {
       if (!observed.has(name)) reasons.push(`OBSERVER_CASE_UNCOVERED:${name}`);
     }
   }
+
+  // Byproduct binding: the observer hashed the attempt directory itself, so
+  // its inventory must name the same paths with the same bytes and sha256
+  // as the attempt's own terminal receipt claims right now.
+  const attemptByproducts = new Map(
+    (attempt.terminal?.byproducts ?? []).map((record) => [
+      record?.path,
+      record,
+    ]),
+  );
+  const observerByproducts = new Map(
+    (observer.effects?.byproducts ?? []).map((record) => [
+      record?.path,
+      record,
+    ]),
+  );
+  const byproductPaths = [
+    ...new Set([...attemptByproducts.keys(), ...observerByproducts.keys()]),
+  ].sort();
+  for (const recordPath of byproductPaths) {
+    const attemptRecord = attemptByproducts.get(recordPath);
+    const observerRecord = observerByproducts.get(recordPath);
+    if (
+      !attemptRecord ||
+      !observerRecord ||
+      attemptRecord.bytes !== observerRecord.bytes ||
+      attemptRecord.sha256 !== observerRecord.sha256
+    ) {
+      reasons.push(`OBSERVER_BYPRODUCT_MISMATCH:${recordPath}`);
+    }
+  }
+
+  // Terminal binding: the observer's last sampled digest of terminal.json's
+  // own bytes must equal the current file, so the receipt that describes
+  // the byproducts above cannot itself have been rewritten after the
+  // observer stopped watching. An older receipt that never recorded a
+  // digest is unsealed, not merely stale.
+  const observerTerminalSha256 = observer.effects?.terminalSha256;
+  if (observerTerminalSha256 === undefined || observerTerminalSha256 === null) {
+    reasons.push("OBSERVER_TERMINAL_UNSEALED");
+  } else if (observerTerminalSha256 !== attempt.terminalSha256) {
+    reasons.push("OBSERVER_TERMINAL_MISMATCH");
+  }
+
   return reasons;
 }
 

@@ -14,7 +14,11 @@ import { laneContract } from "./evidence-cases.mjs";
 // Its receipt is bound to the exact lane, attempt and candidate it watched
 // and to the interval it covered, so it cannot be moved to another run, and
 // it says `healthy` only when it sampled without gaps from before the
-// attempt started until after its terminal receipt appeared.
+// attempt started until after its terminal receipt appeared. It also keeps
+// re-hashing terminal.json's own bytes on every sample once the file
+// appears, so `effects.terminalSha256` holds the last digest it actually
+// saw before it stopped watching -- eligibility binds against that digest,
+// not merely against the receipt's presence.
 
 export const EFFECT_OBSERVER_SCHEMA = "farol.next.effect-observer/v1";
 
@@ -132,6 +136,7 @@ export async function observeAttempt({
   const samples = [];
   const firstSeen = new Map();
   let terminalSeenAt = null;
+  let terminalSha256 = null;
   let interruptedSeenAt = null;
 
   const sample = () => {
@@ -156,11 +161,15 @@ export async function observeAttempt({
             : `${entry.path}@${entry.sha256}`;
           if (!firstSeen.has(key)) firstSeen.set(key, record.at);
         }
-        if (
-          terminalSeenAt === null &&
-          fsSync.existsSync(path.join(directory, "terminal.json"))
-        ) {
-          terminalSeenAt = record.at;
+        const terminalFile = path.join(directory, "terminal.json");
+        if (fsSync.existsSync(terminalFile)) {
+          if (terminalSeenAt === null) terminalSeenAt = record.at;
+          // Re-hashed every sample so the last value before the observer
+          // stops is the last one it actually observed, not merely the
+          // first: a rewrite between samples must change this digest.
+          terminalSha256 = createHash("sha256")
+            .update(fsSync.readFileSync(terminalFile))
+            .digest("hex");
         }
         if (
           interruptedSeenAt === null &&
@@ -258,6 +267,7 @@ export async function observeAttempt({
         ...(sample.error ? { error: sample.error } : {}),
       })),
       terminalSeenAt,
+      terminalSha256,
       interruptedSeenAt,
       byproducts: directory
         ? inventory(directory).filter((entry) => !entry.receipt)

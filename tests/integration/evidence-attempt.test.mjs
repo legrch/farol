@@ -247,6 +247,11 @@ process.exitCode = 0;
         verdict: "ACCEPT",
         subject: { ...candidate },
       },
+      // This describe block exercises the loader's own re-read checks, not
+      // observer binding: the default observer below reports exactly what
+      // the attempt currently claims, so it never contributes an
+      // OBSERVER_BYPRODUCT_MISMATCH/OBSERVER_TERMINAL_MISMATCH reason of
+      // its own here.
       observer: observer ?? {
         healthy: true,
         lane: "sealed-package",
@@ -255,6 +260,10 @@ process.exitCode = 0;
         interval: {
           startedAt: "2000-01-01T00:00:00.000Z",
           endedAt: "2100-01-01T00:00:00.000Z",
+        },
+        effects: {
+          byproducts: attempt.terminal?.byproducts ?? [],
+          terminalSha256: attempt.terminalSha256 ?? null,
         },
       },
     });

@@ -239,6 +239,21 @@ function byproductReasons(directory, terminal) {
   return reasons;
 }
 
+// The terminal receipt's own bytes, hashed independently of its parsed
+// content. This is the minimal read-only accessor an effect observer's
+// receipt is bound against in evidence-eligibility.mjs: null when no
+// terminal receipt exists yet.
+function terminalSha256Sync(directory) {
+  try {
+    return createHash("sha256")
+      .update(fsSync.readFileSync(path.join(directory, "terminal.json")))
+      .digest("hex");
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 function attemptIdsSync(laneRoot) {
   let names;
   try {
@@ -440,10 +455,15 @@ export async function openEvidenceAttempt(laneRoot, { lane, input }) {
 
 // Loads every attempt of a lane with its receipts and, at this I/O
 // boundary, what acceptance may not take on trust: `verification.receipts`
-// names every receipt that contradicts its attempt or lane, and
+// names every receipt that contradicts its attempt or lane,
 // `verification.byproducts` every recorded output that is missing, changed,
-// unreadable, outside the directory or unrecorded. Both are empty for an
-// attempt whose evidence still says what it said when it ended.
+// unreadable, outside the directory or unrecorded, and `terminalSha256` the
+// current bytes of terminal.json itself (independent of `receiptReasons`,
+// which only checks the parsed identity fields). An effect observer's own
+// last-sampled digest is bound against that same field in
+// evidence-eligibility.mjs, so a coordinated post-run rewrite of a
+// byproduct together with the terminal receipt that describes it cannot
+// pass merely because the two files still agree with each other.
 export async function listEvidenceAttempts(laneRoot) {
   return attemptIdsSync(laneRoot).map((attemptId) => {
     const directory = path.join(laneRoot, "attempts", attemptId);
@@ -457,6 +477,7 @@ export async function listEvidenceAttempts(laneRoot) {
       status: attemptStatus(terminal, interrupted),
       started,
       terminal,
+      terminalSha256: terminalSha256Sync(directory),
       exit,
       interrupted,
       verification: {
