@@ -57,16 +57,27 @@ export class LiveTaskRegistry {
     this.replace(state);
   }
 
+  // The same rule admission enforces: no two tasks share a task, session or
+  // turn identity. One task may spell the same value in two of its own
+  // fields — a Codex host thread runs in the Farol task with the same
+  // identity as its task and its session — so the fields are compared each
+  // against its own kind, never against each other.
   private replace(state: ProductTasksState): void {
     const parsed = ProductTasksStateSchema.parse(state);
-    const identities = new Set<string>();
+    const taskIds = new Set<string>();
+    const sessionIds = new Set<string>();
+    const turnIds = new Set<string>();
     for (const task of parsed.tasks) {
-      for (const identity of [task.taskId, task.sessionId, task.turnId]) {
-        if (identities.has(identity)) {
-          throw new Error("LIVE_TASK_IDENTITY_DUPLICATE");
-        }
-        identities.add(identity);
+      if (
+        taskIds.has(task.taskId) ||
+        sessionIds.has(task.sessionId) ||
+        turnIds.has(task.turnId)
+      ) {
+        throw new Error("LIVE_TASK_IDENTITY_DUPLICATE");
       }
+      taskIds.add(task.taskId);
+      sessionIds.add(task.sessionId);
+      turnIds.add(task.turnId);
     }
     this.tasks.splice(0, this.tasks.length, ...parsed.tasks);
     this.revision = parsed.revision;

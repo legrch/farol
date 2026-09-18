@@ -220,4 +220,33 @@ describe("live task registry", () => {
       registry.restore({ revision: 10, tasks: [candidate(3)] }),
     ).toThrow("LIVE_TASK_REGISTRY_NOT_EMPTY");
   });
+  it("restores and rolls back a Route B task whose thread is its task and session identity", () => {
+    // A Codex host thread runs in the Farol task with the same identity, so
+    // taskId and sessionId are equal by design; only another task may not
+    // reuse any of the three identities.
+    const routeB = {
+      ...candidate(1),
+      taskId: "thread-1",
+      sessionId: "thread-1",
+      turnId: "turn-1",
+      label: "Codex task 1",
+    };
+    const registry = new LiveTaskRegistry(5);
+    expect(() =>
+      registry.restore({ revision: 3, tasks: [routeB, candidate(2)] }),
+    ).not.toThrow();
+    expect(registry.get("thread-1")).toEqual(routeB);
+    expect(() =>
+      registry.rollback({ revision: 4, tasks: [routeB] }),
+    ).not.toThrow();
+    for (const twin of [
+      { ...candidate(3), taskId: "thread-1" },
+      { ...candidate(3), sessionId: "thread-1" },
+      { ...candidate(3), turnId: "turn-1" },
+    ]) {
+      expect(() =>
+        registry.rollback({ revision: 5, tasks: [routeB, twin] }),
+      ).toThrow("LIVE_TASK_IDENTITY_DUPLICATE");
+    }
+  });
 });
