@@ -178,6 +178,173 @@ describe("ChatGPT summary-only context driver", () => {
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
   });
 
+  it("CC-15/CC-03 raises the execution fence before the retained summary is submitted, keeps it up while the outcome is unknown, and lowers it once the turn is over", async () => {
+    const state = await store();
+    const events: string[] = [];
+    const fence = {
+      raise: vi.fn(async (input: { operationId: string }) => {
+        events.push(`raise:${input.operationId}`);
+      }),
+      lower: vi.fn(async (input: { operationId: string }) => {
+        events.push(`lower:${input.operationId}`);
+      }),
+    };
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    retained.runReadonlyTask.mockImplementation(async () => {
+      events.push("submit");
+      return {
+        state: "completed",
+        code: null,
+        deltaCount: 1,
+        observedCharacters: JSON.stringify(content).length,
+        outputText: JSON.stringify(content),
+      };
+    });
+    const driver = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+      fence,
+    });
+    await expect(
+      driver.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(events).toEqual([
+      "raise:compact-context-1",
+      "submit",
+      "lower:compact-context-1",
+    ]);
+
+    // An unknown outcome may still be summarizing on the page: the fence
+    // stays up until the turn is observed to be over.
+    const unknownState = await store();
+    const unknown = route({
+      state: "outcome_unknown",
+      code: "CHATGPT_PAGE_UNREACHABLE",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+      turnUserId: "user-message-1",
+      turnAssistantId: null,
+    });
+    const unknownEvents: string[] = [];
+    const unknownFence = {
+      raise: vi.fn(async () => {
+        unknownEvents.push("raise");
+      }),
+      lower: vi.fn(async () => {
+        unknownEvents.push("lower");
+      }),
+    };
+    const unknownDriver = new ChatGptContextSummaryDriver({
+      store: unknownState,
+      routes: { retained: () => unknown, createFallback: vi.fn() },
+      fence: unknownFence,
+    });
+    await expect(
+      unknownDriver.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "outcome_unknown" });
+    expect(unknownEvents).toEqual(["raise"]);
+
+    // A fence that cannot be raised blocks the summary before anything is
+    // submitted; nothing is left dispatched.
+    const blockedState = await store();
+    const blockedRoute = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const blockedDriver = new ChatGptContextSummaryDriver({
+      store: blockedState,
+      routes: { retained: () => blockedRoute, createFallback: vi.fn() },
+      fence: {
+        raise: async () => {
+          throw new Error("EACCES");
+        },
+        lower: async () => undefined,
+      },
+    });
+    await expect(
+      blockedDriver.request({ request, source: source() }),
+    ).resolves.toEqual({
+      status: "blocked",
+      code: "SUMMARY_FENCE_UNAVAILABLE",
+    });
+    expect(blockedRoute.runReadonlyTask).not.toHaveBeenCalled();
+    await expect(
+      blockedState.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toBeNull();
+  });
+
+  it("CC-03/CC-05 carries the exact bound history into the retained summary, and a page that cannot submit is classified rather than replaced by a fallback", async () => {
+    const state = await store();
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const routes = { retained: () => retained, createFallback: vi.fn() };
+    const driver = new ChatGptContextSummaryDriver({ store: state, routes });
+    // A turn the retained conversation never saw is still summarized: the
+    // canonical history to the boundary travels with the request.
+    const unseen = {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "Unseen suffix: keep the draft." }],
+    };
+    const bound = {
+      ...source(),
+      history: [...source().history, unseen],
+    };
+    await expect(
+      driver.request({ request, source: bound }),
+    ).resolves.toMatchObject({ status: "completed" });
+    const prompt = retained.runReadonlyTask.mock.calls[0]?.[0] as string;
+    expect(prompt).toContain("Unseen suffix: keep the draft.");
+    expect(prompt).toContain(`"sourceBoundary":"${request.sourceBoundary}"`);
+    expect(routes.createFallback).not.toHaveBeenCalled();
+
+    // The retained page exists but cannot submit: not a missing source.
+    const signedOut = route({
+      state: "not_authenticated",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    const signedOutRoutes = {
+      retained: () => signedOut,
+      createFallback: vi.fn(),
+    };
+    const signedOutDriver = new ChatGptContextSummaryDriver({
+      store: await store(),
+      routes: signedOutRoutes,
+    });
+    await expect(
+      signedOutDriver.selectSource({
+        binding,
+        variant: "unary_replacement_history",
+        history: source().history,
+      }),
+    ).resolves.toBe("retained_agent");
+    await expect(
+      signedOutDriver.request({ request, source: source() }),
+    ).resolves.toEqual({
+      status: "not_submitted",
+      code: "SUMMARY_SIGN_IN_REQUIRED",
+    });
+    expect(signedOutRoutes.createFallback).not.toHaveBeenCalled();
+  });
+
   it("selects a persisted retained conversation before its surface reopens", async () => {
     const state = await store();
     const retained = route({

@@ -16,6 +16,7 @@ import {
   type CodexCallerRelayResponse,
 } from "../../../../pkg/caller-relay/protocol";
 import type { CodexCallerRelayPort } from "./codex-caller-relay-port";
+import type { ExecutionFenceReader } from "./execution-fence";
 
 export type ReadonlyComputerMcpBinding = Readonly<{
   ownerId: string;
@@ -186,6 +187,22 @@ function failure(code: string): CallToolResult {
   const value = {
     ok: false,
     error: { code, source: "contract", retry: "never" },
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    structuredContent: value,
+    isError: true,
+  };
+}
+
+// A summary-only phase is in progress somewhere in the owner's session: no
+// Computer tool executes until it is over. The connector transport carries
+// no conversation identity, so the fence covers every caller for that
+// bounded time rather than admitting a call it cannot attribute.
+function fenced(code: string): CallToolResult {
+  const value = {
+    ok: false,
+    error: { code, source: "execution-fence", retry: "later" },
   };
   return {
     content: [{ type: "text", text: JSON.stringify(value) }],
@@ -513,11 +530,30 @@ export function createReadonlyComputerMcpServer(
   mutableContract?: MutableComputerContract,
   connectorVerification?: ConnectorVerificationRecorder,
   callerRelay?: CodexCallerRelayPort,
+  fence?: ExecutionFenceReader,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
     version: "0.1.0-preview.0",
   });
+  // Every tool consults the fence before its contract; an unreadable fence
+  // refuses like a raised one.
+  const guarded =
+    <Arguments extends unknown[]>(
+      run: (...arguments_: Arguments) => Promise<CallToolResult>,
+    ) =>
+    async (...arguments_: Arguments): Promise<CallToolResult> => {
+      if (fence) {
+        let admission;
+        try {
+          admission = await fence.admits();
+        } catch {
+          return fenced("COMPUTER_EXECUTION_FENCE_UNREADABLE");
+        }
+        if (!admission.admitted) return fenced(admission.code);
+      }
+      return run(...arguments_);
+    };
 
   server.registerTool(
     "computer_workspace_list",
@@ -528,7 +564,7 @@ export function createReadonlyComputerMcpServer(
       inputSchema: ListInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
-    async ({ workspaceId, relativePath }, context) =>
+    guarded(async ({ workspaceId, relativePath }, context) =>
       execute(
         contract,
         binding,
@@ -540,6 +576,7 @@ export function createReadonlyComputerMcpServer(
         },
         context.mcpReq.signal,
       ),
+    ),
   );
   server.registerTool(
     "computer_workspace_read",
@@ -550,7 +587,7 @@ export function createReadonlyComputerMcpServer(
       inputSchema: ReadInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
-    async ({ workspaceId, relativePath, offset, length }, context) =>
+    guarded(async ({ workspaceId, relativePath, offset, length }, context) =>
       execute(
         contract,
         binding,
@@ -570,6 +607,7 @@ export function createReadonlyComputerMcpServer(
         },
         context.mcpReq.signal,
       ),
+    ),
   );
   server.registerTool(
     "computer_workspace_search",
@@ -580,7 +618,7 @@ export function createReadonlyComputerMcpServer(
       inputSchema: SearchInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
-    async ({ workspaceId, relativePath, pattern }, context) =>
+    guarded(async ({ workspaceId, relativePath, pattern }, context) =>
       execute(
         contract,
         binding,
@@ -593,6 +631,7 @@ export function createReadonlyComputerMcpServer(
         },
         context.mcpReq.signal,
       ),
+    ),
   );
   server.registerTool(
     "computer_workspace_git_status",
@@ -603,7 +642,7 @@ export function createReadonlyComputerMcpServer(
       inputSchema: VerificationInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
-    async ({ workspaceId }, context) =>
+    guarded(async ({ workspaceId }, context) =>
       execute(
         contract,
         binding,
@@ -616,6 +655,7 @@ export function createReadonlyComputerMcpServer(
         },
         context.mcpReq.signal,
       ),
+    ),
   );
   server.registerTool(
     "computer_workspace_git_head",
@@ -626,7 +666,7 @@ export function createReadonlyComputerMcpServer(
       inputSchema: VerificationInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
-    async ({ workspaceId }, context) =>
+    guarded(async ({ workspaceId }, context) =>
       execute(
         contract,
         binding,
@@ -639,6 +679,7 @@ export function createReadonlyComputerMcpServer(
         },
         context.mcpReq.signal,
       ),
+    ),
   );
 
   if (connectorVerification) {
@@ -651,7 +692,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ConnectorVerificationInputSchema,
         annotations: VERIFICATION_ANNOTATIONS,
       },
-      async ({ challenge, workspaceId }, context) =>
+      guarded(async ({ challenge, workspaceId }, context) =>
         executeConnectorVerification(
           contract,
           binding,
@@ -661,6 +702,7 @@ export function createReadonlyComputerMcpServer(
           workspaceId,
           context.mcpReq.signal,
         ),
+      ),
     );
   }
 
@@ -674,7 +716,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: CodexCallerRelayOperationSchema,
         annotations: CALLER_RELAY_ANNOTATIONS,
       },
-      async (operation) => executeCallerRelay(callerRelay, operation),
+      guarded(async (operation) => executeCallerRelay(callerRelay, operation)),
     );
   }
 
@@ -688,24 +730,26 @@ export function createReadonlyComputerMcpServer(
         inputSchema: WriteInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      async (
-        { operationId, workspaceId, relativePath, content, expectedSha256 },
-        context,
-      ) =>
-        executeMutation(
-          mutableContract,
-          binding,
-          String(context.mcpReq.id),
-          operationId,
-          workspaceId,
-          {
-            kind: "workspace.write",
-            relativePath,
-            content,
-            expectedSha256,
-          },
-          context.mcpReq.signal,
-        ),
+      guarded(
+        async (
+          { operationId, workspaceId, relativePath, content, expectedSha256 },
+          context,
+        ) =>
+          executeMutation(
+            mutableContract,
+            binding,
+            String(context.mcpReq.id),
+            operationId,
+            workspaceId,
+            {
+              kind: "workspace.write",
+              relativePath,
+              content,
+              expectedSha256,
+            },
+            context.mcpReq.signal,
+          ),
+      ),
     );
     server.registerTool(
       "computer_workspace_edit",
@@ -716,24 +760,26 @@ export function createReadonlyComputerMcpServer(
         inputSchema: EditInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      async (
-        { operationId, workspaceId, relativePath, edits, expectedSha256 },
-        context,
-      ) =>
-        executeMutation(
-          mutableContract,
-          binding,
-          String(context.mcpReq.id),
-          operationId,
-          workspaceId,
-          {
-            kind: "workspace.edit",
-            relativePath,
-            edits,
-            expectedSha256,
-          },
-          context.mcpReq.signal,
-        ),
+      guarded(
+        async (
+          { operationId, workspaceId, relativePath, edits, expectedSha256 },
+          context,
+        ) =>
+          executeMutation(
+            mutableContract,
+            binding,
+            String(context.mcpReq.id),
+            operationId,
+            workspaceId,
+            {
+              kind: "workspace.edit",
+              relativePath,
+              edits,
+              expectedSha256,
+            },
+            context.mcpReq.signal,
+          ),
+      ),
     );
   }
 

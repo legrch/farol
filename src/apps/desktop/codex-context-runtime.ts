@@ -3,6 +3,7 @@ import { PrivateContextStore } from "../../modules/chat/infra/repo/private-conte
 import {
   ChatGptContextSummaryDriver,
   type ChatGptContextSummaryRoutes,
+  type SummaryExecutionFence,
 } from "./chatgpt-context-summary";
 import {
   startCodexChatGptProvider,
@@ -17,6 +18,8 @@ export type CodexContextControllerOptions = Readonly<{
   providerProfileId: string;
   stateRoot: string;
   summaryRoutes: ChatGptContextSummaryRoutes;
+  // Fences ordinary Computer tools while a summary-only phase runs.
+  summaryFence?: SummaryExecutionFence;
   maximumSummaryPromptCharacters?: number;
   onContextStateChanged?: (session: ContextSession) => void | Promise<void>;
 }>;
@@ -47,6 +50,9 @@ export function createCodexContextController(
   const summary = new ChatGptContextSummaryDriver({
     store,
     routes: options.summaryRoutes,
+    ...(options.summaryFence === undefined
+      ? {}
+      : { fence: options.summaryFence }),
     ...(options.maximumSummaryPromptCharacters === undefined
       ? {}
       : {

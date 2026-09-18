@@ -462,6 +462,137 @@ describe("read-only Computer MCP adapter", () => {
     }
   });
 
+  it("CC-15 refuses every Computer tool while a summary-only fence is raised, before the contract is consulted, and admits it again once lowered", async () => {
+    let executions = 0;
+    const contract: ReadonlyComputerContract = {
+      async execute(value) {
+        executions += 1;
+        const request = ReadonlyComputerCallRequestSchema.parse(value);
+        return {
+          ok: false,
+          correlation: {
+            ownerId: request.ownerId,
+            sessionId: request.sessionId,
+            taskId: request.taskId,
+            taskEpoch: request.taskEpoch,
+            participantId: request.participantId,
+            turnId: request.turnId,
+            generation: request.generation,
+            callId: request.callId,
+            workspaceId: request.workspaceId,
+            relativePath: request.operation.relativePath,
+            operation: request.operation,
+          },
+          error: {
+            code: "AUTHORITY_PATH_DENIED",
+            source: "owner-restriction",
+            retry: "never",
+          },
+        };
+      },
+    };
+    let phase: "open" | "fenced" | "unreadable" = "fenced";
+    const fence = {
+      admits: async () =>
+        phase === "open"
+          ? { admitted: true as const }
+          : {
+              admitted: false as const,
+              code:
+                phase === "fenced"
+                  ? ("COMPUTER_SUMMARY_PHASE_ACTIVE" as const)
+                  : ("COMPUTER_EXECUTION_FENCE_UNREADABLE" as const),
+            },
+    };
+    const server = createReadonlyComputerMcpServer(
+      contract,
+      {
+        ownerId: "owner-preview",
+        sessionId: "session-a",
+        taskId: "task-a",
+        taskEpoch: 3,
+        participantId: "main-a",
+        turnId: "turn-a",
+        generation: 2,
+      },
+      undefined,
+      undefined,
+      undefined,
+      fence,
+    );
+    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.connect(serverTransport),
+    ]);
+    try {
+      // The catalogue stays visible; execution does not.
+      const listed = await client.listTools();
+      expect(listed.tools.map((tool) => tool.name)).toContain(
+        "computer_workspace_read",
+      );
+      for (const call of [
+        {
+          name: "computer_workspace_list",
+          arguments: { workspaceId: "farol", relativePath: "." },
+        },
+        {
+          name: "computer_workspace_read",
+          arguments: { workspaceId: "farol", relativePath: "src/a.ts" },
+        },
+        {
+          name: "computer_workspace_search",
+          arguments: { workspaceId: "farol", relativePath: ".", pattern: "x" },
+        },
+        {
+          name: "computer_workspace_git_status",
+          arguments: { workspaceId: "farol" },
+        },
+      ]) {
+        const refused = await client.callTool(call);
+        expect(refused.isError, call.name).toBe(true);
+        expect(refused.structuredContent, call.name).toEqual({
+          ok: false,
+          error: {
+            code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+            source: "execution-fence",
+            retry: "later",
+          },
+        });
+      }
+      expect(executions).toBe(0);
+
+      // A fence that cannot be read fails closed too.
+      phase = "unreadable";
+      const unreadable = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "farol", relativePath: "src/a.ts" },
+      });
+      expect(unreadable.structuredContent).toMatchObject({
+        ok: false,
+        error: { code: "COMPUTER_EXECUTION_FENCE_UNREADABLE" },
+      });
+      expect(executions).toBe(0);
+
+      // Lowered: the same call reaches the contract.
+      phase = "open";
+      const admitted = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "farol", relativePath: "src/a.ts" },
+      });
+      expect(admitted.structuredContent).toMatchObject({
+        ok: false,
+        error: { code: "AUTHORITY_PATH_DENIED" },
+      });
+      expect(executions).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("C05-06 accepts a window only for the exact range that was asked", async () => {
     // The fake contract answers every read successfully; the file name picks
     // how it misbehaves.

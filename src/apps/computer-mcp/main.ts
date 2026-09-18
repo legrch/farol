@@ -20,6 +20,7 @@ import {
   materializeReadonlyComputerLaunch,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
 
 function launchContractArgument(arguments_: readonly string[]): string {
@@ -75,6 +76,9 @@ async function main(): Promise<void> {
   const callerRelay = launch.callerRelay
     ? new CodexCallerRelayClient(launch.callerRelay)
     : undefined;
+  // The desktop raises a fence in the launch root while a summary-only
+  // phase runs; no tool executes until it is lowered.
+  const fence = new PrivateExecutionFence({ root: path.dirname(launchFile) });
   const handle = serveStdio(
     () =>
       createReadonlyComputerMcpServer(
@@ -83,6 +87,7 @@ async function main(): Promise<void> {
         mutableContract,
         connectorVerification,
         callerRelay,
+        fence,
       ),
     {
       legacy: "serve",

@@ -62,10 +62,24 @@ export interface ChatGptContextSummaryRoutes {
   ): ChatGptContextSummaryRoute | null;
 }
 
+// The broker-level fence of a summary-only phase: while it is raised, no
+// ordinary Computer tool executes, whatever the summarized history asks for.
+// It is raised before the summary can reach the conversation and lowered
+// only once that turn is known to be over; an unknown outcome keeps it up.
+export interface SummaryExecutionFence {
+  raise(
+    input: Readonly<{ operationId: string; binding: ContextBinding }>,
+  ): Promise<void>;
+  lower(
+    input: Readonly<{ operationId: string; binding: ContextBinding }>,
+  ): Promise<void>;
+}
+
 export type ChatGptContextSummaryDriverOptions = Readonly<{
   store: PrivateContextStore;
   routes: ChatGptContextSummaryRoutes;
   maximumPromptCharacters?: number;
+  fence?: SummaryExecutionFence;
 }>;
 
 type RouteLease = Readonly<{
@@ -347,17 +361,38 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         await this.options.store.putSummaryAttempt(attempt);
       },
     };
+    // The fence is up before anything can reach the conversation. If it
+    // cannot be raised, nothing is submitted.
+    if (!(await this.raiseFence(input))) {
+      try {
+        await this.options.store.deleteSummaryAttempt(
+          input.request.binding,
+          input.request.operationId,
+        );
+      } catch {
+        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+      }
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      return { status: "blocked", code: "SUMMARY_FENCE_UNAVAILABLE" };
+    }
     let result: ChatGptReadonlyTaskResult;
     this.dispatched.add(input.request.operationId);
     try {
       result = await lease.route.runReadonlyTask(prepared.prompt, [], observer);
     } catch {
+      // The turn may still be running on the page: the fence stays up.
       return {
         status: "outcome_unknown",
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
     if (result.state === "failed_before_submit") {
+      await this.lowerFence(input);
       try {
         await this.options.store.deleteSummaryAttempt(
           input.request.binding,
@@ -379,6 +414,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     if (result.state === "not_authenticated") {
+      await this.lowerFence(input);
       try {
         await this.options.store.deleteSummaryAttempt(
           input.request.binding,
@@ -429,7 +465,10 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
             : "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
-    return this.acceptCompletedResult(input, lease, result);
+    const accepted = await this.acceptCompletedResult(input, lease, result);
+    // The turn is over whatever its output was worth.
+    await this.lowerFence(input);
+    return accepted;
   }
 
   async observe(
@@ -531,6 +570,10 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
+    // A summary that may still be running on the page keeps its fence.
+    if (!(await this.raiseFence(input))) {
+      return { status: "blocked", code: "SUMMARY_FENCE_UNAVAILABLE" };
+    }
     let observed: ChatGptReadonlyTaskResult;
     try {
       observed = await lease.route.observeReadonlyTask(pending);
@@ -559,7 +602,9 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
-    return this.acceptCompletedResult(input, lease, observed);
+    const accepted = await this.acceptCompletedResult(input, lease, observed);
+    await this.lowerFence(input);
+    return accepted;
   }
 
   async retire(
@@ -627,7 +672,37 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     this.dispatched.delete(input.operationId);
     this.received.delete(operationKey(input.binding, input.operationId));
     this.pending.delete(operationKey(input.binding, input.operationId));
+    // The operation is over: whatever the fence's state, it has no owner.
+    if (this.options.fence) {
+      await this.options.fence
+        .lower({ operationId: input.operationId, binding: input.binding })
+        .catch(() => undefined);
+    }
     return { status: "retired" };
+  }
+
+  private async raiseFence(input: CodexContextSummaryInput): Promise<boolean> {
+    if (!this.options.fence) return true;
+    try {
+      await this.options.fence.raise({
+        operationId: input.request.operationId,
+        binding: input.request.binding,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // A fence that cannot be lowered stays up: fail closed, never open.
+  private async lowerFence(input: CodexContextSummaryInput): Promise<void> {
+    if (!this.options.fence) return;
+    await this.options.fence
+      .lower({
+        operationId: input.request.operationId,
+        binding: input.request.binding,
+      })
+      .catch(() => undefined);
   }
 
   private async acceptCompletedResult(

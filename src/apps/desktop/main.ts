@@ -215,6 +215,7 @@ import {
   clearConnectorVerificationReceipt,
   readConnectorVerificationReceipt,
 } from "../../modules/computer/infra/mcp/connector-verification-receipt";
+import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -940,11 +941,27 @@ async function initializeRouteBRuntime(): Promise<void> {
   }
 }
 
-function initializeCodexContextController(): void {
+async function initializeCodexContextController(): Promise<void> {
+  // While a summary-only phase runs, the connector's Computer tools are
+  // fenced through the launch root its MCP process reads. No summary can be
+  // running before this controller exists, so a fence a crash left behind
+  // is cleared here rather than outliving it.
+  const summaryExecutionFence = new PrivateExecutionFence({
+    root: secureMcpLaunchRoot(),
+  });
+  await summaryExecutionFence.clear().catch(() => undefined);
   codexContextController = createCodexContextController({
     ownerId: contextOwnerId,
     providerProfileId: contextProviderProfileId,
     stateRoot: contextContinuityRoot(),
+    summaryFence: {
+      raise: (input) =>
+        summaryExecutionFence.raise({
+          operationId: input.operationId,
+          taskId: input.binding.taskId,
+        }),
+      lower: (input) => summaryExecutionFence.lower(input.operationId),
+    },
     summaryRoutes: {
       retained: (binding) => liveTaskRoutes.get(binding.taskId) ?? null,
       createFallback: createContextSummaryFallbackRoute,
@@ -6068,7 +6085,7 @@ async function main(): Promise<void> {
   });
   await initializeLiveTaskState();
   await recoverProductAgentExpiry();
-  initializeCodexContextController();
+  await initializeCodexContextController();
   await reconcileContextAfterRestart();
   await initializeCallerRelay();
   await initializeRouteBRuntime();
