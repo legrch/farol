@@ -52,6 +52,12 @@ MAX_LIST_RESULTS = 500
 MAX_GLOB_RESULTS = 1000
 MAX_GREP_RESULTS = 100
 MAX_GREP_LINE_CHARS = 500
+# The Node adapter accepts at most 512 KiB of response payload.  Matches are
+# charged at their serialized size (ASCII-escaped path and excerpt included)
+# before they are kept, and 1 KiB stays reserved for the result envelope, so
+# a search that would overflow ends as a bounded partial result instead of a
+# killed helper.
+MAX_GREP_RESPONSE_BYTES = 512 * 1024 - 1024
 MAX_GREP_FILE_BYTES = 8 * 1024 * 1024
 MAX_GREP_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_IGNORE_BYTES = 256 * 1024
@@ -1528,6 +1534,34 @@ def _grep_deadline(_signal_number, _frame):
     refuse(EXIT_TIMEOUT)
 
 
+def _grep_lines(text):
+    """Split text into lines at LF only, the way editors and the read tool do.
+
+    A CR before the LF belongs to the line ending and is dropped.  Other
+    separators that str.splitlines() honours (U+2028, VT, FF and the like) stay
+    inside their line, so line numbers agree with every other consumer.
+    """
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return [line[:-1] if line.endswith("\r") else line for line in lines]
+
+
+def _match_excerpt(line, start, end):
+    """At most MAX_GREP_LINE_CHARS code points of the line, showing the match.
+
+    A line that fits is returned whole.  Otherwise the excerpt starts at the
+    line start when the match ends inside that window, and otherwise shortly
+    before the match, so a hit far into a long line stays visible.
+    """
+    if len(line) <= MAX_GREP_LINE_CHARS:
+        return line, False
+    if end <= MAX_GREP_LINE_CHARS:
+        return line[:MAX_GREP_LINE_CHARS], True
+    begin = min(start - min(start, MAX_GREP_LINE_CHARS // 4), len(line) - MAX_GREP_LINE_CHARS)
+    return line[begin : begin + MAX_GREP_LINE_CHARS], True
+
+
 def _clean_match_line(line):
     return "".join(
         character if character == "\t" or (ord(character) >= 32 and ord(character) != 127) else "�"
@@ -1559,25 +1593,46 @@ def _grep_descriptor(request, descriptor, rendered_path, expression, matches, st
         state["bounded"] = True
         return
     state["bytes"] += len(payload)
+    # A directory search skips files that are not text, like ripgrep; a file
+    # the caller named explicitly is refused instead of reported as no match.
     if b"\x00" in payload:
+        if explicit:
+            refuse(EXIT_NOT_TEXT)
         return
     try:
         text = payload.decode("utf-8")
     except UnicodeError:
+        if explicit:
+            refuse(EXIT_NOT_TEXT)
         return
-    for number, raw_line in enumerate(text.splitlines(), 1):
-        if expression.search(raw_line) is None:
+    for number, raw_line in enumerate(_grep_lines(text), 1):
+        found = expression.search(raw_line)
+        if found is None:
             continue
-        cleaned = _clean_match_line(raw_line)
-        truncated = len(cleaned) > MAX_GREP_LINE_CHARS
-        matches.append(
-            {
-                "line": number,
-                "path": rendered_path,
-                "text": cleaned[:MAX_GREP_LINE_CHARS],
-                "truncated": truncated,
-            }
+        excerpt, truncated = _match_excerpt(
+            _clean_match_line(raw_line), found.start(), found.end()
         )
+        match = {
+            "line": number,
+            "path": rendered_path,
+            "text": excerpt,
+            "truncated": truncated,
+        }
+        charged = 1 + len(
+            json.dumps(
+                match,
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+        if state["outputBytes"] + charged > MAX_GREP_RESPONSE_BYTES:
+            state["outputLimited"] = True
+            state["stop"] = True
+            return
+        state["outputBytes"] += charged
+        matches.append(match)
         if len(matches) > MAX_GREP_RESULTS:
             state["stop"] = True
             return
@@ -1701,6 +1756,8 @@ def _grep_search_with_deadline(request, root_fd, expression):
         "bytes": 0,
         "directories": 0,
         "entries": 0,
+        "outputBytes": 0,
+        "outputLimited": False,
         "stop": False,
     }
     try:
@@ -1733,7 +1790,7 @@ def _grep_search_with_deadline(request, root_fd, expression):
     return json.dumps(
         {
             "matches": matches[:MAX_GREP_RESULTS],
-            "resultLimited": len(matches) > MAX_GREP_RESULTS,
+            "resultLimited": len(matches) > MAX_GREP_RESULTS or state["outputLimited"],
             "scanLimited": state["bounded"],
         },
         ensure_ascii=True,

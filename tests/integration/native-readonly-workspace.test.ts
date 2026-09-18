@@ -421,4 +421,142 @@ describe("native readonly Computer workspace", () => {
       error: { code: "WORKSPACE_INVALID_REQUEST" },
     });
   });
+
+  describe("P03 bounded search output and match semantics", () => {
+    const search = (relativePath: string, pattern: string) =>
+      reader().execute(
+        request({ kind: "workspace.search", relativePath, pattern }),
+      );
+
+    it("C05-03 returns a valid bounded partial when escaped output would overflow", async () => {
+      const line = `needle ${"\u{1F600}".repeat(500)}`;
+      await fs.writeFile(
+        path.join(root, "emoji.txt"),
+        `${Array.from({ length: 100 }, () => line).join("\n")}\n`,
+        { mode: 0o600 },
+      );
+
+      const result = await search("emoji.txt", "needle");
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.matches", resultLimited: true },
+      });
+      if (!result.ok || result.value.kind !== "workspace.matches") return;
+      expect(result.value.matches.length).toBeGreaterThan(0);
+      expect(result.value.matches.length).toBeLessThan(100);
+      for (const match of result.value.matches) {
+        expect([...match.text].length).toBeLessThanOrEqual(500);
+        expect(match.truncated).toBe(true);
+      }
+    });
+
+    it("C05-03 keeps the ASCII count limit unchanged", async () => {
+      const line = `needle ${"a".repeat(600)}`;
+      await fs.writeFile(
+        path.join(root, "ascii.txt"),
+        `${Array.from({ length: 120 }, () => line).join("\n")}\n`,
+        { mode: 0o600 },
+      );
+
+      const result = await search("ascii.txt", "needle");
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.matches", resultLimited: true },
+      });
+      if (!result.ok || result.value.kind !== "workspace.matches") return;
+      expect(result.value.matches).toHaveLength(100);
+    });
+
+    it("C05-03 counts long Unicode paths in the output budget", async () => {
+      // 80 escaped 500-code-point excerpts fit in the response by themselves;
+      // with their escaped Unicode paths they do not.
+      const segment = "\u{1F4C1}".repeat(40);
+      const directory = path.join(root, segment, segment, segment);
+      await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+      for (let index = 0; index < 80; index += 1) {
+        await fs.writeFile(
+          path.join(directory, `${"\u{1F4C4}".repeat(40)}-${index}.txt`),
+          `needle ${"\u{1F600}".repeat(500)}\n`,
+          { mode: 0o600 },
+        );
+      }
+
+      const result = await search(".", "needle");
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.matches", resultLimited: true },
+      });
+      if (!result.ok || result.value.kind !== "workspace.matches") return;
+      expect(result.value.matches.length).toBeLessThan(80);
+    });
+
+    it("C05-04 refuses an explicitly named binary or non-UTF-8 file", async () => {
+      await fs.writeFile(
+        path.join(root, "blob.bin"),
+        Buffer.from([0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65, 0x00, 0x01]),
+        { mode: 0o600 },
+      );
+      await fs.writeFile(
+        path.join(root, "latin1.txt"),
+        Buffer.from([0x6e, 0x65, 0x65, 0x64, 0x6c, 0x65, 0xe9, 0x0a]),
+        { mode: 0o600 },
+      );
+
+      for (const file of ["blob.bin", "latin1.txt"]) {
+        await expect(search(file, "needle")).resolves.toEqual({
+          ok: false,
+          error: { code: "WORKSPACE_NOT_TEXT", retry: "never" },
+        });
+      }
+      // A directory search still skips files that are not text, like ripgrep.
+      await expect(search(".", "needle")).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "workspace.matches", matches: [] },
+      });
+    });
+
+    it("C05-04 shows a match that starts after code point 500", async () => {
+      await fs.writeFile(
+        path.join(root, "long.txt"),
+        `${"a".repeat(700)}needle${"b".repeat(50)}\n`,
+        { mode: 0o600 },
+      );
+
+      const result = await search("long.txt", "needle");
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok || result.value.kind !== "workspace.matches") return;
+      expect(result.value.matches).toHaveLength(1);
+      const match = result.value.matches[0];
+      if (!match) throw new Error("expected one match");
+      expect(match.text).toContain("needle");
+      expect([...match.text].length).toBeLessThanOrEqual(500);
+      expect(match.truncated).toBe(true);
+      expect(match.line).toBe(1);
+    });
+
+    it("C05-04 numbers lines by LF only, like the editor and the read tool", async () => {
+      await fs.writeFile(
+        path.join(root, "separators.txt"),
+        "first\u{2028}still first\u{b}still\r\nsecond needle\r\nthird\n",
+        { mode: 0o600 },
+      );
+
+      const result = await search("separators.txt", "needle");
+
+      expect(result).toMatchObject({ ok: true });
+      if (!result.ok || result.value.kind !== "workspace.matches") return;
+      expect(result.value.matches).toEqual([
+        {
+          path: "separators.txt",
+          line: 2,
+          text: "second needle",
+          truncated: false,
+        },
+      ]);
+    });
+  });
 });

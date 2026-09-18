@@ -45,6 +45,7 @@ import {
   setupSteps,
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
+import { searchMatchDisplay } from "./computer-presentation";
 
 const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
@@ -1445,7 +1446,9 @@ function renderComputerConfiguration(): void {
             const location = document.createElement("code");
             location.textContent = `${match.path}:${match.line}`;
             const text = document.createElement("span");
-            text.textContent = match.text;
+            const display = searchMatchDisplay(match);
+            text.textContent = display.text;
+            if (display.title) text.title = display.title;
             item.append(location, text);
             matches.append(item);
           }
