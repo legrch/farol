@@ -46,6 +46,7 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
 import { workspaceEditToAcknowledge } from "./workspace-edit-delivery";
+import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
   waitsForAgentRejoin,
@@ -110,14 +111,6 @@ type TaskState = Readonly<{
   label: string;
   attention: boolean;
 }>;
-type SafeActivity = Readonly<{
-  taskId: string;
-  kind: string;
-  phase: string;
-  sequence: number | null;
-  at: number;
-}>;
-
 const sections: readonly SurfaceSection[] = [
   "browser",
   "computer",
@@ -231,7 +224,7 @@ let setupConnectorError: string | null = null;
 let renderedComputerSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
-const activity: SafeActivity[] = [];
+const activity = new ActivityLog();
 const pendingRuntimeEvents: ClientEventDto[] = [];
 let pendingRuntimeStatus: RuntimeStatus | null = null;
 const pendingTaskSurfaceStatuses: TaskSurfaceStatus[] = [];
@@ -1031,6 +1024,7 @@ function renderActivity(): void {
     bootstrap.configuration.status === "ready" &&
     bootstrap.configuration.settings.general.activityDetail === "technical";
   const visible = activity
+    .entries()
     .filter(
       (record) =>
         technical ||
@@ -1061,7 +1055,9 @@ function renderActivity(): void {
       phase.textContent =
         record.sequence === null
           ? (phaseLabels[record.phase] ?? "Updated")
-          : `Part ${record.sequence}`;
+          : record.coalesced > 1
+            ? `Part ${record.sequence} · ${record.coalesced} updates`
+            : `Part ${record.sequence}`;
       const at = document.createElement("time");
       at.dateTime = new Date(record.at).toISOString();
       at.textContent = new Intl.DateTimeFormat(undefined, {
@@ -1072,6 +1068,19 @@ function renderActivity(): void {
       item.append(dot, task, message, phase, at);
       return item;
     }),
+    ...(activity.omitted() > 0
+      ? [
+          (() => {
+            const omitted = document.createElement("li");
+            omitted.className = "activity-empty";
+            const dot = document.createElement("i");
+            const message = document.createElement("span");
+            message.textContent = `${activity.omitted()} older stream ${activity.omitted() === 1 ? "record was" : "records were"} not kept.`;
+            omitted.append(dot, message);
+            return omitted;
+          })(),
+        ]
+      : []),
   );
 }
 
@@ -3357,23 +3366,8 @@ function recordEvent(event: ClientEventDto): void {
   events.push(event);
   if (events.length > 128) events.shift();
   taskEvents.set(event.taskId, events);
-  const quietReceipt =
-    event.kind === "client.delivery_acknowledged" &&
-    !["text.delta", "turn.terminal"].includes(event.deliveredKind);
-  if (!quietReceipt) {
-    activity.push({
-      taskId: event.taskId,
-      kind: event.kind,
-      phase: "phase" in event ? event.phase : event.kind,
-      sequence:
-        event.kind === "text.delta" ||
-        event.kind === "client.delivery_acknowledged"
-          ? event.sequence
-          : null,
-      at: event.at,
-    });
-  }
-  if (activity.length > 256) activity.shift();
+  const projected = projectActivity(event);
+  if (projected) activity.record(projected);
   render();
 }
 
