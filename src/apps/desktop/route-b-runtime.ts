@@ -57,6 +57,9 @@ export type RouteBRuntime = Readonly<{
   // What an isolated Codex host is launched with as its model provider.
   endpoint: Readonly<{ baseUrl: string; token: string }>;
   provider: CodexChatGptProviderRuntime;
+  // True while this process is running a turn of the thread, summarizing it
+  // or preparing a turn of it, so its private context is in use.
+  owns(threadId: string): boolean;
   close(): Promise<void>;
 }>;
 
@@ -119,6 +122,27 @@ function toolRelayInstruction(ticket: string, binding: string): string {
 export class RouteBAdmission {
   private readonly running = new Set<string>();
   private readonly summarizing = new Set<string>();
+  // Turns being prepared, which may confirm a context handoff. They do not
+  // exclude each other or a turn; they only mark the thread as in use.
+  private readonly preparing = new Map<string, number>();
+
+  owns(threadId: string): boolean {
+    return (
+      this.running.has(threadId) ||
+      this.summarizing.has(threadId) ||
+      (this.preparing.get(threadId) ?? 0) > 0
+    );
+  }
+
+  beginPrepare(threadId: string): void {
+    this.preparing.set(threadId, (this.preparing.get(threadId) ?? 0) + 1);
+  }
+
+  endPrepare(threadId: string): void {
+    const remaining = (this.preparing.get(threadId) ?? 1) - 1;
+    if (remaining > 0) this.preparing.set(threadId, remaining);
+    else this.preparing.delete(threadId);
+  }
 
   beginTurn(threadId: string): boolean {
     if (this.summarizing.has(threadId) || this.running.has(threadId)) {
@@ -185,7 +209,20 @@ export function admittedCompaction(
       }
     },
     ...(inner.prepareTurn
-      ? { prepareTurn: (input) => inner.prepareTurn!(input) }
+      ? {
+          prepareTurn: async (input) => {
+            const threadId = compactionThread({
+              metadataHeader: undefined,
+              body: input.body,
+            });
+            if (threadId) admission.beginPrepare(threadId);
+            try {
+              return await inner.prepareTurn!(input);
+            } finally {
+              if (threadId) admission.endPrepare(threadId);
+            }
+          },
+        }
       : {}),
   };
 }
@@ -302,6 +339,7 @@ export async function startRouteBRuntime(
   return {
     endpoint: { baseUrl: `${provider.baseUrl}/v1`, token },
     provider,
+    owns: (threadId) => admission.owns(threadId),
     close: () => provider.close(),
   };
 }

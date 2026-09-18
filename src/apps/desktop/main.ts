@@ -1943,16 +1943,10 @@ async function runProductTaskCommand(
         clearTimeout(persistedProductAgentExpiry.timer);
         persistedProductAgentExpiry = null;
       }
-      if (task && codexContextController) {
-        const cleanup = await deleteTaskContext(
-          codexContextController.store,
-          contextBinding(command.data.taskId),
-          task.context,
-        );
-        if (cleanup === "in_transition") {
-          return taskFailure("TASK_OPERATION_IN_PROGRESS");
-        }
-        if (cleanup === "failed") return taskFailure("TASK_STATE_UNAVAILABLE");
+      // A turn, summary or turn preparation of this task's thread is using
+      // its private context right now.
+      if (task && routeBRuntime?.owns(command.data.taskId)) {
+        return taskFailure("TASK_OPERATION_IN_PROGRESS");
       }
       try {
         await productAgentStore?.remove(command.data.taskId);
@@ -1966,6 +1960,14 @@ async function runProductTaskCommand(
       } catch {
         liveTaskRegistry.rollback(before);
         return taskFailure("TASK_STATE_UNAVAILABLE");
+      }
+      // Only once the removal is saved: a failed deletion then leaves private
+      // state of a closed task, not an open task without its context.
+      if (task && codexContextController) {
+        await deleteTaskContext(
+          codexContextController.store,
+          contextBinding(command.data.taskId),
+        );
       }
       const route = liveTaskRoutes.get(command.data.taskId);
       liveTaskRoutes.delete(command.data.taskId);

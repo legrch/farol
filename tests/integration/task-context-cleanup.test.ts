@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { deleteTaskContext } from "../../src/apps/desktop/task-context-cleanup";
 import {
+  beginCompaction,
   createContextSession,
+  requestCheckpoint,
   type ContextBinding,
 } from "../../src/modules/chat/domain/context-continuity";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
@@ -34,32 +36,31 @@ describe("CCR-11 closing a task deletes its private context state", () => {
     await store.save(createContextSession(binding));
     await store.save(createContextSession(other));
 
-    await expect(
-      deleteTaskContext(store, binding, {
-        epoch: 1,
-        phase: "active",
-        source: null,
-        code: null,
-      }),
-    ).resolves.toBe("deleted");
+    await expect(deleteTaskContext(store, binding)).resolves.toBe("deleted");
     await expect(store.load(binding)).resolves.toBeNull();
     await expect(store.load(other)).resolves.toMatchObject({ epoch: 1 });
   });
 
-  it("refuses while a context transition is moving, and when deletion fails", async () => {
+  it("deletes a transition an earlier run left behind, and reports a failed deletion", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-task-close-"));
     const store = new PrivateContextStore({ root });
-    await store.save(createContextSession(binding));
+    // Nothing resumes a summary that was cut off by a quit or a crash, so its
+    // phase must not keep the task from closing forever.
+    const begun = beginCompaction(createContextSession(binding), {
+      operationId: "compact-cut-off",
+      source: "retained_agent",
+      sourceBoundary: "turn-cut-off",
+    });
+    if (!begun.ok) throw new Error(begun.error.code);
+    const requested = requestCheckpoint(begun.value);
+    if (!requested.ok) throw new Error(requested.error.code);
+    await store.save(requested.value);
+    await expect(store.load(binding)).resolves.toMatchObject({
+      phase: "checkpoint_requested",
+    });
 
-    await expect(
-      deleteTaskContext(store, binding, {
-        epoch: 1,
-        phase: "checkpoint_requested",
-        source: "retained_agent",
-        code: null,
-      }),
-    ).resolves.toBe("in_transition");
-    await expect(store.load(binding)).resolves.toMatchObject({ epoch: 1 });
+    await expect(deleteTaskContext(store, binding)).resolves.toBe("deleted");
+    await expect(store.load(binding)).resolves.toBeNull();
 
     await expect(
       deleteTaskContext(
@@ -69,7 +70,6 @@ describe("CCR-11 closing a task deletes its private context state", () => {
           },
         },
         binding,
-        null,
       ),
     ).resolves.toBe("failed");
   });

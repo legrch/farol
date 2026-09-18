@@ -661,6 +661,35 @@ describe("Route B runtime composed as the product composes it", () => {
     expect(task.prompts[summaries + 1]).not.toContain("Third request.");
   });
 
+  it("reports a thread as owned only while this process uses it", async () => {
+    const task = new TaskConversation();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { runtime: route } = await compose(
+      {
+        surfaceFor: async () => {
+          await gate;
+          return { ok: true as const, surface: task };
+        },
+      },
+      task,
+    );
+    expect(route.owns(threadId)).toBe(false);
+
+    const running = post(
+      route,
+      "/responses",
+      initialRequest("turn-owned-1", "Hold the thread."),
+    );
+    await vi.waitFor(() => expect(route.owns(threadId)).toBe(true));
+    expect(route.owns("0199c0de-0000-7000-8000-00000000b0ff")).toBe(false);
+    release();
+    expect(await (await running).text()).toContain("response.completed");
+    expect(route.owns(threadId)).toBe(false);
+  });
+
   it("refuses an unknown caller and a thread that cannot get a task", async () => {
     const task = new TaskConversation();
     const { runtime: route } = await compose(
