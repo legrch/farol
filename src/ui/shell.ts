@@ -32,7 +32,6 @@ import {
 } from "../pkg/ipc/task-surface-status";
 import {
   ProductConfigurationCommandSchema,
-  ProductConfigurationResultSchema,
   ProductConfigurationSnapshotSchema,
   type ProductConfigurationCommand,
   type ProductConfigurationEvidence,
@@ -46,6 +45,11 @@ import {
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
+import {
+  classifyConfigurationResponse,
+  UNCONFIRMED_CONFIGURATION_MESSAGE,
+  type ConfigurationTransport,
+} from "./configuration-outcome";
 
 const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
@@ -1544,22 +1548,32 @@ function renderComputerConfiguration(): void {
 async function acknowledgeChatGptTaskResult(
   operationId: string,
 ): Promise<void> {
-  const parsed = ProductConfigurationResultSchema.safeParse(
-    await window.farolNext.configure({
-      kind: "chatgpt.ack-task-result",
-      operationId,
-    }),
-  );
-  if (!parsed.success || !parsed.data.ok) {
+  let transport: ConfigurationTransport;
+  try {
+    transport = {
+      settled: "fulfilled",
+      value: await window.farolNext.configure({
+        kind: "chatgpt.ack-task-result",
+        operationId,
+      }),
+    };
+  } catch {
+    transport = { settled: "rejected" };
+  }
+  const outcome = classifyConfigurationResponse(transport);
+  if (outcome.kind !== "applied") {
+    // Only a valid refusal proves the acknowledgement was not saved.
     settingsFeedback =
-      "The task result is visible, but its delivery acknowledgement could not be saved. It will be redelivered after restart.";
+      outcome.kind === "refused"
+        ? "The task result is visible, but its delivery acknowledgement could not be saved. It will be redelivered after restart."
+        : "The task result is visible, but its delivery acknowledgement could not be confirmed. If it was not saved, the result will be redelivered after restart.";
     settingsFeedbackError = true;
     render();
     return;
   }
   bootstrap = {
     ...bootstrap,
-    configuration: parsed.data.snapshot,
+    configuration: outcome.result.snapshot,
     chatgptRecoveryPending: false,
   };
 }
@@ -1645,20 +1659,34 @@ async function configureProduct(
                                                   : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
-  const parsed = ProductConfigurationResultSchema.safeParse(
-    await window.farolNext.configure(command),
-  );
-  if (!parsed.success) {
-    settingsFeedback =
-      "The settings response was invalid. Nothing was applied.";
+  // The IPC promise can reject after the main process already admitted the
+  // command. The rejection is caught here, never left unhandled at the
+  // fire-and-forget `void configureProduct(...)` call sites, and treated like
+  // a malformed reply: the outcome is unconfirmed, not refused.
+  let transport: ConfigurationTransport;
+  try {
+    transport = {
+      settled: "fulfilled",
+      value: await window.farolNext.configure(command),
+    };
+  } catch {
+    transport = { settled: "rejected" };
+  }
+  const outcome = classifyConfigurationResponse(transport);
+  if (outcome.kind === "unconfirmed") {
+    // Neither a malformed reply nor a lost promise proves the command was
+    // not applied, so this must not claim "nothing was applied" — see
+    // UNCONFIRMED_CONFIGURATION_MESSAGE. No snapshot is adopted either.
+    settingsFeedback = UNCONFIRMED_CONFIGURATION_MESSAGE;
     settingsFeedbackError = true;
     render();
     return false;
   }
-  bootstrap = { ...bootstrap, configuration: parsed.data.snapshot };
+  const parsed = outcome.result;
+  bootstrap = { ...bootstrap, configuration: parsed.snapshot };
   renderedGeneralSettingsRevision = -1;
   renderedComputerSettingsRevision = -1;
-  if (!parsed.data.ok) {
+  if (!parsed.ok) {
     if (
       command.kind === "chatgpt.submit-readonly-task" ||
       command.kind === "chatgpt.cancel-readonly-task" ||
@@ -1675,30 +1703,30 @@ async function configureProduct(
       "CODEX_HOST_PICKER_CANCELLED",
       "TUNNEL_CLIENT_PICKER_CANCELLED",
       "SUPPORT_EXPORT_CANCELLED",
-    ].includes(parsed.data.error);
+    ].includes(parsed.error);
     settingsFeedback = cancellation
       ? "No selection was made."
-      : parsed.data.error === "CODEX_AGENT_STILL_RUNNING"
+      : parsed.error === "CODEX_AGENT_STILL_RUNNING"
         ? "The same native Agent child is still running. Use Rejoin Agent to collect its result; no second child will be created."
-        : parsed.data.error === "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
+        : parsed.error === "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
           ? "Native Agent outcome unknown. Inspect the existing Codex task before any deliberate recovery."
-          : parsed.data.error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+          : parsed.error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
             ? "Connector readiness is unknown. Inspect the current connector before an explicit Repair."
-            : parsed.data.error === "CONNECTOR_ATTACHMENT_NOT_FOUND"
+            : parsed.error === "CONNECTOR_ATTACHMENT_NOT_FOUND"
               ? "No connector receipt exists yet. Attach this tunnel in ChatGPT, run the displayed one-time challenge, then check again."
-              : parsed.data.error === "CONNECTOR_ATTACHMENT_INVALID"
+              : parsed.error === "CONNECTOR_ATTACHMENT_INVALID"
                 ? "The connector receipt does not match this runtime, build, workspace, or Computer authority. Stop and deliberately start a fresh challenge."
-                : parsed.data.error === "CONNECTOR_CHALLENGE_UNAVAILABLE"
+                : parsed.error === "CONNECTOR_CHALLENGE_UNAVAILABLE"
                   ? "No current connector challenge is available. Start the connector before checking its ChatGPT attachment."
-                  : parsed.data.error === "CONNECTOR_STOP_REQUIRED"
+                  : parsed.error === "CONNECTOR_STOP_REQUIRED"
                     ? "Stop the connector before changing Computer authority or connector identity."
-                    : `Not applied · ${parsed.data.error}`;
+                    : `Not applied · ${parsed.error}`;
     settingsFeedbackError =
-      !cancellation && parsed.data.error !== "CODEX_AGENT_STILL_RUNNING";
+      !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
     return false;
   }
-  const evidence = parsed.data.evidence;
+  const evidence = parsed.evidence;
   let evidenceError = false;
   let taskResultToAcknowledge: string | null = null;
   if (evidence?.kind === "computer.workspace-read") {
