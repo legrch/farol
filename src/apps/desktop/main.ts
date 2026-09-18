@@ -134,6 +134,7 @@ import {
   type CodexCallerRelayRuntime,
 } from "./codex-caller-relay";
 import { configurationAdmission } from "./configuration-admission";
+import { deleteTaskContext } from "./task-context-cleanup";
 import {
   startRouteBRuntime,
   type RouteBRuntime,
@@ -1878,6 +1879,17 @@ async function runProductTaskCommand(
       if (persistedProductAgentExpiry?.taskId === command.data.taskId) {
         clearTimeout(persistedProductAgentExpiry.timer);
         persistedProductAgentExpiry = null;
+      }
+      if (task && codexContextController) {
+        const cleanup = await deleteTaskContext(
+          codexContextController.store,
+          contextBinding(command.data.taskId),
+          task.context,
+        );
+        if (cleanup === "in_transition") {
+          return taskFailure("TASK_OPERATION_IN_PROGRESS");
+        }
+        if (cleanup === "failed") return taskFailure("TASK_STATE_UNAVAILABLE");
       }
       try {
         await productAgentStore?.remove(command.data.taskId);
