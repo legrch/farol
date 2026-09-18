@@ -151,4 +151,74 @@ describe("checkpoint reconciliation over many compactions", () => {
       error: { code: "CHECKPOINT_CONTENT_INVALID" },
     });
   });
+  it("fails closed instead of cutting an unproven claim out of a full question list", () => {
+    // Sixty-four questions, the last one at the text bound: there is no
+    // room for the marker of the claim whose receipt never arrived.
+    const questions = [
+      ...Array.from({ length: 63 }, (_, index) => `Question ${index}?`),
+      "q".repeat(4_096),
+    ];
+    const claims = [
+      {
+        description: "Claimed step without receipt.",
+        evidenceRefs: ["call-missing"],
+      },
+    ];
+    expect(
+      reconcileCheckpointContent(
+        summary(claims, { unresolvedQuestions: questions }),
+        { receipts: [], carriedWork: [], unresolved: [] },
+        MAXIMUM_BYTES,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CHECKPOINT_QUESTIONS_OVERFLOW" },
+    });
+  });
+
+  it("fails closed when the claims that must share the last free entry do not fit it", () => {
+    const questions = Array.from(
+      { length: 60 },
+      (_, index) => `Question ${index}?`,
+    );
+    // Four free entries: three claims verbatim, five joined into the last,
+    // which would run past the text bound.
+    const claims = Array.from({ length: 8 }, (_, index) => ({
+      description: `${"c".repeat(1_000)} ${index}`,
+      evidenceRefs: [`call-missing-${index}`],
+    }));
+    expect(
+      reconcileCheckpointContent(
+        summary(claims, { unresolvedQuestions: questions }),
+        { receipts: [], carriedWork: [], unresolved: [] },
+        MAXIMUM_BYTES,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "CHECKPOINT_QUESTIONS_OVERFLOW" },
+    });
+  });
+
+  it("keeps every unproven claim readable when the shared entry has room", () => {
+    const questions = Array.from(
+      { length: 64 },
+      (_, index) => `Question ${index}?`,
+    );
+    const claims = [
+      { description: "Claimed step A.", evidenceRefs: ["call-missing-a"] },
+      { description: "Claimed step B.", evidenceRefs: ["call-missing-b"] },
+    ];
+    const result = reconcileCheckpointContent(
+      summary(claims, { unresolvedQuestions: questions }),
+      { receipts: [], carriedWork: [], unresolved: [] },
+      MAXIMUM_BYTES,
+    );
+    if (!result.ok) throw new Error(result.error.code);
+    expect(result.value.completedWork).toEqual([]);
+    expect(result.value.unresolvedQuestions).toHaveLength(64);
+    expect(result.value.unresolvedQuestions[63]).toContain("Question 63?");
+    expect(result.value.unresolvedQuestions[63]).toContain(
+      "Unverified, no receipt exists: Claimed step A.; Claimed step B.",
+    );
+  });
 });

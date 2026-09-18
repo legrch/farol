@@ -10,7 +10,8 @@ import type {
   ContextSource,
 } from "./context-continuity";
 
-const boundedText = z.string().trim().min(1).max(4_096);
+const MAXIMUM_TEXT_CHARACTERS = 4_096;
+const boundedText = z.string().trim().min(1).max(MAXIMUM_TEXT_CHARACTERS);
 const boundedList = z.array(boundedText).max(64);
 const evidenceItem = z.strictObject({
   description: boundedText,
@@ -114,7 +115,8 @@ export type CheckpointErrorCode =
   | "CHECKPOINT_CONTENT_INVALID"
   | "CHECKPOINT_CONTENT_OVERSIZED"
   | "CHECKPOINT_ENVELOPE_INVALID"
-  | "CHECKPOINT_PROVIDER_BINDING_MISMATCH";
+  | "CHECKPOINT_PROVIDER_BINDING_MISMATCH"
+  | "CHECKPOINT_QUESTIONS_OVERFLOW";
 
 export function validateCheckpointContent(
   candidate: unknown,
@@ -198,32 +200,39 @@ function carriedEntries(
 }
 
 // Questions the summary asked come first; claims it could not prove follow,
-// and those that do not fit share the last entry.
+// and those that do not fit share the last entry. A claim is never cut to
+// fit: when a claim, or the entry several of them must share, cannot hold
+// every unproven claim within the schema's text bound, reconciliation fails
+// closed instead of recording a checkpoint that silently forgot a claim it
+// could not prove.
 function questionsWith(
   asked: readonly string[],
   unverified: readonly string[],
-): string[] {
+): Result<string[], CheckpointErrorCode> {
   const questions = [...asked];
-  const claims = unverified.map((description) =>
-    `${UNVERIFIED_PREFIX}${description}`.slice(0, 4_096),
-  );
+  const claims: string[] = [];
+  for (const description of unverified) {
+    const claim = `${UNVERIFIED_PREFIX}${description}`;
+    if (claim.length > MAXIMUM_TEXT_CHARACTERS) {
+      return failure("CHECKPOINT_QUESTIONS_OVERFLOW");
+    }
+    claims.push(claim);
+  }
   const room = MAXIMUM_LIST_ITEMS - questions.length;
-  if (claims.length <= room) return [...questions, ...claims];
+  if (claims.length <= room) return success([...questions, ...claims]);
   if (room > 0) {
-    questions.push(...claims.slice(0, room - 1));
-    questions.push(
-      `${UNVERIFIED_PREFIX}${unverified.slice(room - 1).join("; ")}`.slice(
-        0,
-        4_096,
-      ),
-    );
-    return questions;
+    const shared = `${UNVERIFIED_PREFIX}${unverified.slice(room - 1).join("; ")}`;
+    if (shared.length > MAXIMUM_TEXT_CHARACTERS) {
+      return failure("CHECKPOINT_QUESTIONS_OVERFLOW");
+    }
+    return success([...questions, ...claims.slice(0, room - 1), shared]);
   }
   const last = questions.pop() ?? "";
-  questions.push(
-    `${last}\n${UNVERIFIED_PREFIX}${unverified.join("; ")}`.slice(0, 4_096),
-  );
-  return questions;
+  const shared = `${last}\n${UNVERIFIED_PREFIX}${unverified.join("; ")}`;
+  if (shared.length > MAXIMUM_TEXT_CHARACTERS) {
+    return failure("CHECKPOINT_QUESTIONS_OVERFLOW");
+  }
+  return success([...questions, shared]);
 }
 
 /**
@@ -259,6 +268,7 @@ export function reconcileCheckpointContent(
     content.unresolvedQuestions,
     unverified,
   );
+  if (!unresolvedQuestions.ok) return unresolvedQuestions;
   const cited = new Set(completedWork.flatMap((item) => item.evidenceRefs));
   const carried = carriedEntries(
     facts.carriedWork.filter(
@@ -284,7 +294,7 @@ export function reconcileCheckpointContent(
       {
         ...content,
         completedWork: [...completedWork, ...carried.slice(0, kept)],
-        unresolvedQuestions,
+        unresolvedQuestions: unresolvedQuestions.value,
         unknownOutcomes,
       },
       maximumBytes,
