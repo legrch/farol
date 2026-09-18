@@ -13,6 +13,11 @@ import {
   trustedOwnerHome,
 } from "./promotion-destination.mjs";
 import { runPromotionApply } from "./promotion-apply.mjs";
+import {
+  activationObligations,
+  assertActivationDrained,
+  promotionUserData,
+} from "./promotion-obligations.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -104,6 +109,11 @@ async function main() {
   if (await exists(destination))
     throw new Error("PROMOTION_DESTINATION_EXISTS");
   if (await exists(receipt)) throw new Error("PROMOTION_RECEIPT_EXISTS");
+  // The generation this home runs today must owe nothing before another is
+  // placed: a running or unknown turn, an undelivered result or an
+  // unconfirmed quit refuses the promotion instead of being drained by it.
+  const obligations = await activationObligations(promotionUserData(home));
+  assertActivationDrained(obligations);
 
   const plan = {
     schema: "farol.next.promotion-plan/1",
@@ -119,6 +129,11 @@ async function main() {
     receipt,
     overwrite: false,
     legacyMutation: false,
+    activation: {
+      userData: obligations.userData,
+      drained: obligations.drained,
+      obligations: obligations.obligations,
+    },
   };
   if (!apply) {
     process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
