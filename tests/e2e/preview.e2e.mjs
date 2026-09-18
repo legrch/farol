@@ -996,6 +996,25 @@ async function launch(
       { mode: 0o600 },
     );
   }
+  if (options.seedUnheldExecutionFence === true) {
+    // The execution fence directory as a regular file: `reconcile()`'s
+    // `readdir` rejects with ENOTDIR (not ENOENT, so recovery does not treat
+    // it as an absent, admitting fence) and the sentinel `raise()`'s
+    // `mkdir(..., { recursive: true })` cannot create a directory where a
+    // file already exists. Both fail, so recovery holds no record at all.
+    const launchRoot = path.join(
+      userData,
+      "farol-next-state",
+      "secure-mcp-connector",
+      "computer-authority",
+    );
+    await fs.mkdir(launchRoot, { recursive: true, mode: 0o700 });
+    await fs.writeFile(
+      path.join(launchRoot, "execution-fence"),
+      "not-a-directory\n",
+      { mode: 0o600 },
+    );
+  }
   const workspacePath = path.join(isolatedHome, "approved-workspace");
   await fs.mkdir(workspacePath, { mode: 0o700 });
   const workspaceRoot = await fs.realpath(workspacePath);
@@ -6664,6 +6683,114 @@ for (const stage of [
 cases.push("fault-scenarios-remain-hidden");
 assert.ok(quitProofs >= 8, `E2E_QUIT_PROOF_INCOMPLETE:${quitProofs}`);
 cases.push("quit-terminates-exact-owned-processes");
+
+// The "held:false desktop witness": at startup, `initializeCodexContextController`,
+// `reconcileContextAfterRestart` (which recovers and records the summary
+// execution fence) and `initializeRouteBRuntime` all run before `installIpc()`
+// installs the `connector.start` handler, so no request can reach the
+// connector before recovery has already settled. A recovery that could hold
+// no record at all — reconciliation failed and the sentinel could not be
+// raised either — must refuse the real connector start before any connector
+// effect; a healthy recovery must not be refused for that same reason.
+async function readSummaryFenceRecovery(userData) {
+  return JSON.parse(
+    await fs.readFile(
+      path.join(userData, "farol-next-state", "summary-fence-recovery.json"),
+      "utf8",
+    ),
+  );
+}
+
+function secureMcpLaunchRootEntries(userData) {
+  return fs.readdir(
+    path.join(
+      userData,
+      "farol-next-state",
+      "secure-mcp-connector",
+      "computer-authority",
+    ),
+  );
+}
+
+function ownedProcessFingerprint(application) {
+  return application.evaluate(({ app }) =>
+    app
+      .getAppMetrics()
+      .map((metric) => `${metric.type}:${metric.name ?? ""}:${metric.pid}`)
+      .sort(),
+  );
+}
+
+const heldFalseFence = await launch([], "hidden", "ordinary", {
+  seedUnheldExecutionFence: true,
+});
+try {
+  const recovery = await readSummaryFenceRecovery(heldFalseFence.userData);
+  assert.equal(recovery.status, "kept");
+  assert.equal(recovery.code, "EXECUTION_FENCE_UNRECONCILED");
+  assert.equal(recovery.held, false);
+
+  const processesBeforeStart = await ownedProcessFingerprint(
+    heldFalseFence.application,
+  );
+  const refusal = await heldFalseFence.window.evaluate(() =>
+    window.farolNext.configure({ kind: "connector.start" }),
+  );
+  assert.equal(refusal.ok, false);
+  assert.equal(refusal.error, "COMPUTER_FENCE_UNHELD");
+  assert.equal(refusal.snapshot.status, "ready");
+  assert.equal(
+    refusal.snapshot.settings.connectors.secureMcp.runtime,
+    null,
+    "connector.start must never record a runtime when the fence refuses it",
+  );
+  assert.equal(
+    refusal.snapshot.settings.connectors.secureMcp.credential,
+    "missing",
+    "connector.start must never touch the credential store when the fence refuses it",
+  );
+
+  const processesAfterStart = await ownedProcessFingerprint(
+    heldFalseFence.application,
+  );
+  assert.deepEqual(
+    processesAfterStart,
+    processesBeforeStart,
+    "a refused connector.start must not start or stop any owned process",
+  );
+
+  const launchRootEntries = await secureMcpLaunchRootEntries(
+    heldFalseFence.userData,
+  );
+  assert.deepEqual(
+    launchRootEntries.sort(),
+    ["execution-fence"],
+    "connector.start must not write a launch contract when the fence refuses it",
+  );
+
+  cases.push("connector-refuses-unheld-summary-fence");
+} finally {
+  await close(heldFalseFence);
+}
+
+const reconciledFence = await launch([], "hidden", "ordinary");
+try {
+  const recovery = await readSummaryFenceRecovery(reconciledFence.userData);
+  assert.equal(recovery.status, "reconciled");
+
+  const result = await reconciledFence.window.evaluate(() =>
+    window.farolNext.configure({ kind: "connector.start" }),
+  );
+  // Nothing configures a tunnel client or credential in this fixture, so the
+  // connector still fails to start; only the exact refusal code matters here.
+  assert.equal(result.ok, false);
+  assert.notEqual(result.error, "COMPUTER_FENCE_UNHELD");
+  assert.equal(result.error, "CONNECTOR_CONFIGURE_FAILED");
+
+  cases.push("connector-start-admitted-when-fence-reconciled");
+} finally {
+  await close(reconciledFence);
+}
 
 const repeatedCaseIds = cases.filter(
   (caseId, index) => cases.indexOf(caseId) !== index,
