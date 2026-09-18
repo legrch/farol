@@ -54,6 +54,11 @@ const assignmentSchema = z.strictObject({
   childTurnId: boundedId.nullable().default(null),
   hostRole: boundedId.nullable().default(null),
   delegationDigest: sha256Digest.nullable().default(null),
+  authorityProof: z
+    .string()
+    .regex(/^[a-z0-9-]{1,200}$/u)
+    .nullable()
+    .default(null),
   terminal: z.boolean(),
   terminalReason: terminalReasonSchema.nullable(),
 });
@@ -244,6 +249,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
         assignment.childTurnId === null &&
         assignment.hostRole === null &&
         assignment.delegationDigest === null &&
+        assignment.authorityProof === null &&
         assignment.terminalReason === null &&
         record.resultRef === null &&
         record.parentDelivery === "not_applicable" &&
@@ -332,7 +338,9 @@ export class PrivateAssignmentStore implements AssignmentRepository {
           existing.assignment.childTurnId ||
         replacement.assignment.hostRole !== existing.assignment.hostRole ||
         replacement.assignment.delegationDigest !==
-          existing.assignment.delegationDigest)
+          existing.assignment.delegationDigest ||
+        replacement.assignment.authorityProof !==
+          existing.assignment.authorityProof)
     ) {
       throw new Error("AGENT_ASSIGNMENT_CHILD_MISMATCH");
     }

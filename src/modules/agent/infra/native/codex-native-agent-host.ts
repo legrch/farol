@@ -7,6 +7,7 @@ import type {
   AgentCancelReceipt,
   AgentSpawnReceipt,
   AgentSpawnRequest,
+  AgentRejoin,
   AgentWaitReceipt,
 } from "../../app/port/agent-host";
 import type { AgentComputer } from "../../app/port/computer";
@@ -839,7 +840,7 @@ export class CodexNativeAgentHost implements AgentHost {
         hostRole: child.agentRole ?? null,
         delegationDigest: operation.delegationDigest,
       };
-      return { status: "started", correlation };
+      return { status: "started", correlation, authorityProof: proof };
     } catch (cause) {
       const code = cause instanceof Error ? cause.message : "";
       this.active = null;
@@ -850,7 +851,17 @@ export class CodexNativeAgentHost implements AgentHost {
     }
   }
 
-  async wait(correlation: ChildCorrelation): Promise<AgentWaitReceipt> {
+  async wait(
+    correlation: ChildCorrelation,
+    rejoin?: AgentRejoin,
+  ): Promise<AgentWaitReceipt> {
+    if (!this.active && rejoin && !this.attach(correlation, rejoin)) {
+      return {
+        status: "outcome_unknown",
+        correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      };
+    }
     if (this.active) {
       const activeCorrelation: ChildCorrelation = {
         ...this.active.request.identity,
@@ -897,11 +908,8 @@ export class CodexNativeAgentHost implements AgentHost {
         if (Date.now() >= deadline) {
           return { status: "running", correlation };
         }
-        return {
-          status: "outcome_unknown",
-          correlation,
-          code: "AGENT_WAIT_ACK_LOST",
-        };
+        // Not being able to read the threads says nothing about the child.
+        return { status: "unobserved", correlation };
       }
       const observed = this.observeCompletion(correlation, child, parent);
       if (observed === "completed") {
@@ -1090,6 +1098,54 @@ export class CodexNativeAgentHost implements AgentHost {
       }
       await sleep(this.options.pollIntervalMs);
     }
+  }
+
+  // Takes over a child this host did not spawn, for example after a restart:
+  // the current request must reproduce the recorded delegation exactly, then
+  // the same handlers serve the child's calls under that request's authority
+  // and the retained proof accepts the parent's confirmation.  Nothing is
+  // spawned or resubmitted.
+  private attach(correlation: ChildCorrelation, rejoin: AgentRejoin): boolean {
+    const request = rejoin.request;
+    const authority = request.authority;
+    const exactChildPrompt = childPrompt(request);
+    if (
+      request.identity.assignmentId !== correlation.assignmentId ||
+      request.identity.ownerId !== correlation.ownerId ||
+      request.identity.sessionId !== correlation.sessionId ||
+      request.identity.taskId !== correlation.taskId ||
+      request.identity.taskEpoch !== correlation.taskEpoch ||
+      request.identity.generation !== correlation.generation ||
+      authority.authorityId !== correlation.authorityId ||
+      authority.participantId !== correlation.participantId ||
+      authority.role !== correlation.role ||
+      (request.intent.kind === "product" && !this.computer) ||
+      !/^[a-z0-9-]{1,200}$/u.test(rejoin.authorityProof) ||
+      !compatible(request, this.options.now(), this.options.runtimeRoot) ||
+      sha256(exactChildPrompt) !== correlation.delegationDigest
+    ) {
+      return false;
+    }
+    this.installHandlers();
+    this.active = {
+      request,
+      proof: rejoin.authorityProof,
+      parentThreadId: correlation.parentThreadId,
+      parentTurnId: correlation.parentTurnId,
+      childId: correlation.childId,
+      childTurnId: correlation.childTurnId,
+      childPrompt: exactChildPrompt,
+      delegationDigest: correlation.delegationDigest,
+      authorityToolCalls: 0,
+      workspaceToolCalls: 0,
+      computerCallIds: new Set(),
+      controller: new AbortController(),
+      fatalCode: null,
+      resolveSpawn: () => undefined,
+      rejectSpawn: () => undefined,
+      spawned: Promise.resolve(correlation.childId),
+    };
+    return true;
   }
 
   dispose(): void {

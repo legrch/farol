@@ -74,6 +74,7 @@ class ProductPeer implements CodexNativeAgentPeer {
   authorityCompleted = false;
   computerItems: unknown[] = [];
   runningChildItems: unknown[] = [];
+  failReads = 0;
   extraChildItems: unknown[] = [];
   extraChildTurns: unknown[] = [];
   extraParentTurns: unknown[] = [];
@@ -113,6 +114,10 @@ class ProductPeer implements CodexNativeAgentPeer {
       };
     }
     if (method === "thread/read") {
+      if (this.failReads > 0) {
+        this.failReads -= 1;
+        throw new Error("THREAD_READ_TRANSPORT_LOST");
+      }
       const threadId = (params as { threadId?: string }).threadId;
       if (threadId === "child-product-a") return this.childRead();
       if (threadId === "parent-product-a") return this.parentRead();
@@ -1100,6 +1105,120 @@ describe("native Codex product Agent host", () => {
         correlation: spawned.correlation,
         code: "AGENT_WAIT_ACK_LOST",
       });
+    });
+  });
+
+  describe("LIF-05 and LIF-06 a fresh host observes the same child", () => {
+    const completingComputer: AgentComputer = {
+      execute: vi.fn(async (input) =>
+        input.operation.kind === "workspace.search"
+          ? {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.matches" as const,
+                matches: [],
+                resultLimited: false,
+                scanLimited: false,
+              },
+            }
+          : {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.text" as const,
+                text: "continuity marker\n",
+                bytes: 18,
+              },
+            },
+      ),
+    };
+
+    function productHost(
+      peer: ProductPeer,
+      computer: AgentComputer = completingComputer,
+    ): CodexNativeAgentHost {
+      return new CodexNativeAgentHost(
+        peer,
+        {
+          model: "gpt-6-astra",
+          runtimeRoot: "/private/tmp/farol-agent-runtime",
+          spawnTimeoutMs: 1_000,
+          waitTimeoutMs: 5,
+          pollIntervalMs: 1,
+          nonce: () => "proof-product-a",
+          now: () => 1,
+        },
+        { verify: async () => ({ status: "verified" }) },
+        computer,
+      );
+    }
+
+    it("reports a transient read failure as unobserved, not unknown", async () => {
+      const peer = new ProductPeer();
+      const host = productHost(peer);
+      const spawned = await host.spawn(request);
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      peer.failReads = 1;
+
+      await expect(host.wait(spawned.correlation)).resolves.toEqual({
+        status: "unobserved",
+        correlation: spawned.correlation,
+      });
+      await expect(host.wait(spawned.correlation)).resolves.toEqual({
+        status: "running",
+        correlation: spawned.correlation,
+      });
+    });
+
+    it("serves the still-running child's calls and completes without a second spawn", async () => {
+      const peer = new ProductPeer();
+      const first = productHost(peer);
+      const spawned = await first.spawn(request);
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      expect(spawned.authorityProof).toBe("proof-product-a");
+      const authorityProof = spawned.authorityProof;
+      if (!authorityProof) throw new Error("PROOF_MISSING");
+      // The first process is gone: its handlers went with it.
+      first.dispose();
+
+      const second = productHost(peer);
+      const rejoin = { request, authorityProof };
+      await expect(second.wait(spawned.correlation, rejoin)).resolves.toEqual({
+        status: "running",
+        correlation: spawned.correlation,
+      });
+      await peer.finish();
+      await expect(
+        second.wait(spawned.correlation, rejoin),
+      ).resolves.toMatchObject({
+        status: "completed",
+        correlation: spawned.correlation,
+      });
+      expect(
+        peer.requests.filter(({ method }) => method === "thread/start"),
+      ).toHaveLength(1);
+    });
+
+    it("refuses to attach a rejoin whose request does not produce the recorded delegation", async () => {
+      const peer = new ProductPeer();
+      const first = productHost(peer);
+      const spawned = await first.spawn(request);
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      first.dispose();
+
+      await expect(
+        productHost(peer).wait(spawned.correlation, {
+          request: {
+            ...request,
+            intent: { kind: "product", objective: "A different objective." },
+          },
+          authorityProof: spawned.authorityProof ?? "proof-product-a",
+        }),
+      ).resolves.toEqual({
+        status: "outcome_unknown",
+        correlation: spawned.correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      });
+      expect(peer.handlers.has("item/tool/call")).toBe(false);
     });
   });
 });

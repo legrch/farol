@@ -78,6 +78,7 @@ export type Assignment = Readonly<{
   childTurnId: string | null;
   hostRole: string | null;
   delegationDigest: string | null;
+  authorityProof: string | null;
   terminal: boolean;
   terminalReason: AssignmentTerminalReason | null;
 }>;
@@ -98,6 +99,7 @@ export function createAssignment(
     childTurnId: null,
     hostRole: null,
     delegationDigest: null,
+    authorityProof: null,
     terminal: false,
     terminalReason: null,
   };
@@ -129,6 +131,7 @@ export function matchesChildCorrelation(
 export function startAssignment(
   assignment: Assignment,
   correlation: ChildCorrelation,
+  authorityProof: string | null = null,
 ): Result<Assignment, AssignmentErrorCode> {
   if (assignment.terminal) return failure("AGENT_TERMINAL");
   if (
@@ -164,6 +167,7 @@ export function startAssignment(
     childTurnId: correlation.childTurnId,
     hostRole: correlation.hostRole,
     delegationDigest: correlation.delegationDigest,
+    authorityProof,
   });
 }
 

@@ -766,17 +766,9 @@ describe("Agent app service", () => {
       source: "native-host-transport",
       waitCalls: 1,
     },
-    {
-      name: "a thrown wait transport",
-      host: () =>
-        new AgentHostDouble(
-          { status: "started", correlation: exactChild },
-          new Error("lost wait ack"),
-        ),
-      phase: "outcome_unknown",
-      source: "native-host-transport",
-      waitCalls: 1,
-    },
+    // A thrown wait is no longer terminal (LIF-05): the known child stays
+    // running and observable; see "LIF-05 and LIF-06 observing the same
+    // child again".
   ])(
     "terminates $name without retry",
     async ({ host: createHost, phase, source, waitCalls }) => {
@@ -814,5 +806,73 @@ describe("Agent app service", () => {
     });
     expect(host.spawnCalls).toBe(1);
     expect(host.waitCalls).toBe(0);
+  });
+});
+
+describe("LIF-05 and LIF-06 observing the same child again", () => {
+  it("keeps a child observable after a failed wait and recovers its result without a second child", async () => {
+    const rejoins: unknown[] = [];
+    let waits = 0;
+    const host: AgentHost & { spawnCalls: number } = {
+      spawnCalls: 0,
+      async spawn() {
+        this.spawnCalls += 1;
+        return {
+          status: "started",
+          correlation: exactChild,
+          authorityProof: "proof-preview-a",
+        };
+      },
+      async wait(correlation, rejoin) {
+        waits += 1;
+        rejoins.push(rejoin);
+        if (waits === 1) throw new Error("TRANSPORT_LOST");
+        return {
+          status: "completed",
+          correlation,
+          resultRef: "result-preview-observed",
+          workspaceEnforcement: "verified" as const,
+        };
+      },
+      async cancel() {
+        throw new Error("UNEXPECTED_CANCEL");
+      },
+    };
+    const repository = new InMemoryAssignments();
+
+    await expect(
+      createRunner(host, repository).execute(command),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        assignment: { phase: "running", terminal: false },
+        observation: "unavailable",
+        resultRef: null,
+      },
+    });
+    // A later rejoin, possibly from a new process, observes the same child.
+    await expect(
+      createRunner(host, repository).execute({
+        ...command,
+        admission: "rejoin",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        assignment: { phase: "completed", terminal: true },
+        observation: "current",
+        resultRef: "result-preview-observed",
+      },
+    });
+    expect(host.spawnCalls).toBe(1);
+    expect(rejoins[1]).toEqual({
+      request: {
+        identity: command.identity,
+        authority: delegatedAuthority,
+        focus: command.focus,
+        intent: command.intent,
+      },
+      authorityProof: "proof-preview-a",
+    });
   });
 });

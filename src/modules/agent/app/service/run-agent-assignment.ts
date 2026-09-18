@@ -3,7 +3,7 @@ import {
   success,
   type Result,
 } from "../../../../pkg/kernel/domain/result";
-import type { AgentHost } from "../port/agent-host";
+import type { AgentHost, AgentRejoin } from "../port/agent-host";
 import type { AgentCommandDigester } from "../port/agent-command-digester";
 import type { AgentAssignmentIntent } from "../port/agent-host";
 import type {
@@ -33,6 +33,9 @@ import {
 export type AgentRunReceipt = StoredAssignment &
   Readonly<{
     resultRetention: "not_applicable" | "durable" | "memory_only";
+    // "unavailable" means this run could not observe the known child; it
+    // stays running and a later rejoin observes the same child again.
+    observation: "current" | "unavailable";
   }>;
 
 export type AgentAssignmentCommand = Readonly<{
@@ -247,18 +250,34 @@ export class RunAgentAssignment {
         recovered.delegationDigest
       ) {
         const childId = recovered.childId;
-        return this.waitForChild(recovered, {
-          ...recovered.identity,
-          authorityId: recovered.authority.authorityId,
-          participantId: recovered.authority.participantId,
-          role: recovered.authority.role,
-          parentThreadId: recovered.parentThreadId,
-          childId,
-          parentTurnId: recovered.parentTurnId,
-          childTurnId: recovered.childTurnId,
-          hostRole: recovered.hostRole,
-          delegationDigest: recovered.delegationDigest,
-        });
+        const rejoin =
+          recovered.authorityProof === null
+            ? undefined
+            : {
+                request: {
+                  identity,
+                  authority,
+                  focus: { initialPaths: [...command.focus.initialPaths] },
+                  intent: command.intent,
+                },
+                authorityProof: recovered.authorityProof,
+              };
+        return this.waitForChild(
+          recovered,
+          {
+            ...recovered.identity,
+            authorityId: recovered.authority.authorityId,
+            participantId: recovered.authority.participantId,
+            role: recovered.authority.role,
+            parentThreadId: recovered.parentThreadId,
+            childId,
+            parentTurnId: recovered.parentTurnId,
+            childTurnId: recovered.childTurnId,
+            hostRole: recovered.hostRole,
+            delegationDigest: recovered.delegationDigest,
+          },
+          rejoin,
+        );
       }
       return success(await this.recoverInterrupted(admission.record));
     }
@@ -300,7 +319,11 @@ export class RunAgentAssignment {
       );
     }
 
-    const started = startAssignment(prepared, spawned.correlation);
+    const started = startAssignment(
+      prepared,
+      spawned.correlation,
+      spawned.authorityProof ?? null,
+    );
     if (!started.ok) return failure(started.error.code);
     await this.trySave(this.record(started.value, null));
 
@@ -310,18 +333,26 @@ export class RunAgentAssignment {
   private async waitForChild(
     assignment: Assignment,
     correlation: Parameters<AgentHost["wait"]>[0],
+    rejoin?: AgentRejoin,
   ): Promise<Result<AgentRunReceipt, AssignmentErrorCode>> {
     let waited: Awaited<ReturnType<AgentHost["wait"]>>;
     try {
-      waited = await this.host.wait(correlation);
+      waited = rejoin
+        ? await this.host.wait(correlation, rejoin)
+        : await this.host.wait(correlation);
     } catch {
-      return this.terminal(
-        markChildOutcomeUnknown(assignment, correlation, {
-          code: "AGENT_WAIT_TRANSPORT_UNKNOWN",
-          source: "native-host-transport",
-          retry: "never",
-        }),
-      );
+      // The known child could not be observed.  Keeping it running lets a
+      // later rejoin observe that same child instead of freezing the
+      // assignment as unknown or spawning another one.
+      waited = { status: "unobserved", correlation };
+    }
+    if (waited.status === "unobserved") {
+      if (!matchesChildCorrelation(assignment, waited.correlation)) {
+        return failure("AGENT_CORRELATION");
+      }
+      const record = this.record(assignment, null);
+      const persisted = await this.trySave(record);
+      return success(this.receipt(record, persisted, "unavailable"));
     }
 
     if (waited.status === "completed") {
@@ -486,9 +517,11 @@ export class RunAgentAssignment {
   private receipt(
     record: StoredAssignment,
     persisted: boolean,
+    observation: AgentRunReceipt["observation"] = "current",
   ): AgentRunReceipt {
     return {
       ...record,
+      observation,
       resultRetention:
         record.assignment.phase === "completed"
           ? persisted

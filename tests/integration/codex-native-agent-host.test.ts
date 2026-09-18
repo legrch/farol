@@ -513,6 +513,7 @@ describe("native Codex Agent host", () => {
           .update(peer.childPrompt)
           .digest("hex"),
       },
+      authorityProof: "proof-a",
     });
     if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
     await expect(host.wait(spawned.correlation)).resolves.toEqual({
