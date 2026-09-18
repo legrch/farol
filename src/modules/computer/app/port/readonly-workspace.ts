@@ -1,8 +1,17 @@
+// The folder the owner approved, bound to the device and inode it had then.
+// A request carrying it is refused when another object now has that path.
+export type WorkspaceApprovedRoot = Readonly<{
+  path: string;
+  device: string;
+  inode: string;
+}>;
+
 export type ReadonlyWorkspaceDescriptor = Readonly<{
   workspaceId: string;
   root: string;
   deniedPaths: readonly string[];
   exactFilePaths?: readonly string[];
+  approvedRoot?: WorkspaceApprovedRoot;
 }>;
 
 export type WorkspaceVerificationCommand = "git.status" | "git.head";
@@ -75,6 +84,7 @@ export type ReadonlyWorkspaceErrorCode =
   | "WORKSPACE_HELPER_UNTRUSTED"
   | "WORKSPACE_INTERPRETER_UNTRUSTED"
   | "WORKSPACE_PATH_REFUSED"
+  | "WORKSPACE_ROOT_CHANGED"
   | "WORKSPACE_NOT_FOUND"
   | "WORKSPACE_NOT_A_FILE"
   | "WORKSPACE_FILE_TOO_LARGE"

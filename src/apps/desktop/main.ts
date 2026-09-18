@@ -46,6 +46,7 @@ import {
   type ApprovedProductWorkspace,
   type ProductConfigurationResult,
   type ProductSettings,
+  type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
 import {
   ShellLayoutSchema,
@@ -450,6 +451,9 @@ function verificationWorkspaceAction(
       workspaceId: candidate.workspaceId,
       root: candidate.root,
       access: candidate.access,
+      ...(candidate.rootIdentity
+        ? { rootIdentity: candidate.rootIdentity }
+        : {}),
     })),
     excludedPaths: settings.computer.workspaces.flatMap((candidate) =>
       candidate.excludedPaths.map((excluded) => ({
@@ -2173,8 +2177,29 @@ function attachmentStagingFailure(error: unknown): ProductConfigurationResult {
   return configurationFailure("CHATGPT_ATTACHMENT_STAGING_FAILED");
 }
 
+// The device and inode a folder has now, so its approval can refuse another
+// object that later takes the same path.
+async function measuredRootIdentity(
+  root: string,
+): Promise<WorkspaceRootIdentity | null> {
+  try {
+    const measured = await lstat(root, { bigint: true });
+    return measured.isDirectory()
+      ? { device: String(measured.dev), inode: String(measured.ino) }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 async function selectedWorkspace(): Promise<
-  Readonly<{ root: string; label: string }> | "cancelled" | "invalid"
+  | Readonly<{
+      root: string;
+      label: string;
+      rootIdentity: WorkspaceRootIdentity;
+    }>
+  | "cancelled"
+  | "invalid"
 > {
   let selected: string | undefined;
   const testRoot =
@@ -2200,7 +2225,9 @@ async function selectedWorkspace(): Promise<
     if (!listed.isDirectory() || listed.isSymbolicLink()) return "invalid";
     const root = await realpath(selected);
     if (!path.isAbsolute(root)) return "invalid";
-    return { root, label: path.basename(root) || root };
+    const rootIdentity = await measuredRootIdentity(root);
+    if (!rootIdentity) return "invalid";
+    return { root, label: path.basename(root) || root, rootIdentity };
   } catch {
     return "invalid";
   }
@@ -2658,6 +2685,24 @@ function workspaceDeniedPaths(
   );
 }
 
+// Every desktop helper call names the workspace's own exclusions and, once
+// bound, the folder identity the owner approved, so a folder that has since
+// replaced it at the same path is refused instead of trusted.
+function workspaceDescriptor(
+  workspace: ApprovedProductWorkspace,
+  observedRoot?: WorkspaceRootIdentity,
+) {
+  const identity = workspace.rootIdentity ?? observedRoot;
+  return {
+    workspaceId: workspace.workspaceId,
+    root: workspace.root,
+    deniedPaths: workspaceDeniedPaths(workspace),
+    ...(identity
+      ? { approvedRoot: { path: workspace.root, ...identity } }
+      : {}),
+  };
+}
+
 function verifiedProductWorkspace(
   workspaceId: string,
 ):
@@ -2722,6 +2767,7 @@ async function selectedWorkspaceFile(
 function workspaceReadFailure(code: string): ProductConfigurationResult {
   switch (code) {
     case "WORKSPACE_PATH_REFUSED":
+    case "WORKSPACE_ROOT_CHANGED":
     case "WORKSPACE_NOT_FOUND":
     case "WORKSPACE_NOT_A_FILE":
     case "WORKSPACE_FILE_TOO_LARGE":
@@ -2761,6 +2807,8 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
       return configurationFailure("WORKSPACE_NOT_GIT_REPOSITORY");
     case "WORKSPACE_GIT_HEAD_UNBORN":
       return configurationFailure("WORKSPACE_GIT_HEAD_UNBORN");
+    case "WORKSPACE_ROOT_CHANGED":
+      return configurationFailure("WORKSPACE_ROOT_CHANGED");
     default:
       return configurationFailure("WORKSPACE_COMMAND_FAILED");
   }
@@ -2769,6 +2817,7 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
 function workspaceMutationFailure(code: string): ProductConfigurationResult {
   switch (code) {
     case "WORKSPACE_PATH_REFUSED":
+    case "WORKSPACE_ROOT_CHANGED":
     case "WORKSPACE_NOT_FOUND":
     case "WORKSPACE_NOT_A_FILE":
     case "WORKSPACE_FILE_TOO_LARGE":
@@ -3809,11 +3858,7 @@ async function configureProduct(
           return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
         }
         const workspaceResult = await nativeWorkspace.execute({
-          workspace: {
-            workspaceId: workspace.workspaceId,
-            root: workspace.root,
-            deniedPaths: workspaceDeniedPaths(workspace),
-          },
+          workspace: workspaceDescriptor(workspace),
           operation: { kind: "workspace.read", relativePath },
         });
         if (!workspaceResult.ok) {
@@ -4128,12 +4173,16 @@ async function configureProduct(
       if (relativePath === "invalid") {
         return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
       }
+      // A workspace approved before identities were recorded is bound to the
+      // folder this verification reads; the read itself is checked against it.
+      const observedRoot = workspace.rootIdentity
+        ? undefined
+        : await measuredRootIdentity(workspace.root);
+      if (observedRoot === null) {
+        return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+      }
       const result = await nativeWorkspace.execute({
-        workspace: {
-          workspaceId: workspace.workspaceId,
-          root: workspace.root,
-          deniedPaths: workspaceDeniedPaths(workspace),
-        },
+        workspace: workspaceDescriptor(workspace, observedRoot),
         operation: { kind: "workspace.read", relativePath },
       });
       if (!result.ok) return workspaceReadFailure(result.error.code);
@@ -4151,6 +4200,7 @@ async function configureProduct(
               ? "mutable-workspace/1"
               : "readonly-workspace/1",
         },
+        observedRoot,
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
       const text = result.value.text.slice(0, 32_768);
@@ -4175,11 +4225,7 @@ async function configureProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
       const result = await nativeWorkspace.execute({
-        workspace: {
-          workspaceId: selected.workspace.workspaceId,
-          root: selected.workspace.root,
-          deniedPaths: workspaceDeniedPaths(selected.workspace),
-        },
+        workspace: workspaceDescriptor(selected.workspace),
         operation: {
           kind: "workspace.list",
           relativePath: command.relativePath,
@@ -4210,11 +4256,7 @@ async function configureProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
       const result = await nativeWorkspace.execute({
-        workspace: {
-          workspaceId: selected.workspace.workspaceId,
-          root: selected.workspace.root,
-          deniedPaths: workspaceDeniedPaths(selected.workspace),
-        },
+        workspace: workspaceDescriptor(selected.workspace),
         operation: {
           kind: "workspace.search",
           relativePath: command.relativePath,
@@ -4354,11 +4396,7 @@ async function configureProduct(
       }
       const prepared = await prepareWorkspaceEdit(nativeWorkspace, {
         operationId: randomUUID(),
-        workspace: {
-          workspaceId: selected.workspace.workspaceId,
-          root: selected.workspace.root,
-          deniedPaths: workspaceDeniedPaths(selected.workspace),
-        },
+        workspace: workspaceDescriptor(selected.workspace),
         computerGeneration: snapshot.settings.computer.generation,
         relativePath,
         expiresAt: Date.now() + 10 * 60_000,

@@ -11,10 +11,12 @@ import {
   PendingWorkspaceEditDeliverySchema,
   ProductSettingsSchema,
   SetupStepIdSchema,
+  WorkspaceRootIdentitySchema,
   type ProductConfigurationSnapshot,
   type ProductSettings,
   type PendingWorkspaceEditDelivery,
   type SetupStepId,
+  type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/credential-stores";
 
@@ -51,6 +53,7 @@ type MutationResult = Readonly<
         | "SETTINGS_WRITE_FAILED"
         | "WORKSPACE_NOT_FOUND"
         | "WORKSPACE_SELECTION_PROTECTED"
+        | "WORKSPACE_ROOT_CHANGED"
         | "WORKSPACE_MUTATION_NOT_PENDING";
       snapshot: ProductConfigurationSnapshot;
     }
@@ -59,6 +62,7 @@ type MutationResult = Readonly<
 const workspaceInputSchema = z.strictObject({
   root: z.string(),
   label: z.string().trim().min(1).max(120),
+  rootIdentity: WorkspaceRootIdentitySchema.optional(),
 });
 
 const verificationInputSchema = z.strictObject({
@@ -864,6 +868,9 @@ export class ProductConfigurationService {
           label: parsed.data.label,
           access: "read" as const,
           excludedPaths: [],
+          ...(parsed.data.rootIdentity
+            ? { rootIdentity: parsed.data.rootIdentity }
+            : {}),
         },
       ];
       return {
@@ -1081,23 +1088,46 @@ export class ProductConfigurationService {
     });
   }
 
+  // A workspace approved before identities were recorded is bound to the
+  // folder this owner verification observed; a bound workspace is never
+  // rebound to another object.
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
+    observedRoot?: WorkspaceRootIdentity,
   ): Promise<MutationResult> {
     const parsed = verificationInputSchema.safeParse(input);
-    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
-      return this.failure("WORKSPACE_NOT_FOUND");
+    const identity =
+      WorkspaceRootIdentitySchema.optional().safeParse(observedRoot);
+    if (!parsed.success || !identity.success) {
+      return this.failure("SETTINGS_INPUT_INVALID");
     }
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    const verified = this.current.computer.workspaces.find(
+      (workspace) => workspace.workspaceId === workspaceId,
+    );
+    if (!verified) return this.failure("WORKSPACE_NOT_FOUND");
+    const bound = verified.rootIdentity;
+    if (
+      bound &&
+      identity.data &&
+      (bound.device !== identity.data.device ||
+        bound.inode !== identity.data.inode)
+    ) {
+      return this.failure("WORKSPACE_ROOT_CHANGED");
+    }
+    const rootIdentity = bound ?? identity.data;
     return this.mutate((settings) => ({
       ...settings,
       revision: settings.revision + 1,
+      computer: {
+        ...settings.computer,
+        workspaces: settings.computer.workspaces.map((workspace) =>
+          workspace.workspaceId === workspaceId && rootIdentity
+            ? { ...workspace, rootIdentity }
+            : workspace,
+        ),
+      },
       setup: {
         ...settings.setup,
         computer: {

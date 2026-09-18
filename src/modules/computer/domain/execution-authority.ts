@@ -11,10 +11,17 @@ export type CommandAuthority = "none" | "verification";
 export type ParticipantRole = "main" | "agent" | "critic";
 export type MutationOwnership = "none" | "task";
 
+// The device and inode the approved folder had when the owner approved it.
+export type WorkspaceRootIdentity = Readonly<{
+  device: string;
+  inode: string;
+}>;
+
 export type ApprovedWorkspace = Readonly<{
   workspaceId: string;
   root: string;
   access: WorkspaceAccess;
+  rootIdentity?: WorkspaceRootIdentity | undefined;
 }>;
 
 export type WorkspaceExclusion = Readonly<{
@@ -416,6 +423,23 @@ function publicScopes(
   return scopes.map(({ restrictionSource: _restrictionSource, ...scope }) =>
     scope.mode === "subtree" ? scope : { ...scope, paths: [...scope.paths] },
   );
+}
+
+/**
+ * The folder the owner approved for one workspace, with the identity it had
+ * then, so a native boundary can refuse another object that has since taken
+ * its path. Null when the approval carries no identity.
+ */
+export function approvedRootOf(
+  approval: ComputerApproval,
+  workspaceId: string,
+): Readonly<{ path: string; device: string; inode: string }> | null {
+  const approved = approval.workspaces.find(
+    (workspace) => workspace.workspaceId === workspaceId,
+  );
+  return approved?.rootIdentity
+    ? { path: approved.root, ...approved.rootIdentity }
+    : null;
 }
 
 export function deriveTaskGrant(

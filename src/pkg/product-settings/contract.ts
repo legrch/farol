@@ -223,6 +223,16 @@ export const ProductGeneralSettingsSchema = z.strictObject({
   activityDetail: z.enum(["summary", "technical"]),
 });
 
+// The device and inode the approved folder had when the owner approved it. A
+// workspace approved before identities were recorded has none until its next
+// owner verification binds one.
+export const WorkspaceRootIdentitySchema = z.strictObject({
+  device: z.string().regex(/^[0-9]{1,20}$/u),
+  inode: z.string().regex(/^[0-9]{1,20}$/u),
+});
+
+export type WorkspaceRootIdentity = z.infer<typeof WorkspaceRootIdentitySchema>;
+
 export const ApprovedProductWorkspaceSchema = z
   .strictObject({
     workspaceId: IdentifierSchema,
@@ -230,6 +240,7 @@ export const ApprovedProductWorkspaceSchema = z
     label: z.string().trim().min(1).max(120),
     access: z.enum(["read", "write"]),
     excludedPaths: z.array(CanonicalAbsolutePathSchema).max(32),
+    rootIdentity: WorkspaceRootIdentitySchema.optional(),
   })
   .superRefine((workspace, context) => {
     const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
@@ -832,6 +843,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_FILE_PICKER_CANCELLED",
       "WORKSPACE_FILE_SELECTION_INVALID",
       "WORKSPACE_PATH_REFUSED",
+      "WORKSPACE_ROOT_CHANGED",
       "WORKSPACE_NOT_A_FILE",
       "WORKSPACE_FILE_TOO_LARGE",
       "WORKSPACE_NOT_TEXT",

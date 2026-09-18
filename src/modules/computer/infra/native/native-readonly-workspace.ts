@@ -23,6 +23,7 @@ import type {
   ReadonlyWorkspaceResult,
   WorkspaceEditSnapshotReader,
   WorkspaceEditSnapshotRequest,
+  WorkspaceApprovedRoot,
   WorkspaceEditSnapshotResult,
   WorkspaceMatch,
 } from "../../app/port/readonly-workspace";
@@ -36,8 +37,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "ab91fd919acf44617c31b244a6ffb4f14dbaf2dee8c40fb0e5348b12d0e7fe64",
-  size: 69_438,
+  sha256: "980afb5a430c7102355131d8fc27566df8f57ab5fa6ee6aaae4ad97be57bbae8",
+  size: 70_921,
   mode: 0o644,
 });
 
@@ -91,6 +92,7 @@ const EXIT_TO_ERROR = new Map<number, NativeWorkspaceErrorCode>([
   [30, "WORKSPACE_EDIT_NOT_UNIQUE"],
   [31, "WORKSPACE_EDIT_OVERLAP"],
   [32, "WORKSPACE_MUTATION_OUTCOME_UNKNOWN"],
+  [33, "WORKSPACE_ROOT_CHANGED"],
 ]);
 
 const REVIEWED_PYTHON = Object.freeze({
@@ -287,21 +289,45 @@ function validWorkspaceId(value: unknown): value is string {
   return plainString(value, 120);
 }
 
+function hasOwn(value: unknown, key: string): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.prototype.hasOwnProperty.call(value, key)
+  );
+}
+
+// The approved root is the folder the owner approved, bound to the device and
+// inode it had then. It is the requested root or one of its ancestors, so a
+// narrowed subtree is still checked against the folder that was approved.
+function validApprovedRoot(value: unknown, root: unknown): boolean {
+  if (!exactKeys(value, ["path", "device", "inode"])) return false;
+  const approved = value as Readonly<Record<string, unknown>>;
+  return (
+    canonicalAbsolutePath(approved.path) &&
+    typeof root === "string" &&
+    (root === approved.path || root.startsWith(`${approved.path}/`)) &&
+    typeof approved.device === "string" &&
+    /^[0-9]{1,20}$/u.test(approved.device) &&
+    typeof approved.inode === "string" &&
+    /^[0-9]{1,20}$/u.test(approved.inode)
+  );
+}
+
 function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   if (!exactKeys(value, ["workspace", "operation"])) return null;
   const candidate = value as Readonly<Record<string, unknown>>;
-  const hasExactFilePaths =
-    candidate.workspace !== null &&
-    typeof candidate.workspace === "object" &&
-    !Array.isArray(candidate.workspace) &&
-    Object.prototype.hasOwnProperty.call(candidate.workspace, "exactFilePaths");
+  const hasExactFilePaths = hasOwn(candidate.workspace, "exactFilePaths");
+  const hasApprovedRoot = hasOwn(candidate.workspace, "approvedRoot");
   if (
-    !exactKeys(
-      candidate.workspace,
-      hasExactFilePaths
-        ? ["workspaceId", "root", "deniedPaths", "exactFilePaths"]
-        : ["workspaceId", "root", "deniedPaths"],
-    )
+    !exactKeys(candidate.workspace, [
+      "workspaceId",
+      "root",
+      "deniedPaths",
+      ...(hasExactFilePaths ? ["exactFilePaths"] : []),
+      ...(hasApprovedRoot ? ["approvedRoot"] : []),
+    ])
   ) {
     return null;
   }
@@ -309,6 +335,8 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   if (
     !validWorkspaceId(workspace.workspaceId) ||
     !canonicalAbsolutePath(workspace.root) ||
+    (hasApprovedRoot &&
+      !validApprovedRoot(workspace.approvedRoot, workspace.root)) ||
     !Array.isArray(workspace.deniedPaths) ||
     workspace.deniedPaths.length > 256 ||
     !workspace.deniedPaths.every((entry) => canonicalRelativePath(entry)) ||
@@ -429,12 +457,14 @@ function validateMutationRequest(
 ): WorkspaceMutationRequest | null {
   if (!exactKeys(value, ["workspace", "operation"])) return null;
   const candidate = value as Readonly<Record<string, unknown>>;
+  const hasApprovedRoot = hasOwn(candidate.workspace, "approvedRoot");
   if (
     !exactKeys(candidate.workspace, [
       "workspaceId",
       "root",
       "deniedPaths",
       "writeDeniedPaths",
+      ...(hasApprovedRoot ? ["approvedRoot"] : []),
     ])
   ) {
     return null;
@@ -443,6 +473,8 @@ function validateMutationRequest(
   if (
     !validWorkspaceId(workspace.workspaceId) ||
     !canonicalAbsolutePath(workspace.root) ||
+    (hasApprovedRoot &&
+      !validApprovedRoot(workspace.approvedRoot, workspace.root)) ||
     !validRelativePaths(workspace.deniedPaths) ||
     !validRelativePaths(workspace.writeDeniedPaths) ||
     candidate.operation === null ||
@@ -508,6 +540,14 @@ function validateMutationRequest(
   return value as WorkspaceMutationRequest;
 }
 
+function approvedRootRequest(
+  workspace: Readonly<{ approvedRoot?: WorkspaceApprovedRoot }>,
+): Readonly<{ approvedRoot?: WorkspaceApprovedRoot }> {
+  return workspace.approvedRoot
+    ? { approvedRoot: { ...workspace.approvedRoot } }
+    : {};
+}
+
 function writeDeniedPaths(
   request: WorkspaceMutationRequest,
 ): readonly string[] {
@@ -525,6 +565,7 @@ function nativeMutationRequest(
 ): NativeRequest {
   const common = {
     root: request.workspace.root,
+    ...approvedRootRequest(request.workspace),
     relative: request.operation.relativePath,
     denied: deniedPaths(request),
     writeDenied: writeDeniedPaths(request),
@@ -550,6 +591,7 @@ function nativeRequest(
 ): NativeRequest {
   const common = {
     root: request.workspace.root,
+    ...approvedRootRequest(request.workspace),
     relative: request.operation.relativePath,
     denied: deniedPaths(request),
     ...(options.testHookRequest ? { testHook: options.testHookRequest } : {}),

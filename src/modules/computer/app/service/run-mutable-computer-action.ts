@@ -15,6 +15,7 @@ import type {
   WorkspaceMutationRepository,
 } from "../port/workspace-mutation-repository";
 import {
+  approvedRootOf,
   authorizeComputerAction,
   authorizeTaskIdentity,
   type AuthorityErrorCode,
@@ -384,6 +385,7 @@ export class RunMutableComputerAction {
       return executionHandoff;
     }
 
+    const approvedRoot = approvedRootOf(approval, request.workspaceId);
     let result: Awaited<ReturnType<MutableWorkspace["mutate"]>>;
     try {
       result = await this.workspace.mutate(
@@ -397,6 +399,7 @@ export class RunMutableComputerAction {
               participant.grant.excludedPaths,
             ),
             writeDeniedPaths: [],
+            ...(approvedRoot ? { approvedRoot } : {}),
           },
           operation: request.operation,
         },

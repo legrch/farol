@@ -80,6 +80,7 @@ EXIT_EDIT_NO_MATCH = 29
 EXIT_EDIT_NOT_UNIQUE = 30
 EXIT_EDIT_OVERLAP = 31
 EXIT_MUTATION_OUTCOME_UNKNOWN = 32
+EXIT_ROOT_CHANGED = 33
 
 CONTEXT_NAMES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 CONTEXT_NAME_SET = frozenset(CONTEXT_NAMES)
@@ -210,14 +211,51 @@ def _test_hook(request, phase, index=None):
         refuse(EXIT_INTERNAL)
 
 
+def _approved_root(request, parts):
+    """The approved folder's depth in `parts` and the identity it had then.
+
+    The approved root is the requested root or one of its ancestors, so a
+    narrowed subtree is still checked against the folder the owner approved.
+    A pathname alone cannot tell a replacement at the same path from the
+    approved object; its device and inode can.
+    """
+
+    approved = request.get("approvedRoot")
+    if approved is None:
+        return None
+    if not isinstance(approved, dict) or set(approved) != {"path", "device", "inode"}:
+        refuse(EXIT_INVALID)
+    approved_parts = _components(approved.get("path"), absolute=True)
+    identity = []
+    for key in ("device", "inode"):
+        value = approved.get(key)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,20}", value):
+            refuse(EXIT_INVALID)
+        identity.append(int(value))
+    if len(approved_parts) < 1 or tuple(parts[: len(approved_parts)]) != tuple(
+        approved_parts
+    ):
+        refuse(EXIT_INVALID)
+    return len(approved_parts) - 1, tuple(identity)
+
+
+def _refuse_if_replaced(descriptor, identity):
+    opened = os.fstat(descriptor)
+    if (opened.st_dev, opened.st_ino) != identity:
+        refuse(EXIT_ROOT_CHANGED)
+
+
 def _open_root(request):
     parts = _components(request.get("root"), absolute=True)
+    approved = _approved_root(request, parts)
     descriptor = os.open("/", DIRECTORY_FLAGS)
     try:
         for index, part in enumerate(parts):
             child = _open_directory(descriptor, part)
             os.close(descriptor)
             descriptor = child
+            if approved is not None and index == approved[0]:
+                _refuse_if_replaced(descriptor, approved[1])
             _test_hook(request, "after-directory", index)
         opened = os.fstat(descriptor)
         if opened.st_uid != os.getuid() or opened.st_mode & 0o022:
@@ -1832,6 +1870,7 @@ def _dispatch(request):
         "writeDenied",
         "edits",
         "fileOnly",
+        "approvedRoot",
         "testHook",
     }:
         refuse(EXIT_INVALID)

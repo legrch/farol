@@ -215,6 +215,60 @@ describe("secure MCP Computer launch contract", () => {
     ).resolves.toEqual(launch);
   });
 
+  it("AUTH-10 carries each approved folder's identity through the launch file", async () => {
+    const configured = settings();
+    const bound = ProductSettingsSchema.parse({
+      ...configured,
+      computer: {
+        ...configured.computer,
+        workspaces: configured.computer.workspaces.map((workspace, index) =>
+          index === 1
+            ? { ...workspace, rootIdentity: { device: "5", inode: "99" } }
+            : workspace,
+        ),
+      },
+    });
+    const launch = createSecureMcpLaunchContract(bound, {
+      now: 1_789_516_800_000,
+      runtimeId: "runtime-generation-03",
+      challengeSha256: "c".repeat(64),
+    });
+
+    expect(launch.approval.workspaces).toEqual([
+      {
+        workspaceId: "00000000-0000-4000-8000-000000000002",
+        root: "/Users/example/read",
+        access: "read",
+      },
+      {
+        workspaceId: "00000000-0000-4000-8000-000000000003",
+        root: "/Users/example/write",
+        access: "write",
+        rootIdentity: { device: "5", inode: "99" },
+      },
+    ]);
+    const launchRoot = path.join(await root(), "runtime");
+    const file = await new PrivateSecureMcpLaunchStore({
+      root: launchRoot,
+    }).write(launch);
+    const workspace: ReadonlyWorkspace = {
+      execute: async (request) => ({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: await fs.readFile(
+            path.join(request.workspace.root, request.operation.relativePath),
+            "utf8",
+          ),
+          bytes: (await fs.stat(file)).size,
+        },
+      }),
+    };
+    await expect(
+      loadReadonlyComputerLaunchContract(file, workspace),
+    ).resolves.toEqual(launch);
+  });
+
   it("refuses an empty or oversized connector workspace grant", () => {
     const empty = settings();
     empty.computer.workspaces.splice(0);

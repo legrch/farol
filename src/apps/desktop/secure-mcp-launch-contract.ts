@@ -79,6 +79,9 @@ export function createSecureMcpLaunchContract(
         workspaceId: workspace.workspaceId,
         root: workspace.root,
         access: workspace.access,
+        ...(workspace.rootIdentity
+          ? { rootIdentity: workspace.rootIdentity }
+          : {}),
       })),
       excludedPaths,
       capabilities,

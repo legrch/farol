@@ -60,10 +60,15 @@ function canonicalAbsolutePath(value: string): boolean {
 }
 
 const AbsolutePathSchema = z.string().refine(canonicalAbsolutePath);
+const RootIdentitySchema = z.strictObject({
+  device: z.string().regex(/^[0-9]{1,20}$/u),
+  inode: z.string().regex(/^[0-9]{1,20}$/u),
+});
 const ReadonlyApprovedWorkspaceSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   root: AbsolutePathSchema,
   access: z.literal("read"),
+  rootIdentity: RootIdentitySchema.optional(),
 });
 const ReadonlySubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -86,6 +91,7 @@ const MutableApprovedWorkspaceSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   root: AbsolutePathSchema,
   access: z.enum(["read", "write"]),
+  rootIdentity: RootIdentitySchema.optional(),
 });
 const MutableSubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,

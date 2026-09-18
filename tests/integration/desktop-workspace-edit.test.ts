@@ -32,6 +32,11 @@ const BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const NOW = 1_800_000_000_000;
 let root = "";
 let stateRoot = "";
+let rootIdentity: Readonly<{ device: string; inode: string }> = {
+  device: "0",
+  inode: "0",
+};
+let displaced = "";
 
 function digest(value: Buffer): string {
   return createHash("sha256").update(value).digest("hex");
@@ -56,6 +61,7 @@ function approvedWorkspace(): ApprovedProductWorkspace {
     label: "Edit fixture",
     access: "write",
     excludedPaths: [],
+    rootIdentity,
   };
 }
 
@@ -73,7 +79,12 @@ function computer(): ProductSettings["computer"] {
 async function prepare(workspace: NativeReadonlyWorkspace, file: string) {
   return prepareWorkspaceEdit(workspace, {
     operationId: `operation-${file}`,
-    workspace: { workspaceId: "workspace-edit", root, deniedPaths: [] },
+    workspace: {
+      workspaceId: "workspace-edit",
+      root,
+      deniedPaths: [],
+      approvedRoot: { path: root, ...rootIdentity },
+    },
     computerGeneration: computer().generation,
     relativePath: file,
     expiresAt: NOW + 10 * 60_000,
@@ -100,6 +111,8 @@ beforeEach(async () => {
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-desktop-edit-")),
   );
   await fs.chmod(root, 0o700);
+  const measured = await fs.lstat(root, { bigint: true });
+  rootIdentity = { device: String(measured.dev), inode: String(measured.ino) };
   stateRoot = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-desktop-state-")),
   );
@@ -107,7 +120,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const directory of [root, stateRoot]) {
+  for (const directory of [root, stateRoot, displaced]) {
     if (directory) await fs.rm(directory, { recursive: true, force: true });
   }
 });
@@ -202,6 +215,39 @@ describe("desktop guarded edit: prepare then apply", () => {
     expect(visible(await fs.readFile(path.join(root, "moved.md")))).toBe(
       visible(competing),
     );
+  });
+});
+
+describe("AUTH-10 a guarded edit never follows a replaced workspace folder", () => {
+  it("refuses to apply once another folder has taken the approved path", async () => {
+    await fs.writeFile(path.join(root, "target.md"), "body\n", {
+      mode: 0o600,
+    });
+    const workspace = native();
+    const prepared = await prepare(workspace, "target.md");
+    if (!prepared.ok) throw new Error(prepared.code);
+
+    displaced = `${root}-displaced`;
+    await fs.rename(root, displaced);
+    await fs.mkdir(root, { mode: 0o700 });
+    await fs.writeFile(path.join(root, "target.md"), "body\n", {
+      mode: 0o600,
+    });
+    const result = await applyPrepared(workspace, prepared.pending, {
+      oldText: "body",
+      newText: "BODY",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_ROOT_CHANGED", retry: "never" },
+    });
+    await expect(
+      fs.readFile(path.join(root, "target.md"), "utf8"),
+    ).resolves.toBe("body\n");
+    await expect(
+      fs.readFile(path.join(displaced, "target.md"), "utf8"),
+    ).resolves.toBe("body\n");
   });
 });
 

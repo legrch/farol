@@ -84,7 +84,8 @@ type CommandFailureCode =
   | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
   | "WORKSPACE_COMMAND_FAILED"
   | "WORKSPACE_NOT_GIT_REPOSITORY"
-  | "WORKSPACE_GIT_HEAD_UNBORN";
+  | "WORKSPACE_GIT_HEAD_UNBORN"
+  | "WORKSPACE_ROOT_CHANGED";
 
 // The HEAD profile exits 1 without output when HEAD does not resolve; the
 // caller decides from the repository metadata whether that is an unborn
@@ -709,6 +710,26 @@ function runGitVerification(
   });
 }
 
+// Git runs by pathname, so unlike the helper's descriptor walk this check
+// narrows the replacement window rather than closing it: the approved folder
+// must still be the object that was approved immediately before Git starts,
+// and the sandbox profile still confines Git to the requested root's path.
+async function approvedRootUnchanged(
+  approved: ReadonlyWorkspaceRequest["workspace"]["approvedRoot"],
+): Promise<boolean> {
+  if (!approved) return true;
+  try {
+    const measured = await lstat(approved.path, { bigint: true });
+    return (
+      measured.isDirectory() &&
+      String(measured.dev) === approved.device &&
+      String(measured.ino) === approved.inode
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function executeNativeVerificationCommand(
   request: ReadonlyWorkspaceRequest,
   operation: VerificationOperation,
@@ -722,6 +743,9 @@ export async function executeNativeVerificationCommand(
     operation.relativePath !== "."
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  }
+  if (!(await approvedRootUnchanged(request.workspace.approvedRoot))) {
+    return failure("WORKSPACE_ROOT_CHANGED");
   }
   const initialMetadata = await resolveWorkspaceGitMetadata(
     request.workspace.root,
@@ -756,6 +780,9 @@ export async function executeNativeVerificationCommand(
     metadata.commonDirectory !== initialMetadata.commonDirectory
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  }
+  if (!(await approvedRootUnchanged(request.workspace.approvedRoot))) {
+    return failure("WORKSPACE_ROOT_CHANGED");
   }
   const result = await runGitVerification(
     git,

@@ -1,8 +1,11 @@
+import type { WorkspaceApprovedRoot } from "./readonly-workspace";
+
 export type MutableWorkspaceDescriptor = Readonly<{
   workspaceId: string;
   root: string;
   deniedPaths: readonly string[];
   writeDeniedPaths: readonly string[];
+  approvedRoot?: WorkspaceApprovedRoot;
 }>;
 
 export type WorkspaceTextEdit = Readonly<{
@@ -46,6 +49,7 @@ export type WorkspaceMutationErrorCode =
   | "WORKSPACE_HELPER_UNTRUSTED"
   | "WORKSPACE_INTERPRETER_UNTRUSTED"
   | "WORKSPACE_PATH_REFUSED"
+  | "WORKSPACE_ROOT_CHANGED"
   | "WORKSPACE_NOT_FOUND"
   | "WORKSPACE_NOT_A_FILE"
   | "WORKSPACE_FILE_TOO_LARGE"

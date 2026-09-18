@@ -73,6 +73,91 @@ describe("Farol Next product configuration", () => {
     }
   });
 
+  it("AUTH-10 binds an approved workspace to the folder identity seen at approval", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const rootIdentity = { device: "16777232", inode: "4242" };
+
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+      rootIdentity,
+    });
+    expect(added).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: { computer: { workspaces: [{ rootIdentity }] } },
+      },
+    });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(added.snapshot);
+  });
+
+  it("AUTH-10 binds a workspace approved without an identity at its next owner verification only", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspace = added.snapshot.settings.computer.workspaces[0];
+    if (!workspace) throw new Error("workspace missing");
+    expect(workspace.rootIdentity).toBeUndefined();
+    const verification = {
+      profile: "computer.local.read/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    };
+
+    await expect(
+      service.recordComputerVerification(workspace.workspaceId, verification, {
+        device: "1",
+        inode: "2",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          computer: {
+            generation: added.snapshot.settings.computer.generation,
+            workspaces: [{ rootIdentity: { device: "1", inode: "2" } }],
+          },
+        },
+      },
+    });
+    // A bound workspace is never silently rebound to another object.
+    await expect(
+      service.recordComputerVerification(workspace.workspaceId, verification, {
+        device: "1",
+        inode: "3",
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "WORKSPACE_ROOT_CHANGED",
+      snapshot: {
+        settings: {
+          computer: {
+            workspaces: [{ rootIdentity: { device: "1", inode: "2" } }],
+          },
+        },
+      },
+    });
+  });
+
   it("persists working preferences and workspace approval across restart", async () => {
     const root = await stateRoot();
     const first = new ProductConfigurationService(

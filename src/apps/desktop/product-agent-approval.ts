@@ -29,6 +29,9 @@ export function productAgentApproval(
       workspaceId: workspace.workspaceId,
       root: workspace.root,
       access: "read" as const,
+      ...(workspace.rootIdentity
+        ? { rootIdentity: workspace.rootIdentity }
+        : {}),
     })),
     excludedPaths: computer.workspaces.flatMap((workspace) =>
       workspace.excludedPaths.map((excluded) => ({

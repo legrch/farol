@@ -262,6 +262,35 @@ describe("product Agent assignment composition", () => {
     });
   });
 
+  it("AUTH-10 keeps each approved folder's identity in the Agent projection", () => {
+    const configured = ProductSettingsSchema.parse({
+      ...settings(),
+      computer: {
+        ...settings().computer,
+        workspaces: settings().computer.workspaces.map((workspace) => ({
+          ...workspace,
+          rootIdentity: { device: "7", inode: "11" },
+        })),
+      },
+    });
+
+    expect(
+      productAgentApproval(configured.computer, {
+        ownerId: "owner-desktop",
+        capabilities: ["workspace.read"],
+        commands: "none",
+        expiresAt: 10_000,
+      }).workspaces,
+    ).toEqual([
+      {
+        workspaceId,
+        root: "/workspace/approved",
+        access: "read",
+        rootIdentity: { device: "7", inode: "11" },
+      },
+    ]);
+  });
+
   it("preserves owner-approved fixed verification authority for the product Agent", async () => {
     const fixture = dependencies();
 

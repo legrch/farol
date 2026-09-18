@@ -139,6 +139,9 @@ export function desktopMutableWorkspaceAction(
       workspaceId: candidate.workspaceId,
       root: candidate.root,
       access: candidate.access,
+      ...(candidate.rootIdentity
+        ? { rootIdentity: candidate.rootIdentity }
+        : {}),
     })),
     excludedPaths: computer.workspaces.flatMap((candidate) =>
       candidate.excludedPaths.map((excluded) => ({

@@ -725,6 +725,145 @@ describe("native readonly Computer workspace", () => {
     });
   });
 
+  describe("AUTH-10 an approved root is bound to the object that was approved", () => {
+    let displaced = "";
+
+    afterEach(async () => {
+      if (displaced) await fs.rm(displaced, { recursive: true, force: true });
+      displaced = "";
+    });
+
+    async function approvedRoot() {
+      const measured = await fs.lstat(root, { bigint: true });
+      return {
+        path: root,
+        device: String(measured.dev),
+        inode: String(measured.ino),
+      };
+    }
+
+    // The approved folder is moved away and another folder takes its path.
+    async function replaceRoot() {
+      displaced = `${root}-displaced`;
+      await fs.rename(root, displaced);
+      await fs.mkdir(path.join(root, "src"), { recursive: true, mode: 0o700 });
+      await fs.chmod(root, 0o700);
+      await fs.writeFile(path.join(root, "README.md"), "replacement\n", {
+        mode: 0o600,
+      });
+    }
+
+    const changed = {
+      ok: false,
+      error: { code: "WORKSPACE_ROOT_CHANGED", retry: "never" },
+    } as const;
+
+    it("serves the approved object and refuses a replacement at the same path", async () => {
+      const approved = await approvedRoot();
+      const workspace = reader();
+      const at = (
+        workspaceRoot: string,
+        operation: ReadonlyWorkspaceRequest["operation"],
+      ): ReadonlyWorkspaceRequest => ({
+        workspace: {
+          workspaceId: "workspace-a",
+          root: workspaceRoot,
+          deniedPaths: [],
+          approvedRoot: approved,
+        },
+        operation,
+      });
+
+      await expect(
+        workspace.execute(
+          at(root, { kind: "workspace.read", relativePath: "README.md" }),
+        ),
+      ).resolves.toMatchObject({ ok: true });
+      // A narrowed subtree is checked against the approved ancestor.
+      await expect(
+        workspace.execute(
+          at(path.join(root, "src"), {
+            kind: "workspace.list",
+            relativePath: ".",
+          }),
+        ),
+      ).resolves.toMatchObject({ ok: true });
+
+      await replaceRoot();
+
+      await expect(
+        workspace.execute(
+          at(root, { kind: "workspace.read", relativePath: "README.md" }),
+        ),
+      ).resolves.toEqual(changed);
+      await expect(
+        workspace.execute(
+          at(path.join(root, "src"), {
+            kind: "workspace.list",
+            relativePath: ".",
+          }),
+        ),
+      ).resolves.toEqual(changed);
+      await expect(
+        workspace.execute(
+          at(root, {
+            kind: "verification.run",
+            command: "git.status",
+            relativePath: ".",
+          }),
+        ),
+      ).resolves.toEqual(changed);
+      await expect(
+        workspace.readEditSnapshot({
+          workspace: {
+            workspaceId: "workspace-a",
+            root,
+            deniedPaths: [],
+            approvedRoot: approved,
+          },
+          relativePath: "README.md",
+        }),
+      ).resolves.toEqual(changed);
+      await expect(
+        workspace.mutate({
+          workspace: {
+            workspaceId: "workspace-a",
+            root,
+            deniedPaths: [],
+            writeDeniedPaths: [],
+            approvedRoot: approved,
+          },
+          operation: {
+            kind: "workspace.write",
+            relativePath: "planted.md",
+            content: "planted\n",
+            expectedSha256: null,
+          },
+        }),
+      ).resolves.toEqual(changed);
+      await expect(fs.readdir(root)).resolves.toEqual(["README.md", "src"]);
+    });
+
+    it("refuses an approved root that does not enclose the requested root", async () => {
+      const approved = await approvedRoot();
+
+      await expect(
+        reader().execute({
+          workspace: {
+            workspaceId: "workspace-a",
+            root: path.dirname(root),
+            deniedPaths: [],
+            approvedRoot: approved,
+          },
+          operation: { kind: "workspace.list", relativePath: "." },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+      });
+    });
+  });
+
   describe("C05-10 bounded exclusion policy", () => {
     function withDenied(count: number): ReadonlyWorkspaceRequest {
       return {

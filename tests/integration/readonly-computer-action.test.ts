@@ -347,6 +347,103 @@ describe("real read-only Computer action", () => {
     });
   });
 
+  it("AUTH-10 checks the approved folder's identity even for a narrowed subtree", async () => {
+    const measured = await fs.lstat(root, { bigint: true });
+    const rootIdentity = {
+      device: String(measured.dev),
+      inode: String(measured.ino),
+    };
+    const bound: ComputerApproval = {
+      ...approval(),
+      workspaces: [
+        { workspaceId: "farol", root, access: "read", rootIdentity },
+      ],
+    };
+    const chain = participants();
+    const narrowed = delegateParticipantAuthority(chain.agent, {
+      participantId: "critic-subtree",
+      role: "critic",
+      mutationOwnership: "none",
+      narrowing: {
+        workspaces: [
+          {
+            workspaceId: "farol",
+            mode: "subtree",
+            root: `${root}/src`,
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.list", "workspace.read"],
+        network: "none",
+        commands: "none",
+      },
+    });
+    if (!narrowed.ok) throw new Error(narrowed.error.code);
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: true,
+      value: { kind: "workspace.entries", entries: [], truncated: false },
+    }));
+    const computer = contract(
+      [...Object.values(chain), narrowed.value],
+      bound,
+      {
+        execute,
+      },
+    );
+
+    await expect(
+      computer.execute(
+        request(
+          { kind: "workspace.list", relativePath: "." },
+          "critic-subtree",
+        ),
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    expect(execute.mock.calls[0]?.[0].workspace).toEqual({
+      workspaceId: "farol",
+      root: `${root}/src`,
+      deniedPaths: [],
+      approvedRoot: { path: root, ...rootIdentity },
+    });
+  });
+
+  it("AUTH-10 refuses a replaced approved folder at the real Computer boundary", async () => {
+    const measured = await fs.lstat(root, { bigint: true });
+    const bound: ComputerApproval = {
+      ...approval(),
+      workspaces: [
+        {
+          workspaceId: "farol",
+          root,
+          access: "read",
+          rootIdentity: {
+            device: String(measured.dev),
+            inode: String(measured.ino),
+          },
+        },
+      ],
+    };
+    const computer = contract(Object.values(participants()), bound);
+    const read = request({ kind: "workspace.read", relativePath: "README.md" });
+
+    await expect(computer.execute(read)).resolves.toMatchObject({ ok: true });
+    const displaced = `${root}-displaced`;
+    try {
+      await fs.rename(root, displaced);
+      await fs.mkdir(root, { mode: 0o700 });
+      await fs.writeFile(path.join(root, "README.md"), "replacement\n", {
+        mode: 0o600,
+      });
+
+      await expect(computer.execute(read)).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_ROOT_CHANGED", retry: "never" },
+      });
+    } finally {
+      await fs.rm(displaced, { recursive: true, force: true });
+    }
+  });
+
   it("AUTH-03 searches an exact regular file without promoting an exact directory", async () => {
     const participant = exactParticipant([`${root}/README.md`, `${root}/src`]);
     const computer = contract([participant], approval());
