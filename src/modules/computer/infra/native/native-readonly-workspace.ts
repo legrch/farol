@@ -156,7 +156,10 @@ type SystemFileMeasurement = Readonly<{
 }>;
 
 type NativeWorkspaceErrorCode =
-  ReadonlyWorkspaceErrorCode | WorkspaceMutationErrorCode;
+  | ReadonlyWorkspaceErrorCode
+  | WorkspaceMutationErrorCode
+  // Internal: the caller aborted after the helper process had started.
+  | "WORKSPACE_REQUEST_INTERRUPTED";
 
 class WorkspaceRefusal extends Error {
   constructor(readonly code: NativeWorkspaceErrorCode) {
@@ -859,6 +862,12 @@ function runHelper(
     throw new WorkspaceRefusal("WORKSPACE_INVALID_REQUEST");
   }
 
+  // A cancellation before the helper starts has no effect at all; after it
+  // started, the process is killed and awaited, and the caller learns only
+  // that it was interrupted.
+  if (options.signal?.aborted) {
+    throw new WorkspaceRefusal("WORKSPACE_REQUEST_CANCELLED");
+  }
   return new Promise((resolve, reject) => {
     const withHook = options.testHook !== undefined;
     const child = spawn(interpreter, ["-I", "-S", "-B", "-"], {
@@ -897,15 +906,22 @@ function runHelper(
     let responseBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
+    let interrupted = false;
     let complete = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, DEFAULT_TIMEOUT_MS);
+    const interrupt = (): void => {
+      interrupted = true;
+      child.kill("SIGKILL");
+    };
+    options.signal?.addEventListener("abort", interrupt, { once: true });
     const finish = (action: () => void): void => {
       if (complete) return;
       complete = true;
       clearTimeout(timer);
+      options.signal?.removeEventListener("abort", interrupt);
       action();
     };
     const failChannel = (): void =>
@@ -932,6 +948,11 @@ function runHelper(
     );
     child.once("close", (code, signal) =>
       finish(() => {
+        if (interrupted) {
+          // The process has exited and its pipes are closed.
+          reject(new WorkspaceRefusal("WORKSPACE_REQUEST_INTERRUPTED"));
+          return;
+        }
         if (
           timedOut ||
           signal !== null ||
@@ -1145,6 +1166,9 @@ function readonlyErrorCode(
   code: NativeWorkspaceErrorCode,
 ): ReadonlyWorkspaceErrorCode {
   switch (code) {
+    case "WORKSPACE_REQUEST_INTERRUPTED":
+    case "WORKSPACE_MUTATION_CANCELLED":
+      return "WORKSPACE_REQUEST_CANCELLED";
     case "WORKSPACE_EDIT_NO_MATCH":
     case "WORKSPACE_EDIT_NOT_UNIQUE":
     case "WORKSPACE_EDIT_OVERLAP":
@@ -1173,7 +1197,10 @@ function mutationErrorCode(
     case "WORKSPACE_COMMAND_FAILED":
     case "WORKSPACE_NOT_GIT_REPOSITORY":
     case "WORKSPACE_GIT_HEAD_UNBORN":
+    case "WORKSPACE_REQUEST_INTERRUPTED":
       return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
+    case "WORKSPACE_REQUEST_CANCELLED":
+      return "WORKSPACE_MUTATION_CANCELLED";
     default:
       return code;
   }
@@ -1210,6 +1237,12 @@ export class NativeReadonlyWorkspace
     const validated = validateRequest(request);
     if (validated === null || !validTestOptions(options)) {
       return failure("WORKSPACE_INVALID_REQUEST");
+    }
+    if (
+      options.signal?.aborted &&
+      validated.operation.kind !== "verification.run"
+    ) {
+      return failure("WORKSPACE_REQUEST_CANCELLED");
     }
     if (
       (validated.operation.kind === "verification.run"
@@ -1325,6 +1358,9 @@ export class NativeReadonlyWorkspace
     const validated = validateMutationRequest(request);
     if (validated === null || !validTestOptions(options)) {
       return mutationFailure("WORKSPACE_INVALID_REQUEST");
+    }
+    if (options.signal?.aborted) {
+      return mutationFailure("WORKSPACE_MUTATION_CANCELLED");
     }
     if (
       deniedPaths(validated).length > MAX_HELPER_DENIED_PATHS ||

@@ -42,6 +42,7 @@ export type WorkspaceMutationReceipt = Readonly<{
 export type WorkspaceMutationErrorCode =
   | "WORKSPACE_INVALID_REQUEST"
   | "WORKSPACE_POLICY_TOO_LARGE"
+  | "WORKSPACE_MUTATION_CANCELLED"
   | "WORKSPACE_HELPER_UNTRUSTED"
   | "WORKSPACE_INTERPRETER_UNTRUSTED"
   | "WORKSPACE_PATH_REFUSED"
@@ -66,6 +67,15 @@ export type WorkspaceMutationResult =
       }>;
     }>;
 
+// A cancellation before the helper starts has no effect; one that arrives
+// after it started leaves the outcome unknown.
+export type WorkspaceMutationExecutionContext = Readonly<{
+  signal?: AbortSignal;
+}>;
+
 export interface MutableWorkspace {
-  mutate(request: WorkspaceMutationRequest): Promise<WorkspaceMutationResult>;
+  mutate(
+    request: WorkspaceMutationRequest,
+    context?: WorkspaceMutationExecutionContext,
+  ): Promise<WorkspaceMutationResult>;
 }

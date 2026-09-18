@@ -5,6 +5,7 @@ import {
   type MutableComputerCallRequest,
   type MutableComputerCallResponse,
   type MutableComputerContract,
+  type MutableComputerExecutionContext,
 } from "../contract/mutable-computer-contract";
 
 function summary(request: MutableComputerCallRequest) {
@@ -40,7 +41,10 @@ function summary(request: MutableComputerCallRequest) {
 export class MutableComputerContractHandler implements MutableComputerContract {
   constructor(private readonly service: RunMutableComputerAction) {}
 
-  async execute(request: unknown): Promise<MutableComputerCallResponse> {
+  async execute(
+    request: unknown,
+    context: MutableComputerExecutionContext = {},
+  ): Promise<MutableComputerCallResponse> {
     const parsed = MutableComputerCallRequestSchema.safeParse(request);
     if (!parsed.success) {
       return {
@@ -54,7 +58,7 @@ export class MutableComputerContractHandler implements MutableComputerContract {
       };
     }
     const correlation = summary(parsed.data);
-    const result = await this.service.execute(parsed.data);
+    const result = await this.service.execute(parsed.data, context);
     if (!result.ok) {
       return MutableComputerCallResponseSchema.parse({
         ok: false,

@@ -798,3 +798,61 @@ describe("authorized mutable Computer action", () => {
     expect(reordered).not.toBe(first);
   });
 });
+
+describe("C05-05 cancellation reaches the mutation boundary", () => {
+  it("admits nothing and runs nothing for a request cancelled before admission", async () => {
+    const { workspace, calls } = successfulWorkspace();
+    const mutations = new InMemoryWorkspaceMutationRepository();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      service(workspace, mutations).execute(request(), {
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "WORKSPACE_MUTATION_CANCELLED",
+        source: "native-workspace",
+        retry: "never",
+      },
+    });
+    expect(calls()).toBe(0);
+    await expect(
+      mutations.load({
+        operationId: "mutation-a",
+        ownerId: "owner-preview",
+        sessionId: "session-a",
+        taskId: "task-a",
+        taskEpoch: 3,
+        participantId: "critic-a",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("hands the caller's signal to the workspace boundary", async () => {
+    let received: AbortSignal | undefined;
+    const workspace: MutableWorkspace = {
+      async mutate(_candidate, context) {
+        received = context?.signal;
+        return {
+          ok: false,
+          error: { code: "WORKSPACE_MUTATION_CANCELLED", retry: "never" },
+        };
+      },
+    };
+    const controller = new AbortController();
+
+    await expect(
+      service(workspace, new InMemoryWorkspaceMutationRepository()).execute(
+        request(),
+        { signal: controller.signal },
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_CANCELLED" },
+    });
+    expect(received).toBe(controller.signal);
+  });
+});

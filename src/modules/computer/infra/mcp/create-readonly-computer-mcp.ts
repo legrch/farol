@@ -326,6 +326,7 @@ async function executeMutation(
   operationId: string,
   workspaceId: string,
   operation: MutableComputerCallRequest["operation"],
+  signal?: AbortSignal,
 ): Promise<CallToolResult> {
   const request: MutableComputerCallRequest = {
     ...binding,
@@ -336,7 +337,7 @@ async function executeMutation(
   };
   let response: unknown;
   try {
-    response = await contract.execute(request);
+    response = await contract.execute(request, signal ? { signal } : {});
   } catch {
     return failure("COMPUTER_CONTRACT_UNAVAILABLE");
   }
@@ -670,6 +671,7 @@ export function createReadonlyComputerMcpServer(
             content,
             expectedSha256,
           },
+          context.mcpReq.signal,
         ),
     );
     server.registerTool(
@@ -697,6 +699,7 @@ export function createReadonlyComputerMcpServer(
             edits,
             expectedSha256,
           },
+          context.mcpReq.signal,
         ),
     );
   }

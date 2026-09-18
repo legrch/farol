@@ -486,3 +486,123 @@ describe("native mutable Computer workspace", () => {
     );
   });
 });
+
+describe("C05-05 cancellation of helper work", () => {
+  // Counts real interpreter launches, so "zero spawn" is observed rather
+  // than assumed.
+  async function countingInterpreter(): Promise<{
+    interpreter: string;
+    launches: () => Promise<number>;
+  }> {
+    const counter = path.join(root, ".launches");
+    const interpreter = path.join(root, ".counting-python");
+    await fs.writeFile(
+      interpreter,
+      `#!/bin/sh\nprintf x >> ${JSON.stringify(counter)}\nexec /usr/bin/python3 "$@"\n`,
+      { mode: 0o700 },
+    );
+    return {
+      interpreter,
+      launches: async () =>
+        (await fs.readFile(counter, "utf8").catch(() => "")).length,
+    };
+  }
+
+  function countedWorkspace(interpreter: string): NativeReadonlyWorkspace {
+    return new NativeReadonlyWorkspace({
+      helperPath: sourceHelper,
+      helper: NEXT_SAFE_OPEN_HELPER,
+      attestInterpreter: async () => interpreter,
+    });
+  }
+
+  const readRequest = () => ({
+    workspace: {
+      workspaceId: "workspace-write-a",
+      root,
+      deniedPaths: [".env"],
+    },
+    operation: { kind: "workspace.read" as const, relativePath: "README.md" },
+  });
+
+  it("starts no helper for an already cancelled read or edit", async () => {
+    const { interpreter, launches } = await countingInterpreter();
+    const native = countedWorkspace(interpreter);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      native.execute(readRequest(), { signal: controller.signal }),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_REQUEST_CANCELLED", retry: "never" },
+    });
+    await expect(
+      native.mutate(
+        request({
+          kind: "workspace.write",
+          relativePath: "README.md",
+          content: "after\n",
+          expectedSha256: digest("before\n"),
+        }),
+        { signal: controller.signal },
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_CANCELLED", retry: "never" },
+    });
+    expect(await launches()).toBe(0);
+    expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
+      "before\n",
+    );
+  });
+
+  it("stops a read in progress and waits for the helper to exit", async () => {
+    const { interpreter, launches } = await countingInterpreter();
+    const controller = new AbortController();
+
+    const result = await countedWorkspace(interpreter).execute(readRequest(), {
+      signal: controller.signal,
+      testHookRequest: { phase: "before-post-stat", index: null },
+      testHook: async () => {
+        controller.abort();
+        await new Promise(() => undefined);
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_REQUEST_CANCELLED", retry: "never" },
+    });
+    expect(await launches()).toBe(1);
+  });
+
+  it("never reports a cancelled edit as unapplied once publication happened", async () => {
+    const controller = new AbortController();
+
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "published\n",
+        expectedSha256: digest("before\n"),
+      }),
+      {
+        signal: controller.signal,
+        testHookRequest: { phase: "after-replace", index: null },
+        testHook: async () => {
+          controller.abort();
+          await new Promise(() => undefined);
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    });
+    expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
+      "published\n",
+    );
+  });
+});

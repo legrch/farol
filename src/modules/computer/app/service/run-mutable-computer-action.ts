@@ -6,6 +6,7 @@ import type {
   WorkspaceMutationErrorCode,
   WorkspaceMutationOperation,
   WorkspaceMutationReceipt,
+  WorkspaceMutationExecutionContext,
 } from "../port/mutable-workspace";
 import type {
   StoredWorkspaceMutation,
@@ -219,7 +220,14 @@ export class RunMutableComputerAction {
 
   execute(
     request: MutableComputerActionRequest,
+    context: WorkspaceMutationExecutionContext = {},
   ): Promise<MutableComputerActionResult> {
+    // Cancelled before admission: nothing is recorded and nothing runs.
+    if (context.signal?.aborted) {
+      return Promise.resolve(
+        failure("WORKSPACE_MUTATION_CANCELLED", "native-workspace"),
+      );
+    }
     let requestDigest: string;
     try {
       requestDigest = this.digester.digest({
@@ -250,6 +258,7 @@ export class RunMutableComputerAction {
       request,
       identity,
       requestDigest,
+      context,
     ).finally(() => {
       this.inFlight.delete(key);
     });
@@ -265,6 +274,7 @@ export class RunMutableComputerAction {
     request: MutableComputerActionRequest,
     identity: WorkspaceMutationIdentity,
     requestDigest: string,
+    context: WorkspaceMutationExecutionContext,
   ): Promise<MutableComputerActionResult> {
     let existing: StoredWorkspaceMutation | null;
     try {
@@ -376,19 +386,22 @@ export class RunMutableComputerAction {
 
     let result: Awaited<ReturnType<MutableWorkspace["mutate"]>>;
     try {
-      result = await this.workspace.mutate({
-        workspace: {
-          workspaceId: request.workspaceId,
-          root: scope.root,
-          deniedPaths: relativeExcludedPaths(
-            scope.root,
-            request.workspaceId,
-            participant.grant.excludedPaths,
-          ),
-          writeDeniedPaths: [],
+      result = await this.workspace.mutate(
+        {
+          workspace: {
+            workspaceId: request.workspaceId,
+            root: scope.root,
+            deniedPaths: relativeExcludedPaths(
+              scope.root,
+              request.workspaceId,
+              participant.grant.excludedPaths,
+            ),
+            writeDeniedPaths: [],
+          },
+          operation: request.operation,
         },
-        operation: request.operation,
-      });
+        context,
+      );
     } catch {
       result = {
         ok: false,

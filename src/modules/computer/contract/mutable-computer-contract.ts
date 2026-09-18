@@ -118,6 +118,7 @@ const ErrorCodeSchema = z.enum([
   "AUTHORITY_MUTATION_OWNERSHIP_DENIED",
   "WORKSPACE_INVALID_REQUEST",
   "WORKSPACE_POLICY_TOO_LARGE",
+  "WORKSPACE_MUTATION_CANCELLED",
   "WORKSPACE_HELPER_UNTRUSTED",
   "WORKSPACE_INTERPRETER_UNTRUSTED",
   "WORKSPACE_PATH_REFUSED",
@@ -184,6 +185,13 @@ export type MutableComputerCallResponse = z.infer<
   typeof MutableComputerCallResponseSchema
 >;
 
+export type MutableComputerExecutionContext = Readonly<{
+  signal?: AbortSignal;
+}>;
+
 export interface MutableComputerContract {
-  execute(request: unknown): Promise<MutableComputerCallResponse>;
+  execute(
+    request: unknown,
+    context?: MutableComputerExecutionContext,
+  ): Promise<MutableComputerCallResponse>;
 }
