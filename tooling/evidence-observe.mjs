@@ -86,18 +86,19 @@ function processTable() {
   });
 }
 
-// A sample costs a process-table read and a directory hash, so the gap the
-// observer tolerates between two samples is several intervals with a floor
-// well above that cost; a longer silence means it was not watching.
+// A gap is time the observer was not looking: from the end of one sample,
+// process table read and directory hashed, to the start of the next. The
+// sample's own work is observation, however long the kernel takes to answer
+// under load. Several intervals with a floor are tolerated; a longer silence
+// means it was not watching.
 export const GAP_FLOOR_MS = 2_000;
 
 export function summarizeSamples(samples, intervalMs) {
   let maxGapMs = 0;
   for (let index = 1; index < samples.length; index += 1) {
-    maxGapMs = Math.max(
-      maxGapMs,
-      Date.parse(samples[index].at) - Date.parse(samples[index - 1].at),
-    );
+    const previous = samples[index - 1];
+    const idleFrom = Date.parse(previous.at) + (previous.durationMs ?? 0);
+    maxGapMs = Math.max(maxGapMs, Date.parse(samples[index].at) - idleFrom);
   }
   const counts = samples.map((sample) => sample.processes);
   return {
@@ -134,7 +135,13 @@ export async function observeAttempt({
   let interruptedSeenAt = null;
 
   const sample = () => {
-    const record = { at: now().toISOString(), processes: null, error: null };
+    const begun = Date.now();
+    const record = {
+      at: now().toISOString(),
+      processes: null,
+      error: null,
+      durationMs: 0,
+    };
     try {
       record.processes = countProcesses(processPattern, table());
     } catch (error) {
@@ -165,6 +172,7 @@ export async function observeAttempt({
         record.error ??= error instanceof Error ? error.message : String(error);
       }
     }
+    record.durationMs = Date.now() - begun;
     samples.push(record);
   };
 
@@ -234,6 +242,7 @@ export async function observeAttempt({
       processPattern: processPattern.source,
       processSamples: samples.map((sample) => ({
         at: sample.at,
+        durationMs: sample.durationMs,
         processes: sample.processes,
         ...(sample.error ? { error: sample.error } : {}),
       })),

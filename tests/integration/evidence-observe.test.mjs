@@ -60,6 +60,16 @@ describe("EV-03/EV-08 effect observer", () => {
         50,
       ),
     ).toMatchObject({ maxGapMs: 1_500, gapTolerated: true });
+    // A slow kernel answer is observation time, not a gap.
+    expect(
+      summarizeSamples(
+        [
+          { at: "2026-09-18T09:00:00.000Z", durationMs: 2_800, processes: 0 },
+          { at: "2026-09-18T09:00:03.000Z", durationMs: 10, processes: 1 },
+        ],
+        500,
+      ),
+    ).toMatchObject({ maxGapMs: 200, gapTolerated: true });
   });
 
   it("binds its receipt to the attempt it watched from before its start until after its terminal receipt, and the verifier accepts exactly that run", async () => {
@@ -77,8 +87,8 @@ describe("EV-03/EV-08 effect observer", () => {
       attemptId: null,
       subject: candidate,
       processPattern: new RegExp(marker, "u"),
-      intervalMs: 50,
-      timeoutMs: 20_000,
+      intervalMs: 100,
+      timeoutMs: 30_000,
     });
     // The runner starts after the observer: opens the attempt, runs the
     // "product" (a child process carrying the marker), writes its report and
