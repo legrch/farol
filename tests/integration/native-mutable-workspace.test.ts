@@ -457,4 +457,32 @@ describe("native mutable Computer workspace", () => {
       error: { code: "WORKSPACE_MUTATION_CONFLICT", retry: "never" },
     });
   });
+
+  it("C05-10 refuses an oversized write-exclusion union before any effect", async () => {
+    const result = await workspace().mutate({
+      workspace: {
+        workspaceId: "workspace-write-a",
+        root,
+        deniedPaths: [".env"],
+        writeDeniedPaths: Array.from(
+          { length: 64 },
+          (_, index) => `write-excluded-${index}`,
+        ),
+      },
+      operation: {
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "changed\n",
+        expectedSha256: digest("before\n"),
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_POLICY_TOO_LARGE", retry: "never" },
+    });
+    expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
+      "before\n",
+    );
+  });
 });

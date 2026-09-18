@@ -559,4 +559,37 @@ describe("native readonly Computer workspace", () => {
       ]);
     });
   });
+
+  describe("C05-10 bounded exclusion policy", () => {
+    function withDenied(count: number): ReadonlyWorkspaceRequest {
+      return {
+        workspace: {
+          workspaceId: "workspace-a",
+          root,
+          deniedPaths: Array.from(
+            { length: count },
+            (_, index) => `excluded-${index}`,
+          ),
+        },
+        operation: { kind: "workspace.read", relativePath: "README.md" },
+      };
+    }
+
+    it("accepts the largest exclusion union the helper enforces", async () => {
+      // 14 mandatory credential exclusions + 50 owner exclusions = 64.
+      await expect(reader().execute(withDenied(50))).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "workspace.text" },
+      });
+    });
+
+    it("refuses one exclusion more with a specific policy error", async () => {
+      for (const count of [51, 200]) {
+        await expect(reader().execute(withDenied(count))).resolves.toEqual({
+          ok: false,
+          error: { code: "WORKSPACE_POLICY_TOO_LARGE", retry: "never" },
+        });
+      }
+    });
+  });
 });

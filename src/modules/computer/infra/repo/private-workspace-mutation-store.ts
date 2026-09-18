@@ -39,6 +39,7 @@ const receiptSchema = z.strictObject({
 
 const mutationErrorCodeSchema = z.enum([
   "WORKSPACE_INVALID_REQUEST",
+  "WORKSPACE_POLICY_TOO_LARGE",
   "WORKSPACE_HELPER_UNTRUSTED",
   "WORKSPACE_INTERPRETER_UNTRUSTED",
   "WORKSPACE_PATH_REFUSED",

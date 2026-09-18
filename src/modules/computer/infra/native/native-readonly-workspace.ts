@@ -69,6 +69,12 @@ const DEFAULT_DENIED_PATHS = Object.freeze([
 
 const DEFAULT_WRITE_DENIED_PATHS = Object.freeze([".git"]);
 
+// The helper refuses more deny prefixes than this.  The adapter measures the
+// union of mandatory and owner exclusions first, so an oversized policy is a
+// specific refusal instead of a generic invalid request, and no exclusion is
+// ever dropped to make a request fit.
+const MAX_HELPER_DENIED_PATHS = 64;
+
 const EXIT_TO_ERROR = new Map<number, NativeWorkspaceErrorCode>([
   [20, "WORKSPACE_INVALID_REQUEST"],
   [21, "WORKSPACE_NOT_FOUND"],
@@ -494,6 +500,17 @@ function validateMutationRequest(
   return value as WorkspaceMutationRequest;
 }
 
+function writeDeniedPaths(
+  request: WorkspaceMutationRequest,
+): readonly string[] {
+  return [
+    ...new Set([
+      ...DEFAULT_WRITE_DENIED_PATHS,
+      ...request.workspace.writeDeniedPaths,
+    ]),
+  ];
+}
+
 function nativeMutationRequest(
   request: WorkspaceMutationRequest,
   options: NativeReadonlyWorkspaceTestOptions,
@@ -502,12 +519,7 @@ function nativeMutationRequest(
     root: request.workspace.root,
     relative: request.operation.relativePath,
     denied: deniedPaths(request),
-    writeDenied: [
-      ...new Set([
-        ...DEFAULT_WRITE_DENIED_PATHS,
-        ...request.workspace.writeDeniedPaths,
-      ]),
-    ],
+    writeDenied: writeDeniedPaths(request),
     expectedSha256: request.operation.expectedSha256,
     ...(options.testHookRequest ? { testHook: options.testHookRequest } : {}),
   };
@@ -1199,6 +1211,14 @@ export class NativeReadonlyWorkspace
     if (validated === null || !validTestOptions(options)) {
       return failure("WORKSPACE_INVALID_REQUEST");
     }
+    if (
+      (validated.operation.kind === "verification.run"
+        ? verificationDeniedPaths(validated)
+        : deniedPaths(validated)
+      ).length > MAX_HELPER_DENIED_PATHS
+    ) {
+      return failure("WORKSPACE_POLICY_TOO_LARGE");
+    }
 
     if (validated.operation.kind === "verification.run") {
       return executeNativeVerificationCommand(
@@ -1247,6 +1267,12 @@ export class NativeReadonlyWorkspace
       return {
         ok: false,
         error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+      };
+    }
+    if (deniedPaths(validated).length > MAX_HELPER_DENIED_PATHS) {
+      return {
+        ok: false,
+        error: { code: "WORKSPACE_POLICY_TOO_LARGE", retry: "never" },
       };
     }
     // One helper read supplies both the text check and the identity; a second
@@ -1299,6 +1325,12 @@ export class NativeReadonlyWorkspace
     const validated = validateMutationRequest(request);
     if (validated === null || !validTestOptions(options)) {
       return mutationFailure("WORKSPACE_INVALID_REQUEST");
+    }
+    if (
+      deniedPaths(validated).length > MAX_HELPER_DENIED_PATHS ||
+      writeDeniedPaths(validated).length > MAX_HELPER_DENIED_PATHS
+    ) {
+      return mutationFailure("WORKSPACE_POLICY_TOO_LARGE");
     }
 
     let source: Buffer;
