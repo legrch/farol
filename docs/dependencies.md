@@ -15,6 +15,11 @@ public npm registry recorded in `.npmrc`.
 | Prettier              | build           |   3.9.6 | MIT        | Single formatting gate; kept                                                                 |
 | Node type definitions | build           | 24.12.1 | MIT        | Types for the supported embedded/development Node API floor; kept                            |
 
+The Electron row is enforced by `tooling/runtime-contract.mjs`, which pins the verified
+darwin/arm64 distribution digest and the digest of the bundle that archive extracts to;
+packaging and verification compare the installed and embedded runtime with that contract,
+never only with whatever `node_modules` currently holds.
+
 React, a second validator/test runner, Stryker, Bun, native addons, and an HTTP
 framework are dropped from this preview. The UI is small enough for DOM TypeScript;
 planted defects provide focused mutation proof; Node's HTTP server and Web streams

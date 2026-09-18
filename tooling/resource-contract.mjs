@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { ELECTRON_RUNTIME } from "./runtime-contract.mjs";
 
 export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
   schema: "farol.next.resource-manifest/1",
@@ -47,7 +48,7 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
     {
       name: "Electron renderer/helper",
       kind: "pinned-vendor-runtime",
-      ownedBy: "embedded Electron 44.4.2",
+      ownedBy: `embedded Electron ${ELECTRON_RUNTIME.version}`,
     },
   ],
   integrations: {

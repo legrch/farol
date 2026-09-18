@@ -5,6 +5,12 @@ import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { GEIST_RESOURCES, GEIST_VERSION } from "./font-contract.mjs";
+import {
+  ELECTRON_RUNTIME,
+  assertRuntimeObservation,
+  observeElectronRuntime,
+  runtimeClosure,
+} from "./runtime-contract.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
@@ -117,7 +123,16 @@ if (
   );
 }
 
-const electronSourceSha256 = await treeDigest(electronApp);
+// Refuse to seal any runtime other than the reviewed vendor distribution
+// before a single byte is copied: the installed package's version claims, the
+// vendor checksum it ships and the bytes it extracted must all match the
+// pinned contract, so a stale or modified `node_modules` cannot be packaged
+// under the reviewed label.
+const vendorRuntime = await observeElectronRuntime(
+  path.join(root, "node_modules/electron"),
+);
+assertRuntimeObservation(vendorRuntime);
+const electronSourceSha256 = vendorRuntime.extractedTreeDigest;
 
 await fs.rm(packageRoot, { recursive: true, force: true });
 await fs.mkdir(path.join(appPath, "Contents/MacOS"), { recursive: true });
@@ -205,13 +220,7 @@ const artifact = {
   artifactPath: appPath,
   artifactSha256: await treeDigest(appPath),
   electronSourceSha256,
-  runtime: {
-    electron: "44.4.2",
-    node: "embedded-in-electron",
-    testerManagedRuntime: false,
-    layout: "nested-unmodified-vendor-bundle",
-    relativePath: runtimeRelativePath,
-  },
+  runtime: runtimeClosure(ELECTRON_RUNTIME, runtimeRelativePath),
   signing: {
     kind: "unsigned",
     reason: "local-development-preview",

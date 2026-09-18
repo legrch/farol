@@ -19,6 +19,13 @@ import {
   candidatePaths,
 } from "./candidate-contract.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
+import {
+  ELECTRON_RUNTIME,
+  assertEmbeddedRuntime,
+  assertRuntimeClosure,
+  observeEmbeddedRuntime,
+  plistValue,
+} from "./runtime-contract.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const canonical = candidatePaths(root);
@@ -132,14 +139,7 @@ requireValue(
   artifact.updateChannel === "local-preview-only",
   "PACKAGE_CHANNEL_INVALID",
 );
-requireValue(
-  artifact.runtime?.electron === "44.4.2" &&
-    artifact.runtime?.node === "embedded-in-electron" &&
-    artifact.runtime?.testerManagedRuntime === false &&
-    artifact.runtime?.layout === "nested-unmodified-vendor-bundle" &&
-    artifact.runtime?.relativePath === runtimeRelativePath,
-  "PACKAGE_RUNTIME_CLOSURE_INVALID",
-);
+assertRuntimeClosure(artifact.runtime, ELECTRON_RUNTIME, runtimeRelativePath);
 assertCanonicalArtifactPath(root, artifact);
 
 const appPath = path.resolve(appOption ?? canonical.appPath);
@@ -271,16 +271,6 @@ const sourceResourceManifest = JSON.parse(
 assertResourceManifest(sourceResourceManifest);
 assertResourceManifest(resourceManifest);
 
-function plistValue(plist, key) {
-  return execFileSync(
-    "/usr/libexec/PlistBuddy",
-    ["-c", `Print :${key}`, plist],
-    {
-      encoding: "utf8",
-    },
-  ).trim();
-}
-
 const mainPlist = path.join(appPath, "Contents/Info.plist");
 requireValue(
   plistValue(mainPlist, "CFBundleIdentifier") === artifact.bundleId,
@@ -333,12 +323,10 @@ requireValue(
     plistValue(runtimePlist, "CFBundleExecutable") === "Electron",
   "PACKAGE_RUNTIME_IDENTITY_MISMATCH",
 );
-const expectedElectron = path.join(
-  root,
-  "node_modules/electron/dist/Electron.app",
-);
+// The trusted expectation is the reviewed vendor distribution pinned in the
+// runtime contract, not whatever `node_modules` currently holds.
 requireValue(
-  (await treeDigest(expectedElectron)) === artifact.electronSourceSha256,
+  artifact.electronSourceSha256 === ELECTRON_RUNTIME.extractedTreeDigest,
   "PACKAGE_ELECTRON_SOURCE_MISMATCH",
 );
 
@@ -377,8 +365,10 @@ for (const suffix of helpers) {
 }
 
 requireUnsigned(appPath);
+const embeddedRuntime = await observeEmbeddedRuntime(runtimeApp);
+assertEmbeddedRuntime(embeddedRuntime);
 requireValue(
-  (await treeDigest(runtimeApp)) === artifact.electronSourceSha256,
+  embeddedRuntime.extractedTreeDigest === artifact.electronSourceSha256,
   "PACKAGE_RUNTIME_DIGEST_MISMATCH",
 );
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "pipe" });
