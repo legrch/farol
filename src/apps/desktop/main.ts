@@ -40,7 +40,10 @@ import {
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry } from "./live-task-registry";
-import { toProductTaskContext } from "./context-task-state";
+import {
+  reconcileTaskContexts,
+  toProductTaskContext,
+} from "./context-task-state";
 import {
   createCodexContextController,
   type CodexContextController,
@@ -909,6 +912,29 @@ function initializeCodexContextController(): void {
       publishTasksState();
     },
   });
+}
+
+// Before Route B or IPC can admit work, each restored task's visible context
+// is replaced by what the private context store holds.
+async function reconcileContextAfterRestart(): Promise<void> {
+  const controller = codexContextController;
+  if (!controller) return;
+  const reconciled = await reconcileTaskContexts(
+    liveTaskRegistry.snapshot().tasks.map((task) => task.taskId),
+    controller.store,
+    contextBinding,
+  );
+  let changed = false;
+  for (const entry of reconciled) {
+    const current = liveTaskRegistry.get(entry.taskId)?.context ?? null;
+    if (isDeepStrictEqual(current, entry.context)) continue;
+    changed =
+      liveTaskRegistry.setContext(entry.taskId, entry.context) || changed;
+  }
+  if (changed) {
+    await persistLiveTaskState().catch(() => undefined);
+    publishTasksState();
+  }
 }
 
 async function initializeLiveTaskState(): Promise<void> {
@@ -5917,6 +5943,7 @@ async function main(): Promise<void> {
   await initializeLiveTaskState();
   await recoverProductAgentExpiry();
   initializeCodexContextController();
+  await reconcileContextAfterRestart();
   await initializeCallerRelay();
   await initializeRouteBRuntime();
   const configured = configuration.snapshot();
