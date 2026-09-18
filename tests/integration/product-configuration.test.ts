@@ -1248,6 +1248,54 @@ describe("Farol Next product configuration", () => {
     });
   });
 
+  it("Q-07 leaves settings written by a newer schema intact after a rollback", async () => {
+    // A newer build wrote its own schema. This build must refuse it rather
+    // than rewrite it to defaults or its own shape, so running the newer build
+    // again still finds its configuration.
+    const root = await stateRoot();
+    const first = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await first.initialize();
+    const target = path.join(root, "product-settings.json");
+    const current = JSON.parse(await fs.readFile(target, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const newer = `${JSON.stringify(
+      { ...current, schema: 2, futureSection: { enabled: true } },
+      null,
+      2,
+    )}\n`;
+    await fs.writeFile(target, newer, { mode: 0o600 });
+
+    const rolledBack = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await rolledBack.initialize();
+
+    expect(rolledBack.snapshot()).toEqual({
+      status: "error",
+      error: "SETTINGS_CORRUPT",
+    });
+    await expect(
+      rolledBack.updateGeneral({
+        openAtLaunch: "activity",
+        sidebarDefault: "rail",
+        activityDetail: "technical",
+      }),
+    ).resolves.toMatchObject({ ok: false, error: "SETTINGS_UNAVAILABLE" });
+    await expect(
+      rolledBack.addReadonlyWorkspace({
+        root: "/Users/example/project",
+        label: "Project",
+      }),
+    ).resolves.toMatchObject({ ok: false });
+    expect(await fs.readFile(target, "utf8")).toBe(newer);
+  });
+
   it("revokes a workspace and invalidates its verification", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(
