@@ -116,11 +116,13 @@ export type CodexChatGptCompaction = Readonly<{
       metadataHeader: string | undefined;
     }>,
   ): Promise<Result<HostCompactionHandoff, CodexChatGptCompactionErrorCode>>;
+  // `delivered` is called once the turn carrying `trustedContext` completed
+  // in the conversation, so the same checkpoint is not sent again.
   prepareTurn?(
     input: Readonly<{ body: unknown }>,
   ): Promise<
     Result<
-      Readonly<{ trustedContext: string | null }>,
+      Readonly<{ trustedContext: string | null; delivered?: () => void }>,
       CodexChatGptCompactionErrorCode
     >
   >;
@@ -346,7 +348,19 @@ function promptFromInput(
     const prompt = trustedContext ? `${trustedContext}\n\n${input}` : input;
     return prompt.length <= MAX_PROMPT_CHARACTERS ? prompt : null;
   }
-  const messages = input.flatMap((item) => {
+  // The host resends its whole history with every turn, while the task's
+  // ChatGPT conversation already holds everything a previous turn sent. Only
+  // the user messages after the last item the conversation produced (an
+  // answer, a tool call or a compaction) are this turn's own.
+  let turnStart = input.length;
+  while (turnStart > 0) {
+    const item = input[turnStart - 1];
+    if (!record(item) || item.type !== "message" || item.role !== "user") {
+      break;
+    }
+    turnStart -= 1;
+  }
+  const messages = input.slice(turnStart).flatMap((item) => {
     if (!record(item) || item.type !== "message") return [];
     if (item.role !== "user") return [];
     const content = textFromContent(item.content);
@@ -730,6 +744,11 @@ class ActiveProviderTurn {
     private readonly conversation: CodexChatGptConversation,
     private readonly onToolCallObserved: () => void,
     private readonly onTerminal: () => void,
+    // Learns how the conversation run ended before the host hears it, so a
+    // repeat sent the moment the host learns cannot race the bookkeeping.
+    private readonly onSettled: (
+      state: CodexChatGptConversationResult["state"],
+    ) => Promise<void> = async () => undefined,
   ) {
     this.key = turnKey(input.identity);
     this.tag = turnTag(input.identity);
@@ -762,7 +781,14 @@ class ActiveProviderTurn {
   async serveInitial(response: ServerResponse): Promise<boolean> {
     if (this.state !== "created")
       throw new Error("FAROL_NEXT_TURN_STATE_INVALID");
-    const writer = await this.attach(response);
+    let writer: ResponseRound;
+    try {
+      writer = await this.attach(response);
+    } catch (error) {
+      // The host went away before the conversation run was started.
+      await this.onSettled("failed_before_submit");
+      throw error;
+    }
     this.state = "running";
     void Promise.resolve()
       .then(() =>
@@ -771,7 +797,10 @@ class ActiveProviderTurn {
           onToolCall: (request) => this.requestTool(request),
         }),
       )
-      .then((result) => this.push({ kind: "final", result, code: null }))
+      .then(async (result) => {
+        await this.onSettled(result.state);
+        this.push({ kind: "final", result, code: null });
+      })
       .catch(() =>
         this.push({
           kind: "final",
@@ -1041,6 +1070,7 @@ async function handleResponses(
     return;
   }
   let trustedContext: string | null = null;
+  let contextDelivered: (() => void) | undefined;
   if (options.compaction?.prepareTurn) {
     const prepared = await options.compaction.prepareTurn({
       body: structuredClone(raw),
@@ -1050,6 +1080,7 @@ async function handleResponses(
       return;
     }
     trustedContext = prepared.value.trustedContext;
+    contextDelivered = prepared.value.delivered;
   }
   const prompt = promptFromInput(parsed.data.input, trustedContext);
   if (prompt === null) {
@@ -1114,6 +1145,15 @@ async function handleResponses(
       options.conversation,
       onToolCallObserved,
       () => turns.delete(key),
+      async (state) => {
+        if (state === "completed") contextDelivered?.();
+        // Nothing reached ChatGPT, so a repeat of this request is a new
+        // attempt rather than a duplicate. A record that cannot be removed
+        // stays, and a repeat is refused as already submitted.
+        if (state === "failed_before_submit") {
+          await options.turns.release(key).catch(() => undefined);
+        }
+      },
     );
   } catch (error) {
     onRefusal(

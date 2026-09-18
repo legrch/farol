@@ -11,6 +11,10 @@ export type ProviderTurnAdmission =
 
 export type ProviderTurnJournal = Readonly<{
   admit(key: string, intentSha256: string): Promise<ProviderTurnAdmission>;
+  // Forgets a request this process admitted and that provably never reached
+  // ChatGPT, so a repeat of it is admitted again instead of being refused as
+  // already submitted. Never called once a submission may have happened.
+  release(key: string): Promise<void>;
 }>;
 
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -75,13 +79,30 @@ export class PrivateProviderTurnJournal implements ProviderTurnJournal {
     } finally {
       await handle.close();
     }
+    await this.syncRoot();
+    return "admitted";
+  }
+
+  async release(key: string): Promise<void> {
+    if (key.length === 0) {
+      throw new Error("PROVIDER_TURN_JOURNAL_INPUT_INVALID");
+    }
+    try {
+      await fs.unlink(path.join(this.options.root, `${sha256(key)}.json`));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      return;
+    }
+    await this.syncRoot();
+  }
+
+  private async syncRoot(): Promise<void> {
     const directory = await fs.open(this.options.root, fsConstants.O_RDONLY);
     try {
       await directory.sync();
     } finally {
       await directory.close();
     }
-    return "admitted";
   }
 
   private async existing(

@@ -563,6 +563,104 @@ describe("Route B runtime composed as the product composes it", () => {
     }
   });
 
+  it("sends each turn only its own messages and the checkpoint until a turn delivers it", async () => {
+    const task = new TaskConversation();
+    let refuseNext = false;
+    const surfaceFor = vi.fn(async (_threadId: string) =>
+      refuseNext
+        ? ((refuseNext = false),
+          { ok: false as const, code: "TASK_CAPACITY_REACHED" })
+        : { ok: true as const, surface: task },
+    );
+    const { runtime: route } = await compose({ surfaceFor }, task);
+    const message = (role: "user" | "assistant", text: string) => ({
+      type: "message",
+      role,
+      content: [{ type: role === "user" ? "input_text" : "output_text", text }],
+    });
+
+    const first = await post(
+      route,
+      "/responses",
+      initialRequest("turn-history-1", "First request."),
+    );
+    expect(await first.text()).toContain("response.completed");
+    // The host resends the whole history; the task's conversation already
+    // holds the earlier request, so only the new one is sent.
+    const second = await post(
+      route,
+      "/responses",
+      initialRequest("turn-history-2", "Second request.", [
+        message("user", "First request."),
+        message("assistant", "Answer 1."),
+      ]),
+    );
+    expect(await second.text()).toContain("response.completed");
+    expect(task.prompts[1]).toContain("Second request.");
+    expect(task.prompts[1]).not.toContain("First request.");
+
+    const compacted = await post(
+      route,
+      "/responses/compact",
+      {
+        model: "farol-next/mind",
+        input: [
+          message("user", "First request."),
+          message("assistant", "Answer 1."),
+          message("user", "Second request."),
+          message("assistant", "Answer 2."),
+        ],
+      },
+      {
+        "x-codex-turn-metadata": JSON.stringify({
+          thread_id: threadId,
+          turn_id: "turn-history-compact",
+        }),
+      },
+    );
+    expect(compacted.status).toBe(200);
+    const replacement = ((await compacted.json()) as { output: unknown[] })
+      .output;
+    const summaries = task.prompts.length;
+
+    // The first turn after the compaction is refused before anything is
+    // sent. The same turn repeated is admitted, and still carries the
+    // checkpoint that never reached the conversation.
+    refuseNext = true;
+    const refused = await post(
+      route,
+      "/responses",
+      initialRequest("turn-history-3", "Third request.", replacement),
+    );
+    expect(await refused.text()).toContain("TASK_CAPACITY_REACHED");
+    expect(task.prompts).toHaveLength(summaries);
+    const repeated = await post(
+      route,
+      "/responses",
+      initialRequest("turn-history-3", "Third request.", replacement),
+    );
+    expect(await repeated.text()).toContain("response.completed");
+    expect(task.prompts[summaries]).toContain("Use the second draft.");
+    expect(task.prompts[summaries]).toContain("Third request.");
+
+    // Later turns keep the compaction item in their history. They are
+    // admitted, and do not repeat a checkpoint that was delivered.
+    const fourth = await post(
+      route,
+      "/responses",
+      initialRequest("turn-history-4", "Fourth request.", [
+        ...replacement,
+        message("user", "Third request."),
+        message("assistant", `Answer ${summaries + 1}.`),
+      ]),
+    );
+    expect(fourth.status).toBe(200);
+    expect(await fourth.text()).toContain("response.completed");
+    expect(task.prompts[summaries + 1]).toContain("Fourth request.");
+    expect(task.prompts[summaries + 1]).not.toContain("Use the second draft.");
+    expect(task.prompts[summaries + 1]).not.toContain("Third request.");
+  });
+
   it("refuses an unknown caller and a thread that cannot get a task", async () => {
     const task = new TaskConversation();
     const { runtime: route } = await compose(

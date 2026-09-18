@@ -24,6 +24,9 @@ function memoryJournal(): ProviderTurnJournal {
       }
       return existing === intentSha256 ? "replayed" : "conflict";
     },
+    release: async (key) => {
+      admitted.delete(key);
+    },
   };
 }
 

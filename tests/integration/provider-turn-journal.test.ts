@@ -44,6 +44,22 @@ describe("EV-05 durable provider turn journal", () => {
     expect((await fs.stat(recordFile("turn-a"))).mode & 0o777).toBe(0o600);
   });
 
+  it("forgets a released request so its repeat is admitted again", async () => {
+    const journal = new PrivateProviderTurnJournal({
+      root: path.join(root, "turns"),
+    });
+
+    await expect(journal.admit("turn-a", INTENT)).resolves.toBe("admitted");
+    await journal.release("turn-a");
+    await expect(fs.stat(recordFile("turn-a"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(journal.admit("turn-a", INTENT)).resolves.toBe("admitted");
+    // Releasing what was never admitted, or twice, changes nothing.
+    await journal.release("turn-unknown");
+    await expect(journal.admit("turn-a", INTENT)).resolves.toBe("replayed");
+  });
+
   it("treats a record left unreadable by a crash as unknown, never as new", async () => {
     const journal = new PrivateProviderTurnJournal({
       root: path.join(root, "turns"),

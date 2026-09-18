@@ -183,6 +183,10 @@ function normalizeSessionFailure(
 
 export class CodexContextContinuity implements CodexChatGptCompaction {
   private readonly confirmations = new Map<string, string>();
+  // Checkpoints whose context reached the task's conversation in a completed
+  // turn. Kept in memory only: after a restart the first turn repeats the
+  // context once, which is harmless, while losing it would not be.
+  private readonly deliveredCheckpoints = new Set<string>();
   private readonly compactionRequests = new Map<string, ParsedHostCompaction>();
   private readonly handoffPreflights = new Map<
     string,
@@ -360,11 +364,22 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     return handoff.ok ? handoff : failure(handoff.error.code);
   }
 
+  private deliverable(
+    checkpoint: CheckpointEnvelope,
+  ): Readonly<{ trustedContext: string | null; delivered: () => void }> {
+    return {
+      trustedContext: this.deliveredCheckpoints.has(checkpoint.checkpointId)
+        ? null
+        : renderTrustedCheckpointContext(checkpoint),
+      delivered: () => this.deliveredCheckpoints.add(checkpoint.checkpointId),
+    };
+  }
+
   async prepareTurn(
     input: Parameters<NonNullable<CodexChatGptCompaction["prepareTurn"]>>[0],
   ): Promise<
     Result<
-      Readonly<{ trustedContext: string | null }>,
+      Readonly<{ trustedContext: string | null; delivered?: () => void }>,
       CodexChatGptCompactionErrorCode
     >
   > {
@@ -417,6 +432,21 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
     } catch {
       return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
     }
+    // Every later turn of the epoch still carries the compaction item in the
+    // host's history. It is the stored checkpoint of the active epoch, so the
+    // turn is admitted; its context is sent again only until a turn carrying
+    // it completed, which covers a first turn refused before submission.
+    if (
+      session &&
+      sameContextBinding(session.binding, binding) &&
+      session.phase === "active" &&
+      session.lastCheckpointId === transportedCheckpoint.checkpointId &&
+      session.lastCompletedOperationId === transportedCheckpoint.operationId &&
+      checkpoint &&
+      sameCheckpointEnvelope(checkpoint, transportedCheckpoint)
+    ) {
+      return success(this.deliverable(checkpoint));
+    }
     if (
       !session ||
       !sameContextBinding(session.binding, binding) ||
@@ -467,9 +497,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       return failure("FAROL_NEXT_COMPACTION_RECONCILIATION_FAILED");
     }
     this.confirmations.delete(checkpoint.checkpointId);
-    return success({
-      trustedContext: renderTrustedCheckpointContext(checkpoint),
-    });
+    return success(this.deliverable(checkpoint));
   }
 
   async confirmHostCompaction(
