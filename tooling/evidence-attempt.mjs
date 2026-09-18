@@ -108,6 +108,137 @@ function attemptStatus(terminal, interrupted) {
   return "RUNNING_OR_UNKNOWN";
 }
 
+// A receipt counts only for the attempt whose directory holds it and the
+// lane its start named. A receipt that names another attempt or lane is a
+// contradiction, never repaired by taking the directory's word for it.
+function receiptReasons(attemptId, { started, terminal, exit, interrupted }) {
+  const reasons = [];
+  const bound = (name, receipt) => {
+    if (receipt.schema !== EVIDENCE_ATTEMPT_SCHEMA) {
+      reasons.push(`RECEIPT_SCHEMA:${name}`);
+    }
+    if (receipt.attemptId !== attemptId) {
+      reasons.push(`RECEIPT_IDENTITY:${name}`);
+    }
+  };
+  if (!started) reasons.push("RECEIPT_MISSING:started");
+  else {
+    bound("started", started);
+    if (typeof started.lane !== "string" || started.lane.length === 0) {
+      reasons.push("RECEIPT_LANE:started");
+    }
+  }
+  if (terminal) {
+    bound("terminal", terminal);
+    if (started && terminal.lane !== started.lane) {
+      reasons.push("RECEIPT_LANE:terminal");
+    }
+    if (!TERMINAL_STATUSES.has(terminal.status)) {
+      reasons.push("RECEIPT_STATUS:terminal");
+    }
+    if (!Array.isArray(terminal.byproducts)) {
+      reasons.push("RECEIPT_BYPRODUCTS:terminal");
+    }
+  }
+  if (exit) {
+    bound("exit", exit);
+    if (!Number.isInteger(exit.exitCode))
+      reasons.push("RECEIPT_EXIT_CODE:exit");
+  }
+  if (interrupted) bound("interrupted", interrupted);
+  return reasons;
+}
+
+function containedRelativePath(relative) {
+  return (
+    typeof relative === "string" &&
+    relative.length > 0 &&
+    !relative.startsWith("/") &&
+    !relative.includes("\\") &&
+    !relative.includes("\0") &&
+    relative
+      .split("/")
+      .every((part) => part !== "" && part !== "." && part !== "..")
+  );
+}
+
+// Producer-time hashing is not acceptance-time verification: every byproduct
+// the terminal receipt recorded is read again from the attempt's own
+// directory, without following a symbolic link or leaving that directory,
+// and must still have the recorded bytes. A file the receipt did not record
+// is an addition after the fact.
+function byproductReasons(directory, terminal) {
+  if (!terminal || !Array.isArray(terminal.byproducts)) return [];
+  const reasons = [];
+  let root;
+  try {
+    root = fsSync.realpathSync(directory);
+  } catch {
+    return ["BYPRODUCT_DIRECTORY_UNREADABLE"];
+  }
+  const recorded = new Set();
+  for (const record of terminal.byproducts) {
+    const relative = record?.path;
+    if (!containedRelativePath(relative)) {
+      reasons.push(`BYPRODUCT_PATH_INVALID:${String(relative)}`);
+      continue;
+    }
+    recorded.add(relative);
+    const target = path.join(root, relative);
+    let info;
+    try {
+      info = fsSync.lstatSync(target);
+    } catch (error) {
+      reasons.push(
+        error?.code === "ENOENT"
+          ? `BYPRODUCT_MISSING:${relative}`
+          : `BYPRODUCT_UNREADABLE:${relative}`,
+      );
+      continue;
+    }
+    let parent;
+    try {
+      parent = fsSync.realpathSync(path.dirname(target));
+    } catch {
+      reasons.push(`BYPRODUCT_UNREADABLE:${relative}`);
+      continue;
+    }
+    if (parent !== root && !parent.startsWith(`${root}${path.sep}`)) {
+      reasons.push(`BYPRODUCT_ESCAPES:${relative}`);
+      continue;
+    }
+    if (record.bytes === null || !info.isFile()) {
+      reasons.push(`BYPRODUCT_KIND:${relative}`);
+      continue;
+    }
+    let bytes;
+    try {
+      bytes = fsSync.readFileSync(target);
+    } catch {
+      reasons.push(`BYPRODUCT_UNREADABLE:${relative}`);
+      continue;
+    }
+    if (
+      bytes.length !== record.bytes ||
+      createHash("sha256").update(bytes).digest("hex") !== record.sha256
+    ) {
+      reasons.push(`BYPRODUCT_CHANGED:${relative}`);
+    }
+  }
+  let present;
+  try {
+    present = byproductsSync(root);
+  } catch {
+    return [...reasons, "BYPRODUCT_DIRECTORY_UNREADABLE"];
+  }
+  for (const entry of present) {
+    if (!recorded.has(entry.path)) {
+      reasons.push(`BYPRODUCT_UNRECORDED:${entry.path}`);
+    }
+  }
+  return reasons;
+}
+
 function attemptIdsSync(laneRoot) {
   let names;
   try {
@@ -307,20 +438,36 @@ export async function openEvidenceAttempt(laneRoot, { lane, input }) {
   return new EvidenceAttempt({ laneRoot, directory, attemptId, started });
 }
 
+// Loads every attempt of a lane with its receipts and, at this I/O
+// boundary, what acceptance may not take on trust: `verification.receipts`
+// names every receipt that contradicts its attempt or lane, and
+// `verification.byproducts` every recorded output that is missing, changed,
+// unreadable, outside the directory or unrecorded. Both are empty for an
+// attempt whose evidence still says what it said when it ended.
 export async function listEvidenceAttempts(laneRoot) {
   return attemptIdsSync(laneRoot).map((attemptId) => {
     const directory = path.join(laneRoot, "attempts", attemptId);
     const started = readJsonSync(path.join(directory, "started.json"));
     const terminal = readJsonSync(path.join(directory, "terminal.json"));
     const interrupted = readJsonSync(path.join(directory, "interrupted.json"));
+    const exit = readJsonSync(path.join(directory, "exit.json"));
     return {
       attemptId,
       directory,
       status: attemptStatus(terminal, interrupted),
       started,
       terminal,
-      exit: readJsonSync(path.join(directory, "exit.json")),
+      exit,
       interrupted,
+      verification: {
+        receipts: receiptReasons(attemptId, {
+          started,
+          terminal,
+          exit,
+          interrupted,
+        }),
+        byproducts: byproductReasons(directory, terminal),
+      },
     };
   });
 }

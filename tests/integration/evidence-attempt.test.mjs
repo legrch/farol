@@ -7,6 +7,8 @@ import {
   listEvidenceAttempts,
   openEvidenceAttempt,
 } from "../../tooling/evidence-attempt.mjs";
+import { EVIDENCE_LANES } from "../../tooling/evidence-cases.mjs";
+import { evaluateEligibility } from "../../tooling/evidence-eligibility.mjs";
 
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const roots = [];
@@ -205,5 +207,170 @@ describe("EV-04 immutable evidence attempts", () => {
     expect(() => attempt.path("terminal.json")).toThrow(
       "EVIDENCE_NAME_INVALID",
     );
+  });
+});
+
+describe("HR-010 acceptance re-reads what the receipts claim", () => {
+  const candidate = Object.freeze({
+    sourceCommit: "a".repeat(40),
+    sourceTreeDigest: "b".repeat(64),
+    artifactSha256: "c".repeat(64),
+  });
+
+  // A complete sealed-package attempt produced by a real runner process:
+  // started, a report, a PASS terminal with every case, and the exit receipt
+  // the process handlers write.
+  async function completeAttempt() {
+    const lane = await laneRoot();
+    const cases = JSON.stringify([...EVIDENCE_LANES["sealed-package"].cases]);
+    const result = runnerInChild(
+      lane,
+      `
+const fs = await import("node:fs/promises");
+await fs.writeFile(attempt.directory + "/report.json", JSON.stringify({ status: "PASS" }));
+await attempt.finish("PASS", { cases: ${cases} });
+process.exitCode = 0;
+`,
+    );
+    if (result.status !== 0) throw new Error(result.stderr);
+    const [attempt] = await listEvidenceAttempts(lane);
+    return { lane, attempt };
+  }
+
+  function evaluate(attempt, observer) {
+    return evaluateEligibility({
+      lane: "sealed-package",
+      attempt,
+      candidate,
+      review: {
+        reviewer: "independent",
+        verdict: "ACCEPT",
+        subject: { ...candidate },
+      },
+      observer: observer ?? {
+        healthy: true,
+        lane: "sealed-package",
+        attemptId: attempt.attemptId,
+        subject: { ...candidate },
+        interval: {
+          startedAt: "2000-01-01T00:00:00.000Z",
+          endedAt: "2100-01-01T00:00:00.000Z",
+        },
+      },
+    });
+  }
+
+  it("accepts a complete attempt whose bytes still match, and refuses it once a byproduct is missing, changed, emptied or added", async () => {
+    const { lane, attempt } = await completeAttempt();
+    expect(attempt.verification).toEqual({ receipts: [], byproducts: [] });
+    expect(attempt.started.input).toEqual({});
+    // The subject is bound at start; this fixture started with none, so the
+    // positive control supplies it the way a runner does.
+    attempt.started.input = { ...candidate };
+    expect(evaluate(attempt).acceptable).toBe(true);
+
+    const report = path.join(attempt.directory, "report.json");
+    const original = await fs.readFile(report);
+    const reload = async () => {
+      const [loaded] = await listEvidenceAttempts(lane);
+      loaded.started.input = { ...candidate };
+      return loaded;
+    };
+
+    await fs.writeFile(report, Buffer.concat([original, Buffer.from(" ")]));
+    let loaded = await reload();
+    expect(loaded.verification.byproducts).toEqual([
+      "BYPRODUCT_CHANGED:report.json",
+    ]);
+    expect(evaluate(loaded)).toMatchObject({
+      acceptable: false,
+      eligibility: "INVALID",
+    });
+
+    await fs.writeFile(report, "");
+    loaded = await reload();
+    expect(loaded.verification.byproducts).toEqual([
+      "BYPRODUCT_CHANGED:report.json",
+    ]);
+
+    await fs.rm(report);
+    loaded = await reload();
+    expect(loaded.verification.byproducts).toEqual([
+      "BYPRODUCT_MISSING:report.json",
+    ]);
+    expect(evaluate(loaded).reasons).toContain("BYPRODUCT_MISSING:report.json");
+
+    await fs.writeFile(report, original);
+    await fs.writeFile(path.join(attempt.directory, "extra.png"), "late");
+    loaded = await reload();
+    expect(loaded.verification.byproducts).toEqual([
+      "BYPRODUCT_UNRECORDED:extra.png",
+    ]);
+    await fs.rm(path.join(attempt.directory, "extra.png"));
+
+    // A byproduct replaced by a symbolic link is not the recorded file.
+    await fs.rm(report);
+    await fs.symlink(path.join(lane, "..", "elsewhere.json"), report);
+    loaded = await reload();
+    expect(loaded.verification.byproducts).toEqual([
+      "BYPRODUCT_KIND:report.json",
+    ]);
+    await fs.rm(report);
+    await fs.writeFile(report, original);
+    loaded = await reload();
+    expect(loaded.verification).toEqual({ receipts: [], byproducts: [] });
+    expect(evaluate(loaded).acceptable).toBe(true);
+  });
+
+  it("refuses receipts that name another attempt or lane, and a recorded path that leaves the attempt", async () => {
+    const { lane, attempt } = await completeAttempt();
+    const other = "20260918T080000000Z-0000000b";
+    const rewrite = async (name, mutate) => {
+      const file = path.join(attempt.directory, name);
+      const value = JSON.parse(await fs.readFile(file, "utf8"));
+      const original = await fs.readFile(file);
+      await fs.writeFile(file, JSON.stringify(mutate(value)));
+      const [loaded] = await listEvidenceAttempts(lane);
+      await fs.writeFile(file, original);
+      return loaded;
+    };
+
+    expect(
+      (
+        await rewrite("terminal.json", (value) => ({
+          ...value,
+          attemptId: other,
+        }))
+      ).verification.receipts,
+    ).toEqual(["RECEIPT_IDENTITY:terminal"]);
+    expect(
+      (await rewrite("exit.json", (value) => ({ ...value, attemptId: other })))
+        .verification.receipts,
+    ).toEqual(["RECEIPT_IDENTITY:exit"]);
+    expect(
+      (
+        await rewrite("started.json", (value) => ({
+          ...value,
+          attemptId: other,
+          lane: "hunt",
+        }))
+      ).verification.receipts,
+    ).toEqual(["RECEIPT_IDENTITY:started", "RECEIPT_LANE:terminal"]);
+    expect(
+      (await rewrite("terminal.json", (value) => ({ ...value, lane: "hunt" })))
+        .verification.receipts,
+    ).toEqual(["RECEIPT_LANE:terminal"]);
+    const escaping = await rewrite("terminal.json", (value) => ({
+      ...value,
+      byproducts: [
+        { path: "../outside.json", bytes: 1, sha256: "d".repeat(64) },
+        ...value.byproducts,
+      ],
+    }));
+    expect(escaping.verification.byproducts).toEqual([
+      "BYPRODUCT_PATH_INVALID:../outside.json",
+    ]);
+    const [intact] = await listEvidenceAttempts(lane);
+    expect(intact.verification).toEqual({ receipts: [], byproducts: [] });
   });
 });

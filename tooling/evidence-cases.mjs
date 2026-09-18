@@ -153,9 +153,14 @@ const LOCAL_FIXTURE_BOUNDARY = Object.freeze({
   display: "secondary-inactive",
 });
 
+// The outputs a lane's runner records for every attempt; acceptance re-reads
+// them and refuses an attempt whose recorded bytes are gone or different.
+const PRODUCT_REPORT = Object.freeze(["report.json"]);
+
 export const EVIDENCE_LANES = Object.freeze({
   "development-build": Object.freeze({
     root: "artifacts/e2e-dev",
+    requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "development-build-identity",
       ...SHARED_PRODUCT_CASES,
@@ -167,6 +172,7 @@ export const EVIDENCE_LANES = Object.freeze({
   }),
   "sealed-package": Object.freeze({
     root: "artifacts/e2e",
+    requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([...SEALED_PACKAGE_CASES, ...SHARED_PRODUCT_CASES]),
     boundary: Object.freeze({
       ...LOCAL_FIXTURE_BOUNDARY,
@@ -175,6 +181,7 @@ export const EVIDENCE_LANES = Object.freeze({
   }),
   "lifecycle-soak": Object.freeze({
     root: "artifacts/lifecycle-soak",
+    requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "fifty-task-create-close-cycles",
       "five-concurrent-task-surfaces",
@@ -194,6 +201,7 @@ export const EVIDENCE_LANES = Object.freeze({
   }),
   "persistence-fault": Object.freeze({
     root: "artifacts/persistence-fault",
+    requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "conversation-url-save-failure-is-visible",
       "lifecycle-save-failure-is-outcome-unknown",
@@ -209,6 +217,7 @@ export const EVIDENCE_LANES = Object.freeze({
   }),
   hunt: Object.freeze({
     root: "artifacts/hunt",
+    requiredByproducts: Object.freeze(["path.json"]),
     cases: Object.freeze([
       "tests/hunt/selftest.test.ts",
       "tests/hunt/proof.test.ts",

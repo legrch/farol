@@ -28,6 +28,16 @@ function observerRequired(lane) {
 }
 
 function eligibilityOf(reasons) {
+  if (
+    reasons.some(
+      (reason) =>
+        reason.startsWith("RECEIPT_") ||
+        reason.startsWith("BYPRODUCT_") ||
+        reason === "VERIFICATION_MISSING",
+    )
+  ) {
+    return "INVALID";
+  }
   if (reasons.some((reason) => reason.startsWith("WRONG_SUBJECT:"))) {
     return "WRONG_SUBJECT";
   }
@@ -44,7 +54,12 @@ function eligibilityOf(reasons) {
   ) {
     return "INCOMPLETE";
   }
-  if (reasons.some((reason) => reason.startsWith("REVIEW_"))) {
+  if (
+    reasons.some(
+      (reason) =>
+        reason.startsWith("REVIEW_") || reason.startsWith("OBSERVER_"),
+    )
+  ) {
     return "UNVERIFIED";
   }
   return "CURRENT";
@@ -68,6 +83,54 @@ function reviewReason(lane, review, candidate) {
   }
   if (review.verdict !== "ACCEPT") return "REVIEW_NOT_ACCEPT";
   return null;
+}
+
+function timestamp(value) {
+  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+// An effect observer counts only for the exact run it watched: this lane,
+// this attempt, this candidate, over an interval that covers the attempt
+// from its start to its terminal receipt, and healthy throughout. A receipt
+// that says `healthy: true` about another run, or about no run in
+// particular, is not an observation of this one.
+function observerReasons(lane, observer, attempt, candidate) {
+  if (!observer) return ["OBSERVER_MISSING"];
+  const reasons = [];
+  if (observer.healthy !== true) reasons.push("OBSERVER_UNHEALTHY");
+  if (observer.lane !== lane) reasons.push("OBSERVER_LANE_MISMATCH");
+  if (observer.attemptId !== attempt.attemptId) {
+    reasons.push("OBSERVER_ATTEMPT_MISMATCH");
+  }
+  for (const field of subjectFields(lane).filter(
+    (candidateField) => candidateField !== "sourceTreeDigest",
+  )) {
+    if (observer.subject?.[field] !== candidate[field]) {
+      reasons.push(`OBSERVER_SUBJECT_MISMATCH:${field}`);
+    }
+  }
+  const from = timestamp(observer.interval?.startedAt);
+  const to = timestamp(observer.interval?.endedAt);
+  const startedAt = timestamp(attempt.started?.startedAt);
+  const endedAt = timestamp(attempt.terminal?.endedAt);
+  if (
+    from === null ||
+    to === null ||
+    startedAt === null ||
+    endedAt === null ||
+    from > startedAt ||
+    to < endedAt
+  ) {
+    reasons.push("OBSERVER_INTERVAL_UNCOVERED");
+  }
+  if (Array.isArray(observer.observedCases)) {
+    const observed = new Set(observer.observedCases);
+    for (const name of attempt.terminal?.cases?.normalized ?? []) {
+      if (!observed.has(name)) reasons.push(`OBSERVER_CASE_UNCOVERED:${name}`);
+    }
+  }
+  return reasons;
 }
 
 export function evaluateEligibility({
@@ -94,10 +157,33 @@ export function evaluateEligibility({
   const rawOutcome = attempt.status;
   if (rawOutcome !== "PASS") reasons.push(`RAW_OUTCOME_${rawOutcome}`);
 
+  // Only the loader can vouch for receipts and byproducts; an attempt that
+  // did not pass through it carries no verification and is not accepted.
+  if (!attempt.verification) reasons.push("VERIFICATION_MISSING");
+  else {
+    reasons.push(...attempt.verification.receipts);
+    reasons.push(...attempt.verification.byproducts);
+  }
+  if (attempt.started && attempt.started.lane !== lane) {
+    reasons.push(`RECEIPT_LANE_MISMATCH:${String(attempt.started.lane)}`);
+  }
+
   if (attempt.terminal) {
     if (!attempt.exit) reasons.push("EXIT_RECEIPT_MISSING");
     else if (attempt.exit.exitCode !== 0) {
       reasons.push(`EXIT_NONZERO:${attempt.exit.exitCode}`);
+    }
+    const recorded = new Map(
+      (attempt.terminal.byproducts ?? []).map((record) => [
+        record?.path,
+        record,
+      ]),
+    );
+    for (const required of contract.requiredByproducts ?? []) {
+      const record = recorded.get(required);
+      if (!record || !(record.bytes > 0)) {
+        reasons.push(`BYPRODUCT_REQUIRED_MISSING:${required}`);
+      }
     }
   }
 
@@ -128,8 +214,7 @@ export function evaluateEligibility({
   if (review_) reasons.push(review_);
 
   if (observerRequired(lane)) {
-    if (!observer) reasons.push("OBSERVER_MISSING");
-    else if (observer.healthy !== true) reasons.push("OBSERVER_UNHEALTHY");
+    reasons.push(...observerReasons(lane, observer, attempt, candidate));
   }
 
   for (const finding of findings) {
@@ -217,6 +302,18 @@ function option(arguments_, name) {
   return index === -1 ? null : arguments_[index + 1];
 }
 
+// One observer receipt per lane. The file holds either a map from lane to
+// receipt or one receipt that names its lane; a receipt is never handed to
+// a lane it does not name.
+export function observerFor(observers, lane) {
+  if (!observers || typeof observers !== "object") return null;
+  if (typeof observers.lane === "string") {
+    return observers.lane === lane ? observers : null;
+  }
+  const receipt = observers[lane];
+  return receipt && typeof receipt === "object" ? receipt : null;
+}
+
 // node tooling/evidence-eligibility.mjs [--root <vnext>] [--candidate <file>]
 //   [--review <file>] [--observer <file>] [--findings <file>]
 //   [--requirements <file>]
@@ -232,6 +329,7 @@ async function main(arguments_) {
   const observer = option(arguments_, "--observer");
   const findings = option(arguments_, "--findings");
   const requirements = option(arguments_, "--requirements");
+  const observers = observer ? await readJson(observer) : null;
   const evaluations = {};
   for (const [lane, contract] of Object.entries(EVIDENCE_LANES)) {
     evaluations[lane] = evaluateEligibility({
@@ -239,12 +337,12 @@ async function main(arguments_) {
       attempt: await latestAttempt(path.join(root, contract.root)),
       candidate,
       review: review ? await readJson(review) : null,
-      observer: observer ? await readJson(observer) : null,
+      observer: observerFor(observers, lane),
       findings: findings ? await readJson(findings) : [],
     });
   }
   const output = {
-    schema: "farol.next.evidence-eligibility/v1",
+    schema: "farol.next.evidence-eligibility/v2",
     candidate: {
       sourceCommit: candidate.sourceCommit,
       sourceTreeDigest: candidate.sourceTreeDigest,

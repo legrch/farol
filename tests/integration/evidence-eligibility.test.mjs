@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { EVIDENCE_LANES } from "../../tooling/evidence-cases.mjs";
 import {
   evaluateEligibility,
+  observerFor,
   summarizeRequirements,
 } from "../../tooling/evidence-eligibility.mjs";
 
@@ -11,25 +12,59 @@ const candidate = Object.freeze({
   artifactSha256: "c".repeat(64),
 });
 
+const attemptId = "20260918T090000000Z-0000000a";
+
+// A complete attempt as the loader returns it: receipts that name this
+// attempt and lane, recorded outputs the loader re-read unchanged, and the
+// interval its receipts span.
 function passingAttempt(lane, terminalOverrides = {}, extra = {}) {
   const cases = [...EVIDENCE_LANES[lane].cases];
+  const byproducts =
+    lane === "hunt"
+      ? [{ path: "path.json", bytes: 10, sha256: "d".repeat(64) }]
+      : [{ path: "report.json", bytes: 10, sha256: "d".repeat(64) }];
   return {
-    attemptId: "20260918T090000000Z-0000000a",
+    attemptId,
     status: terminalOverrides.status ?? "PASS",
-    started: { lane, input: { ...candidate } },
+    started: {
+      attemptId,
+      lane,
+      input: { ...candidate },
+      startedAt: "2026-09-18T09:00:00.000Z",
+    },
     terminal: {
+      attemptId,
+      lane,
       status: "PASS",
+      startedAt: "2026-09-18T09:00:00.000Z",
+      endedAt: "2026-09-18T09:10:00.000Z",
       firstFailure: null,
       cases: { raw: cases, normalized: [...cases].sort() },
       blockedCases: [],
       skippedCases: [],
-      byproducts: [{ path: "report.json", bytes: 10, sha256: "d".repeat(64) }],
+      byproducts,
       ...terminalOverrides,
     },
-    exit: { exitCode: 0 },
+    exit: { attemptId, exitCode: 0 },
+    verification: { receipts: [], byproducts: [] },
     ...extra,
   };
 }
+
+// An observer that watched exactly this run.
+const observer = Object.freeze({
+  healthy: true,
+  lane: "sealed-package",
+  attemptId,
+  subject: {
+    sourceCommit: candidate.sourceCommit,
+    artifactSha256: candidate.artifactSha256,
+  },
+  interval: {
+    startedAt: "2026-09-18T08:59:00.000Z",
+    endedAt: "2026-09-18T09:11:00.000Z",
+  },
+});
 
 const review = Object.freeze({
   subject: {
@@ -47,7 +82,7 @@ function evaluate(overrides = {}) {
     attempt: passingAttempt("sealed-package"),
     candidate,
     review,
-    observer: { required: true, healthy: true },
+    observer,
     findings: [],
     ...overrides,
   });
@@ -88,6 +123,7 @@ describe("EV-03/EV-08 evidence eligibility", () => {
         cases: { raw: rest, normalized: [...rest].sort() },
         blockedCases: [{ name: blocked, reason: "no secondary display" }],
       }),
+      observer: { ...observer, lane: "development-build" },
     });
     expect(result.acceptable).toBe(false);
     expect(result.reasons).toEqual([
@@ -165,9 +201,145 @@ describe("EV-03/EV-08 evidence eligibility", () => {
 
   it("refuses an unhealthy or absent required effect observer", () => {
     expect(
-      evaluate({ observer: { required: true, healthy: false } }).reasons,
-    ).toEqual(["OBSERVER_UNHEALTHY"]);
+      evaluate({ observer: { ...observer, healthy: false } }),
+    ).toMatchObject({
+      eligibility: "UNVERIFIED",
+      reasons: ["OBSERVER_UNHEALTHY"],
+    });
     expect(evaluate({ observer: null }).reasons).toEqual(["OBSERVER_MISSING"]);
+  });
+
+  it.each([
+    [
+      "another attempt",
+      { attemptId: "20260918T080000000Z-0000000b" },
+      "OBSERVER_ATTEMPT_MISMATCH",
+    ],
+    ["another lane", { lane: "development-build" }, "OBSERVER_LANE_MISMATCH"],
+    [
+      "another candidate",
+      { subject: { ...observer.subject, artifactSha256: "f".repeat(64) } },
+      "OBSERVER_SUBJECT_MISMATCH:artifactSha256",
+    ],
+    [
+      "an interval that started late",
+      {
+        interval: {
+          ...observer.interval,
+          startedAt: "2026-09-18T09:00:01.000Z",
+        },
+      },
+      "OBSERVER_INTERVAL_UNCOVERED",
+    ],
+    [
+      "an interval that ended early",
+      {
+        interval: { ...observer.interval, endedAt: "2026-09-18T09:09:59.000Z" },
+      },
+      "OBSERVER_INTERVAL_UNCOVERED",
+    ],
+    [
+      "no interval at all",
+      { interval: undefined },
+      "OBSERVER_INTERVAL_UNCOVERED",
+    ],
+  ])(
+    "CTRL-29-E1 refuses an observer receipt about %s",
+    (_name, override, reason) => {
+      const result = evaluate({ observer: { ...observer, ...override } });
+      expect(result.acceptable).toBe(false);
+      expect(result.eligibility).toBe("UNVERIFIED");
+      expect(result.reasons).toEqual([reason]);
+    },
+  );
+
+  it("CTRL-29-E1 refuses an observer that names cases but did not watch one the run executed", () => {
+    const cases = EVIDENCE_LANES["sealed-package"].cases;
+    const result = evaluate({
+      observer: { ...observer, observedCases: cases.slice(1) },
+    });
+    expect(result.reasons).toHaveLength(1);
+    expect(result.reasons[0]).toMatch(/^OBSERVER_CASE_UNCOVERED:/u);
+    expect(
+      evaluate({ observer: { ...observer, observedCases: [...cases] } })
+        .acceptable,
+    ).toBe(true);
+  });
+
+  it("hands a lane only the observer receipt that names it", () => {
+    const other = { ...observer, lane: "development-build" };
+    expect(observerFor(observer, "sealed-package")).toBe(observer);
+    expect(observerFor(observer, "development-build")).toBeNull();
+    expect(
+      observerFor(
+        { "sealed-package": observer, "development-build": other },
+        "development-build",
+      ),
+    ).toBe(other);
+    expect(observerFor({ "sealed-package": observer }, "hunt")).toBeNull();
+    expect(observerFor(null, "hunt")).toBeNull();
+  });
+
+  it("HR-010 refuses an attempt whose receipts or byproducts the loader could not verify, and one that never passed through the loader", () => {
+    const tampered = evaluate({
+      attempt: passingAttempt(
+        "sealed-package",
+        {},
+        {
+          verification: {
+            receipts: ["RECEIPT_IDENTITY:terminal"],
+            byproducts: ["BYPRODUCT_CHANGED:report.json"],
+          },
+        },
+      ),
+    });
+    expect(tampered.acceptable).toBe(false);
+    expect(tampered.eligibility).toBe("INVALID");
+    expect(tampered.reasons).toEqual([
+      "RECEIPT_IDENTITY:terminal",
+      "BYPRODUCT_CHANGED:report.json",
+    ]);
+    const unverified = passingAttempt("sealed-package");
+    delete unverified.verification;
+    expect(evaluate({ attempt: unverified })).toMatchObject({
+      eligibility: "INVALID",
+      reasons: ["VERIFICATION_MISSING"],
+    });
+  });
+
+  it("HR-010 refuses receipts of another lane and a run without its required output", () => {
+    expect(
+      evaluate({
+        attempt: passingAttempt(
+          "sealed-package",
+          {},
+          {
+            started: {
+              ...passingAttempt("sealed-package").started,
+              lane: "hunt",
+            },
+          },
+        ),
+      }).reasons,
+    ).toEqual(["RECEIPT_LANE_MISMATCH:hunt"]);
+    expect(
+      evaluate({
+        attempt: passingAttempt("sealed-package", {
+          byproducts: [
+            { path: "other.json", bytes: 4, sha256: "d".repeat(64) },
+          ],
+        }),
+      }).reasons,
+    ).toEqual(["BYPRODUCT_REQUIRED_MISSING:report.json"]);
+    expect(
+      evaluate({
+        attempt: passingAttempt("sealed-package", {
+          byproducts: [
+            { path: "report.json", bytes: 0, sha256: "d".repeat(64) },
+          ],
+        }),
+      }).reasons,
+    ).toEqual(["BYPRODUCT_REQUIRED_MISSING:report.json"]);
   });
 
   it("refuses while a blocking finding is unresolved", () => {
