@@ -222,6 +222,56 @@ describe("native mutable Computer workspace", () => {
     }
   });
 
+  it("AUTH-04 keeps a newer external save that lands before the exchange is undone", async () => {
+    // Two external saves race one exchange. The first replaced the checked
+    // original before the exchange, so the object swapped out is not it; the
+    // second replaces the target again before the exchange is undone. The
+    // undo then moves that newest save to the private name: it must survive,
+    // and the edit must not claim that nothing happened.
+    const target = path.join(root, "README.md");
+    await fs.writeFile(target, "before\n", { mode: 0o600 });
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "farol-candidate\n",
+        expectedSha256: digest("before\n"),
+      }),
+      {
+        testHookRequest: { phase: "after-exchange", index: null },
+        testHook: async () => {
+          // What the exchange took out stands in for the first external
+          // save: an object other than the checked original.
+          const [privateName] = (await fs.readdir(root)).filter((entry) =>
+            entry.startsWith(".farol-tmp-"),
+          );
+          if (!privateName) throw new Error("private name missing");
+          await fs.writeFile(`${target}.first`, "external save 1\n", {
+            mode: 0o600,
+          });
+          await fs.rename(`${target}.first`, path.join(root, privateName));
+          await fs.writeFile(`${target}.second`, "external save 2\n", {
+            mode: 0o600,
+          });
+          await fs.rename(`${target}.second`, target);
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    });
+    const survivors = await Promise.all(
+      (await fs.readdir(root))
+        .filter(
+          (entry) => entry === "README.md" || entry.startsWith(".farol-tmp-"),
+        )
+        .map((entry) => fs.readFile(path.join(root, entry), "utf8")),
+    );
+    expect(survivors).toContain("external save 2\n");
+  });
+
   it("AUTH-05 validates create-only content before creating parent directories", async () => {
     const result = await workspace().mutate(
       request({

@@ -879,6 +879,24 @@ def _swap_names(parent_fd, first, second):
         raise OSError(code, os.strerror(code))
 
 
+def _holds_inode(parent_fd, name, expected):
+    """True when `name` is still the very file `expected` was measured from.
+
+    Only the device and inode are compared: exchanging names changes a file's
+    ctime, so the stable identity used before a replace would never match a
+    file this helper itself has just moved.
+    """
+
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        return False
+    return stat.S_ISREG(current.st_mode) and (current.st_dev, current.st_ino) == (
+        expected.st_dev,
+        expected.st_ino,
+    )
+
+
 def _is_checked_original(parent_fd, name, previous, expected_sha256):
     """True when `name` holds the very file whose digest the edit checked."""
 
@@ -931,6 +949,7 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
         mode = 0o644 if previous is None else stat.S_IMODE(previous.st_mode)
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
+        written = os.fstat(descriptor)
         os.close(descriptor)
         descriptor = None
 
@@ -985,6 +1004,7 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
                 if error.errno in (errno.ENOTSUP, errno.EINVAL):
                     refuse(EXIT_PATH_REFUSED)
                 refuse(EXIT_RACE)
+            _test_hook(request, "after-exchange", None)
             expected_sha256 = request.get("expectedSha256")
             if not _is_checked_original(parent_fd, temporary, previous, expected_sha256):
                 try:
@@ -992,6 +1012,14 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
                 except OSError:
                     # The other writer's version now has the private name.
                     # Keep it rather than delete someone else's bytes.
+                    temporary = None
+                    refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+                if not _holds_inode(parent_fd, temporary, written):
+                    # The target was replaced again after the exchange, so
+                    # undoing it moved that newer version to the private name
+                    # instead of this edit's file.  Keep it: those bytes are
+                    # someone else's, and which version the target should now
+                    # show is no longer knowable here.
                     temporary = None
                     refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
                 refuse(EXIT_RACE)
