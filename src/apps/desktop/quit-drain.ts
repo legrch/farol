@@ -76,10 +76,28 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       if (state === "draining") return;
       state = "draining";
       const closers = [...ports.collect()];
+      const startedAt = Date.now();
+      let recordTimer: NodeJS.Timeout | undefined;
       void drainOwnedChildren(closers, ports.deadlineMs)
-        .then((receipt) => ports.record(receipt))
+        .then((receipt) => {
+          // Recording is bounded by the same absolute deadline that bounds
+          // the drain (the elapsed drain time counts against it): a
+          // `record` that never settles must not delay quit past it.
+          const remaining = Math.max(
+            0,
+            ports.deadlineMs - (Date.now() - startedAt),
+          );
+          return Promise.race([
+            ports.record(receipt).catch(() => undefined),
+            new Promise<void>((resolve) => {
+              recordTimer = setTimeout(resolve, remaining);
+              recordTimer.unref?.();
+            }),
+          ]);
+        })
         .catch(() => undefined)
         .finally(() => {
+          clearTimeout(recordTimer);
           state = "done";
           ports.quit();
         });

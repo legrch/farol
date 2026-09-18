@@ -149,6 +149,27 @@ describe("LIF-09 quit drains owned children before claiming they stopped", () =>
       expect(quits).toBe(1);
     });
 
+    it("quits no later than the drain deadline even when the receipt record never settles", async () => {
+      let quits = 0;
+      const startedAt = Date.now();
+      let quitAt = 0;
+      const drain = createQuitDrain({
+        deadlineMs: 30,
+        collect: () => [{ name: "route-b", close: async () => undefined }],
+        record: () => new Promise<void>(() => undefined),
+        quit: () => {
+          quits += 1;
+          quitAt = Date.now() - startedAt;
+        },
+      });
+      drain.onBeforeQuit(event());
+      await vi.waitFor(() => expect(drain.state()).toBe("done"), {
+        timeout: 500,
+      });
+      expect(quits).toBe(1);
+      expect(quitAt).toBeLessThan(300);
+    });
+
     it("quits even when the diagnostic receipt cannot be written", async () => {
       let quits = 0;
       const drain = createQuitDrain({
