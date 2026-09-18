@@ -10,6 +10,7 @@ successful response is ``FAROLR1\0`` plus an unsigned 64-bit big-endian payload
 length and the exact payload bytes.  Failures are content-free exit statuses.
 """
 
+import bisect
 import json
 import errno
 import codecs
@@ -957,6 +958,48 @@ def _normalized_edit_text(value):
         refuse(EXIT_INVALID)
 
 
+def _crlf_offsets(source):
+    """Return where each CRLF of ``source`` lands in its LF-normalized text.
+
+    Edits match against LF-normalized text so that a caller may spell a CRLF
+    file with LF, but the published bytes are assembled from the original
+    source.  The k-th CRLF at source index ``i`` becomes the LF at normalized
+    index ``i - k``; this sorted list maps a normalized offset back with one
+    bisection instead of a per-character table.
+    """
+    offsets = []
+    search = 0
+    while True:
+        found = source.find("\r\n", search)
+        if found < 0:
+            return offsets
+        offsets.append(found - len(offsets))
+        search = found + 2
+
+
+def _source_offset(crlf_offsets, normalized_offset):
+    # Every CRLF that normalized before this offset occupied one extra
+    # character in the source.  A normalized offset never lands between a CR
+    # and its LF, because the pair is a single LF after normalization.
+    return normalized_offset + bisect.bisect_left(crlf_offsets, normalized_offset)
+
+
+def _line_ending_at(source, index):
+    """Return the line ending a line break inserted at ``index`` receives.
+
+    Inserted text follows the ending of the line the edit starts on: the first
+    line ending at or after ``index``; on an unterminated final line the one
+    before it; LF in a file with no line ending.  Untouched bytes are never
+    rewritten, so a mixed-ending file keeps every ending it already had.
+    """
+    position = source.find("\n", index)
+    if position < 0:
+        position = source.rfind("\n", 0, index)
+    if position < 0:
+        return "\n"
+    return "\r\n" if position > 0 and source[position - 1] == "\r" else "\n"
+
+
 def _edit_regular(request, parent_fd, leaf):
     if not _safe_output_name(leaf):
         refuse(EXIT_PATH_REFUSED)
@@ -993,15 +1036,15 @@ def _edit_regular(request, parent_fd, leaf):
             source = source_payload.decode("utf-8")
         except UnicodeError:
             refuse(EXIT_NOT_TEXT)
-        crlf = "\r\n" in source
-        source = source.replace("\r\n", "\n")
+        crlf_offsets = _crlf_offsets(source)
+        searchable = source.replace("\r\n", "\n")
 
         replacements = []
         for old_text, new_text in normalized:
-            first = source.find(old_text)
+            first = searchable.find(old_text)
             if first < 0:
                 refuse(EXIT_EDIT_NO_MATCH)
-            if source.find(old_text, first + 1) >= 0:
+            if searchable.find(old_text, first + 1) >= 0:
                 refuse(EXIT_EDIT_NOT_UNIQUE)
             replacements.append((first, first + len(old_text), new_text))
         replacements.sort(key=lambda item: item[0])
@@ -1012,13 +1055,13 @@ def _edit_regular(request, parent_fd, leaf):
         pieces = []
         cursor = 0
         for start, end, new_text in replacements:
-            pieces.append(source[cursor:start])
-            pieces.append(new_text)
-            cursor = end
+            source_start = _source_offset(crlf_offsets, start)
+            pieces.append(source[cursor:source_start])
+            ending = _line_ending_at(source, source_start)
+            pieces.append(new_text if ending == "\n" else new_text.replace("\n", ending))
+            cursor = _source_offset(crlf_offsets, end)
         pieces.append(source[cursor:])
         result = "".join(pieces)
-        if crlf:
-            result = result.replace("\n", "\r\n")
         result_payload = result.encode("utf-8")
         if has_bom:
             result_payload = codecs.BOM_UTF8 + result_payload

@@ -16,8 +16,27 @@ const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
 let root = "";
 
-function digest(value: string): string {
+function digest(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+// latin1 maps every byte to exactly one character, so this comparison is
+// byte-exact while CR, LF and BOM bytes stay readable in a failure diff.
+function visible(value: Buffer): string {
+  return JSON.stringify(value.toString("latin1"));
+}
+
+async function editFileBytes(
+  relativePath: string,
+  before: Buffer,
+  edits: Array<{ oldText: string; newText: string }>,
+  expectedSha256 = digest(before),
+) {
+  await fs.writeFile(path.join(root, relativePath), before, { mode: 0o600 });
+  const result = await workspace().mutate(
+    request({ kind: "workspace.edit", relativePath, expectedSha256, edits }),
+  );
+  return { result, after: await fs.readFile(path.join(root, relativePath)) };
 }
 
 function request(
@@ -251,6 +270,135 @@ describe("native mutable Computer workspace", () => {
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "WORKSPACE_EDIT_NOT_UNIQUE", retry: "never" },
+    });
+  });
+
+  describe("C05-02 byte fidelity of untouched line endings", () => {
+    const utf8 = (value: string) => Buffer.from(value, "utf8");
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+
+    it("keeps every untouched LF and CRLF of a mixed-EOL file", async () => {
+      const before = utf8("first\r\nkeep\nchange this\nlast\n");
+      const expected = utf8("first\r\nkeep\nchange that\nlast\n");
+      const { result, after } = await editFileBytes("mixed.txt", before, [
+        { oldText: "this", newText: "that" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+      expect(result).toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.mutation",
+          operation: "edit",
+          relativePath: "mixed.txt",
+          bytes: expected.length,
+          replacements: 1,
+          beforeSha256: digest(before),
+          afterSha256: digest(expected),
+        },
+      });
+    });
+
+    it("gives inserted line breaks the ending of the line the edit starts on", async () => {
+      const before = utf8("one\r\ntwo\nthree\r\nfour\n");
+      const expected = utf8("1\r\ntwo\ntwo-b\n3\r\n3-b\r\nfour\n");
+      const { result, after } = await editFileBytes("mixed-many.txt", before, [
+        { oldText: "three", newText: "3\n3-b" },
+        { oldText: "one", newText: "1" },
+        { oldText: "two", newText: "two\ntwo-b" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+      expect(result).toMatchObject({
+        ok: true,
+        value: { replacements: 3, afterSha256: digest(expected) },
+      });
+    });
+
+    it("keeps uniform LF files LF, including multi-line insertions", async () => {
+      const before = utf8("alpha\nbeta\ngamma\n");
+      const expected = utf8("alpha\nbeta-1\nbeta-2\ngamma\n");
+      const { after } = await editFileBytes("uniform-lf.txt", before, [
+        { oldText: "beta", newText: "beta-1\r\nbeta-2" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+    });
+
+    it("keeps uniform CRLF files CRLF and matches LF-spelled multi-line text", async () => {
+      const before = utf8("alpha\r\nbeta\r\ngamma\r\n");
+      const expected = utf8("alpha\r\nBETA\r\nGAMMA\r\nDELTA\r\n");
+      const { after } = await editFileBytes("uniform-crlf.txt", before, [
+        { oldText: "beta\ngamma", newText: "BETA\nGAMMA\nDELTA" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+    });
+
+    it("preserves a BOM and mixed endings together", async () => {
+      const before = Buffer.concat([bom, utf8("head\r\nbody\ntail")]);
+      const expected = Buffer.concat([bom, utf8("head\r\nBODY\ntail")]);
+      const { after } = await editFileBytes("bom-mixed.txt", before, [
+        { oldText: "body", newText: "BODY" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+    });
+
+    it("uses the preceding line ending on an unterminated last line", async () => {
+      const before = utf8("alpha\nbeta\r\ngamma");
+      const expected = utf8("alpha\nbeta\r\ngamma\r\ndelta");
+      const { after } = await editFileBytes("no-final-newline.txt", before, [
+        { oldText: "gamma", newText: "gamma\ndelta" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+    });
+
+    it("uses LF when the file has no line ending at all", async () => {
+      const before = utf8("single line");
+      const expected = utf8("single\nline");
+      const { after } = await editFileBytes("single-line.txt", before, [
+        { oldText: "single line", newText: "single\nline" },
+      ]);
+
+      expect(visible(after)).toBe(visible(expected));
+    });
+
+    it("refuses ambiguous, overlapping and stale edits before any byte changes", async () => {
+      const before = utf8("same\r\nsame\nother\n");
+      for (const [edits, expectedSha256, code] of [
+        [
+          [{ oldText: "same", newText: "changed" }],
+          digest(before),
+          "WORKSPACE_EDIT_NOT_UNIQUE",
+        ],
+        [
+          [
+            { oldText: "same\nother", newText: "x" },
+            { oldText: "other", newText: "y" },
+          ],
+          digest(before),
+          "WORKSPACE_EDIT_OVERLAP",
+        ],
+        [
+          [{ oldText: "other", newText: "changed" }],
+          digest("stale snapshot\n"),
+          "WORKSPACE_MUTATION_CONFLICT",
+        ],
+      ] as const) {
+        const { result, after } = await editFileBytes(
+          "refused.txt",
+          before,
+          [...edits],
+          expectedSha256,
+        );
+        expect(result).toMatchObject({
+          ok: false,
+          error: { code, retry: "never" },
+        });
+        expect(visible(after)).toBe(visible(before));
+      }
     });
   });
 
