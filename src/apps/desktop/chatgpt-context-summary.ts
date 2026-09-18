@@ -622,38 +622,84 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       (input.source.source === "retained_agent"
         ? this.options.routes.retained(input.binding)
         : null);
+    // Whether the route still has to be detached from the source now.
+    let detach = false;
     if (route) {
-      let summary = this.received.get(
-        operationKey(input.binding, input.operationId),
-      );
-      if (!summary) {
-        try {
-          summary =
-            (await this.options.store.getSummary(
-              input.binding,
-              input.operationId,
-            )) ?? undefined;
-        } catch {
-          return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
-        }
+      let committed;
+      try {
+        committed = await this.options.store.getRetirement(input.binding);
+      } catch {
+        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
       }
       const conversationUrl = routeConversationUrl(route);
       if (
-        !summary ||
-        !conversationUrl ||
-        summary.sourceCursor !== conversationSourceCursor(conversationUrl)
+        committed &&
+        committed.operationId === input.operationId &&
+        committed.epoch === input.epoch
       ) {
-        return {
-          status: "outcome_unknown",
-          code: "SOURCE_RETIREMENT_UNKNOWN",
-        };
+        // This operation already committed, durably and before any reset,
+        // to detaching exactly this source. A route that names no
+        // conversation has nothing left to detach; one that names another
+        // conversation is newer, and is never touched.
+        if (
+          conversationUrl !== null &&
+          conversationSourceCursor(conversationUrl) !== committed.sourceCursor
+        ) {
+          return {
+            status: "outcome_unknown",
+            code: "SOURCE_RETIREMENT_UNKNOWN",
+          };
+        }
+        detach = conversationUrl !== null;
+      } else {
+        let summary = this.received.get(
+          operationKey(input.binding, input.operationId),
+        );
+        if (!summary) {
+          try {
+            summary =
+              (await this.options.store.getSummary(
+                input.binding,
+                input.operationId,
+              )) ?? undefined;
+          } catch {
+            return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+          }
+        }
+        // Without that commitment only the exact source proves itself: a
+        // route with no conversation, or another one, proves nothing.
+        if (
+          !summary ||
+          !conversationUrl ||
+          summary.sourceCursor !== conversationSourceCursor(conversationUrl)
+        ) {
+          return {
+            status: "outcome_unknown",
+            code: "SOURCE_RETIREMENT_UNKNOWN",
+          };
+        }
+        // The reset below clears the route's identity, so the proof is made
+        // durable first: a retry after any later fault finishes the same
+        // retirement instead of finding an unprovable empty route.
+        try {
+          await this.options.store.putRetirement({
+            schemaVersion: 1,
+            operationId: input.operationId,
+            binding: input.binding,
+            epoch: input.epoch,
+            sourceCursor: summary.sourceCursor,
+          });
+        } catch {
+          return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+        }
+        detach = true;
       }
     }
     try {
-      if (lease) {
+      if (detach && lease) {
         if (lease.owned) lease.route.dispose();
         else lease.route.resetConversation();
-      } else if (route) {
+      } else if (detach && route) {
         route.resetConversation();
       }
     } catch {

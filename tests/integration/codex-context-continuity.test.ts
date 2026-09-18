@@ -4,10 +4,20 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  ChatGptContextSummaryDriver,
+  type ChatGptContextSummaryRoute,
+} from "../../src/apps/desktop/chatgpt-context-summary";
+import type { ChatGptReadonlyTaskResult } from "../../src/apps/desktop/chatgpt-route";
+import {
   CodexContextContinuity,
   type CodexContextSummaryDriver,
 } from "../../src/apps/desktop/codex-context-continuity";
+import type { ContextAdmissionLease } from "../../src/modules/chat/app/port/context-repository";
 import type { CheckpointContent } from "../../src/modules/chat/domain/checkpoint";
+import type {
+  ContextBinding,
+  ContextSession,
+} from "../../src/modules/chat/domain/context-continuity";
 import {
   HOST_CHECKPOINT_PREFIX,
   replayHostCheckpoint,
@@ -1011,4 +1021,181 @@ describe("Codex host context continuity composition", () => {
       continuity.prepareTurn(markerlessTurn("turn-after-close")),
     ).resolves.toEqual({ ok: true, value: { trustedContext: null } });
   });
+});
+
+// HR-014/F1 composed: the actual summary driver, the actual private store and
+// the controller, with a route whose reset clears its URL as production's
+// does. A local fault after the reset, or a failed save of the retired epoch,
+// must end in exactly one epoch transition after a restart, with the same
+// checkpoint and no second summary.
+const summaryContent: CheckpointContent = {
+  goal: "Finish the exact Farol Next task.",
+  activeConstraints: ["Never publish this task."],
+  latestCorrections: ["Use the corrected workspace."],
+  keyDecisions: ["Store the checkpoint before handoff."],
+  completedWork: [],
+  unfinishedWork: ["Continue after context replacement."],
+  unresolvedQuestions: [],
+  unknownOutcomes: [],
+  artifactRefs: [],
+  attachmentRefs: [],
+  nextSafeStep: "Continue the task from the checkpoint.",
+};
+
+class FaultyContinuityStore extends PrivateContextStore {
+  private readonly faults = new Map<string, number>();
+
+  failOnce(name: "deleteSummary" | "saveRetired"): void {
+    this.faults.set(name, (this.faults.get(name) ?? 0) + 1);
+  }
+
+  private take(name: string): boolean {
+    const remaining = this.faults.get(name) ?? 0;
+    if (remaining < 1) return false;
+    this.faults.set(name, remaining - 1);
+    return true;
+  }
+
+  override async deleteSummary(
+    target: ContextBinding,
+    operationId: string,
+  ): Promise<void> {
+    if (this.take("deleteSummary")) throw new Error("SYNTHETIC_UNLINK_FAILURE");
+    return super.deleteSummary(target, operationId);
+  }
+
+  override async save(
+    session: ContextSession,
+    lease?: ContextAdmissionLease,
+  ): Promise<void> {
+    if (session.phase === "old_epoch_retired" && this.take("saveRetired")) {
+      throw new Error("SYNTHETIC_SAVE_FAILURE");
+    }
+    return super.save(session, lease);
+  }
+}
+
+function summaryPage(
+  conversationUrl: string | null = "https://chatgpt.com/c/summary-context-1",
+) {
+  const page = { url: conversationUrl, resets: 0, submissions: 0 };
+  const route: ChatGptContextSummaryRoute = {
+    runReadonlyTask: async (): Promise<ChatGptReadonlyTaskResult> => {
+      page.submissions += 1;
+      return {
+        state: "completed",
+        code: null,
+        deltaCount: 1,
+        observedCharacters: JSON.stringify(summaryContent).length,
+        outputText: JSON.stringify(summaryContent),
+      };
+    },
+    currentConversationUrl: () => page.url,
+    retainedConversationUrl: () => page.url,
+    resetConversation: () => {
+      page.resets += 1;
+      page.url = null;
+    },
+    dispose: () => undefined,
+  };
+  return { route, page };
+}
+
+describe("HR-014/F1 retirement recovery through the controller", () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      roots
+        .splice(0)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
+  });
+
+  function continuityFor(
+    store: PrivateContextStore,
+    route: ChatGptContextSummaryRoute,
+  ): CodexContextContinuity {
+    return new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary: new ChatGptContextSummaryDriver({
+        store,
+        routes: {
+          retained: () => route,
+          createFallback: () => {
+            throw new Error("FALLBACK_FORBIDDEN");
+          },
+        },
+      }),
+    });
+  }
+
+  const receipt = {
+    modelId: "farol-next/mind",
+    threadId: "thread-context-1",
+    turnId: "turn-context-compact-1",
+    itemId: "host-context-compaction-hr014",
+    signal: "turn_completed" as const,
+  };
+
+  for (const fault of ["deleteSummary", "saveRetired"] as const) {
+    it(`HR-014 ${fault === "saveRetired" ? "R4" : "R2"} completes one epoch transition after a restart when ${fault} failed once`, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-next-context-retire-"),
+      );
+      roots.push(root);
+      const store = new FaultyContinuityStore({ root });
+      const { route, page } = summaryPage();
+      const first = continuityFor(store, route);
+      const handoff = await first.compact({
+        endpoint: "responses",
+        body: {
+          model: "farol-next/mind",
+          stream: true,
+          input: [...history(), { type: "compaction_trigger" }],
+        },
+        metadataHeader: metadata(),
+      });
+      if (!handoff.ok || handoff.value.variant !== "streamed_compaction_item") {
+        throw new Error("EXPECTED_STREAMED_HANDOFF");
+      }
+      const replayed = replayHostCheckpoint([handoff.value.item], 262_144);
+      if (!replayed.ok) throw new Error(replayed.error.code);
+      const { checkpoint } = replayed.value;
+      expect(page.submissions).toBe(1);
+
+      store.failOnce(fault);
+      await expect(first.confirmHostCompaction(receipt)).resolves.toMatchObject(
+        { ok: false },
+      );
+      expect(page).toMatchObject({ url: null, resets: 1 });
+      await expect(store.load(checkpoint.binding)).resolves.toMatchObject({
+        epoch: 1,
+      });
+
+      // Restart: a new store, driver and controller over the same state,
+      // and a route restored from the null conversation the reset published.
+      const restartedStore = new PrivateContextStore({ root });
+      const restarted = summaryPage(null);
+      await expect(
+        continuityFor(restartedStore, restarted.route).confirmHostCompaction(
+          receipt,
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          phase: "active",
+          epoch: 2,
+          lastCheckpointId: checkpoint.checkpointId,
+        },
+      });
+      await expect(
+        restartedStore.get(checkpoint.binding, checkpoint.checkpointId),
+      ).resolves.toMatchObject({ checkpointId: checkpoint.checkpointId });
+      expect(page.submissions + restarted.page.submissions).toBe(1);
+      expect(page.resets + restarted.page.resets).toBe(1);
+    });
+  }
 });

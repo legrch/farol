@@ -1030,3 +1030,264 @@ describe("ChatGPT summary-only context driver", () => {
     });
   });
 });
+
+// HR-014/F1: retiring a retained source must survive a local fault behind the
+// reset that cleared the route's URL, and a restart, without resetting a
+// newer conversation, without a second summary, and without ever taking a
+// null URL on its own as proof that a retirement happened.
+class FaultyContextStore extends PrivateContextStore {
+  private readonly faults = new Map<string, number>();
+
+  failOnce(name: "deleteSummary" | "deleteSummaryAttempt"): void {
+    this.faults.set(name, (this.faults.get(name) ?? 0) + 1);
+  }
+
+  private take(name: string): boolean {
+    const remaining = this.faults.get(name) ?? 0;
+    if (remaining < 1) return false;
+    this.faults.set(name, remaining - 1);
+    return true;
+  }
+
+  override async deleteSummary(
+    target: ContextBinding,
+    operationId: string,
+  ): Promise<void> {
+    if (this.take("deleteSummary")) throw new Error("SYNTHETIC_UNLINK_FAILURE");
+    return super.deleteSummary(target, operationId);
+  }
+
+  override async deleteSummaryAttempt(
+    target: ContextBinding,
+    operationId: string,
+  ): Promise<void> {
+    if (this.take("deleteSummaryAttempt")) {
+      throw new Error("SYNTHETIC_UNLINK_FAILURE");
+    }
+    return super.deleteSummaryAttempt(target, operationId);
+  }
+}
+
+// A route whose reset does what production's does to its identity: it points
+// the route at the home page and publishes no conversation, so neither URL
+// getter names the retired conversation afterwards.
+function statefulRoute(
+  conversationUrl: string | null = "https://chatgpt.com/c/summary-context-1",
+) {
+  const page = { url: conversationUrl, resets: 0, submissions: 0 };
+  const route: ChatGptContextSummaryRoute = {
+    runReadonlyTask: async (): Promise<ChatGptReadonlyTaskResult> => {
+      page.submissions += 1;
+      return {
+        state: "completed",
+        code: null,
+        deltaCount: 1,
+        observedCharacters: JSON.stringify(content).length,
+        outputText: JSON.stringify(content),
+      };
+    },
+    currentConversationUrl: () => page.url,
+    retainedConversationUrl: () => page.url,
+    resetConversation: () => {
+      page.resets += 1;
+      page.url = null;
+    },
+    dispose: () => undefined,
+  };
+  return { route, page };
+}
+
+describe("HR-014/F1 retained-source retirement recovery", () => {
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      roots
+        .splice(0)
+        .map((root) => fs.rm(root, { recursive: true, force: true })),
+    );
+  });
+
+  async function stateRoot(): Promise<string> {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-summary-retire-"),
+    );
+    roots.push(root);
+    return root;
+  }
+
+  const retirement = () => ({
+    binding,
+    epoch: 1,
+    operationId: request.operationId,
+    source: source(),
+  });
+
+  function driverFor(
+    state: PrivateContextStore,
+    route: ChatGptContextSummaryRoute | null,
+  ): ChatGptContextSummaryDriver {
+    return new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => route,
+        createFallback: () => {
+          throw new Error("FALLBACK_FORBIDDEN");
+        },
+      },
+    });
+  }
+
+  async function summarized(
+    state: PrivateContextStore,
+    route: ChatGptContextSummaryRoute,
+  ): Promise<ChatGptContextSummaryDriver> {
+    const driver = driverFor(state, route);
+    await expect(
+      driver.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed" });
+    return driver;
+  }
+
+  async function cleanedUp(state: PrivateContextStore): Promise<void> {
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toBeNull();
+    await expect(
+      state.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toBeNull();
+  }
+
+  it("HR-014 R1 retires the exact retained conversation once through a reset that clears its URL", async () => {
+    const state = new FaultyContextStore({ root: await stateRoot() });
+    const { route, page } = statefulRoute();
+    const driver = await summarized(state, route);
+
+    await expect(driver.retire(retirement())).resolves.toEqual({
+      status: "retired",
+    });
+    expect(page).toEqual({ url: null, resets: 1, submissions: 1 });
+    await cleanedUp(state);
+  });
+
+  for (const fault of ["deleteSummary", "deleteSummaryAttempt"] as const) {
+    it(`HR-014 R2/R3 finishes only the local cleanup after ${fault} failed once behind the reset`, async () => {
+      const state = new FaultyContextStore({ root: await stateRoot() });
+      const { route, page } = statefulRoute();
+      const driver = await summarized(state, route);
+      state.failOnce(fault);
+
+      await expect(driver.retire(retirement())).resolves.toEqual({
+        status: "blocked",
+        code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+      });
+      expect(page).toEqual({ url: null, resets: 1, submissions: 1 });
+
+      await expect(driver.retire(retirement())).resolves.toEqual({
+        status: "retired",
+      });
+      expect(page).toEqual({ url: null, resets: 1, submissions: 1 });
+      await cleanedUp(state);
+    });
+  }
+
+  it("HR-014 R2 resumes the same operation after a restart onto the present, empty route", async () => {
+    const root = await stateRoot();
+    const state = new FaultyContextStore({ root });
+    const { route, page } = statefulRoute();
+    const driver = await summarized(state, route);
+    state.failOnce("deleteSummary");
+    await expect(driver.retire(retirement())).resolves.toMatchObject({
+      code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+    });
+
+    // The restarted route is restored from the null conversation the reset
+    // published: present, and naming no conversation at all.
+    const restartedState = new PrivateContextStore({ root });
+    const restarted = statefulRoute(null);
+    await expect(
+      driverFor(restartedState, restarted.route).retire(retirement()),
+    ).resolves.toEqual({ status: "retired" });
+    expect(restarted.page).toEqual({ url: null, resets: 0, submissions: 0 });
+    expect(page.submissions).toBe(1);
+    await cleanedUp(restartedState);
+  });
+
+  it("HR-014 resets again when a restart restored the conversation it was retiring", async () => {
+    const root = await stateRoot();
+    const state = new FaultyContextStore({ root });
+    const { route } = statefulRoute();
+    const driver = await summarized(state, route);
+    state.failOnce("deleteSummary");
+    await expect(driver.retire(retirement())).resolves.toMatchObject({
+      code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+    });
+
+    // The reset's null conversation was never persisted, so the restarted
+    // route shows the very conversation being retired.
+    const restarted = statefulRoute();
+    await expect(
+      driverFor(new PrivateContextStore({ root }), restarted.route).retire(
+        retirement(),
+      ),
+    ).resolves.toEqual({ status: "retired" });
+    expect(restarted.page).toEqual({ url: null, resets: 1, submissions: 0 });
+  });
+
+  it("HR-014 R5 never resets a newer conversation at the recovery boundary", async () => {
+    const state = new FaultyContextStore({ root: await stateRoot() });
+    const { route, page } = statefulRoute();
+    const driver = await summarized(state, route);
+    state.failOnce("deleteSummary");
+    await expect(driver.retire(retirement())).resolves.toMatchObject({
+      code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+    });
+    page.url = "https://chatgpt.com/c/newer-task-conversation";
+
+    await expect(driver.retire(retirement())).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "SOURCE_RETIREMENT_UNKNOWN",
+    });
+    expect(page).toMatchObject({
+      url: "https://chatgpt.com/c/newer-task-conversation",
+      resets: 1,
+    });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+  });
+
+  it("HR-014 never takes a null URL alone as proof of a retirement that never started", async () => {
+    const state = new FaultyContextStore({ root: await stateRoot() });
+    const { route, page } = statefulRoute();
+    const driver = await summarized(state, route);
+    // The page left the conversation on its own before any retirement.
+    page.url = null;
+
+    await expect(driver.retire(retirement())).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "SOURCE_RETIREMENT_UNKNOWN",
+    });
+    expect(page.resets).toBe(0);
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+  });
+
+  it("HR-014 lets a foreign binding touch nothing", async () => {
+    const state = new FaultyContextStore({ root: await stateRoot() });
+    const { route, page } = statefulRoute();
+    const driver = await summarized(state, route);
+
+    await expect(
+      driver.retire({
+        ...retirement(),
+        binding: { ...binding, taskId: "foreign-task" },
+      }),
+    ).resolves.toEqual({ status: "blocked", code: "SUMMARY_SOURCE_MISMATCH" });
+    expect(page.resets).toBe(0);
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+  });
+});

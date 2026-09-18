@@ -147,6 +147,24 @@ const contextSummaryAttemptRecordSchema = z.strictObject({
   attempt: contextSummaryAttemptSchema,
 });
 
+// The durable proof that one operation committed to detaching exactly this
+// source conversation from its route, written before the route is reset. A
+// reset clears the route's identity, so without it a retry after a local
+// fault could no longer tell its own retired source from an empty route.
+const contextRetirementSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  operationId: z.string().min(1).max(160),
+  binding: bindingSchema,
+  epoch: z.number().int().positive(),
+  sourceCursor: z.string().min(1).max(512),
+});
+
+const contextRetirementRecordSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  kind: z.literal("context_retirement"),
+  retirement: contextRetirementSchema,
+});
+
 const admissionSchema = z.strictObject({
   binding: bindingSchema,
   sourceEpoch: z.number().int().positive(),
@@ -177,6 +195,7 @@ const DEFAULT_CHECKPOINT_RECORD_BYTES = 384 * 1_024;
 const DEFAULT_SOURCE_RECORD_BYTES = 1 * 1_024 * 1_024;
 const DEFAULT_SUMMARY_RECORD_BYTES = 384 * 1_024;
 const DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES = 16 * 1_024;
+const MAXIMUM_RETIREMENT_RECORD_BYTES = 8 * 1_024;
 const DEFAULT_RETENTION = 8;
 const PROCESS_INSTANCE_ID = randomBytes(16).toString("hex");
 
@@ -193,6 +212,10 @@ export type StoredContextSummary = Readonly<{
 
 export type StoredContextSummaryAttempt = Readonly<
   z.infer<typeof contextSummaryAttemptSchema>
+>;
+
+export type StoredContextRetirement = Readonly<
+  z.infer<typeof contextRetirementSchema>
 >;
 
 export type PrivateContextStoreOptions = Readonly<{
@@ -757,6 +780,39 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  // One retirement record per task. It only moves forward, to a later
+  // epoch's retirement; the same record is accepted again unchanged, and
+  // anything else is a conflict rather than an overwrite.
+  async putRetirement(candidate: StoredContextRetirement): Promise<void> {
+    const parsed = contextRetirementSchema.safeParse(candidate);
+    if (!parsed.success) throw new Error("CONTEXT_RETIREMENT_INVALID");
+    const retirement = structuredClone(parsed.data);
+    const directory = await this.ensureTaskDirectory(retirement.binding);
+    const file = path.join(directory, "retirement.json");
+    const existing = await this.readRetirementFile(file, retirement.binding);
+    if (existing) {
+      if (JSON.stringify(existing) === JSON.stringify(retirement)) return;
+      if (existing.epoch >= retirement.epoch) {
+        throw new Error("CONTEXT_RETIREMENT_CONFLICT");
+      }
+    }
+    await this.atomicWrite(
+      file,
+      { schemaVersion: 1, kind: "context_retirement", retirement },
+      MAXIMUM_RETIREMENT_RECORD_BYTES,
+      "CONTEXT_RETIREMENT_OVERSIZED",
+    );
+  }
+
+  async getRetirement(
+    binding: ContextBinding,
+  ): Promise<StoredContextRetirement | null> {
+    return this.readRetirementFile(
+      path.join(this.taskDirectory(binding), "retirement.json"),
+      binding,
+    );
+  }
+
   // Every summary attempt a task still holds. An attempt that cannot be
   // read is an error, not a missing one: whether its summary is over is
   // exactly what a caller asking for the list needs to know.
@@ -1082,6 +1138,26 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     return structuredClone({ ...parsed.data.summary, content: content.value });
   }
 
+  private async readRetirementFile(
+    file: string,
+    binding: ContextBinding,
+  ): Promise<StoredContextRetirement | null> {
+    const record = await this.readRecord(
+      file,
+      MAXIMUM_RETIREMENT_RECORD_BYTES,
+      "CONTEXT_RETIREMENT",
+    );
+    if (!record) return null;
+    const parsed = contextRetirementRecordSchema.safeParse(record.value);
+    if (!parsed.success) {
+      throw this.schemaError(record.value, "CONTEXT_RETIREMENT");
+    }
+    if (!sameContextBinding(parsed.data.retirement.binding, binding)) {
+      throw new Error("CONTEXT_RETIREMENT_BINDING_MISMATCH");
+    }
+    return structuredClone(parsed.data.retirement);
+  }
+
   private async readSummaryAttemptFile(
     file: string,
     binding: ContextBinding,
@@ -1172,6 +1248,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       | "CONTEXT_SOURCE"
       | "CONTEXT_SUMMARY"
       | "CONTEXT_SUMMARY_ATTEMPT"
+      | "CONTEXT_RETIREMENT"
       | "CONTEXT_STATE",
   ): Promise<ParsedRecord | null> {
     const createOnly = code === "CONTEXT_ADMISSION" || code === "CONTEXT_LEASE";
