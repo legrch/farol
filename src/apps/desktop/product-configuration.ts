@@ -18,7 +18,7 @@ import {
   type SetupStepId,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
-import { credentialStorePolicy } from "../../modules/computer/infra/native/credential-stores";
+import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 
 const FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;

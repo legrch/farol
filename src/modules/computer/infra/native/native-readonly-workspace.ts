@@ -27,7 +27,7 @@ import type {
   WorkspaceEditSnapshotResult,
   WorkspaceMatch,
 } from "../../app/port/readonly-workspace";
-import { credentialStorePolicy } from "./credential-stores";
+import { credentialStorePolicy } from "./home-secret-stores";
 import { executeNativeVerificationCommand } from "./native-verification-command";
 
 export type SafeOpenHelperRecord = Readonly<{
