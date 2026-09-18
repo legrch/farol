@@ -16,7 +16,9 @@ a renderer. Use the least visible route that preserves the evidence:
 The visible selector is deterministic: non-primary internal, then any non-primary.
 The exact requested 1180x760 viewport is centered inside that display's work area.
 If no secondary can preserve it, the visible lane fails closed instead of using the
-primary display or shrinking the assertion. Equivalent hidden evidence remains valid
+primary display or shrinking the assertion. The harness records that condition as a
+`BLOCKED` topology preflight before starting any visible application window, including
+the exact required viewport and owner action. Equivalent hidden evidence remains valid
 only for boundaries that do not require native visibility or focus. The packaged and
 development reports include the actual display class, display count, work area,
 bounds, and initial focus observation.

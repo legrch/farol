@@ -142,6 +142,91 @@ const macHostLockState = detectMacHostLockState();
 const nativeWindowProofAvailable =
   !skipNativeFocus && macHostLockState !== "locked";
 
+function visibleWindowTopologyBlock(presentation) {
+  const requested = { width: 1180, height: 760 };
+  const displays = [...presentation.displays].sort(
+    (left, right) => left.id - right.id,
+  );
+  const selected =
+    displays.find((display) => !display.primary && display.internal) ??
+    displays.find((display) => !display.primary);
+  if (!selected) {
+    return {
+      code: "SECONDARY_DISPLAY_UNAVAILABLE",
+      reason: "no non-primary display is available for visible native evidence",
+      ownerAction:
+        "Provide one non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
+      requested,
+      selectedDisplay: null,
+    };
+  }
+  if (
+    selected.workArea.width < requested.width ||
+    selected.workArea.height < requested.height
+  ) {
+    return {
+      code: "VISIBLE_TEST_VIEWPORT_UNAVAILABLE",
+      reason:
+        "the selected non-primary display cannot preserve the exact visible test viewport",
+      ownerAction:
+        "Provide a non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
+      requested,
+      selectedDisplay: selected,
+    };
+  }
+  return null;
+}
+
+async function writeWindowTopologyBlockedReport(presentation) {
+  const topologyBlock = visibleWindowTopologyBlock(presentation);
+  if (!topologyBlock) return false;
+  blockedCases.push({
+    name: "visible-window-secondary-display",
+    reason: topologyBlock.reason,
+    code: topologyBlock.code,
+    ownerAction: topologyBlock.ownerAction,
+  });
+  const report = {
+    schema: 1,
+    status: "BLOCKED",
+    lane: development ? "development-build" : "sealed-package",
+    artifactSha256: artifact.artifactSha256,
+    sourceCommit: artifact.sourceCommit,
+    sourceTreeDigest: artifact.sourceTreeDigest,
+    sourceDirty: artifact.sourceDirty,
+    windowPolicy: {
+      visibleRun: {
+        mode: "secondary-visible",
+        status: "blocked-topology-preflight",
+        code: topologyBlock.code,
+        requiredViewport: topologyBlock.requested,
+        selectedDisplay: topologyBlock.selectedDisplay,
+        displayCount: presentation.displays.length,
+        displays: presentation.displays,
+        nativeFocusProof: "not-attempted-topology-unavailable",
+        nativeFocusRequested: !skipNativeFocus,
+        macHostLockState,
+      },
+      hiddenRuns: ["ordinary-product-preflight"],
+    },
+    caseCount: cases.length,
+    uniqueCaseCount: new Set(cases).size,
+    cases,
+    blockedCases,
+    skippedCases,
+    screenshots: [],
+  };
+  await fs.writeFile(
+    path.join(evidenceRoot, "report.json"),
+    `${JSON.stringify(report, null, 2)}\n`,
+  );
+  process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+  process.stderr.write(
+    `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,
+  );
+  return true;
+}
+
 if (development) {
   cases.push("development-build-identity");
 } else {
@@ -3403,6 +3488,10 @@ try {
   cases.push("ordinary-launch-has-no-synthetic-tasks");
 } finally {
   await close(ordinary);
+}
+
+if (await writeWindowTopologyBlockedReport(ordinary.presentation)) {
+  process.exit(1);
 }
 
 const ordinaryLiveTasks = await launch([], "secondary-visible", "ordinary");

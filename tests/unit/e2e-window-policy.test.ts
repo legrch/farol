@@ -23,4 +23,16 @@ describe("the native E2E window policy", () => {
       /skipNativeFocus\s*\?\s*"blocked-owner-authorization"/u,
     );
   });
+
+  it("records an unavailable secondary topology before any visible launch", () => {
+    const preflight = e2eSource.indexOf(
+      "await writeWindowTopologyBlockedReport(ordinary.presentation)",
+    );
+    const visibleLaunch = e2eSource.indexOf(
+      'const ordinaryLiveTasks = await launch([], "secondary-visible", "ordinary")',
+    );
+
+    expect(preflight).toBeGreaterThan(-1);
+    expect(visibleLaunch).toBeGreaterThan(preflight);
+  });
 });
