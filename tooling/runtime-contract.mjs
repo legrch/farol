@@ -11,7 +11,10 @@ import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 // `extractedTreeDigest` is the version-2 tree digest of the Electron.app that
 // archive extracts to. A stale runtime whose own manifest hashes agree, and
 // same-version bytes modified after extraction, both fail these checks even
-// when every other manifest field is consistent with itself.
+// when every other manifest field is consistent with itself. The archive's
+// size is not part of the enforced claim: nothing in packaging or
+// verification can re-establish it, so it is recorded in the evidence log
+// rather than asserted by the manifest.
 export const ELECTRON_RUNTIME = Object.freeze({
   version: "44.4.2",
   platform: "darwin",
@@ -21,7 +24,6 @@ export const ELECTRON_RUNTIME = Object.freeze({
   distribution: Object.freeze({
     asset: "electron-v44.4.2-darwin-arm64.zip",
     sha256: "52f8354eacad1dbe43ee12345b0fa9e1fc7de137f77571abbe12efbbc896aad8",
-    bytes: 130_101_912,
   }),
   treeDigestVersion: TREE_DIGEST_VERSION,
   extractedTreeDigest:
@@ -55,8 +57,6 @@ export function assertRuntimeExpectation(expected) {
       distribution?.asset ===
         `electron-v${expected.version}-${expected.platform}-${expected.arch}.zip` &&
       HEX64.test(distribution.sha256 ?? "") &&
-      Number.isSafeInteger(distribution.bytes) &&
-      distribution.bytes > 0 &&
       expected.treeDigestVersion === TREE_DIGEST_VERSION &&
       HEX64.test(expected.extractedTreeDigest ?? ""),
     "RUNTIME_EXPECTATION_INVALID",
@@ -140,7 +140,6 @@ export function runtimeClosure(expected, relativePath) {
     distribution: {
       asset: expected.distribution.asset,
       sha256: expected.distribution.sha256,
-      bytes: expected.distribution.bytes,
     },
     node: "embedded-in-electron",
     testerManagedRuntime: false,
@@ -159,7 +158,6 @@ export function assertRuntimeClosure(runtime, expected, relativePath) {
       runtime.arch === closure.arch &&
       runtime.distribution?.asset === closure.distribution.asset &&
       runtime.distribution?.sha256 === closure.distribution.sha256 &&
-      runtime.distribution?.bytes === closure.distribution.bytes &&
       runtime.node === closure.node &&
       runtime.testerManagedRuntime === false &&
       runtime.layout === closure.layout &&

@@ -33,7 +33,6 @@ const expected = Object.freeze({
   distribution: Object.freeze({
     asset: "electron-v1.2.3-darwin-arm64.zip",
     sha256: "a".repeat(64),
-    bytes: 1,
   }),
   treeDigestVersion: TREE_DIGEST_VERSION,
   extractedTreeDigest: "b".repeat(64),
@@ -302,7 +301,6 @@ describe("reviewed Electron runtime contract", () => {
       distribution: {
         asset: "electron-v1.2.3-darwin-arm64.zip",
         sha256: "a".repeat(64),
-        bytes: 1,
       },
       node: "embedded-in-electron",
       testerManagedRuntime: false,
