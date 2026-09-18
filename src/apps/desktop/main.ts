@@ -20,6 +20,7 @@ import {
   readFile,
   realpath,
   unlink,
+  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
@@ -137,6 +138,11 @@ import {
   type CodexCallerRelayRuntime,
 } from "./codex-caller-relay";
 import { configurationAdmission } from "./configuration-admission";
+import {
+  drainOwnedChildren,
+  type OwnedCloser,
+  type QuitDrainReceipt,
+} from "./quit-drain";
 import { deleteTaskContext } from "./task-context-cleanup";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
@@ -850,6 +856,23 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
     );
   },
 };
+
+const QUIT_DRAIN_DEADLINE_MS = 5_000;
+
+// The outcome of the last quit's drain, kept privately for diagnostics.
+async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
+  const file = path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "last-quit.json",
+  );
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(
+    file,
+    `${JSON.stringify({ schema: 1, at: new Date().toISOString(), ...receipt })}\n`,
+    { mode: 0o600 },
+  );
+}
 
 // The relay socket path must stay under the 104-byte Unix socket limit, so it
 // lives in a short private temporary directory keyed by this profile. The
@@ -6058,7 +6081,16 @@ async function main(): Promise<void> {
   screen.on("display-removed", reconcileVisibleTestDisplay);
   screen.on("display-metrics-changed", reconcileVisibleTestDisplay);
   app.on("activate", reopenWindow);
-  app.on("before-quit", () => {
+  // Quit waits, up to one deadline, for every owned child to confirm it
+  // stopped, then quits for real; what did not confirm is recorded instead
+  // of being reported as drained.
+  let quitDrain: "idle" | "draining" | "done" = "idle";
+  app.on("before-quit", (event) => {
+    if (quitDrain === "done") return;
+    event.preventDefault();
+    if (quitDrain === "draining") return;
+    quitDrain = "draining";
+    const closers: OwnedCloser[] = [];
     const attachmentTask = pendingChatGptAttachmentTask;
     pendingChatGptAttachmentTask = null;
     if (attachmentTask) {
@@ -6070,7 +6102,12 @@ async function main(): Promise<void> {
     const agentCheck = activeCodexAgentCheck;
     activeCodexAgentCheck = null;
     agentCheck?.host.dispose();
-    if (agentCheck) void agentCheck.client.close().catch(() => undefined);
+    if (agentCheck) {
+      closers.push({
+        name: "agent-check",
+        close: () => agentCheck.client.close(),
+      });
+    }
     const productAgent = activeProductAgentSession;
     activeProductAgentSession = null;
     if (persistedProductAgentExpiry) {
@@ -6079,17 +6116,33 @@ async function main(): Promise<void> {
     }
     if (productAgent?.expiryTimer) clearTimeout(productAgent.expiryTimer);
     productAgent?.host.dispose();
-    if (productAgent) void productAgent.client.close().catch(() => undefined);
-    void secureMcpConnectorRuntime?.stop();
+    if (productAgent) {
+      closers.push({
+        name: "product-agent",
+        close: () => productAgent.client.close(),
+      });
+    }
+    const connector = secureMcpConnectorRuntime;
+    if (connector) {
+      closers.push({ name: "connector", close: () => connector.stop() });
+    }
     const routeB = routeBRuntime;
     routeBRuntime = null;
-    void routeB?.close().catch(() => undefined);
+    if (routeB) closers.push({ name: "route-b", close: () => routeB.close() });
     const relay = callerRelayRuntime;
     callerRelayRuntime = null;
-    void relay?.close().catch(() => undefined);
+    if (relay)
+      closers.push({ name: "caller-relay", close: () => relay.close() });
     disposeChatGptRoutes();
     disposeTaskViews("runtime");
     stopRuntime();
+    void drainOwnedChildren(closers, QUIT_DRAIN_DEADLINE_MS)
+      .then((receipt) => recordQuitReceipt(receipt))
+      .catch(() => undefined)
+      .finally(() => {
+        quitDrain = "done";
+        app.quit();
+      });
   });
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
