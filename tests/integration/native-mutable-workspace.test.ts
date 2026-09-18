@@ -169,6 +169,59 @@ describe("native mutable Computer workspace", () => {
     ).toBe(false);
   });
 
+  it("AUTH-04 never overwrites an external write made after the replacement check", async () => {
+    const target = path.join(root, "README.md");
+    for (const [label, externalWrite] of [
+      [
+        "in place",
+        async () => {
+          await fs.appendFile(target, "external line\n");
+        },
+      ],
+      [
+        "by replacement",
+        async () => {
+          await fs.writeFile(`${target}.next`, "external file\n", {
+            mode: 0o600,
+          });
+          await fs.rename(`${target}.next`, target);
+        },
+      ],
+    ] as const) {
+      await fs.writeFile(target, "before\n", { mode: 0o600 });
+      let external = "";
+      const result = await workspace().mutate(
+        request({
+          kind: "workspace.write",
+          relativePath: "README.md",
+          content: "farol-candidate\n",
+          expectedSha256: digest("before\n"),
+        }),
+        {
+          testHookRequest: { phase: "before-publish", index: null },
+          testHook: async () => {
+            await externalWrite();
+            external = await fs.readFile(target, "utf8");
+          },
+        },
+      );
+
+      expect({ label, result }).toMatchObject({
+        label,
+        result: {
+          ok: false,
+          error: { code: "WORKSPACE_MUTATION_CONFLICT", retry: "never" },
+        },
+      });
+      expect(await fs.readFile(target, "utf8")).toBe(external);
+      expect(
+        (await fs.readdir(root)).some((entry) =>
+          entry.startsWith(".farol-tmp-"),
+        ),
+      ).toBe(false);
+    }
+  });
+
   it("AUTH-05 validates create-only content before creating parent directories", async () => {
     const result = await workspace().mutate(
       request({

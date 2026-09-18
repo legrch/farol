@@ -14,6 +14,7 @@ import bisect
 import json
 import errno
 import codecs
+import ctypes
 import hashlib
 import itertools
 import os
@@ -846,6 +847,64 @@ def _same_path_identity(parent_fd, leaf, expected):
     )
 
 
+RENAME_SWAP = 0x00000002
+_RENAMEATX_NP = None
+
+
+def _swap_names(parent_fd, first, second):
+    """Exchange two names in one directory atomically (macOS renameatx_np).
+
+    Both names keep existing throughout; each now names the other's object.
+    """
+
+    global _RENAMEATX_NP
+    if _RENAMEATX_NP is None:
+        function = ctypes.CDLL(None, use_errno=True).renameatx_np
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        )
+        function.restype = ctypes.c_int
+        _RENAMEATX_NP = function
+    if (
+        _RENAMEATX_NP(
+            parent_fd, os.fsencode(first), parent_fd, os.fsencode(second), RENAME_SWAP
+        )
+        != 0
+    ):
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def _is_checked_original(parent_fd, name, previous, expected_sha256):
+    """True when `name` holds the very file whose digest the edit checked."""
+
+    try:
+        descriptor = os.open(name, FILE_FLAGS, dir_fd=parent_fd)
+    except OSError:
+        return False
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (previous.st_dev, previous.st_ino)
+            or opened.st_size > MAX_FILE_BYTES
+        ):
+            return False
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        return digest.hexdigest() == expected_sha256
+    finally:
+        os.close(descriptor)
+
+
 def _atomic_publish(request, parent_fd, leaf, payload, previous):
     if len(payload) > MAX_MUTATION_BYTES:
         refuse(EXIT_FILE_TOO_LARGE)
@@ -908,16 +967,41 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
                 refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
             temporary = None
         else:
+            # POSIX has no compare-and-rename, so a plain replace would drop a
+            # write made after the identity check above.  Exchanging the names
+            # atomically and then inspecting what came out is the enforceable
+            # contract: the object swapped out of the target must be the very
+            # file whose digest was checked.  Anything else was written by
+            # someone else after that check, so the exchange is undone and the
+            # edit refused.  What remains is disclosed, not closed: a writer
+            # that keeps the old file open and writes after this inspection
+            # still loses those bytes, and a reader can briefly see the new
+            # content before an undone exchange.
             try:
-                os.replace(
-                    temporary,
-                    leaf,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                )
-            except OSError:
+                _swap_names(parent_fd, temporary, leaf)
+            except OSError as error:
+                # Nothing was exchanged.  A volume that cannot swap names
+                # cannot give this guarantee, so the edit is refused there.
+                if error.errno in (errno.ENOTSUP, errno.EINVAL):
+                    refuse(EXIT_PATH_REFUSED)
                 refuse(EXIT_RACE)
-            temporary = None
+            expected_sha256 = request.get("expectedSha256")
+            if not _is_checked_original(parent_fd, temporary, previous, expected_sha256):
+                try:
+                    _swap_names(parent_fd, temporary, leaf)
+                except OSError:
+                    # The other writer's version now has the private name.
+                    # Keep it rather than delete someone else's bytes.
+                    temporary = None
+                    refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+                refuse(EXIT_RACE)
+            # The private name now holds the checked original; drop it before
+            # the durability barrier, as a replace would have.
+            try:
+                os.unlink(temporary, dir_fd=parent_fd)
+                temporary = None
+            except OSError:
+                pass
         try:
             _test_hook(request, "after-replace", None)
             os.fsync(parent_fd)
