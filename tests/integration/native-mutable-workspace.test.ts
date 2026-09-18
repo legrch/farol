@@ -79,6 +79,49 @@ afterEach(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
+// Where the helper keeps its staged candidate, or the object an exchange
+// displaced: a private staging directory beside the target, or (before R5) a
+// private name among the workspace's own entries.
+async function stagedPath(): Promise<string> {
+  const entries = await fs.readdir(root);
+  const stages = entries.filter((entry) => entry.startsWith(".farol-stage-"));
+  if (stages.length === 1) return path.join(root, stages[0]!, "staged");
+  const names = entries.filter((entry) => entry.startsWith(".farol-tmp-"));
+  if (names.length === 1) return path.join(root, names[0]!);
+  throw new Error("staged name missing");
+}
+
+// The bytes of every object the helper left under its own names.
+async function retained(): Promise<string[]> {
+  const contents: string[] = [];
+  for (const entry of await fs.readdir(root)) {
+    const full = path.join(root, entry);
+    if (entry.startsWith(".farol-tmp-")) {
+      contents.push(await fs.readFile(full, "utf8"));
+    } else if (entry.startsWith(".farol-stage-")) {
+      for (const inner of await fs.readdir(full)) {
+        contents.push(await fs.readFile(path.join(full, inner), "utf8"));
+      }
+    }
+  }
+  return contents.sort();
+}
+
+async function leftovers(): Promise<string[]> {
+  return (await fs.readdir(root)).filter((entry) =>
+    entry.startsWith(".farol-"),
+  );
+}
+
+// Replace a file the way an editor's atomic save does: a new inode renamed
+// over the old name.
+let saves = 0;
+async function atomicSave(file: string, content: string): Promise<void> {
+  const next = `${file}.next-${(saves += 1)}`;
+  await fs.writeFile(next, content, { mode: 0o600 });
+  await fs.rename(next, file);
+}
+
 describe("native mutable Computer workspace", () => {
   it("creates once and replaces only the expected source digest", async () => {
     const native = workspace();
@@ -164,9 +207,7 @@ describe("native mutable Computer workspace", () => {
       error: { code: "WORKSPACE_MUTATION_CONFLICT", retry: "never" },
     });
     expect(await fs.readFile(destination, "utf8")).toBe("competing-writer\n");
-    expect(
-      (await fs.readdir(root)).some((entry) => entry.startsWith(".farol-tmp-")),
-    ).toBe(false);
+    expect(await leftovers()).toEqual([]);
   });
 
   it("AUTH-04 never overwrites an external write made after the replacement check", async () => {
@@ -214,22 +255,17 @@ describe("native mutable Computer workspace", () => {
         },
       });
       expect(await fs.readFile(target, "utf8")).toBe(external);
-      expect(
-        (await fs.readdir(root)).some((entry) =>
-          entry.startsWith(".farol-tmp-"),
-        ),
-      ).toBe(false);
+      expect(await leftovers()).toEqual([]);
     }
   });
 
-  it("AUTH-04 keeps a newer external save that lands before the exchange is undone", async () => {
-    // Two external saves race one exchange. The first replaced the checked
-    // original before the exchange, so the object swapped out is not it; the
-    // second replaces the target again before the exchange is undone. The
-    // undo then moves that newest save to the private name: it must survive,
-    // and the edit must not claim that nothing happened.
+  it("AUTH-04 keeps both external versions when the staged name and the target are replaced right after the exchange", async () => {
+    // Early interference with both names at once: right after the exchange
+    // the staged name (holding the checked original) is overwritten by one
+    // external save and the target by another. This is not the late rollback
+    // case (RB-05 below covers that); it pins that the edit claims neither
+    // outcome and that neither external version is lost.
     const target = path.join(root, "README.md");
-    await fs.writeFile(target, "before\n", { mode: 0o600 });
     const result = await workspace().mutate(
       request({
         kind: "workspace.write",
@@ -240,36 +276,21 @@ describe("native mutable Computer workspace", () => {
       {
         testHookRequest: { phase: "after-exchange", index: null },
         testHook: async () => {
-          // What the exchange took out stands in for the first external
-          // save: an object other than the checked original.
-          const [privateName] = (await fs.readdir(root)).filter((entry) =>
-            entry.startsWith(".farol-tmp-"),
-          );
-          if (!privateName) throw new Error("private name missing");
-          await fs.writeFile(`${target}.first`, "external save 1\n", {
-            mode: 0o600,
-          });
-          await fs.rename(`${target}.first`, path.join(root, privateName));
-          await fs.writeFile(`${target}.second`, "external save 2\n", {
-            mode: 0o600,
-          });
-          await fs.rename(`${target}.second`, target);
+          await atomicSave(await stagedPath(), "external save 1\n");
+          await atomicSave(target, "external save 2\n");
         },
       },
     );
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
       error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
     });
-    const survivors = await Promise.all(
-      (await fs.readdir(root))
-        .filter(
-          (entry) => entry === "README.md" || entry.startsWith(".farol-tmp-"),
-        )
-        .map((entry) => fs.readFile(path.join(root, entry), "utf8")),
-    );
-    expect(survivors).toContain("external save 2\n");
+    const survivors = [
+      await fs.readFile(target, "utf8"),
+      ...(await retained()),
+    ].sort();
+    expect(survivors).toEqual(["external save 1\n", "external save 2\n"]);
   });
 
   it("AUTH-04 reports an unknown outcome, never success, when the target is replaced right after the exchange", async () => {
@@ -302,12 +323,7 @@ describe("native mutable Computer workspace", () => {
     // The external save is kept as the target; the checked original survives
     // under a private name instead of being deleted as if the edit had won.
     expect(await fs.readFile(target, "utf8")).toBe("external save\n");
-    const survivors = await Promise.all(
-      (await fs.readdir(root))
-        .filter((entry) => entry.startsWith(".farol-tmp-"))
-        .map((entry) => fs.readFile(path.join(root, entry), "utf8")),
-    );
-    expect(survivors).toContain("before\n");
+    expect(await retained()).toEqual(["before\n"]);
   });
 
   it("AUTH-05 validates create-only content before creating parent directories", async () => {
@@ -745,5 +761,218 @@ describe("C05-05 cancellation of helper work", () => {
     expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
       "published\n",
     );
+  });
+});
+
+// R5 / HR-015: the guarded edit's publication point and cleanup ownership.
+//
+// A replace is published at one atomic exchange of names; it is valid only
+// when the object the exchange displaced is the checked original. Success
+// also needs the helper's final observation, made after its last filesystem
+// operation, to find the published file at the target: a save after that is
+// a later write and wins untouched. Cleanup deletes only objects whose inode
+// the helper verified -- its own candidate or the checked original -- and
+// keeps anything else it finds under its names. Each barrier below is a real
+// two-process pause of the helper at a named point, never a sleep.
+describe("R5 guarded-edit publication and cleanup contract", () => {
+  const target = () => path.join(root, "README.md");
+  const replace = () =>
+    request({
+      kind: "workspace.write",
+      relativePath: "README.md",
+      content: "farol-candidate\n",
+      expectedSha256: digest("before\n"),
+    });
+  const unknown = {
+    ok: false,
+    error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+  };
+  const conflict = {
+    ok: false,
+    error: { code: "WORKSPACE_MUTATION_CONFLICT", retry: "never" },
+  };
+
+  it("RB-01 publishes an ordinary replace and leaves nothing of its own behind", async () => {
+    await expect(workspace().mutate(replace())).resolves.toMatchObject({
+      ok: true,
+      value: { afterSha256: digest("farol-candidate\n") },
+    });
+    expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("RB-02 undoes an exchange that displaced a save made after the identity check, reaching the undo once", async () => {
+    const reached: number[] = [];
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: [
+        { phase: "before-publish", index: null },
+        { phase: "before-undo", index: null },
+      ],
+      testHook: async (barrier: number) => {
+        reached.push(barrier);
+        if (barrier === 0) await atomicSave(target(), "external save 1\n");
+      },
+    });
+
+    expect(reached).toEqual([0, 1]);
+    expect(result).toEqual(conflict);
+    expect(await fs.readFile(target(), "utf8")).toBe("external save 1\n");
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("RB-05 keeps both external saves when a second one lands after the failed original check, before the undo", async () => {
+    // E1 replaces the target after the identity check, so the exchange
+    // displaces E1, not the checked original. E2 replaces the target (then
+    // holding the candidate) after that failed check and before the undo, so
+    // the undo moves E2 into the helper's own names. Both are someone else's.
+    const reached: number[] = [];
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: [
+        { phase: "before-publish", index: null },
+        { phase: "before-undo", index: null },
+      ],
+      testHook: async (barrier: number) => {
+        reached.push(barrier);
+        await atomicSave(
+          target(),
+          barrier === 0 ? "external save 1\n" : "external save 2\n",
+        );
+      },
+    });
+
+    // Each barrier once: the late seam was reached and nothing was retried.
+    expect(reached).toEqual([0, 1]);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(target(), "utf8")).toBe("external save 1\n");
+    expect(await retained()).toEqual(["external save 2\n"]);
+  });
+
+  it("R5-B keeps an object that replaced the staged candidate before a refused publication", async () => {
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "before-replace", index: null },
+      testHook: async () => {
+        const staged = await stagedPath();
+        await fs.rename(staged, path.join(root, "moved-candidate"));
+        await atomicSave(staged, "foreign object\n");
+        await atomicSave(target(), "external save\n");
+      },
+    });
+
+    expect(result).toEqual(conflict);
+    expect(await fs.readFile(target(), "utf8")).toBe("external save\n");
+    expect(await retained()).toEqual(["foreign object\n"]);
+  });
+
+  it("R5-B keeps an object that replaced the staged candidate when the destination appeared first", async () => {
+    const destination = path.join(root, "created-race.txt");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "created-race.txt",
+        content: "farol-candidate\n",
+        expectedSha256: null,
+      }),
+      {
+        testHookRequest: { phase: "before-publish", index: null },
+        testHook: async () => {
+          const staged = await stagedPath();
+          await fs.rename(staged, path.join(root, "moved-candidate"));
+          await atomicSave(staged, "foreign object\n");
+          await fs.writeFile(destination, "competing-writer\n", {
+            mode: 0o600,
+            flag: "wx",
+          });
+        },
+      },
+    );
+
+    expect(result).toEqual(conflict);
+    expect(await fs.readFile(destination, "utf8")).toBe("competing-writer\n");
+    expect(await retained()).toEqual(["foreign object\n"]);
+  });
+
+  it("R5-B keeps an object that replaced the checked original under the staged name before cleanup", async () => {
+    let reached = 0;
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "after-original-check", index: null },
+      testHook: async () => {
+        reached += 1;
+        const staged = await stagedPath();
+        await fs.rename(staged, path.join(root, "moved-original"));
+        await atomicSave(staged, "foreign object\n");
+      },
+    });
+
+    expect(reached).toBe(1);
+    // The exchange displaced the checked original: a valid publication, and
+    // the target still holds it at the final observation.
+    expect(result).toMatchObject({ ok: true });
+    expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
+    expect(await fs.readFile(path.join(root, "moved-original"), "utf8")).toBe(
+      "before\n",
+    );
+    expect(await retained()).toEqual(["foreign object\n"]);
+  });
+
+  it("R5-B keeps an object that replaced the staging link of a created file and reports the create as unknown", async () => {
+    let reached = 0;
+    const destination = path.join(root, "created.txt");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "created.txt",
+        content: "farol-candidate\n",
+        expectedSha256: null,
+      }),
+      {
+        testHookRequest: { phase: "after-link", index: null },
+        testHook: async () => {
+          reached += 1;
+          const staged = await stagedPath();
+          await fs.rename(staged, path.join(root, "moved-link"));
+          await atomicSave(staged, "foreign object\n");
+        },
+      },
+    );
+
+    expect(reached).toBe(1);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(destination, "utf8")).toBe("farol-candidate\n");
+    expect(await retained()).toEqual(["foreign object\n"]);
+  });
+
+  it("R5-A lets a save after the final observation win untouched while the publication stands", async () => {
+    let reached = 0;
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "after-final-check", index: null },
+      testHook: async () => {
+        reached += 1;
+        await atomicSave(target(), "later save\n");
+      },
+    });
+
+    expect(reached).toBe(1);
+    expect(result).toMatchObject({
+      ok: true,
+      value: { afterSha256: digest("farol-candidate\n") },
+    });
+    expect(await fs.readFile(target(), "utf8")).toBe("later save\n");
+    expect(await leftovers()).toEqual([]);
+  });
+
+  it("R5-A reports unknown when the target is replaced after the exchange but before the final observation", async () => {
+    let reached = 0;
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "before-discard", index: null },
+      testHook: async () => {
+        reached += 1;
+        await atomicSave(target(), "external save\n");
+      },
+    });
+
+    expect(reached).toBe(1);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(target(), "utf8")).toBe("external save\n");
+    expect(await leftovers()).toEqual([]);
   });
 });

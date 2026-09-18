@@ -38,8 +38,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "08ae6cace27706cd1a87d1b71af849d2c13d5789f8e5570be5e0befe4b65baed",
-  size: 76_380,
+  sha256: "e3fee7292094c74a9dcdc9b6d6fa1d0d6b5c1cdd4d1cc689f2240bb3c6a2d81a",
+  size: 81_710,
   mode: 0o644,
 });
 
@@ -144,14 +144,20 @@ type NativeRequest = Readonly<{
   edits?: readonly Readonly<{ oldText: string; newText: string }>[];
   expectedSha256?: string | null;
   fileOnly?: boolean;
-  testHook?: Readonly<{ phase: string; index: number | null }>;
+  testHook?: TestHookRequest | readonly TestHookRequest[];
 }>;
+
+type TestHookRequest = Readonly<{ phase: string; index: number | null }>;
+
+// A test may pause the helper at up to four named points in one run; the
+// callback learns which barrier (its position in the request) was reached.
+const MAX_TEST_BARRIERS = 4;
 
 export type NativeReadonlyWorkspaceTestOptions =
   ReadonlyWorkspaceExecutionContext &
     Readonly<{
-      testHookRequest?: Readonly<{ phase: string; index: number | null }>;
-      testHook?: () => Promise<void>;
+      testHookRequest?: TestHookRequest | readonly TestHookRequest[];
+      testHook?: (barrier: number) => Promise<void>;
     }>;
 
 type NativeReadonlyWorkspaceOptions = Readonly<{
@@ -662,20 +668,37 @@ function nativeRequest(
   }
 }
 
+function testBarriers(
+  options: NativeReadonlyWorkspaceTestOptions,
+): readonly TestHookRequest[] {
+  const requested = options.testHookRequest;
+  if (requested === undefined) return [];
+  return Array.isArray(requested)
+    ? (requested as readonly TestHookRequest[])
+    : [requested as TestHookRequest];
+}
+
 function validTestOptions(
   options: NativeReadonlyWorkspaceTestOptions,
 ): boolean {
   if (options.testHookRequest === undefined && options.testHook === undefined) {
     return true;
   }
+  const barriers = testBarriers(options);
   return (
     options.testHookRequest !== undefined &&
     options.testHook !== undefined &&
-    exactKeys(options.testHookRequest, ["phase", "index"]) &&
-    plainString(options.testHookRequest.phase, 80) &&
-    (options.testHookRequest.index === null ||
-      (Number.isSafeInteger(options.testHookRequest.index) &&
-        options.testHookRequest.index >= 0))
+    barriers.length >= 1 &&
+    barriers.length <= MAX_TEST_BARRIERS &&
+    barriers.every(
+      (barrier) =>
+        exactKeys(barrier, ["phase", "index"]) &&
+        plainString(barrier.phase, 80) &&
+        (barrier.index === null ||
+          (Number.isSafeInteger(barrier.index) && barrier.index >= 0)),
+    ) &&
+    new Set(barriers.map((barrier) => `${barrier.phase}:${barrier.index}`))
+      .size === barriers.length
   );
 }
 
@@ -1092,15 +1115,30 @@ function runHelper(
     if (withHook && hookSignal != null && hookContinue != null) {
       const signalPipe = hookSignal;
       const continuePipe = hookContinue;
-      signalPipe.once("data", (chunk: Buffer) => {
-        if (!chunk.equals(Buffer.from("R"))) {
-          failChannel();
-          return;
+      const barriers = testBarriers(options).length;
+      // Each barrier is two bytes, "R" and its position; the helper waits
+      // for one "C" before it goes on, so barriers are handled in order.
+      let pending = Buffer.alloc(0);
+      let handled = Promise.resolve();
+      signalPipe.on("data", (chunk: Buffer) => {
+        pending = Buffer.concat([pending, chunk]);
+        while (pending.length >= 2) {
+          const marker = pending[0];
+          const barrier = pending[1] ?? barriers;
+          pending = pending.subarray(2);
+          if (marker !== 0x52 || barrier >= barriers) {
+            failChannel();
+            return;
+          }
+          handled = handled.then(async () => {
+            try {
+              await options.testHook?.(barrier);
+              continuePipe.write(Buffer.from("C"));
+            } catch {
+              failChannel();
+            }
+          });
         }
-        void options.testHook?.().then(
-          () => continuePipe.end(Buffer.from("C")),
-          () => failChannel(),
-        );
       });
     }
   });

@@ -198,22 +198,31 @@ def _open_directory(parent_fd, name):
         raise
 
 
+MAX_TEST_BARRIERS = 4
+
+
 def _test_hook(request, phase, index=None):
     hook = request.get("testHook")
     if hook is None:
         return
-    if not isinstance(hook, dict) or set(hook) != {"phase", "index"}:
+    barriers = hook if isinstance(hook, list) else [hook]
+    if not 1 <= len(barriers) <= MAX_TEST_BARRIERS:
         refuse(EXIT_INVALID)
-    if hook.get("phase") != phase or hook.get("index") != index:
-        return
-    # FDs 4 and 5 exist only in the test adapter.  Production requests cannot
-    # ask the public MCP surface to add them.
-    try:
-        os.write(4, b"R")
-        if os.read(5, 1) != b"C":
+    for position, barrier in enumerate(barriers):
+        if not isinstance(barrier, dict) or set(barrier) != {"phase", "index"}:
+            refuse(EXIT_INVALID)
+        if barrier.get("phase") != phase or barrier.get("index") != index:
+            continue
+        # FDs 4 and 5 exist only in the test adapter.  Production requests
+        # cannot ask the public MCP surface to add them.  The signal names the
+        # barrier, so a test can pause the helper at several points in turn.
+        try:
+            os.write(4, b"R" + bytes((position,)))
+            if os.read(5, 1) != b"C":
+                refuse(EXIT_INTERNAL)
+        except OSError:
             refuse(EXIT_INTERNAL)
-    except OSError:
-        refuse(EXIT_INTERNAL)
+        return
 
 
 def _approved_root(request, parts):
@@ -855,8 +864,9 @@ RENAME_SWAP = 0x00000002
 _RENAMEATX_NP = None
 
 
-def _swap_names(parent_fd, first, second):
-    """Exchange two names in one directory atomically (macOS renameatx_np).
+def _swap_names(first_dir_fd, first, second_dir_fd, second):
+    """Exchange two names atomically (macOS renameatx_np), across two
+    directories of one volume if need be.
 
     Both names keep existing throughout; each now names the other's object.
     """
@@ -875,7 +885,11 @@ def _swap_names(parent_fd, first, second):
         _RENAMEATX_NP = function
     if (
         _RENAMEATX_NP(
-            parent_fd, os.fsencode(first), parent_fd, os.fsencode(second), RENAME_SWAP
+            first_dir_fd,
+            os.fsencode(first),
+            second_dir_fd,
+            os.fsencode(second),
+            RENAME_SWAP,
         )
         != 0
     ):
@@ -927,33 +941,150 @@ def _is_checked_original(parent_fd, name, previous, expected_sha256):
         os.close(descriptor)
 
 
+STAGED_NAME = "staged"
+
+
+def _create_stage(parent_fd):
+    """Create the private staging directory of one edit, beside its target.
+
+    The candidate is written here, and whatever an exchange displaces from the
+    target lands here, so nothing this helper may delete ever carries a name
+    among the workspace's own entries.  mkdir refuses a name that exists, and
+    the directory is then used only through its descriptor: renaming or
+    replacing its name cannot redirect a later operation.
+    """
+
+    for _attempt in range(32):
+        name = ".farol-stage-{}-{}".format(os.getpid(), os.urandom(16).hex())
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+        except OSError as error:
+            if error.errno == errno.EEXIST:
+                continue
+            refuse(EXIT_PATH_REFUSED)
+        try:
+            return name, os.open(name, DIRECTORY_FLAGS, dir_fd=parent_fd)
+        except OSError:
+            # Created but not opened, so nothing was staged; rmdir removes
+            # the name only while it is an empty directory.
+            try:
+                os.rmdir(name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            refuse(EXIT_PATH_REFUSED)
+    refuse(EXIT_INTERNAL)
+
+
+def _discard_owned(request, stage_fd, expected):
+    """Delete the staged name only while it names the verified `expected`.
+
+    POSIX has no compare-and-unlink, so the check and the unlink below are two
+    operations.  The gap between them lies inside the private staging
+    directory: only a process that deliberately writes in there can substitute
+    an object for the one checked, and such a process is outside what this
+    helper protects against.  Anything else under the name is kept.
+    """
+
+    _test_hook(request, "before-discard", None)
+    if not _holds_inode(stage_fd, STAGED_NAME, expected):
+        return False
+    try:
+        os.unlink(STAGED_NAME, dir_fd=stage_fd)
+    except OSError:
+        return False
+    return True
+
+
+def _remove_stage(parent_fd, name, stage_fd):
+    """Remove the staging directory while its name still names it.
+
+    rmdir never removes a directory that holds anything, so a kept object
+    keeps its directory, and a name that now belongs to another directory is
+    left alone.
+    """
+
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        held = os.fstat(stage_fd)
+    except OSError:
+        return False
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+        held.st_dev,
+        held.st_ino,
+    ):
+        return False
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    except OSError:
+        return False
+    return True
+
+
 def _atomic_publish(request, parent_fd, leaf, payload, previous):
+    """Publish `payload` at `leaf`, replacing `previous` or creating the file.
+
+    Publication point.  A replace takes effect at one atomic exchange of names
+    between the candidate, staged in a private directory, and the target; a
+    create takes effect at one link that fails if the target exists.  An
+    exchange is a valid publication only when the object it displaced is the
+    checked original -- the inode the edit measured, whose bytes still hash to
+    the expected digest -- verified afterwards through a descriptor.  Any other
+    displaced object is put back by exchanging again.
+
+    Outcomes.  Success: a valid publication, and the final observation, made
+    after the helper's last filesystem operation, still finds the published
+    file at the target.  A save after that observation is a later write: it is
+    never touched, and the success stands.  Conflict (EXIT_RACE): nothing was
+    published, or a displaced version was put back and the candidate provably
+    returned to staging.  Unknown (EXIT_MUTATION_OUTCOME_UNKNOWN): published,
+    but neither of those can be established -- the target was replaced before
+    the final observation, an undo displaced a later version instead of the
+    candidate, the undo or the durability barrier failed, or a create could not
+    drop its staging link.
+
+    Cleanup.  Only objects inside the staging directory are ever deleted, and
+    only one whose inode was verified just before: the candidate, or the
+    checked original a valid publication displaced.  Anything else found there
+    is kept, with its directory, for the owner to inspect; there is at most one
+    such object per edit, and nothing removes it later on the helper's own
+    judgement.  An empty staging directory is removed with rmdir.
+
+    Who is protected.  Writers of the target, and processes that create,
+    rename or delete entries of the workspace directory -- including the
+    staging directory's name -- never lose an object to this helper.  Two
+    residuals remain and are disclosed: a writer that keeps the original open
+    and writes after its digest was checked loses those bytes with it, and a
+    process that deliberately writes inside the staging directory between an
+    inode check and its unlink can substitute what is deleted.  No isolation
+    from same-user or root processes is claimed.
+    """
+
     if len(payload) > MAX_MUTATION_BYTES:
         refuse(EXIT_FILE_TOO_LARGE)
-    temporary = None
+    stage_name, stage_fd = _create_stage(parent_fd)
     descriptor = None
+    # What the staged name may be deleted as: the candidate until it is
+    # published; None while it holds something not yet proven to be ours.
+    owned = None
+    # Set once staging is cleaned up or must be kept as it is.
+    settled = False
     try:
-        for _attempt in range(32):
-            temporary = ".farol-tmp-{}-{}".format(os.getpid(), os.urandom(16).hex())
-            try:
-                descriptor = os.open(
-                    temporary,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-                    0o600,
-                    dir_fd=parent_fd,
-                )
-                break
-            except OSError as error:
-                if error.errno != errno.EEXIST:
-                    refuse(EXIT_PATH_REFUSED)
-        if descriptor is None:
-            refuse(EXIT_INTERNAL)
-
+        try:
+            descriptor = os.open(
+                STAGED_NAME,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=stage_fd,
+            )
+        except OSError:
+            refuse(EXIT_PATH_REFUSED)
+        owned = os.fstat(descriptor)
         _write_all(descriptor, payload)
         mode = 0o644 if previous is None else stat.S_IMODE(previous.st_mode)
         os.fchmod(descriptor, mode)
         os.fsync(descriptor)
         written = os.fstat(descriptor)
+        owned = written
         os.close(descriptor)
         descriptor = None
 
@@ -973,76 +1104,71 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
         if previous is None:
             try:
                 os.link(
-                    temporary,
+                    STAGED_NAME,
                     leaf,
-                    src_dir_fd=parent_fd,
+                    src_dir_fd=stage_fd,
                     dst_dir_fd=parent_fd,
                     follow_symlinks=False,
                 )
             except OSError:
                 refuse(EXIT_RACE)
-            try:
-                os.unlink(temporary, dir_fd=parent_fd)
-            except OSError:
-                # The destination link already exists and the private link may
-                # still exist.  This is an acted mutation whose final link
-                # count and durability are not yet known to the caller.
+            # Published: the target is a second link to the staged file.
+            owned = None
+            _test_hook(request, "after-link", None)
+            # A file left with two links is not the file this edit created,
+            # so a staging link that cannot be dropped leaves the outcome
+            # unknown.
+            if not _discard_owned(request, stage_fd, written):
+                settled = True
                 refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
-            temporary = None
         else:
-            # POSIX has no compare-and-rename, so a plain replace would drop a
-            # write made after the identity check above.  Exchanging the names
-            # atomically and then inspecting what came out is the enforceable
-            # contract: the object swapped out of the target must be the very
-            # file whose digest was checked.  Anything else was written by
-            # someone else after that check, so the exchange is undone and the
-            # edit refused.  What remains is disclosed, not closed: a writer
-            # that keeps the old file open and writes after this inspection
-            # still loses those bytes, and a reader can briefly see the new
-            # content before an undone exchange.
             try:
-                _swap_names(parent_fd, temporary, leaf)
+                _swap_names(stage_fd, STAGED_NAME, parent_fd, leaf)
             except OSError as error:
                 # Nothing was exchanged.  A volume that cannot swap names
                 # cannot give this guarantee, so the edit is refused there.
                 if error.errno in (errno.ENOTSUP, errno.EINVAL):
                     refuse(EXIT_PATH_REFUSED)
                 refuse(EXIT_RACE)
+            # The publication point.  The staged name now holds whatever the
+            # exchange displaced, and nothing there is ours until proven.
+            owned = None
             _test_hook(request, "after-exchange", None)
-            if not _holds_inode(parent_fd, leaf, written):
-                # Another writer replaced the target right after the exchange:
-                # it no longer holds this edit, and the private name holds the
-                # checked original.  Neither is touched -- the other writer's
-                # bytes stay where they landed and the original is kept under
-                # the private name -- and the outcome is reported as unknown,
-                # never as a success the target does not show.
-                temporary = None
-                refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
             expected_sha256 = request.get("expectedSha256")
-            if not _is_checked_original(parent_fd, temporary, previous, expected_sha256):
+            if not _is_checked_original(
+                stage_fd, STAGED_NAME, previous, expected_sha256
+            ):
+                # Someone else's version was displaced: put it back.
+                _test_hook(request, "before-undo", None)
                 try:
-                    _swap_names(parent_fd, temporary, leaf)
+                    _swap_names(stage_fd, STAGED_NAME, parent_fd, leaf)
                 except OSError:
-                    # The other writer's version now has the private name.
-                    # Keep it rather than delete someone else's bytes.
-                    temporary = None
+                    # The candidate stays over that version, which staging
+                    # keeps.
+                    settled = True
                     refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
-                if not _holds_inode(parent_fd, temporary, written):
-                    # The target was replaced again after the exchange, so
-                    # undoing it moved that newer version to the private name
-                    # instead of this edit's file.  Keep it: those bytes are
-                    # someone else's, and which version the target should now
-                    # show is no longer knowable here.
-                    temporary = None
+                if not _holds_inode(stage_fd, STAGED_NAME, written):
+                    # The target was replaced again before the undo, so the
+                    # undo moved that newer version into staging instead of
+                    # the candidate.  Both versions are someone else's: one is
+                    # back at the target and staging keeps the other.
+                    settled = True
                     refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+                owned = written
                 refuse(EXIT_RACE)
-            # The private name now holds the checked original; drop it before
-            # the durability barrier, as a replace would have.
-            try:
-                os.unlink(temporary, dir_fd=parent_fd)
-                temporary = None
-            except OSError:
-                pass
+            _test_hook(request, "after-original-check", None)
+            if not _holds_inode(parent_fd, leaf, written):
+                # Replaced after the exchange: the other writer's version
+                # stays at the target, and staging keeps the checked original
+                # for recovery.
+                settled = True
+                refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+            # Drop the checked original, as a replace would have.  If the
+            # staged name no longer holds it, whatever is there is kept; the
+            # publication stands either way.
+            _discard_owned(request, stage_fd, previous)
+        _remove_stage(parent_fd, stage_name, stage_fd)
+        settled = True
         try:
             _test_hook(request, "after-replace", None)
             os.fsync(parent_fd)
@@ -1051,14 +1177,18 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
             # barrier nor a lost response may be reported as though the write
             # were refused before it acted.
             refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+        # The final observation, after the helper's last filesystem operation.
+        if not _holds_inode(parent_fd, leaf, written):
+            refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
+        _test_hook(request, "after-final-check", None)
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if temporary is not None:
-            try:
-                os.unlink(temporary, dir_fd=parent_fd)
-            except OSError:
-                pass
+        if not settled:
+            if owned is not None:
+                _discard_owned(request, stage_fd, owned)
+            _remove_stage(parent_fd, stage_name, stage_fd)
+        os.close(stage_fd)
 
 
 def _mutation_text(value):

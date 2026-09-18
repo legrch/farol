@@ -122,6 +122,22 @@ development and sealed-package E2E routes use a synthetic provider site and temp
 Mac workspace trees, so they prove product composition and containment without
 claiming the owner's authenticated provider account was exercised.
 
+A guarded edit is published at one atomic exchange of names (`renameatx_np` with
+`RENAME_SWAP`) between a candidate staged in a private `.farol-stage-…` directory
+beside the target and the target itself; a create is one `link` that fails if the
+name exists. The exchange counts only when the object it displaced is the checked
+original, verified through a descriptor afterwards; any other displaced version is
+exchanged back. Success means that publication plus a final observation, made after
+the helper's last filesystem operation, that the target still names the published
+file; a later save wins and is never touched. The helper deletes only inside its
+staging directory and only an inode it has just verified, its own candidate or the
+checked original. Anything else is kept there, at most one object per edit, and the
+edit reports a conflict or an unknown outcome that is never retried. Two residuals
+are disclosed: a writer that keeps the original open and writes after its digest was
+checked loses those bytes, and a process that deliberately writes inside the staging
+directory between an inode check and its unlink can substitute what is deleted. No
+isolation from same-user or root processes is claimed.
+
 The N2 authority core is implemented as a runtime-derived task-applicable `TaskGrant`
 / `ExecutionAuthority`. Permitted delegation from a main Turn through Agent and
 Critic preserves that authority for ordinary relevant discovery inside its approved
