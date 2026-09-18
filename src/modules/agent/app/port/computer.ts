@@ -2,7 +2,11 @@ import type { AssignmentIdentity } from "../../domain/assignment";
 import type { DelegatedAgentAuthority } from "./execution-authority";
 
 export type AgentComputerOperation =
-  | Readonly<{ kind: "workspace.read"; relativePath: string }>
+  | Readonly<{
+      kind: "workspace.read";
+      relativePath: string;
+      range?: Readonly<{ offset: number; length: number }> | undefined;
+    }>
   | Readonly<{ kind: "workspace.list"; relativePath: string }>
   | Readonly<{
       kind: "workspace.search";
@@ -20,6 +24,11 @@ export type AgentComputerOutput =
       kind: "workspace.text";
       text: string;
       bytes: number;
+      page?: Readonly<{
+        offset: number;
+        size: number;
+        nextOffset: number | null;
+      }>;
     }>
   | Readonly<{
       kind: "workspace.entries";

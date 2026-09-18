@@ -29,10 +29,21 @@ const ScopeRelativePathSchema = z
   .string()
   .refine((value) => relativePath(value, true));
 
+const MAX_READ_BYTES = 256 * 1_024;
+const MAX_WINDOW_OFFSET = 64 * 1_024 * 1_024;
+
+// A window of a file too large to read whole. It spans at least one whole
+// UTF-8 character, so every window makes progress.
+const ReadRangeSchema = z.strictObject({
+  offset: z.number().int().min(0).max(MAX_WINDOW_OFFSET),
+  length: z.number().int().min(4).max(MAX_READ_BYTES),
+});
+
 const OperationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("workspace.read"),
     relativePath: FileRelativePathSchema,
+    range: ReadRangeSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("workspace.list"),
@@ -76,11 +87,14 @@ const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("workspace.text"),
     text: z.string(),
-    bytes: z
-      .number()
-      .int()
-      .nonnegative()
-      .max(256 * 1_024),
+    bytes: z.number().int().nonnegative().max(MAX_READ_BYTES),
+    page: z
+      .strictObject({
+        offset: z.number().int().nonnegative(),
+        size: z.number().int().nonnegative(),
+        nextOffset: z.number().int().positive().nullable(),
+      })
+      .optional(),
   }),
   z.strictObject({
     kind: z.literal("workspace.entries"),

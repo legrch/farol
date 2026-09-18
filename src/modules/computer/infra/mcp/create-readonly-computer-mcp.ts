@@ -70,9 +70,24 @@ const ListInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   relativePath: ScopeRelativePathSchema,
 });
+// A file over the whole-read ceiling is read window by window. Either field
+// asks for a window; the other then takes its default.
+const DEFAULT_READ_WINDOW_BYTES = 64 * 1_024;
 const ReadInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   relativePath: FileRelativePathSchema,
+  offset: z
+    .number()
+    .int()
+    .min(0)
+    .max(64 * 1_024 * 1_024)
+    .optional(),
+  length: z
+    .number()
+    .int()
+    .min(4)
+    .max(256 * 1_024)
+    .optional(),
 });
 const SearchInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -184,6 +199,14 @@ function failure(code: string): CallToolResult {
   };
 }
 
+type ReadRange = Readonly<{ offset: number; length: number }> | undefined;
+
+function sameRange(left: ReadRange, right: ReadRange): boolean {
+  return left === undefined || right === undefined
+    ? left === right
+    : left.offset === right.offset && left.length === right.length;
+}
+
 function correlationMatches(
   request: ReadonlyComputerCallRequest,
   value: Readonly<{
@@ -213,6 +236,9 @@ function correlationMatches(
     value.relativePath === request.operation.relativePath &&
     value.operation.kind === request.operation.kind &&
     value.operation.relativePath === request.operation.relativePath &&
+    (value.operation.kind !== "workspace.read" ||
+      (request.operation.kind === "workspace.read" &&
+        sameRange(value.operation.range, request.operation.range))) &&
     (value.operation.kind !== "workspace.search" ||
       (request.operation.kind === "workspace.search" &&
         value.operation.pattern === request.operation.pattern)) &&
@@ -258,9 +284,13 @@ async function execute(
     };
   }
   const value = parsed.data.value;
+  // A page answers a ranged read and only a ranged read: text without one
+  // would read as the whole file.
   const outputMatchesOperation =
     (request.operation.kind === "workspace.read" &&
-      value.output.kind === "workspace.text") ||
+      value.output.kind === "workspace.text" &&
+      (request.operation.range === undefined) ===
+        (value.output.page === undefined)) ||
     (request.operation.kind === "workspace.list" &&
       value.output.kind === "workspace.entries") ||
     (request.operation.kind === "workspace.search" &&
@@ -521,11 +551,11 @@ export function createReadonlyComputerMcpServer(
     {
       title: "Read an approved workspace file",
       description:
-        "Read one approved workspace file without granting write, command, or network authority.",
+        "Read one approved workspace file without granting write, command, or network authority. A file over 256 KiB is refused as WORKSPACE_FILE_TOO_LARGE when read whole; read it in windows instead by passing offset (a byte offset, starting at 0) and optionally length (bytes, default 65536, at most 262144). A windowed result carries page.nextOffset: pass it as the next offset, and stop when it is null.",
       inputSchema: ReadInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
-    async ({ workspaceId, relativePath }, context) =>
+    async ({ workspaceId, relativePath, offset, length }, context) =>
       execute(
         contract,
         binding,
@@ -534,6 +564,14 @@ export function createReadonlyComputerMcpServer(
         {
           kind: "workspace.read",
           relativePath,
+          ...(offset === undefined && length === undefined
+            ? {}
+            : {
+                range: {
+                  offset: offset ?? 0,
+                  length: length ?? DEFAULT_READ_WINDOW_BYTES,
+                },
+              }),
         },
         context.mcpReq.signal,
       ),

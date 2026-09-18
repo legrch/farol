@@ -896,4 +896,178 @@ describe("native readonly Computer workspace", () => {
       }
     });
   });
+
+  describe("C05-06 a ranged read continues past the whole-file ceiling", () => {
+    function ranged(
+      relativePath: string,
+      offset: number,
+      length: number,
+    ): ReadonlyWorkspaceRequest {
+      return request({
+        kind: "workspace.read",
+        relativePath,
+        range: { offset, length },
+      });
+    }
+
+    it("pages a file too large to read whole until nextOffset is null", async () => {
+      const line = (index: number) => `строка ${index} — λ ✓ 😀 status\n`;
+      const content = Array.from({ length: 9_000 }, (_, index) =>
+        line(index),
+      ).join("");
+      const size = Buffer.byteLength(content);
+      expect(size).toBeGreaterThan(256 * 1024);
+      await fs.writeFile(path.join(root, "large.txt"), content, {
+        mode: 0o600,
+      });
+      const workspace = reader();
+      await expect(
+        workspace.execute(
+          request({ kind: "workspace.read", relativePath: "large.txt" }),
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_FILE_TOO_LARGE" },
+      });
+
+      const pages: string[] = [];
+      let offset: number | null = 0;
+      while (offset !== null) {
+        const result = await workspace.execute(
+          ranged("large.txt", offset, 65_536),
+        );
+        if (!result.ok || result.value.kind !== "workspace.text") {
+          throw new Error(`window at ${offset} failed`);
+        }
+        const page = result.value.page;
+        expect(page).toMatchObject({ offset, size });
+        expect(result.value.bytes).toBeLessThanOrEqual(65_536);
+        expect(Buffer.byteLength(result.value.text)).toBe(result.value.bytes);
+        pages.push(result.value.text);
+        offset = page?.nextOffset ?? null;
+      }
+      expect(pages.length).toBeGreaterThanOrEqual(5);
+      expect(pages.join("")).toBe(content);
+    });
+
+    it("returns whole characters when a window starts or ends inside one", async () => {
+      // a (1 byte), é (2), ✓ (3), 😀 (4), z (1): 11 bytes.
+      await fs.writeFile(path.join(root, "chars.txt"), "aé✓😀z", {
+        mode: 0o600,
+      });
+      const workspace = reader();
+
+      await expect(
+        workspace.execute(ranged("chars.txt", 0, 4)),
+      ).resolves.toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: "aé",
+          bytes: 3,
+          page: { offset: 0, size: 11, nextOffset: 3 },
+        },
+      });
+      // Byte 2 is the second half of é: the window begins at the next whole
+      // character and says so.
+      await expect(
+        workspace.execute(ranged("chars.txt", 2, 4)),
+      ).resolves.toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: "✓",
+          bytes: 3,
+          page: { offset: 3, size: 11, nextOffset: 6 },
+        },
+      });
+      await expect(
+        workspace.execute(ranged("chars.txt", 6, 5)),
+      ).resolves.toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: "😀z",
+          bytes: 5,
+          page: { offset: 6, size: 11, nextOffset: null },
+        },
+      });
+      await expect(
+        workspace.execute(ranged("chars.txt", 11, 4)),
+      ).resolves.toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: "",
+          bytes: 0,
+          page: { offset: 11, size: 11, nextOffset: null },
+        },
+      });
+    });
+
+    it("applies the same text check and path policy as a whole read", async () => {
+      await fs.writeFile(
+        path.join(root, "binary.bin"),
+        Buffer.from([0x61, 0x00, 0x62]),
+        { mode: 0o600 },
+      );
+      await fs.writeFile(
+        path.join(root, "broken.txt"),
+        Buffer.from([0x61, 0x62, 0xc3]),
+        { mode: 0o600 },
+      );
+      await fs.writeFile(path.join(root, ".env"), "TOKEN=value\n", {
+        mode: 0o600,
+      });
+      const workspace = reader();
+
+      await expect(
+        workspace.execute(ranged("binary.bin", 0, 16)),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_NOT_TEXT" },
+      });
+      // A character cut by the end of the file is invalid text, not a window
+      // boundary to continue from.
+      await expect(
+        workspace.execute(ranged("broken.txt", 0, 16)),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_NOT_TEXT" },
+      });
+      await expect(
+        workspace.execute(ranged(".env", 0, 16)),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED" },
+      });
+    });
+
+    it("refuses a window it cannot read as asked", async () => {
+      const workspace = reader();
+      for (const range of [
+        { offset: 0, length: 0 },
+        // Shorter than one UTF-8 character could never make progress.
+        { offset: 0, length: 3 },
+        { offset: 0, length: 256 * 1024 + 1 },
+        { offset: -1, length: 16 },
+        { offset: 1.5, length: 16 },
+        { offset: 64 * 1024 * 1024 + 1, length: 16 },
+        { offset: 0, length: 16, extra: true },
+      ]) {
+        await expect(
+          workspace.execute(
+            request({
+              kind: "workspace.read",
+              relativePath: "README.md",
+              range,
+            } as unknown as ReadonlyWorkspaceRequest["operation"]),
+          ),
+        ).resolves.toEqual({
+          ok: false,
+          error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+        });
+      }
+    });
+  });
 });

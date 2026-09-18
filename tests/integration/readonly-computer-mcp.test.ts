@@ -220,6 +220,18 @@ describe("read-only Computer MCP adapter", () => {
         expect.any(String),
       );
 
+      const listedRoot = await client.callTool({
+        name: "computer_workspace_list",
+        arguments: { workspaceId: "farol", relativePath: "." },
+      });
+      expect(listedRoot.isError).not.toBe(true);
+      expect(listedRoot.structuredContent).toMatchObject({
+        participantId: "critic-a",
+        workspaceId: "farol",
+        operation: { kind: "workspace.list", relativePath: "." },
+        output: { kind: "workspace.entries", entries: ["src/"] },
+      });
+
       const status = await client.callTool({
         name: "computer_workspace_git_status",
         arguments: { workspaceId: "farol" },
@@ -278,6 +290,68 @@ describe("read-only Computer MCP adapter", () => {
         },
       });
       expect(spoofed.isError).toBe(true);
+
+      // C05-06: a file over the whole-read ceiling is read in windows.
+      await fs.writeFile(
+        path.join(root, "src", "large.log"),
+        "x".repeat(300_000),
+        { mode: 0o600 },
+      );
+      const whole = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: { workspaceId: "farol", relativePath: "src/large.log" },
+      });
+      expect(whole.isError).toBe(true);
+      expect(whole.structuredContent).toMatchObject({
+        error: { code: "WORKSPACE_FILE_TOO_LARGE" },
+      });
+      const first = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: {
+          workspaceId: "farol",
+          relativePath: "src/large.log",
+          offset: 0,
+        },
+      });
+      expect(first.isError).not.toBe(true);
+      expect(first.structuredContent).toMatchObject({
+        operation: {
+          kind: "workspace.read",
+          relativePath: "src/large.log",
+          range: { offset: 0, length: 65_536 },
+        },
+        output: {
+          kind: "workspace.text",
+          bytes: 65_536,
+          page: { offset: 0, size: 300_000, nextOffset: 65_536 },
+        },
+      });
+      const last = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: {
+          workspaceId: "farol",
+          relativePath: "src/large.log",
+          offset: 262_144,
+          length: 262_144,
+        },
+      });
+      expect(last.structuredContent).toMatchObject({
+        output: {
+          kind: "workspace.text",
+          bytes: 37_856,
+          page: { offset: 262_144, size: 300_000, nextOffset: null },
+        },
+      });
+      const oversized = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: {
+          workspaceId: "farol",
+          relativePath: "src/large.log",
+          offset: 0,
+          length: 262_145,
+        },
+      });
+      expect(oversized.isError).toBe(true);
       expect(executionSignals.length).toBeGreaterThan(0);
       expect(
         executionSignals.every((signal) => signal instanceof AbortSignal),
@@ -382,6 +456,114 @@ describe("read-only Computer MCP adapter", () => {
           retry: "never",
         },
       });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  it("C05-06 accepts a window only for the exact range that was asked", async () => {
+    // The fake contract answers every read successfully; the file name picks
+    // how it misbehaves.
+    const contract: ReadonlyComputerContract = {
+      async execute(value) {
+        const request = ReadonlyComputerCallRequestSchema.parse(value);
+        if (request.operation.kind !== "workspace.read") {
+          throw new Error("unexpected operation");
+        }
+        const name = request.operation.relativePath;
+        const range = request.operation.range;
+        const echoed =
+          name === "shifted.txt" && range
+            ? { ...request.operation, range: { ...range, offset: 1 } }
+            : request.operation;
+        const page =
+          name === "unwindowed.txt" || range === undefined
+            ? {}
+            : {
+                page: {
+                  offset: range.offset,
+                  size: 100_000,
+                  nextOffset: range.offset + 4,
+                },
+              };
+        return {
+          ok: true,
+          value: {
+            ownerId: request.ownerId,
+            sessionId: request.sessionId,
+            taskId: request.taskId,
+            taskEpoch: request.taskEpoch,
+            participantId: request.participantId,
+            turnId: request.turnId,
+            generation: request.generation,
+            callId: request.callId,
+            workspaceId: request.workspaceId,
+            relativePath: name,
+            operation: echoed,
+            output: {
+              kind: "workspace.text",
+              text: "abcd",
+              bytes: 4,
+              ...(name === "windowed-whole.txt"
+                ? { page: { offset: 0, size: 4, nextOffset: null } }
+                : page),
+            },
+          },
+        };
+      },
+    };
+    const server = createReadonlyComputerMcpServer(contract, {
+      ownerId: "owner-preview",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 3,
+      participantId: "critic-a",
+      turnId: "turn-a",
+      generation: 2,
+    });
+    const client = new Client({ name: "farol-next-test", version: "1.0.0" });
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair();
+    await Promise.all([
+      client.connect(clientTransport),
+      server.connect(serverTransport),
+    ]);
+    const correlationFailure = {
+      ok: false,
+      error: {
+        code: "COMPUTER_CONTRACT_CORRELATION",
+        source: "contract",
+        retry: "never",
+      },
+    };
+    try {
+      const exact = await client.callTool({
+        name: "computer_workspace_read",
+        arguments: {
+          workspaceId: "farol",
+          relativePath: "exact.txt",
+          length: 4,
+        },
+      });
+      expect(exact.isError).not.toBe(true);
+      expect(exact.structuredContent).toMatchObject({
+        operation: { range: { offset: 0, length: 4 } },
+        output: { page: { offset: 0, nextOffset: 4 } },
+      });
+
+      for (const [relativePath, extra] of [
+        ["shifted.txt", { offset: 8 }],
+        ["unwindowed.txt", { offset: 8 }],
+        ["windowed-whole.txt", {}],
+      ] as const) {
+        const answer = await client.callTool({
+          name: "computer_workspace_read",
+          arguments: { workspaceId: "farol", relativePath, ...extra },
+        });
+        expect(answer.isError).toBe(true);
+        expect(answer.structuredContent).toEqual(correlationFailure);
+      }
     } finally {
       await client.close();
       await server.close();

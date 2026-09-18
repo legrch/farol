@@ -239,6 +239,53 @@ describe("Codex Agent Computer authority", () => {
     });
   });
 
+  it("C05-06 carries a read window to the workspace and its position back", async () => {
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: true,
+      value: {
+        kind: "workspace.text",
+        text: "abcd",
+        bytes: 4,
+        page: { offset: 65_536, size: 300_000, nextOffset: 65_540 },
+      },
+    }));
+    const computer = new CodexAgentWorkspaceProbe(
+      settings(),
+      { execute },
+      () => 1_000,
+    );
+
+    await expect(
+      computer.execute(
+        request({
+          kind: "workspace.read",
+          relativePath: "notes/large.log",
+          range: { offset: 65_536, length: 4 },
+        }),
+      ),
+    ).resolves.toEqual({
+      status: "completed",
+      output: {
+        kind: "workspace.text",
+        text: "abcd",
+        bytes: 4,
+        page: { offset: 65_536, size: 300_000, nextOffset: 65_540 },
+      },
+    });
+    expect(execute).toHaveBeenCalledWith({
+      workspace: {
+        workspaceId,
+        root: "/workspace/primary",
+        deniedPaths: ["private"],
+      },
+      operation: {
+        kind: "workspace.read",
+        relativePath: "notes/large.log",
+        range: { offset: 65_536, length: 4 },
+      },
+    });
+  });
+
   it("DAC-06 preserves exact-file narrowing and exclusion before native access", async () => {
     const execute = vi.fn<ReadonlyWorkspace["execute"]>();
     const computer = new CodexAgentWorkspaceProbe(

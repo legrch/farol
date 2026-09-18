@@ -154,6 +154,20 @@ const computerOperationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("workspace.read"),
     relativePath: relativePathSchema.refine((value) => value !== "."),
+    range: z
+      .strictObject({
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .max(64 * 1_024 * 1_024),
+        length: z
+          .number()
+          .int()
+          .min(4)
+          .max(256 * 1_024),
+      })
+      .optional(),
   }),
   z.strictObject({
     kind: z.literal("workspace.list"),
@@ -629,7 +643,7 @@ function agentComputerDynamicTool() {
     type: "function",
     name: "farol_agent_computer",
     description:
-      "List, search, read, or run a fixed no-network verification in an approved Farol Computer workspace under the exact inherited TaskGrant.",
+      "List, search, read, or run a fixed no-network verification in an approved Farol Computer workspace under the exact inherited TaskGrant. A file over 256 KiB cannot be read whole: read it in windows with range {offset, length} (bytes; length 4 to 262144) and continue at page.nextOffset until it is null.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -647,6 +661,15 @@ function agentComputerDynamicTool() {
               properties: {
                 kind: { const: "workspace.read" },
                 relativePath: { type: "string" },
+                range: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    offset: { type: "integer", minimum: 0 },
+                    length: { type: "integer", minimum: 4, maximum: 262144 },
+                  },
+                  required: ["offset", "length"],
+                },
               },
               required: ["kind", "relativePath"],
             },

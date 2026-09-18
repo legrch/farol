@@ -26,6 +26,7 @@ import type {
   WorkspaceApprovedRoot,
   WorkspaceEditSnapshotResult,
   WorkspaceMatch,
+  WorkspaceReadRange,
 } from "../../app/port/readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
 import { executeNativeVerificationCommand } from "./native-verification-command";
@@ -48,6 +49,11 @@ const O_CLOEXEC =
   (Reflect.get(fsConstants, "O_CLOEXEC") as number | undefined) ?? 0;
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 256 * 1024;
+// A window returns no more than a whole read may, starts inside the range the
+// helper will seek into, and spans at least one whole UTF-8 character (at most
+// four bytes), so each window's `nextOffset` lies past its own offset.
+const MAX_WINDOW_OFFSET = 64 * 1024 * 1024;
+const MIN_WINDOW_BYTES = 4;
 const MAX_MUTATION_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const MAX_STDERR_BYTES = 4 * 1024;
@@ -123,12 +129,15 @@ type JsonValue =
   | Readonly<{ [key: string]: JsonValue }>;
 
 type NativeRequest = Readonly<{
-  operation: "edit" | "grep" | "list-directory" | "read" | "write";
+  operation:
+    "edit" | "grep" | "list-directory" | "read" | "read-window" | "write";
   root: string;
   relative: string;
   denied: readonly string[];
   writeDenied?: readonly string[];
   maxBytes?: number;
+  offset?: number;
+  length?: number;
   pattern?: string;
   content?: string;
   edits?: readonly Readonly<{ oldText: string; newText: string }>[];
@@ -298,6 +307,19 @@ function hasOwn(value: unknown, key: string): boolean {
   );
 }
 
+function validReadRange(value: unknown): value is WorkspaceReadRange {
+  if (!exactKeys(value, ["offset", "length"])) return false;
+  const range = value as Readonly<Record<string, unknown>>;
+  return (
+    Number.isSafeInteger(range.offset) &&
+    (range.offset as number) >= 0 &&
+    (range.offset as number) <= MAX_WINDOW_OFFSET &&
+    Number.isSafeInteger(range.length) &&
+    (range.length as number) >= MIN_WINDOW_BYTES &&
+    (range.length as number) <= MAX_SOURCE_BYTES
+  );
+}
+
 function validGitMetadataGrant(value: unknown): boolean {
   if (!exactKeys(value, ["gitDirectory", "commonDirectory"])) return false;
   const grant = value as Readonly<Record<string, unknown>>;
@@ -374,9 +396,17 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   }
   const operation = candidate.operation as Readonly<Record<string, unknown>>;
   if (operation.kind === "workspace.read") {
+    const hasRange = hasOwn(operation, "range");
     if (
-      !exactKeys(operation, ["kind", "relativePath"]) ||
-      !canonicalRelativePath(operation.relativePath)
+      !exactKeys(operation, [
+        "kind",
+        "relativePath",
+        ...(hasRange ? ["range"] : []),
+      ]) ||
+      !canonicalRelativePath(operation.relativePath) ||
+      (hasRange &&
+        operation.range !== undefined &&
+        !validReadRange(operation.range))
     ) {
       return null;
     }
@@ -610,7 +640,14 @@ function nativeRequest(
   };
   switch (request.operation.kind) {
     case "workspace.read":
-      return { ...common, operation: "read", maxBytes: MAX_SOURCE_BYTES };
+      return request.operation.range
+        ? {
+            ...common,
+            operation: "read-window",
+            offset: request.operation.range.offset,
+            length: request.operation.range.length,
+          }
+        : { ...common, operation: "read", maxBytes: MAX_SOURCE_BYTES };
     case "workspace.list":
       return { ...common, operation: "list-directory" };
     case "workspace.search":
@@ -1169,6 +1206,107 @@ function parseText(raw: Buffer): ReadonlyWorkspaceResult {
   }
 }
 
+function continuationByte(byte: number | undefined): boolean {
+  return byte !== undefined && (byte & 0xc0) === 0x80;
+}
+
+// How many bytes the UTF-8 sequence that `lead` begins should span. An
+// invalid lead counts as one byte and is left for the decoder to refuse.
+function sequenceWidth(lead: number): number {
+  if (lead >= 0xf0) return 4;
+  if (lead >= 0xe0) return 3;
+  if (lead >= 0xc0) return 2;
+  return 1;
+}
+
+// The end of the last whole character in `payload`: an incomplete trailing
+// sequence is left for the next window rather than decoded as broken text.
+function wholeCharacterEnd(payload: Buffer, start: number): number {
+  for (
+    let index = payload.length - 1;
+    index >= Math.max(start, payload.length - 4);
+    index -= 1
+  ) {
+    const byte = payload[index];
+    if (byte === undefined || continuationByte(byte)) continue;
+    return index + sequenceWidth(byte) > payload.length
+      ? index
+      : payload.length;
+  }
+  return payload.length;
+}
+
+/**
+ * The helper answers a window with one JSON header line, then the bytes it
+ * read. A window may begin or end inside a multi-byte character, so it is
+ * narrowed to whole characters: each window decodes on its own and the next
+ * one begins exactly where this one's text ended. Only a window stopping short
+ * of the file's end may end inside a character; one that reaches the end must
+ * be complete text there, as a whole read must.
+ */
+function parseTextWindow(
+  raw: Buffer,
+  range: WorkspaceReadRange,
+): ReadonlyWorkspaceResult {
+  const newline = raw.indexOf(0x0a);
+  if (newline < 0) throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
+  const header = parseJson(raw.subarray(0, newline));
+  if (!exactKeys(header, ["offset", "returned", "size"])) {
+    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
+  }
+  const { offset, returned, size } = header as Readonly<
+    Record<string, unknown>
+  >;
+  const payload = raw.subarray(newline + 1);
+  if (
+    offset !== range.offset ||
+    returned !== payload.length ||
+    payload.length > range.length ||
+    !Number.isSafeInteger(size) ||
+    (size as number) < 0 ||
+    (payload.length > 0 && range.offset + payload.length > (size as number))
+  ) {
+    throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
+  }
+  const fileSize = size as number;
+  if (payload.includes(0)) return failure("WORKSPACE_NOT_TEXT");
+  let start = 0;
+  while (
+    range.offset > 0 &&
+    start < Math.min(3, payload.length) &&
+    continuationByte(payload[start])
+  ) {
+    start += 1;
+  }
+  const end =
+    range.offset + payload.length < fileSize
+      ? wholeCharacterEnd(payload, start)
+      : payload.length;
+  const bytes = payload.subarray(start, end);
+  let text: string;
+  try {
+    // A byte-order mark is dropped only where a whole read drops it: at the
+    // very start of the file.
+    text = new TextDecoder("utf-8", {
+      fatal: true,
+      ignoreBOM: range.offset + start > 0,
+    }).decode(bytes);
+  } catch {
+    return failure("WORKSPACE_NOT_TEXT");
+  }
+  const windowEnd = range.offset + end;
+  return success({
+    kind: "workspace.text",
+    text,
+    bytes: bytes.length,
+    page: {
+      offset: range.offset + start,
+      size: fileSize,
+      nextOffset: windowEnd < fileSize ? windowEnd : null,
+    },
+  });
+}
+
 function parseEditSnapshot(raw: Buffer): WorkspaceEditSnapshotResult {
   const text = parseText(raw);
   if (!text.ok) return text;
@@ -1365,7 +1503,9 @@ export class NativeReadonlyWorkspace
     if (!Buffer.isBuffer(raw)) return failure(raw);
     switch (validated.operation.kind) {
       case "workspace.read":
-        return parseText(raw);
+        return validated.operation.range
+          ? parseTextWindow(raw, validated.operation.range)
+          : parseText(raw);
       case "workspace.list":
         return parseEntries(raw);
       case "workspace.search":

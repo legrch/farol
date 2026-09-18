@@ -25,8 +25,17 @@ export type ReadonlyWorkspaceDescriptor = Readonly<{
 
 export type WorkspaceVerificationCommand = "git.status" | "git.head";
 
+// One window of a file in bytes. A whole read stops at its size ceiling; a
+// file larger than that is read window by window, each continuing at the
+// previous window's `nextOffset`.
+export type WorkspaceReadRange = Readonly<{ offset: number; length: number }>;
+
 export type ReadonlyWorkspaceOperation =
-  | Readonly<{ kind: "workspace.read"; relativePath: string }>
+  | Readonly<{
+      kind: "workspace.read";
+      relativePath: string;
+      range?: WorkspaceReadRange | undefined;
+    }>
   | Readonly<{ kind: "workspace.list"; relativePath: string }>
   | Readonly<{
       kind: "workspace.search";
@@ -44,10 +53,21 @@ export type ReadonlyWorkspaceRequest = Readonly<{
   operation: ReadonlyWorkspaceOperation;
 }>;
 
+// Where a ranged read's text sits in the file. `offset` is the byte of its
+// first whole character, `size` the file's size when the read began, and
+// `nextOffset` the byte to continue from, or null once the text reaches that
+// size.
+export type WorkspaceTextPage = Readonly<{
+  offset: number;
+  size: number;
+  nextOffset: number | null;
+}>;
+
 export type WorkspaceText = Readonly<{
   kind: "workspace.text";
   text: string;
   bytes: number;
+  page?: WorkspaceTextPage;
 }>;
 
 export type WorkspaceEntries = Readonly<{

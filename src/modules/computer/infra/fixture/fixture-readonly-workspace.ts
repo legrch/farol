@@ -35,6 +35,20 @@ export class FixtureReadonlyWorkspace implements ReadonlyWorkspace {
         },
       };
     }
+    // The fixture holds one short file and reads it whole; a window of it
+    // would be answered without its position, so it is refused instead.
+    if (
+      request.operation.kind === "workspace.read" &&
+      request.operation.range
+    ) {
+      return {
+        ok: false as const,
+        error: {
+          code: "WORKSPACE_INVALID_REQUEST" as const,
+          retry: "never" as const,
+        },
+      };
+    }
     if (
       request.operation.kind !== "workspace.read" ||
       request.operation.relativePath !== FIXTURE_STATUS_PATH

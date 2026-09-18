@@ -942,6 +942,143 @@ describe("native Codex product Agent host", () => {
     );
   });
 
+  it("C05-06 forwards a read window and Git status through inherited Computer authority", async () => {
+    const peer = new ProductPeer();
+    const verificationAuthority: DelegatedAgentAuthority = {
+      ...authority,
+      capabilities: [...authority.capabilities, "verification.run"],
+      commands: "verification",
+    };
+    const verificationRequest: AgentSpawnRequest = {
+      ...request,
+      authority: verificationAuthority,
+    };
+    const computer: AgentComputer = {
+      execute: vi.fn(async (input) =>
+        input.operation.kind === "verification.run"
+          ? {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.command" as const,
+                command: "git.status" as const,
+                relativePath: "." as const,
+                exitCode: 0 as const,
+                stdout: " M README.md\n",
+                stderr: "" as const,
+                outputBytes: 13,
+                network: "none" as const,
+                coverage: "tracked-files-only" as const,
+                layout: "primary" as const,
+              },
+            }
+          : {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.text" as const,
+                text: "abcd",
+                bytes: 4,
+                page: { offset: 8, size: 300_000, nextOffset: 12 },
+              },
+            },
+      ),
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-product-a",
+        now: () => 1,
+      },
+      { verify: async () => ({ status: "verified" }) },
+      computer,
+    );
+    const spawned = await host.spawn(verificationRequest);
+    expect(spawned.status).toBe("started");
+    const computerTool = (
+      peer.requests.find(({ method }) => method === "thread/start")?.params as {
+        dynamicTools?: readonly { name?: string; inputSchema?: unknown }[];
+      }
+    ).dynamicTools?.find(({ name }) => name === "farol_agent_computer");
+    expect(JSON.stringify(computerTool?.inputSchema)).toContain('"range"');
+    const handler = peer.handlers.get("item/tool/call");
+    if (!handler) throw new Error("TOOL_HANDLER_MISSING");
+    const proof =
+      /computer proof ([a-f0-9]{64})/u.exec(peer.childPrompt)?.[1] ?? "";
+    const call = (callId: string, operation: unknown) =>
+      handler({
+        threadId: "child-product-a",
+        turnId: "child-turn-product-a",
+        callId,
+        tool: "farol_agent_computer",
+        arguments: {
+          assignmentId: verificationRequest.identity.assignmentId,
+          authorityId: verificationAuthority.authorityId,
+          participantId: verificationAuthority.participantId,
+          proof,
+          workspaceId: "workspace-product-a",
+          operation,
+        },
+      });
+
+    const windowed = (await call("computer-window-a", {
+      kind: "workspace.read",
+      relativePath: "logs/large.log",
+      range: { offset: 8, length: 4 },
+    })) as { success: boolean; contentItems: { text: string }[] };
+    expect(windowed.success).toBe(true);
+    expect(JSON.parse(windowed.contentItems[0]?.text ?? "")).toEqual({
+      status: "completed",
+      output: {
+        kind: "workspace.text",
+        text: "abcd",
+        bytes: 4,
+        page: { offset: 8, size: 300_000, nextOffset: 12 },
+      },
+    });
+    await expect(
+      call("computer-status-a", {
+        kind: "verification.run",
+        command: "git.status",
+        relativePath: ".",
+      }),
+    ).resolves.toMatchObject({ success: true });
+    expect(computer.execute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        authority: verificationAuthority,
+        operation: {
+          kind: "workspace.read",
+          relativePath: "logs/large.log",
+          range: { offset: 8, length: 4 },
+        },
+      }),
+    );
+    expect(computer.execute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        operation: {
+          kind: "verification.run",
+          command: "git.status",
+          relativePath: ".",
+        },
+      }),
+    );
+
+    // A window shorter than one UTF-8 character is refused before Computer.
+    await expect(
+      call("computer-window-b", {
+        kind: "workspace.read",
+        relativePath: "logs/large.log",
+        range: { offset: 0, length: 3 },
+      }),
+    ).rejects.toThrow("CODEX_AGENT_COMPUTER_CORRELATION");
+    expect(computer.execute).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects completed child history containing a direct native command", async () => {
     const peer = new ProductPeer();
     const computer: AgentComputer = {
