@@ -373,6 +373,11 @@ type ActiveCodexAgentCheck = Readonly<{
   boundedRunningObserved: boolean;
 }>;
 let activeCodexAgentCheck: ActiveCodexAgentCheck | null = null;
+// App Servers a one-off host check started. The check keeps its client in a
+// local variable, so quit can wait for it only through this set.
+const hostCheckClients = new Set<
+  Awaited<ReturnType<typeof launchCodexAppServer>>
+>();
 type ActiveProductAgentSession = {
   taskId: string;
   key: string;
@@ -3179,6 +3184,10 @@ async function configureProduct(
       const endpoint = routeBRuntime?.endpoint;
       if (!endpoint) return configurationFailure("ROUTE_B_UNAVAILABLE");
       codexHostTaskAdmission = true;
+      // The check closes its host itself; quit reaches it meanwhile.
+      const routeBCheckClients: Awaited<
+        ReturnType<typeof launchCodexAppServer>
+      >[] = [];
       try {
         const checked = await runRouteBHostCheck(
           {
@@ -3190,7 +3199,12 @@ async function configureProduct(
             endpoint,
           },
           {
-            launch: (input) => launchCodexAppServer(input),
+            launch: async (input) => {
+              const client = await launchCodexAppServer(input);
+              hostCheckClients.add(client);
+              routeBCheckClients.push(client);
+              return client;
+            },
             route: (client, input) => runCodexChatGptHostRoute(client, input),
           },
         );
@@ -3212,6 +3226,8 @@ async function configureProduct(
           },
         });
       } finally {
+        for (const client of routeBCheckClients)
+          hostCheckClients.delete(client);
         codexHostTaskAdmission = false;
       }
     }
@@ -3269,6 +3285,7 @@ async function configureProduct(
             ? { codexHomePath: configuredCodexHome }
             : {}),
         });
+        hostCheckClients.add(client);
         const live = await runCodexHostSmoke(client, {
           model: "gpt-6-astra",
           cwd: runtimeRoot,
@@ -3324,6 +3341,7 @@ async function configureProduct(
         );
       } finally {
         await client?.close().catch(() => undefined);
+        if (client) hostCheckClients.delete(client);
         codexHostTaskAdmission = false;
       }
     }
@@ -6123,6 +6141,9 @@ async function main(): Promise<void> {
         name: "product-agent",
         close: () => productAgent.client.close(),
       });
+    }
+    for (const client of hostCheckClients) {
+      closers.push({ name: "host-check", close: () => client.close() });
     }
     const connector = secureMcpConnectorRuntime;
     if (connector) {
