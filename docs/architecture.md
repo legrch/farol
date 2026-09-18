@@ -125,18 +125,25 @@ claiming the owner's authenticated provider account was exercised.
 A guarded edit is published at one atomic exchange of names (`renameatx_np` with
 `RENAME_SWAP`) between a candidate staged in a private `.farol-stage-…` directory
 beside the target and the target itself; a create is one `link` that fails if the
-name exists. The exchange counts only when the object it displaced is the checked
-original, verified through a descriptor afterwards; any other displaced version is
-exchanged back. Success means that publication plus a final observation, made after
-the helper's last filesystem operation, that the target still names the published
-file; a later save wins and is never touched. The helper deletes only inside its
-staging directory and only an inode it has just verified, its own candidate or the
-checked original. Anything else is kept there, at most one object per edit, and the
-edit reports a conflict or an unknown outcome that is never retried. Two residuals
-are disclosed: a writer that keeps the original open and writes after its digest was
-checked loses those bytes, and a process that deliberately writes inside the staging
-directory between an inode check and its unlink can substitute what is deleted. No
-isolation from same-user or root processes is claimed.
+name exists. Only the candidate is ever published. The exchange counts only when the
+object it displaced is the checked original, verified through a descriptor
+afterwards; any other displaced version is exchanged back, unless a newer save has
+already replaced the candidate, which then stays at the target. Until an undo the
+candidate is visible at the target, so it is deleted after an undo only if it came
+back byte for byte unchanged. Success means that publication, nothing kept, and a
+final observation, made after the helper's last filesystem operation on the
+workspace, that the target still names the published file; a later save wins and is
+never touched. Files are deleted only inside the staging directory and only when
+their inode was verified immediately before; anything else is kept there for the
+owner and the edit reports a conflict or an unknown outcome that is never retried.
+The directory itself is removed only with `rmdir`, which never removes one that holds
+anything, and a helper that is killed leaves it behind. Disclosed residuals: a writer
+that keeps the original, or the briefly published candidate, open and writes through
+that descriptor after it was checked; a save landing between the last check before an
+undo and the undo, which puts the older version back at the target and keeps the
+newer one in staging; and a process that deliberately writes inside the staging
+directory, which can substitute what is published or deleted. No isolation from
+same-user or root processes is claimed.
 
 The N2 authority core is implemented as a runtime-derived task-applicable `TaskGrant`
 / `ExecutionAuthority`. Permitted delegation from a main Turn through Agent and

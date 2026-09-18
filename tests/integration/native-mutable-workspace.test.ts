@@ -286,11 +286,10 @@ describe("native mutable Computer workspace", () => {
       ok: false,
       error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
     });
-    const survivors = [
-      await fs.readFile(target, "utf8"),
-      ...(await retained()),
-    ].sort();
-    expect(survivors).toEqual(["external save 1\n", "external save 2\n"]);
+    // The target no longer holds the candidate, so nothing is exchanged back:
+    // the newest save stays at the target, the other is kept in staging.
+    expect(await fs.readFile(target, "utf8")).toBe("external save 2\n");
+    expect(await retained()).toEqual(["external save 1\n"]);
   });
 
   it("AUTH-04 reports an unknown outcome, never success, when the target is replaced right after the exchange", async () => {
@@ -904,9 +903,10 @@ describe("R5 guarded-edit publication and cleanup contract", () => {
     });
 
     expect(reached).toBe(1);
-    // The exchange displaced the checked original: a valid publication, and
-    // the target still holds it at the final observation.
-    expect(result).toMatchObject({ ok: true });
+    // The exchange displaced the checked original and the target still holds
+    // the candidate, but an object the helper did not create had to be kept:
+    // that is never reported as a clean success.
+    expect(result).toEqual(unknown);
     expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
     expect(await fs.readFile(path.join(root, "moved-original"), "utf8")).toBe(
       "before\n",
@@ -958,6 +958,108 @@ describe("R5 guarded-edit publication and cleanup contract", () => {
     });
     expect(await fs.readFile(target(), "utf8")).toBe("later save\n");
     expect(await leftovers()).toEqual([]);
+  });
+
+  it("R5 keeps the candidate a target writer changed in place before the undo", async () => {
+    // The candidate is visible at the target from the exchange to its undo.
+    // An in-place append made through the target path in that window lands
+    // in the candidate, so the candidate that comes back is no longer only
+    // ours and must be kept, not deleted as a returned candidate.
+    const reached: number[] = [];
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: [
+        { phase: "before-publish", index: null },
+        { phase: "before-undo", index: null },
+      ],
+      testHook: async (barrier: number) => {
+        reached.push(barrier);
+        await fs.appendFile(
+          target(),
+          barrier === 0 ? "external line 1\n" : "external line 2\n",
+        );
+      },
+    });
+
+    expect(reached).toEqual([0, 1]);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(target(), "utf8")).toBe(
+      "before\nexternal line 1\n",
+    );
+    expect(await retained()).toEqual(["farol-candidate\nexternal line 2\n"]);
+  });
+
+  it("RB-07 leaves a newer save at the target when it lands after the failed original check", async () => {
+    const reached: number[] = [];
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: [
+        { phase: "before-publish", index: null },
+        { phase: "after-original-mismatch", index: null },
+      ],
+      testHook: async (barrier: number) => {
+        reached.push(barrier);
+        await atomicSave(
+          target(),
+          barrier === 0 ? "external save 1\n" : "external save 2\n",
+        );
+      },
+    });
+
+    expect(reached).toEqual([0, 1]);
+    expect(result).toEqual(unknown);
+    // Nothing is exchanged back over the newer save: it stays at the target,
+    // and staging keeps the version the exchange displaced.
+    expect(await fs.readFile(target(), "utf8")).toBe("external save 2\n");
+    expect(await retained()).toEqual(["external save 1\n"]);
+  });
+
+  it("R5-B never publishes an object substituted for the candidate", async () => {
+    const destination = path.join(root, "created-substitute.txt");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "created-substitute.txt",
+        content: "farol-candidate\n",
+        expectedSha256: null,
+      }),
+      {
+        testHookRequest: { phase: "before-publish", index: null },
+        testHook: async () => {
+          const staged = await stagedPath();
+          await fs.rename(staged, path.join(root, "moved-candidate"));
+          await atomicSave(staged, "foreign object\n");
+        },
+      },
+    );
+
+    expect(result).toEqual(conflict);
+    await expect(fs.stat(destination)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await retained()).toEqual(["foreign object\n"]);
+  });
+
+  it("R5 refuses a staging directory it did not create privately", async () => {
+    let planted = "";
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "after-stage-mkdir", index: null },
+      testHook: async () => {
+        const [stage] = (await fs.readdir(root)).filter((entry) =>
+          entry.startsWith(".farol-stage-"),
+        );
+        if (!stage) throw new Error("stage missing");
+        planted = path.join(root, stage);
+        await fs.rmdir(planted);
+        await fs.mkdir(planted);
+        await fs.chmod(planted, 0o777);
+      },
+    });
+
+    expect(result).toEqual(conflict);
+    expect(await fs.readFile(target(), "utf8")).toBe("before\n");
+    // The planted directory is not the helper's: it is neither used nor
+    // removed.
+    expect((await fs.stat(planted)).mode & 0o777).toBe(0o777);
+    await fs.rmdir(planted);
   });
 
   it("R5-A reports unknown when the target is replaced after the exchange but before the final observation", async () => {
