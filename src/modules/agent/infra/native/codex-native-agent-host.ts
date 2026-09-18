@@ -156,11 +156,7 @@ const computerOperationSchema = z.discriminatedUnion("kind", [
     relativePath: relativePathSchema.refine((value) => value !== "."),
     range: z
       .strictObject({
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .max(64 * 1_024 * 1_024),
+        offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
         length: z
           .number()
           .int()

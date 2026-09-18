@@ -1005,6 +1005,42 @@ describe("native readonly Computer workspace", () => {
       });
     });
 
+    it("continues past 64 MiB, so every reported nextOffset is a valid request", async () => {
+      // A sparse file keeps this cheap: only its tail holds text.
+      const tailOffset = 64 * 1024 * 1024 + 100;
+      const tail = "a line far past sixty-four mebibytes\n".repeat(20);
+      const size = tailOffset + Buffer.byteLength(tail);
+      const handle = await fs.open(path.join(root, "huge.log"), "w", 0o600);
+      try {
+        await handle.write(tail, tailOffset, "utf8");
+      } finally {
+        await handle.close();
+      }
+      const workspace = reader();
+
+      const first = await workspace.execute(ranged("huge.log", tailOffset, 16));
+      expect(first).toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: tail.slice(0, 16),
+          bytes: 16,
+          page: { offset: tailOffset, size, nextOffset: tailOffset + 16 },
+        },
+      });
+      await expect(
+        workspace.execute(ranged("huge.log", tailOffset + 16, 256 * 1024)),
+      ).resolves.toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.text",
+          text: tail.slice(16),
+          bytes: Buffer.byteLength(tail) - 16,
+          page: { offset: tailOffset + 16, size, nextOffset: null },
+        },
+      });
+    });
+
     it("applies the same text check and path policy as a whole read", async () => {
       await fs.writeFile(
         path.join(root, "binary.bin"),
@@ -1052,7 +1088,7 @@ describe("native readonly Computer workspace", () => {
         { offset: 0, length: 256 * 1024 + 1 },
         { offset: -1, length: 16 },
         { offset: 1.5, length: 16 },
-        { offset: 64 * 1024 * 1024 + 1, length: 16 },
+        { offset: Number.MAX_SAFE_INTEGER + 1, length: 16 },
         { offset: 0, length: 16, extra: true },
       ]) {
         await expect(

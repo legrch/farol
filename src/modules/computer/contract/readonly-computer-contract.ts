@@ -30,12 +30,12 @@ const ScopeRelativePathSchema = z
   .refine((value) => relativePath(value, true));
 
 const MAX_READ_BYTES = 256 * 1_024;
-const MAX_WINDOW_OFFSET = 64 * 1_024 * 1_024;
 
 // A window of a file too large to read whole. It spans at least one whole
-// UTF-8 character, so every window makes progress.
+// UTF-8 character, so every window makes progress, and its offset is any exact
+// integer, so every reported `nextOffset` is a valid next request.
 const ReadRangeSchema = z.strictObject({
-  offset: z.number().int().min(0).max(MAX_WINDOW_OFFSET),
+  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER),
   length: z.number().int().min(4).max(MAX_READ_BYTES),
 });
 

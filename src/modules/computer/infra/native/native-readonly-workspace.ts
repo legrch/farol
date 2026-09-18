@@ -38,8 +38,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "7e1e6f3d2f130ff636645e1aef74ab1615d60817a14ab0ed259cac0be25edd76",
-  size: 75_516,
+  sha256: "1c2dcddecd9d8d2a361754b2cc8c0176c68747e2c8309d1c13f54e15c616a19b",
+  size: 75_779,
   mode: 0o644,
 });
 
@@ -49,10 +49,11 @@ const O_CLOEXEC =
   (Reflect.get(fsConstants, "O_CLOEXEC") as number | undefined) ?? 0;
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 const MAX_SOURCE_BYTES = 256 * 1024;
-// A window returns no more than a whole read may, starts inside the range the
-// helper will seek into, and spans at least one whole UTF-8 character (at most
-// four bytes), so each window's `nextOffset` lies past its own offset.
-const MAX_WINDOW_OFFSET = 64 * 1024 * 1024;
+// A window returns no more than a whole read may and spans at least one whole
+// UTF-8 character (at most four bytes), so each window's `nextOffset` lies
+// past its own offset. Its offset is any exact integer: the helper accepts
+// every offset up to 2^53 - 1, so a reported `nextOffset` is always a valid
+// next request, however large the file.
 const MIN_WINDOW_BYTES = 4;
 const MAX_MUTATION_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 512 * 1024;
@@ -313,7 +314,6 @@ function validReadRange(value: unknown): value is WorkspaceReadRange {
   return (
     Number.isSafeInteger(range.offset) &&
     (range.offset as number) >= 0 &&
-    (range.offset as number) <= MAX_WINDOW_OFFSET &&
     Number.isSafeInteger(range.length) &&
     (range.length as number) >= MIN_WINDOW_BYTES &&
     (range.length as number) <= MAX_SOURCE_BYTES

@@ -76,12 +76,7 @@ const DEFAULT_READ_WINDOW_BYTES = 64 * 1_024;
 const ReadInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   relativePath: FileRelativePathSchema,
-  offset: z
-    .number()
-    .int()
-    .min(0)
-    .max(64 * 1_024 * 1_024)
-    .optional(),
+  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
   length: z
     .number()
     .int()

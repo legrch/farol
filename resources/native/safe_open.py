@@ -67,6 +67,10 @@ MAX_GREP_WALL_SECONDS = 5.0
 # tail or a search step is one call, small enough that a caller cannot ask for
 # a whole transcript by naming a length.
 MAX_WINDOW_BYTES = 4 * 1024 * 1024
+# An offset only positions one bounded read, so it is not capped by file size:
+# any offset a JavaScript caller can express exactly is accepted, and the
+# next offset a window reports is always a request this helper will serve.
+MAX_WINDOW_OFFSET = 2 ** 53 - 1
 
 EXIT_INVALID = 20
 EXIT_NOT_FOUND = 21
@@ -1957,7 +1961,7 @@ def _window_bounds(request):
     return (
         isinstance(offset, int)
         and not isinstance(offset, bool)
-        and abs(offset) <= MAX_FILE_BYTES
+        and abs(offset) <= MAX_WINDOW_OFFSET
         and isinstance(length, int)
         and not isinstance(length, bool)
         and 0 < length <= MAX_WINDOW_BYTES
