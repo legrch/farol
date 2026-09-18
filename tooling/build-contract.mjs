@@ -9,6 +9,7 @@ export const BUILD_ENTRIES = Object.freeze([
   "build-identity.json",
   "computer-mcp.cjs",
   "computer-safe-open.py",
+  "input-manifest.json",
   "main.cjs",
   "preload.cjs",
   "resource-manifest.json",
@@ -90,4 +91,61 @@ export async function verifyAbsentIntegrations(root) {
       }
     }
   }
+}
+
+// The build ledger of every source and dependency input, retained as the exact
+// bytes whose SHA-256 the build manifest records as inputLedgerSha256.  A
+// label that nothing can recompute is not evidence of which inputs were built.
+export async function verifyInputManifest(directory, manifest) {
+  let bytes;
+  try {
+    bytes = await fs.readFile(path.join(directory, "input-manifest.json"));
+  } catch {
+    throw new Error("BUILD_INPUT_MANIFEST_MISSING");
+  }
+  if (
+    createHash("sha256").update(bytes).digest("hex") !==
+    manifest.inputLedgerSha256
+  ) {
+    throw new Error("BUILD_INPUT_MANIFEST_DIGEST_MISMATCH");
+  }
+  let ledger;
+  try {
+    ledger = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    throw new Error("BUILD_INPUT_MANIFEST_INVALID");
+  }
+  if (!Array.isArray(ledger)) throw new Error("BUILD_INPUT_MANIFEST_INVALID");
+  let sources = 0;
+  let dependencies = 0;
+  let previous = null;
+  for (const entry of ledger) {
+    if (
+      entry === null ||
+      typeof entry !== "object" ||
+      typeof entry.path !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(entry.sha256 ?? "") ||
+      (previous !== null && entry.path <= previous)
+    ) {
+      throw new Error("BUILD_INPUT_MANIFEST_INVALID");
+    }
+    previous = entry.path;
+    if (entry.kind === "source") {
+      sources += 1;
+      if (manifest.inputExact === true && entry.exact !== true) {
+        throw new Error("BUILD_INPUT_MANIFEST_NOT_EXACT");
+      }
+    } else if (entry.kind === "dependency") {
+      dependencies += 1;
+    } else {
+      throw new Error("BUILD_INPUT_MANIFEST_INVALID");
+    }
+  }
+  if (
+    sources !== manifest.sourceInputCount ||
+    dependencies !== manifest.dependencyInputCount
+  ) {
+    throw new Error("BUILD_INPUT_MANIFEST_COUNT_MISMATCH");
+  }
+  return ledger;
 }

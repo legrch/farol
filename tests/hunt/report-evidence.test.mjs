@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,17 @@ import { describe, expect, it } from "vitest";
 const reportScript = fileURLToPath(
   new URL("../../tooling/hunt-report.mjs", import.meta.url),
 );
+const sourceIdentityModule = fileURLToPath(
+  new URL("../../tooling/source-identity.mjs", import.meta.url),
+);
+const gitEnvironment = Object.freeze({
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "Hunt Fixture",
+  GIT_AUTHOR_EMAIL: "hunt-fixture@example.invalid",
+  GIT_COMMITTER_NAME: "Hunt Fixture",
+  GIT_COMMITTER_EMAIL: "hunt-fixture@example.invalid",
+});
 const requiredSuites = [
   {
     id: "selftest",
@@ -40,6 +51,8 @@ const requiredMutationIds = [
   "apply_update_while_accepted_work_remains",
 ];
 
+// The stub build below writes this manifest for the fixture repository's
+// actual source identity, the way the real build does.
 function validBuildManifest(overrides = {}) {
   return {
     schema: 3,
@@ -99,31 +112,70 @@ function validVitestReport(root) {
   };
 }
 
+// The fixture is a real Git repository with the product under vnext/, so the
+// report measures the same source identity the real build attests.
 async function createFixtureRoot() {
   const created = await mkdtemp(
     path.join(os.tmpdir(), "farol-hunt-report-test-"),
   );
-  const root = await realpath(created);
+  const repository = await realpath(created);
+  const root = path.join(repository, "vnext");
   await Promise.all([
     mkdir(path.join(root, "node_modules/vitest"), { recursive: true }),
     mkdir(path.join(root, "tooling"), { recursive: true }),
     mkdir(path.join(root, "tests/hunt/fixtures"), { recursive: true }),
-    mkdir(path.join(root, "dist/app"), { recursive: true }),
   ]);
   await Promise.all([
     writeFile(
+      path.join(repository, ".gitignore"),
+      "vnext/node_modules/\nvnext/dist/\nvnext/artifacts/\n",
+    ),
+    writeFile(
       path.join(root, "node_modules/vitest/vitest.mjs"),
       [
+        'import { execFileSync } from "node:child_process";',
         'import fs from "node:fs";',
         'const flag = process.argv.indexOf("--outputFile");',
         "const output = flag >= 0 ? process.argv[flag + 1] : undefined;",
         "const evidence = process.env.FAKE_VITEST_REPORT;",
         "if (output && evidence) fs.copyFileSync(evidence, output);",
+        'if (process.env.FAKE_COMMIT_AFTER_TESTS === "1") {',
+        '  fs.writeFileSync("tests/hunt/fixtures/later.txt", "source B\\n");',
+        '  execFileSync("git", ["add", "-A"]);',
+        '  execFileSync("git", ["commit", "-q", "-m", "source B"]);',
+        "}",
         "process.exit(0);",
         "",
       ].join("\n"),
     ),
-    writeFile(path.join(root, "tooling/build.mjs"), "process.exit(0);\n"),
+    writeFile(
+      path.join(root, "tooling/build.mjs"),
+      [
+        'import { createHash } from "node:crypto";',
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        `import { sourceIdentity } from ${JSON.stringify(sourceIdentityModule)};`,
+        'const identity = sourceIdentity(path.resolve(process.cwd(), ".."), "vnext");',
+        'const ledger = JSON.stringify([{ kind: "source", path: "src/main.ts", objectId: "0".repeat(40), sha256: "1".repeat(64), exact: true }]);',
+        'const overrides = JSON.parse(process.env.FAKE_BUILD_OVERRIDES ?? "{}");',
+        'fs.mkdirSync("dist/app", { recursive: true });',
+        'if (process.env.FAKE_INPUT_MANIFEST !== "absent") {',
+        '  fs.writeFileSync("dist/app/input-manifest.json", process.env.FAKE_INPUT_MANIFEST === "tampered" ? ledger.replace("src/main.ts", "src/other.ts") : ledger);',
+        "}",
+        "const manifest = {",
+        `  ...${JSON.stringify(validBuildManifest())},`,
+        "  sourceCommit: identity.commit,",
+        "  sourceTreeDigest: identity.treeDigest,",
+        "  dirty: identity.dirty,",
+        '  inputLedgerSha256: createHash("sha256").update(ledger).digest("hex"),',
+        "  sourceInputCount: 1,",
+        "  dependencyInputCount: 0,",
+        "  ...overrides,",
+        "};",
+        'fs.writeFileSync("dist/app/build-manifest.json", JSON.stringify(manifest) + "\\n");',
+        "",
+      ].join("\n"),
+    ),
     writeFile(
       path.join(root, "tests/hunt/fixtures/semantic-replay.json"),
       `${JSON.stringify({
@@ -131,20 +183,25 @@ async function createFixtureRoot() {
         commands: [{ kind: "synthetic.command" }],
       })}\n`,
     ),
-    writeFile(
-      path.join(root, "dist/app/build-manifest.json"),
-      `${JSON.stringify(validBuildManifest())}\n`,
-    ),
   ]);
+  const git = (arguments_) =>
+    execFileSync("git", ["-C", repository, ...arguments_], {
+      env: { ...process.env, ...gitEnvironment },
+    });
+  git(["init", "-q"]);
+  git(["add", "-A"]);
+  git(["commit", "-q", "-m", "source A"]);
   return root;
 }
 
-function runReport(root, evidenceFile) {
+function runReport(root, evidenceFile, environment = {}) {
   return spawnSync(process.execPath, [reportScript], {
     cwd: root,
     encoding: "utf8",
     env: {
       ...process.env,
+      ...gitEnvironment,
+      ...environment,
       ...(evidenceFile === undefined
         ? {}
         : { FAKE_VITEST_REPORT: evidenceFile }),
@@ -152,21 +209,33 @@ function runReport(root, evidenceFile) {
   });
 }
 
-async function runWithEvidence(root, report) {
-  const evidenceFile = path.join(root, "vitest-report.json");
+async function runWithEvidence(root, report, environment = {}) {
+  const evidenceFile = path.join(
+    path.dirname(root),
+    "..",
+    `${path.basename(path.dirname(root))}-vitest-report.json`,
+  );
   await writeFile(evidenceFile, `${JSON.stringify(report)}\n`);
-  return runReport(root, evidenceFile);
+  try {
+    return runReport(root, evidenceFile, environment);
+  } finally {
+    await rm(evidenceFile, { force: true });
+  }
 }
 
-async function expectRejected(report, code) {
+async function removeFixture(root) {
+  await rm(path.dirname(root), { recursive: true, force: true });
+}
+
+async function expectRejected(report, code, environment = {}) {
   const root = await createFixtureRoot();
   try {
-    const result = await runWithEvidence(root, report(root));
+    const result = await runWithEvidence(root, report(root), environment);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain(code);
     expect(result.stdout).not.toContain('"verdict": "PASS"');
   } finally {
-    await rm(root, { recursive: true, force: true });
+    await removeFixture(root);
   }
 }
 
@@ -180,7 +249,7 @@ describe("Hunt report Vitest evidence", () => {
       expect(result.stderr).toContain("HUNT_VITEST_REPORT_UNREADABLE");
       expect(result.stdout).not.toContain('"verdict": "PASS"');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeFixture(root);
     }
   });
 
@@ -220,7 +289,7 @@ describe("Hunt report Vitest evidence", () => {
         defects: requiredMutationIds,
       });
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeFixture(root);
     }
   });
 
@@ -230,17 +299,15 @@ describe("Hunt report Vitest evidence", () => {
   ])("refuses PASS evidence from %s", async (_name, buildOverride) => {
     const root = await createFixtureRoot();
     try {
-      await writeFile(
-        path.join(root, "dist/app/build-manifest.json"),
-        `${JSON.stringify(validBuildManifest(buildOverride))}\n`,
-      );
-      const result = await runWithEvidence(root, validVitestReport(root));
+      const result = await runWithEvidence(root, validVitestReport(root), {
+        FAKE_BUILD_OVERRIDES: JSON.stringify(buildOverride),
+      });
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("HUNT_BUILD_SOURCE_NOT_EXACT");
       expect(result.stdout).not.toContain('"verdict": "PASS"');
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeFixture(root);
     }
   });
 
@@ -313,5 +380,41 @@ describe("Hunt report Vitest evidence", () => {
         "renamed-mutation";
       return report;
     }, "HUNT_MUTATION_IDS_MISMATCH");
+  });
+
+  it("EV-02 refuses to certify a build whose source moved after the tests ran", async () => {
+    await expectRejected(
+      (root) => validVitestReport(root),
+      "HUNT_INPUT_CHANGED",
+      { FAKE_COMMIT_AFTER_TESTS: "1" },
+    );
+  });
+
+  it.each([
+    ["absent", "HUNT_BUILD_INPUT_MANIFEST_INVALID"],
+    ["tampered", "HUNT_BUILD_INPUT_MANIFEST_INVALID"],
+  ])(
+    "EV-07 refuses a build whose retained input manifest is %s",
+    async (state, code) => {
+      await expectRejected((root) => validVitestReport(root), code, {
+        FAKE_INPUT_MANIFEST: state,
+      });
+    },
+  );
+
+  it("records the tested source identity it certifies", async () => {
+    const root = await createFixtureRoot();
+    try {
+      const result = await runWithEvidence(root, validVitestReport(root));
+      expect(result.status).toBe(0);
+      const report = JSON.parse(result.stdout);
+      expect(report.testedSource).toEqual({
+        commit: expect.stringMatching(/^[a-f0-9]{40}$/u),
+        treeDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      });
+      expect(report.replay.buildIdentity).toContain(report.testedSource.commit);
+    } finally {
+      await removeFixture(root);
+    }
   });
 });

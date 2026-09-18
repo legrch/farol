@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
-import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
+import {
+  BUILD_ENTRIES,
+  verifyBuildEntries,
+  verifyInputManifest,
+} from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
@@ -192,6 +196,13 @@ requireValue(
     /^[a-f0-9]{64}$/u.test(embedded.inputLedgerSha256 ?? ""),
   "PACKAGE_EMBEDDED_ATTESTATION_INVALID",
 );
+try {
+  await verifyInputManifest(resources, embedded);
+} catch (error) {
+  throw new Error(
+    `PACKAGE_EMBEDDED_INPUT_MANIFEST_INVALID:${error instanceof Error ? error.message : "unknown"}`,
+  );
+}
 requireValue(
   embedded.product === artifact.product,
   "PACKAGE_EMBEDDED_PRODUCT_MISMATCH",

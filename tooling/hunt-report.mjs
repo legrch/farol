@@ -1,9 +1,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { verifyInputManifest } from "./build-contract.mjs";
 import { openEvidenceAttempt } from "./evidence-attempt.mjs";
+import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
+const repositoryRoot = path.resolve(root, "..");
+const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
 const vitest = path.join(root, "node_modules/vitest/vitest.mjs");
 const suites = [
   {
@@ -363,9 +367,13 @@ async function collectVitestEvidence() {
   }
 }
 
+// The report may certify only the exact source its tests ran against: the
+// identity is measured before the tests, then compared with the build and
+// measured again after it.
+const testedSource = sourceIdentity(repositoryRoot, scope);
 const huntAttempt = await openEvidenceAttempt(
   path.join(root, "artifacts/hunt"),
-  { lane: "hunt", input: {} },
+  { lane: "hunt", input: testedSource },
 );
 huntAttempt.installProcessHandlers();
 const vitestEvidence = await collectVitestEvidence();
@@ -406,6 +414,27 @@ if (
 if (build.dirty || !build.inputExact) {
   throw new Error("HUNT_BUILD_SOURCE_NOT_EXACT");
 }
+if (testedSource.dirty) {
+  throw new Error("HUNT_TESTED_SOURCE_NOT_EXACT");
+}
+const builtSource = sourceIdentity(repositoryRoot, scope);
+if (
+  build.sourceCommit !== testedSource.commit ||
+  build.sourceTreeDigest !== testedSource.treeDigest ||
+  builtSource.commit !== testedSource.commit ||
+  builtSource.treeDigest !== testedSource.treeDigest ||
+  builtSource.dirty
+) {
+  throw new Error("HUNT_INPUT_CHANGED");
+}
+try {
+  await verifyInputManifest(path.join(root, "dist/app"), build);
+} catch (error) {
+  fail(
+    "HUNT_BUILD_INPUT_MANIFEST_INVALID",
+    error instanceof Error ? error.message : "unknown",
+  );
+}
 
 const buildIdentity = [
   "farol-next",
@@ -434,6 +463,10 @@ const report = {
   mutationProof: {
     ...vitestEvidence.mutationProof,
     defects: vitestEvidence.mutationProof.killedIds,
+  },
+  testedSource: {
+    commit: testedSource.commit,
+    treeDigest: testedSource.treeDigest,
   },
   replay: { ...fixture, buildIdentity },
 };

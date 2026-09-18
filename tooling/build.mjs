@@ -207,6 +207,12 @@ const inputExact =
 const inputLedger = [...inputRecords.values()].sort((left, right) =>
   left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 );
+// Retain the exact ledger bytes the manifest digest names, so the recorded
+// inputs can be recomputed instead of trusted as a label.
+const inputLedgerBytes = JSON.stringify(inputLedger);
+await fs.writeFile(path.join(output, "input-manifest.json"), inputLedgerBytes, {
+  mode: 0o600,
+});
 const buildIdentity = createBuildIdentity({
   version: packageDocument.version,
   builtAt: new Date().toISOString(),
@@ -236,7 +242,7 @@ const manifest = {
   sourceTreeDigest: initial.treeDigest,
   dirty: buildIdentity.sourceDirty,
   inputExact,
-  inputLedgerSha256: sha256(JSON.stringify(inputLedger)),
+  inputLedgerSha256: sha256(inputLedgerBytes),
   sourceInputCount: sourceInputs.length,
   dependencyInputCount: dependencyInputs.length,
   entries: BUILD_ENTRIES,
