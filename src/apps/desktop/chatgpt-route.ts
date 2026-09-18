@@ -53,6 +53,9 @@ const taskProbeSchema = z.strictObject({
 
 const activityProbeSchema = z.strictObject({ running: z.boolean() });
 
+// How long one page activity probe may take before activity is unknown.
+const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
+
 export type ChatGptProviderErrorKind = "usage_limited" | "generic";
 
 const chatGptUsageLimitPattern =
@@ -413,6 +416,7 @@ export class ChatGptRoute {
   private displayTitle: string;
   private activityTimer: ReturnType<typeof setInterval> | null = null;
   private activityPollInFlight = false;
+  private activityProbeStale = false;
   private activityGeneration = 0;
   private observedTaskRunning: boolean | null = null;
 
@@ -1451,6 +1455,7 @@ export class ChatGptRoute {
     if (this.activityTimer) clearInterval(this.activityTimer);
     this.activityTimer = null;
     this.activityPollInFlight = false;
+    this.activityProbeStale = false;
     this.observedTaskRunning = null;
   }
 
@@ -1467,16 +1472,33 @@ export class ChatGptRoute {
       return;
     }
     this.activityPollInFlight = true;
+    // A probe that never settles must not silence the watcher: past its
+    // deadline the task's activity is reported unknown once, no further
+    // probe starts while this one hangs, and its late answer is discarded.
+    // When it finally settles, the next poll measures afresh.
+    let late = false;
+    const deadline = setTimeout(() => {
+      if (generation !== this.activityGeneration) return;
+      late = true;
+      if (!this.activityProbeStale) {
+        this.activityProbeStale = true;
+        this.observedTaskRunning = null;
+        this.options.onTaskActivityChanged?.("outcome_unknown");
+      }
+    }, ACTIVITY_PROBE_DEADLINE_MS);
+    deadline.unref?.();
     try {
       const observed = activityProbeSchema.safeParse(
         await contents.executeJavaScript(activityProbe, true),
       );
       if (
+        !late &&
         generation === this.activityGeneration &&
         !contents.isDestroyed() &&
         this.load === "loaded" &&
         observed.success
       ) {
+        this.activityProbeStale = false;
         this.reportConversationUrl(contents);
         this.recordTaskActivity(observed.data.running);
       }
@@ -1484,6 +1506,7 @@ export class ChatGptRoute {
       // A navigation can invalidate an in-flight probe. Navigation lifecycle
       // events own readiness and the next bounded poll remeasures activity.
     } finally {
+      clearTimeout(deadline);
       if (generation === this.activityGeneration) {
         this.activityPollInFlight = false;
       }

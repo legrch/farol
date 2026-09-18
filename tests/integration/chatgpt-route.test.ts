@@ -698,6 +698,65 @@ describe("ChatGPT route streaming observation", () => {
 });
 
 describe("ChatGPT embedded task surface", () => {
+  it("OBS-F7 reports a hung activity probe as unknown without piling up probes or trusting its late answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const changes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        onTaskActivityChanged: (state) => {
+          changes.push(state);
+        },
+      });
+      let settleHung!: (value: unknown) => void;
+      const executeJavaScript = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              settleHung = resolve;
+            }),
+        )
+        .mockResolvedValue({ running: false });
+      const contents = {
+        isDestroyed: () => false,
+        executeJavaScript,
+        getURL: () => "https://chatgpt.com/c/activity",
+      };
+      Reflect.set(candidate, "load", "loaded");
+      const poll = () =>
+        Reflect.apply(
+          Reflect.get(candidate, "pollTaskActivity") as (
+            ...args: unknown[]
+          ) => Promise<void>,
+          candidate,
+          [contents, Reflect.get(candidate, "activityGeneration")],
+        );
+
+      const hung = poll();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(changes).toEqual(["outcome_unknown"]);
+      // No second probe starts while the first one hangs.
+      await poll();
+      expect(executeJavaScript).toHaveBeenCalledTimes(1);
+
+      // The hung probe's late answer is discarded.
+      settleHung({ running: true });
+      await hung;
+      expect(changes).toEqual(["outcome_unknown"]);
+
+      // The next poll measures afresh.
+      await poll();
+      expect(executeJavaScript).toHaveBeenCalledTimes(2);
+      expect(changes).toEqual(["outcome_unknown", "idle"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retains an exact owned conversation binding before the surface reopens", () => {
     const candidate = new ChatGptRoute({
       homeUrl: "https://chatgpt.com/",
