@@ -122,6 +122,7 @@ import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra
 import {
   applyWorkspaceEdit,
   desktopMutableWorkspaceAction,
+  observeWorkspaceEdit,
   prepareWorkspaceEdit,
   workspaceEditPreview,
   type PendingWorkspaceEdit,
@@ -2732,6 +2733,14 @@ function workspaceReadFailure(code: string): ProductConfigurationResult {
   }
 }
 
+function workspaceMutationStateRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "workspace-mutations",
+  );
+}
+
 function workspaceCommandFailure(code: string): ProductConfigurationResult {
   switch (code) {
     case "AUTHORITY_CAPABILITY_DENIED":
@@ -4311,6 +4320,11 @@ async function configureProduct(
       if (selected.workspace.access !== "write") {
         return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
       }
+      // A new edit waits until the outcome of the last one was delivered, so
+      // an unknown result is observed instead of being buried under a retry.
+      if (snapshot.settings.computer.pendingEdit !== null) {
+        return configurationFailure("WORKSPACE_MUTATION_RESULT_PENDING");
+      }
       const pending = pendingWorkspaceEdit;
       if (pending) {
         const pendingStillCurrent =
@@ -4393,11 +4407,7 @@ async function configureProduct(
         workspace,
         pending.expiresAt,
         {
-          mutationStateRoot: path.join(
-            app.getPath("userData"),
-            "farol-next-state",
-            "workspace-mutations",
-          ),
+          mutationStateRoot: workspaceMutationStateRoot(),
           workspace: nativeWorkspace,
           now: () => Date.now(),
         },
@@ -4406,9 +4416,25 @@ async function configureProduct(
         pendingWorkspaceEdit = null;
         return configurationFailure("WORKSPACE_WRITE_APPROVAL_REQUIRED");
       }
+      if (snapshot.settings.computer.pendingEdit !== null) {
+        pendingWorkspaceEdit = null;
+        return configurationFailure("WORKSPACE_MUTATION_RESULT_PENDING");
+      }
       workspaceMutationAdmission = true;
       pendingWorkspaceEdit = null;
       try {
+        // The operation ID is durable before anything executes, so a lost
+        // response or a restart leaves this exact operation to observe.
+        const recorded = await configuration.recordPendingWorkspaceEdit({
+          operationId: pending.operationId,
+          workspaceId: pending.workspaceId,
+          relativePath: pending.relativePath,
+          computerGeneration: pending.computerGeneration,
+          submittedAt: new Date().toISOString(),
+        });
+        if (!recorded.ok) {
+          return configurationFailure("SETTINGS_WRITE_FAILED");
+        }
         const result = await applyWorkspaceEdit(action, pending, {
           oldText: command.oldText,
           newText: command.newText,
@@ -4442,6 +4468,61 @@ async function configureProduct(
         workspaceMutationAdmission = false;
       }
     }
+    case "computer.observe-workspace-edit": {
+      if (workspaceMutationAdmission) {
+        return configurationFailure("WORKSPACE_MUTATION_IN_PROGRESS");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const pendingEdit = snapshot.settings.computer.pendingEdit;
+      if (pendingEdit?.operationId !== command.operationId) {
+        return configurationFailure("WORKSPACE_MUTATION_NOT_PENDING");
+      }
+      // Observation reads the durable operation record only: it executes
+      // nothing and needs no write authority.
+      const observed = await observeWorkspaceEdit(
+        { mutationStateRoot: workspaceMutationStateRoot() },
+        pendingEdit,
+      );
+      switch (observed.status) {
+        case "completed":
+          return ProductConfigurationResultSchema.parse({
+            ok: true,
+            snapshot: configuration.snapshot(),
+            evidence: {
+              kind: "computer.workspace-mutation",
+              operationId: observed.operationId,
+              workspaceId: pendingEdit.workspaceId,
+              relativePath: observed.receipt.relativePath,
+              operation: observed.receipt.operation,
+              bytes: observed.receipt.bytes,
+              replacements: observed.receipt.replacements,
+              beforeSha256: observed.receipt.beforeSha256,
+              afterSha256: observed.receipt.afterSha256,
+              resultRetention: "durable",
+              redelivered: observed.redelivered,
+            },
+          });
+        case "failed":
+          return workspaceMutationFailure(observed.code);
+        case "not_admitted":
+          return configurationFailure("WORKSPACE_MUTATION_NOT_ADMITTED");
+        case "outcome_unknown":
+          await configuration.recordComputerMutationOutcomeUnknown(
+            pendingEdit.workspaceId,
+          );
+          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
+        case "unavailable":
+          return configurationFailure("WORKSPACE_MUTATION_OUTCOME_UNKNOWN");
+      }
+      break;
+    }
+    case "computer.ack-workspace-edit":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.clearPendingWorkspaceEdit(command.operationId),
+      );
     case "computer.cancel-workspace-edit":
       if (
         !pendingWorkspaceEdit ||

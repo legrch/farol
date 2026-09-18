@@ -273,6 +273,18 @@ export const SetupStepIdSchema = z.enum([
   "verify",
 ]);
 
+// One guarded edit whose result has not yet been delivered to the owner.  It
+// is recorded before the edit executes and cleared only after the renderer
+// acknowledges the delivered outcome, so a lost response or a restart leaves
+// the exact operation ID to observe instead of a reason to edit again.
+export const PendingWorkspaceEditDeliverySchema = z.strictObject({
+  operationId: IdentifierSchema,
+  workspaceId: IdentifierSchema,
+  relativePath: ProductRelativePathSchema,
+  computerGeneration: z.number().int().positive(),
+  submittedAt: z.string().datetime(),
+});
+
 export const ProductSettingsSchema = z.strictObject({
   schema: z.literal(1),
   revision: z.number().int().positive(),
@@ -283,6 +295,7 @@ export const ProductSettingsSchema = z.strictObject({
     name: z.string().trim().min(1).max(80),
     commands: z.enum(["none", "verification"]).default("none"),
     workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
+    pendingEdit: PendingWorkspaceEditDeliverySchema.nullable().default(null),
   }),
   nativeHosts: z
     .strictObject({
@@ -450,6 +463,14 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("computer.cancel-workspace-edit"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.observe-workspace-edit"),
+    operationId: IdentifierSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("computer.ack-workspace-edit"),
     operationId: IdentifierSchema,
   }),
   z.strictObject({
@@ -833,6 +854,9 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_EDIT_NOT_UNIQUE",
       "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
       "WORKSPACE_MUTATION_FAILED",
+      "WORKSPACE_MUTATION_NOT_PENDING",
+      "WORKSPACE_MUTATION_NOT_ADMITTED",
+      "WORKSPACE_MUTATION_RESULT_PENDING",
       "SUPPORT_EXPORT_CANCELLED",
       "SUPPORT_EXPORT_FAILED",
       "CODEX_HOST_PICKER_CANCELLED",
@@ -884,6 +908,9 @@ export type CodexHostSelection = z.infer<typeof CodexHostSelectionSchema>;
 export type SecureMcpConnector = z.infer<typeof SecureMcpConnectorSchema>;
 export type SetupStepId = z.infer<typeof SetupStepIdSchema>;
 export type ProductSettings = z.infer<typeof ProductSettingsSchema>;
+export type PendingWorkspaceEditDelivery = z.infer<
+  typeof PendingWorkspaceEditDeliverySchema
+>;
 export type ProductConfigurationSnapshot = z.infer<
   typeof ProductConfigurationSnapshotSchema
 >;

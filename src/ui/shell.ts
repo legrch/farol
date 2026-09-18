@@ -45,6 +45,7 @@ import {
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
+import { workspaceEditToAcknowledge } from "./workspace-edit-delivery";
 import {
   classifyConfigurationResponse,
   UNCONFIRMED_CONFIGURATION_MESSAGE,
@@ -1397,14 +1398,21 @@ function renderComputerConfiguration(): void {
         );
       });
       query.append(gitStatus, gitHead);
+      const pendingEdit =
+        bootstrap.configuration.status === "ready"
+          ? bootstrap.configuration.settings.computer.pendingEdit
+          : null;
       if (workspace.access === "write") {
         const edit = document.createElement("button");
         edit.type = "button";
         edit.textContent = "Edit file…";
-        edit.disabled = !verified;
-        edit.title = verified
-          ? "Choose a text file, review an exact replacement, then apply it once"
-          : "Verify guarded edit access first";
+        edit.disabled = !verified || pendingEdit !== null;
+        edit.title =
+          pendingEdit !== null
+            ? "Check the result of the last guarded edit first"
+            : verified
+              ? "Choose a text file, review an exact replacement, then apply it once"
+              : "Verify guarded edit access first";
         edit.addEventListener("click", () => {
           void configureProduct(
             {
@@ -1417,6 +1425,30 @@ function renderComputerConfiguration(): void {
         query.append(edit);
       }
       card.append(query);
+      if (
+        pendingEdit?.workspaceId === workspace.workspaceId &&
+        workspaceEvidence?.kind !== "computer.workspace-mutation"
+      ) {
+        // A submitted edit whose result never reached this window: observe
+        // that exact operation instead of offering to edit again.
+        const notice = document.createElement("p");
+        notice.className = "workspace-pending-edit";
+        notice.textContent = `The last guarded edit of ${pendingEdit.relativePath} has no delivered result.`;
+        const check = document.createElement("button");
+        check.type = "button";
+        check.textContent = "Check result";
+        check.addEventListener("click", () => {
+          void configureProduct(
+            {
+              kind: "computer.observe-workspace-edit",
+              operationId: pendingEdit.operationId,
+            },
+            `Checked the last guarded edit of ${pendingEdit.relativePath}.`,
+          );
+        });
+        notice.append(" ", check);
+        card.append(notice);
+      }
 
       if (workspaceEvidence?.workspaceId === workspace.workspaceId) {
         const evidence = document.createElement("section");
@@ -1584,6 +1616,27 @@ async function acknowledgeChatGptTaskResult(
   };
 }
 
+// Clears the undelivered-result record of one guarded edit after its outcome
+// was shown.  A lost reply leaves the record, and the edit stays observable.
+async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
+  let transport: ConfigurationTransport;
+  try {
+    transport = {
+      settled: "fulfilled",
+      value: await window.farolNext.configure({
+        kind: "computer.ack-workspace-edit",
+        operationId,
+      }),
+    };
+  } catch {
+    transport = { settled: "rejected" };
+  }
+  const outcome = classifyConfigurationResponse(transport);
+  if (outcome.kind === "unconfirmed") return;
+  bootstrap = { ...bootstrap, configuration: outcome.result.snapshot };
+  render();
+}
+
 async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
@@ -1679,6 +1732,12 @@ async function configureProduct(
     transport = { settled: "rejected" };
   }
   const outcome = classifyConfigurationResponse(transport);
+  const editToAcknowledge = workspaceEditToAcknowledge(command, outcome);
+  if (editToAcknowledge) {
+    queueMicrotask(() => {
+      void acknowledgeWorkspaceEdit(editToAcknowledge);
+    });
+  }
   if (outcome.kind === "unconfirmed") {
     // Neither a malformed reply nor a lost promise proves the command was
     // not applied, so this must not claim "nothing was applied" — see
@@ -1726,11 +1785,17 @@ async function configureProduct(
                   ? "No current connector challenge is available. Start the connector before checking its ChatGPT attachment."
                   : parsed.error === "CONNECTOR_STOP_REQUIRED"
                     ? "Stop the connector before changing Computer authority or connector identity."
-                    : parsed.error === "WORKSPACE_NOT_GIT_REPOSITORY"
-                      ? "This workspace is not a Git repository."
-                      : parsed.error === "WORKSPACE_GIT_HEAD_UNBORN"
-                        ? "This repository has no commits yet, so there is no HEAD commit to read."
-                        : `Not applied · ${parsed.error}`;
+                    : parsed.error === "WORKSPACE_MUTATION_RESULT_PENDING"
+                      ? "The last guarded edit has no delivered result yet. Check its result first."
+                      : parsed.error === "WORKSPACE_MUTATION_NOT_ADMITTED"
+                        ? "The last guarded edit was never admitted, so nothing was changed."
+                        : parsed.error === "WORKSPACE_MUTATION_NOT_PENDING"
+                          ? "There is no undelivered edit result to check."
+                          : parsed.error === "WORKSPACE_NOT_GIT_REPOSITORY"
+                            ? "This workspace is not a Git repository."
+                            : parsed.error === "WORKSPACE_GIT_HEAD_UNBORN"
+                              ? "This repository has no commits yet, so there is no HEAD commit to read."
+                              : `Not applied · ${parsed.error}`;
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

@@ -1170,6 +1170,75 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toMatchObject(unknown.snapshot);
   });
 
+  it("C05-08 keeps a submitted edit observable across restart until its delivery is acknowledged", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    expect(added.snapshot.settings.computer.pendingEdit).toBeNull();
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    await service.updateWorkspaceAccess(workspaceId, "write");
+    await service.recordComputerVerification(workspaceId, {
+      profile: "computer.local.write/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "a".repeat(64),
+      protocol: "mutable-workspace/1",
+    });
+    const verified = service.snapshot();
+    if (verified.status !== "ready") throw new Error("settings missing");
+    const pendingEdit = {
+      operationId: "00000000-0000-4000-8000-0000000000aa",
+      workspaceId,
+      relativePath: "README.md",
+      computerGeneration: verified.settings.computer.generation,
+      submittedAt: "2026-09-16T10:01:00.000Z",
+    };
+
+    const recorded = await service.recordPendingWorkspaceEdit(pendingEdit);
+
+    expect(recorded).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          computer: {
+            generation: verified.settings.computer.generation,
+            pendingEdit,
+          },
+          setup: { computer: verified.settings.setup.computer },
+        },
+      },
+    });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject(recorded.snapshot);
+    await expect(
+      restarted.clearPendingWorkspaceEdit(
+        "00000000-0000-4000-8000-0000000000bb",
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: "WORKSPACE_MUTATION_NOT_PENDING",
+    });
+    await expect(
+      restarted.clearPendingWorkspaceEdit(pendingEdit.operationId),
+    ).resolves.toMatchObject({
+      ok: true,
+      snapshot: { settings: { computer: { pendingEdit: null } } },
+    });
+  });
+
   it("persists truthful ChatGPT readiness without credentials or page content", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(

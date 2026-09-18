@@ -7,8 +7,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   applyWorkspaceEdit,
   desktopMutableWorkspaceAction,
+  observeWorkspaceEdit,
   prepareWorkspaceEdit,
 } from "../../src/apps/desktop/workspace-edit";
+import type { MutableWorkspace } from "../../src/modules/computer/app/port/mutable-workspace";
+import { PrivateWorkspaceMutationStore } from "../../src/modules/computer/infra/repo/private-workspace-mutation-store";
 import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
@@ -63,6 +66,7 @@ function computer(): ProductSettings["computer"] {
     name: "This Mac",
     commands: "none",
     workspaces: [approvedWorkspace()],
+    pendingEdit: null,
   };
 }
 
@@ -197,6 +201,130 @@ describe("desktop guarded edit: prepare then apply", () => {
     });
     expect(visible(await fs.readFile(path.join(root, "moved.md")))).toBe(
       visible(competing),
+    );
+  });
+});
+
+describe("C05-08 observing a guarded edit after a lost response", () => {
+  function counting(workspace: NativeReadonlyWorkspace) {
+    const counter = { mutations: 0 };
+    const counted: MutableWorkspace = {
+      mutate: (request) => {
+        counter.mutations += 1;
+        return workspace.mutate(request);
+      },
+    };
+    return { counter, counted };
+  }
+
+  it("recovers the same operation's result without a second mutation", async () => {
+    const before = Buffer.from("title\nbody\n", "utf8");
+    const expected = Buffer.from("title\nBODY\n", "utf8");
+    await fs.writeFile(path.join(root, "lost.md"), before, { mode: 0o600 });
+    const workspace = native();
+    const { counter, counted } = counting(workspace);
+
+    const prepared = await prepare(workspace, "lost.md");
+    if (!prepared.ok) throw new Error(prepared.code);
+    const action = desktopMutableWorkspaceAction(
+      computer(),
+      approvedWorkspace(),
+      prepared.pending.expiresAt,
+      { mutationStateRoot: stateRoot, workspace: counted, now: () => NOW },
+    );
+    if (!action) throw new Error("desktop action composition refused");
+    // The response of this apply is lost: nothing reads its result.
+    await applyWorkspaceEdit(action, prepared.pending, {
+      oldText: "body",
+      newText: "BODY",
+    });
+
+    // A restarted process observes the recorded operation by its identity.
+    await expect(
+      observeWorkspaceEdit({ mutationStateRoot: stateRoot }, prepared.pending),
+    ).resolves.toEqual({
+      status: "completed",
+      operationId: prepared.pending.operationId,
+      receipt: {
+        kind: "workspace.mutation",
+        operation: "edit",
+        relativePath: "lost.md",
+        bytes: expected.length,
+        replacements: 1,
+        beforeSha256: digest(before),
+        afterSha256: digest(expected),
+      },
+      redelivered: true,
+    });
+    expect(counter.mutations).toBe(1);
+    expect(visible(await fs.readFile(path.join(root, "lost.md")))).toBe(
+      visible(expected),
+    );
+
+    // A repeated apply of the same prepared edit after the restart replays
+    // the recorded result instead of editing again.
+    const restarted = desktopMutableWorkspaceAction(
+      computer(),
+      approvedWorkspace(),
+      prepared.pending.expiresAt,
+      { mutationStateRoot: stateRoot, workspace: counted, now: () => NOW },
+    );
+    if (!restarted) throw new Error("desktop action composition refused");
+    await expect(
+      applyWorkspaceEdit(restarted, prepared.pending, {
+        oldText: "body",
+        newText: "BODY",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { redelivered: true } });
+    expect(counter.mutations).toBe(1);
+  });
+
+  it("reports an operation that was never admitted as not applied", async () => {
+    await fs.writeFile(path.join(root, "never.md"), "never\n", {
+      mode: 0o600,
+    });
+    const prepared = await prepare(native(), "never.md");
+    if (!prepared.ok) throw new Error(prepared.code);
+
+    await expect(
+      observeWorkspaceEdit({ mutationStateRoot: stateRoot }, prepared.pending),
+    ).resolves.toEqual({
+      status: "not_admitted",
+      operationId: prepared.pending.operationId,
+    });
+  });
+
+  it("reports an admitted operation whose executor vanished as unknown, never re-executing", async () => {
+    await fs.writeFile(path.join(root, "crash.md"), "crash\n", {
+      mode: 0o600,
+    });
+    const prepared = await prepare(native(), "crash.md");
+    if (!prepared.ok) throw new Error(prepared.code);
+    // Admission was recorded, then the executing process died before the
+    // helper answered.
+    await new PrivateWorkspaceMutationStore({ root: stateRoot }).admit({
+      identity: {
+        operationId: prepared.pending.operationId,
+        ownerId: "owner-desktop",
+        sessionId: "desktop-computer-session",
+        taskId: "desktop-computer-task",
+        taskEpoch: prepared.pending.computerGeneration,
+        participantId: "desktop-main",
+      },
+      workspaceId: prepared.pending.workspaceId,
+      requestDigest: "0".repeat(64),
+      phase: "prepared",
+      outcome: null,
+    });
+
+    await expect(
+      observeWorkspaceEdit({ mutationStateRoot: stateRoot }, prepared.pending),
+    ).resolves.toEqual({
+      status: "outcome_unknown",
+      operationId: prepared.pending.operationId,
+    });
+    expect(await fs.readFile(path.join(root, "crash.md"), "utf8")).toBe(
+      "crash\n",
     );
   });
 });

@@ -7,10 +7,12 @@ import {
   CodexAgentVerificationFieldsSchema,
   ProductConfigurationSnapshotSchema,
   ProductGeneralSettingsSchema,
+  PendingWorkspaceEditDeliverySchema,
   ProductSettingsSchema,
   SetupStepIdSchema,
   type ProductConfigurationSnapshot,
   type ProductSettings,
+  type PendingWorkspaceEditDelivery,
   type SetupStepId,
 } from "../../pkg/product-settings/contract";
 
@@ -42,7 +44,8 @@ type MutationResult = Readonly<
         | "SETTINGS_UNAVAILABLE"
         | "SETTINGS_INPUT_INVALID"
         | "SETTINGS_WRITE_FAILED"
-        | "WORKSPACE_NOT_FOUND";
+        | "WORKSPACE_NOT_FOUND"
+        | "WORKSPACE_MUTATION_NOT_PENDING";
       snapshot: ProductConfigurationSnapshot;
     }
 >;
@@ -329,6 +332,7 @@ function defaultSettings(id: () => string): ProductSettings {
       name: "This Mac",
       commands: "none",
       workspaces: [],
+      pendingEdit: null,
     },
     nativeHosts: { generation: 1, codex: null },
     connectors: {
@@ -1097,6 +1101,42 @@ export class ProductConfigurationService {
           outcomeUnknown: false,
         },
       },
+    }));
+  }
+
+  // Recorded before a guarded edit executes and cleared only after delivery;
+  // neither step changes Computer authority or its verification.
+  async recordPendingWorkspaceEdit(
+    pending: PendingWorkspaceEditDelivery,
+  ): Promise<MutationResult> {
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    const parsed = PendingWorkspaceEditDeliverySchema.safeParse(pending);
+    if (
+      !parsed.success ||
+      !this.current.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === parsed.data.workspaceId,
+      )
+    ) {
+      return this.failure("WORKSPACE_NOT_FOUND");
+    }
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      computer: { ...settings.computer, pendingEdit: parsed.data },
+    }));
+  }
+
+  async clearPendingWorkspaceEdit(
+    operationId: string,
+  ): Promise<MutationResult> {
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    if (this.current.computer.pendingEdit?.operationId !== operationId) {
+      return this.failure("WORKSPACE_MUTATION_NOT_PENDING");
+    }
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      computer: { ...settings.computer, pendingEdit: null },
     }));
   }
 

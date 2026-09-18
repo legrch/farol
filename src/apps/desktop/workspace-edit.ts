@@ -1,4 +1,7 @@
-import type { MutableWorkspace } from "../../modules/computer/app/port/mutable-workspace";
+import type {
+  MutableWorkspace,
+  WorkspaceMutationReceipt,
+} from "../../modules/computer/app/port/mutable-workspace";
 import type {
   ReadonlyWorkspaceDescriptor,
   ReadonlyWorkspaceErrorCode,
@@ -38,6 +41,23 @@ export type PendingWorkspaceEdit = Readonly<{
   beforeSha256: string;
   expiresAt: number;
 }>;
+
+// What a restarted desktop can learn about one submitted guarded edit from
+// the durable operation store alone.  Observation never executes anything and
+// needs no write authority: it reports the recorded outcome of that exact
+// operation ID, and an admitted operation whose executor vanished is unknown,
+// never retried.
+export type ObservedWorkspaceEdit =
+  | Readonly<{
+      status: "completed";
+      operationId: string;
+      receipt: WorkspaceMutationReceipt;
+      redelivered: true;
+    }>
+  | Readonly<{ status: "failed"; operationId: string; code: string }>
+  | Readonly<{ status: "outcome_unknown"; operationId: string }>
+  | Readonly<{ status: "not_admitted"; operationId: string }>
+  | Readonly<{ status: "unavailable"; operationId: string }>;
 
 export type WorkspaceEditPreparation =
   | Readonly<{ ok: true; pending: PendingWorkspaceEdit }>
@@ -176,18 +196,62 @@ export function desktopMutableWorkspaceAction(
   );
 }
 
-export function applyWorkspaceEdit(
-  action: RunMutableComputerAction,
-  pending: PendingWorkspaceEdit,
-  edit: Readonly<{ oldText: string; newText: string }>,
-): Promise<MutableComputerActionResult> {
-  return action.execute({
+function desktopMutationIdentity(
+  pending: Pick<PendingWorkspaceEdit, "operationId" | "computerGeneration">,
+) {
+  return {
     operationId: pending.operationId,
     ownerId: DESKTOP_OWNER_ID,
     sessionId: DESKTOP_SESSION_ID,
     taskId: DESKTOP_TASK_ID,
     taskEpoch: pending.computerGeneration,
     participantId: DESKTOP_PARTICIPANT_ID,
+  } as const;
+}
+
+export async function observeWorkspaceEdit(
+  dependencies: Readonly<{ mutationStateRoot: string }>,
+  pending: Pick<
+    PendingWorkspaceEdit,
+    "operationId" | "workspaceId" | "computerGeneration"
+  >,
+): Promise<ObservedWorkspaceEdit> {
+  const operationId = pending.operationId;
+  let record;
+  try {
+    record = await new PrivateWorkspaceMutationStore({
+      root: dependencies.mutationStateRoot,
+    }).load(desktopMutationIdentity(pending));
+  } catch {
+    return { status: "unavailable", operationId };
+  }
+  if (record === null) return { status: "not_admitted", operationId };
+  if (record.workspaceId !== pending.workspaceId) {
+    return { status: "unavailable", operationId };
+  }
+  switch (record.phase) {
+    case "completed":
+      return {
+        status: "completed",
+        operationId,
+        receipt: record.outcome.receipt,
+        redelivered: true,
+      };
+    case "failed":
+      return { status: "failed", operationId, code: record.outcome.code };
+    case "prepared":
+    case "outcome_unknown":
+      return { status: "outcome_unknown", operationId };
+  }
+}
+
+export function applyWorkspaceEdit(
+  action: RunMutableComputerAction,
+  pending: PendingWorkspaceEdit,
+  edit: Readonly<{ oldText: string; newText: string }>,
+): Promise<MutableComputerActionResult> {
+  return action.execute({
+    ...desktopMutationIdentity(pending),
     turnId: pending.operationId,
     generation: pending.computerGeneration,
     callId: pending.operationId,
