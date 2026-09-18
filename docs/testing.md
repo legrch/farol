@@ -29,6 +29,13 @@ The E2E harness also sets `FAROL_NEXT_E2E=1` for one bounded startup-delay argum
 without that explicit harness marker the delay is ignored. This makes a second launch
 during startup deterministic without changing the owner command.
 
+When the current owner grant does not permit native focus, pass
+`--skip-native-focus` after the task separator. The harness still runs the hidden and
+inactive-secondary evidence, records the mandatory focus rows as
+`blocked-owner-authorization`, and exits non-zero with a `BLOCKED` report. The flag is
+not acceptance evidence for native focus and never turns those rows into skips or
+passes.
+
 The sealed and development E2E lanes also close the macOS window, prove the exact
 `Farol Next Runtime` PID remains, invoke a second launch with the same isolated
 identity, and prove one window reopens without a second utility process. Quit then

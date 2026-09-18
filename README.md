@@ -131,6 +131,10 @@ with no suitable secondary display, or one that cannot preserve the required vie
 fails the native-visible lane closed; it never falls back to the primary display or
 silently shrinks the assertion. Only the final native focus-transfer assertion activates
 that secondary-display window, and teardown follows immediately.
+If native focus is not authorized for the current run, append
+`-- --skip-native-focus`; the other evidence still runs, while the report remains
+`BLOCKED` and names the mandatory focus rows as owner-authorized work rather than
+silently skipping or passing them.
 
 Launch the exact built development preview through the pinned Electron runtime:
 

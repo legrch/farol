@@ -21,6 +21,7 @@ const root = process.cwd();
 const development = process.argv.includes("--development");
 const lifecycleSoak = process.argv.includes("--lifecycle-soak");
 const persistenceFault = process.argv.includes("--persistence-fault");
+const skipNativeFocus = process.argv.includes("--skip-native-focus");
 assert.equal(
   lifecycleSoak && persistenceFault,
   false,
@@ -138,7 +139,8 @@ function detectMacHostLockState() {
 }
 
 const macHostLockState = detectMacHostLockState();
-const nativeWindowProofAvailable = macHostLockState !== "locked";
+const nativeWindowProofAvailable =
+  !skipNativeFocus && macHostLockState !== "locked";
 
 if (development) {
   cases.push("development-build-identity");
@@ -461,7 +463,11 @@ async function inspectWindowPresentation(application) {
   return application.evaluate(({ BrowserWindow, screen }) => {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
-      return url.startsWith("file:") && url.endsWith("/shell.html");
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
     });
     if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
     const bounds = targetWindow.getBounds();
@@ -1708,7 +1714,16 @@ async function proveStartupRuntimeDeath(stage) {
     const killed = await instance.application.evaluate(
       async ({ app, BrowserWindow }, targetStage) => {
         for (let attempt = 0; attempt < 5_000; attempt += 1) {
-          const targetWindow = BrowserWindow.getAllWindows()[0];
+          const targetWindow = BrowserWindow.getAllWindows().find(
+            (candidate) => {
+              const url = candidate.webContents.getURL();
+              return (
+                candidate.getTitle() === "Farol Next Preview" &&
+                url.startsWith("file:") &&
+                url.endsWith("/shell.html")
+              );
+            },
+          );
           const viewCount =
             targetWindow?.contentView.children.filter(
               (view) => "webContents" in view,
@@ -1745,17 +1760,33 @@ async function proveStartupRuntimeDeath(stage) {
       .waitFor({ timeout: 5_000 });
     assert.equal(startupWindow.isClosed(), false);
     assert.equal(
-      await instance.application.evaluate(
-        ({ BrowserWindow }) =>
-          BrowserWindow.getAllWindows()[0]?.isVisible() ?? null,
-      ),
+      await instance.application.evaluate(({ BrowserWindow }) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol Next Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        return shell?.isVisible() ?? null;
+      }),
       false,
     );
     const remainingTaskViews = await instance.application.evaluate(
-      ({ BrowserWindow }) =>
-        (BrowserWindow.getAllWindows()[0]?.contentView.children ?? []).filter(
+      ({ BrowserWindow }) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol Next Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        return (shell?.contentView.children ?? []).filter(
           (view) => "webContents" in view,
-        ).length,
+        ).length;
+      },
     );
     assert.equal(remainingTaskViews, 0);
   } finally {
@@ -1765,8 +1796,16 @@ async function proveStartupRuntimeDeath(stage) {
 
 async function taskSurfaces(application) {
   return application.evaluate(async ({ BrowserWindow, webContents }) => {
+    const shell = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
+    });
     const viewByContentsId = new Map(
-      (BrowserWindow.getAllWindows()[0]?.contentView.children ?? [])
+      (shell?.contentView.children ?? [])
         .filter((view) => "webContents" in view)
         .map((view) => [view.webContents.id, view]),
     );
@@ -1802,9 +1841,14 @@ async function taskSurfaces(application) {
 
 async function liveChatGptSurfaces(application, expectedOrigin) {
   return application.evaluate(async ({ BrowserWindow }, origin) => {
-    const host = BrowserWindow.getAllWindows().find(
-      (candidate) => candidate.getTitle() === "Farol Next Preview",
-    );
+    const host = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
+    });
     const views = (host?.contentView.children ?? []).filter(
       (view) => "webContents" in view,
     );
@@ -1864,9 +1908,14 @@ async function waitForLiveChatGptSurface(instance, taskId, predicate, message) {
 async function submitLiveChatGptTask(instance, taskId, prompt) {
   return instance.application.evaluate(
     async ({ BrowserWindow }, input) => {
-      const host = BrowserWindow.getAllWindows().find(
-        (candidate) => candidate.getTitle() === "Farol Next Preview",
-      );
+      const host = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
       const view = (host?.contentView.children ?? [])
         .filter((candidate) => "webContents" in candidate)
         .find((candidate) => {
@@ -2069,7 +2118,14 @@ async function sendShortcutFromTask(application, taskId, reverse = false) {
 async function activateForNativeFocusProof(application) {
   if (process.platform === "darwin") {
     await application.evaluate(async ({ app, BrowserWindow }) => {
-      const targetWindow = BrowserWindow.getAllWindows()[0];
+      const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
       if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
       app.setActivationPolicy("regular");
       await app.dock.show();
@@ -2097,7 +2153,14 @@ async function activateForNativeFocusProof(application) {
   let consecutiveFocusedSamples = 0;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     last = await application.evaluate(async ({ app, BrowserWindow }) => {
-      const targetWindow = BrowserWindow.getAllWindows()[0];
+      const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
       if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
       if (process.platform === "darwin") {
         app.setActivationPolicy("regular");
@@ -2127,7 +2190,14 @@ async function activateForNativeFocusProof(application) {
 
 async function deactivateForInactiveAppearanceProof(application) {
   await application.evaluate(({ BrowserWindow }) => {
-    const targetWindow = BrowserWindow.getAllWindows()[0];
+    const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
+    });
     if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
     targetWindow.blur();
   });
@@ -2143,7 +2213,15 @@ async function deactivateForInactiveAppearanceProof(application) {
 async function setWindowSize(application, width, height) {
   await application.evaluate(
     ({ BrowserWindow }, size) => {
-      BrowserWindow.getAllWindows()[0]?.setSize(size.width, size.height);
+      const shell = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
+      shell?.setSize(size.width, size.height);
     },
     { width, height },
   );
@@ -2219,7 +2297,14 @@ async function applicationMenuState(application) {
 async function invokeApplicationMenu(application, id) {
   await application.evaluate(({ BrowserWindow, Menu }, itemId) => {
     const item = Menu.getApplicationMenu()?.getMenuItemById(itemId);
-    const targetWindow = BrowserWindow.getAllWindows()[0];
+    const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
+    });
     if (!item?.click || !targetWindow)
       throw new Error(`E2E_MENU_MISSING:${itemId}`);
     item.click(item, targetWindow, { triggeredByAccelerator: false });
@@ -2228,7 +2313,14 @@ async function invokeApplicationMenu(application, id) {
 
 async function nativeWindowChrome(application) {
   return application.evaluate(({ BrowserWindow }) => {
-    const targetWindow = BrowserWindow.getAllWindows()[0];
+    const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
+    });
     if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
     return {
       focused: targetWindow.isFocused(),
@@ -2244,10 +2336,17 @@ async function nativeWindowChrome(application) {
 async function waitForShellFocus(application, reason) {
   let focused = false;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    focused = await application.evaluate(
-      ({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.webContents.isFocused() ?? false,
-    );
+    focused = await application.evaluate(({ BrowserWindow }) => {
+      const shell = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
+      return shell?.webContents.isFocused() ?? false;
+    });
     if (focused) return;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -2256,7 +2355,14 @@ async function waitForShellFocus(application, reason) {
 
 async function setFullScreen(application, value) {
   await application.evaluate(async ({ BrowserWindow }, nextValue) => {
-    const targetWindow = BrowserWindow.getAllWindows()[0];
+    const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return (
+        candidate.getTitle() === "Farol Next Preview" &&
+        url.startsWith("file:") &&
+        url.endsWith("/shell.html")
+      );
+    });
     if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
     if (targetWindow.isFullScreen() === nextValue) return;
     const event = nextValue ? "enter-full-screen" : "leave-full-screen";
@@ -2626,9 +2732,14 @@ async function runLiveTaskPersistenceFaultProof() {
     const taskId = created.selectedTaskId;
     await instance.application.evaluate(
       async ({ BrowserWindow }, selectedTaskId) => {
-        const host = BrowserWindow.getAllWindows().find(
-          (candidate) => candidate.getTitle() === "Farol Next Preview",
-        );
+        const host = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol Next Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
         const view = (host?.contentView.children ?? [])
           .filter((candidate) => "webContents" in candidate)
           .find((candidate) =>
@@ -2914,24 +3025,34 @@ async function waitForLifecycleQuiescence(instance) {
   const origin = new URL(instance.chatGptFixture.url).origin;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const state = await instance.application.evaluate(
-      ({ BrowserWindow, webContents }, expectedOrigin) => ({
-        taskViewCount:
-          BrowserWindow.getAllWindows()[0]?.contentView.children.filter(
-            (candidate) =>
-              candidate &&
-              typeof candidate === "object" &&
-              "webContents" in candidate,
-          ).length ?? 0,
-        providerSurfaceCount: webContents
-          .getAllWebContents()
-          .filter((candidate) => {
-            try {
-              return new URL(candidate.getURL()).origin === expectedOrigin;
-            } catch {
-              return false;
-            }
-          }).length,
-      }),
+      ({ BrowserWindow, webContents }, expectedOrigin) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol Next Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        return {
+          taskViewCount:
+            shell?.contentView.children.filter(
+              (candidate) =>
+                candidate &&
+                typeof candidate === "object" &&
+                "webContents" in candidate,
+            ).length ?? 0,
+          providerSurfaceCount: webContents
+            .getAllWebContents()
+            .filter((candidate) => {
+              try {
+                return new URL(candidate.getURL()).origin === expectedOrigin;
+              } catch {
+                return false;
+              }
+            }).length,
+        };
+      },
       origin,
     );
     if (state.taskViewCount === 0 && state.providerSurfaceCount === 0) return;
@@ -2968,15 +3089,22 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
   );
   assert.equal(admitted.tasks.length, count);
   assert.equal(
-    await instance.application.evaluate(
-      ({ BrowserWindow }) =>
-        BrowserWindow.getAllWindows()[0]?.contentView.children.filter(
-          (candidate) =>
-            candidate &&
-            typeof candidate === "object" &&
-            "webContents" in candidate,
-        ).length,
-    ),
+    await instance.application.evaluate(({ BrowserWindow }) => {
+      const shell = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
+      return shell?.contentView.children.filter(
+        (candidate) =>
+          candidate &&
+          typeof candidate === "object" &&
+          "webContents" in candidate,
+      ).length;
+    }),
     count,
   );
   assert.equal(
@@ -5620,7 +5748,9 @@ try {
   }
 
   if (!nativeFocusProofCompleted) {
-    if (!nativeWindowProofAvailable) {
+    if (skipNativeFocus) {
+      nativeFocusBlockReason = "native focus was not authorized for this run";
+    } else if (!nativeWindowProofAvailable) {
       assert.equal(process.platform, "darwin");
       assert.equal(
         (await nativeWindowChrome(normal.application)).focused,
@@ -6037,10 +6167,19 @@ try {
     .getByText("local runtime stopped", { exact: false })
     .waitFor();
   const remainingTaskViews = await processDeath.application.evaluate(
-    ({ BrowserWindow }) =>
-      (BrowserWindow.getAllWindows()[0]?.contentView.children ?? []).filter(
+    ({ BrowserWindow }) => {
+      const shell = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol Next Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
+      return (shell?.contentView.children ?? []).filter(
         (view) => "webContents" in view,
-      ).length,
+      ).length;
+    },
   );
   assert.equal(remainingTaskViews, 0);
   await processDeath.window.screenshot({
@@ -6104,9 +6243,12 @@ const report = {
       workArea: normal.presentation.display.workArea,
       nativeFocusProof: nativeFocusProofCompleted
         ? "bounded-final-active-phase"
-        : macHostLockState === "locked"
-          ? "blocked-host-locked"
-          : "blocked-focus-acquisition",
+        : skipNativeFocus
+          ? "blocked-owner-authorization"
+          : macHostLockState === "locked"
+            ? "blocked-host-locked"
+            : "blocked-focus-acquisition",
+      nativeFocusRequested: !skipNativeFocus,
       macHostLockState,
     },
     hiddenRuns: [
