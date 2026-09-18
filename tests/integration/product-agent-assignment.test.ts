@@ -298,3 +298,50 @@ describe("product Agent assignment composition", () => {
     }
   });
 });
+
+describe("LIF-02 start then immediate rejoin", () => {
+  it("joins the in-flight execution instead of admitting a second child", async () => {
+    const fixture = dependencies();
+    let releaseWait!: () => void;
+    const waitGate = new Promise<void>((resolve) => {
+      releaseWait = resolve;
+    });
+    const wait = vi.fn(async (correlation) => {
+      await waitGate;
+      return {
+        status: "completed" as const,
+        correlation,
+        resultRef: "codex-app-server://thread/child-a/turn/turn-a",
+        workspaceEnforcement: "verified" as const,
+      };
+    });
+    const host: AgentHost = { ...fixture.value.host, wait };
+    const deps = { ...fixture.value, host };
+
+    const started = runProductAgentAssignment(settings(), task, input(), deps);
+    // The start has not settled when the owner asks to rejoin.
+    await new Promise((resolve) => setImmediate(resolve));
+    const rejoined = runProductAgentAssignment(
+      settings(),
+      task,
+      input(),
+      deps,
+      "rejoin",
+    );
+    // Let the rejoin reach its admission decision while the child is still
+    // being waited for.
+    for (let turn = 0; turn < 5; turn += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    releaseWait();
+
+    const [first, second] = await Promise.all([started, rejoined]);
+    expect(first).toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "completed", childId: "child-a" } },
+    });
+    expect(second).toEqual(first);
+    expect(fixture.spawn).toHaveBeenCalledTimes(1);
+    expect(wait).toHaveBeenCalledTimes(1);
+  });
+});
