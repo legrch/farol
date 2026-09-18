@@ -138,7 +138,10 @@ import {
 } from "./codex-caller-relay";
 import { configurationAdmission } from "./configuration-admission";
 import { deleteTaskContext } from "./task-context-cleanup";
+import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
+import { runRouteBHostCheck } from "./route-b-host-check";
 import {
+  ROUTE_B_MODEL,
   startRouteBRuntime,
   type RouteBRuntime,
   type RouteBSurfaceAdmission,
@@ -3115,6 +3118,66 @@ async function configureProduct(
       return verifyCodexExecutable(
         snapshot.settings.nativeHosts.codex.executablePath,
       );
+    }
+    case "host.run-route-b-check": {
+      if (codexHostTaskAdmission || codexAgentOperationActive()) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const selected = snapshot.settings.nativeHosts.codex;
+      if (!selected) return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
+      if (
+        !selected.liveVerification ||
+        selected.liveVerification.executableSha256 !==
+          selected.executableSha256 ||
+        selected.liveVerification.buildId !== buildIdentity.buildId
+      ) {
+        return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
+      }
+      if (!chatGptTaskAdmissionReady()) {
+        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+      }
+      const endpoint = routeBRuntime?.endpoint;
+      if (!endpoint) return configurationFailure("ROUTE_B_UNAVAILABLE");
+      codexHostTaskAdmission = true;
+      try {
+        const checked = await runRouteBHostCheck(
+          {
+            executablePath: selected.executablePath,
+            runtimeRoot: await codexHostRuntimeRoot(),
+            homePath: app.getPath("home"),
+            tempPath: app.getPath("temp"),
+            clientVersion: buildIdentity.version,
+            endpoint,
+          },
+          {
+            launch: (input) => launchCodexAppServer(input),
+            route: (client, input) => runCodexChatGptHostRoute(client, input),
+          },
+        );
+        if (checked.status === "failed") {
+          return configurationFailure("ROUTE_B_HOST_START_FAILED");
+        }
+        if (checked.status === "outcome_unknown") {
+          return configurationFailure("ROUTE_B_OUTCOME_UNKNOWN");
+        }
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "host.route-b",
+            provider: "farol_next",
+            model: ROUTE_B_MODEL,
+            deltaCount: checked.deltaCount,
+            observedCharacters: checked.observedCharacters,
+          },
+        });
+      } finally {
+        codexHostTaskAdmission = false;
+      }
     }
     case "host.run-codex-smoke": {
       if (codexHostTaskAdmission || codexAgentOperationActive()) {

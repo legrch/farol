@@ -1795,15 +1795,22 @@ async function configureProduct(
                               ? "This repository has no commits yet, so there is no HEAD commit to read."
                               : parsed.error === "WORKSPACE_SELECTION_PROTECTED"
                                 ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
-                                : parsed.error ===
-                                    "WORKSPACE_GIT_METADATA_NOT_APPROVED"
-                                  ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
-                                  : parsed.error ===
-                                      "CODEX_HOST_TASK_IN_PROGRESS"
-                                    ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
-                                    : parsed.error === "WORKSPACE_ROOT_CHANGED"
-                                      ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
-                                      : `Not applied · ${parsed.error}`;
+                                : parsed.error === "ROUTE_B_OUTCOME_UNKNOWN"
+                                  ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
+                                  : parsed.error === "ROUTE_B_HOST_START_FAILED"
+                                    ? "The isolated Codex host for Route B did not start. Nothing was sent."
+                                    : parsed.error === "ROUTE_B_UNAVAILABLE"
+                                      ? "Route B is not running in this app. Restart Farol Next and check again."
+                                      : parsed.error ===
+                                          "WORKSPACE_GIT_METADATA_NOT_APPROVED"
+                                        ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
+                                        : parsed.error ===
+                                            "CODEX_HOST_TASK_IN_PROGRESS"
+                                          ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
+                                          : parsed.error ===
+                                              "WORKSPACE_ROOT_CHANGED"
+                                            ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                            : `Not applied · ${parsed.error}`;
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
@@ -1847,6 +1854,8 @@ async function configureProduct(
     settingsFeedback = `Saved ${evidence.fileName} · ${evidence.bytes} bytes · ${evidence.sha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.codex-probe") {
     settingsFeedback = `Codex ${evidence.version} contract verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "host.route-b") {
+    settingsFeedback = `Route B answered through ChatGPT on ${evidence.model} · ${evidence.observedCharacters} characters in ${evidence.deltaCount} ${evidence.deltaCount === 1 ? "update" : "updates"}.`;
   } else if (evidence?.kind === "host.codex-live") {
     settingsFeedback = `${evidence.model} host turn completed with ${evidence.dynamicToolCalls} correlated Farol Next tool call · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.codex-agent-lineage") {
@@ -2436,7 +2445,26 @@ function renderSettings(): void {
             "Codex host selection removed.",
           );
         });
-        actions.append(choose, verify, live, agent, remove);
+        // Route B: an isolated host this app launches answers one harmless
+        // turn through ChatGPT. It needs the live-verified host and a
+        // verified ChatGPT connection.
+        const routeB = document.createElement("button");
+        routeB.type = "button";
+        routeB.textContent = "Check Route B";
+        const routeBReady =
+          selected?.liveVerification != null &&
+          settings.setup.chatgpt.verified !== null;
+        routeB.disabled = !routeBReady;
+        routeB.title = routeBReady
+          ? "Run one harmless Codex turn through Farol Next and ChatGPT"
+          : "Run the live Codex host check and verify ChatGPT first";
+        routeB.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.run-route-b-check" },
+            "Route B answered through ChatGPT.",
+          );
+        });
+        actions.append(choose, verify, live, agent, routeB, remove);
         row.append(actions);
       }
       return row;

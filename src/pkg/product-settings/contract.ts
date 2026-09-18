@@ -373,6 +373,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("host.run-codex-smoke") }),
   z.strictObject({ kind: z.literal("host.run-codex-agent-check") }),
+  z.strictObject({ kind: z.literal("host.run-route-b-check") }),
   z.strictObject({ kind: z.literal("connector.select-client") }),
   z.strictObject({
     kind: z.literal("connector.configure"),
@@ -509,6 +510,13 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     executableSha256: Sha256Schema,
     schemaSha256: Sha256Schema,
     capabilities: CodexHostCapabilitiesSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("host.route-b"),
+    provider: z.literal("farol_next"),
+    model: z.literal("farol-next/mind"),
+    deltaCount: z.number().int().positive(),
+    observedCharacters: z.number().int().nonnegative(),
   }),
   z.strictObject({
     kind: z.literal("host.codex-live"),
@@ -891,6 +899,9 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_HOST_PROBE_FAILED",
       "CODEX_HOST_RECHECK_REQUIRED",
       "CODEX_HOST_TASK_IN_PROGRESS",
+      "ROUTE_B_UNAVAILABLE",
+      "ROUTE_B_HOST_START_FAILED",
+      "ROUTE_B_OUTCOME_UNKNOWN",
       "CODEX_HOST_MODEL_UNAVAILABLE",
       "CODEX_HOST_LIVE_FAILED",
       "CODEX_HOST_LIVE_OUTCOME_UNKNOWN",
