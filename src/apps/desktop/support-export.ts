@@ -7,6 +7,9 @@ import type { BuildIdentity } from "../../pkg/build-info/identity";
 import type { ProductConfigurationSnapshot } from "../../pkg/product-settings/contract";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+// A support report is a small content-free summary; anything larger means
+// something that does not belong in it was added.
+const MAX_SUPPORT_EXPORT_BYTES = 64 * 1_024;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 
@@ -32,13 +35,64 @@ type SupportExportInput = Readonly<{
     nativeAgent: boolean;
     liveProvider: boolean;
   }>;
+  // The runtime this report was made by, as the shell shows it.
+  embedded: Readonly<{
+    node: string;
+    electron: string | null;
+    chrome: string | null;
+  }>;
   tasks: Readonly<{
     total: number;
     running: number;
     waiting: number;
     failed: number;
+    // After a runtime exit the live counters are cleared, so the report
+    // uses the counts taken just before it, or says they are unavailable.
+    countsFrom: "current" | "before_runtime_exit" | "unavailable";
   }>;
 }>;
+
+function exactKeys(value: unknown, keys: readonly string[]): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) ===
+      JSON.stringify([...keys].sort())
+  );
+}
+
+// Only these shapes may reach a report: an extra field, such as a provider's
+// raw diagnostics, is refused rather than written out.
+function assertKnownInput(input: SupportExportInput): void {
+  if (
+    !exactKeys(input, [
+      "generatedAt",
+      "build",
+      "configuration",
+      "runtime",
+      "capabilities",
+      "embedded",
+      "tasks",
+    ]) ||
+    !exactKeys(input.runtime, ["state", "errorCode", "identity"]) ||
+    !exactKeys(input.capabilities, [
+      "nativeFilesystem",
+      "nativeAgent",
+      "liveProvider",
+    ]) ||
+    !exactKeys(input.embedded, ["node", "electron", "chrome"]) ||
+    !exactKeys(input.tasks, [
+      "total",
+      "running",
+      "waiting",
+      "failed",
+      "countsFrom",
+    ])
+  ) {
+    throw new Error("SUPPORT_EXPORT_INPUT_INVALID");
+  }
+}
 
 function setupReadiness(
   readiness: Extract<
@@ -100,6 +154,7 @@ function nativeAgentVerification(configuration: ProductConfigurationSnapshot) {
 }
 
 export function createSupportExport(input: SupportExportInput) {
+  assertKnownInput(input);
   const configuration =
     input.configuration.status === "error"
       ? {
@@ -109,7 +164,11 @@ export function createSupportExport(input: SupportExportInput) {
       : {
           status: "ready" as const,
           revision: input.configuration.settings.revision,
-          general: input.configuration.settings.general,
+          general: {
+            openAtLaunch: input.configuration.settings.general.openAtLaunch,
+            sidebarDefault: input.configuration.settings.general.sidebarDefault,
+            activityDetail: input.configuration.settings.general.activityDetail,
+          },
           computer: {
             generation: input.configuration.settings.computer.generation,
             workspaceCount:
@@ -146,6 +205,7 @@ export function createSupportExport(input: SupportExportInput) {
     build: input.build,
     runtime: input.runtime,
     capabilities: input.capabilities,
+    embedded: input.embedded,
     configuration,
     nativeAgentVerification: nativeAgentVerification(input.configuration),
     tasks: input.tasks,
@@ -214,6 +274,9 @@ export async function writeSupportExport(target: string, report: unknown) {
     throw new Error("SUPPORT_EXPORT_INVALID");
   }
   const bytes = Buffer.byteLength(serialized);
+  if (bytes > MAX_SUPPORT_EXPORT_BYTES) {
+    throw new Error("SUPPORT_EXPORT_TOO_LARGE");
+  }
   const sha256 = createHash("sha256").update(serialized).digest("hex");
   const temporary = path.join(parent, `.${fileName}.${randomUUID()}.tmp`);
   let handle;

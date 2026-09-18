@@ -904,6 +904,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "ROUTE_B_UNAVAILABLE",
       "ROUTE_B_HOST_START_FAILED",
       "ROUTE_B_OUTCOME_UNKNOWN",
+      "SUPPORT_EXPORT_TOO_LARGE",
       "CODEX_HOST_MODEL_UNAVAILABLE",
       "CODEX_HOST_LIVE_FAILED",
       "CODEX_HOST_LIVE_OUTCOME_UNKNOWN",

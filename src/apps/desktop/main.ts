@@ -305,6 +305,13 @@ let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
 let codexContextController: CodexContextController | null = null;
 let routeBRuntime: RouteBRuntime | null = null;
+// Live counters are cleared when the runtime exits; a support report made
+// after that uses the counts taken just before the exit.
+let taskCountsBeforeRuntimeExit: Readonly<{
+  running: number;
+  waiting: number;
+  failed: number;
+}> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
@@ -3542,14 +3549,27 @@ async function configureProduct(
             capabilities: {
               nativeFilesystem: true,
               nativeAgent: productAgentCapabilityAvailable(),
-              liveProvider: false,
+              liveProvider: routeBRuntime !== null,
             },
-            tasks: {
-              total: tasks.length,
-              running: streamControllers.size,
-              waiting: pendingComputer.size,
-              failed: taskSurfaceFailures.size,
+            embedded: {
+              node: process.versions.node,
+              electron: process.versions.electron ?? null,
+              chrome: process.versions.chrome ?? null,
             },
+            tasks:
+              runtimeState === "failed" && taskCountsBeforeRuntimeExit
+                ? {
+                    total: tasks.length,
+                    ...taskCountsBeforeRuntimeExit,
+                    countsFrom: "before_runtime_exit" as const,
+                  }
+                : {
+                    total: tasks.length,
+                    running: streamControllers.size,
+                    waiting: pendingComputer.size,
+                    failed: taskSurfaceFailures.size,
+                    countsFrom: "current" as const,
+                  },
           }),
         );
         return ProductConfigurationResultSchema.parse({
@@ -3557,8 +3577,12 @@ async function configureProduct(
           snapshot: configuration.snapshot(),
           evidence: { kind: "support.exported", ...receipt },
         });
-      } catch {
-        return configurationFailure("SUPPORT_EXPORT_FAILED");
+      } catch (error) {
+        return configurationFailure(
+          error instanceof Error && error.message === "SUPPORT_EXPORT_TOO_LARGE"
+            ? "SUPPORT_EXPORT_TOO_LARGE"
+            : "SUPPORT_EXPORT_FAILED",
+        );
       }
     }
     case "chatgpt.recover-task-result": {
@@ -5144,6 +5168,11 @@ function handleRuntimeExit(code: number | null): void {
     runtime = null;
     return;
   }
+  taskCountsBeforeRuntimeExit = {
+    running: streamControllers.size,
+    waiting: pendingComputer.size,
+    failed: taskSurfaceFailures.size,
+  };
   runtimeChild = null;
   runtime = null;
   runtimeState = "failed";
@@ -5228,6 +5257,7 @@ async function startRuntime(): Promise<void> {
       });
     });
     runtimeState = "ready";
+    taskCountsBeforeRuntimeExit = null;
   } catch (error) {
     runtimeState = "failed";
     runtimeError =
