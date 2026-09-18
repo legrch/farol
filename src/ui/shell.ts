@@ -46,6 +46,12 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
 import { workspaceEditToAcknowledge } from "./workspace-edit-delivery";
+import { captureInputDraft, restoreInputDraft } from "./input-draft";
+import {
+  waitsForAgentRejoin,
+  windowModeLabel,
+  workspaceAccessLabel,
+} from "./setup-presentation";
 import {
   classifyConfigurationResponse,
   UNCONFIRMED_CONFIGURATION_MESSAGE,
@@ -221,6 +227,7 @@ let pendingChatGptPreview: Extract<
 > | null = null;
 let contextPreviewBusy = false;
 let renderedGeneralSettingsRevision = -1;
+let setupConnectorError: string | null = null;
 let renderedComputerSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
@@ -289,7 +296,9 @@ function taskState(taskId: string): TaskState {
   const task = taskById(taskId);
   if (task?.provider === "chatgpt") {
     if (task.agent?.phase === "running") {
-      return { tone: "running", label: "Agent running", attention: false };
+      return task.agent.observation === "unavailable"
+        ? { tone: "running", label: "Agent not observed", attention: true }
+        : { tone: "running", label: "Agent running", attention: false };
     }
     if (
       task.agent?.phase === "completed" &&
@@ -2249,9 +2258,22 @@ function renderSettings(): void {
           connector.runtime?.state === "outcome_unknown";
         const form = document.createElement("form");
         form.className = "connector-form";
+        // The rows are rebuilt on every event; drafts carry what the owner
+        // is typing across that rebuild.
+        const tunnelDraft = captureInputDraft(
+          document.querySelector<HTMLInputElement>(
+            "#settings-connector-tunnel",
+          ),
+          document.activeElement,
+        );
+        const keyDraft = captureInputDraft(
+          document.querySelector<HTMLInputElement>("#settings-connector-key"),
+          document.activeElement,
+        );
         const tunnelLabel = document.createElement("label");
         tunnelLabel.textContent = "Tunnel ID";
         const tunnel = document.createElement("input");
+        tunnel.id = "settings-connector-tunnel";
         tunnel.type = "text";
         tunnel.autocomplete = "off";
         tunnel.spellcheck = false;
@@ -2262,6 +2284,7 @@ function renderSettings(): void {
         const keyLabel = document.createElement("label");
         keyLabel.textContent = "Runtime key";
         const key = document.createElement("input");
+        key.id = "settings-connector-key";
         key.type = "password";
         key.autocomplete = "off";
         key.spellcheck = false;
@@ -2271,6 +2294,12 @@ function renderSettings(): void {
             : "Required once";
         key.disabled = running;
         keyLabel.append(key);
+        if (!running) {
+          queueMicrotask(() => {
+            restoreInputDraft(tunnel, tunnelDraft);
+            restoreInputDraft(key, keyDraft);
+          });
+        }
         const save = document.createElement("button");
         save.type = "submit";
         save.textContent = "Save route";
@@ -2407,8 +2436,7 @@ function renderSettings(): void {
           verifiedWorkspace !== undefined &&
           settings.setup.computer.reachable === "reachable" &&
           !settings.setup.computer.outcomeUnknown;
-        const agentNeedsRejoin =
-          agentState.needsAction?.startsWith("Rejoin the same") === true;
+        const agentNeedsRejoin = waitsForAgentRejoin(agentState);
         const agent = document.createElement("button");
         agent.type = "button";
         agent.textContent = agentProof
@@ -2503,7 +2531,8 @@ function renderSetup(): void {
   const liveDetails =
     configured.status === "ready" && step.id === "computer"
       ? configured.settings.computer.workspaces.map(
-          (workspace) => `${workspace.label}: read-only · ${workspace.root}`,
+          (workspace) =>
+            `${workspace.label}: ${workspaceAccessLabel(workspace, configured.settings.computer.commands)} · ${workspace.root}`,
         )
       : configured.status === "ready" && step.id === "connect"
         ? [
@@ -2640,6 +2669,14 @@ function renderSetup(): void {
     const settings = configured.settings;
     const connector = settings.connectors.secureMcp;
     const readiness = settings.setup.connect;
+    const tunnelDraft = captureInputDraft(
+      document.querySelector<HTMLInputElement>("#setup-connector-tunnel"),
+      document.activeElement,
+    );
+    const keyDraft = captureInputDraft(
+      document.querySelector<HTMLInputElement>("#setup-connector-key"),
+      document.activeElement,
+    );
     liveSummary.textContent = connector.tunnelClient
       ? readinessDetail(readiness)
       : "Choose the exact installed tunnel-client. Farol Next verifies its profile, doctor, and run surface before saving it.";
@@ -2674,7 +2711,24 @@ function renderSetup(): void {
           : "Required once";
       keyLabel.append(key);
       form.append(tunnelLabel, keyLabel);
+      // A rejected value is explained inside this dialog, next to its field.
+      if (setupConnectorError) {
+        const error = document.createElement("p");
+        error.id = "setup-connector-error";
+        error.className = "setup-field-error";
+        error.setAttribute("role", "alert");
+        error.textContent = setupConnectorError;
+        for (const input of [tunnel, key]) {
+          input.setAttribute("aria-invalid", "true");
+          input.setAttribute("aria-describedby", error.id);
+        }
+        form.append(error);
+      }
       liveSummary.append(form);
+      queueMicrotask(() => {
+        restoreInputDraft(tunnel, tunnelDraft);
+        restoreInputDraft(key, keyDraft);
+      });
     }
     livePrimary.textContent = !connector.tunnelClient
       ? "Choose tunnel-client…"
@@ -2707,13 +2761,12 @@ function renderSetup(): void {
         });
         key.value = "";
         if (!command.success) {
-          settingsFeedbackSurface = "settings";
-          settingsFeedback =
+          setupConnectorError =
             "Enter a valid tunnel ID and a runtime key of at least 20 printable characters.";
-          settingsFeedbackError = true;
           render();
           return;
         }
+        setupConnectorError = null;
         await configureProduct(command.data, "Connector route saved.");
         return;
       }
@@ -2777,8 +2830,7 @@ function renderSetup(): void {
       workspace !== undefined &&
       settings.setup.computer.reachable === "reachable" &&
       !settings.setup.computer.outcomeUnknown;
-    const needsRejoin =
-      readiness.needsAction?.startsWith("Rejoin the same") === true;
+    const needsRejoin = waitsForAgentRejoin(readiness);
     liveSummary.textContent = proof
       ? proof.workspaceEnforcement === "verified"
         ? `Main → Agent → Critic completed with one ${proof.model} turn, verified native workspace enforcement, and durable acknowledged delivery.`
@@ -3013,11 +3065,6 @@ function render(notify = true): void {
   const root = document.documentElement;
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
-  required("#window-mode").textContent = bootstrap.demoMode
-    ? "Explicit demo · synthetic provider"
-    : bootstrap.tasks.length > 0
-      ? "Local preview · isolated ChatGPT tasks"
-      : "Local preview · no task route configured";
   const newTask = required<HTMLButtonElement>("#new-task");
   const chatGptReady =
     bootstrap.configuration.status === "ready" &&
@@ -3025,6 +3072,11 @@ function render(notify = true): void {
     bootstrap.configuration.settings.setup.chatgpt.configured &&
     !bootstrap.configuration.settings.setup.chatgpt.outcomeUnknown &&
     bootstrap.configuration.settings.setup.chatgpt.verified !== null;
+  required("#window-mode").textContent = windowModeLabel({
+    demoMode: bootstrap.demoMode,
+    taskCount: bootstrap.tasks.length,
+    chatGptReady,
+  });
   const taskCapacityAvailable = bootstrap.tasks.length < 5;
   newTask.disabled =
     bootstrap.demoMode || !chatGptReady || !taskCapacityAvailable;

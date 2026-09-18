@@ -1082,6 +1082,37 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toEqual(recorded.snapshot);
   });
 
+  it("OUX-07 records the Agent rejoin as a typed recovery, not only as wording", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    for (const [failure, recovery] of [
+      ["running", "rejoin_agent"],
+      ["outcome_unknown", "rejoin_agent"],
+      ["failed", undefined],
+    ] as const) {
+      const recorded = await service.recordCodexAgentFailure(failure);
+      if (recorded.snapshot.status !== "ready") {
+        throw new Error("settings missing");
+      }
+      expect(recorded.snapshot.settings.setup.verify.recovery, failure).toBe(
+        recovery,
+      );
+    }
+  });
+
   it("accepts the native Agent command and content-free evidence contracts", () => {
     expect(
       ProductConfigurationCommandSchema.parse({

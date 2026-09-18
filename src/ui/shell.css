@@ -1327,6 +1327,17 @@ html[data-has-tasks="false"] .surface {
   color: var(--text);
 }
 
+.setup-connector-form .setup-field-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--failed);
+  font-size: 11px;
+}
+
+.setup-connector-form input[aria-invalid="true"] {
+  border-color: var(--failed);
+}
+
 .connector-form input:disabled,
 .setup-connector-form input:disabled {
   color: var(--text-faint);

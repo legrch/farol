@@ -1297,7 +1297,8 @@ function productAgentSummary(
   receipt: Pick<
     AgentRunReceipt,
     "assignment" | "parentDelivery" | "resultRef" | "workspaceEnforcement"
-  >,
+  > &
+    Partial<Pick<AgentRunReceipt, "observation">>,
 ): ProductTaskAgent {
   const phase = receipt.assignment.phase;
   if (phase === "prepared") {
@@ -1310,6 +1311,9 @@ function productAgentSummary(
     parentDelivery: receipt.parentDelivery,
     workspaceEnforcement: receipt.workspaceEnforcement ?? "not_applicable",
     resultAvailable: receipt.resultRef !== null,
+    ...(phase === "running" && receipt.observation === "unavailable"
+      ? { observation: "unavailable" as const }
+      : {}),
   };
 }
 

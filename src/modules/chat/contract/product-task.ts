@@ -76,6 +76,9 @@ export const ProductTaskAgentSchema = z.strictObject({
   parentDelivery: z.enum(["not_applicable", "pending", "acknowledged"]),
   workspaceEnforcement: z.enum(["not_applicable", "verified"]),
   resultAvailable: z.boolean(),
+  // A running child whose host could not be read: it may still be working,
+  // and only a rejoin of the same child observes it again.
+  observation: z.enum(["current", "unavailable"]).optional(),
 });
 
 export const ProductTaskContextSchema = z.strictObject({

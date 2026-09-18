@@ -284,6 +284,8 @@ export const SetupReadinessSchema = z.strictObject({
   needsAction: z.string().min(1).max(240).nullable(),
   unavailable: z.string().min(1).max(240).nullable(),
   outcomeUnknown: z.boolean(),
+  // The typed recovery a step waits for; its wording lives in needsAction.
+  recovery: z.enum(["rejoin_agent"]).optional(),
 });
 
 export const SetupStepIdSchema = z.enum([

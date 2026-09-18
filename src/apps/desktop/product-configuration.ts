@@ -183,13 +183,20 @@ function readiness(needsAction: string): ProductSettings["setup"][SetupStepId] {
   };
 }
 
+function withoutRecovery(
+  readiness: ProductSettings["setup"]["verify"],
+): ProductSettings["setup"]["verify"] {
+  const { recovery: _recovery, ...rest } = readiness;
+  return rest;
+}
+
 function pendingAgentReadiness(
   previous: ProductSettings["setup"]["verify"],
   needsAction: string,
   configured: boolean,
 ): ProductSettings["setup"]["verify"] {
   return {
-    ...previous,
+    ...withoutRecovery(previous),
     configured,
     reachable: "unknown",
     verified: null,
@@ -1509,7 +1516,7 @@ export class ProductConfigurationService {
         setup: {
           ...settings.setup,
           verify: {
-            ...settings.setup.verify,
+            ...withoutRecovery(settings.setup.verify),
             visited: true,
             skipped: false,
             configured: true,
@@ -1552,7 +1559,10 @@ export class ProductConfigurationService {
         setup: {
           ...settings.setup,
           verify: {
-            ...settings.setup.verify,
+            ...withoutRecovery(settings.setup.verify),
+            ...(running || outcomeUnknown
+              ? { recovery: "rejoin_agent" as const }
+              : {}),
             visited: true,
             skipped: false,
             configured: host.liveVerification !== null,
