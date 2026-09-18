@@ -17,11 +17,19 @@ export type WorkspaceRootIdentity = Readonly<{
   inode: string;
 }>;
 
+// The external Git metadata of a linked worktree the owner approved when they
+// verified the workspace.
+export type WorkspaceGitMetadataApproval = Readonly<{
+  gitDirectory: string;
+  commonDirectory: string;
+}>;
+
 export type ApprovedWorkspace = Readonly<{
   workspaceId: string;
   root: string;
   access: WorkspaceAccess;
   rootIdentity?: WorkspaceRootIdentity | undefined;
+  gitMetadata?: WorkspaceGitMetadataApproval | undefined;
 }>;
 
 export type WorkspaceExclusion = Readonly<{
@@ -426,20 +434,27 @@ function publicScopes(
 }
 
 /**
- * The folder the owner approved for one workspace, with the identity it had
- * then, so a native boundary can refuse another object that has since taken
- * its path. Null when the approval carries no identity.
+ * What the owner approved about one workspace's folder, for the native
+ * boundary: the folder's identity, so another object that has since taken its
+ * path is refused, and a linked worktree's approved Git metadata, the only
+ * metadata outside the root that Git verification may open.
  */
-export function approvedRootOf(
+export function approvedWorkspaceBinding(
   approval: ComputerApproval,
   workspaceId: string,
-): Readonly<{ path: string; device: string; inode: string }> | null {
+): Readonly<{
+  approvedRoot?: Readonly<{ path: string; device: string; inode: string }>;
+  gitMetadata?: WorkspaceGitMetadataApproval;
+}> {
   const approved = approval.workspaces.find(
     (workspace) => workspace.workspaceId === workspaceId,
   );
-  return approved?.rootIdentity
-    ? { path: approved.root, ...approved.rootIdentity }
-    : null;
+  return {
+    ...(approved?.rootIdentity
+      ? { approvedRoot: { path: approved.root, ...approved.rootIdentity } }
+      : {}),
+    ...(approved?.gitMetadata ? { gitMetadata: approved.gitMetadata } : {}),
+  };
 }
 
 export function deriveTaskGrant(

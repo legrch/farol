@@ -11,11 +11,13 @@ import {
   PendingWorkspaceEditDeliverySchema,
   ProductSettingsSchema,
   SetupStepIdSchema,
+  WorkspaceGitMetadataSchema,
   WorkspaceRootIdentitySchema,
   type ProductConfigurationSnapshot,
   type ProductSettings,
   type PendingWorkspaceEditDelivery,
   type SetupStepId,
+  type WorkspaceGitMetadata,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
@@ -1088,18 +1090,27 @@ export class ProductConfigurationService {
     });
   }
 
-  // A workspace approved before identities were recorded is bound to the
-  // folder this owner verification observed; a bound workspace is never
-  // rebound to another object.
+  // Owner verification is when a workspace's folder is bound: a workspace
+  // approved before identities were recorded is bound to the folder this
+  // verification observed, and a bound workspace is never rebound to another
+  // object. It also approves exactly the linked Git metadata it observed, or
+  // clears a grant when the metadata now lives inside the root (null).
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
-    observedRoot?: WorkspaceRootIdentity,
+    observed: Readonly<{
+      rootIdentity?: WorkspaceRootIdentity;
+      gitMetadata?: WorkspaceGitMetadata | null;
+    }> = {},
   ): Promise<MutationResult> {
     const parsed = verificationInputSchema.safeParse(input);
-    const identity =
-      WorkspaceRootIdentitySchema.optional().safeParse(observedRoot);
-    if (!parsed.success || !identity.success) {
+    const identity = WorkspaceRootIdentitySchema.optional().safeParse(
+      observed.rootIdentity,
+    );
+    const gitMetadata = WorkspaceGitMetadataSchema.nullable()
+      .optional()
+      .safeParse(observed.gitMetadata);
+    if (!parsed.success || !identity.success || !gitMetadata.success) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
@@ -1117,16 +1128,23 @@ export class ProductConfigurationService {
       return this.failure("WORKSPACE_ROOT_CHANGED");
     }
     const rootIdentity = bound ?? identity.data;
+    const bind = (
+      workspace: ProductSettings["computer"]["workspaces"][number],
+    ) => {
+      if (workspace.workspaceId !== workspaceId) return workspace;
+      const { gitMetadata: _previous, ...rest } = workspace;
+      return {
+        ...(gitMetadata.data === undefined ? workspace : rest),
+        ...(rootIdentity ? { rootIdentity } : {}),
+        ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
+      };
+    };
     return this.mutate((settings) => ({
       ...settings,
       revision: settings.revision + 1,
       computer: {
         ...settings.computer,
-        workspaces: settings.computer.workspaces.map((workspace) =>
-          workspace.workspaceId === workspaceId && rootIdentity
-            ? { ...workspace, rootIdentity }
-            : workspace,
-        ),
+        workspaces: settings.computer.workspaces.map(bind),
       },
       setup: {
         ...settings.setup,

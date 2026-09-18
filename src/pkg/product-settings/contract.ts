@@ -233,6 +233,15 @@ export const WorkspaceRootIdentitySchema = z.strictObject({
 
 export type WorkspaceRootIdentity = z.infer<typeof WorkspaceRootIdentitySchema>;
 
+// A linked worktree's Git metadata outside its root, approved when the owner
+// verified the workspace. Git verification opens no other external metadata.
+export const WorkspaceGitMetadataSchema = z.strictObject({
+  gitDirectory: CanonicalAbsolutePathSchema,
+  commonDirectory: CanonicalAbsolutePathSchema,
+});
+
+export type WorkspaceGitMetadata = z.infer<typeof WorkspaceGitMetadataSchema>;
+
 export const ApprovedProductWorkspaceSchema = z
   .strictObject({
     workspaceId: IdentifierSchema,
@@ -241,6 +250,7 @@ export const ApprovedProductWorkspaceSchema = z
     access: z.enum(["read", "write"]),
     excludedPaths: z.array(CanonicalAbsolutePathSchema).max(32),
     rootIdentity: WorkspaceRootIdentitySchema.optional(),
+    gitMetadata: WorkspaceGitMetadataSchema.optional(),
   })
   .superRefine((workspace, context) => {
     const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
@@ -857,6 +867,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
       "WORKSPACE_NOT_GIT_REPOSITORY",
       "WORKSPACE_GIT_HEAD_UNBORN",
+      "WORKSPACE_GIT_METADATA_NOT_APPROVED",
       "WORKSPACE_COMMAND_FAILED",
       "WORKSPACE_WRITE_APPROVAL_REQUIRED",
       "WORKSPACE_MUTATION_IN_PROGRESS",

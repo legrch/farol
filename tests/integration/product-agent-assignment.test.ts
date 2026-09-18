@@ -270,6 +270,10 @@ describe("product Agent assignment composition", () => {
         workspaces: settings().computer.workspaces.map((workspace) => ({
           ...workspace,
           rootIdentity: { device: "7", inode: "11" },
+          gitMetadata: {
+            gitDirectory: "/repo/.git/worktrees/approved",
+            commonDirectory: "/repo/.git",
+          },
         })),
       },
     });
@@ -287,6 +291,10 @@ describe("product Agent assignment composition", () => {
         root: "/workspace/approved",
         access: "read",
         rootIdentity: { device: "7", inode: "11" },
+        gitMetadata: {
+          gitDirectory: "/repo/.git/worktrees/approved",
+          commonDirectory: "/repo/.git",
+        },
       },
     ]);
   });

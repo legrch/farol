@@ -6,12 +6,21 @@ export type WorkspaceApprovedRoot = Readonly<{
   inode: string;
 }>;
 
+// The Git metadata of a linked worktree that the owner approved when they
+// verified the workspace. Metadata outside the root is opened only when it is
+// exactly this; a structurally valid backlink alone grants nothing.
+export type WorkspaceGitMetadataGrant = Readonly<{
+  gitDirectory: string;
+  commonDirectory: string;
+}>;
+
 export type ReadonlyWorkspaceDescriptor = Readonly<{
   workspaceId: string;
   root: string;
   deniedPaths: readonly string[];
   exactFilePaths?: readonly string[];
   approvedRoot?: WorkspaceApprovedRoot;
+  gitMetadata?: WorkspaceGitMetadataGrant;
 }>;
 
 export type WorkspaceVerificationCommand = "git.status" | "git.head";
@@ -99,6 +108,7 @@ export type ReadonlyWorkspaceErrorCode =
   | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
   | "WORKSPACE_NOT_GIT_REPOSITORY"
   | "WORKSPACE_GIT_HEAD_UNBORN"
+  | "WORKSPACE_GIT_METADATA_NOT_APPROVED"
   | "WORKSPACE_COMMAND_FAILED"
   | "WORKSPACE_HELPER_FAILED";
 

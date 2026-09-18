@@ -407,6 +407,34 @@ describe("real read-only Computer action", () => {
     });
   });
 
+  it("AUTH-09 hands the approved linked Git metadata to the native boundary", async () => {
+    const gitMetadata = {
+      gitDirectory: "/repo/.git/worktrees/farol",
+      commonDirectory: "/repo/.git",
+    };
+    const bound: ComputerApproval = {
+      ...approval(),
+      workspaces: [{ workspaceId: "farol", root, access: "read", gitMetadata }],
+    };
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: true,
+      value: { kind: "workspace.entries", entries: [], truncated: false },
+    }));
+    const computer = contract(Object.values(participants()), bound, {
+      execute,
+    });
+
+    await computer.execute(
+      request({ kind: "workspace.list", relativePath: "." }),
+    );
+    expect(execute.mock.calls[0]?.[0].workspace).toEqual({
+      workspaceId: "farol",
+      root,
+      deniedPaths: [],
+      gitMetadata,
+    });
+  });
+
   it("AUTH-10 refuses a replaced approved folder at the real Computer boundary", async () => {
     const measured = await fs.lstat(root, { bigint: true });
     const bound: ComputerApproval = {

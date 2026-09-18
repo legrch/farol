@@ -9,7 +9,7 @@ import type {
   ReadonlyWorkspaceOutput,
 } from "../port/readonly-workspace";
 import {
-  approvedRootOf,
+  approvedWorkspaceBinding,
   authorizeComputerAction,
   authorizeTaskIdentity,
   type AuthorityErrorCode,
@@ -191,7 +191,7 @@ export class RunReadonlyComputerAction {
       return failure("AUTHORITY_PATH_DENIED", "task-grant");
     }
 
-    const approvedRoot = approvedRootOf(approval, request.workspaceId);
+    const binding = approvedWorkspaceBinding(approval, request.workspaceId);
     let result;
     try {
       const workspaceRequest = {
@@ -206,7 +206,7 @@ export class RunReadonlyComputerAction {
           ...(scope.mode === "exact"
             ? { exactFilePaths: relativeExactFilePaths(scope) }
             : {}),
-          ...(approvedRoot ? { approvedRoot } : {}),
+          ...binding,
         },
         operation: request.operation,
       };

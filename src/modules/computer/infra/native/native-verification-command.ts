@@ -8,6 +8,7 @@ import { TextDecoder } from "node:util";
 import type {
   ReadonlyWorkspaceRequest,
   ReadonlyWorkspaceResult,
+  WorkspaceGitMetadataGrant,
 } from "../../app/port/readonly-workspace";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -85,6 +86,7 @@ type CommandFailureCode =
   | "WORKSPACE_COMMAND_FAILED"
   | "WORKSPACE_NOT_GIT_REPOSITORY"
   | "WORKSPACE_GIT_HEAD_UNBORN"
+  | "WORKSPACE_GIT_METADATA_NOT_APPROVED"
   | "WORKSPACE_ROOT_CHANGED";
 
 // The HEAD profile exits 1 without output when HEAD does not resolve; the
@@ -312,9 +314,15 @@ function resolveMetadataPath(base: string, value: string): string | null {
 
 // null means metadata this verifier will not follow; "not-repository" means
 // the approved root simply has no .git entry.
+// A linked worktree keeps its metadata outside the root. Its structure (the
+// `.git` pointer, `commondir` and the backlink) proves a relationship, not a
+// permission, so outside owner verification ("discover") the pointed-to
+// directories must be exactly the ones the owner approved, and that is decided
+// before any file inside them is opened.
 async function resolveWorkspaceGitMetadata(
   root: string,
-): Promise<WorkspaceGitMetadata | "not-repository" | null> {
+  grant: WorkspaceGitMetadataGrant | "discover" | undefined,
+): Promise<WorkspaceGitMetadata | "not-repository" | "not-approved" | null> {
   if (!plainPath(root)) return null;
   const uid = process.getuid?.();
   if (uid === undefined || !(await isOwnedDirectory(root, BigInt(uid)))) {
@@ -346,12 +354,11 @@ async function resolveWorkspaceGitMetadata(
     return null;
   }
   const gitDirectory = resolveMetadataPath(root, gitDirectoryLine);
-  if (
-    gitDirectory === null ||
-    !(await isOwnedDirectory(gitDirectory, BigInt(uid)))
-  ) {
-    return null;
+  if (gitDirectory === null) return null;
+  if (grant !== "discover" && grant?.gitDirectory !== gitDirectory) {
+    return "not-approved";
   }
+  if (!(await isOwnedDirectory(gitDirectory, BigInt(uid)))) return null;
 
   const commonLine = onePathLine(
     (await readOwnedMetadataFile(
@@ -361,6 +368,13 @@ async function resolveWorkspaceGitMetadata(
   );
   if (commonLine === null) return null;
   const commonDirectory = resolveMetadataPath(gitDirectory, commonLine);
+  if (
+    grant !== "discover" &&
+    commonDirectory !== null &&
+    grant?.commonDirectory !== commonDirectory
+  ) {
+    return "not-approved";
+  }
   if (
     commonDirectory === null ||
     !(await isOwnedDirectory(commonDirectory, BigInt(uid))) ||
@@ -730,6 +744,29 @@ async function approvedRootUnchanged(
   }
 }
 
+/**
+ * Owner verification is when linked-worktree metadata is approved: this reads
+ * the current layout and returns the grant the owner is approving, or null for
+ * a root whose metadata lives inside it, or that is not a repository.
+ */
+export async function discoverLinkedGitMetadata(
+  root: string,
+): Promise<WorkspaceGitMetadataGrant | null> {
+  const metadata = await resolveWorkspaceGitMetadata(root, "discover");
+  if (
+    metadata === null ||
+    metadata === "not-repository" ||
+    metadata === "not-approved" ||
+    metadata.gitDirectory === path.join(root, ".git")
+  ) {
+    return null;
+  }
+  return {
+    gitDirectory: metadata.gitDirectory,
+    commonDirectory: metadata.commonDirectory,
+  };
+}
+
 export async function executeNativeVerificationCommand(
   request: ReadonlyWorkspaceRequest,
   operation: VerificationOperation,
@@ -749,12 +786,16 @@ export async function executeNativeVerificationCommand(
   }
   const initialMetadata = await resolveWorkspaceGitMetadata(
     request.workspace.root,
+    request.workspace.gitMetadata,
   );
   if (options.signal?.aborted) {
     return failure("WORKSPACE_COMMAND_CANCELLED");
   }
   if (initialMetadata === "not-repository") {
     return failure("WORKSPACE_NOT_GIT_REPOSITORY");
+  }
+  if (initialMetadata === "not-approved") {
+    return failure("WORKSPACE_GIT_METADATA_NOT_APPROVED");
   }
   if (initialMetadata === null) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
@@ -769,13 +810,17 @@ export async function executeNativeVerificationCommand(
   if (options.signal?.aborted) {
     return failure("WORKSPACE_COMMAND_CANCELLED");
   }
-  const metadata = await resolveWorkspaceGitMetadata(request.workspace.root);
+  const metadata = await resolveWorkspaceGitMetadata(
+    request.workspace.root,
+    request.workspace.gitMetadata,
+  );
   if (options.signal?.aborted) {
     return failure("WORKSPACE_COMMAND_CANCELLED");
   }
   if (
     metadata === null ||
     metadata === "not-repository" ||
+    metadata === "not-approved" ||
     metadata.gitDirectory !== initialMetadata.gitDirectory ||
     metadata.commonDirectory !== initialMetadata.commonDirectory
   ) {

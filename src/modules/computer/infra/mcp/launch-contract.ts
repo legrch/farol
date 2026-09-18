@@ -64,11 +64,16 @@ const RootIdentitySchema = z.strictObject({
   device: z.string().regex(/^[0-9]{1,20}$/u),
   inode: z.string().regex(/^[0-9]{1,20}$/u),
 });
+const GitMetadataSchema = z.strictObject({
+  gitDirectory: AbsolutePathSchema,
+  commonDirectory: AbsolutePathSchema,
+});
 const ReadonlyApprovedWorkspaceSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   root: AbsolutePathSchema,
   access: z.literal("read"),
   rootIdentity: RootIdentitySchema.optional(),
+  gitMetadata: GitMetadataSchema.optional(),
 });
 const ReadonlySubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -92,6 +97,7 @@ const MutableApprovedWorkspaceSchema = z.strictObject({
   root: AbsolutePathSchema,
   access: z.enum(["read", "write"]),
   rootIdentity: RootIdentitySchema.optional(),
+  gitMetadata: GitMetadataSchema.optional(),
 });
 const MutableSubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,

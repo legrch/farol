@@ -82,6 +82,9 @@ export function createSecureMcpLaunchContract(
         ...(workspace.rootIdentity
           ? { rootIdentity: workspace.rootIdentity }
           : {}),
+        ...(workspace.gitMetadata
+          ? { gitMetadata: workspace.gitMetadata }
+          : {}),
       })),
       excludedPaths,
       capabilities,

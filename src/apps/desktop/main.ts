@@ -88,6 +88,7 @@ import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
+import { discoverLinkedGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
 import {
   CHATGPT_HOME,
   CHATGPT_PARTITION,
@@ -438,6 +439,7 @@ function verificationWorkspaceAction(
       ...(candidate.rootIdentity
         ? { rootIdentity: candidate.rootIdentity }
         : {}),
+      ...(candidate.gitMetadata ? { gitMetadata: candidate.gitMetadata } : {}),
     })),
     excludedPaths: settings.computer.workspaces.flatMap((candidate) =>
       candidate.excludedPaths.map((excluded) => ({
@@ -2684,6 +2686,7 @@ function workspaceDescriptor(
     ...(identity
       ? { approvedRoot: { path: workspace.root, ...identity } }
       : {}),
+    ...(workspace.gitMetadata ? { gitMetadata: workspace.gitMetadata } : {}),
   };
 }
 
@@ -2793,6 +2796,8 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
       return configurationFailure("WORKSPACE_GIT_HEAD_UNBORN");
     case "WORKSPACE_ROOT_CHANGED":
       return configurationFailure("WORKSPACE_ROOT_CHANGED");
+    case "WORKSPACE_GIT_METADATA_NOT_APPROVED":
+      return configurationFailure("WORKSPACE_GIT_METADATA_NOT_APPROVED");
     default:
       return configurationFailure("WORKSPACE_COMMAND_FAILED");
   }
@@ -4177,7 +4182,12 @@ async function configureProduct(
               ? "mutable-workspace/1"
               : "readonly-workspace/1",
         },
-        observedRoot,
+        {
+          ...(observedRoot ? { rootIdentity: observedRoot } : {}),
+          // Verifying the workspace approves the linked Git metadata it has
+          // now, and only that; a primary checkout needs no grant.
+          gitMetadata: await discoverLinkedGitMetadata(workspace.root),
+        },
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
       const text = result.value.text.slice(0, 32_768);

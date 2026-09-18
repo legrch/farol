@@ -32,6 +32,7 @@ export function productAgentApproval(
       ...(workspace.rootIdentity
         ? { rootIdentity: workspace.rootIdentity }
         : {}),
+      ...(workspace.gitMetadata ? { gitMetadata: workspace.gitMetadata } : {}),
     })),
     excludedPaths: computer.workspaces.flatMap((workspace) =>
       workspace.excludedPaths.map((excluded) => ({

@@ -142,6 +142,7 @@ export function desktopMutableWorkspaceAction(
       ...(candidate.rootIdentity
         ? { rootIdentity: candidate.rootIdentity }
         : {}),
+      ...(candidate.gitMetadata ? { gitMetadata: candidate.gitMetadata } : {}),
     })),
     excludedPaths: computer.workspaces.flatMap((candidate) =>
       candidate.excludedPaths.map((excluded) => ({

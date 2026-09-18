@@ -298,6 +298,15 @@ function hasOwn(value: unknown, key: string): boolean {
   );
 }
 
+function validGitMetadataGrant(value: unknown): boolean {
+  if (!exactKeys(value, ["gitDirectory", "commonDirectory"])) return false;
+  const grant = value as Readonly<Record<string, unknown>>;
+  return (
+    canonicalAbsolutePath(grant.gitDirectory) &&
+    canonicalAbsolutePath(grant.commonDirectory)
+  );
+}
+
 // The approved root is the folder the owner approved, bound to the device and
 // inode it had then. It is the requested root or one of its ancestors, so a
 // narrowed subtree is still checked against the folder that was approved.
@@ -320,6 +329,7 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   const candidate = value as Readonly<Record<string, unknown>>;
   const hasExactFilePaths = hasOwn(candidate.workspace, "exactFilePaths");
   const hasApprovedRoot = hasOwn(candidate.workspace, "approvedRoot");
+  const hasGitMetadata = hasOwn(candidate.workspace, "gitMetadata");
   if (
     !exactKeys(candidate.workspace, [
       "workspaceId",
@@ -327,6 +337,7 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
       "deniedPaths",
       ...(hasExactFilePaths ? ["exactFilePaths"] : []),
       ...(hasApprovedRoot ? ["approvedRoot"] : []),
+      ...(hasGitMetadata ? ["gitMetadata"] : []),
     ])
   ) {
     return null;
@@ -337,6 +348,7 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
     !canonicalAbsolutePath(workspace.root) ||
     (hasApprovedRoot &&
       !validApprovedRoot(workspace.approvedRoot, workspace.root)) ||
+    (hasGitMetadata && !validGitMetadataGrant(workspace.gitMetadata)) ||
     !Array.isArray(workspace.deniedPaths) ||
     workspace.deniedPaths.length > 256 ||
     !workspace.deniedPaths.every((entry) => canonicalRelativePath(entry)) ||
@@ -1244,6 +1256,7 @@ function mutationErrorCode(
     case "WORKSPACE_COMMAND_FAILED":
     case "WORKSPACE_NOT_GIT_REPOSITORY":
     case "WORKSPACE_GIT_HEAD_UNBORN":
+    case "WORKSPACE_GIT_METADATA_NOT_APPROVED":
     case "WORKSPACE_REQUEST_INTERRUPTED":
       return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
     case "WORKSPACE_REQUEST_CANCELLED":

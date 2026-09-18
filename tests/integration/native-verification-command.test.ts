@@ -10,7 +10,10 @@ import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
-import { executeNativeVerificationCommand } from "../../src/modules/computer/infra/native/native-verification-command";
+import {
+  discoverLinkedGitMetadata,
+  executeNativeVerificationCommand,
+} from "../../src/modules/computer/infra/native/native-verification-command";
 
 const executeFile = promisify(execFile);
 const nextRoot = path.resolve(import.meta.dirname, "../..");
@@ -18,12 +21,15 @@ const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
 let root = "";
 let git = "";
 
-function request(): ReadonlyWorkspaceRequest {
+function request(
+  gitMetadata?: Readonly<{ gitDirectory: string; commonDirectory: string }>,
+): ReadonlyWorkspaceRequest {
   return {
     workspace: {
       workspaceId: "workspace-a",
       root,
       deniedPaths: ["private"],
+      ...(gitMetadata ? { gitMetadata } : {}),
     },
     operation: {
       kind: "verification.run",
@@ -227,8 +233,12 @@ int main(void) {
       await fs.writeFile(path.join(root, "README.md"), "linked change\n", {
         mode: 0o600,
       });
+      const grant = {
+        gitDirectory: path.join(mainRoot, ".git", "worktrees", "checkout"),
+        commonDirectory: path.join(mainRoot, ".git"),
+      };
 
-      await expect(workspace().execute(request())).resolves.toMatchObject({
+      await expect(workspace().execute(request(grant))).resolves.toMatchObject({
         ok: true,
         value: {
           kind: "workspace.command",
@@ -260,7 +270,7 @@ int main(void) {
 `,
       );
       await expect(
-        workspace(async () => parentReader).execute(request()),
+        workspace(async () => parentReader).execute(request(grant)),
       ).resolves.toMatchObject({
         ok: true,
         value: {
@@ -270,6 +280,67 @@ int main(void) {
         },
       });
     } finally {
+      root = mainRoot;
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "remove",
+        "--force",
+        linkedRoot,
+      ]).catch(() => undefined);
+      await fs.rm(worktreeParent, { recursive: true, force: true });
+    }
+  });
+
+  it("AUTH-09 refuses linked metadata the owner never approved before opening it", async () => {
+    const mainRoot = root;
+    const worktreeParent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-command-worktree-grant-"),
+    );
+    const linkedRoot = path.join(worktreeParent, "checkout");
+    const gitDirectory = path.join(mainRoot, ".git", "worktrees", "checkout");
+    try {
+      await executeFile(git, [
+        "-C",
+        mainRoot,
+        "worktree",
+        "add",
+        "--quiet",
+        "--detach",
+        linkedRoot,
+      ]);
+      root = await fs.realpath(linkedRoot);
+      const notApproved = {
+        ok: false,
+        error: { code: "WORKSPACE_GIT_METADATA_NOT_APPROVED", retry: "never" },
+      };
+      // An unreadable pointer file inside the external metadata tells a
+      // refusal made before opening it apart from one made by reading it.
+      await fs.chmod(path.join(gitDirectory, "commondir"), 0o000);
+
+      await expect(workspace().execute(request())).resolves.toEqual(
+        notApproved,
+      );
+      // A grant for another worktree's metadata is not this one's.
+      await expect(
+        workspace().execute(
+          request({
+            gitDirectory: path.join(mainRoot, ".git", "worktrees", "other"),
+            commonDirectory: path.join(mainRoot, ".git"),
+          }),
+        ),
+      ).resolves.toEqual(notApproved);
+      await fs.chmod(path.join(gitDirectory, "commondir"), 0o600);
+      await expect(
+        workspace().execute(
+          request({ gitDirectory, commonDirectory: gitDirectory }),
+        ),
+      ).resolves.toEqual(notApproved);
+    } finally {
+      await fs
+        .chmod(path.join(gitDirectory, "commondir"), 0o600)
+        .catch(() => undefined);
       root = mainRoot;
       await executeFile(git, [
         "-C",
@@ -307,7 +378,29 @@ int main(void) {
         mode: 0o600,
       });
 
-      await expect(workspace().execute(request())).resolves.toMatchObject({
+      await expect(
+        workspace().execute(
+          request({
+            gitDirectory: path.join(mainRoot, ".git", "worktrees", "checkout"),
+            commonDirectory: path.join(mainRoot, ".git"),
+          }),
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "WORKSPACE_GIT_METADATA_NOT_APPROVED",
+          retry: "never",
+        },
+      });
+      // Even a grant naming the redirect target does not make it a worktree.
+      await expect(
+        workspace().execute(
+          request({
+            gitDirectory: path.join(mainRoot, ".git"),
+            commonDirectory: path.join(mainRoot, ".git"),
+          }),
+        ),
+      ).resolves.toMatchObject({
         ok: false,
         error: {
           code: "WORKSPACE_COMMAND_UNSUPPORTED",
@@ -361,7 +454,14 @@ int main(void) {
       originalMode = (await fs.stat(gitDirectory)).mode & 0o777;
       await fs.chmod(gitDirectory, originalMode | 0o022);
 
-      await expect(workspace().execute(request())).resolves.toMatchObject({
+      await expect(
+        workspace().execute(
+          request({
+            gitDirectory,
+            commonDirectory: path.join(mainRoot, ".git"),
+          }),
+        ),
+      ).resolves.toMatchObject({
         ok: false,
         error: {
           code: "WORKSPACE_COMMAND_UNSUPPORTED",
@@ -756,11 +856,20 @@ int main(void) {
           linkedRoot,
         ]);
         root = await fs.realpath(linkedRoot);
+        const grant = await discoverLinkedGitMetadata(root);
+        expect(grant).toEqual({
+          gitDirectory: path.join(mainRoot, ".git", "worktrees", "checkout"),
+          commonDirectory: path.join(mainRoot, ".git"),
+        });
 
-        await expect(workspace().execute(request())).resolves.toMatchObject({
+        await expect(
+          workspace().execute(request(grant ?? undefined)),
+        ).resolves.toMatchObject({
           ok: true,
           value: { layout: "linked-worktree", coverage: "tracked-files-only" },
         });
+        // A primary checkout keeps its metadata inside the root: no grant.
+        await expect(discoverLinkedGitMetadata(mainRoot)).resolves.toBeNull();
       } finally {
         root = mainRoot;
         await executeFile(git, [

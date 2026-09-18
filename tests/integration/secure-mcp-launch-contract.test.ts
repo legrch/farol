@@ -223,7 +223,14 @@ describe("secure MCP Computer launch contract", () => {
         ...configured.computer,
         workspaces: configured.computer.workspaces.map((workspace, index) =>
           index === 1
-            ? { ...workspace, rootIdentity: { device: "5", inode: "99" } }
+            ? {
+                ...workspace,
+                rootIdentity: { device: "5", inode: "99" },
+                gitMetadata: {
+                  gitDirectory: "/Users/example/repo/.git/worktrees/write",
+                  commonDirectory: "/Users/example/repo/.git",
+                },
+              }
             : workspace,
         ),
       },
@@ -245,6 +252,10 @@ describe("secure MCP Computer launch contract", () => {
         root: "/Users/example/write",
         access: "write",
         rootIdentity: { device: "5", inode: "99" },
+        gitMetadata: {
+          gitDirectory: "/Users/example/repo/.git/worktrees/write",
+          commonDirectory: "/Users/example/repo/.git",
+        },
       },
     ]);
     const launchRoot = path.join(await root(), "runtime");

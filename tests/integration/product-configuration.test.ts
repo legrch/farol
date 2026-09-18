@@ -125,8 +125,7 @@ describe("Farol Next product configuration", () => {
 
     await expect(
       service.recordComputerVerification(workspace.workspaceId, verification, {
-        device: "1",
-        inode: "2",
+        rootIdentity: { device: "1", inode: "2" },
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -142,8 +141,7 @@ describe("Farol Next product configuration", () => {
     // A bound workspace is never silently rebound to another object.
     await expect(
       service.recordComputerVerification(workspace.workspaceId, verification, {
-        device: "1",
-        inode: "3",
+        rootIdentity: { device: "1", inode: "3" },
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -156,6 +154,65 @@ describe("Farol Next product configuration", () => {
         },
       },
     });
+  });
+
+  it("AUTH-09 records linked Git metadata only as the owner's verification observed it", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/checkout",
+      label: "Checkout",
+      rootIdentity: { device: "1", inode: "2" },
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    const verification = {
+      profile: "computer.local.read/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    };
+    const gitMetadata = {
+      gitDirectory: "/Users/example/repo/.git/worktrees/checkout",
+      commonDirectory: "/Users/example/repo/.git",
+    };
+
+    const linked = await service.recordComputerVerification(
+      workspaceId,
+      verification,
+      { rootIdentity: { device: "1", inode: "2" }, gitMetadata },
+    );
+    expect(linked).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: { computer: { workspaces: [{ workspaceId, gitMetadata }] } },
+      },
+    });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(linked.snapshot);
+
+    // The owner verified a layout whose metadata now lives inside the root.
+    const primary = await service.recordComputerVerification(
+      workspaceId,
+      verification,
+      { rootIdentity: { device: "1", inode: "2" }, gitMetadata: null },
+    );
+    if (primary.snapshot.status !== "ready")
+      throw new Error("settings missing");
+    expect(primary.ok).toBe(true);
+    expect(
+      primary.snapshot.settings.computer.workspaces[0]?.gitMetadata,
+    ).toBeUndefined();
   });
 
   it("persists working preferences and workspace approval across restart", async () => {
