@@ -120,6 +120,7 @@ import {
 } from "../../modules/computer/domain/execution-authority";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
+import { configurationAdmission } from "./configuration-admission";
 import {
   applyWorkspaceEdit,
   desktopMutableWorkspaceAction,
@@ -324,23 +325,6 @@ let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
 let workspaceMutationAdmission = false;
 let windowPresentationReady = false;
 let codexHostTaskAdmission = false;
-const agentCheckConfigurationMutations = new Set<string>([
-  "computer.rename",
-  "computer.add-workspace",
-  "computer.remove-workspace",
-  "computer.update-exclusions",
-  "computer.update-access",
-  "computer.update-commands",
-  "computer.verify-workspace",
-]);
-const connectorAuthorityMutations = new Set<string>([
-  "computer.rename",
-  "computer.add-workspace",
-  "computer.remove-workspace",
-  "computer.update-exclusions",
-  "computer.update-access",
-  "computer.update-commands",
-]);
 type ActiveCodexAgentCheck = Readonly<{
   key: string;
   client: Awaited<ReturnType<typeof launchCodexAppServer>>;
@@ -2845,18 +2829,11 @@ async function configureProduct(
   const parsed = ProductConfigurationCommandSchema.safeParse(value);
   if (!parsed.success) return configurationFailure("SETTINGS_INPUT_INVALID");
   const command = parsed.data;
-  if (
-    codexAgentOperationActive() &&
-    agentCheckConfigurationMutations.has(command.kind)
-  ) {
-    return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
-  }
-  if (
-    secureMcpConnectorRuntime?.isRunning() &&
-    connectorAuthorityMutations.has(command.kind)
-  ) {
-    return configurationFailure("CONNECTOR_STOP_REQUIRED");
-  }
+  const admission = configurationAdmission(command.kind, {
+    agentActive: codexAgentOperationActive(),
+    connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
+  });
+  if (admission !== "admitted") return configurationFailure(admission);
   switch (command.kind) {
     case "connector.select-client": {
       const selected = await selectedTunnelClientExecutable();

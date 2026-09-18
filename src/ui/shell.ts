@@ -1795,9 +1795,11 @@ async function configureProduct(
                               ? "This repository has no commits yet, so there is no HEAD commit to read."
                               : parsed.error === "WORKSPACE_SELECTION_PROTECTED"
                                 ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
-                                : parsed.error === "WORKSPACE_ROOT_CHANGED"
-                                  ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
-                                  : `Not applied · ${parsed.error}`;
+                                : parsed.error === "CODEX_HOST_TASK_IN_PROGRESS"
+                                  ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
+                                  : parsed.error === "WORKSPACE_ROOT_CHANGED"
+                                    ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                    : `Not applied · ${parsed.error}`;
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
