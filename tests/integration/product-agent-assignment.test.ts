@@ -4,7 +4,12 @@ import type {
   AgentHost,
   AgentSpawnRequest,
 } from "../../src/modules/agent/app/port/agent-host";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { AcknowledgeAgentResult } from "../../src/modules/agent/app/service/acknowledge-agent-result";
 import { InMemoryAssignments } from "../../src/modules/agent/infra/repo/in-memory-assignments";
+import { PrivateAssignmentStore } from "../../src/modules/agent/infra/repo/private-assignment-store";
 import {
   runProductAgentAssignment,
   type ProductAgentAssignmentDependencies,
@@ -343,5 +348,104 @@ describe("LIF-02 start then immediate rejoin", () => {
     expect(second).toEqual(first);
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
     expect(wait).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("LIF-10 a retained result reaches the parent after restart", () => {
+  it("redelivers the stored result once through rejoin without a new assignment", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-agent-restart-"),
+    );
+    try {
+      const fixture = dependencies();
+      const first = await runProductAgentAssignment(settings(), task, input(), {
+        ...fixture.value,
+        assignments: new PrivateAssignmentStore({ root }),
+      });
+      expect(first).toMatchObject({
+        ok: true,
+        value: {
+          assignment: { phase: "completed" },
+          parentDelivery: "pending",
+          resultRetention: "durable",
+        },
+      });
+      if (!first.ok || !first.value.resultRef)
+        throw new Error("RESULT_MISSING");
+
+      // A new process: nothing may be spawned or waited for again.
+      const restartedHost: AgentHost = {
+        spawn: vi.fn(async () => {
+          throw new Error("must not spawn");
+        }),
+        wait: vi.fn(async () => {
+          throw new Error("must not wait");
+        }),
+        cancel: vi.fn(async () => {
+          throw new Error("must not cancel");
+        }),
+      };
+      const restarted = {
+        host: restartedHost,
+        assignments: new PrivateAssignmentStore({ root }),
+        now: () => 1_000,
+      };
+      const redelivered = await runProductAgentAssignment(
+        settings(),
+        task,
+        input(),
+        restarted,
+        "rejoin",
+      );
+      expect(redelivered).toMatchObject({
+        ok: true,
+        value: {
+          assignment: { phase: "completed", childId: "child-a" },
+          resultRef: first.value.resultRef,
+          parentDelivery: "pending",
+        },
+      });
+      if (!redelivered.ok) throw new Error("REDELIVERY_FAILED");
+
+      const assignment = redelivered.value.assignment;
+      await expect(
+        new AcknowledgeAgentResult(restarted.assignments).execute({
+          correlation: {
+            ...assignment.identity,
+            authorityId: assignment.authority.authorityId,
+            participantId: assignment.authority.participantId,
+            role: assignment.authority.role,
+            parentThreadId: assignment.parentThreadId!,
+            childId: assignment.childId!,
+            parentTurnId: assignment.parentTurnId!,
+            childTurnId: assignment.childTurnId!,
+            hostRole: assignment.hostRole,
+            delegationDigest: assignment.delegationDigest!,
+          },
+          parentParticipantId: assignment.authority.parentParticipantId,
+          resultRef: first.value.resultRef,
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { parentDelivery: "acknowledged" },
+      });
+      await expect(
+        runProductAgentAssignment(
+          settings(),
+          task,
+          input(),
+          restarted,
+          "rejoin",
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { parentDelivery: "acknowledged" },
+      });
+      expect(fixture.spawn).toHaveBeenCalledTimes(1);
+      expect(restartedHost.spawn).not.toHaveBeenCalled();
+      expect(restartedHost.wait).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });
