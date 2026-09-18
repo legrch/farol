@@ -33,9 +33,12 @@ function components(absolute: string): string[] {
 }
 
 // macOS volumes compare names case- and normalisation-insensitively, and the
-// helper folds its own deny check the same way, so `.SSH` is `.ssh`.
+// helper folds its own deny check the same way, so `.SSH` is `.ssh`. Lower
+// case alone is not case folding: U+017F LONG S has no lower-case change but
+// names the same file as "s" on APFS, so letters are upper-cased first, which
+// maps it, like "ß" and the Kelvin sign, onto what Python's casefold gives.
 function folded(part: string): string {
-  return part.normalize("NFC").toLowerCase();
+  return part.normalize("NFC").toUpperCase().toLowerCase();
 }
 
 function hasPrefix(parts: readonly string[], prefix: readonly string[]) {

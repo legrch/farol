@@ -89,4 +89,33 @@ describe("Product Agent owner scope", () => {
       ),
     ).toBeNull();
   });
+
+  it("never narrows the Agent to a subtree the workspace denies by default", () => {
+    // The default denied names apply from the folder's root; a subtree rooted
+    // inside one would apply them below it and serve what they protect.
+    for (const relativeRoot of [
+      ".git",
+      ".git/refs",
+      ".ENV",
+      ".\u017f\u017fh",
+      "Library/Keychains/login",
+      ".docker/config.json",
+    ]) {
+      expect({
+        relativeRoot,
+        scope: resolveProductAgentScope("/workspace/approved", [], {
+          mode: "subtree",
+          relativeRoot,
+          excludedPaths: [],
+        }),
+      }).toEqual({ relativeRoot, scope: null });
+    }
+    expect(
+      resolveProductAgentScope("/workspace/approved", [], {
+        mode: "subtree",
+        relativeRoot: "src/.github",
+        excludedPaths: [],
+      }),
+    ).toMatchObject({ scope: { root: "/workspace/approved/src/.github" } });
+  });
 });

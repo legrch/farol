@@ -60,7 +60,7 @@ const MAX_RESPONSE_BYTES = 512 * 1024;
 const MAX_STDERR_BYTES = 4 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 
-const DEFAULT_DENIED_PATHS = Object.freeze([
+export const DEFAULT_DENIED_PATHS = Object.freeze([
   ".env",
   ".ssh",
   ".aws",

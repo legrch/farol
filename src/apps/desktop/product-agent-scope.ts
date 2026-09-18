@@ -2,6 +2,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import type { ProductAgentScopeSelection } from "../../modules/chat/contract/product-task";
+import { DEFAULT_DENIED_PATHS } from "../../modules/computer/infra/native/native-readonly-workspace";
 
 const absolutePath = z
   .string()
@@ -71,6 +72,26 @@ function aliasesConfiguredExclusion(
   });
 }
 
+// The native boundary denies these names from the root it is given. A subtree
+// rooted inside one of them would be given as that root, and would then serve
+// what the name protects, so it is never a scope.
+function throughDefaultDenied(workspaceRoot: string, candidate: string) {
+  if (candidate === workspaceRoot) return false;
+  const relative = candidate
+    .slice(workspaceRoot === "/" ? 1 : workspaceRoot.length + 1)
+    .split("/");
+  return DEFAULT_DENIED_PATHS.some((prefix) => {
+    const parts = prefix.split("/");
+    return (
+      parts.length <= relative.length &&
+      parts.every(
+        (part, index) =>
+          pathComponentCollator.compare(part, relative[index] ?? "") === 0,
+      )
+    );
+  });
+}
+
 function denied(excludedPaths: readonly string[], candidate: string): boolean {
   return excludedPaths.some((excluded) => within(excluded, candidate));
 }
@@ -101,6 +122,7 @@ export function productAgentScopeMatchesWorkspace(
   }
   const { scope, excludedPaths } = value;
   if (!within(workspaceRoot, scope.root)) return false;
+  if (throughDefaultDenied(workspaceRoot, scope.root)) return false;
   if (aliasesConfiguredExclusion(configuredExcludedPaths, scope.root)) {
     return false;
   }

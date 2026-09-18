@@ -52,6 +52,8 @@ describe("Farol Next product configuration", () => {
       "/Users/example/.aws/profiles",
       "/Users/example/Library/Keychains",
       "/Users/example/.Codex",
+      // U+017F LONG S folds to "s" on APFS: this names ~/.ssh.
+      "/Users/example/.\u017f\u017fh",
     ]) {
       await expect(
         service.addReadonlyWorkspace({ root: candidate, label: "Store" }),
