@@ -680,6 +680,9 @@ html[data-window-active="false"] .task-tab.active::before {
 
 .new-task {
   flex: 0 0 auto;
+  /* The primary action stays a 24px target at every width. */
+  min-width: 24px;
+  min-height: 24px;
   display: grid;
   grid-template-columns: auto auto;
   align-content: center;

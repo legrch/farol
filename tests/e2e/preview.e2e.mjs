@@ -3737,8 +3737,8 @@ try {
     .locator("#dossier-title")
     .innerText();
   const longLabel =
-    "Очень длинное русское название задачи для проверки усечения — long English task title";
-  assert.ok(longLabel.length <= 80 && longLabel.length >= 70);
+    "Очень длинное русское название задачи для проверки усечения — long English title";
+  assert.equal(longLabel.length, 80, "label uses the full 80-character limit");
   const renamedLong = await ordinaryLiveTasks.window.evaluate(
     ({ taskId, label }) =>
       window.farolNext.task({ kind: "task.rename", taskId, label }),
