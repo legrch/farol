@@ -91,6 +91,8 @@ describe("EV-04 immutable evidence attempts", () => {
       message: "Error: E2E_TOP_LEVEL_FAILURE",
     });
     expect(failed.terminal.exitCode).toBe(1);
+    expect(failed.exit).toMatchObject({ exitCode: 1 });
+    expect(silent.exit).toMatchObject({ exitCode: 0 });
     expect(silent.status).toBe("FAIL");
     expect(silent.terminal.firstFailure).toEqual({
       case: "runner",

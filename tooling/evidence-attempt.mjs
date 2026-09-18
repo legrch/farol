@@ -9,6 +9,9 @@ import path from "node:path";
 //   <laneRoot>/attempts/<attemptId>/...            the run's own evidence
 //   <laneRoot>/attempts/<attemptId>/terminal.json  outcome, first failure,
 //                                                  cases and byproduct hashes
+//   <laneRoot>/attempts/<attemptId>/exit.json      the process exit code,
+//                                                  written when the runner
+//                                                  process actually exits
 //   <laneRoot>/attempts/<attemptId>/interrupted.json
 //                                                  written by a later attempt
 //                                                  when the owner died first
@@ -20,7 +23,12 @@ import path from "node:path";
 export const EVIDENCE_ATTEMPT_SCHEMA = "farol.next.evidence-attempt/v1";
 
 const ATTEMPT_ID = /^\d{8}T\d{9}Z-[0-9a-f]{8}$/u;
-const RECEIPTS = new Set(["started.json", "terminal.json", "interrupted.json"]);
+const RECEIPTS = new Set([
+  "started.json",
+  "terminal.json",
+  "exit.json",
+  "interrupted.json",
+]);
 const TERMINAL_STATUSES = new Set(["PASS", "FAIL", "BLOCKED"]);
 const EVIDENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_FAILURE_TEXT = 500;
@@ -204,15 +212,28 @@ class EvidenceAttempt {
   }
 
   // A runner that throws, rejects or exits without its own terminal receipt
-  // still records a FAIL with the first failure it observed.
+  // still records a FAIL with the first failure it observed.  The actual exit
+  // code is recorded separately, so a green terminal label followed by a
+  // nonzero exit cannot pass as a clean run.
   installProcessHandlers() {
     process.on("uncaughtExceptionMonitor", (error) => {
       this.recordFailure("uncaught", error);
     });
     process.on("exit", (code) => {
-      if (this.terminal) return;
-      this.recordFailure("runner", "EVIDENCE_EXIT_WITHOUT_TERMINAL_RECEIPT");
-      this.finishSync("FAIL", { exitCode: code });
+      if (!this.terminal) {
+        this.recordFailure("runner", "EVIDENCE_EXIT_WITHOUT_TERMINAL_RECEIPT");
+        this.finishSync("FAIL", { exitCode: code });
+      }
+      fsSync.writeFileSync(
+        path.join(this.directory, "exit.json"),
+        serialize({
+          schema: EVIDENCE_ATTEMPT_SCHEMA,
+          attemptId: this.attemptId,
+          exitCode: code,
+          exitedAt: new Date().toISOString(),
+        }),
+        { flag: "wx", mode: 0o600 },
+      );
     });
   }
 }
@@ -298,6 +319,7 @@ export async function listEvidenceAttempts(laneRoot) {
       status: attemptStatus(terminal, interrupted),
       started,
       terminal,
+      exit: readJsonSync(path.join(directory, "exit.json")),
       interrupted,
     };
   });

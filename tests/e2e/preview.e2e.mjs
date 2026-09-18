@@ -10,6 +10,7 @@ import { performance } from "node:perf_hooks";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
+import { missingCases } from "../../tooling/evidence-cases.mjs";
 import {
   assertBuildIdentity,
   createBuildIdentity,
@@ -3457,24 +3458,33 @@ async function runLifecycleSoak() {
   }
 }
 
-async function finishSpecialLane() {
+async function finishSpecialLane(lane) {
   const written = JSON.parse(
     await fs.readFile(path.join(evidenceRoot, "report.json"), "utf8"),
   );
-  await evidenceAttempt.finish(written.status === "PASS" ? "PASS" : "FAIL", {
-    cases: written.cases,
-  });
+  const missing = missingCases(lane, written.cases);
+  if (missing.length > 0) {
+    evidenceAttempt.recordFailure(
+      "contract",
+      `E2E_REQUIRED_CASE_MISSING:${missing.join(",")}`,
+    );
+  }
+  await evidenceAttempt.finish(
+    written.status === "PASS" && missing.length === 0 ? "PASS" : "FAIL",
+    { cases: written.cases },
+  );
+  if (missing.length > 0) process.exit(1);
 }
 
 if (lifecycleSoak) {
   await runLifecycleSoak();
-  await finishSpecialLane();
+  await finishSpecialLane("lifecycle-soak");
   process.exit(0);
 }
 
 if (persistenceFault) {
   await runLiveTaskPersistenceFaultProof();
-  await finishSpecialLane();
+  await finishSpecialLane("persistence-fault");
   process.exit(0);
 }
 
@@ -6348,9 +6358,28 @@ assert.deepEqual(
   `E2E_CASE_IDS_NOT_UNIQUE:${[...new Set(repeatedCaseIds)].join(",")}`,
 );
 
+// The declared cases, not the ones this run happened to record, decide
+// whether the run is complete: a case neither executed nor explicitly blocked
+// makes the run FAIL whatever else passed.
+const missingRequiredCases = missingCases(
+  development ? "development-build" : "sealed-package",
+  cases,
+  blockedCases,
+);
+if (missingRequiredCases.length > 0) {
+  evidenceAttempt.recordFailure(
+    "contract",
+    `E2E_REQUIRED_CASE_MISSING:${missingRequiredCases.join(",")}`,
+  );
+}
 const report = {
   schema: 1,
-  status: blockedCases.length > 0 ? "BLOCKED" : "PASS",
+  status:
+    missingRequiredCases.length > 0
+      ? "FAIL"
+      : blockedCases.length > 0
+        ? "BLOCKED"
+        : "PASS",
   lane: development ? "development-build" : "sealed-package",
   artifactSha256: artifact.artifactSha256,
   sourceCommit: artifact.sourceCommit,
@@ -6429,12 +6458,18 @@ await fs.writeFile(
   path.join(evidenceRoot, "report.json"),
   `${JSON.stringify(report, null, 2)}\n`,
 );
-await evidenceAttempt.finish(blockedCases.length > 0 ? "BLOCKED" : "PASS", {
+await evidenceAttempt.finish(report.status, {
   cases,
   blockedCases,
   skippedCases,
 });
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+if (missingRequiredCases.length > 0) {
+  process.stderr.write(
+    `E2E_REQUIRED_CASE_MISSING:${JSON.stringify(missingRequiredCases)}\n`,
+  );
+  process.exitCode = 1;
+}
 if (blockedCases.length > 0) {
   process.stderr.write(
     `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,

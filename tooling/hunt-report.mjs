@@ -373,7 +373,14 @@ async function collectVitestEvidence() {
 const testedSource = sourceIdentity(repositoryRoot, scope);
 const huntAttempt = await openEvidenceAttempt(
   path.join(root, "artifacts/hunt"),
-  { lane: "hunt", input: testedSource },
+  {
+    lane: "hunt",
+    input: {
+      sourceCommit: testedSource.commit,
+      sourceTreeDigest: testedSource.treeDigest,
+      sourceDirty: testedSource.dirty,
+    },
+  },
 );
 huntAttempt.installProcessHandlers();
 const vitestEvidence = await collectVitestEvidence();
