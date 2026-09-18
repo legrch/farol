@@ -25,6 +25,10 @@ import {
   type CodexNativeToolRequest,
   type ResolvedCodexNativeToolCall,
 } from "./codex-native-tool-registry";
+import type {
+  ProviderTurnAdmission,
+  ProviderTurnJournal,
+} from "./provider-turn-journal";
 
 const MAX_REQUEST_BYTES = 1 * 1_024 * 1_024;
 const MAX_PROMPT_CHARACTERS = 128 * 1_024;
@@ -150,6 +154,9 @@ type ProviderOptions = Readonly<{
   token: string;
   conversation: CodexChatGptConversation;
   compaction?: CodexChatGptCompaction;
+  // Durable identity of every admitted initial request; see EV-05 in
+  // handleResponses.
+  turns: ProviderTurnJournal;
 }>;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -1045,6 +1052,51 @@ async function handleResponses(
   const prompt = promptFromInput(parsed.data.input, trustedContext);
   if (prompt === null) {
     refusal(response, 422, "FAROL_NEXT_INPUT_UNSUPPORTED");
+    return;
+  }
+  try {
+    CodexNativeToolRegistry.parse(parsed.data.tools);
+  } catch (error) {
+    onRefusal(
+      error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
+        ? error.message
+        : "FAROL_NEXT_TOOL_CATALOGUE_INVALID",
+    );
+    refusal(response, 422, "FAROL_NEXT_TOOL_CATALOGUE_INVALID");
+    return;
+  }
+  // A host may repeat an initial request after a terminal answer, a lost
+  // stream or a restart. The logical request is recorded durably, with its
+  // immutable intent, after every local refusal and before anything reaches
+  // ChatGPT, so a repeat never starts a second conversation run and the same
+  // identity cannot carry a different request. A deliberately new identity
+  // with the same text is a new request.
+  let admission: ProviderTurnAdmission;
+  try {
+    admission = await options.turns.admit(
+      key,
+      digest(
+        canonicalJson({
+          model: parsed.data.model,
+          input: parsed.data.input,
+          tools: parsed.data.tools,
+        }),
+      ),
+    );
+  } catch {
+    onRefusal("FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
+    refusal(response, 503, "FAROL_NEXT_TURN_JOURNAL_UNAVAILABLE");
+    return;
+  }
+  if (admission !== "admitted") {
+    const code =
+      admission === "replayed"
+        ? "FAROL_NEXT_TURN_ALREADY_SUBMITTED"
+        : admission === "conflict"
+          ? "FAROL_NEXT_TURN_INTENT_CONFLICT"
+          : "FAROL_NEXT_TURN_STATE_UNKNOWN";
+    onRefusal(code);
+    refusal(response, 409, code);
     return;
   }
   let turn: ActiveProviderTurn;

@@ -15,6 +15,7 @@ import {
   startCodexChatGptProvider,
   type CodexChatGptConversation,
 } from "../src/apps/desktop/codex-chatgpt-provider";
+import { PrivateProviderTurnJournal } from "../src/apps/desktop/provider-turn-journal";
 import { createCodexContextController } from "../src/apps/desktop/codex-context-runtime";
 import type { ContextBinding } from "../src/modules/chat/domain/context-continuity";
 
@@ -191,6 +192,9 @@ const provider = await startCodexChatGptProvider({
   token,
   conversation,
   compaction: context.continuity,
+  turns: new PrivateProviderTurnJournal({
+    root: path.join(scratch, "provider-turns"),
+  }),
 });
 let client: Awaited<ReturnType<typeof launchCodexAppServer>> | null = null;
 

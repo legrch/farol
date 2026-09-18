@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -5,6 +8,24 @@ import {
   type CodexChatGptConversation,
   type CodexChatGptProviderRuntime,
 } from "../../src/apps/desktop/codex-chatgpt-provider";
+import {
+  PrivateProviderTurnJournal,
+  type ProviderTurnJournal,
+} from "../../src/apps/desktop/provider-turn-journal";
+
+function memoryJournal(): ProviderTurnJournal {
+  const admitted = new Map<string, string>();
+  return {
+    admit: async (key, intentSha256) => {
+      const existing = admitted.get(key);
+      if (existing === undefined) {
+        admitted.set(key, intentSha256);
+        return "admitted";
+      }
+      return existing === intentSha256 ? "replayed" : "conflict";
+    },
+  };
+}
 
 class SseReader {
   private readonly reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -177,6 +198,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       model: "farol-next/mind",
       token: "route-b-test-token",
       conversation,
+      turns: memoryJournal(),
     });
 
     const response = await fetch(`${runtime.baseUrl}/v1/responses`, {
@@ -250,6 +272,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       model: "farol-next/mind",
       token: "route-b-test-token",
       conversation,
+      turns: memoryJournal(),
       compaction: { compact: vi.fn(), prepareTurn },
     });
 
@@ -435,6 +458,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       token: "route-b-test-token",
       conversation,
       compaction: { compact },
+      turns: memoryJournal(),
     };
     runtime = await startCodexChatGptProvider(options);
 
@@ -601,6 +625,134 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(conversation.run).not.toHaveBeenCalled();
   });
 
+  it("EV-05 runs one logical initial request once across completion, lost delivery and restart", async () => {
+    const journalRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-provider-turns-"),
+    );
+    try {
+      let hold: Promise<void> | null = null;
+      const run = vi.fn<CodexChatGptConversation["run"]>(
+        async (_input, observer) => {
+          await observer.onTextDelta({
+            sequence: 1,
+            delta: "Hello",
+            text: "Hello",
+            observedCharacters: 5,
+          });
+          if (hold) await hold;
+          return {
+            state: "completed",
+            code: null,
+            outputText: "Hello",
+            observedProvider: "chatgpt-web",
+            observedModel: "gpt-6-astra",
+            observedMode: "high",
+          };
+        },
+      );
+      const start = () =>
+        startCodexChatGptProvider({
+          model: "farol-next/mind",
+          token: "route-b-test-token",
+          conversation: { run },
+          turns: new PrivateProviderTurnJournal({ root: journalRoot }),
+        });
+      const post = (body: unknown, signal?: AbortSignal) =>
+        fetch(`${runtime?.baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-b-test-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+          ...(signal ? { signal } : {}),
+        });
+      const withTurn = (turnId: string, text = "Say hello") => ({
+        ...requestBody(),
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        ],
+        client_metadata: {
+          ...requestBody().client_metadata,
+          turn_id: turnId,
+          root_turn_id: turnId,
+        },
+      });
+      const alreadySubmitted = {
+        error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+      };
+      runtime = await start();
+
+      // Completed, then the host repeats the same initial request.
+      const completed = new SseReader(await post(withTurn("turn-complete")));
+      await completed.until("response.completed");
+      const repeated = await post(withTurn("turn-complete"));
+      expect(repeated.status).toBe(409);
+      await expect(repeated.json()).resolves.toEqual(alreadySubmitted);
+      expect(run).toHaveBeenCalledTimes(1);
+
+      // The host loses the stream while ChatGPT is still answering.
+      let release!: () => void;
+      hold = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const controller = new AbortController();
+      const lost = new SseReader(
+        await post(withTurn("turn-lost"), controller.signal),
+      );
+      await lost.until("response.output_text.delta");
+      controller.abort();
+      // While the original run is still answering it owns the identity.
+      const duringRun = await post(withTurn("turn-lost"));
+      expect(duringRun.status).toBe(409);
+      release();
+      hold = null;
+      await vi.waitFor(() =>
+        expect(runtime?.diagnostics().activeTurns).toBe(0),
+      );
+      const afterLoss = await post(withTurn("turn-lost"));
+      expect(afterLoss.status).toBe(409);
+      await expect(afterLoss.json()).resolves.toEqual(alreadySubmitted);
+      expect(run).toHaveBeenCalledTimes(2);
+
+      // A restarted provider still knows both requests.
+      await runtime.close();
+      runtime = await start();
+      for (const turnId of ["turn-complete", "turn-lost"]) {
+        const afterRestart = await post(withTurn(turnId));
+        expect(afterRestart.status).toBe(409);
+        await expect(afterRestart.json()).resolves.toEqual(alreadySubmitted);
+      }
+      expect(run).toHaveBeenCalledTimes(2);
+
+      // The same identity carrying another request is a conflict, not a run.
+      const changed = await post(withTurn("turn-complete", "Say goodbye"));
+      expect(changed.status).toBe(409);
+      await expect(changed.json()).resolves.toEqual({
+        error: { code: "FAROL_NEXT_TURN_INTENT_CONFLICT" },
+      });
+      expect(run).toHaveBeenCalledTimes(2);
+
+      // A deliberately new request with the same text still runs.
+      const fresh = new SseReader(await post(withTurn("turn-fresh")));
+      await fresh.until("response.completed");
+      expect(run).toHaveBeenCalledTimes(3);
+
+      // The journal keeps digests, never the request text.
+      for (const entry of await fs.readdir(journalRoot)) {
+        const stored = await fs.readFile(path.join(journalRoot, entry), "utf8");
+        expect(stored).not.toContain("hello");
+        expect(stored).not.toContain("turn-");
+      }
+    } finally {
+      await fs.rm(journalRoot, { recursive: true, force: true });
+    }
+  });
+
   it("refuses unauthenticated and unsupported-model requests before dispatch", async () => {
     const conversation: CodexChatGptConversation = {
       run: vi.fn(),
@@ -609,6 +761,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       model: "farol-next/mind",
       token: "route-b-test-token",
       conversation,
+      turns: memoryJournal(),
     });
 
     const unauthenticated = await fetch(`${runtime.baseUrl}/v1/responses`, {
@@ -638,6 +791,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       model: "farol-next/mind",
       token: "route-b-test-token",
       conversation: { run: vi.fn() },
+      turns: memoryJournal(),
     });
 
     const response = await fetch(`${runtime.baseUrl}/v1/models`, {

@@ -10,6 +10,7 @@ import {
   type CodexChatGptProviderRuntime,
 } from "./codex-chatgpt-provider";
 import { CodexContextContinuity } from "./codex-context-continuity";
+import { PrivateProviderTurnJournal } from "./provider-turn-journal";
 
 export type CodexContextControllerOptions = Readonly<{
   ownerId: string;
@@ -25,6 +26,8 @@ export type CodexContextRuntimeOptions = CodexContextControllerOptions &
     model: "farol-next/mind" | "farol-next/drive";
     token: string;
     conversation: CodexChatGptConversation;
+    // Private directory for the provider's durable initial-request journal.
+    providerTurnsRoot: string;
   }>;
 
 export type CodexContextController = Readonly<{
@@ -71,6 +74,7 @@ export async function startCodexContextRuntime(
     token: options.token,
     conversation: options.conversation,
     compaction: controller.continuity,
+    turns: new PrivateProviderTurnJournal({ root: options.providerTurnsRoot }),
   });
   let closed = false;
 
