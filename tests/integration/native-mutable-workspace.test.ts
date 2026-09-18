@@ -272,6 +272,44 @@ describe("native mutable Computer workspace", () => {
     expect(survivors).toContain("external save 2\n");
   });
 
+  it("AUTH-04 reports an unknown outcome, never success, when the target is replaced right after the exchange", async () => {
+    const target = path.join(root, "README.md");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "farol-candidate\n",
+        expectedSha256: digest("before\n"),
+      }),
+      {
+        testHookRequest: { phase: "after-exchange", index: null },
+        testHook: async () => {
+          // An external atomic save lands on the target right after the
+          // exchange and leaves the private name (the checked original)
+          // untouched: the target no longer holds this edit.
+          await fs.writeFile(`${target}.external`, "external save\n", {
+            mode: 0o600,
+          });
+          await fs.rename(`${target}.external`, target);
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    });
+    // The external save is kept as the target; the checked original survives
+    // under a private name instead of being deleted as if the edit had won.
+    expect(await fs.readFile(target, "utf8")).toBe("external save\n");
+    const survivors = await Promise.all(
+      (await fs.readdir(root))
+        .filter((entry) => entry.startsWith(".farol-tmp-"))
+        .map((entry) => fs.readFile(path.join(root, entry), "utf8")),
+    );
+    expect(survivors).toContain("before\n");
+  });
+
   it("AUTH-05 validates create-only content before creating parent directories", async () => {
     const result = await workspace().mutate(
       request({

@@ -1009,6 +1009,15 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
                     refuse(EXIT_PATH_REFUSED)
                 refuse(EXIT_RACE)
             _test_hook(request, "after-exchange", None)
+            if not _holds_inode(parent_fd, leaf, written):
+                # Another writer replaced the target right after the exchange:
+                # it no longer holds this edit, and the private name holds the
+                # checked original.  Neither is touched -- the other writer's
+                # bytes stay where they landed and the original is kept under
+                # the private name -- and the outcome is reported as unknown,
+                # never as a success the target does not show.
+                temporary = None
+                refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
             expected_sha256 = request.get("expectedSha256")
             if not _is_checked_original(parent_fd, temporary, previous, expected_sha256):
                 try:

@@ -38,8 +38,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "1c2dcddecd9d8d2a361754b2cc8c0176c68747e2c8309d1c13f54e15c616a19b",
-  size: 75_779,
+  sha256: "08ae6cace27706cd1a87d1b71af849d2c13d5789f8e5570be5e0befe4b65baed",
+  size: 76_380,
   mode: 0o644,
 });
 
