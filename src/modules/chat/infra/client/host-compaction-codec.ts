@@ -476,6 +476,19 @@ export function renderTrustedCheckpointContext(
   return `${FAROL_CONTEXT_PREAMBLE}\n${JSON.stringify(checkpoint.content, null, 2)}`;
 }
 
+// The next ordinary prompt after a replacement: the rendered checkpoint the
+// provider supplies as trusted context, plus the retained user messages the
+// host sends again (the streamed variant keeps its own history).
+function nextPromptCharacters(
+  checkpoint: CheckpointEnvelope,
+  retainedTail: readonly unknown[],
+): number {
+  return [
+    renderTrustedCheckpointContext(checkpoint),
+    ...retainedTail.map((message) => messageText(message)),
+  ].join("\n\n").length;
+}
+
 export function buildHostCompactionHandoff(
   request: ParsedHostCompaction,
   candidate: unknown,
@@ -483,6 +496,10 @@ export function buildHostCompactionHandoff(
     maximumCheckpointContentBytes: number;
     retainedTailMaximumBytes: number;
     maximumHandoffBytes: number;
+    // A replacement that fits the handoff but leaves no room for the next
+    // prompt would fail on the next turn, so it is refused here instead of
+    // being summarized again.
+    maximumNextPromptCharacters?: number;
   }>,
 ): Result<HostCompactionHandoff, HostCompactionErrorCode> {
   if (
@@ -506,7 +523,12 @@ export function buildHostCompactionHandoff(
   if (checkpoint.sourceBoundary !== request.sourceBoundary) {
     return failure("HOST_COMPACTION_SOURCE_MISMATCH");
   }
+  const fitsNextPrompt = (retainedTail: readonly unknown[]) =>
+    options.maximumNextPromptCharacters === undefined ||
+    nextPromptCharacters(checkpoint, retainedTail) <=
+      options.maximumNextPromptCharacters;
   if (request.variant === "streamed_compaction_item") {
+    if (!fitsNextPrompt([])) return failure("COMPACTION_BUDGET_EXCEEDED");
     const handoff: HostCompactionHandoff = {
       variant: request.variant,
       item: {
@@ -525,6 +547,9 @@ export function buildHostCompactionHandoff(
     options.retainedTailMaximumBytes,
   );
   if (!retained.ok) return retained;
+  if (!fitsNextPrompt(retained.value)) {
+    return failure("COMPACTION_BUDGET_EXCEEDED");
+  }
   const handoff: HostCompactionHandoff = {
     variant: request.variant,
     response: {

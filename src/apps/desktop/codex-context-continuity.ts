@@ -32,10 +32,17 @@ import {
   PrivateContextStore,
   type StoredContextSource,
 } from "../../modules/chat/infra/repo/private-context-store";
-import type {
-  CodexChatGptCompaction,
-  CodexChatGptCompactionErrorCode,
+import {
+  MAX_PROMPT_CHARACTERS,
+  type CodexChatGptCompaction,
+  type CodexChatGptCompactionErrorCode,
 } from "./codex-chatgpt-provider";
+
+// Room kept for what the next turn adds to a replacement: the new user
+// message and the host-tool relay instruction.
+const NEXT_TURN_RESERVE_CHARACTERS = 16 * 1_024;
+const NEXT_PROMPT_MAXIMUM_CHARACTERS =
+  MAX_PROMPT_CHARACTERS - NEXT_TURN_RESERVE_CHARACTERS;
 
 const preparedTurnSchema = z
   .object({
@@ -212,6 +219,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
             maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
             retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
             maximumHandoffBytes: MAXIMUM_HOST_HANDOFF_BYTES,
+            maximumNextPromptCharacters: NEXT_PROMPT_MAXIMUM_CHARACTERS,
           });
           this.handoffPreflights.set(checkpoint.operationId, handoff);
           return handoff.ok
@@ -276,6 +284,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
           maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
           retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
           maximumHandoffBytes: MAXIMUM_HOST_HANDOFF_BYTES,
+          maximumNextPromptCharacters: NEXT_PROMPT_MAXIMUM_CHARACTERS,
         });
         return replay.ok ? replay : failure(replay.error.code);
       }
@@ -346,6 +355,7 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
         maximumCheckpointContentBytes: MAXIMUM_CHECKPOINT_CONTENT_BYTES,
         retainedTailMaximumBytes: RETAINED_TAIL_MAXIMUM_BYTES,
         maximumHandoffBytes: MAXIMUM_HOST_HANDOFF_BYTES,
+        maximumNextPromptCharacters: NEXT_PROMPT_MAXIMUM_CHARACTERS,
       });
     return handoff.ok ? handoff : failure(handoff.error.code);
   }

@@ -31,7 +31,8 @@ import type {
 } from "./provider-turn-journal";
 
 const MAX_REQUEST_BYTES = 1 * 1_024 * 1_024;
-const MAX_PROMPT_CHARACTERS = 128 * 1_024;
+// The longest prompt a Route B turn sends into one ChatGPT message.
+export const MAX_PROMPT_CHARACTERS = 128 * 1_024;
 const MAX_TOOLS = 512;
 const MAX_ACTIVE_TURNS = 8;
 const MAX_TOOL_OUTPUT_CHARACTERS = 512 * 1_024;

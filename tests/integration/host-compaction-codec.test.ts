@@ -415,6 +415,48 @@ describe("native host compaction codec", () => {
     });
   });
 
+  it("CCR-09 refuses a replacement that fits the handoff but not the next prompt window", () => {
+    for (const endpoint of ["responses_compact", "responses"] as const) {
+      const parsed = value(
+        parseHostCompactionRequest(
+          endpoint,
+          endpoint === "responses_compact"
+            ? { model: "farol-next/mind", input: baseInput }
+            : {
+                model: "farol-next/mind",
+                stream: true,
+                input: [...baseInput, { type: "compaction_trigger" }],
+              },
+          metadata,
+        ),
+      );
+      const checkpoint = checkpointFor(parsed);
+      const budget = {
+        maximumCheckpointContentBytes: 16_384,
+        retainedTailMaximumBytes: 16_384,
+        maximumHandoffBytes: 64 * 1_024,
+      };
+
+      expect(
+        buildHostCompactionHandoff(parsed, checkpoint, {
+          ...budget,
+          maximumNextPromptCharacters: 200,
+        }),
+        endpoint,
+      ).toMatchObject({
+        ok: false,
+        error: { code: "COMPACTION_BUDGET_EXCEEDED" },
+      });
+      expect(
+        buildHostCompactionHandoff(parsed, checkpoint, {
+          ...budget,
+          maximumNextPromptCharacters: 64 * 1_024,
+        }),
+        endpoint,
+      ).toMatchObject({ ok: true });
+    }
+  });
+
   it("treats historical tool instructions as data and drops live tool authority", () => {
     const parsed = value(
       parseHostCompactionRequest(
