@@ -31,6 +31,7 @@
     "preview": "electron dist/app/main.cjs",
     "test:e2e:dev": "npm run build && node tests/e2e/preview.e2e.mjs --development",
     "test:e2e:soak": "npm run build && node tests/e2e/preview.e2e.mjs --development --lifecycle-soak",
+    "test:e2e:soak:package": "node tests/e2e/preview.e2e.mjs --lifecycle-soak",
     "test:e2e:persistence-fault": "npm run build && node tests/e2e/preview.e2e.mjs --development --persistence-fault",
     "test:e2e": "node tests/e2e/preview.e2e.mjs",
     "test:e2e:computer": "node tests/e2e/readonly-computer-mcp.e2e.mjs && node tests/e2e/mutable-computer-mcp.e2e.mjs",

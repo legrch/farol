@@ -153,6 +153,18 @@ const LOCAL_FIXTURE_BOUNDARY = Object.freeze({
   display: "secondary-inactive",
 });
 
+const LIFECYCLE_SOAK_CASES = Object.freeze([
+  "fifty-task-create-close-cycles",
+  "five-concurrent-task-surfaces",
+  "alternating-task-menu-and-quick-switcher-overlays",
+  "two-same-state-application-recoveries",
+  "zero-provider-surfaces-after-each-batch",
+  "single-shared-download-guard",
+  "single-runtime-process",
+  "bounded-process-fd-resource-and-memory-trend",
+  "zero-task-restart",
+]);
+
 // The outputs a lane's runner records for every attempt; acceptance re-reads
 // them and refuses an attempt whose recorded bytes are gone or different.
 const PRODUCT_REPORT = Object.freeze(["report.json"]);
@@ -182,20 +194,22 @@ export const EVIDENCE_LANES = Object.freeze({
   "lifecycle-soak": Object.freeze({
     root: "artifacts/lifecycle-soak",
     requiredByproducts: PRODUCT_REPORT,
-    cases: Object.freeze([
-      "fifty-task-create-close-cycles",
-      "five-concurrent-task-surfaces",
-      "alternating-task-menu-and-quick-switcher-overlays",
-      "two-same-state-application-recoveries",
-      "zero-provider-surfaces-after-each-batch",
-      "single-shared-download-guard",
-      "single-runtime-process",
-      "bounded-process-fd-resource-and-memory-trend",
-      "zero-task-restart",
-    ]),
+    cases: LIFECYCLE_SOAK_CASES,
     boundary: Object.freeze({
       ...LOCAL_FIXTURE_BOUNDARY,
       build: "development-electron",
+      display: "hidden",
+    }),
+  }),
+  // The same workload, seed, budgets and cases driven through the sealed
+  // package's own launcher: what the owner would run, measured as such.
+  "lifecycle-soak-packaged": Object.freeze({
+    root: "artifacts/lifecycle-soak-packaged",
+    requiredByproducts: PRODUCT_REPORT,
+    cases: LIFECYCLE_SOAK_CASES,
+    boundary: Object.freeze({
+      ...LOCAL_FIXTURE_BOUNDARY,
+      build: "sealed-package",
       display: "hidden",
     }),
   }),

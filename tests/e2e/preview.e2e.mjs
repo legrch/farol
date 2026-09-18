@@ -29,10 +29,23 @@ assert.equal(
   false,
   "E2E_EXCLUSIVE_SPECIAL_MODE",
 );
+// The soak lane is named by the bytes it drives: the development build or
+// the sealed package, never one presented as the other.
+const evidenceLane = lifecycleSoak
+  ? development
+    ? "lifecycle-soak"
+    : "lifecycle-soak-packaged"
+  : persistenceFault
+    ? "persistence-fault"
+    : development
+      ? "development-build"
+      : "sealed-package";
 const evidenceLaneRoot = path.join(
   root,
   lifecycleSoak
-    ? "artifacts/lifecycle-soak"
+    ? development
+      ? "artifacts/lifecycle-soak"
+      : "artifacts/lifecycle-soak-packaged"
     : persistenceFault
       ? "artifacts/persistence-fault"
       : development
@@ -123,13 +136,7 @@ if (development) {
 // Every run writes into its own immutable attempt directory under the lane
 // root; a later or crashed run never removes an earlier run's evidence.
 const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
-  lane: lifecycleSoak
-    ? "lifecycle-soak"
-    : persistenceFault
-      ? "persistence-fault"
-      : development
-        ? "development-build"
-        : "sealed-package",
+  lane: evidenceLane,
   input: {
     sourceCommit: artifact.sourceCommit,
     sourceTreeDigest: artifact.sourceTreeDigest,
@@ -3293,7 +3300,8 @@ function assertQuiescentMetrics(metrics, baseline) {
 }
 
 async function runLifecycleSoak() {
-  assert.equal(development, true, "E2E_SOAK_REQUIRES_DEVELOPMENT_BUILD");
+  // The development build and the sealed package run the same workload;
+  // the lane, the report and the evidence say which bytes were measured.
   const instance = await launch([], "hidden", "ordinary");
   const samples = [];
   const timings = {
@@ -3394,6 +3402,10 @@ async function runLifecycleSoak() {
       schema: 1,
       status: "PASS",
       evidence: "FIXTURE_APP",
+      lane: evidenceLane,
+      build: development ? "development-electron" : "sealed-package",
+      executable,
+      artifactSha256: artifact.artifactSha256,
       sourceCommit: expectedSource.commit,
       sourceTreeDigest: expectedSource.treeDigest,
       buildId: artifact.buildId,
