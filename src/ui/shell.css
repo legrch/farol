@@ -40,7 +40,8 @@
   --line-soft: rgba(255, 255, 255, 0.075);
   --text: #f4f2f7;
   --text-soft: #aaa6b2;
-  --text-faint: #74717c;
+  /* 4.5:1 or better on every surface below, for the 8-11px text that uses it. */
+  --text-faint: #8f8c98;
   --iris: #7867ff;
   --iris-bright: #a89cff;
   --iris-soft: rgba(120, 103, 255, 0.18);

@@ -3730,6 +3730,293 @@ try {
     (surface) => surface.hostVisible && surface.hostBounds.x === 216,
     "wide layout restores the embedded provider page",
   );
+  // UX-07/UX-11: long Russian and English content, the breakpoints around
+  // 980 px, the minimum window, hit targets, contrast and motion are measured
+  // in the DOM. A screenshot alone certifies none of them.
+  const originalLabel = await ordinaryLiveTasks.window
+    .locator("#dossier-title")
+    .innerText();
+  const longLabel =
+    "Очень длинное русское название задачи для проверки усечения — long English task title";
+  assert.ok(longLabel.length <= 80 && longLabel.length >= 70);
+  const renamedLong = await ordinaryLiveTasks.window.evaluate(
+    ({ taskId, label }) =>
+      window.farolNext.task({ kind: "task.rename", taskId, label }),
+    { taskId: selectedLiveTaskId, label: longLabel },
+  );
+  assert.equal(renamedLong.ok, true, "long RU/EN label accepted");
+  const uxMeasurements = {
+    schema: "farol.next.ux-measurements/1",
+    label: longLabel,
+    breakpoint: "(max-width: 979px) selects the rail",
+    widths: {},
+    hitTargets: null,
+    contrast: null,
+    motion: null,
+    glyphFallback: "not-measured",
+  };
+  const measureLayout = () => {
+    const viewport = { width: window.innerWidth, height: window.innerHeight };
+    const within = (rect) =>
+      rect.left >= -0.5 &&
+      rect.top >= -0.5 &&
+      rect.right <= viewport.width + 0.5 &&
+      rect.bottom <= viewport.height + 0.5;
+    const describe = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        visible: element.offsetParent !== null && rect.width > 0,
+        withinViewport: within(rect),
+      };
+    };
+    const title = document.querySelector("#dossier-title");
+    const titleStyle = title ? getComputedStyle(title) : null;
+    const primary = document.querySelector("#new-task");
+    const sidebar = document.querySelector("#sidebar");
+    const controls = ["#new-task", "#command-button", "#build-identity"]
+      .map((selector) => document.querySelector(selector))
+      .filter((element) => element && element.offsetParent !== null);
+    return {
+      viewport,
+      sidebar: document.documentElement.dataset.sidebar ?? null,
+      horizontalOverflow: document.documentElement.scrollWidth > viewport.width,
+      sidebarOverflow: sidebar
+        ? sidebar.scrollWidth > sidebar.clientWidth + 1
+        : null,
+      title: title
+        ? {
+            ...describe(title),
+            text: title.textContent,
+            scrollWidth: title.scrollWidth,
+            clientWidth: title.clientWidth,
+            textOverflow: titleStyle.textOverflow,
+            whiteSpace: titleStyle.whiteSpace,
+            bounded:
+              title.scrollWidth <= title.clientWidth + 1 ||
+              (titleStyle.textOverflow === "ellipsis" &&
+                titleStyle.overflowX !== "visible") ||
+              titleStyle.whiteSpace !== "nowrap",
+          }
+        : null,
+      primaryAction: primary ? describe(primary) : null,
+      offscreen: controls
+        .filter((element) => !within(element.getBoundingClientRect()))
+        .map((element) => `#${element.id}`),
+    };
+  };
+  for (const [width, height] of [
+    [640, 520],
+    [700, 520],
+    [979, 600],
+    [980, 600],
+    [981, 600],
+    [1_180, 760],
+  ]) {
+    await setWindowSize(ordinaryLiveTasks.application, width, height);
+    await ordinaryLiveTasks.window.waitForFunction(
+      (expected) => window.innerWidth === expected,
+      width,
+    );
+    await ordinaryLiveTasks.window.waitForFunction(
+      (expected) => document.documentElement.dataset.sidebar === expected,
+      width <= 979 ? "rail" : "full",
+    );
+    const measured = await ordinaryLiveTasks.window.evaluate(measureLayout);
+    uxMeasurements.widths[width] = measured;
+    assert.equal(measured.horizontalOverflow, false, `overflow at ${width}`);
+    assert.notEqual(
+      measured.sidebarOverflow,
+      true,
+      `sidebar overflow at ${width}`,
+    );
+    assert.deepEqual(measured.offscreen, [], `controls offscreen at ${width}`);
+    assert.ok(measured.primaryAction?.visible, `primary action at ${width}`);
+    assert.ok(
+      measured.primaryAction.width >= 24 && measured.primaryAction.height >= 24,
+      `primary action target at ${width}`,
+    );
+    if (measured.title?.visible) {
+      assert.equal(measured.title.bounded, true, `title bounded at ${width}`);
+      assert.equal(
+        measured.title.withinViewport,
+        true,
+        `title within ${width}`,
+      );
+      assert.ok(measured.title.text.includes("Очень длинное"), "RU rendered");
+    }
+  }
+  uxMeasurements.hitTargets = await ordinaryLiveTasks.window.evaluate(() =>
+    [
+      ...document.querySelectorAll(
+        "button, [role=button], a[href], input, select, textarea",
+      ),
+    ]
+      .filter((element) => element.offsetParent !== null)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`,
+          name: (
+            element.getAttribute("aria-label") ??
+            element.textContent ??
+            ""
+          )
+            .trim()
+            .slice(0, 40),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          primary:
+            element.matches("#new-task, #command-button, .nav-item") === true,
+        };
+      }),
+  );
+  const smallPrimaryTargets = uxMeasurements.hitTargets.filter(
+    (target) => target.primary && (target.width < 24 || target.height < 24),
+  );
+  assert.deepEqual(smallPrimaryTargets, [], "primary targets are 24px or more");
+  uxMeasurements.contrast = await ordinaryLiveTasks.window.evaluate(() => {
+    const parse = (color) => {
+      const match = /rgba?\(([^)]+)\)/u.exec(color);
+      if (!match) return null;
+      const [r, g, b, a = 1] = match[1].split(",").map(Number);
+      return { r, g, b, a };
+    };
+    const channel = (value) => {
+      const c = value / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    };
+    const luminance = ({ r, g, b }) =>
+      0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    const blend = (top, under) => ({
+      r: top.r * top.a + under.r * (1 - top.a),
+      g: top.g * top.a + under.g * (1 - top.a),
+      b: top.b * top.a + under.b * (1 - top.a),
+      a: 1,
+    });
+    const background = (element) => {
+      let node = element;
+      while (node) {
+        const color = parse(getComputedStyle(node).backgroundColor);
+        if (color && color.a > 0) {
+          if (color.a >= 1) return color;
+          return blend(color, background(node.parentElement));
+        }
+        node = node.parentElement;
+      }
+      return (
+        parse(getComputedStyle(document.body).backgroundColor) ?? {
+          r: 10,
+          g: 10,
+          b: 13,
+          a: 1,
+        }
+      );
+    };
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT,
+    );
+    const seen = new Set();
+    const rows = [];
+    while (walker.nextNode()) {
+      const text = walker.currentNode.textContent.trim();
+      const element = walker.currentNode.parentElement;
+      if (!text || !element || seen.has(element)) continue;
+      if (element.offsetParent === null) continue;
+      seen.add(element);
+      const style = getComputedStyle(element);
+      const color = parse(style.color);
+      if (!color || color.a === 0) continue;
+      const size = Number.parseFloat(style.fontSize);
+      const weight = Number.parseInt(style.fontWeight, 10) || 400;
+      const large = size >= 24 || (size >= 18.66 && weight >= 700);
+      const under = background(element);
+      const foreground = color.a < 1 ? blend(color, under) : color;
+      const l1 = luminance(foreground);
+      const l2 = luminance(under);
+      const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+      const required = large ? 3 : 4.5;
+      rows.push({
+        element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${
+          typeof element.className === "string" && element.className.trim()
+            ? `.${element.className.trim().split(/\s+/u).join(".")}`
+            : ""
+        }`,
+        fontSize: size,
+        fontWeight: weight,
+        large,
+        ratio: Math.round(ratio * 100) / 100,
+        required,
+        passes: ratio >= required,
+      });
+    }
+    return rows;
+  });
+  const contrastFailures = uxMeasurements.contrast.filter((row) => !row.passes);
+  assert.deepEqual(contrastFailures, [], "every visible text meets WCAG AA");
+  const animatedElements = () =>
+    ordinaryLiveTasks.window.evaluate(() => {
+      const animated = [];
+      for (const element of document.querySelectorAll("*")) {
+        const style = getComputedStyle(element);
+        const transitions = style.transitionDuration
+          .split(",")
+          .some((value) => Number.parseFloat(value) > 0);
+        const animations =
+          style.animationName !== "none" &&
+          style.animationDuration
+            .split(",")
+            .some((value) => Number.parseFloat(value) > 0);
+        if (transitions || animations) {
+          animated.push(
+            `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`,
+          );
+        }
+      }
+      return {
+        reduced: matchMedia("(prefers-reduced-motion: reduce)").matches,
+        animated,
+      };
+    });
+  const motionDefault = await animatedElements();
+  await ordinaryLiveTasks.window.emulateMedia({ reducedMotion: "reduce" });
+  const motionReduced = await animatedElements();
+  await ordinaryLiveTasks.window.emulateMedia({
+    reducedMotion: "no-preference",
+  });
+  uxMeasurements.motion = { default: motionDefault, reduced: motionReduced };
+  assert.equal(motionReduced.reduced, true, "reduced motion emulated");
+  assert.deepEqual(
+    motionReduced.animated,
+    [],
+    "no motion under reduced motion",
+  );
+  await fs.writeFile(
+    path.join(evidenceRoot, "ux-measurements.json"),
+    `${JSON.stringify(uxMeasurements, null, 2)}\n`,
+  );
+  const renamedBack = await ordinaryLiveTasks.window.evaluate(
+    ({ taskId, label }) =>
+      window.farolNext.task({ kind: "task.rename", taskId, label }),
+    { taskId: selectedLiveTaskId, label: originalLabel },
+  );
+  assert.equal(renamedBack.ok, true);
+  await waitForLiveChatGptSurface(
+    ordinaryLiveTasks,
+    selectedLiveTaskId,
+    (surface) => surface.hostVisible && surface.hostBounds.x === 216,
+    "wide layout restored after measurements",
+  );
+  cases.push(
+    "layout-breakpoints-long-content",
+    "hit-targets-measured",
+    "accessible-contrast-measured",
+    "reduced-motion-measured",
+  );
   const providerSecurity = await ordinaryLiveTasks.application.evaluate(
     ({ session, webContents }, origin) =>
       webContents
