@@ -170,11 +170,21 @@ describe("EV-03/EV-08 effect observer", () => {
     ).toContain("OBSERVER_ATTEMPT_MISMATCH");
   });
 
-  it("reports an unhealthy receipt when no attempt ever appears", async () => {
+  it("reports an unhealthy receipt when no attempt ever appears, and never binds to a run that started before it did", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-observe-"),
     );
     roots.push(root);
+    // The lane's pointer names an earlier, already finished attempt.
+    const earlier = await openEvidenceAttempt(
+      path.join(root, "artifacts", "e2e"),
+      { lane: "sealed-package", input: { ...candidate } },
+    );
+    await fs.writeFile(path.join(earlier.directory, "report.json"), "{}");
+    await earlier.finish("PASS", {
+      cases: [...EVIDENCE_LANES["sealed-package"].cases],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
     const receipt = await observeAttempt({
       laneRoot: path.join(root, "artifacts", "e2e"),
       lane: "sealed-package",
