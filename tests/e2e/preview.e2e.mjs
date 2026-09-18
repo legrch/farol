@@ -3928,6 +3928,20 @@ try {
       if (!text || !element || seen.has(element)) continue;
       if (element.offsetParent === null) continue;
       seen.add(element);
+      // Inactive controls are dimmed by design and exempt from the ratio;
+      // they are recorded, not measured.
+      if (
+        element.closest(
+          "button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled='true']",
+        )
+      ) {
+        rows.push({
+          element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`,
+          exempt: "disabled",
+          passes: true,
+        });
+        continue;
+      }
       const style = getComputedStyle(element);
       const color = parse(style.color);
       if (!color || color.a === 0) continue;
