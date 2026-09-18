@@ -365,12 +365,15 @@ for (const suffix of helpers) {
 }
 
 requireUnsigned(appPath);
+// First the sealed runtime bytes must be the bytes the manifest says were
+// copied; only then is what was copied compared with the reviewed
+// distribution's version, identity and digest.
 const embeddedRuntime = await observeEmbeddedRuntime(runtimeApp);
-assertEmbeddedRuntime(embeddedRuntime);
 requireValue(
   embeddedRuntime.extractedTreeDigest === artifact.electronSourceSha256,
   "PACKAGE_RUNTIME_DIGEST_MISMATCH",
 );
+assertEmbeddedRuntime(embeddedRuntime);
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "pipe" });
 process.stdout.write(
   `verified ${artifact.product} ${artifact.version} ${artifact.artifactSha256} (${artifact.sourceDirty ? "dirty" : "clean"}) at ${appPath}\n`,
