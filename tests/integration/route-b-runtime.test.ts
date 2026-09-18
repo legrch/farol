@@ -8,6 +8,11 @@ import type {
   ChatGptReadonlyTaskResult,
   ChatGptTaskObserver,
 } from "../../src/apps/desktop/chatgpt-route";
+import { CodexCallerRelayClient } from "../../src/apps/computer-mcp/codex-caller-relay-client";
+import {
+  startCodexCallerRelay,
+  type CodexCallerRelayRuntime,
+} from "../../src/apps/desktop/codex-caller-relay";
 import { createCodexContextController } from "../../src/apps/desktop/codex-context-runtime";
 import {
   startRouteBRuntime,
@@ -116,7 +121,11 @@ describe("Route B runtime composed as the product composes it", () => {
     );
   });
 
-  async function compose(surfaces: RouteBTaskSurfaces, task: TaskConversation) {
+  async function compose(
+    surfaces: RouteBTaskSurfaces,
+    task: ChatGptContextSummaryRoute,
+    relay?: CodexCallerRelayRuntime,
+  ) {
     const root = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-route-b-")),
     );
@@ -134,6 +143,7 @@ describe("Route B runtime composed as the product composes it", () => {
       stateRoot: root,
       surfaces,
       compaction: controller.continuity,
+      ...(relay ? { relay } : {}),
     });
     return { root, controller, runtime };
   }
@@ -231,6 +241,135 @@ describe("Route B runtime composed as the product composes it", () => {
         mode: "mind",
       }),
     ).resolves.toMatchObject({ phase: "active", epoch: 2 });
+  });
+
+  it("correlates one host tool that ChatGPT invokes through the caller relay", async () => {
+    const relayRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-relay-")),
+    );
+    roots.push(relayRoot);
+    const relay = await startCodexCallerRelay({ root: relayRoot });
+    try {
+      const client = new CodexCallerRelayClient(relay.endpoint);
+      const invocations: unknown[] = [];
+      // ChatGPT reads the ticket from its prompt, calls the connector tool and
+      // answers with what the host returned.
+      const task: ChatGptContextSummaryRoute = {
+        runReadonlyTask: async (prompt, _attachments, observer = {}) => {
+          const ticket =
+            /with ticket ([a-f0-9]{64}) and binding ([a-f0-9]{64})/u.exec(
+              prompt,
+            );
+          if (!ticket) throw new Error("TICKET_MISSING");
+          const described = await client.request({
+            operation: "describe",
+            ticket: ticket[1]!,
+            binding: ticket[2]!,
+          });
+          invocations.push(described);
+          const invoked = await client.request({
+            operation: "invoke",
+            ticket: ticket[1]!,
+            binding: ticket[2]!,
+            operationId: "chatgpt-operation-1",
+            name: "exec_command",
+            namespace: null,
+            arguments: { cmd: "printf ROUTE_B_TOOL_OK" },
+          });
+          invocations.push(invoked);
+          const text =
+            invoked.ok && invoked.operation === "invoke"
+              ? `Host said ${invoked.output}.`
+              : "No tool result.";
+          await observer.onTextDelta?.({
+            sequence: 1,
+            delta: text,
+            text,
+            observedCharacters: text.length,
+          });
+          return {
+            state: "completed",
+            code: null,
+            deltaCount: 1,
+            observedCharacters: text.length,
+            outputText: text,
+          };
+        },
+        currentConversationUrl: () => "https://chatgpt.com/c/route-b-tools",
+        retainedConversationUrl: () => "https://chatgpt.com/c/route-b-tools",
+        resetConversation: () => undefined,
+        dispose: () => undefined,
+      };
+      const { runtime: route } = await compose(
+        { surfaceFor: async () => ({ ok: true, surface: task }) },
+        task,
+        relay,
+      );
+      const tools = [
+        {
+          type: "function",
+          name: "exec_command",
+          description:
+            "Run one command through the exact native host registry.",
+          parameters: {
+            type: "object",
+            properties: { cmd: { type: "string", minLength: 1 } },
+            required: ["cmd"],
+            additionalProperties: false,
+          },
+          strict: true,
+        },
+      ];
+      const initial = {
+        ...initialRequest("turn-route-b-tool", "Check the host."),
+        tools,
+      };
+
+      const first = await post(route, "/responses", initial);
+      const firstStream = await first.text();
+      const call =
+        /"type":"function_call"[^}]*"call_id":"(farol_next_call_[a-f0-9]{32})"/u.exec(
+          firstStream,
+        );
+      expect(call).not.toBeNull();
+      expect(firstStream).toContain('\\"cmd\\":\\"printf ROUTE_B_TOOL_OK\\"');
+      const completedItem = JSON.parse(
+        firstStream
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => line.slice(6))
+          .find((line) => line.includes('"response.completed"')) ?? "{}",
+      ) as { response: { output: Readonly<Record<string, unknown>>[] } };
+      const toolCall = completedItem.response.output[0];
+
+      // The host executes its own tool and returns the result.
+      const continued = await post(route, "/responses", {
+        ...initial,
+        tools: [],
+        input: [
+          toolCall,
+          {
+            type: "function_call_output",
+            call_id: call?.[1],
+            output: "ROUTE_B_TOOL_OK",
+          },
+        ],
+      });
+      const finalStream = await continued.text();
+      expect(finalStream).toContain("Host said ROUTE_B_TOOL_OK.");
+      expect(finalStream).toContain("response.completed");
+      expect(invocations).toEqual([
+        expect.objectContaining({ ok: true, operation: "describe" }),
+        {
+          ok: true,
+          operation: "invoke",
+          operationId: "chatgpt-operation-1",
+          output: "ROUTE_B_TOOL_OK",
+        },
+      ]);
+    } finally {
+      await relay.close();
+    }
   });
 
   it("refuses an unknown caller and a thread that cannot get a task", async () => {

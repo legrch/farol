@@ -5,6 +5,7 @@ import type {
   ChatGptReadonlyTaskResult,
   ChatGptTaskObserver,
 } from "./chatgpt-route";
+import type { CodexCallerRelayRuntime } from "./codex-caller-relay";
 import {
   startCodexChatGptProvider,
   type CodexChatGptCompaction,
@@ -39,11 +40,16 @@ export type RouteBTaskSurfaces = Readonly<{
   ): void | Promise<void>;
 }>;
 
+// The caller relay the Farol Next connector reaches: each turn that offers
+// host tools opens one relay turn bound to exactly that tool catalogue.
+export type RouteBToolRelay = Pick<CodexCallerRelayRuntime, "openTurn">;
+
 export type RouteBRuntimeOptions = Readonly<{
   // Private Next state directory; the provider's turn journal lives inside it.
   stateRoot: string;
   surfaces: RouteBTaskSurfaces;
   compaction: CodexChatGptCompaction;
+  relay?: RouteBToolRelay;
 }>;
 
 export type RouteBRuntime = Readonly<{
@@ -81,32 +87,79 @@ function conversationResult(
   };
 }
 
+function refusedBeforeSubmit(code: string): CodexChatGptConversationResult {
+  return {
+    state: "failed_before_submit",
+    code,
+    outputText: "",
+    observedProvider: null,
+    observedModel: null,
+    observedMode: null,
+  };
+}
+
+// ChatGPT reaches the host's own tools only through the Farol Next connector
+// tool, bound to this one turn; the relay admits nothing else.
+function toolRelayInstruction(ticket: string, binding: string): string {
+  return [
+    "This Codex task's native tools are available only through the Farol Next connector tool farol_next_caller_tools,",
+    `with ticket ${ticket} and binding ${binding}.`,
+    'Describe them first with operation "describe". Invoke one tool at a time with operation "invoke" and a new stable operationId.',
+    "Never repeat an invoke whose result you did not receive.",
+  ].join(" ");
+}
+
 /**
  * Runs each Route B turn in its task's ChatGPT conversation and streams the
- * observed text back to the host. This surface has no tool path of its own:
- * a ChatGPT answer is text, and host tools are reached separately.
+ * observed text back to the host. When the host offers tools, the turn opens
+ * one relay turn for exactly that catalogue: a tool ChatGPT invokes through
+ * the connector becomes a function call the host executes, and its output
+ * returns the same way.
  */
 export function chatGptTaskConversation(
   surfaces: RouteBTaskSurfaces,
+  relay?: RouteBToolRelay,
 ): CodexChatGptConversation {
   return {
     run: async (input, observer) => {
       const threadId = input.identity.threadId;
       const admitted = await surfaces.surfaceFor(threadId);
-      if (!admitted.ok) {
-        return {
-          state: "failed_before_submit",
-          code: admitted.code,
-          outputText: "",
-          observedProvider: null,
-          observedModel: null,
-          observedMode: null,
-        };
+      if (!admitted.ok) return refusedBeforeSubmit(admitted.code);
+      let toolTurn: ReturnType<RouteBToolRelay["openTurn"]> | null = null;
+      // Every path after admission reports how the turn ended, so the task
+      // never stays running after a refusal.
+      const settle = async (result: CodexChatGptConversationResult) => {
+        toolTurn?.close();
+        await surfaces.settled?.(threadId, result.state);
+        return result;
+      };
+      let prompt = input.prompt;
+      if (input.tools.length > 0) {
+        if (!relay) {
+          return settle(refusedBeforeSubmit("ROUTE_B_TOOL_RELAY_UNAVAILABLE"));
+        }
+        try {
+          toolTurn = relay.openTurn({
+            identity: input.identity,
+            tools: input.tools,
+            invoke: (resolved) =>
+              observer.onToolCall({
+                name: resolved.name,
+                ...(resolved.namespace === null
+                  ? {}
+                  : { namespace: resolved.namespace }),
+                arguments: resolved.arguments,
+              }),
+          });
+        } catch {
+          return settle(refusedBeforeSubmit("ROUTE_B_TOOL_RELAY_REFUSED"));
+        }
+        prompt = `${prompt}\n\n${toolRelayInstruction(toolTurn.ticket, toolTurn.binding)}`;
       }
       let result: CodexChatGptConversationResult;
       try {
         result = conversationResult(
-          await admitted.surface.runReadonlyTask(input.prompt, [], {
+          await admitted.surface.runReadonlyTask(prompt, [], {
             onTextDelta: (delta) => observer.onTextDelta(delta),
           }),
         );
@@ -120,8 +173,7 @@ export function chatGptTaskConversation(
           observedMode: null,
         };
       }
-      await surfaces.settled?.(threadId, result.state);
-      return result;
+      return settle(result);
     },
   };
 }
@@ -137,7 +189,7 @@ export async function startRouteBRuntime(
   const provider = await startCodexChatGptProvider({
     model: ROUTE_B_MODEL,
     token,
-    conversation: chatGptTaskConversation(options.surfaces),
+    conversation: chatGptTaskConversation(options.surfaces, options.relay),
     compaction: options.compaction,
     turns: new PrivateProviderTurnJournal({
       root: path.join(options.stateRoot, "provider-turns"),

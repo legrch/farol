@@ -13,7 +13,15 @@ import {
   type SaveDialogOptions,
   type UtilityProcess,
 } from "electron";
-import { chmod, lstat, mkdir, readFile, realpath } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  unlink,
+} from "node:fs/promises";
+import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -121,6 +129,10 @@ import {
 } from "../../modules/computer/domain/execution-authority";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
+import {
+  startCodexCallerRelay,
+  type CodexCallerRelayRuntime,
+} from "./codex-caller-relay";
 import { configurationAdmission } from "./configuration-admission";
 import {
   startRouteBRuntime,
@@ -286,6 +298,7 @@ let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
 let codexContextController: CodexContextController | null = null;
 let routeBRuntime: RouteBRuntime | null = null;
+let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
@@ -824,6 +837,37 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
   },
 };
 
+// The relay socket path must stay under the 104-byte Unix socket limit, so it
+// lives in a short private temporary directory keyed by this profile. The
+// single-instance lock is held here, so a socket left there belongs to a
+// previous run of this same profile.
+function callerRelayRoot(): string {
+  const profile = createHash("sha256")
+    .update(app.getPath("userData"))
+    .digest("hex")
+    .slice(0, 16);
+  return path.join(os.tmpdir(), `farol-next-relay-${profile}`);
+}
+
+async function initializeCallerRelay(): Promise<void> {
+  if (callerRelayRuntime) return;
+  const root = callerRelayRoot();
+  try {
+    const stale = await lstat(path.join(root, "caller-relay.sock"));
+    if (stale.isSocket() && stale.uid === process.getuid?.()) {
+      await unlink(path.join(root, "caller-relay.sock"));
+    }
+  } catch {
+    // No previous socket.
+  }
+  try {
+    callerRelayRuntime = await startCodexCallerRelay({ root });
+  } catch {
+    // Without the relay, Route B turns that offer host tools are refused.
+    callerRelayRuntime = null;
+  }
+}
+
 async function initializeRouteBRuntime(): Promise<void> {
   const controller = codexContextController;
   if (!controller || routeBRuntime) return;
@@ -832,6 +876,7 @@ async function initializeRouteBRuntime(): Promise<void> {
       stateRoot: path.join(app.getPath("userData"), "farol-next-state"),
       surfaces: routeBTaskSurfaces,
       compaction: controller.continuity,
+      ...(callerRelayRuntime ? { relay: callerRelayRuntime } : {}),
     });
   } catch {
     // Route B stays unavailable; ordinary Browser tasks are unaffected.
@@ -2544,6 +2589,9 @@ async function startSecureMcpConnector(
         now: Date.now(),
         runtimeId,
         challengeSha256: verificationChallengeSha256,
+        ...(callerRelayRuntime
+          ? { callerRelay: callerRelayRuntime.endpoint }
+          : {}),
       });
       launchFile = await new PrivateSecureMcpLaunchStore({
         root: secureMcpLaunchRoot(),
@@ -5857,6 +5905,7 @@ async function main(): Promise<void> {
   await initializeLiveTaskState();
   await recoverProductAgentExpiry();
   initializeCodexContextController();
+  await initializeCallerRelay();
   await initializeRouteBRuntime();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
@@ -5899,6 +5948,9 @@ async function main(): Promise<void> {
     const routeB = routeBRuntime;
     routeBRuntime = null;
     void routeB?.close().catch(() => undefined);
+    const relay = callerRelayRuntime;
+    callerRelayRuntime = null;
+    void relay?.close().catch(() => undefined);
     disposeChatGptRoutes();
     disposeTaskViews("runtime");
     stopRuntime();
