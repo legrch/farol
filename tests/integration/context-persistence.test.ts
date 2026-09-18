@@ -354,6 +354,60 @@ describe("private context persistence", () => {
     );
   });
 
+  it("lists every summary attempt a task holds, and refuses to list past one it cannot read", async () => {
+    const stateRoot = await root();
+    const store = new PrivateContextStore({ root: stateRoot });
+    await expect(store.listSummaryAttempts(binding)).resolves.toEqual([]);
+    const prepared = {
+      schemaVersion: 1 as const,
+      operationId: "compact-list-prepared",
+      binding,
+      source: request.source,
+      sourceBoundary: request.sourceBoundary,
+      phase: "prepared" as const,
+      conversationUrl: null,
+      turnUserId: null,
+      turnAssistantId: null,
+    };
+    const possibleSend = {
+      ...prepared,
+      operationId: "compact-list-sent",
+      phase: "possible_send" as const,
+      conversationUrl: "https://chatgpt.com/c/context-list",
+      turnUserId: "summary-user-list",
+    };
+    await store.putSummaryAttempt(prepared);
+    await store.putSummaryAttempt(possibleSend);
+    const restarted = new PrivateContextStore({ root: stateRoot });
+    const listed = await restarted.listSummaryAttempts(binding);
+    expect(listed).toHaveLength(2);
+    expect(listed).toEqual(expect.arrayContaining([prepared, possibleSend]));
+    // Another task's attempts are not this task's.
+    await expect(
+      restarted.listSummaryAttempts({
+        ...binding,
+        taskId: "task-harbor",
+        hostThreadId: "task-harbor",
+        sessionId: "task-harbor",
+      }),
+    ).resolves.toEqual([]);
+    // One attempt that cannot be read makes the whole list unknown.
+    const [taskKey] = await fs.readdir(path.join(stateRoot, "tasks"));
+    const directory = path.join(
+      stateRoot,
+      "tasks",
+      taskKey!,
+      "summary-attempts",
+    );
+    const [file] = (await fs.readdir(directory)).sort();
+    await fs.writeFile(path.join(directory, file!), "{not json", {
+      mode: 0o600,
+    });
+    await expect(restarted.listSummaryAttempts(binding)).rejects.toThrow(
+      /CONTEXT_SUMMARY_ATTEMPT/u,
+    );
+  });
+
   it("fences concurrent coordinators through the shared filesystem", async () => {
     const stateRoot = await root();
     const first = new PrivateContextStore({ root: stateRoot });

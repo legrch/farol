@@ -757,6 +757,33 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  // Every summary attempt a task still holds. An attempt that cannot be
+  // read is an error, not a missing one: whether its summary is over is
+  // exactly what a caller asking for the list needs to know.
+  async listSummaryAttempts(
+    binding: ContextBinding,
+  ): Promise<ReadonlyArray<StoredContextSummaryAttempt>> {
+    const directory = this.summaryAttemptDirectory(binding);
+    let names: string[];
+    try {
+      names = await fs.readdir(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const attempts: StoredContextSummaryAttempt[] = [];
+    for (const name of names
+      .filter((entry) => /^[a-f0-9]{64}\.json$/u.test(entry))
+      .sort()) {
+      const attempt = await this.readSummaryAttemptFile(
+        path.join(directory, name),
+        binding,
+      );
+      if (attempt) attempts.push(attempt);
+    }
+    return attempts;
+  }
+
   // Every task directory the store holds, by the binding its session names.
   // A directory whose session cannot be read is reported as unreadable: its
   // owner is unknown, so a sweep must leave it alone.

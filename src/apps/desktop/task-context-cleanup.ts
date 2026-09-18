@@ -5,6 +5,13 @@ import {
 
 export type TaskContextCleanup = "deleted" | "failed";
 
+// The Computer connector's execution fence, by the task that raised it: a
+// task that is gone has no owner left to observe its summaries, so its
+// records go with its context. A release that fails leaves them up.
+export type TaskExecutionFence = Readonly<{
+  release(taskId: string): Promise<void>;
+}>;
+
 /**
  * Closing a task deletes its private context state: sessions, checkpoints,
  * sources and summaries live only in Next-owned storage and must not outlive
@@ -17,13 +24,15 @@ export type TaskContextCleanup = "deleted" | "failed";
 export async function deleteTaskContext(
   store: Readonly<{ deleteTask(binding: ContextBinding): Promise<void> }>,
   binding: ContextBinding,
+  fence?: TaskExecutionFence,
 ): Promise<TaskContextCleanup> {
   try {
     await store.deleteTask(binding);
-    return "deleted";
   } catch {
     return "failed";
   }
+  await fence?.release(binding.taskId).catch(() => undefined);
+  return "deleted";
 }
 
 export type OrphanContextSweep = Readonly<{
@@ -61,6 +70,7 @@ export async function sweepOrphanTaskContexts(
   }>,
   inventory: LiveTaskInventory,
   bindingFor: (taskId: string) => ContextBinding,
+  fence?: TaskExecutionFence,
 ): Promise<OrphanContextSweep> {
   if (inventory.status !== "loaded") {
     return { swept: [], unreadable: 0, failed: [] };
@@ -83,10 +93,12 @@ export async function sweepOrphanTaskContexts(
     }
     try {
       await store.deleteTask(binding);
-      swept.push(binding.taskId);
     } catch {
       failed.push(binding.taskId);
+      continue;
     }
+    await fence?.release(binding.taskId).catch(() => undefined);
+    swept.push(binding.taskId);
   }
   return { swept, unreadable, failed };
 }

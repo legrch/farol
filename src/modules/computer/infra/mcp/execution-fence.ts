@@ -102,9 +102,50 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
     await this.syncDirectory();
   }
 
-  // Every record, whatever raised it: for a start at which no summary can
-  // be running, so a fence a crash left behind does not outlive it.
-  async clear(): Promise<void> {
+  // At a start, the fence is brought in line with what the private context
+  // store still holds as possibly running: a record for an operation the
+  // store settled is removed, and an unresolved operation whose record is
+  // missing or unreadable is raised again. A crash leaves neither side
+  // trusted alone; nothing here takes a record's age, a new process, or an
+  // empty store as proof that a summary is over.
+  async reconcile(
+    unresolved: ReadonlyArray<
+      Readonly<{ operationId: string; taskId: string }>
+    >,
+  ): Promise<void> {
+    const keep = new Map(
+      unresolved.map((operation) => [
+        fileName(operation.operationId),
+        operation,
+      ]),
+    );
+    let entries: string[] = [];
+    try {
+      entries = await fs.readdir(this.directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    let removed = false;
+    for (const entry of entries) {
+      if (keep.has(entry)) continue;
+      await fs.rm(path.join(this.directory, entry), { force: true });
+      removed = true;
+    }
+    for (const [entry, operation] of keep) {
+      if (
+        entries.includes(entry) &&
+        (await this.holds(path.join(this.directory, entry), operation))
+      ) {
+        continue;
+      }
+      await this.raise(operation);
+    }
+    if (removed) await this.syncDirectory();
+  }
+
+  // Every record a task raised: for the owner ending that task, whose
+  // summaries then have no owner left to observe them.
+  async release(taskId: string): Promise<void> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.directory);
@@ -112,10 +153,44 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    for (const entry of entries) {
-      await fs.rm(path.join(this.directory, entry), { force: true });
+    let removed = false;
+    for (const entry of entries.filter((name) =>
+      /^[a-f0-9]{64}\.json$/u.test(name),
+    )) {
+      const file = path.join(this.directory, entry);
+      let record: ExecutionFenceRecord;
+      try {
+        record = fenceRecordSchema.parse(
+          JSON.parse(await fs.readFile(file, "utf8")),
+        );
+      } catch {
+        continue;
+      }
+      if (record.taskId !== taskId) continue;
+      await fs.rm(file, { force: true });
+      removed = true;
     }
-    await this.syncDirectory();
+    if (removed) await this.syncDirectory();
+  }
+
+  private async holds(
+    file: string,
+    operation: Readonly<{ operationId: string; taskId: string }>,
+  ): Promise<boolean> {
+    try {
+      const info = await fs.lstat(file);
+      if (!info.isFile() || info.size > MAXIMUM_RECORD_BYTES) return false;
+      const parsed = fenceRecordSchema.safeParse(
+        JSON.parse(await fs.readFile(file, "utf8")),
+      );
+      return (
+        parsed.success &&
+        parsed.data.operationId === operation.operationId &&
+        parsed.data.taskId === operation.taskId
+      );
+    } catch {
+      return false;
+    }
   }
 
   async admits(): Promise<ExecutionFenceAdmission> {

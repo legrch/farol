@@ -144,6 +144,10 @@ import {
   type QuitDrainReceipt,
 } from "./quit-drain";
 import {
+  recoverSummaryExecutionFence,
+  type SummaryFenceRecovery,
+} from "./summary-fence-recovery";
+import {
   deleteTaskContext,
   sweepOrphanTaskContexts,
 } from "./task-context-cleanup";
@@ -315,6 +319,9 @@ let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
 let codexContextController: CodexContextController | null = null;
+// The connector's execution fence for summary-only phases, shared with the
+// MCP process through the launch root; it exists once the controller does.
+let summaryExecutionFence: PrivateExecutionFence | null = null;
 let routeBRuntime: RouteBRuntime | null = null;
 // Live counters are cleared when the runtime exits; a support report made
 // after that uses the counts taken just before the exit.
@@ -863,7 +870,11 @@ const routeBTaskLifecycle = createRouteBTaskLifecycle({
   persist: () => persistLiveTaskState(),
   deleteContext: (taskId) =>
     codexContextController
-      ? deleteTaskContext(codexContextController.store, contextBinding(taskId))
+      ? deleteTaskContext(
+          codexContextController.store,
+          contextBinding(taskId),
+          summaryExecutionFence ?? undefined,
+        )
       : Promise.resolve("none"),
   disposeRoute: (taskId) => {
     const route = liveTaskRoutes.get(taskId);
@@ -884,6 +895,25 @@ const routeBTaskSurfaces: RouteBTaskSurfaces = {
 };
 
 const QUIT_DRAIN_DEADLINE_MS = 5_000;
+
+// What the start did with the connector's execution fence, kept privately
+// for diagnostics: whether the store was read and how many summaries it
+// still holds as possibly running.
+async function recordSummaryFenceRecovery(
+  recovery: SummaryFenceRecovery,
+): Promise<void> {
+  const file = path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "summary-fence-recovery.json",
+  );
+  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await writeFile(
+    file,
+    `${JSON.stringify({ schema: 1, at: new Date().toISOString(), ...recovery })}\n`,
+    { mode: 0o600 },
+  );
+}
 
 // The outcome of the last quit's drain, kept privately for diagnostics.
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
@@ -949,24 +979,24 @@ async function initializeRouteBRuntime(): Promise<void> {
 
 async function initializeCodexContextController(): Promise<void> {
   // While a summary-only phase runs, the connector's Computer tools are
-  // fenced through the launch root its MCP process reads. No summary can be
-  // running before this controller exists, so a fence a crash left behind
-  // is cleared here rather than outliving it.
-  const summaryExecutionFence = new PrivateExecutionFence({
-    root: secureMcpLaunchRoot(),
-  });
-  await summaryExecutionFence.clear().catch(() => undefined);
+  // fenced through the launch root its MCP process reads. A summary a crash
+  // interrupted may still be running on its page, so the fence a previous
+  // process raised is never cleared here: reconcileContextAfterRestart
+  // brings it in line with the private context store before any work is
+  // admitted.
+  const fence = new PrivateExecutionFence({ root: secureMcpLaunchRoot() });
+  summaryExecutionFence = fence;
   codexContextController = createCodexContextController({
     ownerId: contextOwnerId,
     providerProfileId: contextProviderProfileId,
     stateRoot: contextContinuityRoot(),
     summaryFence: {
       raise: (input) =>
-        summaryExecutionFence.raise({
+        fence.raise({
           operationId: input.operationId,
           taskId: input.binding.taskId,
         }),
-      lower: (input) => summaryExecutionFence.lower(input.operationId),
+      lower: (input) => fence.lower(input.operationId),
     },
     summaryRoutes: {
       retained: (binding) => liveTaskRoutes.get(binding.taskId) ?? null,
@@ -1021,7 +1051,20 @@ async function reconcileContextAfterRestart(): Promise<void> {
         }
       : { status: "unavailable" },
     contextBinding,
+    summaryExecutionFence ?? undefined,
   ).catch(() => undefined);
+  // A summary a crash interrupted may still be running on its page: only an
+  // operation the store proves over, or a task the owner ended, loses its
+  // fence; a store that cannot be read keeps every record. This runs before
+  // Route B, IPC or the connector can admit work.
+  if (summaryExecutionFence) {
+    await recordSummaryFenceRecovery(
+      await recoverSummaryExecutionFence({
+        fence: summaryExecutionFence,
+        store: controller.store,
+      }),
+    ).catch(() => undefined);
+  }
 }
 
 async function initializeLiveTaskState(): Promise<void> {

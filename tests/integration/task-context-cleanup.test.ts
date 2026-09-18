@@ -39,9 +39,17 @@ describe("CCR-11 closing a task deletes its private context state", () => {
     await store.save(createContextSession(binding));
     await store.save(createContextSession(other));
 
-    await expect(deleteTaskContext(store, binding)).resolves.toBe("deleted");
+    // The connector's fence records the closed task raised go with it.
+    const released: string[] = [];
+    const fence = {
+      release: async (taskId: string) => void released.push(taskId),
+    };
+    await expect(deleteTaskContext(store, binding, fence)).resolves.toBe(
+      "deleted",
+    );
     await expect(store.load(binding)).resolves.toBeNull();
     await expect(store.load(other)).resolves.toMatchObject({ epoch: 1 });
+    expect(released).toEqual([binding.taskId]);
   });
 
   it("deletes a transition an earlier run left behind, and reports a failed deletion", async () => {
@@ -65,6 +73,8 @@ describe("CCR-11 closing a task deletes its private context state", () => {
     await expect(deleteTaskContext(store, binding)).resolves.toBe("deleted");
     await expect(store.load(binding)).resolves.toBeNull();
 
+    // A deletion that fails leaves the task's context, and its fence, alone.
+    const released: string[] = [];
     await expect(
       deleteTaskContext(
         {
@@ -73,8 +83,19 @@ describe("CCR-11 closing a task deletes its private context state", () => {
           },
         },
         binding,
+        { release: async (taskId) => void released.push(taskId) },
       ),
     ).resolves.toBe("failed");
+    expect(released).toEqual([]);
+    // A release that fails does not undo a deletion that succeeded.
+    await store.save(createContextSession(binding));
+    await expect(
+      deleteTaskContext(store, binding, {
+        release: async () => {
+          throw new Error("EACCES");
+        },
+      }),
+    ).resolves.toBe("deleted");
   });
 });
 
@@ -105,16 +126,20 @@ describe("CC-21 orphan context sweep after restart", () => {
     }
     expect(corrupted).not.toBe("");
 
+    const released: string[] = [];
     const first = await sweepOrphanTaskContexts(
       store,
       { status: "loaded", taskIds: ["task-live"] },
       bindingFor,
+      { release: async (taskId) => void released.push(taskId) },
     );
     expect(first).toEqual({
       swept: ["task-closed"],
       unreadable: 1,
       failed: [],
     });
+    // Only the swept task's fence records are released with its context.
+    expect(released).toEqual(["task-closed"]);
     await expect(store.load(bindingFor("task-live"))).resolves.toMatchObject({
       epoch: 1,
     });
