@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { openEvidenceAttempt } from "./evidence-attempt.mjs";
 
 const root = process.cwd();
 const vitest = path.join(root, "node_modules/vitest/vitest.mjs");
@@ -322,11 +322,10 @@ function validateVitestEvidence(raw) {
 }
 
 async function collectVitestEvidence() {
-  const temporaryRoot = await fs.mkdtemp(
-    path.join(os.tmpdir(), "farol-hunt-vitest-"),
-  );
-  const outputFile = path.join(temporaryRoot, "report.json");
-  try {
+  // The raw reporter output stays in this attempt as the evidence the
+  // sanitized path.json summarizes.
+  const outputFile = path.join(huntAttempt.directory, "vitest-report.json");
+  {
     const run = spawnSync(
       process.execPath,
       [
@@ -361,11 +360,14 @@ async function collectVitestEvidence() {
       );
     }
     return validateVitestEvidence(raw);
-  } finally {
-    await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
 }
 
+const huntAttempt = await openEvidenceAttempt(
+  path.join(root, "artifacts/hunt"),
+  { lane: "hunt", input: {} },
+);
+huntAttempt.installProcessHandlers();
 const vitestEvidence = await collectVitestEvidence();
 execFileSync(process.execPath, [path.join(root, "tooling/build.mjs")], {
   cwd: root,
@@ -439,9 +441,10 @@ const serialized = `${JSON.stringify(report, null, 2)}\n`;
 if (/(prompt|answer|secret|token|\/Users\/|bearer\s+)/iu.test(serialized)) {
   throw new Error("HUNT_REPORT_PRIVACY_CANARY");
 }
-const evidenceRoot = path.join(root, "artifacts/hunt");
-await fs.mkdir(evidenceRoot, { recursive: true });
-await fs.writeFile(path.join(evidenceRoot, "path.json"), serialized, {
+await fs.writeFile(path.join(huntAttempt.directory, "path.json"), serialized, {
   mode: 0o600,
+});
+await huntAttempt.finish("PASS", {
+  cases: vitestEvidence.suites.map((suite) => suite.file),
 });
 process.stdout.write(serialized);

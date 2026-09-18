@@ -162,11 +162,19 @@ independent-recipient, update/rollback, live-provider or release-readiness evide
 - `dist/package/artifact.json` — exact source and packaged-tree identity;
 - packaged `Contents/Resources/app/resource-manifest.json` — app, process, state,
   transport, receipt, and intentionally absent integration ownership;
-- `artifacts/e2e-dev/report.json` — exact development-build interaction evidence;
-- `artifacts/e2e/report.json` and its recorded PNG set — packaged interaction
-  evidence;
-- `artifacts/hunt/path.json` — semantic path, model/command-table version, controlled
-  schedule, mutation proof and exact build identity.
+- `artifacts/e2e-dev/` — exact development-build interaction evidence;
+- `artifacts/e2e/` with its recorded PNG set — packaged interaction evidence;
+- `artifacts/hunt/` — `path.json` with the semantic path, model/command-table
+  version, controlled schedule, mutation proof and exact build identity, next to
+  the raw Vitest report it summarizes.
+
+Every lane keeps each run in its own immutable `attempts/<attemptId>/` directory:
+`started.json` before any work, the run's own `report.json`/`path.json` and
+screenshots, and `terminal.json` with the outcome, first failure, raw and
+normalized cases and the SHA-256 of every byproduct. A later run records a dead
+owner's unfinished attempt as `interrupted.json` and never deletes or rewrites an
+earlier run. `latest.json` in the lane root is only a pointer to the newest
+attempt.
 
 The E2E reports also record the visible run's selected-display class, work area,
 window bounds, initial focus state, and the scenarios proved while hidden. Native

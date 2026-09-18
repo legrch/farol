@@ -9,6 +9,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
 import {
   assertBuildIdentity,
   createBuildIdentity,
@@ -27,7 +28,7 @@ assert.equal(
   false,
   "E2E_EXCLUSIVE_SPECIAL_MODE",
 );
-const evidenceRoot = path.join(
+const evidenceLaneRoot = path.join(
   root,
   lifecycleSoak
     ? "artifacts/lifecycle-soak"
@@ -118,8 +119,28 @@ if (development) {
   assert.equal(artifact.builtAt, buildIdentity.builtAt);
   executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 }
-await fs.rm(evidenceRoot, { recursive: true, force: true });
-await fs.mkdir(evidenceRoot, { recursive: true });
+// Every run writes into its own immutable attempt directory under the lane
+// root; a later or crashed run never removes an earlier run's evidence.
+const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
+  lane: lifecycleSoak
+    ? "lifecycle-soak"
+    : persistenceFault
+      ? "persistence-fault"
+      : development
+        ? "development-build"
+        : "sealed-package",
+  input: {
+    sourceCommit: artifact.sourceCommit,
+    sourceTreeDigest: artifact.sourceTreeDigest,
+    sourceDirty: artifact.sourceDirty,
+    artifactSha256: artifact.artifactSha256,
+    buildId: artifact.buildId,
+    builtAt: artifact.builtAt,
+    skipNativeFocus,
+  },
+});
+evidenceAttempt.installProcessHandlers();
+const evidenceRoot = evidenceAttempt.directory;
 
 const cases = [];
 const skippedCases = [];
@@ -220,6 +241,11 @@ async function writeWindowTopologyBlockedReport(presentation) {
     path.join(evidenceRoot, "report.json"),
     `${JSON.stringify(report, null, 2)}\n`,
   );
+  await evidenceAttempt.finish("BLOCKED", {
+    cases,
+    blockedCases,
+    skippedCases,
+  });
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
   process.stderr.write(
     `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,
@@ -3431,13 +3457,24 @@ async function runLifecycleSoak() {
   }
 }
 
+async function finishSpecialLane() {
+  const written = JSON.parse(
+    await fs.readFile(path.join(evidenceRoot, "report.json"), "utf8"),
+  );
+  await evidenceAttempt.finish(written.status === "PASS" ? "PASS" : "FAIL", {
+    cases: written.cases,
+  });
+}
+
 if (lifecycleSoak) {
   await runLifecycleSoak();
+  await finishSpecialLane();
   process.exit(0);
 }
 
 if (persistenceFault) {
   await runLiveTaskPersistenceFaultProof();
+  await finishSpecialLane();
   process.exit(0);
 }
 
@@ -6392,6 +6429,11 @@ await fs.writeFile(
   path.join(evidenceRoot, "report.json"),
   `${JSON.stringify(report, null, 2)}\n`,
 );
+await evidenceAttempt.finish(blockedCases.length > 0 ? "BLOCKED" : "PASS", {
+  cases,
+  blockedCases,
+  skippedCases,
+});
 process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
 if (blockedCases.length > 0) {
   process.stderr.write(
