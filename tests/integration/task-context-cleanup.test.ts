@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { deleteTaskContext } from "../../src/apps/desktop/task-context-cleanup";
+import {
+  deleteTaskContext,
+  sweepOrphanTaskContexts,
+} from "../../src/apps/desktop/task-context-cleanup";
 import {
   beginCompaction,
   createContextSession,
@@ -72,5 +75,99 @@ describe("CCR-11 closing a task deletes its private context state", () => {
         binding,
       ),
     ).resolves.toBe("failed");
+  });
+});
+
+describe("CC-21 orphan context sweep after restart", () => {
+  const bindingFor = (taskId: string): ContextBinding => ({
+    ...binding,
+    taskId,
+    hostThreadId: taskId,
+    sessionId: taskId,
+  });
+
+  it("deletes only the context of a closed task whose deletion was cut off, keeps live and unreadable directories, and is idempotent", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-orphan-"));
+    const store = new PrivateContextStore({ root });
+    await store.save(createContextSession(bindingFor("task-live")));
+    // The crash cut: the task's removal was saved, its context was not.
+    await store.save(createContextSession(bindingFor("task-closed")));
+    // A session record nobody can read names no owner.
+    await store.save(createContextSession(bindingFor("task-unreadable")));
+    const directories = await fs.readdir(path.join(root, "tasks"));
+    let corrupted = "";
+    for (const name of directories) {
+      const file = path.join(root, "tasks", name, "session.json");
+      if ((await fs.readFile(file, "utf8")).includes("task-unreadable")) {
+        await fs.writeFile(file, "{not json", { mode: 0o600 });
+        corrupted = name;
+      }
+    }
+    expect(corrupted).not.toBe("");
+
+    const first = await sweepOrphanTaskContexts(
+      store,
+      { status: "loaded", taskIds: ["task-live"] },
+      bindingFor,
+    );
+    expect(first).toEqual({
+      swept: ["task-closed"],
+      unreadable: 1,
+      failed: [],
+    });
+    await expect(store.load(bindingFor("task-live"))).resolves.toMatchObject({
+      epoch: 1,
+    });
+    await expect(store.load(bindingFor("task-closed"))).resolves.toBeNull();
+    await expect(
+      fs.stat(path.join(root, "tasks", corrupted, "session.json")),
+    ).resolves.toBeTruthy();
+
+    // Again: nothing more to do, nothing revived.
+    await expect(
+      sweepOrphanTaskContexts(
+        store,
+        { status: "loaded", taskIds: ["task-live"] },
+        bindingFor,
+      ),
+    ).resolves.toEqual({ swept: [], unreadable: 1, failed: [] });
+  });
+
+  it("sweeps nothing when the task registry could not be read, and reports a deletion that fails", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-orphan-"));
+    const store = new PrivateContextStore({ root });
+    await store.save(createContextSession(bindingFor("task-closed")));
+    await expect(
+      sweepOrphanTaskContexts(store, { status: "unavailable" }, bindingFor),
+    ).resolves.toEqual({ swept: [], unreadable: 0, failed: [] });
+    await expect(store.load(bindingFor("task-closed"))).resolves.toMatchObject({
+      epoch: 1,
+    });
+
+    // A binding that is not this product's exact binding is not ours to
+    // delete either.
+    await expect(
+      sweepOrphanTaskContexts(
+        store,
+        { status: "loaded", taskIds: [] },
+        (id) => ({
+          ...bindingFor(id),
+          modelId: "farol-next/other",
+        }),
+      ),
+    ).resolves.toEqual({ swept: [], unreadable: 0, failed: [] });
+
+    await expect(
+      sweepOrphanTaskContexts(
+        {
+          listTaskBindings: () => store.listTaskBindings(),
+          deleteTask: async () => {
+            throw new Error("CONTEXT_TASK_DIRECTORY_UNSAFE");
+          },
+        },
+        { status: "loaded", taskIds: [] },
+        bindingFor,
+      ),
+    ).resolves.toEqual({ swept: [], unreadable: 0, failed: ["task-closed"] });
   });
 });

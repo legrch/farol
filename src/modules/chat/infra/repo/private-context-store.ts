@@ -757,6 +757,56 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
   }
 
+  // Every task directory the store holds, by the binding its session names.
+  // A directory whose session cannot be read is reported as unreadable: its
+  // owner is unknown, so a sweep must leave it alone.
+  async listTaskBindings(): Promise<
+    ReadonlyArray<
+      | Readonly<{ readable: true; binding: ContextBinding }>
+      | Readonly<{ readable: false; key: string }>
+    >
+  > {
+    await this.ensureRoot();
+    const tasks = path.join(this.options.root, "tasks");
+    let names: string[];
+    try {
+      names = await fs.readdir(tasks);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    const listed: Array<
+      | Readonly<{ readable: true; binding: ContextBinding }>
+      | Readonly<{ readable: false; key: string }>
+    > = [];
+    for (const name of names.filter((entry) => /^[a-f0-9]{64}$/u.test(entry))) {
+      try {
+        const record = await this.readRecord(
+          path.join(tasks, name, "session.json"),
+          this.maximumSessionBytes,
+          "CONTEXT_STATE",
+        );
+        const parsed = record
+          ? sessionRecordSchema.safeParse(record.value)
+          : null;
+        if (
+          !parsed?.success ||
+          bindingKey(parsed.data.session.binding) !== name
+        ) {
+          listed.push({ readable: false, key: name });
+          continue;
+        }
+        listed.push({
+          readable: true,
+          binding: structuredClone(parsed.data.session.binding),
+        });
+      } catch {
+        listed.push({ readable: false, key: name });
+      }
+    }
+    return listed;
+  }
+
   async deleteTask(binding: ContextBinding): Promise<void> {
     await this.ensureRoot();
     const directory = this.taskDirectory(binding);

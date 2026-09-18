@@ -143,7 +143,10 @@ import {
   type OwnedCloser,
   type QuitDrainReceipt,
 } from "./quit-drain";
-import { deleteTaskContext } from "./task-context-cleanup";
+import {
+  deleteTaskContext,
+  sweepOrphanTaskContexts,
+} from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
@@ -327,6 +330,9 @@ const managedChatGptRoutes = new Set<ChatGptRoute>();
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
+// True once the saved task registry was read and restored for real; only
+// then is a stored context with no live task known to be an orphan.
+let liveTaskRegistryRestored = false;
 let liveTaskPersistence: Promise<void> = Promise.resolve();
 let taskMutationInFlight = false;
 let chatGptHomeUrl = CHATGPT_HOME;
@@ -1004,6 +1010,18 @@ async function reconcileContextAfterRestart(): Promise<void> {
     await persistLiveTaskState().catch(() => undefined);
     publishTasksState();
   }
+  // Context a closed task left behind is removed only when the registry was
+  // really read; an unreadable registry sweeps nothing.
+  await sweepOrphanTaskContexts(
+    controller.store,
+    liveTaskStore && liveTaskRegistryRestored
+      ? {
+          status: "loaded",
+          taskIds: liveTaskRegistry.snapshot().tasks.map((task) => task.taskId),
+        }
+      : { status: "unavailable" },
+    contextBinding,
+  ).catch(() => undefined);
 }
 
 async function initializeLiveTaskState(): Promise<void> {
@@ -1062,6 +1080,7 @@ async function initializeLiveTaskState(): Promise<void> {
       revision: record.revision + (reconciled ? 1 : 0),
       tasks,
     });
+    liveTaskRegistryRestored = true;
     for (const [taskId, route] of stagedRoutes) {
       liveTaskRoutes.set(taskId, route);
     }

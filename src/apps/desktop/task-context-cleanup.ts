@@ -1,4 +1,7 @@
-import type { ContextBinding } from "../../modules/chat/domain/context-continuity";
+import {
+  sameContextBinding,
+  type ContextBinding,
+} from "../../modules/chat/domain/context-continuity";
 
 export type TaskContextCleanup = "deleted" | "failed";
 
@@ -21,4 +24,69 @@ export async function deleteTaskContext(
   } catch {
     return "failed";
   }
+}
+
+export type OrphanContextSweep = Readonly<{
+  // Task ids whose private context was deleted because no live task owns it.
+  swept: readonly string[];
+  // Directories left in place: their session could not be read, so their
+  // owner is unknown; or their deletion failed.
+  unreadable: number;
+  failed: readonly string[];
+}>;
+
+export type LiveTaskInventory =
+  | Readonly<{ status: "loaded"; taskIds: readonly string[] }>
+  // The task registry could not be read: nothing is known to be an orphan.
+  | Readonly<{ status: "unavailable" }>;
+
+/**
+ * Private context a closed task left behind, for example when its deletion
+ * failed after the task's removal was already saved, is removed at the next
+ * start, once the live task registry has been read for real. An unreadable
+ * registry is not an empty one: then nothing is swept. Only a directory whose
+ * session names this product's exact binding for a task that is not live is
+ * deleted; an unreadable session keeps its directory. Sweeping twice changes
+ * nothing, and a live task's context is never touched.
+ */
+export async function sweepOrphanTaskContexts(
+  store: Readonly<{
+    listTaskBindings(): Promise<
+      ReadonlyArray<
+        | Readonly<{ readable: true; binding: ContextBinding }>
+        | Readonly<{ readable: false; key: string }>
+      >
+    >;
+    deleteTask(binding: ContextBinding): Promise<void>;
+  }>,
+  inventory: LiveTaskInventory,
+  bindingFor: (taskId: string) => ContextBinding,
+): Promise<OrphanContextSweep> {
+  if (inventory.status !== "loaded") {
+    return { swept: [], unreadable: 0, failed: [] };
+  }
+  const live = new Set(inventory.taskIds);
+  const swept: string[] = [];
+  const failed: string[] = [];
+  let unreadable = 0;
+  for (const entry of await store.listTaskBindings()) {
+    if (!entry.readable) {
+      unreadable += 1;
+      continue;
+    }
+    const { binding } = entry;
+    if (
+      live.has(binding.taskId) ||
+      !sameContextBinding(binding, bindingFor(binding.taskId))
+    ) {
+      continue;
+    }
+    try {
+      await store.deleteTask(binding);
+      swept.push(binding.taskId);
+    } catch {
+      failed.push(binding.taskId);
+    }
+  }
+  return { swept, unreadable, failed };
 }
