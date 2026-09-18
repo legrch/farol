@@ -47,7 +47,7 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
     {
       name: "Electron renderer/helper",
       kind: "pinned-vendor-runtime",
-      ownedBy: "embedded Electron 44.4.1",
+      ownedBy: "embedded Electron 44.4.2",
     },
   ],
   integrations: {

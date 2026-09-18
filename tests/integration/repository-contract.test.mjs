@@ -82,9 +82,9 @@ describe("portable Farol Next repository contract", () => {
       "utf8",
     );
 
-    expect(packageDocument.dependencies.electron).toBe("44.4.1");
+    expect(packageDocument.dependencies.electron).toBe("44.4.2");
     expect(dependencyDocument).toMatch(
-      /\| Electron\s+\| runtime closure \|\s+44\.4\.1\s+\|/u,
+      /\| Electron\s+\| runtime closure \|\s+44\.4\.2\s+\|/u,
     );
   });
 });
