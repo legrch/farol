@@ -86,6 +86,11 @@ function processTable() {
   });
 }
 
+// A sample costs a process-table read and a directory hash, so the gap the
+// observer tolerates between two samples is several intervals with a floor
+// well above that cost; a longer silence means it was not watching.
+export const GAP_FLOOR_MS = 2_000;
+
 export function summarizeSamples(samples, intervalMs) {
   let maxGapMs = 0;
   for (let index = 1; index < samples.length; index += 1) {
@@ -104,7 +109,7 @@ export function summarizeSamples(samples, intervalMs) {
       last: counts.at(-1) ?? null,
     },
     errors: samples.filter((sample) => sample.error).length,
-    gapTolerated: maxGapMs <= intervalMs * 4,
+    gapTolerated: maxGapMs <= Math.max(intervalMs * 4, GAP_FLOOR_MS),
   };
 }
 

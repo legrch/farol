@@ -51,6 +51,15 @@ describe("EV-03/EV-08 effect observer", () => {
         500,
       ),
     ).toMatchObject({ samples: 3, maxGapMs: 2_500, gapTolerated: false });
+    expect(
+      summarizeSamples(
+        [
+          { at: "2026-09-18T09:00:00.000Z", processes: 0 },
+          { at: "2026-09-18T09:00:01.500Z", processes: 1 },
+        ],
+        50,
+      ),
+    ).toMatchObject({ maxGapMs: 1_500, gapTolerated: true });
   });
 
   it("binds its receipt to the attempt it watched from before its start until after its terminal receipt, and the verifier accepts exactly that run", async () => {
