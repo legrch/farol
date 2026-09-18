@@ -99,6 +99,8 @@ import {
 } from "./chatgpt-readonly-task";
 import {
   ChatGptRoute,
+  type ChatGptRouteOptions,
+  type ChatGptWindowPresentation,
   type ChatGptRouteSurface,
   type ChatGptRouteSurfaceFactory,
 } from "./chatgpt-route";
@@ -271,6 +273,7 @@ let chatGptRoute: ChatGptRoute | null = null;
 let codexContextController: CodexContextController | null = null;
 const liveTaskRegistry = new LiveTaskRegistry(5);
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
+const managedChatGptRoutes = new Set<ChatGptRoute>();
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
@@ -322,6 +325,7 @@ type PendingWorkspaceEdit = Readonly<{
 }>;
 let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
 let workspaceMutationAdmission = false;
+let windowPresentationReady = false;
 let codexHostTaskAdmission = false;
 const agentCheckConfigurationMutations = new Set<string>([
   "computer.rename",
@@ -751,6 +755,16 @@ function persistLiveTaskState(): Promise<void> {
   return write;
 }
 
+function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
+  let route: ChatGptRoute;
+  route = new ChatGptRoute({
+    ...options,
+    onDisposed: () => managedChatGptRoutes.delete(route),
+  });
+  managedChatGptRoutes.add(route);
+  return route;
+}
+
 function createLiveChatGptRoute(
   taskId: string,
   label: string,
@@ -787,11 +801,12 @@ function createLiveChatGptRoute(
             : task.lifecycle;
     setLiveTaskLifecycle(taskId, lifecycle);
   };
-  return new ChatGptRoute({
+  return createManagedChatGptRoute({
     homeUrl: routeHomeUrl,
     initialUrl: routeInitialUrl,
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
+    ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
     title: `${label} · Farol Next`,
     onClosed: (conversationUrl, taskRunning) => {
@@ -828,11 +843,12 @@ function createContextSummaryFallbackRoute(
     fixtureUrl.searchParams.set("farol-e2e-task", `context-${binding.taskId}`);
     initialUrl = fixtureUrl.href;
   }
-  return new ChatGptRoute({
+  return createManagedChatGptRoute({
     homeUrl: chatGptHomeUrl,
     initialUrl,
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
+    ...chatGptWindowPresentationOption(),
     title: "Context recovery · Farol Next",
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
@@ -4816,6 +4832,7 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
       webContents: view.webContents,
       isDestroyed: () => view.webContents.isDestroyed(),
       loadURL: (url) => view.webContents.loadURL(url),
+      hide: () => view.setVisible(false),
       reveal: () => {
         attachTaskView(taskId, view);
         applyLayout();
@@ -5488,6 +5505,7 @@ async function createWindow(): Promise<void> {
     stopStreams();
     attachedTaskViewIds.clear();
     window = null;
+    windowPresentationReady = false;
   });
   await window.loadFile(path.join(directory, "shell.html"));
   publishWindowState();
@@ -5503,15 +5521,61 @@ async function createWindow(): Promise<void> {
       failTaskSurface(task.taskId);
     });
   }
+  windowPresentationReady = true;
   revealWindow();
+}
+
+function selectedVisibleTestPlacement(
+  requested: Readonly<{ width: number; height: number }>,
+) {
+  return selectPreviewWindowPlacement(
+    screen.getAllDisplays(),
+    screen.getPrimaryDisplay().id,
+    requested,
+  );
+}
+
+function chatGptWindowPresentation(): ChatGptWindowPresentation | undefined {
+  if (windowMode === "default") return undefined;
+  if (windowMode === "hidden") return { mode: "hidden" };
+  return {
+    mode: "secondary-visible",
+    place: (requested) => selectedVisibleTestPlacement(requested).bounds,
+  };
+}
+
+function chatGptWindowPresentationOption(): Readonly<{
+  windowPresentation?: ChatGptWindowPresentation;
+}> {
+  const presentation = chatGptWindowPresentation();
+  return presentation === undefined ? {} : { windowPresentation: presentation };
 }
 
 function revealWindow(): void {
   if (!window || window.isDestroyed()) return;
   if (window.isMinimized()) window.restore();
   const action = presentationAction(windowMode);
-  if (action === "show-inactive") window.showInactive();
-  else if (action === "show-and-focus") window.show();
+  if (action === "show-inactive") {
+    window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
+    window.showInactive();
+  } else if (action === "show-and-focus") window.show();
+}
+
+function reconcileVisibleTestDisplay(): void {
+  if (windowMode !== "secondary-visible") return;
+  if (windowPresentationReady && window !== null && !window.isDestroyed()) {
+    window.hide();
+    try {
+      window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
+      window.showInactive();
+    } catch {
+      // The accepted test policy has no primary-display fallback. A later
+      // display event can re-evaluate and reveal this exact owned window.
+    }
+  }
+  for (const route of managedChatGptRoutes) {
+    route.reconcileWindowPresentation();
+  }
 }
 
 function ensureWindow(): Promise<void> {
@@ -5588,9 +5652,8 @@ function stopRuntime(): void {
 }
 
 function disposeChatGptRoutes(): void {
-  const routes = new Set(liveTaskRoutes.values());
-  if (chatGptRoute) routes.add(chatGptRoute);
-  for (const route of routes) route.dispose();
+  for (const route of [...managedChatGptRoutes]) route.dispose();
+  managedChatGptRoutes.clear();
   liveTaskRoutes.clear();
 }
 
@@ -5692,11 +5755,12 @@ async function main(): Promise<void> {
     chatGptConversationStore = null;
     chatGptConversation = null;
   }
-  chatGptRoute = new ChatGptRoute({
+  chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
+    ...chatGptWindowPresentationOption(),
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
@@ -5715,6 +5779,9 @@ async function main(): Promise<void> {
   installApplicationMenu();
   await startRuntime();
   await ensureWindow();
+  screen.on("display-added", reconcileVisibleTestDisplay);
+  screen.on("display-removed", reconcileVisibleTestDisplay);
+  screen.on("display-metrics-changed", reconcileVisibleTestDisplay);
   app.on("activate", reopenWindow);
   app.on("before-quit", () => {
     const attachmentTask = pendingChatGptAttachmentTask;

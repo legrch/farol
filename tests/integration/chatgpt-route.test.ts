@@ -22,6 +22,7 @@ vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
 import {
   ChatGptRoute,
   classifyChatGptProviderError,
+  resolveChatGptWindowPresentation,
   type ChatGptRouteSurfaceFactory,
 } from "../../src/apps/desktop/chatgpt-route";
 
@@ -139,6 +140,7 @@ function embeddedSurface() {
     loadURL: vi.fn(async (nextUrl: string) => {
       url = nextUrl;
     }),
+    hide: vi.fn(),
     reveal: vi.fn(),
     focus: vi.fn(),
     setTitle: vi.fn(),
@@ -165,6 +167,107 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("ChatGPT test-window presentation", () => {
+  it("preserves ordinary foreground behavior outside an explicit test mode", () => {
+    expect(
+      resolveChatGptWindowPresentation(undefined, {
+        width: 1080,
+        height: 760,
+      }),
+    ).toEqual({ bounds: null, reveal: "show", focus: true });
+  });
+
+  it("keeps every hidden-lane route window hidden and unfocused", () => {
+    expect(
+      resolveChatGptWindowPresentation(
+        { mode: "hidden" },
+        { width: 720, height: 760 },
+      ),
+    ).toEqual({ bounds: null, reveal: "remain-hidden", focus: false });
+  });
+
+  it("places a visible sign-in or popup exactly before inactive reveal", () => {
+    const place = vi.fn(() => ({
+      x: -1110,
+      y: 530,
+      width: 1080,
+      height: 760,
+    }));
+
+    expect(
+      resolveChatGptWindowPresentation(
+        { mode: "secondary-visible", place },
+        { width: 1080, height: 760 },
+      ),
+    ).toEqual({
+      bounds: { x: -1110, y: 530, width: 1080, height: 760 },
+      reveal: "show-inactive",
+      focus: false,
+    });
+    expect(place).toHaveBeenCalledExactlyOnceWith({
+      width: 1080,
+      height: 760,
+    });
+  });
+
+  it("rejects a placement adapter that shrinks the requested child viewport", () => {
+    expect(() =>
+      resolveChatGptWindowPresentation(
+        {
+          mode: "secondary-visible",
+          place: () => ({ x: 0, y: 0, width: 719, height: 760 }),
+        },
+        { width: 720, height: 760 },
+      ),
+    ).toThrow("CHATGPT_WINDOW_PLACEMENT_INVALID");
+  });
+
+  it("hides a separate route before fail-closed topology re-evaluation", async () => {
+    const surface = { ...embeddedSurface(), kind: "window" as const };
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      windowPresentation: {
+        mode: "secondary-visible",
+        place: () => ({ x: -1080, y: 0, width: 1080, height: 760 }),
+      },
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.open();
+    surface.hide.mockClear();
+    surface.reveal.mockClear();
+    surface.reveal.mockImplementationOnce(() => {
+      throw new Error("NO_SECONDARY_DISPLAY");
+    });
+
+    expect(() => candidate.reconcileWindowPresentation()).not.toThrow();
+    expect(surface.hide).toHaveBeenCalledTimes(1);
+    expect(surface.reveal).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a separate hidden-lane route hidden after topology changes", async () => {
+    const surface = { ...embeddedSurface(), kind: "window" as const };
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      windowPresentation: { mode: "hidden" },
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.open();
+    surface.hide.mockClear();
+    surface.reveal.mockClear();
+
+    candidate.reconcileWindowPresentation();
+
+    expect(surface.hide).toHaveBeenCalledTimes(1);
+    expect(surface.reveal).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatGPT route submission boundary", () => {

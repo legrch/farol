@@ -267,6 +267,7 @@ export type ChatGptRouteOptions = Readonly<{
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
+  windowPresentation?: ChatGptWindowPresentation;
   surfaceFactory?: ChatGptRouteSurfaceFactory;
   title?: string;
   onClosed?: (conversationUrl: string | null, taskRunning: boolean) => void;
@@ -274,9 +275,57 @@ export type ChatGptRouteOptions = Readonly<{
   onTaskActivityChanged?: (
     state: "idle" | "running" | "outcome_unknown",
   ) => void;
+  onDisposed?: () => void;
   taskTimeoutMs?: number;
   taskPollMs?: number;
 }>;
+
+export type ChatGptWindowPresentation =
+  | Readonly<{ mode: "hidden" }>
+  | Readonly<{
+      mode: "secondary-visible";
+      place(
+        requested: Readonly<{ width: number; height: number }>,
+      ): Readonly<{ x: number; y: number; width: number; height: number }>;
+    }>;
+
+type ChatGptWindowBounds = Readonly<{
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}>;
+
+export type ResolvedChatGptWindowPresentation =
+  | Readonly<{ bounds: null; reveal: "show"; focus: true }>
+  | Readonly<{ bounds: null; reveal: "remain-hidden"; focus: false }>
+  | Readonly<{
+      bounds: ChatGptWindowBounds;
+      reveal: "show-inactive";
+      focus: false;
+    }>;
+
+export function resolveChatGptWindowPresentation(
+  presentation: ChatGptWindowPresentation | undefined,
+  requested: Readonly<{ width: number; height: number }>,
+): ResolvedChatGptWindowPresentation {
+  if (presentation === undefined) {
+    return { bounds: null, reveal: "show", focus: true };
+  }
+  if (presentation.mode === "hidden") {
+    return { bounds: null, reveal: "remain-hidden", focus: false };
+  }
+  const bounds = presentation.place(requested);
+  if (
+    !Number.isSafeInteger(bounds.x) ||
+    !Number.isSafeInteger(bounds.y) ||
+    bounds.width !== requested.width ||
+    bounds.height !== requested.height
+  ) {
+    throw new Error("CHATGPT_WINDOW_PLACEMENT_INVALID");
+  }
+  return { bounds, reveal: "show-inactive", focus: false };
+}
 
 export type ChatGptOpenResult = Readonly<{
   status: "opened" | "unreachable";
@@ -287,6 +336,7 @@ export type ChatGptRouteSurface = Readonly<{
   webContents: WebContents;
   isDestroyed: () => boolean;
   loadURL: (url: string) => Promise<void>;
+  hide: () => void;
   reveal: () => void;
   focus: () => void;
   setTitle: (title: string) => void;
@@ -353,6 +403,7 @@ export type ChatGptTaskObserver = Readonly<{
 export class ChatGptRoute {
   private routeWindow: ChatGptRouteSurface | null = null;
   private readonly popupWindows = new Set<BrowserWindow>();
+  private readonly readyPopupWindows = new Set<BrowserWindow>();
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
   private disposing = false;
@@ -382,9 +433,13 @@ export class ChatGptRoute {
   async open(): Promise<ChatGptOpenResult> {
     if (this.opening) return this.opening;
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.reveal();
-      this.routeWindow.focus();
-      return { status: this.load === "loaded" ? "opened" : "unreachable" };
+      try {
+        this.routeWindow.reveal();
+        this.routeWindow.focus();
+        return { status: this.load === "loaded" ? "opened" : "unreachable" };
+      } catch {
+        return { status: "unreachable" };
+      }
     }
 
     const opening = this.openRouteWindow();
@@ -446,6 +501,7 @@ export class ChatGptRoute {
         if (
           !this.disposing &&
           candidate.kind === "window" &&
+          this.options.windowPresentation === undefined &&
           restoreParent &&
           parent &&
           !parent.isDestroyed()
@@ -470,10 +526,16 @@ export class ChatGptRoute {
   }
 
   private createWindowSurface(): ChatGptRouteSurface {
+    const requested = { width: 1080, height: 760 } as const;
+    const initial = resolveChatGptWindowPresentation(
+      this.options.windowPresentation,
+      requested,
+    );
     const candidate = new BrowserWindow({
       title: this.displayTitle,
-      width: 1080,
-      height: 760,
+      width: requested.width,
+      height: requested.height,
+      ...(initial.bounds ?? {}),
       minWidth: 720,
       minHeight: 560,
       backgroundColor: "#111216",
@@ -485,11 +547,31 @@ export class ChatGptRoute {
       webContents: candidate.webContents,
       isDestroyed: () => candidate.isDestroyed(),
       loadURL: (url) => candidate.loadURL(url),
+      hide: () => candidate.hide(),
       reveal: () => {
+        const presentation = resolveChatGptWindowPresentation(
+          this.options.windowPresentation,
+          requested,
+        );
+        if (presentation.reveal === "remain-hidden") return;
         if (candidate.isMinimized()) candidate.restore();
+        if (presentation.reveal === "show-inactive") {
+          candidate.setBounds(presentation.bounds);
+          candidate.showInactive();
+          return;
+        }
         candidate.show();
       },
-      focus: () => candidate.focus(),
+      focus: () => {
+        if (
+          resolveChatGptWindowPresentation(
+            this.options.windowPresentation,
+            requested,
+          ).focus
+        ) {
+          candidate.focus();
+        }
+      },
       setTitle: (title) => candidate.setTitle(title),
       destroy: () => candidate.destroy(),
       onPageTitleUpdated: (listener) => {
@@ -1117,6 +1199,31 @@ export class ChatGptRoute {
     }
   }
 
+  reconcileWindowPresentation(): void {
+    const presentation = this.options.windowPresentation;
+    if (presentation === undefined) return;
+    const candidate = this.routeWindow;
+    if (
+      candidate !== null &&
+      candidate.kind === "window" &&
+      !candidate.isDestroyed()
+    ) {
+      candidate.hide();
+      if (presentation.mode === "secondary-visible") {
+        try {
+          candidate.reveal();
+        } catch {
+          // The exact owned window stays hidden until a later display event
+          // can satisfy the secondary-display contract without fallback.
+        }
+      }
+    }
+    for (const popup of this.popupWindows) {
+      if (popup.isDestroyed()) continue;
+      this.reconcilePopupWindow(popup);
+    }
+  }
+
   resetConversation(): void {
     this.entryUrl = this.options.homeUrl;
     this.disposing = true;
@@ -1125,6 +1232,7 @@ export class ChatGptRoute {
       if (!popup.isDestroyed()) popup.destroy();
     }
     this.popupWindows.clear();
+    this.readyPopupWindows.clear();
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
       this.routeWindow.destroy();
     }
@@ -1141,11 +1249,13 @@ export class ChatGptRoute {
       if (!popup.isDestroyed()) popup.destroy();
     }
     this.popupWindows.clear();
+    this.readyPopupWindows.clear();
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
       this.routeWindow.destroy();
     }
     this.routeWindow = null;
     this.routeSession = null;
+    this.options.onDisposed?.();
   }
 
   private hardenSession(routeSession: Session): void {
@@ -1233,12 +1343,26 @@ export class ChatGptRoute {
     }
     contents.setWindowOpenHandler(({ url }) => {
       if (!allowed(url)) return { action: "deny" };
+      const requested = { width: 720, height: 760 } as const;
+      let presentation: ResolvedChatGptWindowPresentation;
+      try {
+        presentation = resolveChatGptWindowPresentation(
+          this.options.windowPresentation,
+          requested,
+        );
+      } catch {
+        return { action: "deny" };
+      }
       return {
         action: "allow",
         overrideBrowserWindowOptions: {
           title: "Sign in · Farol Next",
-          width: 720,
-          height: 760,
+          width: requested.width,
+          height: requested.height,
+          ...(presentation.bounds ?? {}),
+          ...(this.options.windowPresentation === undefined
+            ? {}
+            : { show: false }),
           backgroundColor: "#111216",
           webPreferences: this.remoteWebPreferences(),
         },
@@ -1247,8 +1371,43 @@ export class ChatGptRoute {
     contents.on("did-create-window", (popup) => {
       this.popupWindows.add(popup);
       this.hardenContents(popup.webContents, false);
-      popup.on("closed", () => this.popupWindows.delete(popup));
+      popup.on("closed", () => {
+        this.popupWindows.delete(popup);
+        this.readyPopupWindows.delete(popup);
+      });
+      const presentation = this.options.windowPresentation;
+      if (presentation !== undefined) {
+        popup.hide();
+        popup.once("ready-to-show", () => {
+          if (popup.isDestroyed()) return;
+          this.readyPopupWindows.add(popup);
+          this.reconcilePopupWindow(popup);
+        });
+      }
     });
+  }
+
+  private reconcilePopupWindow(popup: BrowserWindow): void {
+    popup.hide();
+    const presentation = this.options.windowPresentation;
+    if (
+      presentation?.mode !== "secondary-visible" ||
+      !this.readyPopupWindows.has(popup)
+    ) {
+      return;
+    }
+    try {
+      const resolved = resolveChatGptWindowPresentation(presentation, {
+        width: 720,
+        height: 760,
+      });
+      if (resolved.reveal !== "show-inactive") return;
+      popup.setBounds(resolved.bounds);
+      popup.showInactive();
+    } catch {
+      // No primary-display fallback and no reduced viewport. The popup stays
+      // hidden until another display event makes exact placement possible.
+    }
   }
 
   private reportConversationUrl(contents: WebContents): void {
