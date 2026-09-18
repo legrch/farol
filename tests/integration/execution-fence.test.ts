@@ -122,4 +122,27 @@ describe("private execution fence", () => {
       "EXECUTION_FENCE_ROOT_NOT_ABSOLUTE",
     );
   });
+  it("raises the records a reconciliation requires before it removes anything stale", async () => {
+    const fence = new PrivateExecutionFence({ root });
+    await fence.raise({ operationId: "compact-stale", taskId: "task-gone" });
+    // The required record cannot be written: its operation id is not a valid
+    // record. The stale record must still be up afterwards.
+    await expect(
+      fence.reconcile([{ operationId: "x".repeat(161), taskId: "task-live" }]),
+    ).rejects.toThrow();
+    await expect(fence.admits()).resolves.toEqual({
+      admitted: false,
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+    });
+    // A reconciliation that can write its records then removes the stale one.
+    await fence.reconcile([
+      { operationId: "compact-live", taskId: "task-live" },
+    ]);
+    await expect(fence.admits()).resolves.toEqual({
+      admitted: false,
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+    });
+    await fence.reconcile([]);
+    await expect(fence.admits()).resolves.toEqual({ admitted: true });
+  });
 });

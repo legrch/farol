@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import fs from "node:fs/promises";
@@ -15,7 +16,10 @@ import {
   startRouteBRuntime,
   type RouteBRuntime,
 } from "../../src/apps/desktop/route-b-runtime";
-import { recoverSummaryExecutionFence } from "../../src/apps/desktop/summary-fence-recovery";
+import {
+  FENCE_RECOVERY_SENTINEL,
+  recoverSummaryExecutionFence,
+} from "../../src/apps/desktop/summary-fence-recovery";
 import {
   deleteTaskContext,
   sweepOrphanTaskContexts,
@@ -530,6 +534,60 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       recoverSummaryExecutionFence({ fence, store }),
     ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
     await expect(fs.readdir(fenceDirectory)).resolves.toEqual([]);
+    await expect(fence.admits()).resolves.toEqual({ admitted: true });
+  });
+  it("holds the connector closed when a required fence record cannot be materialized, until a later start reconciles for real", async () => {
+    const launchRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-fence-recovery-"),
+    );
+    roots.push(launchRoot);
+    const fence = new PrivateExecutionFence({ root: launchRoot });
+    const binding = {
+      ownerId: "owner-desktop",
+      taskId: "task-held",
+      hostThreadId: "task-held",
+      sessionId: "task-held",
+      providerProfileId: "profile-isolated-next",
+      modelId: "farol-next/mind",
+      mode: "mind",
+    };
+    // The store still holds a possibly running summary whose record cannot
+    // be written: its operation id is not a valid fence record.
+    const unwritable = {
+      listTaskBindings: async () => [{ readable: true, binding }],
+      listSummaryAttempts: async () => [
+        { operationId: "x".repeat(161), phase: "possible_send" },
+      ],
+    } as unknown as Parameters<typeof recoverSummaryExecutionFence>[0]["store"];
+    await expect(
+      recoverSummaryExecutionFence({ fence, store: unwritable }),
+    ).resolves.toEqual({
+      status: "kept",
+      code: "EXECUTION_FENCE_UNRECONCILED",
+      held: true,
+    });
+    await expect(fence.admits()).resolves.toEqual({
+      admitted: false,
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+    });
+    const sentinelFile = path.join(
+      launchRoot,
+      "execution-fence",
+      `${createHash("sha256").update(FENCE_RECOVERY_SENTINEL.operationId).digest("hex")}.json`,
+    );
+    expect(JSON.parse(await fs.readFile(sentinelFile, "utf8"))).toMatchObject({
+      operationId: FENCE_RECOVERY_SENTINEL.operationId,
+      taskId: FENCE_RECOVERY_SENTINEL.taskId,
+    });
+    // A later start whose store proves every summary over reconciles for
+    // real: the sentinel is stale and goes, and the connector is admitted.
+    const settled = {
+      listTaskBindings: async () => [{ readable: true, binding }],
+      listSummaryAttempts: async () => [],
+    } as unknown as Parameters<typeof recoverSummaryExecutionFence>[0]["store"];
+    await expect(
+      recoverSummaryExecutionFence({ fence, store: settled }),
+    ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
     await expect(fence.admits()).resolves.toEqual({ admitted: true });
   });
 });

@@ -125,12 +125,9 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    let removed = false;
-    for (const entry of entries) {
-      if (keep.has(entry)) continue;
-      await fs.rm(path.join(this.directory, entry), { force: true });
-      removed = true;
-    }
+    // Required records are raised before anything stale is removed: a raise
+    // that fails then leaves every record that was up still up, and never a
+    // directory emptier than the one the crash left.
     for (const [entry, operation] of keep) {
       if (
         entries.includes(entry) &&
@@ -139,6 +136,12 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
         continue;
       }
       await this.raise(operation);
+    }
+    let removed = false;
+    for (const entry of entries) {
+      if (keep.has(entry)) continue;
+      await fs.rm(path.join(this.directory, entry), { force: true });
+      removed = true;
     }
     if (removed) await this.syncDirectory();
   }

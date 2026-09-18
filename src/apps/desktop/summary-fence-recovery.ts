@@ -5,6 +5,9 @@ import type {
 
 export type SummaryFenceRecoveryPorts = Readonly<{
   fence: Readonly<{
+    raise(
+      input: Readonly<{ operationId: string; taskId: string }>,
+    ): Promise<void>;
     reconcile(
       unresolved: ReadonlyArray<
         Readonly<{ operationId: string; taskId: string }>
@@ -14,14 +17,27 @@ export type SummaryFenceRecoveryPorts = Readonly<{
   store: Pick<PrivateContextStore, "listTaskBindings" | "listSummaryAttempts">;
 }>;
 
+// The record the desktop raises when reconciliation could not materialize
+// every required fence: it holds the connector closed until a later start
+// reconciles for real, which removes it as stale.
+export const FENCE_RECOVERY_SENTINEL = Object.freeze({
+  operationId: "farol-next-fence-recovery-unreconciled",
+  taskId: "farol-next-desktop",
+});
+
 export type SummaryFenceRecovery =
   | Readonly<{ status: "reconciled"; unresolved: number }>
   | Readonly<{
       status: "kept";
-      code:
-        | "CONTEXT_TASK_UNREADABLE"
-        | "CONTEXT_STORE_UNREADABLE"
-        | "EXECUTION_FENCE_UNRECONCILED";
+      code: "CONTEXT_TASK_UNREADABLE" | "CONTEXT_STORE_UNREADABLE";
+    }>
+  | Readonly<{
+      status: "kept";
+      code: "EXECUTION_FENCE_UNRECONCILED";
+      // Whether the sentinel record could be raised, so the connector keeps
+      // refusing; when it could not, the fence directory itself cannot be
+      // written and the launch root is not usable.
+      held: boolean;
     }>;
 
 // Whether a summary may still be running on its page after the process that
@@ -38,7 +54,9 @@ function unresolved(attempt: StoredContextSummaryAttempt): boolean {
  * its fence outlives the restart until the store proves the operation over.
  * A store that cannot be read proves nothing, so every raised fence is kept
  * as it is, and the connector keeps refusing until a later start can read
- * it; nothing is opened on the strength of a new process.
+ * it; nothing is opened on the strength of a new process. A fence that could
+ * not be reconciled is held closed by a sentinel record rather than left to
+ * whatever the crash and a partial repair left behind.
  */
 export async function recoverSummaryExecutionFence(
   ports: SummaryFenceRecoveryPorts,
@@ -66,7 +84,16 @@ export async function recoverSummaryExecutionFence(
   try {
     await ports.fence.reconcile(operations);
   } catch {
-    return { status: "kept", code: "EXECUTION_FENCE_UNRECONCILED" };
+    // A reconciliation that could not materialize every required record
+    // must not leave the connector open: the sentinel record refuses every
+    // Computer tool until a later start reconciles for real.
+    let held = true;
+    try {
+      await ports.fence.raise(FENCE_RECOVERY_SENTINEL);
+    } catch {
+      held = false;
+    }
+    return { status: "kept", code: "EXECUTION_FENCE_UNRECONCILED", held };
   }
   return { status: "reconciled", unresolved: operations.length };
 }
