@@ -1045,7 +1045,7 @@ const summaryContent: CheckpointContent = {
 class FaultyContinuityStore extends PrivateContextStore {
   private readonly faults = new Map<string, number>();
 
-  failOnce(name: "deleteSummary" | "saveRetired"): void {
+  failOnce(name: "deleteSummary" | "saveRetired" | "putRetirement"): void {
     this.faults.set(name, (this.faults.get(name) ?? 0) + 1);
   }
 
@@ -1062,6 +1062,13 @@ class FaultyContinuityStore extends PrivateContextStore {
   ): Promise<void> {
     if (this.take("deleteSummary")) throw new Error("SYNTHETIC_UNLINK_FAILURE");
     return super.deleteSummary(target, operationId);
+  }
+
+  override async putRetirement(
+    candidate: Parameters<PrivateContextStore["putRetirement"]>[0],
+  ): Promise<void> {
+    if (this.take("putRetirement")) throw new Error("SYNTHETIC_WRITE_FAILURE");
+    return super.putRetirement(candidate);
   }
 
   override async save(
@@ -1140,8 +1147,12 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
     signal: "turn_completed" as const,
   };
 
-  for (const fault of ["deleteSummary", "saveRetired"] as const) {
-    it(`HR-014 ${fault === "saveRetired" ? "R4" : "R2"} completes one epoch transition after a restart when ${fault} failed once`, async () => {
+  for (const fault of [
+    "deleteSummary",
+    "saveRetired",
+    "putRetirement",
+  ] as const) {
+    it(`HR-014 ${fault === "saveRetired" ? "R4" : fault === "putRetirement" ? "store" : "R2"} completes one epoch transition after a restart when ${fault} failed once`, async () => {
       const root = await fs.mkdtemp(
         path.join(os.tmpdir(), "farol-next-context-retire-"),
       );
@@ -1170,7 +1181,14 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
       await expect(first.confirmHostCompaction(receipt)).resolves.toMatchObject(
         { ok: false },
       );
-      expect(page).toMatchObject({ url: null, resets: 1 });
+      // A failed retirement record stops before any reset.
+      expect(page).toMatchObject({
+        url:
+          fault === "putRetirement"
+            ? "https://chatgpt.com/c/summary-context-1"
+            : null,
+        resets: fault === "putRetirement" ? 0 : 1,
+      });
       await expect(store.load(checkpoint.binding)).resolves.toMatchObject({
         epoch: 1,
       });
@@ -1178,7 +1196,11 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
       // Restart: a new store, driver and controller over the same state,
       // and a route restored from the null conversation the reset published.
       const restartedStore = new PrivateContextStore({ root });
-      const restarted = summaryPage(null);
+      // The reset's null conversation is what a restart restores, unless the
+      // retirement never got as far as the reset.
+      const restarted = summaryPage(
+        fault === "putRetirement" ? undefined : null,
+      );
       await expect(
         continuityFor(restartedStore, restarted.route).confirmHostCompaction(
           receipt,

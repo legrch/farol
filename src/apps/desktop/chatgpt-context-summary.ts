@@ -617,11 +617,16 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       return { status: "blocked", code: "SUMMARY_SOURCE_MISMATCH" };
     }
     const lease = this.routes.get(input.operationId);
+    const retainedSource = input.source.source === "retained_agent";
     const route =
       lease?.route ??
-      (input.source.source === "retained_agent"
-        ? this.options.routes.retained(input.binding)
-        : null);
+      (retainedSource ? this.options.routes.retained(input.binding) : null);
+    // A retained source is proven only through its route. With no route at
+    // all -- for instance a launch whose live tasks did not load -- nothing
+    // shows the conversation was left, and a later launch could restore it.
+    if (!route && retainedSource) {
+      return { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" };
+    }
     // Whether the route still has to be detached from the source now.
     let detach = false;
     if (route) {
@@ -629,28 +634,17 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       try {
         committed = await this.options.store.getRetirement(input.binding);
       } catch {
-        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+        return { status: "blocked", code: "CONTEXT_RETIREMENT_STORE_FAILED" };
       }
-      const conversationUrl = routeConversationUrl(route);
+      let sourceCursor: string;
       if (
         committed &&
         committed.operationId === input.operationId &&
         committed.epoch === input.epoch
       ) {
         // This operation already committed, durably and before any reset,
-        // to detaching exactly this source. A route that names no
-        // conversation has nothing left to detach; one that names another
-        // conversation is newer, and is never touched.
-        if (
-          conversationUrl !== null &&
-          conversationSourceCursor(conversationUrl) !== committed.sourceCursor
-        ) {
-          return {
-            status: "outcome_unknown",
-            code: "SOURCE_RETIREMENT_UNKNOWN",
-          };
-        }
-        detach = conversationUrl !== null;
+        // to detaching exactly this source.
+        sourceCursor = committed.sourceCursor;
       } else {
         let summary = this.received.get(
           operationKey(input.binding, input.operationId),
@@ -663,15 +657,19 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
                 input.operationId,
               )) ?? undefined;
           } catch {
-            return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+            return {
+              status: "blocked",
+              code: "CONTEXT_RETIREMENT_STORE_FAILED",
+            };
           }
         }
         // Without that commitment only the exact source proves itself: a
         // route with no conversation, or another one, proves nothing.
+        const provingUrl = routeConversationUrl(route);
         if (
           !summary ||
-          !conversationUrl ||
-          summary.sourceCursor !== conversationSourceCursor(conversationUrl)
+          !provingUrl ||
+          summary.sourceCursor !== conversationSourceCursor(provingUrl)
         ) {
           return {
             status: "outcome_unknown",
@@ -690,18 +688,31 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
             sourceCursor: summary.sourceCursor,
           });
         } catch {
-          return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+          return { status: "blocked", code: "CONTEXT_RETIREMENT_STORE_FAILED" };
         }
-        detach = true;
+        sourceCursor = summary.sourceCursor;
       }
+      // Nothing waits between this read and the reset below. A route that
+      // names no conversation has nothing left to detach; one that names
+      // another conversation -- even one opened while the retirement was
+      // being recorded -- is newer, and is never touched.
+      const conversationUrl = routeConversationUrl(route);
+      if (
+        conversationUrl !== null &&
+        conversationSourceCursor(conversationUrl) !== sourceCursor
+      ) {
+        return {
+          status: "outcome_unknown",
+          code: "SOURCE_RETIREMENT_UNKNOWN",
+        };
+      }
+      detach = conversationUrl !== null;
     }
     try {
-      if (detach && lease) {
-        if (lease.owned) lease.route.dispose();
-        else lease.route.resetConversation();
-      } else if (detach && route) {
-        route.resetConversation();
-      }
+      // An owned fallback route belongs to this operation alone: it is
+      // disposed once the source is proven, whatever it shows now.
+      if (lease?.owned) lease.route.dispose();
+      else if (detach && route) route.resetConversation();
     } catch {
       return { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" };
     }

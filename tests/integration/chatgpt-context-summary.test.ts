@@ -1274,6 +1274,50 @@ describe("HR-014/F1 retained-source retirement recovery", () => {
     ).resolves.not.toBeNull();
   });
 
+  it("HR-014 never resets a conversation the route moved to while the retirement was being recorded", async () => {
+    const root = await stateRoot();
+    const { route, page } = statefulRoute();
+    await summarized(new PrivateContextStore({ root }), route);
+    // Recording the retirement is the one wait between proving the source
+    // and resetting the route; the owner starts a new conversation during it.
+    class MovingStore extends PrivateContextStore {
+      override async putRetirement(
+        candidate: Parameters<PrivateContextStore["putRetirement"]>[0],
+      ): Promise<void> {
+        await super.putRetirement(candidate);
+        page.url = "https://chatgpt.com/c/newer-task-conversation";
+      }
+    }
+    const state = new MovingStore({ root });
+
+    await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
+      { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" },
+    );
+    expect(page).toMatchObject({
+      url: "https://chatgpt.com/c/newer-task-conversation",
+      resets: 0,
+    });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+  });
+
+  it("HR-014 never takes a missing retained route as proof of retirement", async () => {
+    const state = new FaultyContextStore({ root: await stateRoot() });
+    const { route } = statefulRoute();
+    await summarized(state, route);
+
+    // A launch whose live tasks failed to load has no route to prove or
+    // reset; a later healthy launch could restore the very conversation.
+    await expect(driverFor(state, null).retire(retirement())).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "SOURCE_RETIREMENT_UNKNOWN",
+    });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+  });
+
   it("HR-014 lets a foreign binding touch nothing", async () => {
     const state = new FaultyContextStore({ root: await stateRoot() });
     const { route, page } = statefulRoute();
