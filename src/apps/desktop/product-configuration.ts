@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import {
@@ -15,6 +16,7 @@ import {
   type PendingWorkspaceEditDelivery,
   type SetupStepId,
 } from "../../pkg/product-settings/contract";
+import { credentialStorePolicy } from "../../modules/computer/infra/native/credential-stores";
 
 const FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
@@ -31,6 +33,9 @@ export type ProductSettingsStoreOptions = Readonly<{ root: string }>;
 export type ProductConfigurationDependencies = Readonly<{
   now?: () => string;
   id?: () => string;
+  // The owner's home, whose credential stores can never be approved as a
+  // workspace root. Defaults to this process's home directory.
+  homeDirectory?: string;
 }>;
 
 type MutationResult = Readonly<
@@ -45,6 +50,7 @@ type MutationResult = Readonly<
         | "SETTINGS_INPUT_INVALID"
         | "SETTINGS_WRITE_FAILED"
         | "WORKSPACE_NOT_FOUND"
+        | "WORKSPACE_SELECTION_PROTECTED"
         | "WORKSPACE_MUTATION_NOT_PENDING";
       snapshot: ProductConfigurationSnapshot;
     }
@@ -493,6 +499,7 @@ export class ProductSettingsStore {
 export class ProductConfigurationService {
   private readonly now: () => string;
   private readonly id: () => string;
+  private readonly homeDirectory: string;
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
 
@@ -502,6 +509,7 @@ export class ProductConfigurationService {
   ) {
     this.now = dependencies.now ?? (() => new Date().toISOString());
     this.id = dependencies.id ?? randomUUID;
+    this.homeDirectory = dependencies.homeDirectory ?? os.homedir();
   }
 
   async initialize(): Promise<void> {
@@ -834,6 +842,12 @@ export class ProductConfigurationService {
   async addReadonlyWorkspace(input: unknown): Promise<MutationResult> {
     const parsed = workspaceInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    if (
+      credentialStorePolicy(parsed.data.root, this.homeDirectory).kind ===
+      "inside-store"
+    ) {
+      return this.failure("WORKSPACE_SELECTION_PROTECTED");
+    }
     return this.mutate((settings) => {
       if (
         settings.computer.workspaces.some(

@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import type { Readable, Writable } from "node:stream";
@@ -25,6 +26,7 @@ import type {
   WorkspaceEditSnapshotResult,
   WorkspaceMatch,
 } from "../../app/port/readonly-workspace";
+import { credentialStorePolicy } from "./credential-stores";
 import { executeNativeVerificationCommand } from "./native-verification-command";
 
 export type SafeOpenHelperRecord = Readonly<{
@@ -145,6 +147,9 @@ type NativeReadonlyWorkspaceOptions = Readonly<{
   helper: SafeOpenHelperRecord;
   attestInterpreter?: () => Promise<string>;
   attestGit?: () => Promise<string>;
+  // The owner's home, whose credential stores stay denied whichever root is
+  // selected. Defaults to this process's home directory.
+  homeDirectory?: string;
 }>;
 
 type SystemFileMeasurement = Readonly<{
@@ -1211,10 +1216,37 @@ export class NativeReadonlyWorkspace
 {
   private helperAttestation: Promise<Buffer> | undefined;
   private readonly attestInterpreter: () => Promise<string>;
+  private readonly homeDirectory: string;
 
   constructor(private readonly options: NativeReadonlyWorkspaceOptions) {
     this.attestInterpreter =
       options.attestInterpreter ?? defaultAttestInterpreter;
+    this.homeDirectory = options.homeDirectory ?? os.homedir();
+  }
+
+  // Null when the root is a home credential store or lies inside one;
+  // otherwise the request with every store its root encloses added to its
+  // own exclusions, before any policy bound is measured.
+  private withCredentialStores<
+    T extends Readonly<{
+      workspace: Readonly<{ root: string; deniedPaths: readonly string[] }>;
+    }>,
+  >(request: T): T | null {
+    const policy = credentialStorePolicy(
+      request.workspace.root,
+      this.homeDirectory,
+    );
+    if (policy.kind === "inside-store") return null;
+    if (policy.deniedPaths.length === 0) return request;
+    return {
+      ...request,
+      workspace: {
+        ...request.workspace,
+        deniedPaths: [
+          ...new Set([...policy.deniedPaths, ...request.workspace.deniedPaths]),
+        ],
+      },
+    };
   }
 
   private async helperSource(): Promise<Buffer> {
@@ -1234,10 +1266,12 @@ export class NativeReadonlyWorkspace
     request: ReadonlyWorkspaceRequest,
     options: NativeReadonlyWorkspaceTestOptions = {},
   ): Promise<ReadonlyWorkspaceResult> {
-    const validated = validateRequest(request);
-    if (validated === null || !validTestOptions(options)) {
+    const requested = validateRequest(request);
+    if (requested === null || !validTestOptions(options)) {
       return failure("WORKSPACE_INVALID_REQUEST");
     }
+    const validated = this.withCredentialStores(requested);
+    if (validated === null) return failure("WORKSPACE_PATH_REFUSED");
     if (
       options.signal?.aborted &&
       validated.operation.kind !== "verification.run"
@@ -1288,18 +1322,25 @@ export class NativeReadonlyWorkspace
     request: WorkspaceEditSnapshotRequest,
     options: NativeReadonlyWorkspaceTestOptions = {},
   ): Promise<WorkspaceEditSnapshotResult> {
-    const validated = validateRequest({
+    const requested = validateRequest({
       workspace: request.workspace,
       operation: { kind: "workspace.read", relativePath: request.relativePath },
     });
     if (
-      validated === null ||
-      validated.operation.kind !== "workspace.read" ||
+      requested === null ||
+      requested.operation.kind !== "workspace.read" ||
       !validTestOptions(options)
     ) {
       return {
         ok: false,
         error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+      };
+    }
+    const validated = this.withCredentialStores(requested);
+    if (validated === null) {
+      return {
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED", retry: "never" },
       };
     }
     if (deniedPaths(validated).length > MAX_HELPER_DENIED_PATHS) {
@@ -1355,10 +1396,12 @@ export class NativeReadonlyWorkspace
     request: WorkspaceMutationRequest,
     options: NativeReadonlyWorkspaceTestOptions = {},
   ): Promise<WorkspaceMutationResult> {
-    const validated = validateMutationRequest(request);
-    if (validated === null || !validTestOptions(options)) {
+    const requested = validateMutationRequest(request);
+    if (requested === null || !validTestOptions(options)) {
       return mutationFailure("WORKSPACE_INVALID_REQUEST");
     }
+    const validated = this.withCredentialStores(requested);
+    if (validated === null) return mutationFailure("WORKSPACE_PATH_REFUSED");
     if (options.signal?.aborted) {
       return mutationFailure("WORKSPACE_MUTATION_CANCELLED");
     }

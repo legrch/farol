@@ -560,6 +560,171 @@ describe("native readonly Computer workspace", () => {
     });
   });
 
+  describe("AUTH-06 home credential stores survive root selection", () => {
+    // The outer fixture root plays a folder that encloses the owner's home;
+    // the synthetic home and its synthetic key live inside it.
+    let home = "";
+
+    beforeEach(async () => {
+      home = path.join(root, "home");
+      await fs.mkdir(path.join(home, ".ssh", "keys"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await fs.writeFile(
+        path.join(home, ".ssh", "keys", "id_synthetic"),
+        "SYNTHETIC-KEY-CANARY\n",
+        { mode: 0o600 },
+      );
+      await fs.mkdir(path.join(home, "Library", "Keychains"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await fs.writeFile(path.join(home, "notes.md"), "ordinary notes\n", {
+        mode: 0o600,
+      });
+    });
+
+    function homeReader(): NativeReadonlyWorkspace {
+      return new NativeReadonlyWorkspace({
+        helperPath: sourceHelper,
+        helper: NEXT_SAFE_OPEN_HELPER,
+        attestInterpreter: async () => "/usr/bin/python3",
+        homeDirectory: home,
+      });
+    }
+
+    function at(
+      workspaceRoot: string,
+      operation: ReadonlyWorkspaceRequest["operation"],
+    ): ReadonlyWorkspaceRequest {
+      return {
+        workspace: {
+          workspaceId: "workspace-a",
+          root: workspaceRoot,
+          deniedPaths: [],
+        },
+        operation,
+      };
+    }
+
+    const refused = {
+      ok: false,
+      error: { code: "WORKSPACE_PATH_REFUSED", retry: "never" },
+    } as const;
+
+    it("refuses a root that is a credential store or lies inside one", async () => {
+      const workspace = homeReader();
+      for (const candidate of [
+        path.join(home, ".ssh"),
+        path.join(home, ".ssh", "keys"),
+        path.join(home, ".SSH", "keys"),
+        path.join(home, "Library", "Keychains"),
+      ]) {
+        await expect(
+          workspace.execute(
+            at(candidate, { kind: "workspace.list", relativePath: "." }),
+          ),
+        ).resolves.toEqual(refused);
+        await expect(
+          workspace.execute(
+            at(candidate, {
+              kind: "verification.run",
+              command: "git.status",
+              relativePath: ".",
+            }),
+          ),
+        ).resolves.toEqual(refused);
+        await expect(
+          workspace.readEditSnapshot({
+            workspace: {
+              workspaceId: "workspace-a",
+              root: candidate,
+              deniedPaths: [],
+            },
+            relativePath: "id_synthetic",
+          }),
+        ).resolves.toEqual(refused);
+        await expect(
+          workspace.mutate({
+            workspace: {
+              workspaceId: "workspace-a",
+              root: candidate,
+              deniedPaths: [],
+              writeDeniedPaths: [],
+            },
+            operation: {
+              kind: "workspace.write",
+              relativePath: "planted",
+              content: "planted\n",
+              expectedSha256: null,
+            },
+          }),
+        ).resolves.toEqual(refused);
+      }
+      await expect(
+        fs.readdir(path.join(home, ".ssh", "keys")),
+      ).resolves.toEqual(["id_synthetic"]);
+    });
+
+    it("keeps the stores of an enclosed home out of a broader root", async () => {
+      const workspace = homeReader();
+
+      await expect(
+        workspace.execute(
+          at(root, {
+            kind: "workspace.read",
+            relativePath: "home/.ssh/keys/id_synthetic",
+          }),
+        ),
+      ).resolves.toEqual(refused);
+      await expect(
+        workspace.execute(
+          at(root, {
+            kind: "workspace.search",
+            relativePath: ".",
+            pattern: "SYNTHETIC-KEY-CANARY",
+          }),
+        ),
+      ).resolves.toMatchObject({ ok: true, value: { matches: [] } });
+      await expect(
+        workspace.execute(
+          at(root, { kind: "workspace.read", relativePath: "home/notes.md" }),
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { text: "ordinary notes\n" },
+      });
+    });
+
+    it("keeps root conventions distinct and does not scan nested names", async () => {
+      await fs.writeFile(path.join(root, ".env"), "TOKEN=canary\n", {
+        mode: 0o600,
+      });
+      await fs.writeFile(path.join(root, "src", ".env.example"), "TOKEN=\n", {
+        mode: 0o600,
+      });
+      const workspace = homeReader();
+
+      // The selected root's own credential conventions stay denied.
+      await expect(
+        workspace.execute(
+          at(root, { kind: "workspace.read", relativePath: ".env" }),
+        ),
+      ).resolves.toEqual(refused);
+      // Path policy is not a secret scanner: a nested example file stays an
+      // ordinary task input.
+      await expect(
+        workspace.execute(
+          at(root, {
+            kind: "workspace.read",
+            relativePath: "src/.env.example",
+          }),
+        ),
+      ).resolves.toMatchObject({ ok: true, value: { text: "TOKEN=\n" } });
+    });
+  });
+
   describe("C05-10 bounded exclusion policy", () => {
     function withDenied(count: number): ReadonlyWorkspaceRequest {
       return {

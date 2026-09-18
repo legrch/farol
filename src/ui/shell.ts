@@ -1793,7 +1793,9 @@ async function configureProduct(
                             ? "This workspace is not a Git repository."
                             : parsed.error === "WORKSPACE_GIT_HEAD_UNBORN"
                               ? "This repository has no commits yet, so there is no HEAD commit to read."
-                              : `Not applied · ${parsed.error}`;
+                              : parsed.error === "WORKSPACE_SELECTION_PROTECTED"
+                                ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
+                                : `Not applied · ${parsed.error}`;
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

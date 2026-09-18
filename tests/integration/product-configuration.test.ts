@@ -39,6 +39,40 @@ function dependencies() {
 }
 
 describe("Farol Next product configuration", () => {
+  it("AUTH-06 refuses to approve a root inside a home credential store", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      { ...dependencies(), homeDirectory: "/Users/example" },
+    );
+    await service.initialize();
+
+    for (const candidate of [
+      "/Users/example/.ssh",
+      "/Users/example/.aws/profiles",
+      "/Users/example/Library/Keychains",
+      "/Users/example/.Codex",
+    ]) {
+      await expect(
+        service.addReadonlyWorkspace({ root: candidate, label: "Store" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: "WORKSPACE_SELECTION_PROTECTED",
+        snapshot: {
+          status: "ready",
+          settings: { computer: { workspaces: [] } },
+        },
+      });
+    }
+    // The home itself and ordinary folders beside the stores stay approvable;
+    // the stores inside them remain denied by the native helper policy.
+    for (const candidate of ["/Users/example", "/Users/example/.ssh-notes"]) {
+      await expect(
+        service.addReadonlyWorkspace({ root: candidate, label: "Folder" }),
+      ).resolves.toMatchObject({ ok: true });
+    }
+  });
+
   it("persists working preferences and workspace approval across restart", async () => {
     const root = await stateRoot();
     const first = new ProductConfigurationService(
