@@ -271,6 +271,11 @@ try {
   assert.equal(status.structuredContent?.output?.command, "git.status");
   assert.equal(status.structuredContent?.output?.exitCode, 0);
   assert.equal(status.structuredContent?.output?.network, "none");
+  assert.equal(
+    status.structuredContent?.output?.coverage,
+    "tracked-files-only",
+  );
+  assert.equal(status.structuredContent?.output?.layout, "primary");
 
   const exactHead = await client.callTool({
     name: "computer_workspace_git_head",
@@ -292,6 +297,8 @@ try {
     stderr: "",
     outputBytes: Buffer.byteLength(head),
     network: "none",
+    coverage: "head-commit",
+    layout: "primary",
   });
 
   const injected = await client.callTool({
