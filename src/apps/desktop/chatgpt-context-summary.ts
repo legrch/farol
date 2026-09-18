@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { ContextSummaryReceipt } from "../../modules/chat/app/port/context-summarizer";
 import type { SourceRetirementReceipt } from "../../modules/chat/app/port/context-source-control";
 import {
+  reconcileCheckpointContent,
   validateCheckpointContent,
   type CheckpointContent,
 } from "../../modules/chat/domain/checkpoint";
@@ -11,7 +12,10 @@ import {
   type ContextBinding,
   type ContextSource,
 } from "../../modules/chat/domain/context-continuity";
-import { replayHostCheckpoint } from "../../modules/chat/infra/client/host-compaction-codec";
+import {
+  authoritativeHistoryFacts,
+  replayHostCheckpoint,
+} from "../../modules/chat/infra/client/host-compaction-codec";
 import {
   PrivateContextStore,
   type StoredContextSummary,
@@ -656,9 +660,26 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
       return { status: "blocked", code: content.error.code };
     }
-    const boundedContent = withoutUnverifiedAttachmentAvailability(
-      content.value,
+    // The host history, not the model's prose, decides which effects are
+    // unknown and which receipts exist.
+    const reconciled = reconcileCheckpointContent(
+      withoutUnverifiedAttachmentAvailability(content.value),
+      authoritativeHistoryFacts(
+        input.source.history,
+        MAXIMUM_CHECKPOINT_CONTENT_BYTES,
+      ),
+      MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
+    if (!reconciled.ok) {
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      return { status: "blocked", code: reconciled.error.code };
+    }
+    const boundedContent = reconciled.value;
     const conversationUrl = lease.route.currentConversationUrl();
     if (!conversationUrl) {
       if (!this.releaseOwnedLease(input.request.operationId)) {

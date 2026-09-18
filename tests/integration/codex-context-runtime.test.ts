@@ -521,6 +521,127 @@ describe("assembled Codex context runtime", () => {
     );
   });
 
+  it("CCR-10 keeps authoritative facts through three epochs of lossy summaries", async () => {
+    const root = await stateRoot();
+    // From the second epoch on, the model forgets the unknown write, drops
+    // the real receipt and invents another one.
+    const lossy = (cycle: number): CheckpointContent =>
+      cycle === 1
+        ? checkpoint(cycle)
+        : {
+            ...checkpoint(cycle),
+            completedWork: [
+              {
+                description: "Published the release.",
+                evidenceRefs: ["receipt-publish-99"],
+              },
+            ],
+            unknownOutcomes: [],
+          };
+    const routes = [1, 2, 3, 4].map(
+      (cycle) =>
+        new DeterministicSummaryRoute(
+          lossy(cycle),
+          `https://chatgpt.com/c/context-lossy-${cycle}`,
+        ),
+    );
+    let retained = routes[0]!;
+    let ordinaryTurns = 0;
+    const conversation: CodexChatGptConversation = {
+      run: vi.fn(async (_input, observer) => {
+        ordinaryTurns += 1;
+        const text = `Ordinary result ${ordinaryTurns}.`;
+        await observer.onTextDelta({
+          sequence: 1,
+          delta: text,
+          text,
+          observedCharacters: text.length,
+        });
+        retained = routes[ordinaryTurns]!;
+        return {
+          state: "completed" as const,
+          code: null,
+          outputText: text,
+          observedProvider: "deterministic-local",
+          observedModel: null,
+          observedMode: null,
+        };
+      }),
+    };
+    const runtime = await startCodexContextRuntime({
+      ownerId: binding.ownerId,
+      providerProfileId: binding.providerProfileId,
+      stateRoot: root,
+      providerTurnsRoot: path.join(root, "provider-turns"),
+      model,
+      token,
+      conversation,
+      summaryRoutes: {
+        retained: vi.fn(() => retained),
+        createFallback: vi.fn(),
+      },
+    });
+    runtimes.push(runtime);
+    let exactHistory = history(1);
+
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      const compact = await fetch(
+        `${runtime.provider.baseUrl}/v1/responses/compact`,
+        {
+          method: "POST",
+          headers: compactionHeaders(`turn-lossy-compact-${cycle}`),
+          body: JSON.stringify({ model, input: exactHistory }),
+        },
+      );
+      expect(compact.status).toBe(200);
+      const replacement = (await compact.json()) as { output: unknown[] };
+      const replayed = replayHostCheckpoint(replacement.output, 256 * 1_024);
+      if (!replayed.ok) throw new Error(replayed.error.code);
+      const content = replayed.value.checkpoint.content;
+      expect(content.unknownOutcomes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            operationRef: protectedFacts.unknownOperation,
+          }),
+        ]),
+      );
+      const citedReceipts = content.completedWork.flatMap(
+        (item) => item.evidenceRefs,
+      );
+      expect(citedReceipts).toContain(protectedFacts.completedReceipt);
+      expect(citedReceipts).not.toContain("receipt-publish-99");
+
+      const continued = await fetch(
+        `${runtime.provider.baseUrl}/v1/responses`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            ...ordinaryBody(replacement.output, cycle),
+            client_metadata: {
+              ...ordinaryBody(replacement.output, cycle).client_metadata,
+              turn_id: `turn-lossy-continue-${cycle}`,
+              root_turn_id: `turn-lossy-continue-${cycle}`,
+            },
+          }),
+        },
+      );
+      expect(continued.status).toBe(200);
+      expect(await continued.text()).toContain("response.completed");
+      exactHistory = history(cycle + 1, replacement.output);
+    }
+
+    // The actual next model inputs after each epoch keep the protected facts.
+    expect(conversation.run).toHaveBeenCalledTimes(3);
+    for (const [input] of vi.mocked(conversation.run).mock.calls) {
+      expect(input.prompt).toContain(protectedFacts.unknownOperation);
+      expect(input.prompt).toContain(protectedFacts.completedReceipt);
+    }
+  });
+
   it("projects a trusted streamed checkpoint into the actual next model input", async () => {
     const root = await stateRoot();
     const retained = new DeterministicSummaryRoute(

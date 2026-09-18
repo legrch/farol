@@ -75,6 +75,11 @@ function source(
       },
       {
         type: "function_call_output",
+        call_id: "receipt-read-1",
+        output: "read",
+      },
+      {
+        type: "function_call_output",
         call_id: "write-17",
         output: "unknown",
       },
@@ -740,6 +745,80 @@ describe("ChatGPT summary-only context driver", () => {
     await expect(
       state.getSummary(binding, request.operationId),
     ).resolves.toBeNull();
+  });
+
+  it("CCR-10 repairs a summary that drops an unknown effect or fabricates a receipt", async () => {
+    const state = await store();
+    const history = [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Never publish." }],
+      },
+      {
+        type: "function_call",
+        call_id: "read-1",
+        name: "exec_command",
+        arguments: "{}",
+      },
+      { type: "function_call_output", call_id: "read-1", output: "done" },
+      {
+        type: "function_call",
+        call_id: "write-17",
+        name: "apply_patch",
+        arguments: "{}",
+      },
+    ];
+    const mutated: CheckpointContent = {
+      ...content,
+      completedWork: [
+        { description: "Read completed.", evidenceRefs: ["read-1"] },
+        { description: "Published the release.", evidenceRefs: ["publish-99"] },
+      ],
+      unresolvedQuestions: [],
+      // The model forgot the write whose result never arrived.
+      unknownOutcomes: [],
+    };
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(mutated).length,
+      outputText: JSON.stringify(mutated),
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+
+    const receipt = await summary.request({
+      request,
+      source: { ...source(), history },
+    });
+
+    expect(receipt).toMatchObject({
+      status: "completed",
+      content: {
+        completedWork: [
+          { description: "Read completed.", evidenceRefs: ["read-1"] },
+        ],
+        unresolvedQuestions: [
+          "Unverified, no receipt exists: Published the release.",
+        ],
+        unknownOutcomes: [
+          {
+            operationRef: "write-17",
+            description:
+              "apply_patch was called but no result was delivered before compaction.",
+          },
+        ],
+      },
+    });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toMatchObject({
+      content: { unknownOutcomes: [{ operationRef: "write-17" }] },
+    });
   });
 
   it("keeps attachment references but never treats model text as byte availability", async () => {

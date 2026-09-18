@@ -7,6 +7,7 @@ import {
 } from "../../../../pkg/kernel/domain/result";
 import {
   validateCheckpointEnvelope,
+  type AuthoritativeContextFacts,
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 
@@ -384,6 +385,88 @@ function summaryMessage(checkpoint: CheckpointEnvelope): unknown {
         text: `${FAROL_CONTEXT_PREAMBLE}\n${marker}\n${JSON.stringify(checkpoint.content, null, 2)}`,
       },
     ],
+  };
+}
+
+const CALL_TYPES = new Set(["function_call", "custom_tool_call"]);
+const OUTPUT_TYPES = new Set([
+  "function_call_output",
+  "custom_tool_call_output",
+]);
+
+// A result is cited either by its call ID or, for a tool that answers with a
+// receipt token, by that exact token.
+function receiptToken(output: unknown): string | null {
+  return typeof output === "string" && /^[^\s]{1,160}$/u.test(output)
+    ? output
+    : null;
+}
+
+/**
+ * What the host's record proves about tool effects, independent of a model
+ * summary. After a compaction the older effects survive only in the previous
+ * validated checkpoint, which was itself reconciled when it was made, so its
+ * receipts and unknown outcomes carry forward: a later summary can neither
+ * cite a receipt nothing proves nor quietly forget an unknown effect.
+ */
+export function authoritativeHistoryFacts(
+  history: readonly unknown[],
+  maximumCheckpointContentBytes: number,
+): AuthoritativeContextFacts {
+  const receipts = new Set<string>();
+  const unresolved = new Map<string, string>();
+  const carriedWork: AuthoritativeContextFacts["carriedWork"][number][] = [];
+  const previous = replayHostCheckpoint(history, maximumCheckpointContentBytes);
+  if (previous.ok) {
+    const content = previous.value.checkpoint.content;
+    for (const item of content.completedWork) {
+      for (const ref of item.evidenceRefs) receipts.add(ref);
+      if (item.evidenceRefs.length > 0) carriedWork.push(item);
+    }
+    for (const entry of content.unknownOutcomes) {
+      unresolved.set(entry.operationRef, entry.description);
+    }
+  }
+  const calls = new Map<string, string>();
+  const delivered = new Set<string>();
+  for (const candidate of history) {
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate)
+    ) {
+      continue;
+    }
+    const item = candidate as Record<string, unknown>;
+    if (typeof item.call_id !== "string" || item.call_id.length === 0) continue;
+    if (CALL_TYPES.has(String(item.type))) {
+      calls.set(
+        item.call_id,
+        typeof item.name === "string" && item.name.length > 0
+          ? item.name.slice(0, 160)
+          : "A tool",
+      );
+    } else if (OUTPUT_TYPES.has(String(item.type))) {
+      delivered.add(item.call_id);
+      receipts.add(item.call_id.slice(0, 512));
+      const token = receiptToken(item.output);
+      if (token !== null) receipts.add(token);
+    }
+  }
+  for (const [callId, name] of calls) {
+    if (delivered.has(callId) || unresolved.has(callId.slice(0, 160))) continue;
+    unresolved.set(
+      callId.slice(0, 160),
+      `${name} was called but no result was delivered before compaction.`,
+    );
+  }
+  return {
+    receipts: [...receipts],
+    carriedWork,
+    unresolved: [...unresolved].map(([operationRef, description]) => ({
+      operationRef,
+      description,
+    })),
   };
 }
 

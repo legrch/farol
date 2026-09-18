@@ -95,6 +95,21 @@ export type CheckpointEnvelope = Readonly<{
   content: CheckpointContent;
 }>;
 
+// Facts the host's own record proves, independent of any model summary: the
+// receipts that may be cited, completed work an earlier validated checkpoint
+// already proved, and calls whose result never arrived.
+export type AuthoritativeContextFacts = Readonly<{
+  receipts: readonly string[];
+  carriedWork: readonly Readonly<{
+    description: string;
+    evidenceRefs: readonly string[];
+  }>[];
+  unresolved: readonly Readonly<{
+    operationRef: string;
+    description: string;
+  }>[];
+}>;
+
 export type CheckpointErrorCode =
   | "CHECKPOINT_CONTENT_INVALID"
   | "CHECKPOINT_CONTENT_OVERSIZED"
@@ -121,6 +136,60 @@ export function validateCheckpointContent(
   const parsed = checkpointContentSchema.safeParse(candidate);
   if (!parsed.success) return failure("CHECKPOINT_CONTENT_INVALID");
   return success(structuredClone(parsed.data));
+}
+
+const UNVERIFIED_PREFIX = "Unverified, no receipt exists: ";
+
+/**
+ * A model summary is lossy and can be wrong in the ways that matter most, so
+ * the facts the host record proves override it: every call whose result never
+ * arrived stays an unknown outcome even if the summary forgot it, completed
+ * work may cite only receipts that exist, and work an earlier checkpoint proved
+ * stays cited. A claim whose every cited receipt is absent is kept as an
+ * unverified question, never as completed work.
+ */
+export function reconcileCheckpointContent(
+  content: CheckpointContent,
+  facts: AuthoritativeContextFacts,
+  maximumBytes: number,
+): Result<CheckpointContent, CheckpointErrorCode> {
+  const receipts = new Set(facts.receipts);
+  const completedWork: CheckpointContent["completedWork"][number][] = [];
+  const unresolvedQuestions = [...content.unresolvedQuestions];
+  for (const item of content.completedWork) {
+    if (item.evidenceRefs.length === 0) {
+      completedWork.push(item);
+      continue;
+    }
+    const evidenceRefs = item.evidenceRefs.filter((ref) => receipts.has(ref));
+    if (evidenceRefs.length > 0) {
+      completedWork.push({ ...item, evidenceRefs });
+    } else {
+      unresolvedQuestions.push(
+        `${UNVERIFIED_PREFIX}${item.description}`.slice(0, 4_096),
+      );
+    }
+  }
+  const cited = new Set(completedWork.flatMap((item) => item.evidenceRefs));
+  for (const item of facts.carriedWork) {
+    if (item.evidenceRefs.some((ref) => cited.has(ref))) continue;
+    completedWork.push({
+      description: item.description,
+      evidenceRefs: [...item.evidenceRefs],
+    });
+    for (const ref of item.evidenceRefs) cited.add(ref);
+  }
+  const unknownOutcomes = [...content.unknownOutcomes];
+  const known = new Set(unknownOutcomes.map((entry) => entry.operationRef));
+  for (const entry of facts.unresolved) {
+    if (known.has(entry.operationRef)) continue;
+    known.add(entry.operationRef);
+    unknownOutcomes.push({ ...entry });
+  }
+  return validateCheckpointContent(
+    { ...content, completedWork, unresolvedQuestions, unknownOutcomes },
+    maximumBytes,
+  );
 }
 
 export function validateCheckpointEnvelope(
