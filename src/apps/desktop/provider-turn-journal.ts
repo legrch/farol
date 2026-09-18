@@ -35,6 +35,17 @@ function sha256(value: string): string {
  * lost stream or a restart must not start a second ChatGPT conversation run,
  * so the record is created exclusively and made durable before anything is
  * submitted. Records hold digests only, never request text.
+ *
+ * Who owns what, durably: this journal owns the request identity and its
+ * immutable intent; the task's retained ChatGPT conversation owns the
+ * answer; the host's own thread state owns what it received. A repeat of an
+ * identity whose answer the host lost is refused as already submitted, never
+ * run again, and the answer stays visible in the task's conversation. The
+ * duplicate protection must outlive any host retry of the same identity:
+ * the hosts this product launches on the Next route carry zero request and
+ * stream retries (codex-app-server-process.ts), and Codex turn identities
+ * are unique per user turn, so the retention window below is a storage
+ * bound well past any process lifetime, not the guarantee itself.
  */
 export class PrivateProviderTurnJournal implements ProviderTurnJournal {
   private pruned = false;

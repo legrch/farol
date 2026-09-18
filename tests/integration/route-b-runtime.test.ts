@@ -827,6 +827,68 @@ describe("Route B runtime composed as the product composes it", () => {
     expect(task.prompts).toHaveLength(1);
   });
 
+  it("EV-05/EV-06 refuses a repeated identity after a lost answer and a restart without running the model again, conflicts on another intent, and admits a new identity", async () => {
+    const task = new TaskConversation();
+    const surfaces = {
+      surfaceFor: async () => ({ ok: true as const, surface: task }),
+    };
+    const { root, runtime: first } = await compose(surfaces, task);
+    // The host loses the answer: it stops reading after the first byte.
+    const lost = await post(
+      first,
+      "/responses",
+      initialRequest("turn-lost-1", "Answer once."),
+    );
+    const reader = lost.body!.getReader();
+    await reader.read();
+    await reader.cancel();
+    await vi.waitFor(() => expect(task.prompts).toHaveLength(1));
+    await first.close();
+
+    // The same process restarts on the same private state.
+    const controller = createCodexContextController({
+      ownerId: "owner-desktop",
+      providerProfileId: "profile-isolated-next",
+      stateRoot: path.join(root, "context-continuity"),
+      summaryRoutes: { retained: () => task, createFallback: vi.fn() },
+    });
+    const restarted = await startRouteBRuntime({
+      stateRoot: root,
+      surfaces,
+      compaction: controller.continuity,
+    });
+    runtime = restarted;
+    // The lost answer is not run again; it stays in the task's conversation.
+    const repeated = await post(
+      restarted,
+      "/responses",
+      initialRequest("turn-lost-1", "Answer once."),
+    );
+    expect(repeated.status).toBe(409);
+    await expect(repeated.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_TURN_ALREADY_SUBMITTED" },
+    });
+    // The same identity with another intent is a conflict, not a new run.
+    const conflict = await post(
+      restarted,
+      "/responses",
+      initialRequest("turn-lost-1", "Answer differently."),
+    );
+    expect(conflict.status).toBe(409);
+    await expect(conflict.json()).resolves.toEqual({
+      error: { code: "FAROL_NEXT_TURN_INTENT_CONFLICT" },
+    });
+    expect(task.prompts).toHaveLength(1);
+    // A deliberately new identity is a new request.
+    const fresh = await post(
+      restarted,
+      "/responses",
+      initialRequest("turn-lost-2", "Answer once."),
+    );
+    expect(await fresh.text()).toContain("response.completed");
+    expect(task.prompts).toHaveLength(2);
+  });
+
   it("refuses an unknown caller and a thread that cannot get a task", async () => {
     const task = new TaskConversation();
     const { runtime: route } = await compose(

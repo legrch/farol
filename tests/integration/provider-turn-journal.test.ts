@@ -85,6 +85,37 @@ describe("EV-05 durable provider turn journal", () => {
     );
   });
 
+  it("HR-006 keeps a record up to the exact retention boundary and drops it only past it, on a fake clock", async () => {
+    const day = 24 * 60 * 60 * 1_000;
+    const now = 1_800_000_000_000;
+    const journal = new PrivateProviderTurnJournal({
+      root: path.join(root, "turns"),
+      now: () => now,
+    });
+    await journal.admit("turn-kept", INTENT);
+    await journal.admit("turn-dropped", INTENT);
+    // Written 30 days ago exactly, and one millisecond older than that.
+    const boundary = new Date(now - 30 * day);
+    await fs.utimes(recordFile("turn-kept"), boundary, boundary);
+    const past = new Date(now - 30 * day - 1);
+    await fs.utimes(recordFile("turn-dropped"), past, past);
+
+    const restarted = new PrivateProviderTurnJournal({
+      root: path.join(root, "turns"),
+      now: () => now,
+    });
+    await expect(restarted.admit("turn-new", INTENT)).resolves.toBe("admitted");
+    // Still protected: the same identity is a replay, another intent a
+    // conflict; nothing runs twice inside the window.
+    await expect(restarted.admit("turn-kept", INTENT)).resolves.toBe(
+      "replayed",
+    );
+    await expect(restarted.admit("turn-kept", OTHER_INTENT)).resolves.toBe(
+      "conflict",
+    );
+    await expect(fs.access(recordFile("turn-dropped"))).rejects.toThrow();
+  });
+
   it("drops records older than the retention window on the next start", async () => {
     const now = Date.now();
     await new PrivateProviderTurnJournal({
