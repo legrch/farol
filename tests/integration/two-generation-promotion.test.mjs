@@ -45,13 +45,23 @@ async function predecessorDirectory() {
   const candidates = [];
   for (const name of names) {
     try {
-      await fs.access(path.join(root, name, "artifact.json"));
-      candidates.push(path.join(root, name));
+      const manifest = JSON.parse(
+        await fs.readFile(path.join(root, name, "artifact.json"), "utf8"),
+      );
+      // Only a manifest whose tree digest is the unambiguous v2 encoding
+      // identifies its bytes; an older schema is kept for history only.
+      if (manifest.schema === 5) {
+        candidates.push({
+          directory: path.join(root, name),
+          builtAt: manifest.builtAt,
+        });
+      }
     } catch {
-      // A predecessor without its manifest is not identified.
+      // A predecessor without a readable manifest is not identified.
     }
   }
-  return candidates.sort().at(-1) ?? null;
+  candidates.sort((left, right) => (left.builtAt < right.builtAt ? -1 : 1));
+  return candidates.at(-1)?.directory ?? null;
 }
 
 describe("Q-07/Q-08 two identified generations", () => {
