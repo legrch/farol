@@ -147,6 +147,40 @@ describe("ChatGPT attachment staging", () => {
     ).rejects.toThrow("ATTACHMENT_TOO_LARGE");
   });
 
+  it("P09 enforces the disclosure budget by count and total bytes without leaving a partial operation", async () => {
+    const root = await temporaryRoot();
+    const stagingRoot = path.join(root, "staging");
+    const sources = await Promise.all(
+      ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"].map(async (name) => {
+        const source = path.join(root, name);
+        await fs.writeFile(source, "x", { mode: 0o600 });
+        return source;
+      }),
+    );
+
+    await expect(
+      stageChatGptAttachments({
+        root: stagingRoot,
+        operationId: randomUUID(),
+        paths: sources,
+      }),
+    ).rejects.toThrow("ATTACHMENT_SELECTION_INVALID");
+
+    // Each file fits alone, together they exceed what one task may disclose.
+    const large = sources.slice(0, 3);
+    for (const source of large) {
+      await fs.writeFile(
+        source,
+        Buffer.alloc(MAX_CHATGPT_ATTACHMENT_BYTES - 1, "x"),
+      );
+    }
+    const operationId = randomUUID();
+    await expect(
+      stageChatGptAttachments({ root: stagingRoot, operationId, paths: large }),
+    ).rejects.toThrow("ATTACHMENT_TOTAL_TOO_LARGE");
+    await expect(fs.readdir(stagingRoot)).resolves.not.toContain(operationId);
+  });
+
   it("removes a partial operation and only cleans UUID staging children", async () => {
     const root = await temporaryRoot();
     const stagingRoot = path.join(root, "staging");
