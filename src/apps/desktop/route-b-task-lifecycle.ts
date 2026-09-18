@@ -4,14 +4,21 @@ import type {
 } from "./route-b-runtime";
 
 export type TaskContextDeletion = "deleted" | "failed" | "none";
+export type AgentInputRemoval = "removed" | "failed";
 
+// A close either did not happen, or it happened and reports what became of
+// the private state it then removed: a deletion that failed is named, never
+// folded into an unqualified success.
 export type TaskCloseResult =
-  | Readonly<{ ok: true; contextDeletion: TaskContextDeletion }>
+  | Readonly<{
+      ok: true;
+      contextDeletion: TaskContextDeletion;
+      agentInput: AgentInputRemoval;
+    }>
   | Readonly<{
       ok: false;
       code:
         | "TASK_OPERATION_IN_PROGRESS"
-        | "AGENT_INPUT_STATE_UNAVAILABLE"
         | "TASK_NOT_FOUND"
         | "TASK_STATE_UNAVAILABLE";
     }>;
@@ -25,6 +32,9 @@ export type RouteBTaskLifecyclePorts<Snapshot> = Readonly<{
   // summarizing a turn of the task's thread, so its private context is in use.
   owns(taskId: string): boolean;
   existingSurface(taskId: string): RouteBConversationSurface | null;
+  // True while the task is in the live registry, whether or not its route
+  // exists yet; a thread that is not a live task starts from nothing.
+  liveTask(taskId: string): boolean;
   markRunning(taskId: string): void;
   mutationInFlight(): boolean;
   admissionReady(): boolean;
@@ -59,7 +69,9 @@ export type RouteBTaskLifecycle = Readonly<{
  * won ownership enters its closing state before its first await, so a turn
  * arriving meanwhile is refused before submission instead of running on the
  * surface the close is about to dispose. A task closes as soon as its thread
- * is idle; retained context never locks it.
+ * is idle; retained context never locks it. A thread that is not a live task
+ * starts only on a clean private context: the residue of a closed task whose
+ * deletion failed is removed before admission, or the admission is refused.
  */
 export function createRouteBTaskLifecycle<Snapshot>(
   ports: RouteBTaskLifecyclePorts<Snapshot>,
@@ -83,6 +95,22 @@ export function createRouteBTaskLifecycle<Snapshot>(
       if (threadId.length < 1 || threadId.length > 120) {
         return { ok: false, code: "TASK_IDENTITY_INVALID" };
       }
+      if (!ports.liveTask(threadId)) {
+        // A thread that is not a live task may only start on a clean private
+        // state. The residue of a closed task whose removal failed — its
+        // Agent input, its private context — is removed first; while it
+        // cannot be, admission is refused rather than attached to the state
+        // the owner closed.
+        try {
+          await ports.removeAgentInput(threadId);
+        } catch {
+          return { ok: false, code: "TASK_CONTEXT_RESIDUE" };
+        }
+        const residue = await ports.deleteContext(threadId);
+        if (residue === "failed") {
+          return { ok: false, code: "TASK_CONTEXT_RESIDUE" };
+        }
+      }
       return ports.admitTask(threadId);
     },
     close: async (taskId) => {
@@ -94,11 +122,6 @@ export function createRouteBTaskLifecycle<Snapshot>(
       closing.add(taskId);
       try {
         const before = ports.snapshotTasks();
-        try {
-          await ports.removeAgentInput(taskId);
-        } catch {
-          return { ok: false, code: "AGENT_INPUT_STATE_UNAVAILABLE" };
-        }
         if (!ports.removeTask(taskId)) {
           return { ok: false, code: "TASK_NOT_FOUND" };
         }
@@ -108,12 +131,20 @@ export function createRouteBTaskLifecycle<Snapshot>(
           ports.rollbackTasks(before);
           return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
         }
-        // Only once the removal is saved: a failed deletion then leaves
-        // private state of a closed task, not an open task without its
-        // context.
+        // Only once the removal is saved is private state removed: a removal
+        // or deletion that fails then leaves private state of a task that is
+        // already gone, never a live task without its Agent input or its
+        // context. A close that did not save is rolled back whole.
+        let agentInput: AgentInputRemoval;
+        try {
+          await ports.removeAgentInput(taskId);
+          agentInput = "removed";
+        } catch {
+          agentInput = "failed";
+        }
         const contextDeletion = await ports.deleteContext(taskId);
         ports.disposeRoute(taskId);
-        return { ok: true, contextDeletion };
+        return { ok: true, contextDeletion, agentInput };
       } finally {
         closing.delete(taskId);
       }

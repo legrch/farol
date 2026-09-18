@@ -857,6 +857,7 @@ async function admitRouteBTask(
 const routeBTaskLifecycle = createRouteBTaskLifecycle({
   owns: (taskId) => routeBRuntime?.owns(taskId) ?? false,
   existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
+  liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
   markRunning: (taskId) => setLiveTaskLifecycle(taskId, "running"),
   mutationInFlight: () => taskMutationInFlight,
   admissionReady: () => chatGptTaskAdmissionReady(),
@@ -990,6 +991,7 @@ async function initializeCodexContextController(): Promise<void> {
     ownerId: contextOwnerId,
     providerProfileId: contextProviderProfileId,
     stateRoot: contextContinuityRoot(),
+    liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
     summaryFence: {
       raise: (input) =>
         fence.raise({

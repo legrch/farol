@@ -966,4 +966,49 @@ describe("Codex host context continuity composition", () => {
     expect(summary.request).not.toHaveBeenCalled();
     expect(summary.observe).not.toHaveBeenCalled();
   });
+  it("never renders the checkpoint of a thread that is not a live task, even when its store survived a failed close", async () => {
+    const root = await stateRoot();
+    const live = new Set(["thread-context-1"]);
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store: new PrivateContextStore({ root }),
+      summary: driver(),
+      liveTask: (taskId) => live.has(taskId),
+    });
+    const handoff = await continuity.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok) throw new Error(handoff.error.code);
+    await expect(
+      continuity.confirmHostCompaction({
+        modelId: "farol-next/mind",
+        threadId: "thread-context-1",
+        turnId: "turn-context-compact-1",
+        itemId: "host-context-compaction-1",
+        signal: "turn_completed",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { phase: "active" } });
+    // While the task is live its epoch continues into a markerless turn.
+    const whileLive = await continuity.prepareTurn(
+      markerlessTurn("turn-after-live"),
+    );
+    if (!whileLive.ok) throw new Error(whileLive.error.code);
+    expect(whileLive.value.trustedContext).toContain(
+      "Do not repeat an unknown write.",
+    );
+    // The owner closed the task but its private context survived on disk:
+    // the same thread is a first turn again and nothing of the old context
+    // is rendered.
+    live.delete("thread-context-1");
+    await expect(
+      continuity.prepareTurn(markerlessTurn("turn-after-close")),
+    ).resolves.toEqual({ ok: true, value: { trustedContext: null } });
+  });
 });

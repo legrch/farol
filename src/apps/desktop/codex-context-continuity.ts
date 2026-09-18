@@ -88,6 +88,10 @@ export interface CodexContextSummaryDriver {
 export type CodexContextContinuityOptions = Readonly<{
   ownerId: string;
   providerProfileId: string;
+  // Whether a task is live in the product right now. A thread that is not
+  // has no epoch to continue: whatever the store still holds under its
+  // binding is residue of a closed task and is never rendered into a turn.
+  liveTask?: (taskId: string) => boolean;
   store: PrivateContextStore;
   summary: CodexContextSummaryDriver;
   onStateChanged?: (session: ContextSession) => void | Promise<void>;
@@ -392,6 +396,17 @@ export class CodexContextContinuity implements CodexChatGptCompaction {
       parsed.data.input,
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
+    // A thread that is not a live task starts under first-turn rules before
+    // the store is consulted: the residue a failed close left under its
+    // binding is the lifecycle's to remove or refuse at admission, never
+    // context for a new conversation. A marker-carrying turn for such a
+    // thread names a checkpoint no live task owns and is refused.
+    if (this.options.liveTask && !this.options.liveTask(binding.taskId)) {
+      if (replayed.ok) return failure("HOST_CHECKPOINT_INVALID");
+      return replayed.error.code === "HOST_CHECKPOINT_NOT_FOUND"
+        ? success({ trustedContext: null })
+        : failure(replayed.error.code);
+    }
     if (!replayed.ok) {
       if (replayed.error.code !== "HOST_CHECKPOINT_NOT_FOUND") {
         return failure(replayed.error.code);

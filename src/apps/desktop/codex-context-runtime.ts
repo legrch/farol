@@ -20,6 +20,9 @@ export type CodexContextControllerOptions = Readonly<{
   summaryRoutes: ChatGptContextSummaryRoutes;
   // Fences ordinary Computer tools while a summary-only phase runs.
   summaryFence?: SummaryExecutionFence;
+  // Whether a task is live in the product; a thread that is not starts
+  // under first-turn rules and never receives the residue of a closed task.
+  liveTask?: (taskId: string) => boolean;
   maximumSummaryPromptCharacters?: number;
   onContextStateChanged?: (session: ContextSession) => void | Promise<void>;
 }>;
@@ -67,6 +70,7 @@ export function createCodexContextController(
     ...(options.onContextStateChanged === undefined
       ? {}
       : { onStateChanged: options.onContextStateChanged }),
+    ...(options.liveTask === undefined ? {} : { liveTask: options.liveTask }),
   });
   return { store, continuity };
 }

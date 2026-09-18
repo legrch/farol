@@ -21,6 +21,7 @@ import {
 import {
   createRouteBTaskLifecycle,
   type RouteBTaskLifecycle,
+  type TaskContextDeletion,
 } from "../../src/apps/desktop/route-b-task-lifecycle";
 import { deleteTaskContext } from "../../src/apps/desktop/task-context-cleanup";
 import type {
@@ -163,6 +164,12 @@ describe("Route B task lifecycle composed as the product composes it", () => {
       }>;
       // Stops a close of this task after it has begun.
       removal?: Readonly<{ taskId: string; gate: ReturnType<typeof gate> }>;
+      // Forces the outcome of this task's private context deletions, one
+      // outcome per deletion, until the outcomes run out.
+      contextDeletion?: Readonly<{
+        taskId: string;
+        outcomes: TaskContextDeletion[];
+      }>;
     }> = {},
   ) {
     const root = await fs.realpath(
@@ -178,6 +185,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     const registry = new LiveTaskRegistry(5);
     const routes = new Map<string, TaskSurface>();
     const persist = vi.fn(async () => undefined);
+    const agentInputRemovals: string[] = [];
     const admitTask = vi.fn(async (threadId: string) => {
       const admitted = registry.admit(
         productTask(threadId, `Codex task ${routes.size + 1}`),
@@ -211,6 +219,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
       createRouteBTaskLifecycle<ProductTasksState>({
         owns: (taskId) => route?.owns(taskId) ?? false,
         existingSurface: (taskId) => routes.get(taskId) ?? null,
+        liveTask: (taskId) => registry.get(taskId) !== null,
         markRunning: (taskId) => {
           registry.setLifecycle(taskId, "running");
         },
@@ -218,17 +227,30 @@ describe("Route B task lifecycle composed as the product composes it", () => {
         admissionReady: () => true,
         admitTask,
         removeAgentInput: async (taskId) => {
-          if (hooks.removal && hooks.removal.taskId === taskId) {
+          // The gate pauses a close inside its cleanup; the residue removal
+          // an admission performs passes through.
+          if (
+            hooks.removal &&
+            hooks.removal.taskId === taskId &&
+            lifecycle.closing(taskId)
+          ) {
             hooks.removal.gate.open();
             await hooks.removal.gate.wait();
           }
+          agentInputRemovals.push(taskId);
         },
         snapshotTasks: () => registry.snapshot(),
         removeTask: (taskId) => registry.remove(taskId) !== null,
         rollbackTasks: (snapshot) => registry.rollback(snapshot),
         persist,
-        deleteContext: (taskId) =>
-          deleteTaskContext(controller.store, binding(taskId)),
+        deleteContext: async (taskId) => {
+          const forced =
+            hooks.contextDeletion?.taskId === taskId
+              ? hooks.contextDeletion.outcomes.shift()
+              : undefined;
+          if (forced) return forced;
+          return deleteTaskContext(controller.store, binding(taskId));
+        },
         disposeRoute: (taskId) => {
           const surface = routes.get(taskId);
           routes.delete(taskId);
@@ -250,7 +272,16 @@ describe("Route B task lifecycle composed as the product composes it", () => {
       journal: gatedJournal,
     });
     runtime = route;
-    return { controller, registry, routes, admitTask, lifecycle, route };
+    return {
+      controller,
+      registry,
+      routes,
+      admitTask,
+      lifecycle,
+      route,
+      persist,
+      agentInputRemovals,
+    };
   }
 
   function post(route: RouteBRuntime, body: unknown) {
@@ -318,6 +349,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     await expect(lifecycle.close(threadA)).resolves.toEqual({
       ok: true,
       contextDeletion: "deleted",
+      agentInput: "removed",
     });
     expect(registry.get(threadA)).toBeNull();
     expect(registry.get(threadB)).not.toBeNull();
@@ -364,6 +396,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     await expect(closing).resolves.toEqual({
       ok: true,
       contextDeletion: "deleted",
+      agentInput: "removed",
     });
     expect(registry.get(threadA)).toBeNull();
     expect(surfaceA.disposed).toBe(1);
@@ -379,5 +412,68 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     expect(admitTask).toHaveBeenCalledTimes(2);
     expect(surfaceA.prompts).toHaveLength(1);
     expect(routes.get(threadA)!.prompts).toEqual(["Continue A."]);
+  });
+  it("never re-admits a thread onto the private context a failed close left behind", async () => {
+    const threadX = `thread-${randomUUID()}`;
+    // Outcomes, in order: the clean start of a new thread, the close whose
+    // deletion fails, the residue that still cannot be deleted, and finally a
+    // deletion that succeeds.
+    const { registry, admitTask, lifecycle } = await compose({
+      contextDeletion: {
+        taskId: threadX,
+        outcomes: ["none", "failed", "failed", "deleted"],
+      },
+    });
+    const first = await lifecycle.surfaceFor(threadX);
+    expect(first.ok).toBe(true);
+    expect(admitTask).toHaveBeenCalledTimes(1);
+    // The close reports the failed deletion instead of an unqualified success.
+    await expect(lifecycle.close(threadX)).resolves.toEqual({
+      ok: true,
+      contextDeletion: "failed",
+      agentInput: "removed",
+    });
+    expect(registry.get(threadX)).toBeNull();
+    // The same thread returns while its old context is still on disk: it is
+    // refused, never attached to the context the owner closed.
+    await expect(lifecycle.surfaceFor(threadX)).resolves.toEqual({
+      ok: false,
+      code: "TASK_CONTEXT_RESIDUE",
+    });
+    expect(admitTask).toHaveBeenCalledTimes(1);
+    // Once the residue is gone the thread starts again from nothing.
+    const again = await lifecycle.surfaceFor(threadX);
+    expect(again.ok).toBe(true);
+    expect(admitTask).toHaveBeenCalledTimes(2);
+  });
+  it("keeps a task's Agent input when its close could not be saved", async () => {
+    const threadY = `thread-${randomUUID()}`;
+    const { registry, admitTask, lifecycle, persist, agentInputRemovals } =
+      await compose({});
+    expect((await lifecycle.surfaceFor(threadY)).ok).toBe(true);
+    expect(admitTask).toHaveBeenCalledTimes(1);
+    const removalsBefore = agentInputRemovals.filter(
+      (id) => id === threadY,
+    ).length;
+    // The removal cannot be saved: the task comes back whole, and nothing of
+    // its private state was removed ahead of the save.
+    persist.mockRejectedValueOnce(new Error("disk full"));
+    await expect(lifecycle.close(threadY)).resolves.toEqual({
+      ok: false,
+      code: "TASK_STATE_UNAVAILABLE",
+    });
+    expect(registry.get(threadY)).not.toBeNull();
+    expect(agentInputRemovals.filter((id) => id === threadY).length).toBe(
+      removalsBefore,
+    );
+    // A save that succeeds removes the private state afterwards.
+    await expect(lifecycle.close(threadY)).resolves.toEqual({
+      ok: true,
+      contextDeletion: "deleted",
+      agentInput: "removed",
+    });
+    expect(agentInputRemovals.filter((id) => id === threadY).length).toBe(
+      removalsBefore + 1,
+    );
   });
 });
