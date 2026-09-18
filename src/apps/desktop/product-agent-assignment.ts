@@ -19,6 +19,7 @@ import {
 } from "../../modules/computer/domain/execution-authority";
 import { ExecutionAuthorityContractHandler } from "../../modules/computer/infra/authority-contract-handler";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
+import { productAgentApproval } from "./product-agent-approval";
 import type { ProductAgentInput } from "./product-agent-store";
 import {
   productAgentInitialPaths,
@@ -70,7 +71,6 @@ export async function runProductAgentAssignment(
   );
   if (
     !selected ||
-    selected.access !== "read" ||
     !productAgentScopeMatchesWorkspace(
       selected.root,
       selected.excludedPaths,
@@ -79,9 +79,6 @@ export async function runProductAgentAssignment(
   ) {
     return denied();
   }
-  const readWorkspaces = settings.computer.workspaces.filter(
-    (workspace) => workspace.access === "read",
-  );
   const exactFilesOnly = input.scope.mode === "exact";
   const capabilities: ComputerApproval["capabilities"] = exactFilesOnly
     ? ["workspace.read", "workspace.search"]
@@ -96,26 +93,12 @@ export async function runProductAgentAssignment(
   const commands = exactFilesOnly
     ? ("none" as const)
     : settings.computer.commands;
-  const approval: ComputerApproval = {
+  const approval = productAgentApproval(settings.computer, {
     ownerId: "owner-desktop",
-    computerId: settings.computer.computerId,
-    generation: settings.computer.generation,
-    workspaces: readWorkspaces.map((workspace) => ({
-      workspaceId: workspace.workspaceId,
-      root: workspace.root,
-      access: "read" as const,
-    })),
-    excludedPaths: readWorkspaces.flatMap((workspace) =>
-      workspace.excludedPaths.map((excluded) => ({
-        workspaceId: workspace.workspaceId,
-        path: excluded,
-      })),
-    ),
     capabilities,
-    network: "none",
     commands,
     expiresAt: input.expiresAt,
-  };
+  });
   const admission: TaskAdmission = {
     authorityId: input.authorityId,
     ownerId: approval.ownerId,

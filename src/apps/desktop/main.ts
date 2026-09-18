@@ -911,7 +911,7 @@ function productAgentContext(workspaceId: string): ProductAgentContext | null {
     agent.workspaceId !== workspaceId ||
     agent.computerGeneration !== settings.computer.generation ||
     agent.workspaceEnforcement !== "verified" ||
-    workspace?.access !== "read" ||
+    !workspace ||
     !verified ||
     verified.workspaceId !== workspace.workspaceId ||
     verified.configRevision !== settings.computer.generation ||
@@ -3051,7 +3051,7 @@ async function configureProduct(
         computerVerification.buildId !== buildIdentity.buildId ||
         snapshot.settings.setup.computer.reachable !== "reachable" ||
         snapshot.settings.setup.computer.outcomeUnknown ||
-        workspace?.access !== "read"
+        !workspace
       ) {
         const recorded = await configuration.recordCodexAgentFailure(
           "workspace_not_verified",

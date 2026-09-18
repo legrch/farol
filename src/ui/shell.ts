@@ -697,9 +697,7 @@ function productAgentReadiness(): ProductAgentReadiness {
     };
   }
   const workspace = settings.computer.workspaces.find(
-    (candidate) =>
-      candidate.workspaceId === proof.workspaceId &&
-      candidate.access === "read",
+    (candidate) => candidate.workspaceId === proof.workspaceId,
   );
   const computer = settings.setup.computer;
   if (
@@ -712,7 +710,7 @@ function productAgentReadiness(): ProductAgentReadiness {
   ) {
     return {
       ready: false,
-      reason: "Verify the same read-only workspace for this exact build.",
+      reason: "Verify the same workspace for this exact build.",
     };
   }
   return { ready: true, workspace };
@@ -802,7 +800,7 @@ function renderTaskMenu(): void {
   } else {
     const option = document.createElement("option");
     option.value = "";
-    option.textContent = "No verified read-only workspace";
+    option.textContent = "No verified workspace";
     workspace.replaceChildren(option);
   }
   const needsRejoin =
@@ -912,7 +910,7 @@ function renderTaskMenu(): void {
                       tone: "complete",
                       label: "Ready",
                       detail:
-                        "One verified read-only workspace will be delegated without per-file reapproval.",
+                        "One verified workspace will be delegated read-only, without per-file reapproval.",
                     }
                   : {
                       tone: "unavailable",
@@ -2387,7 +2385,7 @@ function renderSettings(): void {
         );
         const agentCanRun =
           selected?.liveVerification != null &&
-          verifiedWorkspace?.access === "read" &&
+          verifiedWorkspace !== undefined &&
           settings.setup.computer.reachable === "reachable" &&
           !settings.setup.computer.outcomeUnknown;
         const agentNeedsRejoin =
@@ -2408,7 +2406,7 @@ function renderSettings(): void {
           : agentState.outcomeUnknown
             ? "Inspect the existing Codex task before deliberate recovery"
             : !agentCanRun
-              ? "Run the live Codex host check and verify one read-only workspace first"
+              ? "Run the live Codex host check and verify one workspace first"
               : agentNeedsRejoin
                 ? "Rejoin the same child without another model turn"
                 : "Verify Main to Agent to Critic continuity with one bounded gpt-6-astra turn";
@@ -2738,7 +2736,7 @@ function renderSetup(): void {
     );
     const prerequisitesReady =
       host?.liveVerification != null &&
-      workspace?.access === "read" &&
+      workspace !== undefined &&
       settings.setup.computer.reachable === "reachable" &&
       !settings.setup.computer.outcomeUnknown;
     const needsRejoin =
@@ -2753,7 +2751,7 @@ function renderSetup(): void {
           ? "The same native child is still running. Rejoin it without creating another child or model turn."
           : prerequisitesReady
             ? "Ready to verify lineage, unchanged TaskGrant transport, bounded same-child rejoin and durable parent delivery."
-            : "Run the live Codex host check and verify one read-only workspace first.";
+            : "Run the live Codex host check and verify one workspace first.";
     livePrimary.textContent = proof
       ? "Agent verified"
       : needsRejoin
@@ -3158,7 +3156,7 @@ function taskMenuErrorMessage(
     return "Enter a task name between 1 and 80 characters.";
   }
   if (error === "AGENT_NOT_READY") {
-    return "Verify the exact native host, Agent lineage, and read-only workspace first.";
+    return "Verify the exact native host, Agent lineage, and workspace first.";
   }
   if (error === "AGENT_SCOPE_INVALID") {
     return "The requested Agent scope is outside the verified workspace or conflicts with an existing exclusion.";

@@ -10,7 +10,6 @@ import {
   createParticipantAuthority,
   deriveTaskGrant,
   type AuthorityCapability,
-  type ComputerApproval,
   type TaskAdmission,
 } from "../../modules/computer/domain/execution-authority";
 import { ExecutionAuthorityContractHandler } from "../../modules/computer/infra/authority-contract-handler";
@@ -19,6 +18,7 @@ import type {
   ProductConfigurationEvidence,
   ProductSettings,
 } from "../../pkg/product-settings/contract";
+import { productAgentApproval } from "./product-agent-approval";
 
 type NativeAgentEvidence = Extract<
   ProductConfigurationEvidence,
@@ -87,7 +87,7 @@ function verifiedWorkspace(input: CodexNativeAgentCheckInput) {
     (candidate) => candidate.workspaceId === input.workspaceId,
   );
   const verification = settings.setup.computer.verified;
-  return workspace?.access === "read" &&
+  return workspace !== undefined &&
     verification?.workspaceId === input.workspaceId &&
     verification.configRevision === settings.computer.generation &&
     verification.buildId === input.buildId &&
@@ -126,12 +126,7 @@ export async function runCodexNativeAgentCheck(
   if (!selectedWorkspace) {
     return failure("workspace_not_verified", "AGENT_WORKSPACE_NOT_VERIFIED");
   }
-  const workspaces = input.settings.computer.workspaces.filter(
-    (workspace) => workspace.access === "read",
-  );
-  if (workspaces.length === 0) {
-    return failure("workspace_not_verified", "AGENT_WORKSPACE_NOT_VERIFIED");
-  }
+  const workspaces = input.settings.computer.workspaces;
 
   const fingerprint = assignmentFingerprint(input);
   const suffix = fingerprint.slice(0, 32);
@@ -148,21 +143,12 @@ export async function runCodexNativeAgentCheck(
       path: excluded,
     })),
   );
-  const approval: ComputerApproval = {
+  const approval = productAgentApproval(input.settings.computer, {
     ownerId,
-    computerId: input.settings.computer.computerId,
-    generation: input.settings.computer.generation,
-    workspaces: workspaces.map((workspace) => ({
-      workspaceId: workspace.workspaceId,
-      root: workspace.root,
-      access: "read" as const,
-    })),
-    excludedPaths,
     capabilities: READ_CAPABILITIES,
-    network: "none",
     commands: "none",
     expiresAt,
-  };
+  });
   const admission: TaskAdmission = {
     authorityId: `authority-${suffix}`,
     ownerId,

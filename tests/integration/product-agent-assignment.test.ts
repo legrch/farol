@@ -14,6 +14,7 @@ import {
   runProductAgentAssignment,
   type ProductAgentAssignmentDependencies,
 } from "../../src/apps/desktop/product-agent-assignment";
+import { productAgentApproval } from "../../src/apps/desktop/product-agent-approval";
 import type { ProductAgentInput } from "../../src/apps/desktop/product-agent-store";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { ProductTaskSchema } from "../../src/modules/chat/contract/product-task";
@@ -33,7 +34,11 @@ function readiness() {
   };
 }
 
-function settings(generation = 7, commands: "none" | "verification" = "none") {
+function settings(
+  generation = 7,
+  commands: "none" | "verification" = "none",
+  access: "read" | "write" = "read",
+) {
   return ProductSettingsSchema.parse({
     schema: 1,
     revision: 1,
@@ -52,7 +57,7 @@ function settings(generation = 7, commands: "none" | "verification" = "none") {
           workspaceId,
           root: "/workspace/approved",
           label: "Approved",
-          access: "read",
+          access,
           excludedPaths: ["/workspace/approved/private"],
         },
       ],
@@ -186,6 +191,74 @@ describe("product Agent assignment composition", () => {
       capabilities: ["workspace.list", "workspace.read", "workspace.search"],
       network: "none",
       commands: "none",
+    });
+  });
+
+  it("C05-09 delegates a write-approved workspace to the read-only Agent as an enforced read projection", async () => {
+    const fixture = dependencies();
+
+    await expect(
+      runProductAgentAssignment(
+        settings(7, "verification", "write"),
+        task,
+        input(),
+        fixture.value,
+      ),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { assignment: { phase: "completed", childId: "child-a" } },
+    });
+    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
+    // The whole approved subtree stays delegated: the grant is not narrowed
+    // to the files the Agent happens to open first.
+    expect(request.focus.initialPaths).toEqual(["/workspace/approved"]);
+    expect(request.authority).toEqual(
+      expect.objectContaining({
+        role: "agent",
+        mutationOwnership: "none",
+        workspaces: [
+          {
+            workspaceId,
+            mode: "subtree",
+            root: "/workspace/approved",
+            access: "read",
+          },
+        ],
+        excludedPaths: [{ workspaceId, path: "/workspace/approved/private" }],
+        capabilities: [
+          "workspace.list",
+          "workspace.read",
+          "workspace.search",
+          "verification.run",
+        ],
+        network: "none",
+        commands: "verification",
+      }),
+    );
+  });
+
+  it("C05-09 projects every approved workspace as read and never carries write or network", () => {
+    const configured = settings(7, "verification", "write");
+
+    expect(
+      productAgentApproval(configured.computer, {
+        ownerId: "owner-desktop",
+        capabilities: ["workspace.read", "workspace.write"],
+        commands: "verification",
+        expiresAt: 10_000,
+      }),
+    ).toEqual({
+      ownerId: "owner-desktop",
+      computerId: configured.computer.computerId,
+      generation: 7,
+      workspaces: [
+        { workspaceId, root: "/workspace/approved", access: "read" },
+      ],
+      excludedPaths: [{ workspaceId, path: "/workspace/approved/private" }],
+      capabilities: ["workspace.read"],
+      network: "none",
+      commands: "verification",
+      expiresAt: 10_000,
     });
   });
 

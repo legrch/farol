@@ -32,7 +32,7 @@ async function assignmentStore(): Promise<PrivateAssignmentStore> {
   return new PrivateAssignmentStore({ root: path.join(root, "assignments") });
 }
 
-function settings() {
+function settings(selectedAccess: "read" | "write" = "read") {
   return ProductSettingsSchema.parse({
     schema: 1,
     revision: 10,
@@ -50,7 +50,7 @@ function settings() {
           workspaceId: selectedWorkspaceId,
           root: "/workspace/primary",
           label: "Primary",
-          access: "read",
+          access: selectedAccess,
           excludedPaths: ["/workspace/primary/private"],
         },
         {
@@ -278,6 +278,55 @@ describe("desktop native Agent lineage check", () => {
     });
     expect(redeliveryHost.spawn).not.toHaveBeenCalled();
     expect(redeliveryHost.wait).not.toHaveBeenCalled();
+  });
+
+  it("C05-09 checks a write-approved workspace through its read projection only", async () => {
+    const native = completingHost();
+
+    const result = await runCodexNativeAgentCheck({
+      host: native.host,
+      assignments: await assignmentStore(),
+      settings: settings("write"),
+      workspaceId: selectedWorkspaceId,
+      executableSha256,
+      schemaSha256,
+      buildId,
+      now: () => 1_000,
+      pause: async () => undefined,
+      maximumWaitCycles: 3,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      evidence: {
+        workspaceId: selectedWorkspaceId,
+        parentDelivery: "acknowledged",
+      },
+    });
+    const spawn = native.request();
+    if (!spawn) throw new Error("spawn missing");
+    expect(spawn.authority).toEqual(
+      expect.objectContaining({
+        mutationOwnership: "none",
+        workspaces: [
+          {
+            workspaceId: selectedWorkspaceId,
+            mode: "subtree",
+            root: "/workspace/primary",
+            access: "read",
+          },
+          {
+            workspaceId: "00000000-0000-4000-8000-000000000002",
+            mode: "subtree",
+            root: "/workspace/reference",
+            access: "read",
+          },
+        ],
+        capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+        network: "none",
+        commands: "none",
+      }),
+    );
   });
 
   it("retains one running child for bounded same-assignment rejoin", async () => {

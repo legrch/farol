@@ -50,7 +50,7 @@ export const setupSteps: readonly SetupStep[] = [
     copy: "Select the exact Codex executable Farol Next may start. The app first records the bounded version and App Server contract, then verifies readiness with one explicit gpt-6-astra turn and correlated Farol Next tool call.",
     details: [
       "The live host check disables provider fallback and persists only content-free verification evidence.",
-      "Native Agent lineage is verified separately after one read-only workspace is ready.",
+      "Native Agent lineage is verified separately after one workspace is ready.",
     ],
   },
   {

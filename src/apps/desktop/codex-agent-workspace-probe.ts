@@ -18,6 +18,7 @@ import { deriveTaskGrant } from "../../modules/computer/domain/execution-authori
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
+import { productAgentApproval } from "./product-agent-approval";
 
 type AuthorityBoundRequest = Readonly<
   Pick<AgentWorkspaceProbeRequest, "identity" | "authority">
@@ -92,37 +93,19 @@ function approval(
   ) {
     return null;
   }
-  const workspaces = settings.computer.workspaces.filter(
-    (workspace) => workspace.access === "read",
-  );
-  const capabilities: ComputerApproval["capabilities"] = [
-    "workspace.list",
-    "workspace.read",
-    "workspace.search",
-    ...(settings.computer.commands === "verification"
-      ? (["verification.run"] as const)
-      : []),
-  ];
-  return {
+  return productAgentApproval(settings.computer, {
     ownerId: authority.ownerId,
-    computerId: settings.computer.computerId,
-    generation: settings.computer.generation,
-    workspaces: workspaces.map((workspace) => ({
-      workspaceId: workspace.workspaceId,
-      root: workspace.root,
-      access: "read" as const,
-    })),
-    excludedPaths: workspaces.flatMap((workspace) =>
-      workspace.excludedPaths.map((excluded) => ({
-        workspaceId: workspace.workspaceId,
-        path: excluded,
-      })),
-    ),
-    capabilities,
-    network: "none",
+    capabilities: [
+      "workspace.list",
+      "workspace.read",
+      "workspace.search",
+      ...(settings.computer.commands === "verification"
+        ? (["verification.run"] as const)
+        : []),
+    ],
     commands: settings.computer.commands,
     expiresAt: authority.expiresAt,
-  };
+  });
 }
 
 function authorityMatchesCurrentPolicy(

@@ -206,7 +206,7 @@ function invalidateStaleAgentVerification(
     liveVerification.schemaSha256 === verification.schemaSha256 &&
     liveVerification.buildId === verification.buildId &&
     settings.computer.generation === verification.computerGeneration &&
-    workspace?.access === "read" &&
+    workspace !== undefined &&
     computerVerification?.workspaceId === verification.workspaceId &&
     computerVerification.configRevision === verification.computerGeneration &&
     computerVerification.buildId === verification.buildId &&
@@ -1420,7 +1420,7 @@ export class ProductConfigurationService {
       liveVerification.schemaSha256 !== parsed.data.schemaSha256 ||
       liveVerification.buildId !== parsed.data.buildId ||
       parsed.data.computerGeneration !== this.current.computer.generation ||
-      workspace?.access !== "read" ||
+      !workspace ||
       computerVerification?.workspaceId !== parsed.data.workspaceId ||
       computerVerification.configRevision !== parsed.data.computerGeneration ||
       computerVerification.buildId !== parsed.data.buildId ||

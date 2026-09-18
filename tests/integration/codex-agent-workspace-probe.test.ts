@@ -136,6 +136,56 @@ describe("Codex child workspace enforcement probe", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("C05-09 verifies the read projection of a write-approved workspace and never its write authority", async () => {
+    const editable = ProductSettingsSchema.parse({
+      ...settings,
+      computer: {
+        ...settings.computer,
+        workspaces: settings.computer.workspaces.map((workspace) =>
+          workspace.workspaceId === workspaceId
+            ? { ...workspace, access: "write" }
+            : workspace,
+        ),
+      },
+    });
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
+      ok: true,
+      value: {
+        kind: "workspace.entries",
+        entries: ["README.md"],
+        truncated: false,
+      },
+    }));
+    const probe = new CodexAgentWorkspaceProbe(
+      editable,
+      { execute },
+      () => 1_000,
+    );
+
+    await expect(probe.verify(request())).resolves.toEqual({
+      status: "verified",
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    for (const inflated of [
+      {
+        workspaces: authority.workspaces.map((workspace) => ({
+          ...workspace,
+          access: "write" as const,
+        })),
+      },
+      {
+        capabilities: [...authority.capabilities, "workspace.write" as const],
+      },
+    ]) {
+      await expect(probe.verify(request(inflated))).resolves.toEqual({
+        status: "failed",
+        code: "AGENT_WORKSPACE_BINDING_INVALID",
+      });
+    }
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses an inflated delegated workspace before native access", async () => {
     const execute = vi.fn<ReadonlyWorkspace["execute"]>();
     const probe = new CodexAgentWorkspaceProbe(

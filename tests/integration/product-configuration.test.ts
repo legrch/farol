@@ -822,6 +822,90 @@ describe("Farol Next product configuration", () => {
     });
   });
 
+  it("C05-09 keeps native Agent evidence for a write-approved workspace read through its projection", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    const editable = await service.updateWorkspaceAccess(workspaceId, "write");
+    if (editable.snapshot.status !== "ready") {
+      throw new Error("settings missing");
+    }
+    const computerGeneration = editable.snapshot.settings.computer.generation;
+    await service.recordComputerVerification(workspaceId, {
+      profile: "computer.local.write/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    });
+    await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+    await service.recordCodexHostLiveVerification({
+      model: "gpt-6-astra",
+      executableSha256: "a".repeat(64),
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    const recorded = await service.recordCodexAgentVerification({
+      model: "gpt-6-astra",
+      executableSha256: "a".repeat(64),
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+      workspaceId,
+      computerGeneration,
+      transport: "codex-native-agent/spawn-prompt-sha256-v1",
+      authorityRole: "critic",
+      hostRole: "default",
+      delegationDigest: "d".repeat(64),
+      parentThreadSha256: "e".repeat(64),
+      childThreadSha256: "f".repeat(64),
+      boundedRunning: true,
+      modelTurnsSubmitted: 1,
+      fallbackAllowed: false,
+      descendantCount: 0,
+      resultRefProtocol: "codex-app-server",
+      resultRetention: "durable",
+      parentDelivery: "acknowledged",
+      workspaceEnforcement: "verified",
+    });
+    expect(recorded).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          computer: { workspaces: [{ workspaceId, access: "write" }] },
+          nativeHosts: {
+            codex: { agentVerification: { workspaceId, computerGeneration } },
+          },
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(recorded.snapshot);
+  });
+
   it("accepts the native Agent command and content-free evidence contracts", () => {
     expect(
       ProductConfigurationCommandSchema.parse({
