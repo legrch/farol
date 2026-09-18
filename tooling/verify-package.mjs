@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { treeDigest } from "./artifact-digest.mjs";
+import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
@@ -69,7 +69,14 @@ function requireValue(condition, code) {
   if (!condition) throw new Error(code);
 }
 
-requireValue(artifact.schema === 4, "PACKAGE_MANIFEST_SCHEMA_INVALID");
+// Schema 4 manifests carry a version 1 tree digest, whose framing is
+// ambiguous.  Recognize them explicitly instead of reporting a mismatch.
+requireValue(artifact.schema !== 4, "PACKAGE_TREE_DIGEST_LEGACY");
+requireValue(artifact.schema === 5, "PACKAGE_MANIFEST_SCHEMA_INVALID");
+requireValue(
+  artifact.treeDigestVersion === TREE_DIGEST_VERSION,
+  "PACKAGE_TREE_DIGEST_VERSION_INVALID",
+);
 requireValue(
   artifact.product === "Farol Next Preview",
   "PACKAGE_PRODUCT_INVALID",

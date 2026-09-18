@@ -2,8 +2,36 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
+// Version 1 appended each entry's path, kind and mode with NUL separators and
+// then the raw file bytes, so a file whose bytes spelled another entry could
+// serialize exactly like a two-entry tree.  Version 2 makes every record
+// self-delimiting: a length-prefixed UTF-8 path, one kind byte, the mode as a
+// big-endian u32, then the SHA-256 of a file's bytes or a length-prefixed
+// symlink target (a directory record has no payload; its children follow as
+// records with their own full paths).  The stream starts with this version
+// tag, and promotion-apply.py implements the identical encoding.
+export const TREE_DIGEST_VERSION = "farol.next.tree-digest/v2";
+
+const KIND_CODES = Object.freeze({
+  file: 0x66,
+  directory: 0x64,
+  symlink: 0x6c,
+});
+
+function u32(value) {
+  const bytes = Buffer.alloc(4);
+  bytes.writeUInt32BE(value);
+  return bytes;
+}
+
+function lengthPrefixed(text) {
+  const bytes = Buffer.from(text, "utf8");
+  return Buffer.concat([u32(bytes.length), bytes]);
+}
+
 export async function treeDigest(directory) {
   const hash = createHash("sha256");
+  hash.update(Buffer.from(`${TREE_DIGEST_VERSION}\0`, "utf8"));
   const rootStat = await fs.lstat(directory);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     throw new Error("ARTIFACT_ROOT_TYPE_INVALID");
@@ -62,16 +90,20 @@ export async function treeDigest(directory) {
             ? "file"
             : null;
       if (kind === null) throw new Error("ARTIFACT_ENTRY_TYPE_UNSUPPORTED");
-      hash.update(relative);
-      hash.update("\0");
-      hash.update(kind);
-      hash.update("\0");
-      hash.update(String(stat.mode & 0o777));
-      hash.update("\0");
-      if (entry.isSymbolicLink()) hash.update(await containedSymlink(target));
-      else if (entry.isDirectory()) await walk(target);
-      else hash.update(await fs.readFile(target));
-      hash.update("\0");
+      hash.update(lengthPrefixed(relative));
+      hash.update(Buffer.of(KIND_CODES[kind]));
+      hash.update(u32(stat.mode & 0o7777));
+      if (entry.isSymbolicLink()) {
+        hash.update(lengthPrefixed(await containedSymlink(target)));
+      } else if (entry.isDirectory()) {
+        await walk(target);
+      } else {
+        hash.update(
+          createHash("sha256")
+            .update(await fs.readFile(target))
+            .digest(),
+        );
+      }
     }
   }
 

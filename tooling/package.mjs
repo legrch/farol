@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { treeDigest } from "./artifact-digest.mjs";
+import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
 import { GEIST_RESOURCES, GEIST_VERSION } from "./font-contract.mjs";
@@ -192,7 +192,8 @@ if ((await treeDigest(runtimeApp)) !== electronSourceSha256) {
 execFileSync("/usr/bin/plutil", ["-lint", mainPlist], { stdio: "inherit" });
 
 const artifact = {
-  schema: 4,
+  schema: 5,
+  treeDigestVersion: TREE_DIGEST_VERSION,
   product: "Farol Next Preview",
   version: previewVersion,
   bundleId: "local.farol.next.preview",

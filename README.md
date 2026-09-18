@@ -117,7 +117,10 @@ bundled runtime without modifying its signed vendor bundle; it writes evidence t
 `artifacts/e2e-dev/`. The separately sealed package lane remains the artifact gate.
 Packaging verifies the app identity, embedded source manifest, runtime closure,
 the immutable nested Electron runtime and helper identities, contained symlinks,
-type-bound tree digest, plist, fixed launcher and explicit unsigned status. E2E
+type-bound tree digest, plist, fixed launcher and explicit unsigned status. The
+tree digest is `farol.next.tree-digest/v2` (self-delimiting records, shared with
+the promotion helper); a schema 4 manifest carries the ambiguous version 1 digest
+and is refused as `PACKAGE_TREE_DIGEST_LEGACY` until the candidate is repackaged. E2E
 launches those packaged bytes under a throwaway home and explicit user-data root,
 checks the real UI and task views, rejects malformed and tampered artifacts, proves
 default-deny task egress, makes a second launch wait across an intentionally delayed

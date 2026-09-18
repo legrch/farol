@@ -13,6 +13,7 @@ import json
 import os
 import posixpath
 import stat
+import struct
 import sys
 
 
@@ -24,6 +25,13 @@ MAX_RECEIPT_BYTES = 64 * 1024
 MAX_ENTRIES = 100_000
 MAX_BYTES = 1024 * 1024 * 1024
 MAX_DEPTH = 128
+
+# Must match TREE_DIGEST_VERSION and the record encoding in
+# tooling/artifact-digest.mjs: a version tag, then per entry a length-prefixed
+# UTF-8 path, one kind byte, the mode as a big-endian u32 and the SHA-256 of a
+# file's bytes or a length-prefixed symlink target.
+TREE_DIGEST_VERSION = "farol.next.tree-digest/v2"
+KIND_CODES = {"file": b"f", "directory": b"d", "symlink": b"l"}
 
 EXIT_INVALID = 70
 EXIT_PATH = 71
@@ -298,8 +306,9 @@ def copy_tree(source_fd, destination_fd, state, depth=0):
             refuse(EXIT_COPY)
 
 
-def hash_value(digest, value):
-    digest.update(value.encode("utf-8"))
+def length_prefixed(value):
+    encoded = value.encode("utf-8")
+    return struct.pack(">I", len(encoded)) + encoded
 
 
 def assert_contained_link(relative, target):
@@ -310,12 +319,13 @@ def assert_contained_link(relative, target):
         refuse(EXIT_DIGEST)
 
 
-def digest_file(descriptor, listed, digest, state):
+def digest_file(descriptor, listed, state):
     if listed.st_nlink != 1:
         refuse(EXIT_DIGEST)
     before = os.fstat(descriptor)
     if identity(before) != identity(listed) or before.st_nlink != 1:
         refuse(EXIT_DIGEST)
+    content = hashlib.sha256()
     read_bytes = 0
     while True:
         chunk = os.read(descriptor, 1024 * 1024)
@@ -325,14 +335,16 @@ def digest_file(descriptor, listed, digest, state):
         state["bytes"] += len(chunk)
         if state["bytes"] > MAX_BYTES:
             refuse(EXIT_DIGEST)
-        digest.update(chunk)
+        content.update(chunk)
     after = os.fstat(descriptor)
     if identity(after) != identity(before) or after.st_size != read_bytes:
         refuse(EXIT_DIGEST)
+    return content.digest()
 
 
 def digest_tree(directory_fd):
     digest = hashlib.sha256()
+    digest.update((TREE_DIGEST_VERSION + "\0").encode("utf-8"))
     state = {"entries": 0, "bytes": 0}
 
     def walk(current_fd, prefix, depth):
@@ -353,19 +365,16 @@ def digest_tree(directory_fd):
                 kind = "file"
             else:
                 refuse(EXIT_DIGEST)
-            hash_value(digest, relative)
-            digest.update(b"\0")
-            hash_value(digest, kind)
-            digest.update(b"\0")
-            hash_value(digest, str(stat.S_IMODE(listed.st_mode)))
-            digest.update(b"\0")
+            digest.update(length_prefixed(relative))
+            digest.update(KIND_CODES[kind])
+            digest.update(struct.pack(">I", stat.S_IMODE(listed.st_mode)))
             if kind == "symlink":
                 try:
                     target = os.readlink(name, dir_fd=current_fd)
                 except OSError:
                     refuse(EXIT_DIGEST)
                 assert_contained_link(relative, target)
-                hash_value(digest, target)
+                digest.update(length_prefixed(target))
             elif kind == "directory":
                 child = open_directory(current_fd, name)
                 try:
@@ -378,10 +387,9 @@ def digest_tree(directory_fd):
                 except OSError:
                     refuse(EXIT_DIGEST)
                 try:
-                    digest_file(descriptor, listed, digest, state)
+                    digest.update(digest_file(descriptor, listed, state))
                 finally:
                     os.close(descriptor)
-            digest.update(b"\0")
 
     walk(directory_fd, "", 0)
     return digest.hexdigest()
