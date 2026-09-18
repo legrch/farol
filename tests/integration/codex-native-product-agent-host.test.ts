@@ -878,6 +878,8 @@ describe("native Codex product Agent host", () => {
           stderr: "" as const,
           outputBytes: 41,
           network: "none" as const,
+          coverage: "head-commit" as const,
+          layout: "primary" as const,
         },
       })),
     };

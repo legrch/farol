@@ -320,6 +320,8 @@ describe("Codex Agent Computer authority", () => {
           stderr: "",
           outputBytes: 41,
           network: "none",
+          coverage: "head-commit",
+          layout: "primary",
         },
       }));
       const computer = new CodexAgentWorkspaceProbe(
@@ -360,6 +362,8 @@ describe("Codex Agent Computer authority", () => {
           stderr: "",
           outputBytes: 41,
           network: "none",
+          coverage: "head-commit",
+          layout: "primary",
         },
       });
       expect(execute).toHaveBeenCalledWith({

@@ -82,7 +82,14 @@ type CommandFailureCode =
   | "WORKSPACE_COMMAND_CANCELLED"
   | "WORKSPACE_COMMAND_TIMEOUT"
   | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
-  | "WORKSPACE_COMMAND_FAILED";
+  | "WORKSPACE_COMMAND_FAILED"
+  | "WORKSPACE_NOT_GIT_REPOSITORY"
+  | "WORKSPACE_GIT_HEAD_UNBORN";
+
+// The HEAD profile exits 1 without output when HEAD does not resolve; the
+// caller decides from the repository metadata whether that is an unborn
+// branch or a failure.
+const HEAD_UNRESOLVED = Symbol("head-unresolved");
 
 function failure(code: CommandFailureCode): ReadonlyWorkspaceResult {
   return { ok: false, error: { code, retry: "never" } };
@@ -302,9 +309,11 @@ function resolveMetadataPath(base: string, value: string): string | null {
   return plainPath(candidate) ? candidate : null;
 }
 
+// null means metadata this verifier will not follow; "not-repository" means
+// the approved root simply has no .git entry.
 async function resolveWorkspaceGitMetadata(
   root: string,
-): Promise<WorkspaceGitMetadata | null> {
+): Promise<WorkspaceGitMetadata | "not-repository" | null> {
   if (!plainPath(root)) return null;
   const uid = process.getuid?.();
   if (uid === undefined || !(await isOwnedDirectory(root, BigInt(uid)))) {
@@ -318,8 +327,10 @@ async function resolveWorkspaceGitMetadata(
       return { gitDirectory: gitEntry, commonDirectory: gitEntry };
     }
     if (listed.isSymbolicLink() || !listed.isFile()) return null;
-  } catch {
-    return null;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? "not-repository"
+      : null;
   }
 
   const gitEntryText = await readOwnedMetadataFile(gitEntry, BigInt(uid));
@@ -449,7 +460,28 @@ function gitArguments(
         "--untracked-files=no",
         "--ignore-submodules=all",
       ]
-    : ["rev-parse", "--verify", "HEAD"];
+    : ["rev-parse", "--verify", "--quiet", "HEAD"];
+}
+
+// Status excludes untracked files and submodules by construction; HEAD reads
+// one commit.  The result says so rather than letting a short status read as
+// a clean workspace.
+function commandCoverage(
+  command: VerificationOperation["command"],
+): "tracked-files-only" | "head-commit" {
+  return command === "git.status" ? "tracked-files-only" : "head-commit";
+}
+
+async function headIsUnbornBranch(
+  metadata: WorkspaceGitMetadata,
+): Promise<boolean> {
+  const uid = process.getuid?.();
+  if (uid === undefined) return false;
+  const head = await readOwnedMetadataFile(
+    path.join(metadata.gitDirectory, "HEAD"),
+    BigInt(uid),
+  );
+  return head !== null && /^ref: refs\/heads\/[^\0\r\n]+\n?$/u.test(head);
 }
 
 function validGitOutput(
@@ -470,7 +502,7 @@ function runGitVerification(
   command: VerificationOperation["command"],
   deniedPaths: readonly string[],
   signal?: AbortSignal,
-): Promise<ReadonlyWorkspaceResult> {
+): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
   if (signal?.aborted) {
     return Promise.resolve(failure("WORKSPACE_COMMAND_CANCELLED"));
   }
@@ -569,7 +601,9 @@ function runGitVerification(
       timedOut = true;
       killProcessGroup(child);
     }, COMMAND_TIMEOUT_MS);
-    const finish = (result: ReadonlyWorkspaceResult): void => {
+    const finish = (
+      result: ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED,
+    ): void => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -628,6 +662,16 @@ function runGitVerification(
         finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
         return;
       }
+      if (
+        command === "git.head" &&
+        code === 1 &&
+        signal === null &&
+        errorText === "" &&
+        stdoutBytes === 0
+      ) {
+        finish(HEAD_UNRESOLVED);
+        return;
+      }
       if (code !== 0 || signal !== null || errorText !== "") {
         finish(failure("WORKSPACE_COMMAND_FAILED"));
         return;
@@ -651,6 +695,11 @@ function runGitVerification(
             stderr: "",
             outputBytes: stdoutBytes,
             network: "none",
+            coverage: commandCoverage(command),
+            layout:
+              metadata.gitDirectory === metadata.commonDirectory
+                ? "primary"
+                : "linked-worktree",
           },
         });
       } catch {
@@ -680,6 +729,9 @@ export async function executeNativeVerificationCommand(
   if (options.signal?.aborted) {
     return failure("WORKSPACE_COMMAND_CANCELLED");
   }
+  if (initialMetadata === "not-repository") {
+    return failure("WORKSPACE_NOT_GIT_REPOSITORY");
+  }
   if (initialMetadata === null) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
@@ -699,12 +751,13 @@ export async function executeNativeVerificationCommand(
   }
   if (
     metadata === null ||
+    metadata === "not-repository" ||
     metadata.gitDirectory !== initialMetadata.gitDirectory ||
     metadata.commonDirectory !== initialMetadata.commonDirectory
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
-  return runGitVerification(
+  const result = await runGitVerification(
     git,
     request.workspace.root,
     metadata,
@@ -712,4 +765,8 @@ export async function executeNativeVerificationCommand(
     request.workspace.deniedPaths,
     options.signal,
   );
+  if (result !== HEAD_UNRESOLVED) return result;
+  return (await headIsUnbornBranch(metadata))
+    ? failure("WORKSPACE_GIT_HEAD_UNBORN")
+    : failure("WORKSPACE_COMMAND_FAILED");
 }

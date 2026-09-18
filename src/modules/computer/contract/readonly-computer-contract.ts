@@ -115,6 +115,8 @@ const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
       .nonnegative()
       .max(64 * 1_024),
     network: z.literal("none"),
+    coverage: z.enum(["tracked-files-only", "head-commit"]),
+    layout: z.enum(["primary", "linked-worktree"]),
   }),
 ]);
 
@@ -160,6 +162,8 @@ const ComputerErrorCodeSchema = z.enum([
   "WORKSPACE_COMMAND_CANCELLED",
   "WORKSPACE_COMMAND_TIMEOUT",
   "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+  "WORKSPACE_NOT_GIT_REPOSITORY",
+  "WORKSPACE_GIT_HEAD_UNBORN",
   "WORKSPACE_COMMAND_FAILED",
   "COMPUTER_PARTICIPANT_NOT_FOUND",
   "COMPUTER_APPROVAL_NOT_FOUND",

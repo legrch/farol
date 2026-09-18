@@ -678,6 +678,8 @@ describe("real read-only Computer action", () => {
             stderr: "",
             outputBytes: 8,
             network: "none",
+            coverage: "tracked-files-only",
+            layout: "primary",
           },
         };
       },

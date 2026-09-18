@@ -61,6 +61,8 @@ export type WorkspaceCommandOutput = Readonly<{
   stderr: "";
   outputBytes: number;
   network: "none";
+  coverage: "tracked-files-only" | "head-commit";
+  layout: "primary" | "linked-worktree";
 }>;
 
 export type ReadonlyWorkspaceOutput =
@@ -83,6 +85,8 @@ export type ReadonlyWorkspaceErrorCode =
   | "WORKSPACE_COMMAND_CANCELLED"
   | "WORKSPACE_COMMAND_TIMEOUT"
   | "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"
+  | "WORKSPACE_NOT_GIT_REPOSITORY"
+  | "WORKSPACE_GIT_HEAD_UNBORN"
   | "WORKSPACE_COMMAND_FAILED"
   | "WORKSPACE_HELPER_FAILED";
 

@@ -565,7 +565,7 @@ export function createReadonlyComputerMcpServer(
     {
       title: "Inspect approved workspace Git status",
       description:
-        "Run the fixed no-network Git status verifier at one approved workspace root. No executable, arguments, path, environment, or network access can be supplied by the caller.",
+        "Run the fixed no-network Git status verifier at one approved workspace root. It covers tracked files only: untracked files and submodules are not examined, so a short status is not proof of a clean workspace. The result names this coverage and whether the root is a linked worktree. No executable, arguments, path, environment, or network access can be supplied by the caller.",
       inputSchema: VerificationInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
@@ -588,7 +588,7 @@ export function createReadonlyComputerMcpServer(
     {
       title: "Read approved workspace Git HEAD",
       description:
-        "Read the exact Git HEAD commit at one approved workspace root through a fixed no-network verifier. No executable, arguments, path, environment, or network access can be supplied by the caller.",
+        "Read the exact Git HEAD commit at one approved workspace root through a fixed no-network verifier. A repository without commits is reported as WORKSPACE_GIT_HEAD_UNBORN and a root without Git as WORKSPACE_NOT_GIT_REPOSITORY. No executable, arguments, path, environment, or network access can be supplied by the caller.",
       inputSchema: VerificationInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },

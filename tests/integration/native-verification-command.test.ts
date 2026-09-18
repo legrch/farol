@@ -603,9 +603,11 @@ int main(void) {
   it("fails closed when repository metadata disappears before execution", async () => {
     await fs.rm(path.join(root, ".git"), { recursive: true, force: true });
 
+    // C05-07: a root without any .git entry is reported as not a repository
+    // rather than as an unsupported command.
     await expect(workspace().execute(request())).resolves.toMatchObject({
       ok: false,
-      error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+      error: { code: "WORKSPACE_NOT_GIT_REPOSITORY", retry: "never" },
     });
   });
 
@@ -668,6 +670,109 @@ int main(void) {
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+    });
+  });
+
+  describe("C05-07 truthful fixed Git coverage", () => {
+    it("discloses that status covers tracked files only", async () => {
+      await fs.writeFile(path.join(root, "untracked-canary.txt"), "new\n", {
+        mode: 0o600,
+      });
+
+      const result = await workspace().execute(request());
+
+      expect(result).toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          command: "git.status",
+          coverage: "tracked-files-only",
+          layout: "primary",
+        },
+      });
+      if (!result.ok || result.value.kind !== "workspace.command") return;
+      expect(result.value.stdout).not.toContain("untracked-canary.txt");
+    });
+
+    it("names the HEAD profile's coverage and layout", async () => {
+      await expect(workspace().execute(headRequest())).resolves.toMatchObject({
+        ok: true,
+        value: { coverage: "head-commit", layout: "primary" },
+      });
+    });
+
+    it("distinguishes an unborn HEAD from a failed command", async () => {
+      const unborn = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-unborn-")),
+      );
+      const mainRoot = root;
+      try {
+        await fs.chmod(unborn, 0o700);
+        await executeFile(git, ["init", "--quiet", unborn]);
+        root = unborn;
+
+        await expect(workspace().execute(headRequest())).resolves.toEqual({
+          ok: false,
+          error: { code: "WORKSPACE_GIT_HEAD_UNBORN", retry: "never" },
+        });
+        const status = await workspace().execute(request());
+        expect(status).toMatchObject({
+          ok: true,
+          value: { coverage: "tracked-files-only" },
+        });
+        if (!status.ok || status.value.kind !== "workspace.command") return;
+        expect(status.value.stdout).toContain("No commits yet");
+      } finally {
+        root = mainRoot;
+        await fs.rm(unborn, { recursive: true, force: true });
+      }
+    });
+
+    it("distinguishes a directory that is not a Git repository", async () => {
+      await fs.rm(path.join(root, ".git"), { recursive: true, force: true });
+
+      for (const operation of [request(), headRequest()]) {
+        await expect(workspace().execute(operation)).resolves.toEqual({
+          ok: false,
+          error: { code: "WORKSPACE_NOT_GIT_REPOSITORY", retry: "never" },
+        });
+      }
+    });
+
+    it("reports a linked worktree layout", async () => {
+      const mainRoot = root;
+      const worktreeParent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-next-command-layout-"),
+      );
+      const linkedRoot = path.join(worktreeParent, "checkout");
+      try {
+        await executeFile(git, [
+          "-C",
+          mainRoot,
+          "worktree",
+          "add",
+          "--quiet",
+          "--detach",
+          linkedRoot,
+        ]);
+        root = await fs.realpath(linkedRoot);
+
+        await expect(workspace().execute(request())).resolves.toMatchObject({
+          ok: true,
+          value: { layout: "linked-worktree", coverage: "tracked-files-only" },
+        });
+      } finally {
+        root = mainRoot;
+        await executeFile(git, [
+          "-C",
+          mainRoot,
+          "worktree",
+          "remove",
+          "--force",
+          linkedRoot,
+        ]).catch(() => undefined);
+        await fs.rm(worktreeParent, { recursive: true, force: true });
+      }
     });
   });
 });

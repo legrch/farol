@@ -1159,6 +1159,8 @@ function mutationErrorCode(
     case "WORKSPACE_COMMAND_TIMEOUT":
     case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
     case "WORKSPACE_COMMAND_FAILED":
+    case "WORKSPACE_NOT_GIT_REPOSITORY":
+    case "WORKSPACE_GIT_HEAD_UNBORN":
       return "WORKSPACE_MUTATION_OUTCOME_UNKNOWN";
     default:
       return code;

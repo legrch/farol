@@ -202,7 +202,12 @@ describe("native verification command process failures", () => {
       detached: boolean;
       env: Record<string, string>;
     };
-    expect(arguments_.slice(-3)).toEqual(["rev-parse", "--verify", "HEAD"]);
+    expect(arguments_.slice(-4)).toEqual([
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "HEAD",
+    ]);
     expect(options).toMatchObject({
       cwd: root,
       detached: true,

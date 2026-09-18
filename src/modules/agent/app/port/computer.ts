@@ -46,6 +46,8 @@ export type AgentComputerOutput =
       stderr: "";
       outputBytes: number;
       network: "none";
+      coverage: "tracked-files-only" | "head-commit";
+      layout: "primary" | "linked-worktree";
     }>;
 
 export type AgentComputerRequest = Readonly<{

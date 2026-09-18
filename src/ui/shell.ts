@@ -1459,13 +1459,19 @@ function renderComputerConfiguration(): void {
           evidence.append(heading, matches);
         } else if (workspaceEvidence.kind === "computer.workspace-command") {
           const status = workspaceEvidence.command === "git.status";
-          heading.textContent = `${status ? "Git status" : "Git HEAD"} · exit ${workspaceEvidence.exitCode} · ${workspaceEvidence.outputBytes} bytes · network ${workspaceEvidence.network}`;
+          heading.textContent = `${status ? "Git status" : "Git HEAD"}${workspaceEvidence.layout === "linked-worktree" ? " · linked worktree" : ""} · exit ${workspaceEvidence.exitCode} · ${workspaceEvidence.outputBytes} bytes · network ${workspaceEvidence.network}`;
           const output = document.createElement("pre");
           output.textContent =
             status && workspaceEvidence.stdout === ""
-              ? "Clean working tree"
+              ? "No changes to tracked files"
               : workspaceEvidence.stdout.trimEnd();
           evidence.append(heading, output);
+          if (workspaceEvidence.coverage === "tracked-files-only") {
+            const coverage = document.createElement("p");
+            coverage.textContent =
+              "Tracked files only: untracked files and submodules are not checked.";
+            evidence.append(coverage);
+          }
         } else if (
           workspaceEvidence.kind === "computer.workspace-edit-preview"
         ) {
@@ -1720,7 +1726,11 @@ async function configureProduct(
                   ? "No current connector challenge is available. Start the connector before checking its ChatGPT attachment."
                   : parsed.error === "CONNECTOR_STOP_REQUIRED"
                     ? "Stop the connector before changing Computer authority or connector identity."
-                    : `Not applied · ${parsed.error}`;
+                    : parsed.error === "WORKSPACE_NOT_GIT_REPOSITORY"
+                      ? "This workspace is not a Git repository."
+                      : parsed.error === "WORKSPACE_GIT_HEAD_UNBORN"
+                        ? "This repository has no commits yet, so there is no HEAD commit to read."
+                        : `Not applied · ${parsed.error}`;
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

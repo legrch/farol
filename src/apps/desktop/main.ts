@@ -2748,6 +2748,10 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
       return configurationFailure("WORKSPACE_COMMAND_TIMEOUT");
     case "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE":
       return configurationFailure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE");
+    case "WORKSPACE_NOT_GIT_REPOSITORY":
+      return configurationFailure("WORKSPACE_NOT_GIT_REPOSITORY");
+    case "WORKSPACE_GIT_HEAD_UNBORN":
+      return configurationFailure("WORKSPACE_GIT_HEAD_UNBORN");
     default:
       return configurationFailure("WORKSPACE_COMMAND_FAILED");
   }
@@ -4284,6 +4288,8 @@ async function configureProduct(
           stderr: result.value.output.stderr,
           outputBytes: result.value.output.outputBytes,
           network: result.value.output.network,
+          coverage: result.value.output.coverage,
+          layout: result.value.output.layout,
         },
       });
     }

@@ -1389,6 +1389,8 @@ describe("Farol Next product configuration", () => {
         stderr: "",
         outputBytes: 8,
         network: "none",
+        coverage: "tracked-files-only",
+        layout: "primary",
       }).success,
     ).toBe(true);
     expect(
@@ -1401,6 +1403,8 @@ describe("Farol Next product configuration", () => {
         stderr: "",
         outputBytes: 41,
         network: "none",
+        coverage: "head-commit",
+        layout: "linked-worktree",
       }).success,
     ).toBe(true);
   });

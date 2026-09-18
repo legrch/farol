@@ -723,6 +723,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
       .nonnegative()
       .max(64 * 1_024),
     network: z.literal("none"),
+    coverage: z.enum(["tracked-files-only", "head-commit"]),
+    layout: z.enum(["primary", "linked-worktree"]),
   }),
   z.strictObject({
     kind: z.literal("computer.workspace-edit-preview"),
@@ -819,6 +821,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "WORKSPACE_COMMAND_CANCELLED",
       "WORKSPACE_COMMAND_TIMEOUT",
       "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+      "WORKSPACE_NOT_GIT_REPOSITORY",
+      "WORKSPACE_GIT_HEAD_UNBORN",
       "WORKSPACE_COMMAND_FAILED",
       "WORKSPACE_WRITE_APPROVAL_REQUIRED",
       "WORKSPACE_MUTATION_IN_PROGRESS",
