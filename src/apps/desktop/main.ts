@@ -139,7 +139,7 @@ import {
 } from "./codex-caller-relay";
 import { configurationAdmission } from "./configuration-admission";
 import {
-  drainOwnedChildren,
+  createQuitDrain,
   type OwnedCloser,
   type QuitDrainReceipt,
 } from "./quit-drain";
@@ -6126,69 +6126,65 @@ async function main(): Promise<void> {
   // Quit waits, up to one deadline, for every owned child to confirm it
   // stopped, then quits for real; what did not confirm is recorded instead
   // of being reported as drained.
-  let quitDrain: "idle" | "draining" | "done" = "idle";
-  app.on("before-quit", (event) => {
-    if (quitDrain === "done") return;
-    event.preventDefault();
-    if (quitDrain === "draining") return;
-    quitDrain = "draining";
-    const closers: OwnedCloser[] = [];
-    const attachmentTask = pendingChatGptAttachmentTask;
-    pendingChatGptAttachmentTask = null;
-    if (attachmentTask) {
-      void discardChatGptAttachments(
-        chatGptAttachmentStagingRoot(),
-        attachmentTask.operationId,
-      );
-    }
-    const agentCheck = activeCodexAgentCheck;
-    activeCodexAgentCheck = null;
-    agentCheck?.host.dispose();
-    if (agentCheck) {
-      closers.push({
-        name: "agent-check",
-        close: () => agentCheck.client.close(),
-      });
-    }
-    const productAgent = activeProductAgentSession;
-    activeProductAgentSession = null;
-    if (persistedProductAgentExpiry) {
-      clearTimeout(persistedProductAgentExpiry.timer);
-      persistedProductAgentExpiry = null;
-    }
-    if (productAgent?.expiryTimer) clearTimeout(productAgent.expiryTimer);
-    productAgent?.host.dispose();
-    if (productAgent) {
-      closers.push({
-        name: "product-agent",
-        close: () => productAgent.client.close(),
-      });
-    }
-    for (const client of hostCheckClients) {
-      closers.push({ name: "host-check", close: () => client.close() });
-    }
-    const connector = secureMcpConnectorRuntime;
-    if (connector) {
-      closers.push({ name: "connector", close: () => connector.stop() });
-    }
-    const routeB = routeBRuntime;
-    routeBRuntime = null;
-    if (routeB) closers.push({ name: "route-b", close: () => routeB.close() });
-    const relay = callerRelayRuntime;
-    callerRelayRuntime = null;
-    if (relay)
-      closers.push({ name: "caller-relay", close: () => relay.close() });
-    disposeChatGptRoutes();
-    disposeTaskViews("runtime");
-    stopRuntime();
-    void drainOwnedChildren(closers, QUIT_DRAIN_DEADLINE_MS)
-      .then((receipt) => recordQuitReceipt(receipt))
-      .catch(() => undefined)
-      .finally(() => {
-        quitDrain = "done";
-        app.quit();
-      });
+  const quitDrain = createQuitDrain({
+    deadlineMs: QUIT_DRAIN_DEADLINE_MS,
+    record: (receipt) => recordQuitReceipt(receipt),
+    quit: () => app.quit(),
+    collect: () => {
+      const closers: OwnedCloser[] = [];
+      const attachmentTask = pendingChatGptAttachmentTask;
+      pendingChatGptAttachmentTask = null;
+      if (attachmentTask) {
+        void discardChatGptAttachments(
+          chatGptAttachmentStagingRoot(),
+          attachmentTask.operationId,
+        );
+      }
+      const agentCheck = activeCodexAgentCheck;
+      activeCodexAgentCheck = null;
+      agentCheck?.host.dispose();
+      if (agentCheck) {
+        closers.push({
+          name: "agent-check",
+          close: () => agentCheck.client.close(),
+        });
+      }
+      const productAgent = activeProductAgentSession;
+      activeProductAgentSession = null;
+      if (persistedProductAgentExpiry) {
+        clearTimeout(persistedProductAgentExpiry.timer);
+        persistedProductAgentExpiry = null;
+      }
+      if (productAgent?.expiryTimer) clearTimeout(productAgent.expiryTimer);
+      productAgent?.host.dispose();
+      if (productAgent) {
+        closers.push({
+          name: "product-agent",
+          close: () => productAgent.client.close(),
+        });
+      }
+      for (const client of hostCheckClients) {
+        closers.push({ name: "host-check", close: () => client.close() });
+      }
+      const connector = secureMcpConnectorRuntime;
+      if (connector) {
+        closers.push({ name: "connector", close: () => connector.stop() });
+      }
+      const routeB = routeBRuntime;
+      routeBRuntime = null;
+      if (routeB)
+        closers.push({ name: "route-b", close: () => routeB.close() });
+      const relay = callerRelayRuntime;
+      callerRelayRuntime = null;
+      if (relay)
+        closers.push({ name: "caller-relay", close: () => relay.close() });
+      disposeChatGptRoutes();
+      disposeTaskViews("runtime");
+      stopRuntime();
+      return closers;
+    },
   });
+  app.on("before-quit", (event) => quitDrain.onBeforeQuit(event));
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });
