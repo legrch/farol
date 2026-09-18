@@ -1,6 +1,7 @@
 import type {
   AssignmentIdentity,
   ChildCorrelation,
+  SpawnLineage,
 } from "../../domain/assignment";
 import type { DelegatedAgentAuthority } from "./execution-authority";
 
@@ -73,8 +74,17 @@ export type AgentCancelReceipt =
       correlation: ChildCorrelation;
     }>;
 
+// Awaited as a spawn learns its lineage. The parent thread must be recorded
+// before any model turn is submitted; a failure there stops the spawn.
+export type AgentSpawnProgress = Readonly<{
+  lineage(lineage: SpawnLineage): Promise<void>;
+}>;
+
 export interface AgentHost {
-  spawn(request: AgentSpawnRequest): Promise<AgentSpawnReceipt>;
+  spawn(
+    request: AgentSpawnRequest,
+    progress?: AgentSpawnProgress,
+  ): Promise<AgentSpawnReceipt>;
   wait(
     correlation: ChildCorrelation,
     rejoin?: AgentRejoin,

@@ -22,6 +22,7 @@ import {
   failPreparedAssignment,
   markChildOutcomeUnknown,
   markSpawnOutcomeUnknown,
+  recordSpawnLineage,
   matchesChildCorrelation,
   startAssignment,
   type Assignment,
@@ -282,17 +283,31 @@ export class RunAgentAssignment {
       return success(await this.recoverInterrupted(admission.record));
     }
 
+    // The spawn's lineage is recorded durably as the host learns it, so a
+    // crash mid-spawn leaves the parent thread (and later the turn and child)
+    // to observe instead of a bare unknown.
+    let latest = prepared;
     let spawned: Awaited<ReturnType<AgentHost["spawn"]>>;
     try {
-      spawned = await this.host.spawn({
-        identity,
-        authority,
-        focus: { initialPaths: [...command.focus.initialPaths] },
-        intent: command.intent,
-      });
+      spawned = await this.host.spawn(
+        {
+          identity,
+          authority,
+          focus: { initialPaths: [...command.focus.initialPaths] },
+          intent: command.intent,
+        },
+        {
+          lineage: async (lineage) => {
+            const recorded = recordSpawnLineage(latest, lineage);
+            if (!recorded.ok) throw new Error(recorded.error.code);
+            await this.assignments.save(this.record(recorded.value, null));
+            latest = recorded.value;
+          },
+        },
+      );
     } catch {
       return this.terminal(
-        markSpawnOutcomeUnknown(prepared, {
+        markSpawnOutcomeUnknown(latest, {
           code: "AGENT_SPAWN_TRANSPORT_UNKNOWN",
           source: "native-host-transport",
           retry: "never",
@@ -302,7 +317,7 @@ export class RunAgentAssignment {
 
     if (spawned.status === "outcome_unknown") {
       return this.terminal(
-        markSpawnOutcomeUnknown(prepared, {
+        markSpawnOutcomeUnknown(latest, {
           code: spawned.code,
           source: "native-host-transport",
           retry: "never",
@@ -310,17 +325,24 @@ export class RunAgentAssignment {
       );
     }
     if (spawned.status === "failed") {
+      // A refusal after the child was seen cannot mean nothing is running.
       return this.terminal(
-        failPreparedAssignment(prepared, {
-          code: spawned.code,
-          source: "native-host",
-          retry: "never",
-        }),
+        latest.childId === null
+          ? failPreparedAssignment(latest, {
+              code: spawned.code,
+              source: "native-host",
+              retry: "never",
+            })
+          : markSpawnOutcomeUnknown(latest, {
+              code: spawned.code,
+              source: "native-host",
+              retry: "never",
+            }),
       );
     }
 
     const started = startAssignment(
-      prepared,
+      latest,
       spawned.correlation,
       spawned.authorityProof ?? null,
     );
@@ -471,7 +493,11 @@ export class RunAgentAssignment {
       !record.assignment.childTurnId ||
       !record.assignment.delegationDigest
         ? markSpawnOutcomeUnknown(record.assignment, {
-            code: "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
+            code:
+              record.assignment.phase === "prepared" &&
+              record.assignment.parentThreadId !== null
+                ? "AGENT_SPAWN_INTERRUPTED_WITH_LINEAGE"
+                : "AGENT_INTERRUPTED_WITHOUT_IN_FLIGHT_OWNER",
             source: "recovery",
             retry: "never",
           })

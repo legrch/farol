@@ -128,6 +128,44 @@ export function matchesChildCorrelation(
   );
 }
 
+// How far a spawn got before it could confirm its child: the parent thread,
+// then the parent turn, then the child. Recorded as it happens, so a crash
+// mid-spawn leaves an observable lineage instead of only an unknown.
+export type SpawnLineage = Readonly<{
+  parentThreadId: string;
+  parentTurnId: string | null;
+  childId: string | null;
+}>;
+
+function sameOrUnset(recorded: string | null, observed: string | null) {
+  return recorded === null || recorded === observed;
+}
+
+export function recordSpawnLineage(
+  assignment: Assignment,
+  lineage: SpawnLineage,
+): Result<Assignment, AssignmentErrorCode> {
+  if (assignment.terminal) return failure("AGENT_TERMINAL");
+  if (assignment.phase !== "prepared") return failure("AGENT_ALREADY_STARTED");
+  if (
+    !sameOrUnset(assignment.parentThreadId, lineage.parentThreadId) ||
+    (lineage.parentTurnId !== null &&
+      !sameOrUnset(assignment.parentTurnId, lineage.parentTurnId)) ||
+    (lineage.childId !== null &&
+      !sameOrUnset(assignment.childId, lineage.childId)) ||
+    (lineage.childId !== null &&
+      (lineage.parentTurnId ?? assignment.parentTurnId) === null)
+  ) {
+    return failure("AGENT_CORRELATION");
+  }
+  return success({
+    ...assignment,
+    parentThreadId: lineage.parentThreadId,
+    parentTurnId: lineage.parentTurnId ?? assignment.parentTurnId,
+    childId: lineage.childId ?? assignment.childId,
+  });
+}
+
 export function startAssignment(
   assignment: Assignment,
   correlation: ChildCorrelation,
@@ -149,9 +187,9 @@ export function startAssignment(
   }
   if (
     assignment.phase !== "prepared" ||
-    assignment.parentThreadId !== null ||
-    assignment.childId !== null ||
-    assignment.parentTurnId !== null ||
+    !sameOrUnset(assignment.parentThreadId, correlation.parentThreadId) ||
+    !sameOrUnset(assignment.childId, correlation.childId) ||
+    !sameOrUnset(assignment.parentTurnId, correlation.parentTurnId) ||
     assignment.childTurnId !== null ||
     assignment.hostRole !== null ||
     assignment.delegationDigest !== null
@@ -214,7 +252,9 @@ export function markSpawnOutcomeUnknown(
   },
 ): Result<Assignment, AssignmentErrorCode> {
   if (assignment.terminal) return failure("AGENT_TERMINAL");
-  if (assignment.phase !== "prepared" || assignment.childId !== null) {
+  // A prepared assignment may already carry the lineage its spawn recorded;
+  // it stays with the unknown outcome so the child can still be observed.
+  if (assignment.phase !== "prepared") {
     return failure("AGENT_ALREADY_STARTED");
   }
   return success({

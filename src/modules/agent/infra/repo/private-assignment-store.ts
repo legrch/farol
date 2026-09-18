@@ -243,9 +243,10 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     const valid =
       (assignment.phase === "prepared" &&
         !assignment.terminal &&
-        assignment.parentThreadId === null &&
-        assignment.childId === null &&
-        assignment.parentTurnId === null &&
+        // Spawn progress fills the lineage in order: thread, turn, child.
+        (assignment.parentTurnId === null ||
+          assignment.parentThreadId !== null) &&
+        (assignment.childId === null || assignment.parentTurnId !== null) &&
         assignment.childTurnId === null &&
         assignment.hostRole === null &&
         assignment.delegationDigest === null &&
@@ -327,7 +328,19 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     ) {
       throw new Error("AGENT_ASSIGNMENT_STALE_WRITE");
     }
-    if (
+    if (existing.assignment.phase === "prepared") {
+      // Recorded spawn progress is only ever added to, never changed.
+      for (const key of [
+        "parentThreadId",
+        "parentTurnId",
+        "childId",
+      ] as const) {
+        const recorded = existing.assignment[key];
+        if (recorded !== null && replacement.assignment[key] !== recorded) {
+          throw new Error("AGENT_ASSIGNMENT_CHILD_MISMATCH");
+        }
+      }
+    } else if (
       existing.assignment.childId !== null &&
       (replacement.assignment.childId !== existing.assignment.childId ||
         replacement.assignment.parentThreadId !==

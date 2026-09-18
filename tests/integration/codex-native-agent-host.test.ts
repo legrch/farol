@@ -449,6 +449,66 @@ describe("native Codex Agent host", () => {
     expect(peer.notifications.size).toBe(0);
   });
 
+  it("LIF-07 records the parent thread before any model turn and stops if it cannot", async () => {
+    const options = {
+      model: "gpt-6-astra" as const,
+      runtimeRoot: "/private/tmp/farol-agent-runtime",
+      spawnTimeoutMs: 1_000,
+      waitTimeoutMs: 5,
+      pollIntervalMs: 1,
+      nonce: () => "proof-a",
+      now: () => 1,
+    };
+    const refusingPeer = new NativeAgentPeer();
+    const refusing = new CodexNativeAgentHost(
+      refusingPeer,
+      options,
+      verifiedWorkspaceProbe(),
+    );
+
+    await expect(
+      refusing.spawn(request, {
+        lineage: async () => {
+          throw new Error("AGENT_ASSIGNMENT_STORE_UNAVAILABLE");
+        },
+      }),
+    ).resolves.toEqual({ status: "failed", code: "AGENT_SPAWN_REJECTED" });
+    expect(refusingPeer.requests.map(({ method }) => method)).toEqual([
+      "thread/start",
+    ]);
+
+    const recordedPeer = new NativeAgentPeer();
+    const recorded: unknown[] = [];
+    const host = new CodexNativeAgentHost(
+      recordedPeer,
+      options,
+      verifiedWorkspaceProbe(),
+    );
+    const spawned = await host.spawn(request, {
+      lineage: async (lineage) => {
+        recorded.push(lineage);
+      },
+    });
+    if (spawned.status !== "started") throw new Error(spawned.status);
+    expect(recorded).toEqual([
+      {
+        parentThreadId: spawned.correlation.parentThreadId,
+        parentTurnId: null,
+        childId: null,
+      },
+      {
+        parentThreadId: spawned.correlation.parentThreadId,
+        parentTurnId: spawned.correlation.parentTurnId,
+        childId: null,
+      },
+      {
+        parentThreadId: spawned.correlation.parentThreadId,
+        parentTurnId: spawned.correlation.parentTurnId,
+        childId: spawned.correlation.childId,
+      },
+    ]);
+  });
+
   it("LIF-11 refuses before any turn when the host cannot start the required thread profile", async () => {
     for (const refusal of ["rejected", "substituted-model"] as const) {
       class RefusingPeer extends NativeAgentPeer {

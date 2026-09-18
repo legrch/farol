@@ -6,6 +6,7 @@ import type {
   AgentHost,
   AgentCancelReceipt,
   AgentSpawnReceipt,
+  AgentSpawnProgress,
   AgentSpawnRequest,
   AgentRejoin,
   AgentWaitReceipt,
@@ -731,7 +732,10 @@ export class CodexNativeAgentHost implements AgentHost {
     }
   }
 
-  async spawn(request: AgentSpawnRequest): Promise<AgentSpawnReceipt> {
+  async spawn(
+    request: AgentSpawnRequest,
+    progress?: AgentSpawnProgress,
+  ): Promise<AgentSpawnReceipt> {
     if (
       this.active ||
       (request.intent.kind === "product" && !this.computer) ||
@@ -797,6 +801,13 @@ export class CodexNativeAgentHost implements AgentHost {
         throw error("CODEX_AGENT_PROTOCOL_INVALID");
       }
       operation.parentThreadId = parent.data.thread.id;
+      // Recorded before any model turn: a crash from here on leaves a
+      // lineage that can be observed instead of a bare unknown.
+      await progress?.lineage({
+        parentThreadId: operation.parentThreadId,
+        parentTurnId: null,
+        childId: null,
+      });
 
       turnSubmitted = true;
       const started = turnStartSchema.safeParse(
@@ -813,6 +824,13 @@ export class CodexNativeAgentHost implements AgentHost {
       );
       if (!started.success) throw error("CODEX_AGENT_PROTOCOL_INVALID");
       operation.parentTurnId = started.data.turn.id;
+      await progress
+        ?.lineage({
+          parentThreadId: operation.parentThreadId,
+          parentTurnId: operation.parentTurnId,
+          childId: null,
+        })
+        .catch(() => undefined);
 
       const childId = await withTimeout(
         operation.spawned,
@@ -820,6 +838,13 @@ export class CodexNativeAgentHost implements AgentHost {
         "CODEX_AGENT_SPAWN_TIMEOUT",
       );
       if (operation.fatalCode) throw error(operation.fatalCode);
+      await progress
+        ?.lineage({
+          parentThreadId: operation.parentThreadId,
+          parentTurnId: operation.parentTurnId,
+          childId,
+        })
+        .catch(() => undefined);
       const child = await this.readThread(childId).catch(() => null);
       if (child?.parentThreadId !== operation.parentThreadId) {
         throw error("CODEX_AGENT_LINEAGE_INVALID");

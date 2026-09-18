@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AgentHost,
   AgentSpawnReceipt,
@@ -16,6 +19,7 @@ import {
   type AgentAssignmentCommand,
 } from "../../src/modules/agent/app/service/run-agent-assignment";
 import { InMemoryAssignments } from "../../src/modules/agent/infra/repo/in-memory-assignments";
+import { PrivateAssignmentStore } from "../../src/modules/agent/infra/repo/private-assignment-store";
 import type { ChildCorrelation } from "../../src/modules/agent/domain/assignment";
 import {
   createAssignment,
@@ -450,6 +454,86 @@ describe("Agent app service", () => {
     }
     expect(host.spawnCalls).toBe(1);
     expect(host.waitCalls).toBe(1);
+  });
+
+  it("LIF-07 keeps the lineage a crashed spawn recorded and reports it after restart", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-agent-lineage-"),
+    );
+    let releaseCrashed!: () => void;
+    const crashed = new Promise<void>((resolve) => {
+      releaseCrashed = resolve;
+    });
+    let first: Promise<unknown> = Promise.resolve();
+    try {
+      const store = () =>
+        new PrivateAssignmentStore({ root: path.join(root, "assignments") });
+      // The host records the parent thread and turn, then its process dies.
+      const crashing: AgentHost = {
+        spawn: async (_request, progress) => {
+          await progress?.lineage({
+            parentThreadId: "parent-thread-crash",
+            parentTurnId: null,
+            childId: null,
+          });
+          await progress?.lineage({
+            parentThreadId: "parent-thread-crash",
+            parentTurnId: "parent-turn-crash",
+            childId: null,
+          });
+          // The dead process never answers; releasing it at the end only
+          // lets this test's in-memory execution finish.
+          await crashed;
+          throw new Error("PROCESS_GONE");
+        },
+        wait: async () => {
+          throw new Error("UNEXPECTED_WAIT");
+        },
+        cancel: async () => {
+          throw new Error("UNEXPECTED_CANCEL");
+        },
+      };
+      first = createRunner(crashing, store()).execute(command);
+      await vi.waitFor(async () =>
+        expect(
+          (await store().load(command.identity))?.assignment.parentTurnId,
+        ).toBe("parent-turn-crash"),
+      );
+
+      // A restarted process has a fresh service module: nothing of the dead
+      // spawn survives in memory, only what it recorded.
+      vi.resetModules();
+      const restartedModule =
+        await import("../../src/modules/agent/app/service/run-agent-assignment");
+      const restarted = new AgentHostDouble(new Error("must not spawn"), null);
+      await expect(
+        new restartedModule.RunAgentAssignment(
+          restarted,
+          store(),
+          new AuthorityDouble(),
+          commandDigester,
+        ).execute(command),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          assignment: {
+            phase: "outcome_unknown",
+            parentThreadId: "parent-thread-crash",
+            parentTurnId: "parent-turn-crash",
+            childId: null,
+            terminalReason: {
+              code: "AGENT_SPAWN_INTERRUPTED_WITH_LINEAGE",
+              source: "recovery",
+            },
+          },
+        },
+      });
+      expect(restarted.spawnCalls).toBe(0);
+    } finally {
+      releaseCrashed();
+      await first;
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("tombstones a prepared record recovered without a known child", async () => {
