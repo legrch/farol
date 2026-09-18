@@ -1551,6 +1551,18 @@ export class CodexNativeAgentHost implements AgentHost {
       authorityId: correlation.authorityId,
       participantId: correlation.participantId,
     });
+    // A tool call still in progress is ordinary running work while its turn
+    // has not completed; a completed turn must hold only settled calls.  The
+    // call's correlation and proof are checked in every state.
+    const settledOrRunning = (
+      item: Readonly<{ status: string; success?: boolean | null | undefined }>,
+      requireSuccess: boolean,
+    ): boolean =>
+      item.status === "completed"
+        ? requireSuccess
+          ? item.success === true
+          : typeof item.success === "boolean"
+        : item.status === "inProgress" && childTurn.status !== "completed";
     if (
       forbiddenChildTool ||
       childWorkspaceCalls.length > 1 ||
@@ -1559,8 +1571,7 @@ export class CodexNativeAgentHost implements AgentHost {
         childComputerCalls.length ||
       childWorkspaceCalls.some(
         (item) =>
-          item.status !== "completed" ||
-          item.success !== true ||
+          !settledOrRunning(item, true) ||
           item.arguments.assignmentId !== correlation.assignmentId ||
           item.arguments.authorityId !== correlation.authorityId ||
           item.arguments.participantId !== correlation.participantId ||
@@ -1568,8 +1579,7 @@ export class CodexNativeAgentHost implements AgentHost {
       ) ||
       childComputerCalls.some(
         (item) =>
-          item.status !== "completed" ||
-          typeof item.success !== "boolean" ||
+          !settledOrRunning(item, false) ||
           item.arguments.assignmentId !== correlation.assignmentId ||
           item.arguments.authorityId !== correlation.authorityId ||
           item.arguments.participantId !== correlation.participantId ||

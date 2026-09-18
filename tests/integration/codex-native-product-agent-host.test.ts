@@ -73,6 +73,7 @@ class ProductPeer implements CodexNativeAgentPeer {
   childCompleted = false;
   authorityCompleted = false;
   computerItems: unknown[] = [];
+  runningChildItems: unknown[] = [];
   extraChildItems: unknown[] = [];
   extraChildTurns: unknown[] = [];
   extraParentTurns: unknown[] = [];
@@ -253,7 +254,7 @@ class ProductPeer implements CodexNativeAgentPeer {
                     text: "notes/continuity.md",
                   },
                 ]
-              : [],
+              : this.runningChildItems,
           },
           ...this.extraChildTurns,
         ],
@@ -987,6 +988,118 @@ describe("native Codex product Agent host", () => {
     await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
       status: "outcome_unknown",
       code: "AGENT_WAIT_ACK_LOST",
+    });
+  });
+
+  describe("LIF-03 an in-progress child tool call is running work", () => {
+    function runningComputerItem(
+      peer: ProductPeer,
+      overrides: Readonly<Record<string, unknown>> = {},
+    ): unknown {
+      return {
+        id: "computer-running-a",
+        type: "dynamicToolCall",
+        tool: "farol_agent_computer",
+        status: "inProgress",
+        success: null,
+        arguments: {
+          assignmentId: request.identity.assignmentId,
+          authorityId: authority.authorityId,
+          participantId: authority.participantId,
+          proof:
+            /computer proof ([a-f0-9]{64})/u.exec(peer.childPrompt)?.[1] ?? "",
+          workspaceId: "workspace-product-a",
+          operation: { kind: "workspace.read", relativePath: "README.md" },
+          ...overrides,
+        },
+      };
+    }
+
+    const completingComputer: AgentComputer = {
+      execute: vi.fn(async (input) =>
+        input.operation.kind === "workspace.search"
+          ? {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.matches" as const,
+                matches: [],
+                resultLimited: false,
+                scanLimited: false,
+              },
+            }
+          : {
+              status: "completed" as const,
+              output: {
+                kind: "workspace.text" as const,
+                text: "continuity marker\n",
+                bytes: 18,
+              },
+            },
+      ),
+    };
+
+    function host(
+      peer: ProductPeer,
+      computer: AgentComputer = { execute: vi.fn() },
+    ): CodexNativeAgentHost {
+      return new CodexNativeAgentHost(
+        peer,
+        {
+          model: "gpt-6-astra",
+          runtimeRoot: "/private/tmp/farol-agent-runtime",
+          spawnTimeoutMs: 1_000,
+          waitTimeoutMs: 5,
+          pollIntervalMs: 1,
+          nonce: () => "proof-product-a",
+          now: () => 1,
+        },
+        { verify: async () => ({ status: "verified" }) },
+        computer,
+      );
+    }
+
+    it("reports running while the child's Computer call is in progress", async () => {
+      const peer = new ProductPeer();
+      const agentHost = host(peer);
+      const spawned = await agentHost.spawn(request);
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      peer.runningChildItems = [runningComputerItem(peer)];
+
+      await expect(agentHost.wait(spawned.correlation)).resolves.toEqual({
+        status: "running",
+        correlation: spawned.correlation,
+      });
+    });
+
+    it("still refuses an in-progress call carrying foreign authority", async () => {
+      const peer = new ProductPeer();
+      const agentHost = host(peer);
+      const spawned = await agentHost.spawn(request);
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      peer.runningChildItems = [
+        runningComputerItem(peer, { assignmentId: "assignment-foreign" }),
+      ];
+
+      await expect(agentHost.wait(spawned.correlation)).resolves.toEqual({
+        status: "outcome_unknown",
+        correlation: spawned.correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      });
+    });
+
+    it("refuses a completed child turn that still holds an in-progress call", async () => {
+      const peer = new ProductPeer();
+      const agentHost = host(peer, completingComputer);
+      const spawned = await agentHost.spawn(request);
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      await peer.finish();
+      peer.extraChildItems = [runningComputerItem(peer)];
+
+      await expect(agentHost.wait(spawned.correlation)).resolves.toEqual({
+        status: "outcome_unknown",
+        correlation: spawned.correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      });
     });
   });
 });
