@@ -18,6 +18,7 @@ import {
 } from "../../src/apps/desktop/route-b-runtime";
 import {
   FENCE_RECOVERY_SENTINEL,
+  computerConnectorAdmission,
   recoverSummaryExecutionFence,
 } from "../../src/apps/desktop/summary-fence-recovery";
 import {
@@ -589,5 +590,36 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       recoverSummaryExecutionFence({ fence, store: settled }),
     ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
     await expect(fence.admits()).resolves.toEqual({ admitted: true });
+  });
+  it("refuses to expose the Computer connector after a start that could hold no fence record, or none at all", () => {
+    expect(computerConnectorAdmission(null)).toEqual({
+      admissible: false,
+      code: "COMPUTER_FENCE_UNHELD",
+    });
+    expect(
+      computerConnectorAdmission({
+        status: "kept",
+        code: "EXECUTION_FENCE_UNRECONCILED",
+        held: false,
+      }),
+    ).toEqual({ admissible: false, code: "COMPUTER_FENCE_UNHELD" });
+    // A held sentinel, a reconciled start and a kept fence leave the
+    // refusal to the records the broker reads.
+    expect(
+      computerConnectorAdmission({
+        status: "kept",
+        code: "EXECUTION_FENCE_UNRECONCILED",
+        held: true,
+      }),
+    ).toEqual({ admissible: true });
+    expect(
+      computerConnectorAdmission({ status: "reconciled", unresolved: 2 }),
+    ).toEqual({ admissible: true });
+    expect(
+      computerConnectorAdmission({
+        status: "kept",
+        code: "CONTEXT_STORE_UNREADABLE",
+      }),
+    ).toEqual({ admissible: true });
   });
 });

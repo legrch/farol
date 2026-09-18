@@ -144,6 +144,7 @@ import {
   type QuitDrainReceipt,
 } from "./quit-drain";
 import {
+  computerConnectorAdmission,
   recoverSummaryExecutionFence,
   type SummaryFenceRecovery,
 } from "./summary-fence-recovery";
@@ -322,6 +323,9 @@ let codexContextController: CodexContextController | null = null;
 // The connector's execution fence for summary-only phases, shared with the
 // MCP process through the launch root; it exists once the controller does.
 let summaryExecutionFence: PrivateExecutionFence | null = null;
+// What the last start's fence recovery concluded; the Computer connector is
+// not started while it holds nothing (or never ran).
+let summaryFenceRecovery: SummaryFenceRecovery | null = null;
 let routeBRuntime: RouteBRuntime | null = null;
 // Live counters are cleared when the runtime exits; a support report made
 // after that uses the counts taken just before the exit.
@@ -1060,12 +1064,13 @@ async function reconcileContextAfterRestart(): Promise<void> {
   // fence; a store that cannot be read keeps every record. This runs before
   // Route B, IPC or the connector can admit work.
   if (summaryExecutionFence) {
-    await recordSummaryFenceRecovery(
-      await recoverSummaryExecutionFence({
-        fence: summaryExecutionFence,
-        store: controller.store,
-      }),
-    ).catch(() => undefined);
+    summaryFenceRecovery = await recoverSummaryExecutionFence({
+      fence: summaryExecutionFence,
+      store: controller.store,
+    });
+    await recordSummaryFenceRecovery(summaryFenceRecovery).catch(
+      () => undefined,
+    );
   }
 }
 
@@ -2694,6 +2699,13 @@ async function startSecureMcpConnector(
   }
   if (connectorTaskAdmission) {
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+  }
+  // A start whose fence recovery could hold no record leaves the broker
+  // nothing to refuse with: the connector is not exposed at all until a
+  // later start recovers.
+  const fenceAdmission = computerConnectorAdmission(summaryFenceRecovery);
+  if (!fenceAdmission.admissible) {
+    return configurationFailure(fenceAdmission.code);
   }
   if (secureMcpConnectorRuntime.isRunning() && !repair) {
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");

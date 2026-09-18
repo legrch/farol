@@ -97,3 +97,31 @@ export async function recoverSummaryExecutionFence(
   }
   return { status: "reconciled", unresolved: operations.length };
 }
+
+export type ComputerConnectorAdmission =
+  | Readonly<{ admissible: true }>
+  | Readonly<{ admissible: false; code: "COMPUTER_FENCE_UNHELD" }>;
+
+/**
+ * Whether the Computer connector may be exposed at all after a start. The
+ * broker refuses while a fence record exists, so a start that reconciled,
+ * or that could at least hold the sentinel, leaves the connector to the
+ * records. A start that could hold nothing — reconciliation failed and the
+ * sentinel could not be written either — has no record to refuse with, and
+ * a start whose recovery never ran proves nothing; in both cases the desktop
+ * itself refuses to start the connector until a later start recovers.
+ */
+export function computerConnectorAdmission(
+  recovery: SummaryFenceRecovery | null,
+): ComputerConnectorAdmission {
+  if (recovery === null)
+    return { admissible: false, code: "COMPUTER_FENCE_UNHELD" };
+  if (
+    recovery.status === "kept" &&
+    recovery.code === "EXECUTION_FENCE_UNRECONCILED" &&
+    !recovery.held
+  ) {
+    return { admissible: false, code: "COMPUTER_FENCE_UNHELD" };
+  }
+  return { admissible: true };
+}
