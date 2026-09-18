@@ -20,6 +20,9 @@ import type {
   ReadonlyWorkspaceExecutionContext,
   ReadonlyWorkspaceRequest,
   ReadonlyWorkspaceResult,
+  WorkspaceEditSnapshotReader,
+  WorkspaceEditSnapshotRequest,
+  WorkspaceEditSnapshotResult,
   WorkspaceMatch,
 } from "../../app/port/readonly-workspace";
 import { executeNativeVerificationCommand } from "./native-verification-command";
@@ -1074,6 +1077,21 @@ function parseText(raw: Buffer): ReadonlyWorkspaceResult {
   }
 }
 
+function parseEditSnapshot(raw: Buffer): WorkspaceEditSnapshotResult {
+  const text = parseText(raw);
+  if (!text.ok) return text;
+  // The digest covers the bytes this read returned, BOM included, which are
+  // the bytes the edit helper compares before it replaces the file.
+  return {
+    ok: true,
+    value: {
+      kind: "workspace.edit-snapshot",
+      bytes: raw.length,
+      sha256: createHash("sha256").update(raw).digest("hex"),
+    },
+  };
+}
+
 function parseMutationReceipt(
   raw: Buffer,
   operation: WorkspaceMutationRequest["operation"],
@@ -1148,7 +1166,7 @@ function mutationErrorCode(
 }
 
 export class NativeReadonlyWorkspace
-  implements ReadonlyWorkspace, MutableWorkspace
+  implements ReadonlyWorkspace, MutableWorkspace, WorkspaceEditSnapshotReader
 {
   private helperAttestation: Promise<Buffer> | undefined;
   private readonly attestInterpreter: () => Promise<string>;
@@ -1199,43 +1217,76 @@ export class NativeReadonlyWorkspace
       );
     }
 
+    const raw = await this.readonlyHelper(validated, options);
+    if (!Buffer.isBuffer(raw)) return failure(raw);
+    switch (validated.operation.kind) {
+      case "workspace.read":
+        return parseText(raw);
+      case "workspace.list":
+        return parseEntries(raw);
+      case "workspace.search":
+        return parseMatches(raw);
+    }
+  }
+
+  async readEditSnapshot(
+    request: WorkspaceEditSnapshotRequest,
+    options: NativeReadonlyWorkspaceTestOptions = {},
+  ): Promise<WorkspaceEditSnapshotResult> {
+    const validated = validateRequest({
+      workspace: request.workspace,
+      operation: { kind: "workspace.read", relativePath: request.relativePath },
+    });
+    if (
+      validated === null ||
+      validated.operation.kind !== "workspace.read" ||
+      !validTestOptions(options)
+    ) {
+      return {
+        ok: false,
+        error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+      };
+    }
+    // One helper read supplies both the text check and the identity; a second
+    // read for the digest could observe a different file.
+    const raw = await this.readonlyHelper(validated, options);
+    if (!Buffer.isBuffer(raw)) {
+      return { ok: false, error: { code: raw, retry: "never" } };
+    }
+    return parseEditSnapshot(raw);
+  }
+
+  private async readonlyHelper(
+    validated: ReadonlyWorkspaceRequest,
+    options: NativeReadonlyWorkspaceTestOptions,
+  ): Promise<Buffer | ReadonlyWorkspaceErrorCode> {
     let source: Buffer;
     try {
       source = await this.helperSource();
     } catch {
-      return failure("WORKSPACE_HELPER_UNTRUSTED");
+      return "WORKSPACE_HELPER_UNTRUSTED";
     }
     let interpreter: string;
     try {
       interpreter = await this.attestInterpreter();
       if (!canonicalAbsolutePath(interpreter)) {
-        return failure("WORKSPACE_INTERPRETER_UNTRUSTED");
+        return "WORKSPACE_INTERPRETER_UNTRUSTED";
       }
     } catch {
-      return failure("WORKSPACE_INTERPRETER_UNTRUSTED");
+      return "WORKSPACE_INTERPRETER_UNTRUSTED";
     }
 
     try {
-      const raw = await runHelper(
+      return await runHelper(
         interpreter,
         source,
         nativeRequest(validated, options),
         options,
       );
-      switch (validated.operation.kind) {
-        case "workspace.read":
-          return parseText(raw);
-        case "workspace.list":
-          return parseEntries(raw);
-        case "workspace.search":
-          return parseMatches(raw);
-      }
     } catch (error) {
-      return failure(
-        error instanceof WorkspaceRefusal
-          ? readonlyErrorCode(error.code)
-          : "WORKSPACE_HELPER_FAILED",
-      );
+      return error instanceof WorkspaceRefusal
+        ? readonlyErrorCode(error.code)
+        : "WORKSPACE_HELPER_FAILED";
     }
   }
 

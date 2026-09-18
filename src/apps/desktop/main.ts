@@ -109,7 +109,6 @@ import {
   type LiveTaskStoreRecord,
   type StoredLiveTask,
 } from "./live-task-store";
-import { RunMutableComputerAction } from "../../modules/computer/app/service/run-mutable-computer-action";
 import { RunReadonlyComputerAction } from "../../modules/computer/app/service/run-readonly-computer-action";
 import {
   createParticipantAuthority,
@@ -118,10 +117,15 @@ import {
   type ComputerApproval,
   type TaskAdmission,
 } from "../../modules/computer/domain/execution-authority";
-import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/native/sha256-workspace-mutation-digester";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
-import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
+import {
+  applyWorkspaceEdit,
+  desktopMutableWorkspaceAction,
+  prepareWorkspaceEdit,
+  workspaceEditPreview,
+  type PendingWorkspaceEdit,
+} from "./workspace-edit";
 import {
   createSupportExport,
   writeSupportExport,
@@ -314,15 +318,6 @@ let recoverableChatGptTask: ChatGptTaskJournalRecord | null = null;
 let recoverableChatGptObservationPersisted = false;
 let chatGptConversationStore: PrivateChatGptConversationStore | null = null;
 let chatGptConversation: ChatGptConversationRecord | null = null;
-type PendingWorkspaceEdit = Readonly<{
-  operationId: string;
-  workspaceId: string;
-  computerGeneration: number;
-  relativePath: string;
-  bytes: number;
-  beforeSha256: string;
-  expiresAt: number;
-}>;
 let pendingWorkspaceEdit: PendingWorkspaceEdit | null = null;
 let workspaceMutationAdmission = false;
 let windowPresentationReady = false;
@@ -423,108 +418,6 @@ function chatGptAttachmentTaskPreview(
     ),
     expiresAt: new Date(pending.expiresAt).toISOString(),
   };
-}
-
-function workspaceEditPreview(
-  pending: PendingWorkspaceEdit,
-): Readonly<Record<string, unknown>> {
-  return {
-    kind: "computer.workspace-edit-preview",
-    operationId: pending.operationId,
-    workspaceId: pending.workspaceId,
-    relativePath: pending.relativePath,
-    bytes: pending.bytes,
-    beforeSha256: pending.beforeSha256,
-    expiresAt: new Date(pending.expiresAt).toISOString(),
-  };
-}
-
-function mutableWorkspaceAction(
-  settings: ProductSettings,
-  workspace: ApprovedProductWorkspace,
-  expiresAt: number,
-): RunMutableComputerAction | null {
-  const ownerId = "owner-desktop";
-  const sessionId = "desktop-computer-session";
-  const taskId = "desktop-computer-task";
-  const participantId = "desktop-main";
-  const approvalCapabilities: AuthorityCapability[] = [
-    "workspace.list",
-    "workspace.read",
-    "workspace.search",
-    ...(settings.computer.workspaces.some(
-      (candidate) => candidate.access === "write",
-    )
-      ? (["workspace.write"] as const)
-      : []),
-  ];
-  const approval: ComputerApproval = {
-    ownerId,
-    computerId: settings.computer.computerId,
-    generation: settings.computer.generation,
-    workspaces: settings.computer.workspaces.map((candidate) => ({
-      workspaceId: candidate.workspaceId,
-      root: candidate.root,
-      access: candidate.access,
-    })),
-    excludedPaths: settings.computer.workspaces.flatMap((candidate) =>
-      candidate.excludedPaths.map((excluded) => ({
-        workspaceId: candidate.workspaceId,
-        path: excluded,
-      })),
-    ),
-    capabilities: approvalCapabilities,
-    network: "none",
-    commands: "none",
-    expiresAt,
-  };
-  const admission: TaskAdmission = {
-    authorityId: `desktop-authority-${settings.computer.generation}`,
-    ownerId,
-    sessionId,
-    taskId,
-    taskEpoch: settings.computer.generation,
-    computerId: settings.computer.computerId,
-    computerGeneration: settings.computer.generation,
-    workspaces: [
-      {
-        workspaceId: workspace.workspaceId,
-        mode: "subtree",
-        root: workspace.root,
-        access: "write",
-      },
-    ],
-    excludedPaths: workspace.excludedPaths.map((excluded) => ({
-      workspaceId: workspace.workspaceId,
-      path: excluded,
-    })),
-    capabilities: ["workspace.read", "workspace.write"],
-    network: "none",
-    commands: "none",
-    expiresAt,
-  };
-  const grant = deriveTaskGrant(approval, admission, Date.now());
-  if (!grant.ok) return null;
-  const participant = createParticipantAuthority(grant.value, {
-    participantId,
-    role: "main",
-    mutationOwnership: "task",
-  });
-  if (!participant.ok) return null;
-  return new RunMutableComputerAction(
-    new InMemoryAuthorityRepository([participant.value]),
-    new InMemoryComputerApprovalRepository([approval]),
-    new PrivateWorkspaceMutationStore({
-      root: path.join(
-        app.getPath("userData"),
-        "farol-next-state",
-        "workspace-mutations",
-      ),
-    }),
-    new Sha256WorkspaceMutationDigester(),
-    nativeWorkspace,
-    { now: () => Date.now() },
-  );
 }
 
 function verificationWorkspaceAction(
@@ -4439,29 +4332,19 @@ async function configureProduct(
       if (relativePath === "invalid") {
         return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
       }
-      const read = await nativeWorkspace.execute({
+      const prepared = await prepareWorkspaceEdit(nativeWorkspace, {
+        operationId: randomUUID(),
         workspace: {
           workspaceId: selected.workspace.workspaceId,
           root: selected.workspace.root,
           deniedPaths: workspaceDeniedPaths(selected.workspace),
         },
-        operation: { kind: "workspace.read", relativePath },
-      });
-      if (!read.ok) return workspaceReadFailure(read.error.code);
-      if (read.value.kind !== "workspace.text") {
-        return configurationFailure("WORKSPACE_READ_FAILED");
-      }
-      pendingWorkspaceEdit = {
-        operationId: randomUUID(),
-        workspaceId: selected.workspace.workspaceId,
         computerGeneration: snapshot.settings.computer.generation,
         relativePath,
-        bytes: read.value.bytes,
-        beforeSha256: createHash("sha256")
-          .update(read.value.text, "utf8")
-          .digest("hex"),
         expiresAt: Date.now() + 10 * 60_000,
-      };
+      });
+      if (!prepared.ok) return workspaceReadFailure(prepared.code);
+      pendingWorkspaceEdit = prepared.pending;
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot,
@@ -4499,10 +4382,19 @@ async function configureProduct(
         pendingWorkspaceEdit = null;
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
-      const action = mutableWorkspaceAction(
-        snapshot.settings,
+      const action = desktopMutableWorkspaceAction(
+        snapshot.settings.computer,
         workspace,
         pending.expiresAt,
+        {
+          mutationStateRoot: path.join(
+            app.getPath("userData"),
+            "farol-next-state",
+            "workspace-mutations",
+          ),
+          workspace: nativeWorkspace,
+          now: () => Date.now(),
+        },
       );
       if (!action) {
         pendingWorkspaceEdit = null;
@@ -4511,23 +4403,9 @@ async function configureProduct(
       workspaceMutationAdmission = true;
       pendingWorkspaceEdit = null;
       try {
-        const result = await action.execute({
-          operationId: pending.operationId,
-          ownerId: "owner-desktop",
-          sessionId: "desktop-computer-session",
-          taskId: "desktop-computer-task",
-          taskEpoch: pending.computerGeneration,
-          participantId: "desktop-main",
-          turnId: pending.operationId,
-          generation: pending.computerGeneration,
-          callId: pending.operationId,
-          workspaceId: pending.workspaceId,
-          operation: {
-            kind: "workspace.edit",
-            relativePath: pending.relativePath,
-            edits: [{ oldText: command.oldText, newText: command.newText }],
-            expectedSha256: pending.beforeSha256,
-          },
+        const result = await applyWorkspaceEdit(action, pending, {
+          oldText: command.oldText,
+          newText: command.newText,
         });
         if (!result.ok) {
           if (result.error.code === "WORKSPACE_MUTATION_OUTCOME_UNKNOWN") {

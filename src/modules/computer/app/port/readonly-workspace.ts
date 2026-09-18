@@ -106,3 +106,30 @@ export interface ReadonlyWorkspace {
     context?: ReadonlyWorkspaceExecutionContext,
   ): Promise<ReadonlyWorkspaceResult>;
 }
+
+/**
+ * The precondition for a later guarded edit: the size and SHA-256 of the exact
+ * bytes one descriptor-bound read returned, after the same UTF-8 text check as
+ * `workspace.read`.  Decoded text is not an identity: decoding drops a BOM, so
+ * a digest of the text never matches the file the edit helper compares.
+ */
+export type WorkspaceEditSnapshot = Readonly<{
+  kind: "workspace.edit-snapshot";
+  bytes: number;
+  sha256: string;
+}>;
+
+export type WorkspaceEditSnapshotRequest = Readonly<{
+  workspace: ReadonlyWorkspaceDescriptor;
+  relativePath: string;
+}>;
+
+export type WorkspaceEditSnapshotResult =
+  | Readonly<{ ok: true; value: WorkspaceEditSnapshot }>
+  | Extract<ReadonlyWorkspaceResult, { ok: false }>;
+
+export interface WorkspaceEditSnapshotReader {
+  readEditSnapshot(
+    request: WorkspaceEditSnapshotRequest,
+  ): Promise<WorkspaceEditSnapshotResult>;
+}
