@@ -10,6 +10,13 @@ import { assertPromotionDestination } from "../../tooling/promotion-destination.
 // kept under artifacts/predecessors and the current sealed package. Both are
 // hundreds of megabytes and git-ignored, so this runs only when asked for
 // and both exist; it is then recorded as its own attempt.
+//
+// This is placement-level evidence: it drives `runPromotionApply` directly
+// and proves copy, no-overwrite and receipt behaviour between two identified
+// generations. It does not run the ordinary verifier or the launch and
+// promotion admission gates, and the current verifier qualifies only the
+// runtime pinned in `tooling/runtime-contract.mjs`, so a preserved older
+// generation is restored as bytes, not re-qualified by the newer tooling.
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const enabled = process.env.FAROL_NEXT_TWO_GENERATION === "1";
 const roots = [];
