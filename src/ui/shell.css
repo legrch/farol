@@ -298,6 +298,13 @@ html[data-window-active="false"] .nav-item.active {
   color: var(--text-faint);
 }
 
+/* A highlighted row lightens its background, which leaves the faint shortcut
+   hint below AA (4.35:1 on the active row of a focused window, 3.80:1 while
+   hovered). The softer text colour keeps it at 5.25:1 or more in every state. */
+.nav-item:is(:hover, .active) > kbd {
+  color: var(--text-soft);
+}
+
 .nav-signal {
   position: absolute;
   right: 8px;
