@@ -2719,6 +2719,17 @@ const setupScreens = [
   ["verify", "setup-5-verify-wide.png"],
 ];
 
+// F1-8: the product refuses every Git verification before any process
+// starts. Resolves true when the refusal is shown, false when Git ran.
+async function gitVerificationIsOff(page, gitOff) {
+  await page.waitForFunction((off) => {
+    const shown =
+      document.querySelector("#computer-feedback")?.textContent ?? "";
+    return shown === off || /^Fixed Git (status|HEAD) completed/u.test(shown);
+  }, gitOff);
+  return (await page.locator("#computer-feedback").textContent()) === gitOff;
+}
+
 // A Setup wait that times out names what the dialog showed instead, so a
 // failure under load is told apart from a refusal without another run.
 async function waitForSetup(instance, predicate, arg) {
@@ -6786,7 +6797,7 @@ try {
     true,
   );
   await workspaceCard
-    .getByRole("button", { name: "Verify", exact: true })
+    .getByRole("button", { name: "Verify folder", exact: true })
     .click();
   await workspaceCard.getByText(/read-only · verified/u).waitFor();
   const gitStatus = workspaceCard.getByRole("button", {
@@ -6795,46 +6806,84 @@ try {
   });
   assert.equal(await gitStatus.isEnabled(), true);
   await gitStatus.click();
-  await workspaceCard
-    .locator(".workspace-query-evidence")
-    .getByText(/Git status · exit 0 · \d+ bytes · network none/u)
-    .waitFor();
-  await workspaceCard
-    .locator(".workspace-query-evidence")
-    .getByText(/## main/u)
-    .waitFor();
-  await normal.window
-    .locator("#computer-feedback")
-    .getByText(
-      /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
-    )
-    .waitFor();
-  const expectedHeadResult = spawnSync(
-    "/usr/bin/xcrun",
-    ["git", "-C", normal.workspaceRoot, "rev-parse", "--verify", "HEAD"],
-    { encoding: "utf8" },
-  );
-  assert.equal(expectedHeadResult.status, 0, expectedHeadResult.stderr);
+  // While F1-8 is open every product Git verification is refused before any
+  // process starts, and the two Git cases are reported blocked. Once Git
+  // verification returns, the same block requires the full proof again.
+  const gitOff =
+    "Git checks are off in this build: Git cannot yet be confined to the approved folder (open review finding F1-8). Listing, searching and reading files are not affected.";
+  await normal.window.waitForFunction((off) => {
+    const shown =
+      document.querySelector("#computer-feedback")?.textContent ?? "";
+    return shown === off || shown.startsWith("Fixed Git status completed");
+  }, gitOff);
   const gitHead = workspaceCard.getByRole("button", {
     name: "Git HEAD",
     exact: true,
   });
-  assert.equal(await gitHead.isEnabled(), true);
-  await gitHead.click();
-  await workspaceCard
-    .locator(".workspace-query-evidence")
-    .getByText(/Git HEAD · exit 0 · \d+ bytes · network none/u)
-    .waitFor();
-  await workspaceCard
-    .locator(".workspace-query-evidence")
-    .getByText(expectedHeadResult.stdout.trim(), { exact: true })
-    .waitFor();
-  await normal.window
-    .locator("#computer-feedback")
-    .getByText(
-      /^Fixed Git HEAD completed · exit 0 · \d+ bytes · network none\.$/u,
-    )
-    .waitFor();
+  if (
+    (await normal.window.locator("#computer-feedback").textContent()) !== gitOff
+  ) {
+    await workspaceCard
+      .locator(".workspace-query-evidence")
+      .getByText(/Git status · exit 0 · \d+ bytes · network none/u)
+      .waitFor();
+    await workspaceCard
+      .locator(".workspace-query-evidence")
+      .getByText(/## main/u)
+      .waitFor();
+    await normal.window
+      .locator("#computer-feedback")
+      .getByText(
+        /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
+      )
+      .waitFor();
+    const expectedHeadResult = spawnSync(
+      "/usr/bin/xcrun",
+      ["git", "-C", normal.workspaceRoot, "rev-parse", "--verify", "HEAD"],
+      { encoding: "utf8" },
+    );
+    assert.equal(expectedHeadResult.status, 0, expectedHeadResult.stderr);
+    assert.equal(await gitHead.isEnabled(), true);
+    await gitHead.click();
+    await workspaceCard
+      .locator(".workspace-query-evidence")
+      .getByText(/Git HEAD · exit 0 · \d+ bytes · network none/u)
+      .waitFor();
+    await workspaceCard
+      .locator(".workspace-query-evidence")
+      .getByText(expectedHeadResult.stdout.trim(), { exact: true })
+      .waitFor();
+    await normal.window
+      .locator("#computer-feedback")
+      .getByText(
+        /^Fixed Git HEAD completed · exit 0 · \d+ bytes · network none\.$/u,
+      )
+      .waitFor();
+    cases.push(
+      "workspace-command-fixed-no-network",
+      "workspace-command-exact-head",
+    );
+  } else {
+    assert.equal(await gitHead.isEnabled(), true);
+    await gitHead.click();
+    await normal.window
+      .locator("#computer-feedback")
+      .getByText(gitOff, { exact: true })
+      .waitFor();
+    assert.equal(
+      await workspaceCard
+        .locator(".workspace-query-evidence")
+        .getByText(/Git (status|HEAD) · exit/u)
+        .count(),
+      0,
+    );
+    const reason =
+      "F1-8 open: Git verification is off in the product (WORKSPACE_COMMAND_UNSUPPORTED)";
+    blockedCases.push(
+      { name: "workspace-command-fixed-no-network", reason },
+      { name: "workspace-command-exact-head", reason },
+    );
+  }
   const commandConfiguration = await normal.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -6845,8 +6894,6 @@ try {
   cases.push(
     "workspace-command-disabled-by-default",
     "workspace-command-authority-explicit",
-    "workspace-command-fixed-no-network",
-    "workspace-command-exact-head",
   );
 
   const exclusionInput = normal.window.getByLabel(
@@ -6866,11 +6913,17 @@ try {
     .waitFor();
   await normal.window
     .locator("#computer-workspaces")
-    .getByRole("button", { name: "Verify", exact: true })
+    .getByRole("button", { name: "Verify folder", exact: true })
     .click();
+  // The excluded README.md is not listed: the top level reads as empty.
   await normal.window
     .locator("#computer-feedback")
-    .getByText("Not applied · WORKSPACE_PATH_REFUSED", { exact: true })
+    .getByText(
+      "Farol can open approved-workspace (0 items at the top level).",
+      {
+        exact: true,
+      },
+    )
     .waitFor();
   assert.equal(
     await normal.window.locator(".workspace-read-evidence").count(),
@@ -6891,11 +6944,13 @@ try {
     .waitFor();
   await normal.window
     .locator("#computer-workspaces")
-    .getByRole("button", { name: "Verify", exact: true })
+    .getByRole("button", { name: "Verify folder", exact: true })
     .click();
   await normal.window
-    .locator(".workspace-read-evidence")
-    .getByText("Farol Next workspace verification fixture", { exact: true })
+    .locator("#computer-feedback")
+    .getByText("Farol can open approved-workspace (1 item at the top level).", {
+      exact: true,
+    })
     .waitFor();
 
   await workspaceCard
@@ -6909,7 +6964,7 @@ try {
     true,
   );
   await workspaceCard
-    .getByRole("button", { name: "Verify", exact: true })
+    .getByRole("button", { name: "Verify folder", exact: true })
     .click();
   await workspaceCard.getByText(/guarded edits · verified/u).waitFor();
   await workspaceCard
@@ -6941,14 +6996,22 @@ try {
   await workspaceCard
     .getByRole("button", { name: "Git status", exact: true })
     .click();
-  await workspaceCard
-    .locator(".workspace-query-evidence")
-    .getByText(/README\.md/u)
-    .waitFor();
+  if (await gitVerificationIsOff(normal.window, gitOff)) {
+    blockedCases.push({
+      name: "workspace-command-observes-real-change",
+      reason:
+        "F1-8 open: Git verification is off in the product (WORKSPACE_COMMAND_UNSUPPORTED)",
+    });
+  } else {
+    await workspaceCard
+      .locator(".workspace-query-evidence")
+      .getByText(/README\.md/u)
+      .waitFor();
+    cases.push("workspace-command-observes-real-change");
+  }
   cases.push(
     "workspace-write-access-explicit",
     "workspace-guarded-edit-atomic",
-    "workspace-command-observes-real-change",
   );
 
   await invokeApplicationMenu(normal.application, "app.settings");
@@ -7331,13 +7394,24 @@ try {
   });
   assert.equal(await restartedGitStatus.isEnabled(), true);
   await restartedGitStatus.click();
-  await restartedWorkspaceCard
-    .locator(".workspace-query-evidence")
-    .getByText(/README\.md/u)
-    .waitFor();
+  const restartedGitOff = await gitVerificationIsOff(normal.window, gitOff);
+  if (!restartedGitOff) {
+    await restartedWorkspaceCard
+      .locator(".workspace-query-evidence")
+      .getByText(/README\.md/u)
+      .waitFor();
+  }
   await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
-  cases.push("workspace-command-persists-and-runs-after-restart");
+  if (restartedGitOff) {
+    blockedCases.push({
+      name: "workspace-command-persists-and-runs-after-restart",
+      reason:
+        "F1-8 open: Git verification is off in the product (WORKSPACE_COMMAND_UNSUPPORTED)",
+    });
+  } else {
+    cases.push("workspace-command-persists-and-runs-after-restart");
+  }
   await normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Open sign-in…", exact: true })
