@@ -28,6 +28,12 @@ import unicodedata
 
 
 MAGIC = b"FAROLR1\0"
+# Written to stdout immediately before the helper replaces itself with the
+# reviewed verification command, so the caller can tell a helper refusal (no
+# marker, helper exit status) from the command's own output and exit status.
+EXEC_MAGIC = b"FAROLX1\0"
+MAX_EXEC_ARGUMENTS = 512
+SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_MUTATION_BYTES = 8 * 1024 * 1024
@@ -2368,9 +2374,62 @@ def _dispatch_with_grep_deadline(request):
         signal.signal(signal.SIGALRM, previous_alarm)
 
 
+def _exec_verification(request):
+    """Run the reviewed verification command inside the approved root object.
+
+    The root is opened component by component without following links and
+    checked against the identity the owner approved, exactly as every read and
+    write is. The helper then makes that descriptor its working directory and
+    replaces itself with the sandboxed command, whose Git paths are relative:
+    the directory Git works in is the approved object, not whatever holds its
+    pathname by the time Git starts. A folder moved into its place afterwards
+    is never where Git runs.
+    """
+
+    if set(request) - {"operation", "root", "approvedRoot", "launch"}:
+        refuse(EXIT_INVALID)
+    if request.get("approvedRoot") is None:
+        refuse(EXIT_INVALID)
+    launch = request.get("launch")
+    if not isinstance(launch, dict) or set(launch) != {"arguments", "environment"}:
+        refuse(EXIT_INVALID)
+    arguments = launch.get("arguments")
+    environment = launch.get("environment")
+    if (
+        not isinstance(arguments, list)
+        or not 1 <= len(arguments) <= MAX_EXEC_ARGUMENTS
+        or not all(isinstance(value, str) and "\x00" not in value for value in arguments)
+        or not isinstance(environment, dict)
+        or len(environment) > 64
+        or not all(
+            isinstance(key, str)
+            and isinstance(value, str)
+            and key
+            and "=" not in key
+            and "\x00" not in key + value
+            for key, value in environment.items()
+        )
+    ):
+        refuse(EXIT_INVALID)
+    descriptor = _open_root(request)
+    try:
+        os.fchdir(descriptor)
+    finally:
+        os.close(descriptor)
+    os.write(1, EXEC_MAGIC)
+    try:
+        os.close(3)
+    except OSError:
+        pass
+    os.execve(SANDBOX_EXEC, [SANDBOX_EXEC, *arguments], environment)
+
+
 def main():
     try:
         request = _read_request()
+        if request.get("operation") == "exec-verification":
+            _exec_verification(request)
+            return EXIT_INTERNAL
         payload = (
             _dispatch_with_grep_deadline(request)
             if request.get("operation") == "grep"

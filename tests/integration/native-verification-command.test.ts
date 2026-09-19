@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
 import {
+  approvedRootLauncher,
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
@@ -241,15 +242,12 @@ int main(void) {
         commonDirectory: path.join(mainRoot, ".git"),
       };
 
+      // F1-8: Git runs only bound to the approved root object with relative
+      // metadata paths; a linked worktree's metadata lives outside the root
+      // and cannot be bound that way yet, so it is refused, not run by path.
       await expect(workspace().execute(request(grant))).resolves.toMatchObject({
-        ok: true,
-        value: {
-          kind: "workspace.command",
-          command: "git.status",
-          relativePath: ".",
-          stdout: expect.stringContaining("README.md"),
-          network: "none",
-        },
+        ok: false,
+        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
       });
 
       const parentReader = await compileCommandFixture(
@@ -272,15 +270,13 @@ int main(void) {
 }
 `,
       );
+      // Nothing runs at all for a linked worktree now, so no command gets the
+      // chance to reach the metadata parent.
       await expect(
         workspace(async () => parentReader).execute(request(grant)),
       ).resolves.toMatchObject({
-        ok: true,
-        value: {
-          kind: "workspace.command",
-          stdout: "parent denied\n",
-          network: "none",
-        },
+        ok: false,
+        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
       });
     } finally {
       root = mainRoot;
@@ -845,7 +841,7 @@ int main(void) {
       }
     });
 
-    it("reports a linked worktree layout", async () => {
+    it("refuses a linked worktree until its metadata can be bound (F1-8)", async () => {
       const mainRoot = root;
       const worktreeParent = await fs.mkdtemp(
         path.join(os.tmpdir(), "farol-next-command-layout-"),
@@ -871,8 +867,8 @@ int main(void) {
         await expect(
           workspace().execute(request(grant ?? undefined)),
         ).resolves.toMatchObject({
-          ok: true,
-          value: { layout: "linked-worktree", coverage: "tracked-files-only" },
+          ok: false,
+          error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
         });
         // A primary checkout keeps its metadata inside the root: no grant.
         await expect(discoverLinkedGitMetadata(mainRoot)).resolves.toBeNull();
@@ -889,5 +885,47 @@ int main(void) {
         await fs.rm(worktreeParent, { recursive: true, force: true });
       }
     });
+  });
+
+  it("F1-8 never runs Git in a folder that took the approved root's place after the last check", async () => {
+    await fs.writeFile(path.join(root, "APPROVED.txt"), "approved\n", {
+      mode: 0o600,
+    });
+    const input = request();
+    if (input.operation.kind !== "verification.run") {
+      throw new Error("verification operation expected");
+    }
+    const moved = `${root}.approved-moved`;
+    let replaced = false;
+    const result = await executeNativeVerificationCommand(
+      input,
+      input.operation,
+      {
+        attestGit: async () => git,
+        launchInApprovedRoot: approvedRootLauncher({
+          helperSource: () => fs.readFile(sourceHelper),
+          attestInterpreter: async () => "/usr/bin/python3",
+        }),
+        // After every pathname check has passed: move the approved folder away
+        // and put another repository at its path.
+        beforeLaunch: async () => {
+          await fs.rename(root, moved);
+          await fs.mkdir(root, { mode: 0o700 });
+          await executeFile(git, ["init", "--quiet", root]);
+          await fs.writeFile(path.join(root, "REPLACEMENT.txt"), "x\n", {
+            mode: 0o600,
+          });
+          replaced = true;
+        },
+      },
+    );
+    expect(replaced).toBe(true);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_ROOT_CHANGED", retry: "never" },
+    });
+    expect(JSON.stringify(result)).not.toContain("REPLACEMENT");
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rename(moved, root);
   });
 });

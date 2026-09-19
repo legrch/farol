@@ -18,7 +18,11 @@ vi.mock("node:child_process", () => ({
   spawn: processMock.spawn,
 }));
 
-import { executeNativeVerificationCommand } from "../../src/modules/computer/infra/native/native-verification-command";
+import type { ChildProcess } from "node:child_process";
+import {
+  executeNativeVerificationCommand,
+  type ApprovedRootLauncher,
+} from "../../src/modules/computer/infra/native/native-verification-command";
 import { approvedRootOf } from "../fixtures/root-identity";
 
 class FakeChild extends EventEmitter {
@@ -66,11 +70,27 @@ async function execute(
   return executeNativeVerificationCommand(input, input.operation, {
     ...(attestGit ? { attestGit } : {}),
     ...(signal ? { signal } : {}),
+    // The reviewed helper's launch, replaced by the process mock so each test
+    // controls what the bound command does.
+    launchInApprovedRoot: async (launch) => {
+      launches.push(launch);
+      return processMock.spawn(
+        "/usr/bin/python3",
+        launch.arguments,
+        {},
+      ) as unknown as ChildProcess;
+    },
   });
 }
 
+// What the helper writes right before it becomes the command.
+const EXEC_MAGIC = Buffer.from("FAROLX1\0", "ascii");
+type Launch = Parameters<ApprovedRootLauncher>[0];
+const launches: Launch[] = [];
+
 beforeEach(async () => {
   processMock.spawn.mockReset();
+  launches.length = 0;
   root = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-command-failure-"),
   );
@@ -139,7 +159,7 @@ describe("native verification command process failures", () => {
   it("reports a missing sandbox process and ignores its later close", async () => {
     processMock.spawn.mockImplementationOnce(() => {
       const child = new FakeChild();
-      queueMicrotask(() => {
+      setImmediate(() => {
         child.emit("error", new Error("sandbox unavailable"));
         child.emit("close", 1, null);
       });
@@ -158,7 +178,8 @@ describe("native verification command process failures", () => {
   it("classifies sandbox policy application failures precisely", async () => {
     processMock.spawn.mockImplementationOnce(() => {
       const child = new FakeChild();
-      queueMicrotask(() => {
+      setImmediate(() => {
+        child.stdout.emit("data", EXEC_MAGIC);
         child.stderr.emit(
           "data",
           Buffer.from("sandbox-exec: sandbox_apply: operation not permitted"),
@@ -180,8 +201,11 @@ describe("native verification command process failures", () => {
   it("pins the exact HEAD command, workspace and Git metadata environment", async () => {
     processMock.spawn.mockImplementationOnce(() => {
       const child = new FakeChild();
-      queueMicrotask(() => {
-        child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
+      setImmediate(() => {
+        child.stdout.emit(
+          "data",
+          Buffer.concat([EXEC_MAGIC, Buffer.from(`${"a".repeat(40)}\n`)]),
+        );
         child.emit("close", 0, null);
       });
       return child;
@@ -197,28 +221,23 @@ describe("native verification command process failures", () => {
         network: "none",
       },
     });
-    const invocation = processMock.spawn.mock.calls[0];
-    const arguments_ = invocation?.[1] as string[];
-    const options = invocation?.[2] as {
-      cwd: string;
-      detached: boolean;
-      env: Record<string, string>;
-    };
-    expect(arguments_.slice(-4)).toEqual([
+    const launch = launches[0];
+    expect(launch?.arguments.slice(-4)).toEqual([
       "rev-parse",
       "--verify",
       "--quiet",
       "HEAD",
     ]);
-    expect(options).toMatchObject({
-      cwd: root,
-      detached: true,
-      env: {
-        GIT_DIR: path.join(root, ".git"),
-        GIT_COMMON_DIR: path.join(root, ".git"),
-        GIT_WORK_TREE: root,
-        GIT_TERMINAL_PROMPT: "0",
-      },
+    // Git gets no pathname for the workspace: the helper binds the working
+    // directory to the approved root object and Git's paths are relative.
+    expect(launch?.arguments).not.toContain("-C");
+    expect(launch?.root).toBe(root);
+    expect(launch?.approvedRoot).toEqual(approvedRootOf(root));
+    expect(launch?.environment).toMatchObject({
+      GIT_DIR: ".git",
+      GIT_COMMON_DIR: ".git",
+      GIT_WORK_TREE: ".",
+      GIT_TERMINAL_PROMPT: "0",
     });
   });
 

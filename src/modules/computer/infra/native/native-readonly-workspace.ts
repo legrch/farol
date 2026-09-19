@@ -29,7 +29,10 @@ import type {
   WorkspaceReadRange,
 } from "../../app/port/readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
-import { executeNativeVerificationCommand } from "./native-verification-command";
+import {
+  type ApprovedRootLauncher,
+  executeNativeVerificationCommand,
+} from "./native-verification-command";
 
 export type SafeOpenHelperRecord = Readonly<{
   sha256: string;
@@ -38,8 +41,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "ceced42c46cb862579002ca9856e0215c9564cb52f82c84f8ef7a345bb37f6c9",
-  size: 86_424,
+  sha256: "e06b320af93e62f3040152e1a3a878307ad2d6b994d256fd05d027a3f5a9e056",
+  size: 88_730,
   mode: 0o644,
 });
 
@@ -960,6 +963,54 @@ async function defaultAttestInterpreter(): Promise<string> {
   }
 }
 
+// Starts a reviewed verification command bound to the approved root object:
+// the attested helper opens the root by descriptor, checks the approved
+// identity, makes it its working directory and replaces itself with the
+// command (see safe_open.py `_exec_verification`).
+export function approvedRootLauncher(
+  dependencies: Readonly<{
+    helperSource: () => Promise<Buffer>;
+    attestInterpreter: () => Promise<string>;
+  }>,
+): ApprovedRootLauncher {
+  return async (input) => {
+    let source: Buffer;
+    let interpreter: string;
+    try {
+      source = await dependencies.helperSource();
+      interpreter = await dependencies.attestInterpreter();
+      if (!canonicalAbsolutePath(interpreter)) {
+        return "WORKSPACE_HELPER_UNTRUSTED";
+      }
+    } catch {
+      return "WORKSPACE_HELPER_UNTRUSTED";
+    }
+    const request = Buffer.from(
+      canonical({
+        operation: "exec-verification",
+        root: input.root,
+        approvedRoot: { ...input.approvedRoot },
+        launch: {
+          arguments: [...input.arguments],
+          environment: { ...input.environment },
+        },
+      } as unknown as JsonValue),
+      "utf8",
+    );
+    const child = spawn(interpreter, ["-I", "-S", "-B", "-"], {
+      env: { LANG: "C", LC_ALL: "C" },
+      detached: true,
+      stdio: ["pipe", "pipe", "pipe", "pipe"],
+    });
+    const pipes = child.stdio as unknown as readonly (Writable | null)[];
+    child.stdin?.on("error", () => undefined);
+    pipes[3]?.on("error", () => undefined);
+    child.stdin?.end(source);
+    pipes[3]?.end(request);
+    return child;
+  };
+}
+
 function mapExitCode(code: number | null): NativeWorkspaceErrorCode {
   if (code === null) return "WORKSPACE_HELPER_FAILED";
   return EXIT_TO_ERROR.get(code) ?? "WORKSPACE_HELPER_FAILED";
@@ -1530,6 +1581,10 @@ export class NativeReadonlyWorkspace
         },
         validated.operation,
         {
+          launchInApprovedRoot: approvedRootLauncher({
+            helperSource: () => this.helperSource(),
+            attestInterpreter: () => this.attestInterpreter(),
+          }),
           ...(this.options.attestGit
             ? { attestGit: this.options.attestGit }
             : {}),

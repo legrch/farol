@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -66,10 +66,31 @@ type VerificationOperation = Extract<
   { kind: "verification.run" }
 >;
 
+// Starts the reviewed command with its working directory bound to the approved
+// root object (the native helper opens the root by descriptor, checks the
+// approved identity, changes into it and replaces itself with the command).
+export type ApprovedRootLauncher = (
+  input: Readonly<{
+    root: string;
+    approvedRoot: Readonly<{ path: string; device: string; inode: string }>;
+    arguments: readonly string[];
+    environment: Readonly<Record<string, string>>;
+  }>,
+) => Promise<ChildProcess | "WORKSPACE_HELPER_UNTRUSTED">;
+
 export type NativeVerificationCommandOptions = Readonly<{
   attestGit?: () => Promise<string>;
+  launchInApprovedRoot?: ApprovedRootLauncher;
+  // Test seam: runs after the last pathname check and before the launch, the
+  // window a replacement of the root used to exploit.
+  beforeLaunch?: () => Promise<void>;
   signal?: AbortSignal;
 }>;
+
+// The helper writes this immediately before it becomes the command; without
+// it, the exit status is the helper's own refusal, not the command's.
+const EXEC_MAGIC = Buffer.from("FAROLX1\0", "ascii");
+const HELPER_ROOT_CHANGED = 33;
 
 type ExactResult = Readonly<{ stdout: string; stderr: string }>;
 type WorkspaceGitMetadata = Readonly<{
@@ -513,9 +534,11 @@ function validGitOutput(
 function runGitVerification(
   git: string,
   root: string,
+  approvedRoot: Readonly<{ path: string; device: string; inode: string }>,
   metadata: WorkspaceGitMetadata,
   command: VerificationOperation["command"],
   deniedPaths: readonly string[],
+  launch: ApprovedRootLauncher,
   signal?: AbortSignal,
 ): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
   if (signal?.aborted) {
@@ -558,176 +581,204 @@ function runGitVerification(
     return Promise.resolve(failure("WORKSPACE_COMMAND_UNSUPPORTED"));
   }
 
+  // Git sees only relative paths: its work tree and metadata are resolved
+  // from the working directory the helper bound to the approved root object.
+  const launchArguments = [
+    ...parameters,
+    "-p",
+    profile,
+    git,
+    "-c",
+    "core.attributesFile=/dev/null",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.excludesFile=/dev/null",
+    "-c",
+    "core.untrackedCache=false",
+    "-c",
+    "core.quotepath=true",
+    "-c",
+    "submodule.recurse=false",
+    ...gitArguments(command),
+  ];
+  const environment = {
+    GIT_CEILING_DIRECTORIES: root,
+    GIT_ATTR_NOSYSTEM: "1",
+    GIT_COMMON_DIR: ".git",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_DIR: ".git",
+    GIT_OPTIONAL_LOCKS: "0",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_WORK_TREE: ".",
+    HOME: "/var/empty",
+    LANG: "C",
+    LC_ALL: "C",
+    PATH: "/usr/bin:/bin",
+    TMPDIR: "/private/tmp",
+  };
+
   return new Promise((resolve) => {
-    const child = spawn(
-      SANDBOX_EXEC,
-      [
-        ...parameters,
-        "-p",
-        profile,
-        git,
-        "-C",
-        root,
-        "-c",
-        "core.attributesFile=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.excludesFile=/dev/null",
-        "-c",
-        "core.untrackedCache=false",
-        "-c",
-        "core.quotepath=true",
-        "-c",
-        "submodule.recurse=false",
-        ...gitArguments(command),
-      ],
-      {
-        cwd: root,
-        detached: true,
-        env: {
-          GIT_CEILING_DIRECTORIES: root,
-          GIT_ATTR_NOSYSTEM: "1",
-          GIT_COMMON_DIR: metadata.commonDirectory,
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_DIR: metadata.gitDirectory,
-          GIT_OPTIONAL_LOCKS: "0",
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_WORK_TREE: root,
-          HOME: "/var/empty",
-          LANG: "C",
-          LC_ALL: "C",
-          PATH: "/usr/bin:/bin",
-          TMPDIR: "/private/tmp",
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let timedOut = false;
-    let outputTooLarge = false;
-    let cancelled = false;
-    let finished = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      killProcessGroup(child);
-    }, COMMAND_TIMEOUT_MS);
-    const finish = (
-      result: ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED,
-    ): void => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", cancel);
-      resolve(result);
-    };
-    const cancel = (): void => {
-      if (finished || cancelled) return;
-      cancelled = true;
-      killProcessGroup(child);
-    };
-    signal?.addEventListener("abort", cancel, { once: true });
-    if (signal?.aborted) cancel();
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBytes += chunk.length;
-      if (stdoutBytes > MAX_OUTPUT_BYTES) {
-        outputTooLarge = true;
+    const observe = (child: ChildProcess): void => {
+      if (child.stdout === null || child.stderr === null) {
         killProcessGroup(child);
-      } else {
-        stdout.push(chunk);
+        resolve(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
+        return;
       }
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderrBytes += chunk.length;
-      if (stderrBytes > MAX_STDERR_BYTES) {
-        outputTooLarge = true;
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let timedOut = false;
+      let outputTooLarge = false;
+      let cancelled = false;
+      let finished = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
         killProcessGroup(child);
-      } else {
-        stderr.push(chunk);
-      }
-    });
-    child.once("error", () =>
-      finish(
-        failure(
-          cancelled
-            ? "WORKSPACE_COMMAND_CANCELLED"
-            : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+      }, COMMAND_TIMEOUT_MS);
+      const finish = (
+        result: ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED,
+      ): void => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", cancel);
+        resolve(result);
+      };
+      const cancel = (): void => {
+        if (finished || cancelled) return;
+        cancelled = true;
+        killProcessGroup(child);
+      };
+      signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+      child.stdout.on("data", (chunk: Buffer) => {
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > MAX_OUTPUT_BYTES) {
+          outputTooLarge = true;
+          killProcessGroup(child);
+        } else {
+          stdout.push(chunk);
+        }
+      });
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrBytes += chunk.length;
+        if (stderrBytes > MAX_STDERR_BYTES) {
+          outputTooLarge = true;
+          killProcessGroup(child);
+        } else {
+          stderr.push(chunk);
+        }
+      });
+      child.once("error", () =>
+        finish(
+          failure(
+            cancelled
+              ? "WORKSPACE_COMMAND_CANCELLED"
+              : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+          ),
         ),
-      ),
-    );
-    child.once("close", (code, signal) => {
-      if (cancelled) {
-        finish(failure("WORKSPACE_COMMAND_CANCELLED"));
-        return;
-      }
-      if (timedOut) {
-        finish(failure("WORKSPACE_COMMAND_TIMEOUT"));
-        return;
-      }
-      if (outputTooLarge) {
-        finish(failure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"));
-        return;
-      }
-      const errorText = Buffer.concat(stderr).toString("utf8");
-      if (/^sandbox-exec: sandbox_apply:/mu.test(errorText)) {
-        finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
-        return;
-      }
-      if (
-        command === "git.head" &&
-        code === 1 &&
-        signal === null &&
-        errorText === "" &&
-        stdoutBytes === 0
-      ) {
-        finish(HEAD_UNRESOLVED);
-        return;
-      }
-      if (code !== 0 || signal !== null || errorText !== "") {
-        finish(failure("WORKSPACE_COMMAND_FAILED"));
-        return;
-      }
-      try {
-        const output = new TextDecoder("utf-8", { fatal: true }).decode(
-          Buffer.concat(stdout),
-        );
-        if (!validGitOutput(command, output)) {
+      );
+      child.once("close", (code, signal) => {
+        if (cancelled) {
+          finish(failure("WORKSPACE_COMMAND_CANCELLED"));
+          return;
+        }
+        if (timedOut) {
+          finish(failure("WORKSPACE_COMMAND_TIMEOUT"));
+          return;
+        }
+        if (outputTooLarge) {
+          finish(failure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"));
+          return;
+        }
+        const produced = Buffer.concat(stdout);
+        if (
+          produced.length < EXEC_MAGIC.length ||
+          !produced.subarray(0, EXEC_MAGIC.length).equals(EXEC_MAGIC)
+        ) {
+          // The helper refused before it became the command: the root is not
+          // the approved object any more, or it could not be bound at all.
+          finish(
+            failure(
+              code === HELPER_ROOT_CHANGED
+                ? "WORKSPACE_ROOT_CHANGED"
+                : "WORKSPACE_COMMAND_FAILED",
+            ),
+          );
+          return;
+        }
+        const body = produced.subarray(EXEC_MAGIC.length);
+        const errorText = Buffer.concat(stderr).toString("utf8");
+        if (/^sandbox-exec: sandbox_apply:/mu.test(errorText)) {
+          finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
+          return;
+        }
+        if (
+          command === "git.head" &&
+          code === 1 &&
+          signal === null &&
+          errorText === "" &&
+          body.length === 0
+        ) {
+          finish(HEAD_UNRESOLVED);
+          return;
+        }
+        if (code !== 0 || signal !== null || errorText !== "") {
           finish(failure("WORKSPACE_COMMAND_FAILED"));
           return;
         }
-        finish({
-          ok: true,
-          value: {
-            kind: "workspace.command",
-            command,
-            relativePath: ".",
-            exitCode: 0,
-            stdout: output,
-            stderr: "",
-            outputBytes: stdoutBytes,
-            network: "none",
-            coverage: commandCoverage(command),
-            layout:
-              metadata.gitDirectory === metadata.commonDirectory
-                ? "primary"
-                : "linked-worktree",
-          },
-        });
-      } catch {
-        finish(failure("WORKSPACE_COMMAND_FAILED"));
-      }
-    });
+        try {
+          const output = new TextDecoder("utf-8", { fatal: true }).decode(body);
+          if (!validGitOutput(command, output)) {
+            finish(failure("WORKSPACE_COMMAND_FAILED"));
+            return;
+          }
+          finish({
+            ok: true,
+            value: {
+              kind: "workspace.command",
+              command,
+              relativePath: ".",
+              exitCode: 0,
+              stdout: output,
+              stderr: "",
+              outputBytes: body.length,
+              network: "none",
+              coverage: commandCoverage(command),
+              layout:
+                metadata.gitDirectory === metadata.commonDirectory
+                  ? "primary"
+                  : "linked-worktree",
+            },
+          });
+        } catch {
+          finish(failure("WORKSPACE_COMMAND_FAILED"));
+        }
+      });
+    };
+    void launch({
+      root,
+      approvedRoot,
+      arguments: launchArguments,
+      environment,
+    }).then(
+      (launched) => {
+        if (launched === "WORKSPACE_HELPER_UNTRUSTED") {
+          resolve(failure("WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED"));
+          return;
+        }
+        observe(launched);
+      },
+      () => resolve(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE")),
+    );
   });
 }
 
-// Git runs by pathname, so unlike the helper's descriptor walk this check
-// narrows the replacement window rather than closing it: the approved folder
-// must still be the object that was approved immediately before Git starts,
-// and the sandbox profile still confines Git to the requested root's path.
+// An early, cheap refusal. The binding itself happens in the helper, which
+// opens the root by descriptor and checks this identity before Git starts.
 async function approvedRootUnchanged(
   approved: ReadonlyWorkspaceRequest["workspace"]["approvedRoot"],
 ): Promise<boolean> {
@@ -825,15 +876,29 @@ export async function executeNativeVerificationCommand(
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
+  // Git runs bound to the approved root object, with relative metadata paths.
+  // Metadata outside the root (a linked worktree's) cannot be bound that way
+  // yet, so a linked worktree is refused rather than run by pathname.
+  const primaryMetadata = path.join(request.workspace.root, ".git");
+  if (
+    metadata.gitDirectory !== primaryMetadata ||
+    metadata.commonDirectory !== primaryMetadata ||
+    !options.launchInApprovedRoot
+  ) {
+    return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  }
   if (!(await approvedRootUnchanged(request.workspace.approvedRoot))) {
     return failure("WORKSPACE_ROOT_CHANGED");
   }
+  await options.beforeLaunch?.();
   const result = await runGitVerification(
     git,
     request.workspace.root,
+    request.workspace.approvedRoot,
     metadata,
     operation.command,
     request.workspace.deniedPaths,
+    options.launchInApprovedRoot,
     options.signal,
   );
   if (result !== HEAD_UNRESOLVED) return result;
