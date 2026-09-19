@@ -275,6 +275,54 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
     expect(refusedByFailure.requirements[0].reasons).toEqual(["DONE_UNPROVEN"]);
   });
 
+  it("a binding that cites no case stands for the whole lane, which only a passing run proves", () => {
+    const [executedCase, blockedCase] = EVIDENCE_LANES["sealed-package"].cases;
+    const wholeLane = (attemptId) => ({
+      candidate,
+      lanes: [],
+      requirements: [
+        {
+          id: "R-WHOLE",
+          u2: "DONE",
+          bindings: [{ lane: "sealed-package", attemptId, cases: [] }],
+        },
+      ],
+    });
+    const blockedId = "20260918T090000000Z-000000b2";
+    const blocked = fixtureAttempt("sealed-package", blockedId, {
+      status: "BLOCKED",
+      exitCode: 1,
+      cases: [executedCase],
+      blockedCases: [{ name: blockedCase, reason: "display unavailable" }],
+    });
+    const byBlocked = evaluateBindings({
+      ledger: wholeLane(blockedId),
+      candidate,
+      attempts: { "sealed-package": [blocked] },
+      observers: {
+        "sealed-package": observerFixture("sealed-package", blockedId),
+      },
+    });
+    expect(byBlocked.requirements[0].bindings[0].reasons).toEqual([
+      "LANE_NOT_PASSED:BLOCKED",
+    ]);
+    expect(byBlocked.requirements[0].verdict).toBe("UNPROVEN");
+    expect(byBlocked.requirements[0].reasons).toEqual(["DONE_UNPROVEN"]);
+
+    const passedId = "20260918T090000000Z-000000a2";
+    const passed = fixtureAttempt("sealed-package", passedId);
+    const byPassed = evaluateBindings({
+      ledger: wholeLane(passedId),
+      candidate,
+      attempts: { "sealed-package": [passed] },
+      observers: {
+        "sealed-package": observerFixture("sealed-package", passedId),
+      },
+    });
+    expect(byPassed.requirements[0].bindings[0].reasons).toEqual([]);
+    expect(byPassed.requirements[0].verdict).toBe("PROVEN");
+  });
+
   it("a clean binding marked historical never proves a row on its own", () => {
     // The same current, observed attempt as the positive control, only
     // declared historical: its integrity is clean, but a historical citation

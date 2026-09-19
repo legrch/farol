@@ -95,6 +95,16 @@ function caseReasons(lane, attempt, names) {
   return reasons;
 }
 
+// A binding that cites no case stands for the whole lane, and only a lane
+// that passed proves that. A BLOCKED run proves no more than the cases it
+// executed, so a row relying on one must name them.
+function wholeLaneReasons(attempt, cases) {
+  if ((cases ?? []).length > 0) return [];
+  return attempt?.status === "PASS"
+    ? []
+    : [`LANE_NOT_PASSED:${attempt?.status ?? "UNKNOWN"}`];
+}
+
 // Resolves a binding's {lane, attemptId} against the loaded attempts. An
 // attempt that exists only under a different lane key is a lane mismatch,
 // never silently accepted as evidence for this lane; an attemptId that
@@ -151,6 +161,7 @@ function evaluateBinding(
       observers,
     ),
     ...caseReasons(lane, located.attempt, cases),
+    ...wholeLaneReasons(located.attempt, cases),
   ];
   return {
     lane,
