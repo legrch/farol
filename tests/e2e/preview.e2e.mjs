@@ -2719,6 +2719,26 @@ const setupScreens = [
   ["verify", "setup-5-verify-wide.png"],
 ];
 
+// A Setup wait that times out names what the dialog showed instead, so a
+// failure under load is told apart from a refusal without another run.
+async function waitForSetup(instance, predicate, arg) {
+  try {
+    await instance.window.waitForFunction(predicate, arg);
+  } catch (error) {
+    const shown = await instance.window
+      .evaluate(() => ({
+        step: document.querySelector("#setup-dialog")?.dataset.stepId ?? null,
+        status: document.querySelector("#setup-status strong")?.textContent,
+        primary: document.querySelector("#setup-live-primary")?.textContent,
+        summary: document.querySelector("#setup-live-summary")?.textContent,
+        feedback: document.querySelector("#setup-feedback")?.textContent,
+      }))
+      .catch(() => null);
+    error.message = `${error.message} · setup showed ${JSON.stringify(shown)}`;
+    throw error;
+  }
+}
+
 async function completeSetup(
   instance,
   capture = false,
@@ -2823,13 +2843,15 @@ async function completeSetup(
       await chatGptPage.locator("#prompt-textarea").waitFor({
         state: "visible",
       });
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-live-primary")?.textContent ===
           "Check connection",
       );
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
           "Verified",
@@ -2839,7 +2861,8 @@ async function completeSetup(
         state: "visible",
       });
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
             "Needs action" &&
@@ -2847,14 +2870,16 @@ async function completeSetup(
             "Open sign-in…",
       );
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-live-primary")?.textContent ===
           "Check connection",
       );
       await chatGptPage.locator('[data-testid="login-button"]').click();
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
           "Verified",
@@ -2869,7 +2894,8 @@ async function completeSetup(
     }
     if (stepId === "computer" && configureComputer) {
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-live-primary")?.textContent ===
           "Verify folder",
@@ -2886,7 +2912,8 @@ async function completeSetup(
         null,
       );
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
           "Verified",
@@ -2916,7 +2943,8 @@ async function completeSetup(
           hasText: "Choose another…",
         })
         .click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
             "Needs action" &&
@@ -2940,7 +2968,8 @@ async function completeSetup(
         null,
       );
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
             "Verified" &&
@@ -2967,7 +2996,8 @@ async function completeSetup(
         "Verify Agent",
       );
       await instance.window.locator("#setup-live-primary").click();
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         () =>
           document.querySelector("#setup-status strong")?.textContent ===
             "Verified" &&
@@ -3049,7 +3079,8 @@ async function completeSetup(
     }
     await instance.window.locator("#setup-next").click();
     if (stepId !== "verify") {
-      await instance.window.waitForFunction(
+      await waitForSetup(
+        instance,
         (previous) =>
           document
             .querySelector("#setup-dialog")
