@@ -202,6 +202,7 @@ import {
   discoverExecutables,
   type DiscoveryCandidate,
 } from "./executable-discovery";
+import { reverifyDiscoveredCandidate as reverifyDiscoveredCandidateImpl } from "./reverify-discovered-candidate";
 import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
@@ -2649,32 +2650,33 @@ async function selectedWorkspace(): Promise<
 // which remain the sole authority on whether a path may actually run). This
 // closes the gap between "the owner clicked a card that was true a moment
 // ago" and "this exact path is still what discovery would offer right now".
+//
+// The decision logic itself lives in `reverify-discovered-candidate.ts`,
+// injectable and unit-tested there; this wrapper supplies the real
+// discovery function and the real owner-facing confirmation dialog.
 async function reverifyDiscoveredCandidate(
   kind: "codex" | "tunnel-client",
   requestedPath: string,
 ): Promise<DiscoveryCandidate | "stale" | "declined"> {
-  const discovered = await discoverExecutables(kind);
-  const candidate = discovered.candidates.find(
-    (entry) => entry.path === requestedPath && entry.verdict !== "refused",
-  );
-  if (!candidate) return "stale";
-  if (candidate.verdict === "offer") return candidate;
-  // A candidate Farol does not trust automatically runs only after the owner
-  // confirms it in a dialog this process shows: a renderer request alone is
-  // not the owner's choice.
-  if (!window) return "declined";
-  const { response } = await dialog.showMessageBox(window, {
-    type: "warning",
-    buttons: ["Cancel", "Use this file"],
-    defaultId: 0,
-    cancelId: 0,
-    message:
-      kind === "codex"
-        ? "Use a Codex that is not confirmed as signed by OpenAI?"
-        : "Use a tunnel-client that does not match the reviewed build?",
-    detail: `${candidate.path}\n\nFarol could not confirm where this file came from. Continue only if you placed it there yourself.`,
+  return reverifyDiscoveredCandidateImpl(kind, requestedPath, {
+    discover: (discoverKind) => discoverExecutables(discoverKind),
+    confirm: window
+      ? async ({ kind: dialogKind, path }) => {
+          const { response } = await dialog.showMessageBox(window!, {
+            type: "warning",
+            buttons: ["Cancel", "Use this file"],
+            defaultId: 0,
+            cancelId: 0,
+            message:
+              dialogKind === "codex"
+                ? "Use a Codex that is not confirmed as signed by OpenAI?"
+                : "Use a tunnel-client that does not match the reviewed build?",
+            detail: `${path}\n\nFarol could not confirm where this file came from. Continue only if you placed it there yourself.`,
+          });
+          return response === 1 ? "confirmed" : "cancelled";
+        }
+      : null,
   });
-  return response === 1 ? candidate : "declined";
 }
 
 async function selectedCodexExecutable(): Promise<
