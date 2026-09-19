@@ -8277,6 +8277,25 @@ async function waitForSignInReturnOutcome(instance) {
   return afterReturn;
 }
 
+// A real Return click/press closes the sign-in window as a synchronous
+// consequence of the input event's own handler (click -> console.log ->
+// main-process console-message listener -> BrowserWindow.close()), which
+// can race Playwright's own CDP round-trip for "the input was dispatched"
+// and surface as "Target page, context or browser has been closed" even
+// though the input reached the control and did its job. The window closing
+// is the real, separately verified outcome (waitForSignInReturnOutcome
+// asserts window count and the truthful not-signed-in bootstrap state), so
+// this narrowly tolerates only that exact race rather than papering over an
+// unrelated failure.
+async function dispatchTolerantOfWindowClose(action) {
+  try {
+    await action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/has been closed/u.test(message)) throw error;
+  }
+}
+
 // Real dispatched pointer input at the Return control's centre — the CDP
 // Input.dispatchMouseEvent channel a real pointer uses, not a synthetic DOM
 // method call.
@@ -8291,7 +8310,9 @@ async function assertSignInReturnByPointer(instance, chatGptPage) {
     true,
     "a hit-test at the Return control's centre reaches the control",
   );
-  await chatGptPage.mouse.click(hit.x, hit.y);
+  await dispatchTolerantOfWindowClose(() =>
+    chatGptPage.mouse.click(hit.x, hit.y),
+  );
   await waitForSignInReturnOutcome(instance);
 }
 
@@ -8321,7 +8342,9 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     true,
     `Tab reaches the Return control within ${maxTabs} presses`,
   );
-  await chatGptPage.keyboard.press("Enter");
+  await dispatchTolerantOfWindowClose(() =>
+    chatGptPage.keyboard.press("Enter"),
+  );
   await waitForSignInReturnOutcome(instance);
 }
 
