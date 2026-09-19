@@ -74,6 +74,22 @@ outcome-unknown, a later owner mutation must fail closed, and the retained file
 must remain at the last successful snapshot. Its exact-head report is the
 `report.json` of its attempt under `artifacts/persistence-fault/`.
 
+`task next:test:two-generation-state -- --predecessor-artifact=<manifest>` is the
+hidden lane for the owner's state across two sealed generations. Generation A is the
+predecessor that manifest names: the lane runs the verifier of A's own source commit
+in the checkout the manifest names, after proving every file of that commit's
+`tooling/` and package manifests is byte-identical there, so A is never re-qualified
+by this candidate's tooling. B is this package. Both run in turn on one isolated user
+data directory: A completes Setup and creates, renames and pins tasks; B launched
+while A runs must be refused as `identity-mismatch` without touching A's state; A is
+killed with a provider turn running; B's first activation is killed before any window;
+B must then read A's settings byte for byte and its tasks, report the interrupted turn
+as outcome-unknown without submitting anything, refuse A while it runs, and keep its
+own change across a restart; the rollback to A must read B's state without rewriting
+it, and neither bundle's tree digest may change. Context checkpoints and bundle
+placement are outside it. The report is the `report.json` of its attempt under
+`artifacts/two-generation-state/`.
+
 The final owner journey is separate from automation: `task next:run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector
 read is repeated around it, and the application is quit by its exact instance. This
