@@ -138,6 +138,89 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
     expect(result.summary).toEqual({ counts: { PROVEN: 1 }, doneUnproven: [] });
   });
 
+  it("holds a development lane to the development build of the same source", () => {
+    const developmentCandidate = Object.freeze({
+      sourceCommit: candidate.sourceCommit,
+      sourceTreeDigest: candidate.sourceTreeDigest,
+      artifactSha256: "f".repeat(64),
+    });
+    const attemptId = "20260918T090000000Z-0000000d";
+    const attempt = fixtureAttempt("development-build", attemptId, {
+      input: { artifactSha256: developmentCandidate.artifactSha256 },
+    });
+    const observer = observerFixture("development-build", attemptId, {
+      subject: {
+        sourceCommit: candidate.sourceCommit,
+        artifactSha256: developmentCandidate.artifactSha256,
+      },
+    });
+    const ledger = {
+      candidate: {
+        ...candidate,
+        developmentArtifactSha256: developmentCandidate.artifactSha256,
+      },
+      lanes: [],
+      requirements: [
+        {
+          id: "R-DEV",
+          u2: "DONE",
+          bindings: [
+            {
+              lane: "development-build",
+              attemptId,
+              cases: ["development-build-identity"],
+            },
+          ],
+        },
+      ],
+    };
+    const attempts = { "development-build": [attempt] };
+    const observers = { "development-build": observer };
+
+    const proven = evaluateBindings({
+      ledger,
+      candidate,
+      attempts,
+      observers,
+      developmentCandidate,
+    });
+    expect(proven.header.reasons).toEqual([]);
+    expect(proven.requirements[0].verdict).toBe("PROVEN");
+
+    // Without the development subject the same attempt is measured against
+    // the sealed package and is refused rather than silently accepted.
+    const sealedOnly = evaluateBindings({
+      ledger,
+      candidate,
+      attempts,
+      observers,
+    });
+    expect(sealedOnly.requirements[0].bindings[0].reasons).toContain(
+      "WRONG_SUBJECT:artifactSha256",
+    );
+    expect(sealedOnly.requirements[0].reasons).toEqual(["DONE_UNPROVEN"]);
+
+    // A development build of another source, or a header naming another
+    // development build, is a header mismatch.
+    const foreign = evaluateBindings({
+      ledger: {
+        ...ledger,
+        candidate: { ...candidate, developmentArtifactSha256: "0".repeat(64) },
+      },
+      candidate,
+      attempts,
+      observers,
+      developmentCandidate: {
+        ...developmentCandidate,
+        sourceCommit: "9".repeat(40),
+      },
+    });
+    expect(foreign.header.reasons).toEqual([
+      "DEVELOPMENT_SOURCE_MISMATCH:sourceCommit",
+      "HEADER_MISMATCH:developmentArtifactSha256",
+    ]);
+  });
+
   it("a clean binding marked historical never proves a row on its own", () => {
     // The same current, observed attempt as the positive control, only
     // declared historical: its integrity is clean, but a historical citation

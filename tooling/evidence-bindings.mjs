@@ -105,7 +105,24 @@ function locateAttempt(attempts, lane, attemptId) {
   return { attempt: null, mismatch: "BINDING_ATTEMPT_MISSING" };
 }
 
-function evaluateBinding(binding, candidate, attempts, observers) {
+// A development lane measures the development build of the same source, so
+// its subject is that build's own identity rather than the sealed package's.
+// Everything else -- the sealed lanes and the hermetic Hunt model, which
+// compares source identity only -- is held to the sealed candidate.
+function subjectFor(lane, candidate, developmentCandidate) {
+  return EVIDENCE_LANES[lane]?.boundary?.build === "development-electron" &&
+    developmentCandidate
+    ? developmentCandidate
+    : candidate;
+}
+
+function evaluateBinding(
+  binding,
+  candidate,
+  attempts,
+  observers,
+  developmentCandidate,
+) {
   const { lane, attemptId, cases = [], historical = null } = binding;
   const isHistorical = Boolean(historical);
   const located = locateAttempt(attempts, lane, attemptId);
@@ -119,7 +136,12 @@ function evaluateBinding(binding, candidate, attempts, observers) {
     };
   }
   const reasons = [
-    ...integrityReasons(lane, located.attempt, candidate, observers),
+    ...integrityReasons(
+      lane,
+      located.attempt,
+      subjectFor(lane, candidate, developmentCandidate),
+      observers,
+    ),
     ...caseReasons(lane, located.attempt, cases),
   ];
   return {
@@ -142,9 +164,21 @@ function evaluateBinding(binding, candidate, attempts, observers) {
 // that cites nothing at all -- a row whose only bindings are historical is
 // UNPROVEN, not NO_BINDINGS, because it does cite something, just nothing
 // current.
-function evaluateRequirement(requirement, candidate, attempts, observers) {
+function evaluateRequirement(
+  requirement,
+  candidate,
+  attempts,
+  observers,
+  developmentCandidate,
+) {
   const bindings = (requirement.bindings ?? []).map((binding) =>
-    evaluateBinding(binding, candidate, attempts, observers),
+    evaluateBinding(
+      binding,
+      candidate,
+      attempts,
+      observers,
+      developmentCandidate,
+    ),
   );
   let verdict;
   if (bindings.length === 0) {
@@ -212,10 +246,26 @@ function evaluateLaneSummary(entry, attempts, requirements) {
   return { lane, attemptId, rawOutcome, reasons };
 }
 
-function headerReasons(ledgerCandidate, candidate) {
-  return HEADER_FIELDS.filter(
+function headerReasons(ledgerCandidate, candidate, developmentCandidate) {
+  const reasons = HEADER_FIELDS.filter(
     (field) => ledgerCandidate?.[field] !== candidate[field],
   ).map((field) => `HEADER_MISMATCH:${field}`);
+  // A development subject must be the same source, and the ledger header
+  // names its build identity whenever development lanes are accepted.
+  if (developmentCandidate) {
+    for (const field of ["sourceCommit", "sourceTreeDigest"]) {
+      if (developmentCandidate[field] !== candidate[field]) {
+        reasons.push(`DEVELOPMENT_SOURCE_MISMATCH:${field}`);
+      }
+    }
+    if (
+      ledgerCandidate?.developmentArtifactSha256 !==
+      developmentCandidate.artifactSha256
+    ) {
+      reasons.push("HEADER_MISMATCH:developmentArtifactSha256");
+    }
+  }
+  return reasons;
 }
 
 // evaluateBindings({ ledger, candidate, attempts, observers }):
@@ -232,16 +282,25 @@ export function evaluateBindings({
   candidate,
   attempts,
   observers = null,
+  developmentCandidate = null,
 }) {
   const requirements = (ledger.requirements ?? []).map((requirement) =>
-    evaluateRequirement(requirement, candidate, attempts, observers),
+    evaluateRequirement(
+      requirement,
+      candidate,
+      attempts,
+      observers,
+      developmentCandidate,
+    ),
   );
   const lanes = (ledger.lanes ?? [])
     .filter(isStructuredLaneEntry)
     .map((entry) =>
       evaluateLaneSummary(entry, attempts, ledger.requirements ?? []),
     );
-  const header = { reasons: headerReasons(ledger.candidate, candidate) };
+  const header = {
+    reasons: headerReasons(ledger.candidate, candidate, developmentCandidate),
+  };
   const counts = {};
   const doneUnproven = [];
   for (const requirement of requirements) {
@@ -281,7 +340,7 @@ function option(arguments_, name) {
 }
 
 const USAGE =
-  "usage: evidence-bindings.mjs --ledger <file> --root <vnext> [--candidate <file>] [--observer <file>]";
+  "usage: evidence-bindings.mjs --ledger <file> --root <vnext> [--candidate <file>] [--dev-candidate <file>] [--observer <file>]";
 
 // node tooling/evidence-bindings.mjs --ledger <file> --root <vnext>
 //   [--candidate <artifact.json>] [--observer <file>]
@@ -305,17 +364,27 @@ async function main(arguments_) {
     option(arguments_, "--candidate") ??
     path.join(root, "dist/package/artifact.json");
   const observerFile = option(arguments_, "--observer");
+  const developmentCandidateFile = option(arguments_, "--dev-candidate");
 
   const ledger = await readJson(path.resolve(ledgerFile));
   const candidate = await readJson(candidateFile);
   const observers = observerFile ? await readJson(observerFile) : null;
+  const developmentCandidate = developmentCandidateFile
+    ? await readJson(developmentCandidateFile)
+    : null;
 
   const attempts = {};
   for (const [lane, contract] of Object.entries(EVIDENCE_LANES)) {
     attempts[lane] = await listEvidenceAttempts(path.join(root, contract.root));
   }
 
-  const output = evaluateBindings({ ledger, candidate, attempts, observers });
+  const output = evaluateBindings({
+    ledger,
+    candidate,
+    attempts,
+    observers,
+    developmentCandidate,
+  });
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
   return hasBlockingIssues(output) ? 1 : 0;
 }
