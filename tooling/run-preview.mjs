@@ -135,11 +135,18 @@ async function main() {
         child.kill("SIGTERM");
       }
     });
+    let ownerStopSignal = null;
     const forward = (signal) => {
       if (!child.killed) child.kill(signal);
     };
-    const forwardInterrupt = () => forward("SIGINT");
-    const forwardTermination = () => forward("SIGTERM");
+    const forwardInterrupt = () => {
+      ownerStopSignal = "SIGINT";
+      forward("SIGINT");
+    };
+    const forwardTermination = () => {
+      ownerStopSignal = "SIGTERM";
+      forward("SIGTERM");
+    };
     process.once("SIGINT", forwardInterrupt);
     process.once("SIGTERM", forwardTermination);
     const outcome = await new Promise((resolve, reject) => {
@@ -153,6 +160,13 @@ async function main() {
     });
     if (protocolError) throw protocolError;
     if (outcome.signal) {
+      if (ownerStopSignal) {
+        process.stdout.write(
+          `Farol Next Preview stopped (owner ${ownerStopSignal === "SIGINT" ? "Ctrl+C" : ownerStopSignal}). Nothing else was touched.\n`,
+        );
+        process.exitCode = 130;
+        return;
+      }
       throw new Error(`application stopped by ${outcome.signal}`);
     }
     if (outcome.status !== 0) {
