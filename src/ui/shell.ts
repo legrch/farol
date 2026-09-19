@@ -3997,8 +3997,14 @@ async function start(): Promise<void> {
     if (parsed.data.action === "toggle-sidebar") toggleSidebar();
     else if (parsed.data.action === "open-quick-switcher") openCommands();
     else if (parsed.data.action === "open-settings") {
+      chatGptSignInOpened = false;
       setupJourney = { ...setupJourney, open: false };
       selectSection("settings");
+      void refreshSettingsAfterReturn();
+    } else if (parsed.data.action === "sign-in-returned") {
+      // The sign-in window closed and its outcome is recorded: the step's
+      // next action comes from that outcome, not from "a window is open".
+      chatGptSignInOpened = false;
       void refreshSettingsAfterReturn();
     } else closeOverlay();
   });

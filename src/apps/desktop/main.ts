@@ -892,7 +892,10 @@ async function recordChatGptSignInOutcome(
       // connection" or sign-in attempt tries again.
     }
   }
-  if (!setupOpen) publishShellAction("open-settings");
+  // Outside Setup the owner is brought to Settings; inside Setup the open
+  // step is told the window closed, so it shows the recorded outcome and
+  // its next action instead of the state from before sign-in.
+  publishShellAction(setupOpen ? "sign-in-returned" : "open-settings");
 }
 
 // The first turn of a Codex host thread admits its task like a new Browser
@@ -5306,6 +5309,7 @@ function publishShellAction(
     | "toggle-sidebar"
     | "open-quick-switcher"
     | "open-settings"
+    | "sign-in-returned"
     | "close-overlay",
 ): void {
   window?.webContents.send(channels.shellAction, { action });

@@ -8263,6 +8263,15 @@ async function signInReturnHitTest(chatGptPage) {
 // silent close and never "any navigation happened".
 async function waitForSignInReturnOutcome(instance) {
   await waitForWindowCount(instance.application, 1);
+  if (await instance.window.locator("#setup-dialog").isVisible()) {
+    // The open Setup step shows the recorded outcome's next action at once,
+    // not the "Check connection" it offered while the window was open.
+    await instance.window.waitForFunction(
+      () =>
+        document.querySelector("#setup-live-primary")?.textContent ===
+        "Open sign-in…",
+    );
+  }
   const afterReturn = await instance.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );

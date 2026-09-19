@@ -30,6 +30,7 @@ export const ShellActionSchema = z.strictObject({
     "toggle-sidebar",
     "open-quick-switcher",
     "open-settings",
+    "sign-in-returned",
     "close-overlay",
   ]),
 });
