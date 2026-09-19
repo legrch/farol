@@ -11,13 +11,24 @@ import {
 
 export type LiveTaskAdmission =
   | Readonly<{ status: "admitted"; task: ProductTask }>
-  | Readonly<{ status: "capacity" | "duplicate" }>;
+  | Readonly<{ status: "capacity" | "duplicate" | "promotion_pending" }>;
+
+// The other half of the promotion lease's mutual exclusion (see
+// `promotion-lease.ts`): a momentary, synchronous check of the same lease
+// file a promotion holds from before its drain check through placement. A
+// task admitted after that check completes cannot be admitted once the
+// lease is visible, which is exactly the gap the drain check's two reads
+// cannot fence by themselves.
+export type PromotionLeaseGuard = Readonly<{ isHeld(): boolean }>;
 
 export class LiveTaskRegistry {
   private readonly tasks: ProductTask[] = [];
   private revision = 0;
 
-  constructor(private readonly capacity: number) {
+  constructor(
+    private readonly capacity: number,
+    private readonly promotionLease?: PromotionLeaseGuard,
+  ) {
     if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > 5) {
       throw new Error("LIVE_TASK_CAPACITY_INVALID");
     }
@@ -25,6 +36,9 @@ export class LiveTaskRegistry {
 
   admit(candidate: ProductTask): LiveTaskAdmission {
     const task = ProductTaskSchema.parse(candidate);
+    if (this.promotionLease?.isHeld()) {
+      return { status: "promotion_pending" };
+    }
     if (this.tasks.length >= this.capacity) return { status: "capacity" };
     if (
       this.tasks.some(

@@ -30,6 +30,14 @@ async function userData() {
   return root;
 }
 
+// Every real writer of this state (live-task-store.ts, the quit receipt,
+// product-configuration.ts) creates its file owner-only; F3-3's reader now
+// insists on that too, so fixtures must earn the same mode a default
+// `fs.writeFile` under this machine's umask would not reliably give them.
+async function writeFile(file, content) {
+  await fs.writeFile(file, content, { mode: 0o600 });
+}
+
 function task(overrides = {}) {
   return {
     taskId: "task-a",
@@ -43,7 +51,7 @@ function task(overrides = {}) {
 }
 
 async function writeTasks(root, tasks) {
-  await fs.writeFile(
+  await writeFile(
     path.join(root, "farol-next-state", "live-tasks", "live-tasks.json"),
     JSON.stringify({ schema: 1, revision: 1, tasks }),
   );
@@ -66,7 +74,7 @@ describe("Q-08 activation obligations", () => {
         lifecycle: "completed",
       }),
     ]);
-    await fs.writeFile(
+    await writeFile(
       path.join(fresh, "farol-next-state", "last-quit.json"),
       JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
     );
@@ -98,7 +106,7 @@ describe("Q-08 activation obligations", () => {
         agent: { phase: "completed", parentDelivery: "pending" },
       }),
     ]);
-    await fs.writeFile(
+    await writeFile(
       path.join(
         root,
         "farol-next-state",
@@ -107,7 +115,7 @@ describe("Q-08 activation obligations", () => {
       ),
       JSON.stringify({ schema: 1, phase: "dispatch_intent" }),
     );
-    await fs.writeFile(
+    await writeFile(
       path.join(root, "farol-next-state", "last-quit.json"),
       JSON.stringify({ schema: 1, drained: false, unconfirmed: ["route-b"] }),
     );
@@ -131,17 +139,17 @@ describe("Q-08 activation obligations", () => {
 
   it("fails closed on state it cannot read, and admits the same root once its obligations are gone", async () => {
     const root = await userData();
-    await fs.writeFile(
+    await writeFile(
       path.join(root, "farol-next-state", "live-tasks", "live-tasks.json"),
       "{not json",
     );
     const unreadable = await activationObligations(root);
     expect(unreadable).toMatchObject({
       drained: false,
-      unreadable: ["live-tasks"],
+      unreadable: ["live-tasks:CORRUPT"],
     });
     expect(() => assertActivationDrained(unreadable)).toThrow(
-      "PROMOTION_STATE_UNREADABLE:live-tasks",
+      "PROMOTION_STATE_UNREADABLE:live-tasks:CORRUPT",
     );
     await writeTasks(root, [task({ lifecycle: "running" })]);
     expect((await activationObligations(root)).obligations).toEqual([
@@ -149,7 +157,7 @@ describe("Q-08 activation obligations", () => {
     ]);
     // The turn settled and the app quit cleanly: nothing is owed any more.
     await writeTasks(root, [task({ lifecycle: "completed" })]);
-    await fs.writeFile(
+    await writeFile(
       path.join(root, "farol-next-state", "last-quit.json"),
       JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
     );
@@ -173,59 +181,81 @@ describe("Q-08 activation obligations", () => {
       "chatgpt-task-journal.json",
     );
     const invalidTasks = {
-      "missing task list": { schema: 1, revision: 1 },
-      "task list that is an object": {
-        schema: 1,
-        revision: 1,
-        tasks: { a: task({ lifecycle: "running" }) },
-      },
-      "top-level array": [task({ lifecycle: "running" })],
-      "null task entry": { schema: 1, revision: 1, tasks: [null] },
-      "future schema": { schema: 2, revision: 1, tasks: [] },
-      "unknown lifecycle": {
-        schema: 1,
-        revision: 1,
-        tasks: [task({ lifecycle: "paused" })],
-      },
-      "agent without a delivery state": {
-        schema: 1,
-        revision: 1,
-        tasks: [task({ agent: { phase: "completed" } })],
-      },
-      "more tasks than the store holds": {
-        schema: 1,
-        revision: 1,
-        tasks: Array.from({ length: 6 }, (_, index) =>
-          task({ taskId: `task-${index}` }),
-        ),
-      },
+      "missing task list": [{ schema: 1, revision: 1 }, "MALFORMED"],
+      "task list that is an object": [
+        { schema: 1, revision: 1, tasks: { a: task({ lifecycle: "running" }) } },
+        "MALFORMED",
+      ],
+      "top-level array": [[task({ lifecycle: "running" })], "MALFORMED"],
+      "null task entry": [
+        { schema: 1, revision: 1, tasks: [null] },
+        "MALFORMED",
+      ],
+      "future schema": [
+        { schema: 2, revision: 1, tasks: [] },
+        "UNKNOWN_VERSION",
+      ],
+      "unknown lifecycle": [
+        { schema: 1, revision: 1, tasks: [task({ lifecycle: "paused" })] },
+        "MALFORMED",
+      ],
+      "agent without a delivery state": [
+        {
+          schema: 1,
+          revision: 1,
+          tasks: [task({ agent: { phase: "completed" } })],
+        },
+        "MALFORMED",
+      ],
+      "more tasks than the store holds": [
+        {
+          schema: 1,
+          revision: 1,
+          tasks: Array.from({ length: 6 }, (_, index) =>
+            task({ taskId: `task-${index}` }),
+          ),
+        },
+        "MALFORMED",
+      ],
     };
-    for (const [name, value] of Object.entries(invalidTasks)) {
-      await fs.writeFile(tasksFile, JSON.stringify(value));
+    for (const [name, [value, reason]] of Object.entries(invalidTasks)) {
+      await writeFile(tasksFile, JSON.stringify(value));
       const report = await activationObligations(root);
       expect(report, name).toMatchObject({
         drained: false,
         obligations: [],
-        unreadable: ["live-tasks"],
+        unreadable: [`live-tasks:${reason}`],
       });
       expect(() => assertActivationDrained(report), name).toThrow(
-        "PROMOTION_STATE_UNREADABLE:live-tasks",
+        `PROMOTION_STATE_UNREADABLE:live-tasks:${reason}`,
       );
     }
     await fs.rm(tasksFile);
     const invalidJournals = {
-      "journal without a phase": { schema: 1, operationId: "op-1" },
-      "journal with an unknown phase": { schema: 1, phase: "sent" },
-      "journal with a future schema": { schema: 2, phase: "prepared" },
-      "journal that is an array": [{ schema: 1, phase: "prepared" }],
+      "journal without a phase": [
+        { schema: 1, operationId: "op-1" },
+        "MALFORMED",
+      ],
+      "journal with an unknown phase": [
+        { schema: 1, phase: "sent" },
+        "MALFORMED",
+      ],
+      "journal with a future schema": [
+        { schema: 2, phase: "prepared" },
+        "UNKNOWN_VERSION",
+      ],
+      "journal that is an array": [
+        [{ schema: 1, phase: "prepared" }],
+        "MALFORMED",
+      ],
     };
-    for (const [name, value] of Object.entries(invalidJournals)) {
-      await fs.writeFile(journalFile, JSON.stringify(value));
+    for (const [name, [value, reason]] of Object.entries(invalidJournals)) {
+      await writeFile(journalFile, JSON.stringify(value));
       const report = await activationObligations(root);
       expect(report, name).toMatchObject({
         drained: false,
         obligations: [],
-        unreadable: ["chatgpt-task-journal"],
+        unreadable: [`chatgpt-task-journal:${reason}`],
       });
     }
     await fs.rm(journalFile);
@@ -235,10 +265,10 @@ describe("Q-08 activation obligations", () => {
       { schema: 1, drained: true },
       { schema: 1, drained: true, unconfirmed: [1] },
     ]) {
-      await fs.writeFile(quitFile, JSON.stringify(value));
+      await writeFile(quitFile, JSON.stringify(value));
       expect(await activationObligations(root)).toMatchObject({
         drained: false,
-        unreadable: ["last-quit"],
+        unreadable: ["last-quit:MALFORMED"],
       });
     }
     await fs.rm(quitFile);
@@ -253,11 +283,11 @@ describe("Q-08 activation obligations", () => {
         agent: { phase: "completed", parentDelivery: "acknowledged" },
       }),
     ]);
-    await fs.writeFile(
+    await writeFile(
       journalFile,
       JSON.stringify({ schema: 1, phase: "delivery_acknowledged" }),
     );
-    await fs.writeFile(
+    await writeFile(
       quitFile,
       JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
     );
@@ -297,11 +327,11 @@ describe("Q-08 activation obligations", () => {
     };
     // Otherwise idle: settled tasks, a delivered turn, a clean quit.
     await writeTasks(root, [task({ lifecycle: "completed" })]);
-    await fs.writeFile(
+    await writeFile(
       path.join(root, "farol-next-state", "last-quit.json"),
       JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
     );
-    await fs.writeFile(settingsFile, JSON.stringify(settings(pending)));
+    await writeFile(settingsFile, JSON.stringify(settings(pending)));
     const report = await activationObligations(root);
     expect(report).toMatchObject({
       drained: false,
@@ -318,22 +348,22 @@ describe("Q-08 activation obligations", () => {
       drained: false,
     });
     // A pending edit without its identity is not a settled one.
-    await fs.writeFile(
+    await writeFile(
       settingsFile,
       JSON.stringify(settings({ relativePath: "README.md" })),
     );
     await expect(activationObligations(root)).resolves.toMatchObject({
       drained: false,
-      unreadable: ["product-settings"],
+      unreadable: ["product-settings:MALFORMED"],
     });
-    await fs.writeFile(settingsFile, JSON.stringify({ schema: 2 }));
+    await writeFile(settingsFile, JSON.stringify({ schema: 2 }));
     await expect(activationObligations(root)).resolves.toMatchObject({
       drained: false,
-      unreadable: ["product-settings"],
+      unreadable: ["product-settings:UNKNOWN_VERSION"],
     });
     // Only the acknowledgment of that exact operation clears it: the
     // configuration service writes null, and then nothing is owed.
-    await fs.writeFile(settingsFile, JSON.stringify(settings(null)));
+    await writeFile(settingsFile, JSON.stringify(settings(null)));
     await expect(activationObligations(root)).resolves.toMatchObject({
       drained: true,
       obligations: [],
@@ -341,7 +371,7 @@ describe("Q-08 activation obligations", () => {
     });
     // Settings written before the field existed carry no pending edit.
     const { pendingEdit: _absent, ...computer } = settings(null).computer;
-    await fs.writeFile(
+    await writeFile(
       settingsFile,
       JSON.stringify({ ...settings(null), computer }),
     );
@@ -364,10 +394,62 @@ describe("Q-08 activation obligations", () => {
       "PROMOTION_USER_DATA_NOT_ABSOLUTE",
     );
   });
+
+  it("F3-3 refuses a symlink standing in for the state file, never follows it", async () => {
+    const root = await userData();
+    const outside = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-outside-state-"),
+    );
+    roots.push(outside);
+    // What an attacker or a race would want promotion to read instead: a
+    // fully idle record living outside the state directory.
+    await writeFile(
+      path.join(outside, "live-tasks.json"),
+      JSON.stringify({ schema: 1, revision: 1, tasks: [] }),
+    );
+    const tasksFile = path.join(
+      root,
+      "farol-next-state",
+      "live-tasks",
+      "live-tasks.json",
+    );
+    await fs.symlink(path.join(outside, "live-tasks.json"), tasksFile);
+    const report = await activationObligations(root);
+    expect(report).toMatchObject({
+      drained: false,
+      obligations: [],
+      unreadable: ["live-tasks:SYMLINK"],
+    });
+    expect(() => assertActivationDrained(report)).toThrow(
+      "PROMOTION_STATE_UNREADABLE:live-tasks:SYMLINK",
+    );
+  });
+
+  it("F3-3 refuses state that is not a private, single-owner regular file", async () => {
+    const root = await userData();
+    const tasksFile = path.join(
+      root,
+      "farol-next-state",
+      "live-tasks",
+      "live-tasks.json",
+    );
+    await writeTasks(root, [task()]);
+    await fs.chmod(tasksFile, 0o644);
+    const report = await activationObligations(root);
+    expect(report).toMatchObject({
+      drained: false,
+      obligations: [],
+      unreadable: ["live-tasks:UNSAFE"],
+    });
+    await fs.chmod(tasksFile, 0o600);
+    await expect(activationObligations(root)).resolves.toMatchObject({
+      drained: true,
+    });
+  });
   it("refuses a state that changed while it was being read", async () => {
     const root = await userData();
     await writeTasks(root, [task()]);
-    await fs.writeFile(
+    await writeFile(
       path.join(root, "farol-next-state", "last-quit.json"),
       JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
     );

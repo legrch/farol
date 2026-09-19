@@ -13,12 +13,16 @@ import {
   type SaveDialogOptions,
   type UtilityProcess,
 } from "electron";
+import { constants as fsConstants } from "node:fs";
 import {
   chmod,
   lstat,
   mkdir,
+  open,
   readFile,
   realpath,
+  rename,
+  rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -41,6 +45,7 @@ import {
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry } from "./live-task-registry";
+import { isPromotionLeaseHeldSync } from "./promotion-lease";
 import {
   reconcileTaskContexts,
   toProductTaskContext,
@@ -390,7 +395,9 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   failed: number;
 }> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
-const liveTaskRegistry = new LiveTaskRegistry(5);
+const liveTaskRegistry = new LiveTaskRegistry(5, {
+  isHeld: () => isPromotionLeaseHeldSync(app.getPath("userData")),
+});
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
 const liveTaskConversationUrls = new Map<string, string | null>();
@@ -1015,19 +1022,39 @@ async function recordSummaryFenceRecovery(
   );
 }
 
-// The outcome of the last quit's drain, kept privately for diagnostics.
+// The outcome of the last quit's drain: F3-3's reader (the tooling-side
+// `promotion-obligations.mjs` and its `promotion-lease.ts` counterpart) both
+// insist on a private regular file with no symlink standing in for it, so
+// this write earns that the same way `live-task-store.ts` does — a private
+// temporary file created next to the target, synced, then renamed over it,
+// never a direct write that a concurrent reader or a symlinked target could
+// observe half-written or redirected.
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
-  const file = path.join(
-    app.getPath("userData"),
-    "farol-next-state",
-    "last-quit.json",
-  );
-  await mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  await writeFile(
-    file,
-    `${JSON.stringify({ schema: 1, at: new Date().toISOString(), ...receipt })}\n`,
-    { mode: 0o600 },
-  );
+  const directory = path.join(app.getPath("userData"), "farol-next-state");
+  const file = path.join(directory, "last-quit.json");
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const serialized = `${JSON.stringify({ schema: 1, at: new Date().toISOString(), ...receipt })}\n`;
+  const temporary = path.join(directory, `.last-quit.json.${randomUUID()}.tmp`);
+  let handle;
+  try {
+    handle = await open(
+      temporary,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        (fsConstants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    await handle.writeFile(serialized, "utf8");
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporary, file);
+    await chmod(file, 0o600);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 // The relay socket path must stay under the 104-byte Unix socket limit, so it

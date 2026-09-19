@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -21,6 +22,8 @@ export const PROMOTION_OBLIGATIONS_SCHEMA =
   "farol.next.promotion-obligations/1";
 
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
+const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const CLOSE_ON_EXEC = fsConstants.O_CLOEXEC ?? 0;
 const TASK_LIFECYCLES = new Set([
   "event_driven",
   "idle",
@@ -55,18 +58,28 @@ function record(value) {
     : null;
 }
 
+const ok = (value) => ({ ok: true, value });
+const malformed = () => ({ ok: false, reason: "MALFORMED" });
+const unknownVersion = () => ({ ok: false, reason: "UNKNOWN_VERSION" });
+
+// Every shape validator below checks the exact schema literal its owning
+// store writes (live-task-store.ts, chatgpt-task-journal.ts, the desktop's
+// quit receipt, product-configuration.ts) before it looks at any other
+// field, so a future or older record is refused as a version mismatch
+// rather than folded into the same bucket as a merely malformed one. A
+// present record that parses as JSON but is not the shape its owner writes
+// is always malformed, never an empty obligation — only an absent record
+// owes nothing.
+
 // live-tasks.json as live-task-store writes it: schema 1 and at most five
 // stored tasks, each with a lifecycle from the product's closed set and, when
 // it has one, an Agent with a closed phase and delivery state.
 function liveTasks(value) {
   const stored = record(value);
-  if (
-    !stored ||
-    stored.schema !== 1 ||
-    !Array.isArray(stored.tasks) ||
-    stored.tasks.length > 5
-  ) {
-    return null;
+  if (!stored) return malformed();
+  if (stored.schema !== 1) return unknownVersion();
+  if (!Array.isArray(stored.tasks) || stored.tasks.length > 5) {
+    return malformed();
   }
   const tasks = [];
   for (const entry of stored.tasks) {
@@ -76,7 +89,7 @@ function liveTasks(value) {
       typeof task.taskId !== "string" ||
       !TASK_LIFECYCLES.has(task.lifecycle)
     ) {
-      return null;
+      return malformed();
     }
     let agent = null;
     if (task.agent !== undefined && task.agent !== null) {
@@ -86,7 +99,7 @@ function liveTasks(value) {
         !AGENT_PHASES.has(candidate.phase) ||
         !PARENT_DELIVERIES.has(candidate.parentDelivery)
       ) {
-        return null;
+        return malformed();
       }
       agent = {
         phase: candidate.phase,
@@ -95,32 +108,32 @@ function liveTasks(value) {
     }
     tasks.push({ lifecycle: task.lifecycle, agent });
   }
-  return { tasks };
+  return ok({ tasks });
 }
 
 // chatgpt-task-journal.json as chatgpt-task-journal writes it: schema 1 and
 // one closed phase.
 function taskJournal(value) {
   const stored = record(value);
-  if (!stored || stored.schema !== 1 || !JOURNAL_PHASES.has(stored.phase)) {
-    return null;
-  }
-  return { phase: stored.phase };
+  if (!stored) return malformed();
+  if (stored.schema !== 1) return unknownVersion();
+  if (!JOURNAL_PHASES.has(stored.phase)) return malformed();
+  return ok({ phase: stored.phase });
 }
 
 // last-quit.json as the desktop's quit receipt writes it.
 function quitReceipt(value) {
   const stored = record(value);
+  if (!stored) return malformed();
+  if (stored.schema !== 1) return unknownVersion();
   if (
-    !stored ||
-    stored.schema !== 1 ||
     typeof stored.drained !== "boolean" ||
     !Array.isArray(stored.unconfirmed) ||
     !stored.unconfirmed.every((name) => typeof name === "string")
   ) {
-    return null;
+    return malformed();
   }
-  return { drained: stored.drained, unconfirmed: stored.unconfirmed };
+  return ok({ drained: stored.drained, unconfirmed: stored.unconfirmed });
 }
 
 // product-settings.json as the configuration service writes it: schema 1,
@@ -128,11 +141,12 @@ function quitReceipt(value) {
 // the acknowledgment of that exact operation. Only its identity is read.
 function productSettings(value) {
   const stored = record(value);
-  if (!stored || stored.schema !== 1) return null;
+  if (!stored) return malformed();
+  if (stored.schema !== 1) return unknownVersion();
   const computer = record(stored.computer);
-  if (!computer) return null;
+  if (!computer) return malformed();
   if (computer.pendingEdit === undefined || computer.pendingEdit === null) {
-    return { pendingEdit: null };
+    return ok({ pendingEdit: null });
   }
   const pending = record(computer.pendingEdit);
   if (
@@ -140,34 +154,70 @@ function productSettings(value) {
     typeof pending.operationId !== "string" ||
     !pending.operationId
   ) {
-    return null;
+    return malformed();
   }
-  return { pendingEdit: { operationId: pending.operationId } };
+  return ok({ pendingEdit: { operationId: pending.operationId } });
+}
+
+// A private regular file only: no symlink (O_NOFOLLOW refuses to open one),
+// no directory or other non-regular node, no extra hard link, owned by this
+// process's own user, and closed to every other user's read or write. Any
+// state that is not exactly that is unsafe, whatever bytes it might hold.
+async function openPrivateStateFile(file) {
+  let handle;
+  try {
+    handle = await fs.open(
+      file,
+      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") return { status: "absent" };
+    if (error?.code === "ELOOP") return { status: "unsafe", reason: "SYMLINK" };
+    return { status: "unsafe", reason: "UNSAFE" };
+  }
+  const info = await handle.stat();
+  const effectiveUser = process.geteuid?.();
+  if (
+    !info.isFile() ||
+    info.nlink !== 1 ||
+    (effectiveUser !== undefined && info.uid !== effectiveUser) ||
+    (info.mode & 0o077) !== 0
+  ) {
+    await handle.close();
+    return { status: "unsafe", reason: "UNSAFE" };
+  }
+  if (info.size > MAX_STATE_BYTES) {
+    await handle.close();
+    return { status: "unsafe", reason: "OVERSIZED" };
+  }
+  return { status: "open", handle };
 }
 
 // Every read carries the digest of the bytes it saw, so two reads of the same
 // state can be compared without keeping the content.
 async function readState(file, shape) {
+  const opened = await openPrivateStateFile(file);
+  if (opened.status === "absent") return { status: "absent", digest: null };
+  if (opened.status === "unsafe") {
+    return { status: "unreadable", digest: null, reason: opened.reason };
+  }
   let text;
   try {
-    text = await fs.readFile(file, "utf8");
-  } catch (error) {
-    if (error?.code === "ENOENT") return { status: "absent", digest: null };
-    return { status: "unreadable", digest: null };
+    text = await opened.handle.readFile("utf8");
+  } finally {
+    await opened.handle.close();
   }
   const digest = createHash("sha256").update(text).digest("hex");
-  if (Buffer.byteLength(text) > MAX_STATE_BYTES)
-    return { status: "unreadable", digest };
   let parsed;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { status: "unreadable", digest };
+    return { status: "unreadable", digest, reason: "CORRUPT" };
   }
-  const value = shape(parsed);
-  return value
-    ? { status: "read", value, digest }
-    : { status: "unreadable", digest };
+  const outcome = shape(parsed);
+  return outcome.ok
+    ? { status: "read", value: outcome.value, digest }
+    : { status: "unreadable", digest, reason: outcome.reason };
 }
 
 const STATE_FILES = Object.freeze([
@@ -211,7 +261,7 @@ export async function activationObligations(userData, options = {}) {
   );
 
   const tasks = confirmed["live-tasks"];
-  if (tasks.status === "unreadable") unreadable.push("live-tasks");
+  if (tasks.status === "unreadable") unreadable.push(`live-tasks:${tasks.reason}`);
   else if (tasks.status === "read") {
     const list = tasks.value.tasks;
     const running = list.filter((task) => task.lifecycle === "running").length;
@@ -235,7 +285,7 @@ export async function activationObligations(userData, options = {}) {
   }
 
   const journal = confirmed["chatgpt-task-journal"];
-  if (journal.status === "unreadable") unreadable.push("chatgpt-task-journal");
+  if (journal.status === "unreadable") unreadable.push(`chatgpt-task-journal:${journal.reason}`);
   else if (journal.status === "read") {
     const phase = journal.value.phase;
     if (phase === "dispatch_intent" || phase === "result_retained") {
@@ -246,7 +296,7 @@ export async function activationObligations(userData, options = {}) {
   }
 
   const settings = confirmed["product-settings"];
-  if (settings.status === "unreadable") unreadable.push("product-settings");
+  if (settings.status === "unreadable") unreadable.push(`product-settings:${settings.reason}`);
   else if (settings.status === "read" && settings.value.pendingEdit) {
     obligations.push(
       `EDIT_DELIVERY_PENDING:${settings.value.pendingEdit.operationId}`,
@@ -254,7 +304,7 @@ export async function activationObligations(userData, options = {}) {
   }
 
   const quit = confirmed["last-quit"];
-  if (quit.status === "unreadable") unreadable.push("last-quit");
+  if (quit.status === "unreadable") unreadable.push(`last-quit:${quit.reason}`);
   else if (quit.status === "read" && !quit.value.drained) {
     obligations.push(
       `QUIT_UNCONFIRMED:${quit.value.unconfirmed.join(",") || "unknown"}`,
