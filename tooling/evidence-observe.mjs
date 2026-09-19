@@ -83,7 +83,7 @@ export function countProcesses(pattern, table) {
   return lines.filter((line) => line.length > 0 && pattern.test(line)).length;
 }
 
-function processTable() {
+export function processTable() {
   return execFileSync("/bin/ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
@@ -231,8 +231,18 @@ export async function observeAttempt({
     Date.parse(endedAt) >= Date.parse(terminal.endedAt);
   // An effect observer that never saw the product's own process corroborated
   // files only; a pattern that names no running process says nothing about
-  // the product, however clean the hashed receipts are.
-  const productObserved = (summary.processes.max ?? 0) > 0;
+  // the product, however clean the hashed receipts are. Only a sighting
+  // inside the attempt's own interval counts: the watch begins before the
+  // attempt does, and a process seen then -- a previous run's leftover -- is
+  // not this run's product.
+  const attemptBegan = Date.parse(started?.startedAt ?? "");
+  const attemptEnded = Date.parse(terminal?.endedAt ?? "");
+  const productObserved = samples.some(
+    (sample) =>
+      (sample.processes ?? 0) > 0 &&
+      Date.parse(sample.at) >= attemptBegan &&
+      Date.parse(sample.at) <= attemptEnded,
+  );
   const healthy =
     bound !== null &&
     terminalSeenAt !== null &&
