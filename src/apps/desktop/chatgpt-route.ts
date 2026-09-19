@@ -97,6 +97,20 @@ function hostOf(url: string): string {
 // How long the sign-in window's closing page read may take before the
 // outcome is reported as unknown instead of not at all.
 const SIGN_IN_CLOSE_OBSERVATION_MS = 2_000;
+
+// A page read taken around closing the sign-in window, bounded so that
+// neither the close nor the reported outcome can wait on it forever: after
+// the bound it yields null, which is reported as "unknown".
+function boundedSignInObservation(
+  read: Promise<ChatGptPageObservation>,
+): Promise<ChatGptPageObservation | null> {
+  return Promise.race([
+    read,
+    new Promise<null>((resolve) =>
+      setTimeout(() => resolve(null), SIGN_IN_CLOSE_OBSERVATION_MS),
+    ),
+  ]);
+}
 const SIGN_IN_RETURN_SENTINEL = "farol-sign-in-return-to-farol";
 
 // The Return-to-Farol control is only ever added to ChatGPT's own pages. An
@@ -530,7 +544,7 @@ export class ChatGptRoute {
   private observedTaskRunning: boolean | null = null;
   private signInMode = false;
   private signInReported = false;
-  private pendingSignInObservation: Promise<ChatGptPageObservation> | null =
+  private pendingSignInObservation: Promise<ChatGptPageObservation | null> | null =
     null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
@@ -625,7 +639,7 @@ export class ChatGptRoute {
     // open and the window closes afterwards. A read begun inside the close
     // itself races the teardown and usually ends as "unknown".
     if (this.signInMode && this.pendingSignInObservation === null) {
-      const observation = this.observe();
+      const observation = boundedSignInObservation(this.observe());
       this.pendingSignInObservation = observation;
       void observation.then(close, close);
       return;
@@ -671,7 +685,9 @@ export class ChatGptRoute {
       // `requestSignInReturn` prefers a real `close()`. Reading it now is
       // the only way to report a truthful status rather than "unknown".
       if (this.signInMode && this.pendingSignInObservation === null) {
-        this.pendingSignInObservation = this.observe();
+        this.pendingSignInObservation = boundedSignInObservation(
+          this.observe(),
+        );
       }
     });
     candidate.onClosed(() => {
@@ -685,20 +701,9 @@ export class ChatGptRoute {
         void (async () => {
           let status: ChatGptSignInStatus = "unknown";
           try {
-            // The page is read while the window closes. A read that never
-            // settles because the frame went away first must not swallow
-            // the outcome: it is bounded, and then reported as unknown.
-            const observation = pending
-              ? await Promise.race([
-                  pending,
-                  new Promise<null>((resolve) =>
-                    setTimeout(
-                      () => resolve(null),
-                      SIGN_IN_CLOSE_OBSERVATION_MS,
-                    ),
-                  ),
-                ])
-              : null;
+            // Every read taken around closing is bounded (see
+            // boundedSignInObservation); null means it did not answer.
+            const observation = pending ? await pending : null;
             if (observation?.state === "authenticated")
               status = "authenticated";
             else if (observation?.state === "signed_out")

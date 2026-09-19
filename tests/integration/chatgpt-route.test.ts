@@ -873,3 +873,76 @@ describe("ChatGPT shared partition lifecycle", () => {
     expect(sharedSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ChatGPT sign-in return", () => {
+  it("closes on one Return and reports one unknown outcome when the page read never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = embeddedSurface();
+      const mainFrame = {
+        processId: 1,
+        routingId: 7,
+        url: "https://chatgpt.com/",
+      };
+      Object.assign(base.webContents, {
+        mainFrame,
+        executeJavaScript: vi.fn(() => new Promise(() => undefined)),
+      });
+      const close = vi.fn(() => base.destroy());
+      const surface = { ...base, kind: "window" as const, close };
+      const outcomes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+        onSignInOutcome: (status) => outcomes.push(status),
+      });
+      await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+      base.webContents.emit("console-message", {
+        message: "farol-sign-in-return-to-farol",
+        frame: mainFrame,
+      });
+      expect(close).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(close).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(outcomes).toEqual(["unknown"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores the return signal from a frame other than the page's top-level frame", async () => {
+    const base = embeddedSurface();
+    const mainFrame = {
+      processId: 1,
+      routingId: 7,
+      url: "https://chatgpt.com/",
+    };
+    Object.assign(base.webContents, {
+      mainFrame,
+      executeJavaScript: vi.fn(async () => ({})),
+    });
+    const close = vi.fn(() => base.destroy());
+    const surface = { ...base, kind: "window" as const, close };
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+    base.webContents.emit("console-message", {
+      message: "farol-sign-in-return-to-farol",
+      frame: { processId: 2, routingId: 9, url: "https://chatgpt.com/" },
+    });
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+  });
+});
