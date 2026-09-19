@@ -8039,7 +8039,18 @@ if (blockedCases.length > 0) {
           }
         }
       }
+      const panelRight = panel.getBoundingClientRect().right;
+      const protruding = [...panel.querySelectorAll("*")]
+        .filter(
+          (element) => element.getBoundingClientRect().right > panelRight + 1,
+        )
+        .slice(0, 6)
+        .map(
+          (element) =>
+            `${element.id || element.className || element.tagName.toLowerCase()}:${Math.round(element.getBoundingClientRect().right - panelRight)}px`,
+        );
       return {
+        protruding,
         panelHorizontalOverflow: panel.scrollWidth > panel.clientWidth + 1,
         documentHorizontalOverflow:
           document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -8063,7 +8074,7 @@ if (blockedCases.length > 0) {
       assert.equal(
         measured.panelHorizontalOverflow,
         false,
-        `Settings panel has no horizontal scroll at ${width}px`,
+        `Settings panel has no horizontal scroll at ${width}px (protruding: ${measured.protruding.join(", ")})`,
       );
       assert.equal(
         measured.documentHorizontalOverflow,
