@@ -1553,10 +1553,18 @@ export class ChatGptRoute {
         }
       });
       contents.on("console-message", (details) => {
+        // Only the page's own top-level frame may send the return signal: an
+        // embedded frame of another origin on a ChatGPT page must not be able
+        // to close the sign-in window.
+        const frame = details.frame;
         if (
           this.signInMode &&
           details.message === SIGN_IN_RETURN_SENTINEL &&
-          isChatGptPage(contents.getURL(), this.options.homeUrl) &&
+          frame !== null &&
+          frame !== undefined &&
+          frame.processId === contents.mainFrame.processId &&
+          frame.routingId === contents.mainFrame.routingId &&
+          isChatGptPage(frame.url, this.options.homeUrl) &&
           this.ownsRouteContents(contents)
         ) {
           this.requestSignInReturn();

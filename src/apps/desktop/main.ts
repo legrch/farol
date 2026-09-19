@@ -359,16 +359,12 @@ let connectorTaskAdmission = false;
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
 
-function transitionRefusal(
-  heldBy: ReturnType<AuthorityTransitionReservation["current"]>,
-): ProductConfigurationResult {
-  return configurationFailure(
-    heldBy === "agent-admission"
-      ? "CODEX_HOST_TASK_IN_PROGRESS"
-      : heldBy === "connector-start"
-        ? "CONNECTOR_STOP_REQUIRED"
-        : "AUTHORITY_CHANGE_IN_PROGRESS",
-  );
+// Whichever of an authority change, a connector start or an Agent admission
+// holds the reservation, the loser is told that a transition is in progress
+// and to retry: "stop the connector" or "stop the Agent task" would name an
+// action the owner cannot take while that start is still underway.
+function transitionRefusal(): ProductConfigurationResult {
+  return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
 }
 let chatGptRoute: ChatGptRoute | null = null;
 // The most recent content-free block the sign-in surface reported (host,
@@ -2653,12 +2649,29 @@ async function selectedWorkspace(): Promise<
 async function reverifyDiscoveredCandidate(
   kind: "codex" | "tunnel-client",
   requestedPath: string,
-): Promise<DiscoveryCandidate | null> {
+): Promise<DiscoveryCandidate | "stale" | "declined"> {
   const discovered = await discoverExecutables(kind);
   const candidate = discovered.candidates.find(
     (entry) => entry.path === requestedPath && entry.verdict !== "refused",
   );
-  return candidate ?? null;
+  if (!candidate) return "stale";
+  if (candidate.verdict === "offer") return candidate;
+  // A candidate Farol does not trust automatically runs only after the owner
+  // confirms it in a dialog this process shows: a renderer request alone is
+  // not the owner's choice.
+  if (!window) return "declined";
+  const { response } = await dialog.showMessageBox(window, {
+    type: "warning",
+    buttons: ["Cancel", "Use this file"],
+    defaultId: 0,
+    cancelId: 0,
+    message:
+      kind === "codex"
+        ? "Use a Codex that is not confirmed as signed by OpenAI?"
+        : "Use a tunnel-client that does not match the reviewed build?",
+    detail: `${candidate.path}\n\nFarol could not confirm where this file came from. Continue only if you placed it there yourself.`,
+  });
+  return response === 1 ? candidate : "declined";
 }
 
 async function selectedCodexExecutable(): Promise<
@@ -2855,7 +2868,7 @@ async function startSecureMcpConnector(
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
   }
   const transition = authorityTransitions.tryReserve("connector-start");
-  if (!transition) return transitionRefusal(authorityTransitions.current());
+  if (!transition) return transitionRefusal();
   connectorTaskAdmission = true;
   try {
     if (repair) {
@@ -3304,9 +3317,7 @@ async function configureProduct(
     "authority-change",
     () => configureAdmittedProduct(command),
   );
-  return reserved.admitted
-    ? reserved.value
-    : transitionRefusal(reserved.heldBy);
+  return reserved.admitted ? reserved.value : transitionRefusal();
 }
 
 async function configureAdmittedProduct(
@@ -3348,8 +3359,11 @@ async function configureAdmittedProduct(
         "tunnel-client",
         command.path,
       );
-      if (!candidate) {
+      if (candidate === "stale") {
         return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+      }
+      if (candidate === "declined") {
+        return configurationFailure("TUNNEL_CLIENT_PICKER_CANCELLED");
       }
       return verifyTunnelClientExecutable(candidate.path);
     }
@@ -3449,8 +3463,11 @@ async function configureAdmittedProduct(
         "codex",
         command.path,
       );
-      if (!candidate) {
+      if (candidate === "stale") {
         return configurationFailure("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
+      }
+      if (candidate === "declined") {
+        return configurationFailure("CODEX_HOST_PICKER_CANCELLED");
       }
       return verifyCodexExecutable(candidate.path);
     }
@@ -3717,7 +3734,7 @@ async function configureAdmittedProduct(
       // changed after it was read.
       const agentAdmission = authorityTransitions.tryReserve("agent-admission");
       if (!agentAdmission) {
-        return transitionRefusal(authorityTransitions.current());
+        return transitionRefusal();
       }
       const current = configuration.snapshot();
       if (
