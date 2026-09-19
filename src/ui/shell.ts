@@ -80,7 +80,10 @@ function transitionRefusalMessage(error: string): string | null {
   if (error === "AUTHORITY_CHANGE_IN_PROGRESS") {
     return "Another change to Computer access, a connector start or an Agent start is in progress. Try again when it has finished.";
   }
-  if (error === "WORKSPACE_COMMAND_UNSUPPORTED") {
+  // The main process reports the native gate's WORKSPACE_COMMAND_UNSUPPORTED
+  // as this product code, and only the Git verifiers produce it: while the
+  // F1-8 gate is in place every Git status or HEAD request ends here.
+  if (error === "WORKSPACE_COMMAND_UNAVAILABLE") {
     return "Git checks are off in this build: Git cannot yet be confined to the approved folder (open review finding F1-8). Listing, searching and reading files are not affected.";
   }
   return null;
