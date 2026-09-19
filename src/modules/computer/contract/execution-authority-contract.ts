@@ -29,6 +29,46 @@ const WorkspaceExclusionSchema = z.strictObject({
   path: z.string().min(1).max(4_096),
 });
 
+// Present only on a granted authority (the response), never on a caller's
+// own narrowing request: the caller asks for a scope, it does not get to
+// claim where that scope's restriction came from. `.optional()` is what
+// lets a record produced before this field existed still parse — a missing
+// value is read back as unknown provenance, never defaulted to
+// "task-grant" (see `codex-agent-workspace-probe.ts`'s `participant()`).
+const WorkspaceRestrictionSourceSchema = z.enum([
+  "task-grant",
+  "owner-restriction",
+]);
+const ExclusionRestrictionSourceSchema = z.enum([
+  "computer-approval",
+  "task-grant",
+  "owner-restriction",
+]);
+
+const GrantedWorkspaceScopeSchema = z.discriminatedUnion("mode", [
+  z.strictObject({
+    workspaceId: z.string().min(1).max(120),
+    mode: z.literal("subtree"),
+    root: z.string().min(1).max(4_096),
+    access: z.enum(["read", "write"]),
+    restrictionSource: WorkspaceRestrictionSourceSchema.optional(),
+  }),
+  z.strictObject({
+    workspaceId: z.string().min(1).max(120),
+    mode: z.literal("exact"),
+    root: z.string().min(1).max(4_096),
+    paths: z.array(z.string().min(1).max(4_096)).min(1).max(256),
+    access: z.enum(["read", "write"]),
+    restrictionSource: WorkspaceRestrictionSourceSchema.optional(),
+  }),
+]);
+
+const GrantedWorkspaceExclusionSchema = z.strictObject({
+  workspaceId: z.string().min(1).max(120),
+  path: z.string().min(1).max(4_096),
+  restrictionSource: ExclusionRestrictionSourceSchema.optional(),
+});
+
 const AuthorityNarrowingSchema = z.strictObject({
   workspaces: z.array(WorkspaceScopeSchema).max(64),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
@@ -61,12 +101,18 @@ const DelegatedAuthoritySchema = z.strictObject({
   taskEpoch: z.number().int().nonnegative(),
   computerId: z.string().min(1).max(120),
   computerGeneration: z.number().int().nonnegative(),
-  workspaces: z.array(WorkspaceScopeSchema).max(64),
-  excludedPaths: z.array(WorkspaceExclusionSchema).max(32),
+  workspaces: z.array(GrantedWorkspaceScopeSchema).max(64),
+  excludedPaths: z.array(GrantedWorkspaceExclusionSchema).max(32),
   capabilities: z.array(AuthorityCapabilitySchema).max(16),
   network: z.enum(["none", "approved"]),
   commands: z.enum(["none", "verification"]),
   expiresAt: z.number().finite().nonnegative(),
+  // Marks this record as carrying real provenance (added alongside
+  // `restrictionSource` above). Absent on a record from before this field
+  // existed, which is exactly the signal `participant()` uses to read such
+  // a record back as unknown provenance rather than trusting a
+  // `restrictionSource` it has no basis to believe.
+  authorityShapeVersion: z.literal(1).optional(),
 });
 
 const AuthorityErrorCodeSchema = z.enum([

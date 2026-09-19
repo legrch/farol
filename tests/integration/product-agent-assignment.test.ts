@@ -223,9 +223,16 @@ describe("product Agent assignment composition", () => {
             mode: "subtree",
             root: "/workspace/approved",
             access: "read",
+            restrictionSource: "task-grant",
           },
         ],
-        excludedPaths: [{ workspaceId, path: "/workspace/approved/private" }],
+        excludedPaths: [
+          {
+            workspaceId,
+            path: "/workspace/approved/private",
+            restrictionSource: "task-grant",
+          },
+        ],
         capabilities: [
           "workspace.list",
           "workspace.read",

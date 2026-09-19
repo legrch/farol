@@ -1,9 +1,37 @@
 import type { DelegateExecutionAuthority } from "../app/service/delegate-execution-authority";
+import type {
+  ExclusionRestrictionSource,
+  WorkspaceRestrictionSource,
+} from "../domain/execution-authority";
 import {
   ExecutionAuthorityDelegationRequestSchema,
   type ExecutionAuthorityContract,
   type ExecutionAuthorityDelegationResponse,
 } from "../contract/execution-authority-contract";
+
+// This handler only ever wire-encodes a `TaskGrant` produced by
+// `deriveTaskGrant` / `narrowTaskGrant` (via `DelegateExecutionAuthority`),
+// and both always stamp a concrete source. "unknown" only exists for a
+// record reconstructed from outside this module (see
+// `codex-agent-workspace-probe.ts`'s `participant()`) and can never reach
+// here — a loud failure beats silently mislabeling it as "task-grant".
+function grantedWorkspaceSource(
+  source: WorkspaceRestrictionSource,
+): "task-grant" | "owner-restriction" {
+  if (source === "unknown") {
+    throw new Error("AUTHORITY_GRANT_PROVENANCE_INVALID");
+  }
+  return source;
+}
+
+function grantedExclusionSource(
+  source: ExclusionRestrictionSource,
+): "computer-approval" | "task-grant" | "owner-restriction" {
+  if (source === "unknown") {
+    throw new Error("AUTHORITY_GRANT_PROVENANCE_INVALID");
+  }
+  return source;
+}
 
 export class ExecutionAuthorityContractHandler implements ExecutionAuthorityContract {
   constructor(private readonly service: DelegateExecutionAuthority) {}
@@ -57,6 +85,9 @@ export class ExecutionAuthorityContractHandler implements ExecutionAuthorityCont
                 mode: scope.mode,
                 root: scope.root,
                 access: scope.access,
+                restrictionSource: grantedWorkspaceSource(
+                  scope.restrictionSource,
+                ),
               }
             : {
                 workspaceId: scope.workspaceId,
@@ -64,17 +95,22 @@ export class ExecutionAuthorityContractHandler implements ExecutionAuthorityCont
                 root: scope.root,
                 paths: [...scope.paths],
                 access: scope.access,
+                restrictionSource: grantedWorkspaceSource(
+                  scope.restrictionSource,
+                ),
               },
         ),
-        excludedPaths: authority.grant.excludedPaths.map(
-          ({ restrictionSource: _restrictionSource, ...exclusion }) => ({
-            ...exclusion,
-          }),
-        ),
+        excludedPaths: authority.grant.excludedPaths.map((exclusion) => ({
+          ...exclusion,
+          restrictionSource: grantedExclusionSource(
+            exclusion.restrictionSource,
+          ),
+        })),
         capabilities: [...authority.grant.capabilities],
         network: authority.grant.network,
         commands: authority.grant.commands,
         expiresAt: authority.grant.expiresAt,
+        authorityShapeVersion: 1,
       },
     };
   }

@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DelegatedAgentAuthority } from "../../src/modules/agent/app/port/execution-authority";
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
-import { CodexAgentWorkspaceProbe } from "../../src/apps/desktop/codex-agent-workspace-probe";
+import {
+  CodexAgentWorkspaceProbe,
+  participant,
+} from "../../src/apps/desktop/codex-agent-workspace-probe";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
@@ -220,5 +223,62 @@ describe("Codex child workspace enforcement probe", () => {
       code: "AGENT_WORKSPACE_BINDING_INVALID",
     });
     expect(execute).not.toHaveBeenCalled();
+  });
+});
+
+describe("Codex child workspace authority provenance", () => {
+  it("reports an owner-restriction denial through the public contract and the Agent port, not as an ordinary task grant", async () => {
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>();
+    const probe = new CodexAgentWorkspaceProbe(
+      settings,
+      { execute },
+      () => 1_000,
+    );
+    const narrowed = request({
+      authorityShapeVersion: 1,
+      workspaces: authority.workspaces.map((workspace) => ({
+        ...workspace,
+        restrictionSource: "owner-restriction" as const,
+      })),
+      excludedPaths: authority.excludedPaths.map((exclusion) => ({
+        ...exclusion,
+        restrictionSource: "owner-restriction" as const,
+      })),
+    });
+
+    const denied = await probe.execute({
+      identity: narrowed.identity,
+      authority: narrowed.authority,
+      workspaceId,
+      operation: { kind: "workspace.read", relativePath: "private" },
+      threadId: narrowed.threadId,
+      turnId: narrowed.turnId,
+      callId: narrowed.callId,
+    });
+
+    expect(denied).toEqual({
+      status: "failed",
+      code: "AUTHORITY_PATH_DENIED",
+      source: "owner-restriction",
+      retry: "never",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("reads a record from before provenance existed back as unknown, never as a task grant", () => {
+    // `authority` carries neither `authorityShapeVersion` nor any
+    // `restrictionSource` — exactly the shape a record produced before this
+    // field existed would still have.
+    const reconstructed = participant({
+      identity: request().identity,
+      authority,
+    });
+
+    for (const workspace of reconstructed.grant.workspaces) {
+      expect(workspace.restrictionSource).toBe("unknown");
+    }
+    for (const exclusion of reconstructed.grant.excludedPaths) {
+      expect(exclusion.restrictionSource).toBe("unknown");
+    }
   });
 });

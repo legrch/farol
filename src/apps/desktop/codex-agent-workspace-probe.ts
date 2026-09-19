@@ -46,8 +46,29 @@ function relativePath(root: string, candidate: string): string | null {
   return inside(root, candidate) ? candidate.slice(root.length + 1) : null;
 }
 
-function participant(request: AuthorityBoundRequest): ParticipantAuthority {
+// The authority arriving here already crossed the public Computer contract
+// and the Agent port — both untrusted module boundaries. `restrictionSource`
+// is trusted only when the record explicitly declares the shape version
+// that introduced it; anything else (a record from before that version, or
+// a field simply left off) reads back as "unknown" provenance. A denial
+// caused by an owner narrowing must be able to say so, and a legacy record
+// must never be coerced into looking like an ordinary task grant it never
+// claimed to be.
+export function participant(request: AuthorityBoundRequest): ParticipantAuthority {
   const authority = request.authority;
+  const provenanceTrusted = authority.authorityShapeVersion === 1;
+  const workspaceSource = (
+    declared: "task-grant" | "owner-restriction" | undefined,
+  ): "task-grant" | "owner-restriction" | "unknown" =>
+    provenanceTrusted && declared ? declared : "unknown";
+  const exclusionSource = (
+    declared:
+      | "computer-approval"
+      | "task-grant"
+      | "owner-restriction"
+      | undefined,
+  ): "computer-approval" | "task-grant" | "owner-restriction" | "unknown" =>
+    provenanceTrusted && declared ? declared : "unknown";
   return {
     participantId: authority.participantId,
     parentParticipantId: authority.parentParticipantId,
@@ -63,16 +84,19 @@ function participant(request: AuthorityBoundRequest): ParticipantAuthority {
       computerGeneration: authority.computerGeneration,
       workspaces: authority.workspaces.map((workspace) =>
         workspace.mode === "subtree"
-          ? { ...workspace, restrictionSource: "task-grant" as const }
+          ? {
+              ...workspace,
+              restrictionSource: workspaceSource(workspace.restrictionSource),
+            }
           : {
               ...workspace,
               paths: [...workspace.paths],
-              restrictionSource: "task-grant" as const,
+              restrictionSource: workspaceSource(workspace.restrictionSource),
             },
       ),
       excludedPaths: authority.excludedPaths.map((entry) => ({
         ...entry,
-        restrictionSource: "task-grant" as const,
+        restrictionSource: exclusionSource(entry.restrictionSource),
       })),
       capabilities: [...authority.capabilities],
       network: authority.network,
@@ -135,6 +159,10 @@ function authorityMatchesCurrentPolicy(
   );
   if (!derived.ok) return false;
   const grant = derived.value;
+  // This check is about the *authorization* content (paths, capabilities,
+  // network, commands, expiry) matching what current policy would derive —
+  // provenance annotations are a separate concern `participant()` carries
+  // through on its own, so both sides are compared with them stripped.
   const publicGrant = {
     ...grant,
     workspaces: grant.workspaces.map(
@@ -154,8 +182,13 @@ function authorityMatchesCurrentPolicy(
       taskEpoch: authority.taskEpoch,
       computerId: authority.computerId,
       computerGeneration: authority.computerGeneration,
-      workspaces: authority.workspaces,
-      excludedPaths: authority.excludedPaths,
+      workspaces: authority.workspaces.map(
+        ({ restrictionSource: _restrictionSource, ...workspace }) =>
+          workspace,
+      ),
+      excludedPaths: authority.excludedPaths.map(
+        ({ restrictionSource: _restrictionSource, ...entry }) => entry,
+      ),
       capabilities: authority.capabilities,
       network: authority.network,
       commands: authority.commands,

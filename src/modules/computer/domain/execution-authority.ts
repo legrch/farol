@@ -58,12 +58,27 @@ export type ExactWorkspaceScope = Readonly<{
 
 export type WorkspaceScope = SubtreeWorkspaceScope | ExactWorkspaceScope;
 
+// "unknown" is never produced by this module: `deriveTaskGrant` and
+// `narrowTaskGrant` below always stamp a concrete source. It exists so an
+// authority reconstructed from an external record that predates provenance
+// (see `codex-agent-workspace-probe.ts`'s `participant()`) can say so
+// honestly instead of being coerced into looking like an ordinary grant.
+export type WorkspaceRestrictionSource =
+  | "task-grant"
+  | "owner-restriction"
+  | "unknown";
+export type ExclusionRestrictionSource =
+  | "computer-approval"
+  | "task-grant"
+  | "owner-restriction"
+  | "unknown";
+
 type GrantedWorkspaceScope = WorkspaceScope &
-  Readonly<{ restrictionSource: "task-grant" | "owner-restriction" }>;
+  Readonly<{ restrictionSource: WorkspaceRestrictionSource }>;
 
 export type GrantedWorkspaceExclusion = WorkspaceExclusion &
   Readonly<{
-    restrictionSource: "computer-approval" | "task-grant" | "owner-restriction";
+    restrictionSource: ExclusionRestrictionSource;
   }>;
 
 export type ComputerApproval = Readonly<{

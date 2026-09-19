@@ -22,6 +22,40 @@ export type AgentWorkspaceScope =
       access: "read" | "write";
     }>;
 
+// Only a granted authority (the response side of `AgentAuthorityPort`)
+// carries where its restriction came from; a caller's own narrowing request
+// never does — it asks for a scope, it does not get to assert its
+// provenance. Optional so a record produced before this field existed still
+// matches the type: `undefined` is read back as unknown provenance, never
+// defaulted to "task-grant" (see `codex-agent-workspace-probe.ts`'s
+// `participant()`).
+export type GrantedAgentWorkspaceScope =
+  | Readonly<{
+      workspaceId: string;
+      mode: "subtree";
+      root: string;
+      access: "read" | "write";
+      restrictionSource?: "task-grant" | "owner-restriction" | undefined;
+    }>
+  | Readonly<{
+      workspaceId: string;
+      mode: "exact";
+      root: string;
+      paths: readonly string[];
+      access: "read" | "write";
+      restrictionSource?: "task-grant" | "owner-restriction" | undefined;
+    }>;
+
+export type GrantedAgentWorkspaceExclusion = Readonly<{
+  workspaceId: string;
+  path: string;
+  restrictionSource?:
+    | "computer-approval"
+    | "task-grant"
+    | "owner-restriction"
+    | undefined;
+}>;
+
 export type AgentAuthorityNarrowing = Readonly<{
   workspaces: readonly AgentWorkspaceScope[];
   excludedPaths?:
@@ -56,15 +90,15 @@ export type DelegatedAgentAuthority = Readonly<{
   taskEpoch: number;
   computerId: string;
   computerGeneration: number;
-  workspaces: readonly AgentWorkspaceScope[];
-  excludedPaths: readonly Readonly<{
-    workspaceId: string;
-    path: string;
-  }>[];
+  workspaces: readonly GrantedAgentWorkspaceScope[];
+  excludedPaths: readonly GrantedAgentWorkspaceExclusion[];
   capabilities: readonly AgentAuthorityCapability[];
   network: "none" | "approved";
   commands: "none" | "verification";
   expiresAt: number;
+  // Absent on a record produced before provenance existed. See
+  // `GrantedAgentWorkspaceScope` above.
+  authorityShapeVersion?: 1 | undefined;
 }>;
 
 export type AgentAuthorityFailureSource =
