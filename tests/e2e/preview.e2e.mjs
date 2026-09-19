@@ -6120,7 +6120,9 @@ try {
   assert.equal(initialChrome.fullScreen, false);
   if (process.platform === "darwin") {
     assert.deepEqual(initialChrome.trafficLightPosition, { x: 14, y: 18 });
-    assert.equal(initialWatchGeometry.toggle.x, 75);
+    // Traffic-light x 14 + cluster width 52 + clearance 12
+    // (window-chrome-geometry.ts sidebarToggleLeft).
+    assert.equal(initialWatchGeometry.toggle.x, 78);
   }
 
   await invokeApplicationMenu(normal.application, "view.toggle-sidebar");
@@ -7121,7 +7123,7 @@ try {
         () => document.documentElement.dataset.fullScreen === "false",
       );
       if (process.platform === "darwin") {
-        assert.equal((await watchRailGeometry(normal.window)).toggle.x, 75);
+        assert.equal((await watchRailGeometry(normal.window)).toggle.x, 78);
         assert.deepEqual(
           (await nativeWindowChrome(normal.application)).trafficLightPosition,
           { x: 14, y: 18 },
