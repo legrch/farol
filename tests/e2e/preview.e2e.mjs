@@ -6040,11 +6040,12 @@ try {
     );
   }
   await completeSetup(normal, true, true, true, true, "demo");
-  // Setup's last message is not lost with the dialog: it moves to Settings.
+  // Setup's last message is not lost with the dialog: it moves to Settings
+  // (finishing Setup opens Browser, so the Settings panel is not shown yet).
   await normal.window
     .locator("#settings-feedback")
     .getByText("Setup saved. Limited mode is open.", { exact: true })
-    .waitFor();
+    .waitFor({ state: "attached" });
   cases.push("native-codex-host-live-tool-verified");
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
