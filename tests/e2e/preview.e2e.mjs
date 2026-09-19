@@ -2719,6 +2719,19 @@ const setupScreens = [
   ["verify", "setup-5-verify-wide.png"],
 ];
 
+// The native title of the window showing `url` — what the owner sees in the
+// title bar and Window menu. Playwright's page.title() is the page's own
+// document.title, which Farol deliberately does not show.
+async function nativeWindowTitle(application, url) {
+  return application.evaluate(
+    ({ BrowserWindow }, pageUrl) =>
+      BrowserWindow.getAllWindows()
+        .find((candidate) => candidate.webContents.getURL().startsWith(pageUrl))
+        ?.getTitle() ?? null,
+    url,
+  );
+}
+
 // Finishes first-run Setup with Continue only. Each step is saved before the
 // journey advances, so the next click waits for the step to change: clicking
 // ahead of the save repeats a step and the dialog never closes.
@@ -8285,7 +8298,10 @@ if (blockedCases.length > 0) {
     const chatGptPage = await chatGptWindow;
     await chatGptPage.waitForURL(signIn.chatGptFixture.url);
     await waitForWindowCount(signIn.application, 2);
-    assert.equal(await chatGptPage.title(), "Sign in to ChatGPT — Farol");
+    assert.equal(
+      await nativeWindowTitle(signIn.application, signIn.chatGptFixture.url),
+      "Sign in to ChatGPT — Farol",
+    );
     const banner = chatGptPage.locator("#farol-sign-in-banner");
     await banner.waitFor({ state: "visible" });
     assert.match(await banner.innerText(), /Return to Farol/u);
@@ -8315,7 +8331,7 @@ if (blockedCases.length > 0) {
       host: "example.invalid",
     });
     assert.equal(
-      await chatGptPage.title(),
+      await nativeWindowTitle(signIn.application, signIn.chatGptFixture.url),
       "Sign in to ChatGPT — Farol",
       "the blocked navigation never left the sign-in page",
     );
