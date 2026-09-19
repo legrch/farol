@@ -66,6 +66,7 @@ function passingAttempt(lane, terminalOverrides = {}, extra = {}) {
 // attempt's byproducts and the last sha256 it sampled of terminal.json,
 // both consistent with `passingAttempt`'s defaults above.
 const observer = Object.freeze({
+  schema: "farol.next.effect-observer/v1",
   healthy: true,
   lane: "sealed-package",
   attemptId,
@@ -78,6 +79,11 @@ const observer = Object.freeze({
     endedAt: "2026-09-18T09:11:00.000Z",
   },
   effects: {
+    processSamples: [
+      { at: "2026-09-18T09:05:00.000Z", processes: 1 },
+      { at: "2026-09-18T09:10:30.000Z", processes: 0 },
+    ],
+    terminalSeenAt: "2026-09-18T09:10:30.000Z",
     byproducts: [{ path: "report.json", bytes: 10, sha256: "d".repeat(64) }],
     terminalSha256: TERMINAL_SHA256,
   },
@@ -106,6 +112,45 @@ function evaluate(overrides = {}) {
 }
 
 describe("EV-03/EV-08 evidence eligibility", () => {
+  it.each([
+    [
+      "is not an observer receipt",
+      { ...observer, schema: undefined },
+      "OBSERVER_SCHEMA_INVALID",
+    ],
+    [
+      "claims health without samples",
+      { ...observer, effects: { ...observer.effects, processSamples: [] } },
+      "OBSERVER_SAMPLES_INVALID",
+    ],
+    [
+      "saw the product only before the attempt began",
+      {
+        ...observer,
+        effects: {
+          ...observer.effects,
+          processSamples: [
+            { at: "2026-09-18T08:59:30.000Z", processes: 2 },
+            { at: "2026-09-18T09:05:00.000Z", processes: 0 },
+          ],
+        },
+      },
+      "OBSERVER_PRODUCT_NOT_OBSERVED",
+    ],
+    [
+      "never saw the terminal receipt",
+      { ...observer, effects: { ...observer.effects, terminalSeenAt: null } },
+      "OBSERVER_TERMINAL_NOT_SEEN",
+    ],
+  ])(
+    "refuses an observer receipt that %s, whatever its healthy flag says",
+    (_case, receipt, reason) => {
+      const result = evaluate({ observer: receipt });
+      expect(result.reasons).toContain(reason);
+      expect(result.acceptable).toBe(false);
+    },
+  );
+
   it("accepts one complete, current, reviewed and observed attempt", () => {
     expect(evaluate()).toEqual({
       lane: "sealed-package",
@@ -534,6 +579,7 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
   async function healthyObserverFor(laneRoot, attemptIdentifier) {
     const [loaded] = await listEvidenceAttempts(laneRoot);
     return {
+      schema: "farol.next.effect-observer/v1",
       healthy: true,
       lane: "sealed-package",
       attemptId: attemptIdentifier,
@@ -543,6 +589,11 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
         endedAt: "2100-01-01T00:00:00.000Z",
       },
       effects: {
+        processSamples: [
+          { at: loaded.started.startedAt, processes: 1 },
+          { at: loaded.terminal.endedAt, processes: 0 },
+        ],
+        terminalSeenAt: loaded.terminal.endedAt,
         byproducts: loaded.terminal.byproducts,
         terminalSha256: loaded.terminalSha256,
       },

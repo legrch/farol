@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EVIDENCE_LANES, laneContract } from "./evidence-cases.mjs";
 import { listEvidenceAttempts } from "./evidence-attempt.mjs";
+import { EFFECT_OBSERVER_SCHEMA } from "./evidence-observe.mjs";
 
 // Decides whether one recorded attempt may count as acceptance evidence for an
 // exact candidate.  Two axes stay separate: the raw outcome the run recorded
@@ -135,6 +136,47 @@ function observerReasons(lane, observer, attempt, candidate) {
     to < endedAt
   ) {
     reasons.push("OBSERVER_INTERVAL_UNCOVERED");
+  }
+  // The receipt's own facts decide, not its healthy flag: a receipt that is
+  // not an observer's, has too few or failed samples, never saw the terminal
+  // receipt, or never saw the product inside this attempt's own interval
+  // corroborates nothing, however its flag reads.
+  if (observer.schema !== EFFECT_OBSERVER_SCHEMA) {
+    reasons.push("OBSERVER_SCHEMA_INVALID");
+  }
+  const samples = Array.isArray(observer.effects?.processSamples)
+    ? observer.effects.processSamples
+    : [];
+  if (
+    samples.length < 2 ||
+    samples.some(
+      (sample) =>
+        timestamp(sample?.at) === null ||
+        sample.error !== undefined ||
+        !Number.isInteger(sample.processes) ||
+        sample.processes < 0,
+    )
+  ) {
+    reasons.push("OBSERVER_SAMPLES_INVALID");
+  }
+  if (timestamp(observer.effects?.terminalSeenAt) === null) {
+    reasons.push("OBSERVER_TERMINAL_NOT_SEEN");
+  }
+  if (
+    startedAt === null ||
+    endedAt === null ||
+    !samples.some((sample) => {
+      const at = timestamp(sample?.at);
+      return (
+        Number.isInteger(sample?.processes) &&
+        sample.processes > 0 &&
+        at !== null &&
+        at >= startedAt &&
+        at <= endedAt
+      );
+    })
+  ) {
+    reasons.push("OBSERVER_PRODUCT_NOT_OBSERVED");
   }
   if (Array.isArray(observer.observedCases)) {
     const observed = new Set(observer.observedCases);

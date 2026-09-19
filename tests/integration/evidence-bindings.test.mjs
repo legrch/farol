@@ -75,6 +75,7 @@ function fixtureAttempt(lane, attemptId, options = {}) {
 function observerFixture(lane, attemptId, overrides = {}) {
   const requiredPath = lane === "hunt" ? "path.json" : "report.json";
   return {
+    schema: "farol.next.effect-observer/v1",
     healthy: true,
     lane,
     attemptId,
@@ -87,6 +88,11 @@ function observerFixture(lane, attemptId, overrides = {}) {
       endedAt: "2026-09-18T09:11:00.000Z",
     },
     effects: {
+      processSamples: [
+        { at: "2026-09-18T09:05:00.000Z", processes: 1 },
+        { at: "2026-09-18T09:10:30.000Z", processes: 0 },
+      ],
+      terminalSeenAt: "2026-09-18T09:10:30.000Z",
       byproducts: [{ path: requiredPath, bytes: 10, sha256: "d".repeat(64) }],
       terminalSha256: TERMINAL_SHA256,
     },
@@ -321,6 +327,34 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
     });
     expect(byPassed.requirements[0].bindings[0].reasons).toEqual([]);
     expect(byPassed.requirements[0].verdict).toBe("PROVEN");
+  });
+
+  it("refuses a structured lane entry that is incomplete and a requirement id given twice", () => {
+    const result = evaluateBindings({
+      ledger: {
+        candidate,
+        lanes: [
+          { name: "root gate", command: "task ci:fast", result: "PASS" },
+          { lane: "sealed-package", attemptId: 7, rawOutcome: "PASS" },
+        ],
+        requirements: [
+          { id: "R-A", u2: "OPEN", bindings: [] },
+          { id: "R-A", u2: "OPEN", bindings: [] },
+          { u2: "OPEN", bindings: [] },
+        ],
+      },
+      candidate,
+      attempts: {},
+      observers: null,
+    });
+    expect(result.header.reasons).toEqual(
+      expect.arrayContaining([
+        "LANE_ENTRY_MALFORMED:1",
+        "REQUIREMENT_ID_DUPLICATE:R-A",
+        "REQUIREMENT_ID_INVALID:2",
+      ]),
+    );
+    expect(result.header.reasons).not.toContain("LANE_ENTRY_MALFORMED:0");
   });
 
   it("refuses a ledger that declares no requirements at all", () => {
@@ -881,6 +915,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
 
     const [before] = await listEvidenceAttempts(laneRoot);
     const observerReceipt = {
+      schema: "farol.next.effect-observer/v1",
       healthy: true,
       lane: "sealed-package",
       attemptId,
@@ -893,6 +928,11 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
         endedAt: "2100-01-01T00:00:00.000Z",
       },
       effects: {
+        processSamples: [
+          { at: before.started.startedAt, processes: 1 },
+          { at: before.terminal.endedAt, processes: 0 },
+        ],
+        terminalSeenAt: before.terminal.endedAt,
         byproducts: before.terminal.byproducts,
         terminalSha256: before.terminalSha256,
       },
@@ -952,6 +992,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
       ],
     };
     const observerReceipt = {
+      schema: "farol.next.effect-observer/v1",
       healthy: true,
       lane: "sealed-package",
       attemptId,
@@ -964,6 +1005,11 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
         endedAt: "2100-01-01T00:00:00.000Z",
       },
       effects: {
+        processSamples: [
+          { at: loaded.started.startedAt, processes: 1 },
+          { at: loaded.terminal.endedAt, processes: 0 },
+        ],
+        terminalSeenAt: loaded.terminal.endedAt,
         byproducts: loaded.terminal.byproducts,
         terminalSha256: loaded.terminalSha256,
       },

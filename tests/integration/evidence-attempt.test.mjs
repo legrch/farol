@@ -253,6 +253,7 @@ process.exitCode = 0;
       // OBSERVER_BYPRODUCT_MISMATCH/OBSERVER_TERMINAL_MISMATCH reason of
       // its own here.
       observer: observer ?? {
+        schema: "farol.next.effect-observer/v1",
         healthy: true,
         lane: "sealed-package",
         attemptId: attempt.attemptId,
@@ -262,6 +263,11 @@ process.exitCode = 0;
           endedAt: "2100-01-01T00:00:00.000Z",
         },
         effects: {
+          processSamples: [
+            { at: attempt.started?.startedAt, processes: 1 },
+            { at: attempt.terminal?.endedAt, processes: 0 },
+          ],
+          terminalSeenAt: attempt.terminal?.endedAt,
           byproducts: attempt.terminal?.byproducts ?? [],
           terminalSha256: attempt.terminalSha256 ?? null,
         },

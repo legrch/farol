@@ -247,6 +247,39 @@ function evaluateRequirement(
   };
 }
 
+// A lane entry that names any attempt-bound field claims to be a structured
+// summary; one that does so incompletely is a broken claim, not free text.
+const STRUCTURED_LANE_FIELDS = Object.freeze([
+  "lane",
+  "attemptId",
+  "rawOutcome",
+]);
+
+function structureReasons(ledger) {
+  const reasons = [];
+  (ledger.lanes ?? []).forEach((entry, index) => {
+    const claimsStructure =
+      entry !== null &&
+      typeof entry === "object" &&
+      STRUCTURED_LANE_FIELDS.some((field) => field in entry);
+    if (claimsStructure && !isStructuredLaneEntry(entry)) {
+      reasons.push(`LANE_ENTRY_MALFORMED:${index}`);
+    }
+  });
+  const seen = new Set();
+  (ledger.requirements ?? []).forEach((requirement, index) => {
+    const id = requirement?.id;
+    if (typeof id !== "string" || id.length === 0) {
+      reasons.push(`REQUIREMENT_ID_INVALID:${index}`);
+    } else if (seen.has(id)) {
+      reasons.push(`REQUIREMENT_ID_DUPLICATE:${id}`);
+    } else {
+      seen.add(id);
+    }
+  });
+  return reasons;
+}
+
 function isStructuredLaneEntry(entry) {
   return (
     entry !== null &&
@@ -355,6 +388,7 @@ export function evaluateBindings({
   const header = {
     reasons: [
       ...headerReasons(ledger.candidate, candidate, developmentCandidate),
+      ...structureReasons(ledger),
       // A ledger that claims nothing has nothing wrong with it row by row,
       // and would otherwise pass as a clean one.
       ...(requirements.length === 0 ? ["LEDGER_EMPTY"] : []),
