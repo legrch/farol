@@ -220,6 +220,42 @@ describe("Agent -> Computer delegated-authority peer", () => {
     });
   });
 
+  it("does not trust an authority response the contract schema refuses", async () => {
+    const granted = await createPeer().peer.delegate({
+      identity,
+      parentParticipantId: "main-a",
+      participantId: "agent-a",
+      role: "agent",
+      mutationOwnership: "task",
+    });
+    if (!granted.ok) throw new Error(granted.error.code);
+    const peer = new ComputerExecutionAuthorityPeer({
+      delegate: async () => ({
+        ok: true,
+        value: { ...granted.value, workspaces: [{ workspaceId: "farol" }] },
+      }),
+    } as unknown as ConstructorParameters<
+      typeof ComputerExecutionAuthorityPeer
+    >[0]);
+
+    await expect(
+      peer.delegate({
+        identity,
+        parentParticipantId: "main-a",
+        participantId: "agent-a",
+        role: "agent",
+        mutationOwnership: "task",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "AGENT_AUTHORITY_UNAVAILABLE",
+        source: "authority-store",
+        retry: "never",
+      },
+    });
+  });
+
   it("rejects malformed contract input before authority lookup", async () => {
     const { contract } = createPeer();
     await expect(

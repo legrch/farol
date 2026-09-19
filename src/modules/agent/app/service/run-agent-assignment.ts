@@ -9,6 +9,7 @@ import type { AgentAssignmentIntent } from "../port/agent-host";
 import type {
   AgentAuthorityNarrowing,
   AgentAuthorityPort,
+  AgentWorkspaceScope,
   DelegatedAgentAuthority,
 } from "../port/execution-authority";
 import type {
@@ -454,7 +455,8 @@ export class RunAgentAssignment {
       authority.parentParticipantId === delegation.parentParticipantId &&
       authority.participantId === delegation.participantId &&
       authority.role === delegation.role &&
-      authority.mutationOwnership === delegation.mutationOwnership
+      authority.mutationOwnership === delegation.mutationOwnership &&
+      withinNarrowing(delegation.narrowing, authority)
     );
   }
 
@@ -566,4 +568,45 @@ export class RunAgentAssignment {
       return false;
     }
   }
+}
+
+// The authority owner answers a narrowing with exactly the scopes, capabilities
+// and limits it was asked for, and keeps every exclusion the owner named. A
+// response that is broader in any of them is refused here as well, so nothing
+// between the owner and this service can widen what the owner selected.
+function withinNarrowing(
+  narrowing: AgentAuthorityNarrowing | undefined,
+  authority: DelegatedAgentAuthority,
+): boolean {
+  if (!narrowing) return true;
+  const scopes = new Set(narrowing.workspaces.map(scopeKey));
+  const capabilities = new Set(narrowing.capabilities);
+  const exclusions = new Set(authority.excludedPaths.map(exclusionKey));
+  return (
+    authority.workspaces.every((scope) => scopes.has(scopeKey(scope))) &&
+    authority.capabilities.every((capability) =>
+      capabilities.has(capability),
+    ) &&
+    (narrowing.network === "approved" || authority.network === "none") &&
+    (narrowing.commands === "verification" || authority.commands === "none") &&
+    (narrowing.excludedPaths ?? []).every((exclusion) =>
+      exclusions.has(exclusionKey(exclusion)),
+    )
+  );
+}
+
+function scopeKey(scope: AgentWorkspaceScope): string {
+  return JSON.stringify([
+    scope.workspaceId,
+    scope.mode,
+    scope.root,
+    scope.access,
+    scope.mode === "exact" ? scope.paths : null,
+  ]);
+}
+
+function exclusionKey(
+  exclusion: Readonly<{ workspaceId: string; path: string }>,
+): string {
+  return JSON.stringify([exclusion.workspaceId, exclusion.path]);
 }

@@ -4,7 +4,10 @@ import type {
   AgentAuthorityPort,
   AgentDelegationRequest,
 } from "../../app/port/execution-authority";
-import type { ExecutionAuthorityContract } from "../../../computer/contract/execution-authority-contract";
+import {
+  ExecutionAuthorityDelegationResponseSchema,
+  type ExecutionAuthorityContract,
+} from "../../../computer/contract/execution-authority-contract";
 
 function mapSource(source: string): AgentAuthorityFailureSource {
   switch (source) {
@@ -27,7 +30,7 @@ export class ComputerExecutionAuthorityPeer implements AgentAuthorityPort {
   async delegate(
     request: AgentDelegationRequest,
   ): Promise<AgentAuthorityDecision> {
-    const response = await this.contract.delegate({
+    const answer = await this.contract.delegate({
       ownerId: request.identity.ownerId,
       sessionId: request.identity.sessionId,
       taskId: request.identity.taskId,
@@ -38,6 +41,20 @@ export class ComputerExecutionAuthorityPeer implements AgentAuthorityPort {
       mutationOwnership: request.mutationOwnership,
       ...(request.narrowing ? { narrowing: request.narrowing } : {}),
     });
+    // The answer crosses a module boundary: it is parsed here, not trusted
+    // for having the contract's type.
+    const parsed = ExecutionAuthorityDelegationResponseSchema.safeParse(answer);
+    if (!parsed.success) {
+      return {
+        ok: false,
+        error: {
+          code: "AGENT_AUTHORITY_UNAVAILABLE",
+          source: "authority-store",
+          retry: "never",
+        },
+      };
+    }
+    const response = parsed.data;
     if (!response.ok) {
       return {
         ok: false,

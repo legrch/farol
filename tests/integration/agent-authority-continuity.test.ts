@@ -287,6 +287,110 @@ describe("Agent delegated-authority continuity", () => {
     });
   });
 
+  describe("an authority broader than the owner's narrowing", () => {
+    const exactFile = {
+      workspaceId: "farol",
+      mode: "exact" as const,
+      root: "/workspace/farol",
+      paths: ["/workspace/farol/vnext/README.md"],
+      access: "read" as const,
+    };
+    const brainTree = {
+      workspaceId: "brain",
+      mode: "subtree" as const,
+      root: "/workspace/brain/Work/Farol",
+      access: "read" as const,
+    };
+    const narrowing = {
+      workspaces: [exactFile, brainTree],
+      excludedPaths: [
+        { workspaceId: "brain", path: "/workspace/brain/Work/Farol/Private" },
+      ],
+      capabilities: ["workspace.read" as const],
+      network: "none" as const,
+      commands: "none" as const,
+    };
+    const narrowed: AgentAssignmentCommand = {
+      ...command,
+      focus: { initialPaths: ["/workspace/farol/vnext/README.md"] },
+      delegation: {
+        ...command.delegation,
+        mutationOwnership: "none",
+        narrowing,
+      },
+    };
+    // Exactly what the Computer's owner returns for this narrowing.
+    const exact: DelegatedAgentAuthority = {
+      ...authority,
+      mutationOwnership: "none",
+      workspaces: narrowing.workspaces,
+      excludedPaths: narrowing.excludedPaths,
+      capabilities: ["workspace.read"],
+      network: "none",
+      commands: "none",
+    };
+
+    it("spawns under the exact narrowed authority", async () => {
+      const nativeHost = host();
+      await expect(
+        new RunAgentAssignment(
+          nativeHost,
+          new InMemoryAssignments(),
+          authorityPort({ ok: true, value: exact }),
+          commandDigester,
+        ).execute(narrowed),
+      ).resolves.toMatchObject({ ok: true });
+      expect(nativeHost.spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it.each<[string, Partial<DelegatedAgentAuthority>]>([
+      [
+        "a whole-workspace subtree for an exact-file scope",
+        {
+          workspaces: [
+            {
+              workspaceId: "farol",
+              mode: "subtree",
+              root: "/workspace/farol",
+              access: "read",
+            },
+            brainTree,
+          ],
+        },
+      ],
+      [
+        "write access for a read scope",
+        {
+          workspaces: [{ ...exactFile, access: "write" }, brainTree],
+        },
+      ],
+      [
+        "a capability that was not requested",
+        { capabilities: ["workspace.read", "workspace.search"] },
+      ],
+      ["approved network for a no-network request", { network: "approved" }],
+      [
+        "verification commands for a no-command request",
+        { commands: "verification" },
+      ],
+      ["the owner's exclusion dropped", { excludedPaths: [] }],
+    ])("refuses %s before native-host spawn", async (_case, broadened) => {
+      const nativeHost = host();
+      await expect(
+        new RunAgentAssignment(
+          nativeHost,
+          new InMemoryAssignments(),
+          authorityPort({ ok: true, value: { ...exact, ...broadened } }),
+          commandDigester,
+        ).execute(narrowed),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "AGENT_AUTHORITY_CORRELATION", retry: "never" },
+      });
+      expect(nativeHost.spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it.each([
     ["outside the delegated workspace", "/workspace/private/notes.md"],
     ["with a non-canonical segment", "/workspace/farol/../private.md"],
