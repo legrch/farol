@@ -60,6 +60,7 @@ describe("evidence case contract", () => {
     expect(inlineCaseArrays(source)).toEqual([
       [...EVIDENCE_LANES["persistence-fault"].cases],
       [...EVIDENCE_LANES["lifecycle-soak"].cases],
+      [...EVIDENCE_LANES["two-generation-state"].cases],
     ]);
   });
 

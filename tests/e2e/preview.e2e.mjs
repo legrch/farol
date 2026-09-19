@@ -9,6 +9,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
+import { candidatePaths } from "../../tooling/candidate-contract.mjs";
 import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
 import { missingCases } from "../../tooling/evidence-cases.mjs";
 import {
@@ -23,6 +24,7 @@ const root = process.cwd();
 const development = process.argv.includes("--development");
 const lifecycleSoak = process.argv.includes("--lifecycle-soak");
 const persistenceFault = process.argv.includes("--persistence-fault");
+const twoGenerationState = process.argv.includes("--two-generation-state");
 const skipNativeFocus = process.argv.includes("--skip-native-focus");
 // The soak workload is seeded. The default seed reproduces the historical
 // run exactly; another seed moves the two restarts and flips the overlay
@@ -42,10 +44,27 @@ function integerOption(name, fallback, maximum) {
 }
 const soakSeed = integerOption("soak-seed", 260_917, 2 ** 31 - 1);
 const soakIdleMs = integerOption("soak-idle-ms", 0, 120_000);
-assert.equal(
-  lifecycleSoak && persistenceFault,
-  false,
+assert.ok(
+  [lifecycleSoak, persistenceFault, twoGenerationState].filter(Boolean)
+    .length <= 1,
   "E2E_EXCLUSIVE_SPECIAL_MODE",
+);
+// The two-generation lane compares two sealed packages: the predecessor a
+// manifest names, qualified by the verifier pinned at its own commit, and the
+// current candidate. A development build is not a generation.
+assert.equal(
+  twoGenerationState && development,
+  false,
+  "E2E_TWO_GENERATION_REQUIRES_SEALED_PACKAGES",
+);
+const predecessorArtifactOption = process.argv
+  .find((value) => value.startsWith("--predecessor-artifact="))
+  ?.slice("--predecessor-artifact=".length);
+assert.equal(
+  twoGenerationState,
+  typeof predecessorArtifactOption === "string" &&
+    path.isAbsolute(predecessorArtifactOption),
+  "E2E_PREDECESSOR_ARTIFACT_OPTION",
 );
 // The soak lane is named by the bytes it drives: the development build or
 // the sealed package, never one presented as the other.
@@ -55,9 +74,11 @@ const evidenceLane = lifecycleSoak
     : "lifecycle-soak-packaged"
   : persistenceFault
     ? "persistence-fault"
-    : development
-      ? "development-build"
-      : "sealed-package";
+    : twoGenerationState
+      ? "two-generation-state"
+      : development
+        ? "development-build"
+        : "sealed-package";
 const evidenceLaneRoot = path.join(
   root,
   lifecycleSoak
@@ -66,9 +87,11 @@ const evidenceLaneRoot = path.join(
       : "artifacts/lifecycle-soak-packaged"
     : persistenceFault
       ? "artifacts/persistence-fault"
-      : development
-        ? "artifacts/e2e-dev"
-        : "artifacts/e2e",
+      : twoGenerationState
+        ? "artifacts/two-generation-state"
+        : development
+          ? "artifacts/e2e-dev"
+          : "artifacts/e2e",
 );
 const metadataPath = path.join(root, "dist/package/artifact.json");
 const canonicalPackagePath = path.join(
@@ -151,6 +174,113 @@ if (development) {
   assert.equal(artifact.builtAt, buildIdentity.builtAt);
   executable = path.join(appPath, "Contents/MacOS/Farol Next Preview");
 }
+
+// The predecessor is identified by its own manifest and qualified by the
+// verifier pinned at its own source commit, run where that verifier expects
+// it: the checkout the manifest names. Every file of that commit's tooling
+// and package manifests must be byte-identical there, so the verifier that
+// runs is exactly the predecessor's, never this candidate's.
+async function resolvePredecessor(artifactFile) {
+  const manifest = JSON.parse(await fs.readFile(artifactFile, "utf8"));
+  assert.equal(manifest.schema, 5, "E2E_PREDECESSOR_MANIFEST_SCHEMA");
+  assert.equal(manifest.sourceDirty, false, "E2E_PREDECESSOR_DIRTY");
+  assert.ok(
+    typeof manifest.artifactPath === "string" &&
+      path.isAbsolute(manifest.artifactPath),
+    "E2E_PREDECESSOR_PATH_INVALID",
+  );
+  const predecessorRoot = path.dirname(
+    path.dirname(path.dirname(manifest.artifactPath)),
+  );
+  const canonical = candidatePaths(predecessorRoot);
+  assert.equal(
+    canonical.appPath,
+    manifest.artifactPath,
+    "E2E_PREDECESSOR_PATH_NOT_CANONICAL",
+  );
+  assert.equal(
+    canonical.artifactFile,
+    path.resolve(artifactFile),
+    "E2E_PREDECESSOR_MANIFEST_NOT_CANONICAL",
+  );
+  assert.notEqual(manifest.sourceCommit, artifact.sourceCommit);
+  assert.notEqual(manifest.buildId, artifact.buildId);
+  assert.notEqual(manifest.artifactSha256, artifact.artifactSha256);
+  const pinned = spawnSync(
+    "git",
+    [
+      "-C",
+      predecessorRoot,
+      "ls-tree",
+      "-r",
+      manifest.sourceCommit,
+      "--",
+      "tooling",
+      "package.json",
+      "package-lock.json",
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(pinned.status, 0, pinned.stderr);
+  const entries = pinned.stdout
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const [meta, name] = line.split("\t");
+      const [, type, object] = meta.split(" ");
+      return { type, object, name };
+    });
+  assert.ok(
+    entries.length > 0 && entries.every((entry) => entry.type === "blob"),
+    "E2E_PREDECESSOR_VERIFIER_TREE_INVALID",
+  );
+  for (const entry of entries) {
+    const actual = spawnSync(
+      "git",
+      ["-C", predecessorRoot, "hash-object", "--", entry.name],
+      { encoding: "utf8" },
+    );
+    assert.equal(actual.status, 0, actual.stderr);
+    assert.equal(
+      actual.stdout.trim(),
+      entry.object,
+      `E2E_PREDECESSOR_VERIFIER_NOT_PINNED:${entry.name}`,
+    );
+  }
+  const verified = spawnSync(
+    process.execPath,
+    [path.join(predecessorRoot, "tooling/verify-package.mjs")],
+    { cwd: predecessorRoot, encoding: "utf8" },
+  );
+  assert.equal(verified.status, 0, `${verified.stdout}${verified.stderr}`);
+  assert.ok(
+    verified.stdout.includes(
+      ` ${manifest.artifactSha256} (clean) at ${manifest.artifactPath}`,
+    ),
+    `E2E_PREDECESSOR_NOT_VERIFIED:${verified.stdout}`,
+  );
+  return {
+    sourceCommit: manifest.sourceCommit,
+    sourceTreeDigest: manifest.sourceTreeDigest,
+    artifactSha256: manifest.artifactSha256,
+    buildId: manifest.buildId,
+    builtAt: manifest.builtAt,
+    appPath: manifest.artifactPath,
+    executable: path.join(
+      manifest.artifactPath,
+      "Contents/MacOS/Farol Next Preview",
+    ),
+    verifier: {
+      root: predecessorRoot,
+      pinnedFiles: entries.length,
+      output: verified.stdout.trim(),
+    },
+  };
+}
+
+const predecessor = twoGenerationState
+  ? await resolvePredecessor(path.resolve(predecessorArtifactOption))
+  : null;
 // Every run writes into its own immutable attempt directory under the lane
 // root; a later or crashed run never removes an earlier run's evidence.
 const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
@@ -163,6 +293,17 @@ const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
     buildId: artifact.buildId,
     builtAt: artifact.builtAt,
     skipNativeFocus,
+    ...(predecessor
+      ? {
+          predecessor: {
+            sourceCommit: predecessor.sourceCommit,
+            sourceTreeDigest: predecessor.sourceTreeDigest,
+            artifactSha256: predecessor.artifactSha256,
+            buildId: predecessor.buildId,
+            builtAt: predecessor.builtAt,
+          },
+        }
+      : {}),
   },
 });
 evidenceAttempt.installProcessHandlers();
@@ -1421,7 +1562,8 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     TMPDIR: os.tmpdir(),
   };
   const application = await electron.launch({
-    executablePath: executable,
+    // Only the two-generation lane names another generation's executable.
+    executablePath: options.executable ?? executable,
     args: launchArgs,
     env: launchEnvironment,
     timeout: 15_000,
@@ -3552,6 +3694,474 @@ async function runLifecycleSoak() {
   }
 }
 
+// Q-07/Q-08: the owner's state across two real generations. A is the
+// predecessor qualified by its own pinned verifier, B is this candidate; both
+// run in turn on one isolated user-data directory. A running generation owns
+// that state against the other; a crash with a running provider turn and an
+// interrupted activation leave an obligation that B reports instead of
+// resetting or resubmitting; B reads A's state and keeps its own change
+// across a restart; the rollback to A reads B's state without rewriting it.
+// Context checkpoints and bundle placement are outside this lane: the first
+// needs an agent-backed conversation, the second is the promotion test's.
+function durableStateFiles(userData) {
+  const state = path.join(userData, "farol-next-state");
+  return {
+    settings: path.join(state, "product-settings.json"),
+    tasks: path.join(state, "live-tasks", "live-tasks.json"),
+  };
+}
+
+async function durableStateBytes(userData) {
+  const files = durableStateFiles(userData);
+  const digest = async (file) =>
+    createHash("sha256")
+      .update(await fs.readFile(file))
+      .digest("hex");
+  return {
+    settings: await digest(files.settings),
+    tasks: await digest(files.tasks),
+  };
+}
+
+async function runningGeneration(instance) {
+  const appRoot = await instance.application.evaluate(({ app }) =>
+    app.getAppPath(),
+  );
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(appRoot, "build-manifest.json"), "utf8"),
+  );
+  return manifest.sourceCommit;
+}
+
+async function generationSnapshot(instance) {
+  const state = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  return {
+    settings: state.configuration.settings,
+    tasks: state.tasks.map(
+      ({ taskId, sessionId, label, pinned, lifecycle }) => ({
+        taskId,
+        sessionId,
+        label,
+        pinned,
+        lifecycle,
+      }),
+    ),
+  };
+}
+
+function launchOtherGeneration(instance, generation) {
+  const launched = spawnSync(generation.executable, instance.launchArgs, {
+    cwd: root,
+    env: instance.launchEnvironment,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+  return {
+    status: launched.status,
+    outcome: parseOwnerLaunchResult(`${launched.stdout}${launched.stderr}`),
+  };
+}
+
+function userDataProcesses(userData) {
+  const listed = spawnSync(
+    "/usr/bin/pgrep",
+    ["-f", userData.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")],
+    { encoding: "utf8" },
+  );
+  assert.ok(listed.status === 0 || listed.status === 1, listed.stderr);
+  return listed.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map(Number)
+    .filter((pid) => pid !== process.pid);
+}
+
+function childProcesses(pid) {
+  const listed = spawnSync("/usr/bin/pgrep", ["-P", String(pid)], {
+    encoding: "utf8",
+  });
+  assert.ok(listed.status === 0 || listed.status === 1, listed.stderr);
+  return listed.stdout.split("\n").filter(Boolean).map(Number);
+}
+
+async function waitForProcessExit(pids, userData, code) {
+  let remaining = [];
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    const alive = [...pids].filter((pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        if (error?.code === "ESRCH") return false;
+        throw error;
+      }
+    });
+    remaining = [...new Set([...alive, ...userDataProcesses(userData)])];
+    if (remaining.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`${code}:${remaining.join(",")}`);
+}
+
+async function killGeneration(application, pids, userData, code) {
+  const mainPid = application.process().pid;
+  const owned = new Set([mainPid, ...pids, ...childProcesses(mainPid)]);
+  const closed = once(application, "close");
+  process.kill(mainPid, "SIGKILL");
+  await closed;
+  await waitForProcessExit(owned, userData, code);
+  return owned.size;
+}
+
+async function relaunchAs(instance, generation) {
+  instance.application = await electron.launch({
+    executablePath: generation.executable,
+    args: instance.launchArgs,
+    env: instance.launchEnvironment,
+    timeout: 15_000,
+  });
+  instance.window = await instance.application.firstWindow({ timeout: 15_000 });
+  await instance.window.locator("#sidebar").waitFor({ state: "visible" });
+  await instance.window
+    .locator('#runtime-pill[data-state="ready"]')
+    .waitFor({ state: "visible" });
+  const bootstrap = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  instance.presentation = await waitForWindowPresentation(
+    instance.application,
+    instance.windowMode,
+    bootstrap.tasks.length > 0 ? 1 : 0,
+  );
+  assert.equal(
+    await runningGeneration(instance),
+    generation.sourceCommit,
+    "E2E_GENERATION_IDENTITY",
+  );
+}
+
+async function discardInstance(instance) {
+  await stopChatGptFixture(instance.chatGptFixture);
+  instance.chatGptFixture = null;
+  const real = path.resolve(instance.isolatedHome);
+  assert.ok(
+    real.startsWith(
+      `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
+    ),
+  );
+  await fs.rm(real, { recursive: true, force: true });
+}
+
+async function runTwoGenerationStateProof() {
+  const generationA = {
+    executable: predecessor.executable,
+    sourceCommit: predecessor.sourceCommit,
+  };
+  const generationB = { executable, sourceCommit: artifact.sourceCommit };
+  const observations = {};
+  const instance = await launch([], "hidden", "ordinary", {
+    executable: generationA.executable,
+  });
+  try {
+    assert.equal(await runningGeneration(instance), generationA.sourceCommit);
+    await completeSetup(instance, false, true, true, true, "ordinary");
+    for (let index = 0; index < 2; index += 1) {
+      const created = await instance.window.evaluate(() =>
+        window.farolNext.task({ kind: "task.create-chatgpt" }),
+      );
+      assert.equal(created.ok, true, JSON.stringify(created));
+    }
+    const created = await generationSnapshot(instance);
+    assert.equal(created.tasks.length, 2);
+    const [kept, turn] = created.tasks;
+    const renamed = await instance.window.evaluate(
+      (taskId) =>
+        window.farolNext.task({
+          kind: "task.rename",
+          taskId,
+          label: "Generation A task",
+        }),
+      kept.taskId,
+    );
+    assert.equal(renamed.ok, true, JSON.stringify(renamed));
+    const pinned = await instance.window.evaluate(
+      (taskId) =>
+        window.farolNext.task({ kind: "task.pin", taskId, pinned: true }),
+      kept.taskId,
+    );
+    assert.equal(pinned.ok, true, JSON.stringify(pinned));
+    const generationAState = await generationSnapshot(instance);
+    assert.equal(generationAState.settings.computer.workspaces.length, 1);
+    for (const step of ["computer", "chatgpt", "hosts"]) {
+      assert.notEqual(
+        generationAState.settings.setup[step].verified,
+        null,
+        `E2E_GENERATION_A_SETUP_NOT_VERIFIED:${step}`,
+      );
+    }
+    assert.deepEqual(
+      generationAState.tasks.map(({ taskId, label, pinned, lifecycle }) => [
+        taskId,
+        label,
+        pinned,
+        lifecycle,
+      ]),
+      [
+        [kept.taskId, "Generation A task", true, "idle"],
+        [turn.taskId, turn.label, false, "idle"],
+      ],
+    );
+
+    // B is refused while A owns the state, and A's state is untouched.
+    const ownedByA = await durableStateBytes(instance.userData);
+    observations.stateDigests = { ownedByA };
+    assert.deepEqual(launchOtherGeneration(instance, generationB), {
+      status: 0,
+      outcome: "identity-mismatch",
+    });
+    assert.deepEqual(await durableStateBytes(instance.userData), ownedByA);
+    assert.deepEqual(await generationSnapshot(instance), generationAState);
+
+    // A dies with a provider turn running: the obligation is on disk.
+    const activated = await instance.window.evaluate(
+      (taskId) => window.farolNext.task({ kind: "task.activate", taskId }),
+      turn.taskId,
+    );
+    assert.equal(activated.ok, true, JSON.stringify(activated));
+    await waitForLiveChatGptSurface(
+      instance,
+      turn.taskId,
+      (surface) => surface.state.composerVisible,
+      "turn task surface before the crash",
+    );
+    assert.equal(
+      await submitLiveChatGptTask(
+        instance,
+        turn.taskId,
+        "Farol two-generation cancellation canary",
+      ),
+      1,
+    );
+    await instance.window.waitForFunction(
+      async (taskId) =>
+        (await window.farolNext.bootstrap()).tasks.find(
+          (task) => task.taskId === taskId,
+        )?.lifecycle === "running",
+      turn.taskId,
+    );
+    const files = durableStateFiles(instance.userData);
+    let persistedRunning = false;
+    for (let attempt = 0; attempt < 100 && !persistedRunning; attempt += 1) {
+      const record = JSON.parse(await fs.readFile(files.tasks, "utf8"));
+      persistedRunning =
+        record.tasks.find((task) => task.taskId === turn.taskId)?.lifecycle ===
+        "running";
+      if (!persistedRunning) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+    assert.equal(persistedRunning, true, "E2E_RUNNING_TURN_NOT_PERSISTED");
+    const beforeCrash = JSON.parse(await fs.readFile(files.tasks, "utf8"));
+    observations.crash = {
+      revision: beforeCrash.revision,
+      turnLifecycle: "running",
+    };
+    const crashPids = await instance.application.evaluate(({ app }) =>
+      app.getAppMetrics().map((metric) => metric.pid),
+    );
+    observations.crashedGenerationProcesses = await killGeneration(
+      instance.application,
+      crashPids,
+      instance.userData,
+      "E2E_CRASHED_GENERATION_PROCESS_SURVIVED",
+    );
+
+    // B's first activation dies before the harness waits for any window.
+    const interrupted = await electron.launch({
+      executablePath: generationB.executable,
+      args: instance.launchArgs,
+      env: instance.launchEnvironment,
+      timeout: 15_000,
+    });
+    observations.interruptedActivationProcesses = await killGeneration(
+      interrupted,
+      [],
+      instance.userData,
+      "E2E_INTERRUPTED_ACTIVATION_PROCESS_SURVIVED",
+    );
+    const afterInterruption = JSON.parse(
+      await fs.readFile(files.tasks, "utf8"),
+    );
+    // Where the activation died decides whether it had already reconciled
+    // the running turn; either is a readable state, never a third one.
+    observations.interruptedActivation = {
+      revision: afterInterruption.revision,
+      turnLifecycle: afterInterruption.tasks.find(
+        (task) => task.taskId === turn.taskId,
+      )?.lifecycle,
+    };
+    assert.deepEqual(
+      afterInterruption.tasks.map(({ taskId }) => taskId),
+      beforeCrash.tasks.map(({ taskId }) => taskId),
+    );
+    assert.ok(afterInterruption.revision >= beforeCrash.revision);
+    assert.ok(
+      ["running", "outcome_unknown"].includes(
+        afterInterruption.tasks.find((task) => task.taskId === turn.taskId)
+          ?.lifecycle,
+      ),
+    );
+
+    // B activates on A's state: nothing is reset and nothing is resubmitted.
+    await relaunchAs(instance, generationB);
+    const generationBState = await generationSnapshot(instance);
+    assert.deepEqual(generationBState.settings, generationAState.settings);
+    assert.deepEqual(
+      generationBState.tasks,
+      generationAState.tasks.map((task) =>
+        task.taskId === turn.taskId
+          ? { ...task, lifecycle: "outcome_unknown" }
+          : task,
+      ),
+    );
+    const restoredRecord = JSON.parse(await fs.readFile(files.tasks, "utf8"));
+    observations.restoredByB = { revision: restoredRecord.revision };
+    assert.equal(
+      restoredRecord.tasks.find((task) => task.taskId === turn.taskId)
+        ?.lifecycle,
+      "outcome_unknown",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    const origin = new URL(instance.chatGptFixture.url).origin;
+    const surfaces = await liveChatGptSurfaces(instance.application, origin);
+    observations.generationBSurfaces = surfaces.length;
+    assert.ok(
+      surfaces.every((surface) => surface.state.submitCount === 0),
+      `E2E_GENERATION_B_RESUBMITTED:${JSON.stringify(surfaces)}`,
+    );
+    assert.equal(
+      (await generationSnapshot(instance)).tasks.find(
+        (task) => task.taskId === turn.taskId,
+      )?.lifecycle,
+      "outcome_unknown",
+    );
+
+    // A is refused while B owns the state, and B's state is untouched.
+    const ownedByB = await durableStateBytes(instance.userData);
+    observations.stateDigests.ownedByB = ownedByB;
+    assert.deepEqual(launchOtherGeneration(instance, generationA), {
+      status: 0,
+      outcome: "identity-mismatch",
+    });
+    assert.deepEqual(await durableStateBytes(instance.userData), ownedByB);
+
+    // B's own change survives B's restart, which rewrites nothing.
+    const relabelled = await instance.window.evaluate(
+      (taskId) =>
+        window.farolNext.task({
+          kind: "task.rename",
+          taskId,
+          label: "Generation B label",
+        }),
+      kept.taskId,
+    );
+    assert.equal(relabelled.ok, true, JSON.stringify(relabelled));
+    const changedByB = await generationSnapshot(instance);
+    assert.equal(
+      changedByB.tasks.find((task) => task.taskId === kept.taskId)?.label,
+      "Generation B label",
+    );
+    await close(instance, { removeHome: false });
+    const closedByB = await durableStateBytes(instance.userData);
+    observations.stateDigests.closedByB = closedByB;
+    await relaunchAs(instance, generationB);
+    assert.deepEqual(await generationSnapshot(instance), changedByB);
+    assert.deepEqual(await durableStateBytes(instance.userData), closedByB);
+
+    // Rollback: A reads B's state as B left it and rewrites nothing.
+    await close(instance, { removeHome: false });
+    const beforeRollback = await durableStateBytes(instance.userData);
+    observations.stateDigests.beforeRollback = beforeRollback;
+    await relaunchAs(instance, generationA);
+    assert.deepEqual(await generationSnapshot(instance), changedByB);
+    assert.deepEqual(
+      await durableStateBytes(instance.userData),
+      beforeRollback,
+    );
+    await close(instance);
+
+    // Neither generation's bytes were changed by running either of them.
+    assert.equal(
+      await treeDigest(predecessor.appPath),
+      predecessor.artifactSha256,
+    );
+    assert.equal(await treeDigest(appPath), artifact.artifactSha256);
+
+    await fs.writeFile(
+      path.join(evidenceRoot, "report.json"),
+      `${JSON.stringify(
+        {
+          schema: 1,
+          status: "PASS",
+          evidence: "LOCAL_FIXTURE",
+          sourceCommit: expectedSource.commit,
+          sourceTreeDigest: expectedSource.treeDigest,
+          buildId: artifact.buildId,
+          builtAt: artifact.builtAt,
+          predecessor: {
+            sourceCommit: predecessor.sourceCommit,
+            artifactSha256: predecessor.artifactSha256,
+            buildId: predecessor.buildId,
+            verifier: predecessor.verifier,
+          },
+          interruptions: [
+            "generation A SIGKILL with a provider turn running",
+            "generation B SIGKILL after process launch, before any window",
+          ],
+          observations,
+          outside: [
+            "context checkpoint continuity across generations",
+            "bundle placement and promotion between generations",
+          ],
+          cases: [
+            "predecessor-qualified-by-own-pinned-verifier",
+            "generation-a-establishes-owner-state",
+            "second-generation-refused-while-first-owns-state",
+            "crash-with-running-turn-leaves-no-process",
+            "interrupted-activation-leaves-state-readable",
+            "second-generation-reads-first-generation-state",
+            "running-turn-restored-as-outcome-unknown-without-resubmit",
+            "first-generation-refused-while-second-owns-state",
+            "second-generation-change-survives-restart",
+            "rollback-reads-newer-state-without-rewriting-it",
+            "generation-bytes-unchanged",
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  } finally {
+    // A generation that is still running after a failure is closed, or
+    // killed when it cannot be; the isolated home is always removed.
+    // Playwright refuses process() on an application it already closed.
+    let running = null;
+    try {
+      running = instance.application?.process() ?? null;
+    } catch {
+      running = null;
+    }
+    if (running && running.exitCode === null && running.signalCode === null) {
+      await close(instance, { removeHome: false }).catch(() => {
+        process.kill(running.pid, "SIGKILL");
+      });
+    }
+    await discardInstance(instance);
+  }
+}
+
 async function finishSpecialLane(lane) {
   const written = JSON.parse(
     await fs.readFile(path.join(evidenceRoot, "report.json"), "utf8"),
@@ -3586,6 +4196,11 @@ if (persistenceFault) {
   await runLiveTaskPersistenceFaultProof();
   await finishSpecialLane("persistence-fault");
   process.exit(0);
+}
+
+if (twoGenerationState) {
+  await runTwoGenerationStateProof();
+  process.exit((await finishSpecialLane("two-generation-state")) ? 0 : 1);
 }
 
 await proveSecondLaunchDuringStartup();

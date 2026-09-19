@@ -235,6 +235,32 @@ export const EVIDENCE_LANES = Object.freeze({
       fault: "simulated",
     }),
   }),
+  // Two sealed generations in turn on one isolated state: the predecessor a
+  // manifest names, qualified by its own pinned verifier, and the candidate.
+  // The crashes are real process kills, not simulated faults.
+  "two-generation-state": Object.freeze({
+    root: "artifacts/two-generation-state",
+    requiredByproducts: PRODUCT_REPORT,
+    cases: Object.freeze([
+      "predecessor-qualified-by-own-pinned-verifier",
+      "generation-a-establishes-owner-state",
+      "second-generation-refused-while-first-owns-state",
+      "crash-with-running-turn-leaves-no-process",
+      "interrupted-activation-leaves-state-readable",
+      "second-generation-reads-first-generation-state",
+      "running-turn-restored-as-outcome-unknown-without-resubmit",
+      "first-generation-refused-while-second-owns-state",
+      "second-generation-change-survives-restart",
+      "rollback-reads-newer-state-without-rewriting-it",
+      "generation-bytes-unchanged",
+    ]),
+    boundary: Object.freeze({
+      ...LOCAL_FIXTURE_BOUNDARY,
+      build: "sealed-package",
+      display: "hidden",
+      fault: "process-kill",
+    }),
+  }),
   hunt: Object.freeze({
     root: "artifacts/hunt",
     requiredByproducts: Object.freeze(["path.json"]),
