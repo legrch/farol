@@ -945,4 +945,179 @@ describe("ChatGPT sign-in return", () => {
     await Promise.resolve();
     expect(close).not.toHaveBeenCalled();
   });
+
+  // A fixture that tracks `isDestroyed()` faithfully (unlike the shared
+  // `embeddedSurface()`, which hardcodes it to `false`), so a guard the
+  // production code takes against a second native close is actually
+  // exercised instead of silently no-opped by the fixture. `nativeClose`
+  // fires the "close" then "closed" listeners directly, without going
+  // through the `close`/`destroy` spies — modelling the owner's own OS
+  // close button, a trigger independent of the Return control.
+  function signInSurface() {
+    const closing = new Set<() => void>();
+    const closed = new Set<() => void>();
+    let destroyed = false;
+    const mainFrame = {
+      processId: 1,
+      routingId: 7,
+      url: "https://chatgpt.com/",
+    };
+    const executeJavaScript = vi.fn(() => new Promise(() => undefined));
+    const contents = Object.assign(new EventEmitter(), {
+      mainFrame,
+      getURL: () => "https://chatgpt.com/",
+      isDestroyed: () => destroyed,
+      executeJavaScript,
+      setWindowOpenHandler: vi.fn(),
+    });
+    const fireClosing = () => {
+      for (const listener of closing) listener();
+    };
+    const fireClosed = () => {
+      for (const listener of closed) listener();
+    };
+    const nativeClose = () => {
+      if (destroyed) return;
+      fireClosing();
+      destroyed = true;
+      fireClosed();
+    };
+    const close = vi.fn(nativeClose);
+    const destroy = vi.fn(nativeClose);
+    const surface = {
+      kind: "window" as const,
+      webContents: contents,
+      isDestroyed: () => destroyed,
+      loadURL: vi.fn(async () => undefined),
+      hide: vi.fn(),
+      reveal: vi.fn(),
+      focus: vi.fn(),
+      setTitle: vi.fn(),
+      destroy,
+      close,
+      onPageTitleUpdated: vi.fn(),
+      onClosing: vi.fn((listener: () => void) => closing.add(listener)),
+      onClosed: vi.fn((listener: () => void) => closed.add(listener)),
+    };
+    return { surface, contents, close, destroy, nativeClose };
+  }
+
+  function emitReturn(contents: EventEmitter & { mainFrame: unknown }) {
+    contents.emit("console-message", {
+      message: "farol-sign-in-return-to-farol",
+      frame: (contents as unknown as { mainFrame: unknown }).mainFrame,
+    });
+  }
+
+  it("closes once and reports exactly one outcome for two Return clicks in a row", async () => {
+    vi.useFakeTimers();
+    try {
+      const { surface, contents, close } = signInSurface();
+      const outcomes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+        onSignInOutcome: (status) => outcomes.push(status),
+      });
+      await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+      emitReturn(contents);
+      emitReturn(contents);
+      // The second click, arriving while the first click's bounded read is
+      // still in flight, is the one that actually closes the window: it
+      // falls through to the same `close()` the first click deferred.
+      expect(close).toHaveBeenCalledTimes(1);
+
+      // Once the first click's own bounded read eventually settles, its
+      // deferred close must see the window already gone and not call
+      // native close a second time.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(outcomes).toEqual(["unknown"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still reports exactly one outcome when a native close arrives while the bounded read is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const { surface, contents, close, nativeClose } = signInSurface();
+      const outcomes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+        onSignInOutcome: (status) => outcomes.push(status),
+      });
+      await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+      emitReturn(contents);
+      // The owner's OS close button, independent of the Return control's
+      // own close() call, arrives while Return's bounded read is pending.
+      nativeClose();
+      expect(close).not.toHaveBeenCalled();
+
+      // Return's own deferred close, once its bounded read settles, must
+      // find the window already gone and must not report a second time.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(close).not.toHaveBeenCalled();
+      expect(outcomes).toEqual(["unknown"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores a read that answers only after the window is already gone", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveRead!: (value: unknown) => void;
+      const { surface, contents, close } = signInSurface();
+      Object.assign(contents, {
+        executeJavaScript: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveRead = resolve;
+            }),
+        ),
+      });
+      const outcomes: string[] = [];
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+        onSignInOutcome: (status) => outcomes.push(status),
+      });
+      await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+      emitReturn(contents);
+      expect(close).not.toHaveBeenCalled();
+
+      // The bound expires before the real read ever answers: the window
+      // closes and the outcome is reported from the bound, not the read.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(outcomes).toEqual(["unknown"]);
+
+      // The read the bound raced against finally answers, well after the
+      // window is gone and the outcome already reported. It must change
+      // nothing: no second outcome, no further state write.
+      resolveRead({ composerVisible: true, signInVisible: false });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(outcomes).toEqual(["unknown"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
