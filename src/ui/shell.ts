@@ -80,11 +80,13 @@ function transitionRefusalMessage(error: string): string | null {
   if (error === "AUTHORITY_CHANGE_IN_PROGRESS") {
     return "Another change to Computer access, a connector start or an Agent start is in progress. Try again when it has finished.";
   }
-  // The main process reports the native gate's WORKSPACE_COMMAND_UNSUPPORTED
-  // as this product code, and only the Git verifiers produce it: while the
-  // F1-8 gate is in place every Git status or HEAD request ends here.
+  // The main process reports several native-gate refusals as this one
+  // product code (an unsupported request shape, a sandbox that could not be
+  // applied, or an executable that failed its own trust check). Git checks
+  // run for real now (N02): this message never claims they are off, only
+  // that this particular attempt did not go through.
   if (error === "WORKSPACE_COMMAND_UNAVAILABLE") {
-    return "Git checks are off in this build: Git cannot yet be confined to the approved folder (open review finding F1-8). Listing, searching and reading files are not affected.";
+    return "This Git check could not run right now. Listing, searching and reading files are not affected; try the Git check again.";
   }
   return null;
 }

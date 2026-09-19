@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
@@ -29,10 +29,26 @@ import type {
   WorkspaceReadRange,
 } from "../../app/port/readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
-import {
-  type ApprovedRootLauncher,
-  executeNativeVerificationCommand,
-} from "./native-verification-command";
+import { executeNativeVerificationCommand } from "./native-verification-command";
+import { createWorkspaceSnapshot } from "./workspace-snapshot";
+
+// The general-purpose descriptor-bound launcher `_exec_verification`
+// (safe_open.py) still implements: opens the approved root by descriptor,
+// checks its identity, makes it the launched command's working directory and
+// replaces itself with it. N02 moved Git verification off this mechanism (it
+// binds only the *first* working directory, not the absolute paths Git
+// reopens while it runs -- see native-verification-command.ts); nothing in
+// the product currently calls `approvedRootLauncher`, but it stays exported
+// as working, tested infrastructure rather than being deleted as part of a
+// Git-specific change.
+export type ApprovedRootLauncher = (
+  input: Readonly<{
+    root: string;
+    approvedRoot: Readonly<{ path: string; device: string; inode: string }>;
+    arguments: readonly string[];
+    environment: Readonly<Record<string, string>>;
+  }>,
+) => Promise<ChildProcess | "WORKSPACE_HELPER_UNTRUSTED">;
 
 export type SafeOpenHelperRecord = Readonly<{
   sha256: string;
@@ -170,15 +186,14 @@ type NativeReadonlyWorkspaceOptions = Readonly<{
   helper: SafeOpenHelperRecord;
   attestInterpreter?: () => Promise<string>;
   attestGit?: () => Promise<string>;
-  // Git verification stays unavailable in the product (review finding F1-8):
-  // binding Git's first working directory to the approved root object does
-  // not bind the absolute paths Git reopens while it runs, and the Seatbelt
-  // profile still grants the approved pathname. Only tests of that mechanism
-  // turn it on.
-  experimentalDescriptorBoundGit?: true;
   // The owner's home, whose credential stores stay denied whichever root is
   // selected. Defaults to this process's home directory.
   homeDirectory?: string;
+  // N02: where a Git verification's private snapshot is created (mode 0700,
+  // `mkdtemp`'s own guarantee) before it is removed again. Farol's own
+  // runtime directory in production; a test's own temporary directory in
+  // tests. Defaults to the OS temporary directory.
+  runtimeDirectory?: string;
 }>;
 
 type SystemFileMeasurement = Readonly<{
@@ -1506,11 +1521,13 @@ export class NativeReadonlyWorkspace
   private helperAttestation: Promise<Buffer> | undefined;
   private readonly attestInterpreter: () => Promise<string>;
   private readonly homeDirectory: string;
+  private readonly runtimeDirectory: string;
 
   constructor(private readonly options: NativeReadonlyWorkspaceOptions) {
     this.attestInterpreter =
       options.attestInterpreter ?? defaultAttestInterpreter;
     this.homeDirectory = options.homeDirectory ?? os.homedir();
+    this.runtimeDirectory = options.runtimeDirectory ?? os.tmpdir();
   }
 
   // Null when the root is a home credential store or lies inside one;
@@ -1587,13 +1604,13 @@ export class NativeReadonlyWorkspace
         },
         validated.operation,
         {
-          ...(this.options.experimentalDescriptorBoundGit
-            ? { experimentalDescriptorBoundGit: true as const }
-            : {}),
-          launchInApprovedRoot: approvedRootLauncher({
-            helperSource: () => this.helperSource(),
-            attestInterpreter: () => this.attestInterpreter(),
-          }),
+          createSnapshot: (snapshotRequest) =>
+            createWorkspaceSnapshot(snapshotRequest, {
+              helperPath: this.options.helperPath,
+              helper: this.options.helper,
+              attestInterpreter: () => this.attestInterpreter(),
+              runtimeDirectory: this.runtimeDirectory,
+            }),
           ...(this.options.attestGit
             ? { attestGit: this.options.attestGit }
             : {}),

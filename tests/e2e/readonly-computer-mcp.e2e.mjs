@@ -266,22 +266,34 @@ try {
     bytes: 46,
   });
 
-  // F1-8: while Git cannot be confined to the approved folder, every Git
-  // verification is refused before a process starts.
-  for (const name of [
-    "computer_workspace_git_status",
-    "computer_workspace_git_head",
-  ]) {
-    const refused = await client.callTool({
-      name,
-      arguments: { workspaceId: "fixture" },
-    });
-    const shown = JSON.stringify(refused);
-    assert.equal(refused.isError, true, `${name} must be refused: ${shown}`);
-    assert.match(shown, /WORKSPACE_COMMAND_UNSUPPORTED/u, shown);
-    assert.equal(shown.includes('"workspace.command"'), false, shown);
-  }
+  // N02: Git runs for real now, over a private snapshot of the approved
+  // folder -- both fixed, no-network verifications return their result.
+  const status = await client.callTool({
+    name: "computer_workspace_git_status",
+    arguments: { workspaceId: "fixture" },
+  });
+  assert.equal(status.isError, undefined, JSON.stringify(status));
+  assert.equal(status.structuredContent?.output?.kind, "workspace.command");
+  assert.equal(status.structuredContent?.output?.command, "git.status");
+  assert.equal(status.structuredContent?.output?.exitCode, 0);
+  assert.equal(status.structuredContent?.output?.network, "none");
+  assert.equal(status.structuredContent?.output?.coverage, "tracked-files-only");
+  assert.equal(status.structuredContent?.output?.layout, "primary");
 
+  const exactHead = await client.callTool({
+    name: "computer_workspace_git_head",
+    arguments: { workspaceId: "fixture" },
+  });
+  assert.equal(exactHead.isError, undefined, JSON.stringify(exactHead));
+  assert.equal(exactHead.structuredContent?.output?.kind, "workspace.command");
+  assert.equal(exactHead.structuredContent?.output?.command, "git.head");
+  assert.equal(exactHead.structuredContent?.output?.stdout, head);
+  assert.equal(exactHead.structuredContent?.output?.exitCode, 0);
+  assert.equal(exactHead.structuredContent?.output?.network, "none");
+
+  // A command with an injected argument is still refused: the tool exposes
+  // exactly the two fixed, no-network verifications and nothing shaped like
+  // an arbitrary command line.
   const injected = await client.callTool({
     name: "computer_workspace_git_status",
     arguments: { workspaceId: "fixture", command: "sh -c whoami" },

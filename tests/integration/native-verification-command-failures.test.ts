@@ -18,10 +18,9 @@ vi.mock("node:child_process", () => ({
   spawn: processMock.spawn,
 }));
 
-import type { ChildProcess } from "node:child_process";
 import {
   executeNativeVerificationCommand,
-  type ApprovedRootLauncher,
+  type SnapshotFactory,
 } from "../../src/modules/computer/infra/native/native-verification-command";
 import { approvedRootOf } from "../fixtures/root-identity";
 
@@ -58,6 +57,22 @@ function request(
   };
 }
 
+// N02: the snapshot mechanism itself is proven separately
+// (workspace-snapshot.test.ts) and by the real end-to-end tests in
+// native-verification-command.test.ts. These tests are about the command
+// spawned *over* a snapshot, so the snapshot here is a fixed fake -- its
+// destination is `root` itself, which already has a `.git` from beforeEach --
+// and never goes through a real child process of its own.
+function fakeSnapshotFactory(): SnapshotFactory {
+  return async () => ({
+    ok: true,
+    path: root,
+    entries: 0,
+    bytes: 0,
+    remove: async () => undefined,
+  });
+}
+
 async function execute(
   attestGit?: () => Promise<string>,
   command: WorkspaceVerificationCommand = "git.status",
@@ -70,28 +85,12 @@ async function execute(
   return executeNativeVerificationCommand(input, input.operation, {
     ...(attestGit ? { attestGit } : {}),
     ...(signal ? { signal } : {}),
-    experimentalDescriptorBoundGit: true,
-    // The reviewed helper's launch, replaced by the process mock so each test
-    // controls what the bound command does.
-    launchInApprovedRoot: async (launch) => {
-      launches.push(launch);
-      return processMock.spawn(
-        "/usr/bin/python3",
-        launch.arguments,
-        {},
-      ) as unknown as ChildProcess;
-    },
+    createSnapshot: fakeSnapshotFactory(),
   });
 }
 
-// What the helper writes right before it becomes the command.
-const EXEC_MAGIC = Buffer.from("FAROLX1\0", "ascii");
-type Launch = Parameters<ApprovedRootLauncher>[0];
-const launches: Launch[] = [];
-
 beforeEach(async () => {
   processMock.spawn.mockReset();
-  launches.length = 0;
   root = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-command-failure-"),
   );
@@ -180,7 +179,6 @@ describe("native verification command process failures", () => {
     processMock.spawn.mockImplementationOnce(() => {
       const child = new FakeChild();
       setImmediate(() => {
-        child.stdout.emit("data", EXEC_MAGIC);
         child.stderr.emit(
           "data",
           Buffer.from("sandbox-exec: sandbox_apply: operation not permitted"),
@@ -199,14 +197,11 @@ describe("native verification command process failures", () => {
     });
   });
 
-  it("pins the exact HEAD command, workspace and Git metadata environment", async () => {
+  it("pins the exact HEAD command, snapshot working directory and environment", async () => {
     processMock.spawn.mockImplementationOnce(() => {
       const child = new FakeChild();
       setImmediate(() => {
-        child.stdout.emit(
-          "data",
-          Buffer.concat([EXEC_MAGIC, Buffer.from(`${"a".repeat(40)}\n`)]),
-        );
+        child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
         child.emit("close", 0, null);
       });
       return child;
@@ -222,23 +217,27 @@ describe("native verification command process failures", () => {
         network: "none",
       },
     });
-    const launch = launches[0];
-    expect(launch?.arguments.slice(-4)).toEqual([
+    expect(processMock.spawn).toHaveBeenCalledTimes(1);
+    const [executable, launchArguments, spawnOptions] =
+      processMock.spawn.mock.calls[0] as [string, string[], Record<string, unknown>];
+    expect(executable).toBe("/usr/bin/sandbox-exec");
+    expect(launchArguments.slice(-4)).toEqual([
       "rev-parse",
       "--verify",
       "--quiet",
       "HEAD",
     ]);
-    // Git gets no pathname for the workspace: the helper binds the working
-    // directory to the approved root object and Git's paths are relative.
-    expect(launch?.arguments).not.toContain("-C");
-    expect(launch?.root).toBe(root);
-    expect(launch?.approvedRoot).toEqual(approvedRootOf(root));
-    expect(launch?.environment).toMatchObject({
-      GIT_DIR: ".git",
-      GIT_COMMON_DIR: ".git",
-      GIT_WORK_TREE: ".",
+    // Git gets no `-C`: it runs bound to the private snapshot's own working
+    // directory (here the fake snapshot's path, which this test doubles as
+    // `root` for convenience) rather than being told a path on the command
+    // line.
+    expect(launchArguments).not.toContain("-C");
+    expect(spawnOptions.cwd).toBe(root); // the fake snapshot's own path
+    expect(spawnOptions.env).toMatchObject({
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
+      HOME: root,
     });
   });
 

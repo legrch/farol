@@ -7,14 +7,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
 import {
-  approvedRootLauncher,
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import {
   discoverLinkedGitMetadata,
   executeNativeVerificationCommand,
+  type SnapshotFactory,
 } from "../../src/modules/computer/infra/native/native-verification-command";
+import { createWorkspaceSnapshot } from "../../src/modules/computer/infra/native/workspace-snapshot";
 import { approvedRootOf } from "../fixtures/root-identity";
 
 const executeFile = promisify(execFile);
@@ -22,6 +23,11 @@ const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
 let root = "";
 let git = "";
+let runtimeDirectory = "";
+// Compiled test doubles live here, never inside `root`: a confinement test
+// proves the sandboxed process cannot read a secret sitting next to it in
+// the owner's approved folder, so the double itself must sit somewhere else.
+let fixturesDirectory = "";
 
 function request(
   gitMetadata?: Readonly<{ gitDirectory: string; commonDirectory: string }>,
@@ -42,13 +48,16 @@ function request(
   };
 }
 
-function headRequest(): ReadonlyWorkspaceRequest {
+function headRequest(
+  gitMetadata?: Readonly<{ gitDirectory: string; commonDirectory: string }>,
+): ReadonlyWorkspaceRequest {
   return {
     workspace: {
       workspaceId: "workspace-a",
       root,
       approvedRoot: approvedRootOf(root),
       deniedPaths: ["private"],
+      ...(gitMetadata ? { gitMetadata } : {}),
     },
     operation: {
       kind: "verification.run",
@@ -66,16 +75,29 @@ function workspace(
     helper: NEXT_SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
     attestGit,
-    experimentalDescriptorBoundGit: true,
+    runtimeDirectory,
   });
+}
+
+// The same production wiring `NativeReadonlyWorkspace` builds internally
+// (native-readonly-workspace.ts), exposed directly for the tests that call
+// `executeNativeVerificationCommand` below the workspace layer.
+function snapshotFactory(): SnapshotFactory {
+  return (snapshotRequest) =>
+    createWorkspaceSnapshot(snapshotRequest, {
+      helperPath: sourceHelper,
+      helper: NEXT_SAFE_OPEN_HELPER,
+      attestInterpreter: async () => "/usr/bin/python3",
+      runtimeDirectory,
+    });
 }
 
 async function compileCommandFixture(
   name: string,
   source: string,
 ): Promise<string> {
-  const sourcePath = path.join(root, `${name}.c`);
-  const executablePath = path.join(root, name);
+  const sourcePath = path.join(fixturesDirectory, `${name}.c`);
+  const executablePath = path.join(fixturesDirectory, name);
   const clang = (
     await executeFile("/usr/bin/xcrun", ["--find", "clang"])
   ).stdout.trim();
@@ -101,6 +123,12 @@ beforeEach(async () => {
   root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-"));
   root = await fs.realpath(root);
   await fs.chmod(root, 0o700);
+  runtimeDirectory = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-runtime-")),
+  );
+  fixturesDirectory = await fs.realpath(
+    await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-command-fixtures-")),
+  );
   git = (await executeFile("/usr/bin/xcrun", ["--find", "git"])).stdout.trim();
   await executeFile(git, ["init", "--quiet", root]);
   await fs.writeFile(path.join(root, "README.md"), "before\n", {
@@ -127,27 +155,39 @@ beforeEach(async () => {
 
 afterEach(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
+  if (runtimeDirectory) {
+    await fs.rm(runtimeDirectory, { recursive: true, force: true });
+  }
+  if (fixturesDirectory) {
+    await fs.rm(fixturesDirectory, { recursive: true, force: true });
+  }
 });
 
 describe("native verification command", () => {
-  it("F1-8 the product refuses every Git verification while the finding is open", async () => {
+  it("N02 runs both Git verifications for real with no test-only flag anywhere in the path", async () => {
+    // The plain production constructor: no experimental flag exists any
+    // more, and no launcher override is supplied -- this is exactly what the
+    // desktop and the Computer MCP server build.
     const product = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
       helper: NEXT_SAFE_OPEN_HELPER,
+      runtimeDirectory,
     });
-    for (const input of [request(), headRequest()]) {
-      await expect(product.execute(input)).resolves.toEqual({
-        ok: false,
-        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
-      });
-    }
+    await expect(product.execute(request())).resolves.toMatchObject({
+      ok: true,
+      value: { kind: "workspace.command", command: "git.status", exitCode: 0 },
+    });
+    await expect(product.execute(headRequest())).resolves.toMatchObject({
+      ok: true,
+      value: { kind: "workspace.command", command: "git.head", exitCode: 0 },
+    });
   });
 
   it("attests and caches the reviewed Apple Git chain before production execution", async () => {
     const productionWorkspace = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
       helper: NEXT_SAFE_OPEN_HELPER,
-      experimentalDescriptorBoundGit: true,
+      runtimeDirectory,
     });
 
     await expect(productionWorkspace.execute(request())).resolves.toMatchObject(
@@ -230,7 +270,7 @@ int main(void) {
     });
   });
 
-  it("supports one exact linked worktree without authorizing its metadata parent", async () => {
+  it("supports one exact linked worktree while never authorizing its metadata parent", async () => {
     const mainRoot = root;
     const worktreeParent = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-command-worktree-parent-"),
@@ -252,17 +292,27 @@ int main(void) {
       await fs.writeFile(path.join(root, "README.md"), "linked change\n", {
         mode: 0o600,
       });
-      const grant = {
+      const grant = await discoverLinkedGitMetadata(root);
+      expect(grant).toEqual({
         gitDirectory: path.join(mainRoot, ".git", "worktrees", "checkout"),
         commonDirectory: path.join(mainRoot, ".git"),
-      };
+      });
 
-      // F1-8: Git runs only bound to the approved root object with relative
-      // metadata paths; a linked worktree's metadata lives outside the root
-      // and cannot be bound that way yet, so it is refused, not run by path.
-      await expect(workspace().execute(request(grant))).resolves.toMatchObject({
-        ok: false,
-        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+      // N02: a linked worktree is supported for real now -- both its own
+      // gitdir and the repository's common gitdir are snapshotted into the
+      // same private destination, so Git needs no path outside it.
+      await expect(
+        workspace().execute(request(grant ?? undefined)),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          command: "git.status",
+          exitCode: 0,
+          coverage: "tracked-files-only",
+          layout: "linked-worktree",
+          stdout: expect.stringContaining("README.md"),
+        },
       });
 
       const parentReader = await compileCommandFixture(
@@ -285,13 +335,13 @@ int main(void) {
 }
 `,
       );
-      // Nothing runs at all for a linked worktree now, so no command gets the
-      // chance to reach the metadata parent.
+      // The sandboxed process runs bound to the snapshot alone: the parent
+      // directory the worktree's own gitdir lives under is never granted.
       await expect(
-        workspace(async () => parentReader).execute(request(grant)),
+        workspace(async () => parentReader).execute(request(grant ?? undefined)),
       ).resolves.toMatchObject({
-        ok: false,
-        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+        ok: true,
+        value: { stdout: "parent denied\n" },
       });
     } finally {
       root = mainRoot;
@@ -538,7 +588,7 @@ int main(void) {
     await expect(fs.stat(canary)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("keeps default credential paths denied for verification commands", async () => {
+  it("keeps the owner's workspace unreadable to the verifier: only the snapshot is granted", async () => {
     const credential = path.join(root, ".env");
     await fs.writeFile(credential, "PRIVATE_VALUE=never-read\n", {
       mode: 0o600,
@@ -574,6 +624,45 @@ int main(void) {
         network: "none",
       },
     });
+  });
+
+  it("never lets the verifier read a sentinel outside the approved root", async () => {
+    const outside = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-command-sentinel-"),
+    );
+    const sentinel = path.join(outside, "sentinel.txt");
+    await fs.writeFile(sentinel, "OUTSIDE-SENTINEL\n", { mode: 0o600 });
+    try {
+      const sentinelReader = await compileCommandFixture(
+        "sentinel-reader",
+        `#include <fcntl.h>
+#include <stddef.h>
+#include <unistd.h>
+
+int main(void) {
+  const int descriptor = open(${JSON.stringify(sentinel)}, O_RDONLY);
+  const char denied[] = "sentinel denied\\n";
+  const char readable[] = "sentinel readable\\n";
+  const char *output = descriptor < 0 ? denied : readable;
+  const size_t length = descriptor < 0 ? sizeof(denied) - 1 : sizeof(readable) - 1;
+  if (descriptor >= 0) {
+    close(descriptor);
+  }
+  const ssize_t written = write(STDOUT_FILENO, output, length);
+  return written == (ssize_t)length ? 0 : 1;
+}
+`,
+      );
+
+      await expect(
+        workspace(async () => sentinelReader).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { stdout: "sentinel denied\n" },
+      });
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("fails closed when Git attestation is missing or malformed", async () => {
@@ -744,7 +833,7 @@ int main(void) {
           operation,
         },
         operation,
-        { attestGit: async () => git },
+        { attestGit: async () => git, createSnapshot: snapshotFactory() },
       ),
     ).resolves.toMatchObject({
       ok: false,
@@ -763,7 +852,7 @@ int main(void) {
           operation,
         },
         operation,
-        { attestGit: async () => git },
+        { attestGit: async () => git, createSnapshot: snapshotFactory() },
       ),
     ).resolves.toMatchObject({
       ok: false,
@@ -782,7 +871,7 @@ int main(void) {
           operation,
         },
         operation,
-        { attestGit: async () => git },
+        { attestGit: async () => git, createSnapshot: snapshotFactory() },
       ),
     ).resolves.toMatchObject({
       ok: false,
@@ -856,7 +945,7 @@ int main(void) {
       }
     });
 
-    it("refuses a linked worktree until its metadata can be bound (F1-8)", async () => {
+    it("reports the linked-worktree layout and coverage for both commands", async () => {
       const mainRoot = root;
       const worktreeParent = await fs.mkdtemp(
         path.join(os.tmpdir(), "farol-next-command-layout-"),
@@ -882,8 +971,21 @@ int main(void) {
         await expect(
           workspace().execute(request(grant ?? undefined)),
         ).resolves.toMatchObject({
-          ok: false,
-          error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+          ok: true,
+          value: { coverage: "tracked-files-only", layout: "linked-worktree" },
+        });
+        const expectedHead = (
+          await executeFile(git, ["-C", root, "rev-parse", "--verify", "HEAD"])
+        ).stdout;
+        await expect(
+          workspace().execute(headRequest(grant ?? undefined)),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: {
+            coverage: "head-commit",
+            layout: "linked-worktree",
+            stdout: expectedHead,
+          },
         });
         // A primary checkout keeps its metadata inside the root: no grant.
         await expect(discoverLinkedGitMetadata(mainRoot)).resolves.toBeNull();
@@ -902,7 +1004,7 @@ int main(void) {
     });
   });
 
-  it("F1-8 never runs Git in a folder that took the approved root's place after the last check", async () => {
+  it("F1-8 never runs Git in a folder that took the approved root's place after the last check, and cleans up its snapshot either way", async () => {
     await fs.writeFile(path.join(root, "APPROVED.txt"), "approved\n", {
       mode: 0o600,
     });
@@ -912,36 +1014,69 @@ int main(void) {
     }
     const moved = `${root}.approved-moved`;
     let replaced = false;
-    const result = await executeNativeVerificationCommand(
-      input,
-      input.operation,
-      {
-        attestGit: async () => git,
-        experimentalDescriptorBoundGit: true,
-        launchInApprovedRoot: approvedRootLauncher({
-          helperSource: () => fs.readFile(sourceHelper),
-          attestInterpreter: async () => "/usr/bin/python3",
-        }),
-        // After every pathname check has passed: move the approved folder away
-        // and put another repository at its path.
-        beforeLaunch: async () => {
-          await fs.rename(root, moved);
-          await fs.mkdir(root, { mode: 0o700 });
-          await executeFile(git, ["init", "--quiet", root]);
-          await fs.writeFile(path.join(root, "REPLACEMENT.txt"), "x\n", {
-            mode: 0o600,
-          });
-          replaced = true;
-        },
+    const factory = snapshotFactory();
+    const snapshotPaths: string[] = [];
+    const result = await executeNativeVerificationCommand(input, input.operation, {
+      attestGit: async () => git,
+      createSnapshot: async (snapshotRequest) => {
+        const outcome = await factory(snapshotRequest);
+        if (outcome.ok) snapshotPaths.push(outcome.path);
+        return outcome;
       },
-    );
+      // After every pathname check has passed: move the approved folder away
+      // and put another repository at its path. The snapshot's own
+      // descriptor-bound identity check (workspace-snapshot.ts / safe_open.py)
+      // is what must catch this, not just the outer cheap check that already
+      // ran before this hook.
+      beforeSnapshot: async () => {
+        await fs.rename(root, moved);
+        await fs.mkdir(root, { mode: 0o700 });
+        await executeFile(git, ["init", "--quiet", root]);
+        await fs.writeFile(path.join(root, "REPLACEMENT.txt"), "x\n", {
+          mode: 0o600,
+        });
+        replaced = true;
+      },
+    });
     expect(replaced).toBe(true);
     expect(result).toMatchObject({
       ok: false,
       error: { code: "WORKSPACE_ROOT_CHANGED", retry: "never" },
     });
     expect(JSON.stringify(result)).not.toContain("REPLACEMENT");
+    // No snapshot was left behind by the refused attempt.
+    for (const snapshotPath of snapshotPaths) {
+      await expect(fs.stat(snapshotPath)).rejects.toThrow();
+    }
     await fs.rm(root, { recursive: true, force: true });
     await fs.rename(moved, root);
+  });
+
+  it("N02 removes the snapshot after a successful command and after a failed one", async () => {
+    const factory = snapshotFactory();
+    const snapshotPaths: string[] = [];
+    const observedFactory: SnapshotFactory = async (snapshotRequest) => {
+      const outcome = await factory(snapshotRequest);
+      if (outcome.ok) snapshotPaths.push(outcome.path);
+      return outcome;
+    };
+    const input = request();
+    if (input.operation.kind !== "verification.run") {
+      throw new Error("verification operation expected");
+    }
+
+    await executeNativeVerificationCommand(input, input.operation, {
+      attestGit: async () => git,
+      createSnapshot: observedFactory,
+    });
+    await executeNativeVerificationCommand(input, input.operation, {
+      attestGit: async () => "/usr/bin/false",
+      createSnapshot: observedFactory,
+    });
+
+    expect(snapshotPaths.length).toBe(2);
+    for (const snapshotPath of snapshotPaths) {
+      await expect(fs.stat(snapshotPath)).rejects.toThrow();
+    }
   });
 });

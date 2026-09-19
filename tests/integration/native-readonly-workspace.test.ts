@@ -834,11 +834,10 @@ describe("native readonly Computer workspace", () => {
             relativePath: ".",
           }),
         ),
-        // While F1-8 is open the product refuses Git before any check.
-      ).resolves.toEqual({
-        ok: false,
-        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
-      });
+        // N02: Git verification now runs for real, over a private snapshot,
+        // and is bound to the same approved-root identity check every other
+        // operation here already goes through.
+      ).resolves.toEqual(changed);
       await expect(
         workspace.readEditSnapshot({
           workspace: {

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
@@ -10,6 +10,11 @@ import type {
   ReadonlyWorkspaceResult,
   WorkspaceGitMetadataGrant,
 } from "../../app/port/readonly-workspace";
+import type {
+  WorkspaceSnapshotErrorCode,
+  WorkspaceSnapshotOutcome,
+  WorkspaceSnapshotRequest,
+} from "./workspace-snapshot";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const XCODE_SELECT = "/usr/bin/xcode-select";
@@ -31,6 +36,13 @@ const REVIEWED_DEVELOPER_ROOTS = Object.freeze([
   "/Library/Developer/CommandLineTools",
 ]);
 
+// N02 -- Git never reads the owner's folder. It reads only the private
+// snapshot `createSnapshot` (workspace-snapshot.ts) assembles from
+// descriptors Farol already holds, and the sandbox grants read and write
+// access to that snapshot directory alone -- never to the owner's workspace
+// pathname. The snapshot mirrors both a primary checkout and a linked
+// worktree (its own gitdir and the repository's common gitdir rebuilt inside
+// the same destination), so Git needs no path outside it.
 const COMMAND_PROFILE = `(version 1)
 (import "dyld-support.sb")
 (deny default)
@@ -47,18 +59,18 @@ const COMMAND_PROFILE = `(version 1)
   (literal "/dev/null")
   (literal "/dev/urandom")
   (subpath (param "FAROL_DEVELOPER"))
-  (subpath (param "FAROL_GIT_DIR"))
-  (subpath (param "FAROL_GIT_COMMON_DIR"))
-  (subpath (param "FAROL_WORKSPACE")))
-(allow file-write-data
-  (require-all
-    (path "/dev/null")
-    (vnode-type CHARACTER-DEVICE)))
+  (subpath (param "FAROL_EXECUTABLE_DIR"))
+  (subpath (param "FAROL_SNAPSHOT")))
 (allow file-write*
+  (subpath (param "FAROL_SNAPSHOT"))
   (literal "/dev/stdout")
   (literal "/dev/stderr")
   (literal "/dev/null")
   (regex #"^/dev/fd/[0-9]+$"))
+(allow file-write-data
+  (require-all
+    (path "/dev/null")
+    (vnode-type CHARACTER-DEVICE)))
 (deny network*)`;
 
 type VerificationOperation = Extract<
@@ -66,34 +78,24 @@ type VerificationOperation = Extract<
   { kind: "verification.run" }
 >;
 
-// Starts the reviewed command with its working directory bound to the approved
-// root object (the native helper opens the root by descriptor, checks the
-// approved identity, changes into it and replaces itself with the command).
-export type ApprovedRootLauncher = (
-  input: Readonly<{
-    root: string;
-    approvedRoot: Readonly<{ path: string; device: string; inode: string }>;
-    arguments: readonly string[];
-    environment: Readonly<Record<string, string>>;
-  }>,
-) => Promise<ChildProcess | "WORKSPACE_HELPER_UNTRUSTED">;
+// Builds the private snapshot for one Git verification and removes it once
+// the caller is done with it -- production wires this to
+// `createWorkspaceSnapshot` (workspace-snapshot.ts); a test may supply a
+// fixed handle directly.
+export type SnapshotFactory = (
+  request: WorkspaceSnapshotRequest,
+) => Promise<WorkspaceSnapshotOutcome>;
 
 export type NativeVerificationCommandOptions = Readonly<{
   attestGit?: () => Promise<string>;
-  // See NativeReadonlyWorkspaceOptions.experimentalDescriptorBoundGit: absent
-  // in the product, so every Git verification is refused (F1-8 open).
-  experimentalDescriptorBoundGit?: true;
-  launchInApprovedRoot?: ApprovedRootLauncher;
-  // Test seam: runs after the last pathname check and before the launch, the
-  // window a replacement of the root used to exploit.
-  beforeLaunch?: () => Promise<void>;
+  createSnapshot: SnapshotFactory;
+  // Test seam: runs after the last pathname check and before the snapshot is
+  // built, the window a replacement of the root used to exploit (F1-8). The
+  // snapshot's own descriptor-bound walk re-checks the approved identity, so
+  // a replacement made here is never read.
+  beforeSnapshot?: () => Promise<void>;
   signal?: AbortSignal;
 }>;
-
-// The helper writes this immediately before it becomes the command; without
-// it, the exit status is the helper's own refusal, not the command's.
-const EXEC_MAGIC = Buffer.from("FAROLX1\0", "ascii");
-const HELPER_ROOT_CHANGED = 33;
 
 type ExactResult = Readonly<{ stdout: string; stderr: string }>;
 type WorkspaceGitMetadata = Readonly<{
@@ -111,7 +113,8 @@ type CommandFailureCode =
   | "WORKSPACE_NOT_GIT_REPOSITORY"
   | "WORKSPACE_GIT_HEAD_UNBORN"
   | "WORKSPACE_GIT_METADATA_NOT_APPROVED"
-  | "WORKSPACE_ROOT_CHANGED";
+  | "WORKSPACE_ROOT_CHANGED"
+  | "WORKSPACE_HELPER_FAILED";
 
 // The HEAD profile exits 1 without output when HEAD does not resolve; the
 // caller decides from the repository metadata whether that is an unborn
@@ -120,6 +123,28 @@ const HEAD_UNRESOLVED = Symbol("head-unresolved");
 
 function failure(code: CommandFailureCode): ReadonlyWorkspaceResult {
   return { ok: false, error: { code, retry: "never" } };
+}
+
+// Maps a snapshot-layer refusal (cbcf0924, EXIT_TO_CODE in workspace-snapshot.ts)
+// onto this command's own product codes. `SNAPSHOT_ROOT_CHANGED` and
+// `SNAPSHOT_METADATA_UNAPPROVED` already name an existing product refusal
+// exactly, so they are surfaced as that code; every other snapshot failure is
+// an internal-mechanism refusal without a more specific product meaning, so
+// it is surfaced as the existing generic `WORKSPACE_HELPER_FAILED`, and
+// `SNAPSHOT_HELPER_UNTRUSTED` (the attested interpreter or helper bytes
+// failed their own check) as the existing executable-untrusted code, which
+// already covers a failed attestation for the command itself.
+function snapshotFailureCode(code: WorkspaceSnapshotErrorCode): CommandFailureCode {
+  switch (code) {
+    case "SNAPSHOT_ROOT_CHANGED":
+      return "WORKSPACE_ROOT_CHANGED";
+    case "SNAPSHOT_METADATA_UNAPPROVED":
+      return "WORKSPACE_GIT_METADATA_NOT_APPROVED";
+    case "SNAPSHOT_HELPER_UNTRUSTED":
+      return "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED";
+    default:
+      return "WORKSPACE_HELPER_FAILED";
+  }
 }
 
 function plainPath(value: string): boolean {
@@ -422,6 +447,27 @@ async function resolveWorkspaceGitMetadata(
   return { gitDirectory, commonDirectory };
 }
 
+// The identity of a directory this command already proved is owned and
+// exactly the one the owner approved (`resolveWorkspaceGitMetadata`): what
+// the snapshot's own grant needs to re-check that identity itself, the same
+// discipline every other grant in this product already follows.
+async function directoryGrant(
+  directory: string,
+): Promise<Readonly<{ path: string; device: string; inode: string }> | null> {
+  try {
+    const measured = await lstat(directory, { bigint: true });
+    return measured.isDirectory() && !measured.isSymbolicLink()
+      ? {
+          path: directory,
+          device: String(measured.dev),
+          inode: String(measured.ino),
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function validDeniedPath(relative: string): boolean {
   return (
     relative.length > 0 &&
@@ -434,39 +480,24 @@ function validDeniedPath(relative: string): boolean {
   );
 }
 
-function deniedRules(root: string, deniedPaths: readonly string[]): string {
-  return deniedPaths
-    .map((relative, index) => {
-      if (!validDeniedPath(relative)) {
-        throw new Error("invalid denied path");
-      }
-      const absolute = path.join(root, ...relative.split("/"));
-      if (!plainPath(absolute)) throw new Error("invalid denied path");
-      return `(deny file-read* (subpath (param "FAROL_DENY_${index}")))`;
-    })
-    .join("\n");
-}
+// `subpath` grants the snapshot's own subtree, never the chain of ordinary
+// directories leading to it (the snapshot lives under Farol's runtime
+// directory, itself under the OS temporary root). A linked worktree's `.git`
+// file and its `commondir` name that chain by absolute path, and Git
+// canonicalises them component by component, so each ancestor directory
+// needs its metadata (never its contents) readable. A primary checkout never
+// exercises this path -- `.git` is a plain directory at the snapshot's own
+// top level -- but the grant costs nothing to always add.
+const MAX_SNAPSHOT_ANCESTORS = 128;
 
-function metadataTraversalDirectories(
-  root: string,
-  metadata: WorkspaceGitMetadata,
-): readonly string[] {
-  const directories = new Set<string>();
-  for (const target of [
-    root,
-    metadata.gitDirectory,
-    metadata.commonDirectory,
-  ]) {
-    let current = path.dirname(target);
-    while (current !== "/") {
-      directories.add(current);
-      current = path.dirname(current);
-    }
+function snapshotAncestors(snapshotPath: string): readonly string[] {
+  const ancestors: string[] = [];
+  let current = path.dirname(snapshotPath);
+  while (current !== "/") {
+    ancestors.push(current);
+    current = path.dirname(current);
   }
-  if (directories.size > 128) {
-    throw new Error("Git metadata traversal is too deep");
-  }
-  return [...directories].sort();
+  return ancestors;
 }
 
 function sandboxDeveloperRoot(git: string): string {
@@ -534,58 +565,60 @@ function validGitOutput(
   );
 }
 
-function runGitVerification(
+// Runs the fixed, no-network Git command entirely inside `snapshotPath` (the
+// private snapshot N02 built): the Seatbelt profile grants read and write
+// only under that one directory, plus the reviewed Git binary and the system
+// libraries it needs. Git sees no pathname belonging to the owner's real
+// workspace at all -- primary and linked-worktree layouts alike are self-
+// contained inside the snapshot (workspace-snapshot.ts / safe_open.py
+// `_snapshot_linked_worktree`), so no extra grant is needed for either.
+function runGitOverSnapshot(
   git: string,
-  root: string,
-  approvedRoot: Readonly<{ path: string; device: string; inode: string }>,
-  metadata: WorkspaceGitMetadata,
+  snapshotPath: string,
   command: VerificationOperation["command"],
-  deniedPaths: readonly string[],
-  launch: ApprovedRootLauncher,
   signal?: AbortSignal,
 ): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
   if (signal?.aborted) {
     return Promise.resolve(failure("WORKSPACE_COMMAND_CANCELLED"));
   }
-  let profile: string;
-  let parameters: string[];
+  if (!plainPath(snapshotPath)) {
+    return Promise.resolve(failure("WORKSPACE_COMMAND_UNSUPPORTED"));
+  }
+  let ancestors: readonly string[];
   try {
-    const rules = deniedRules(root, deniedPaths);
-    const traversalDirectories = metadataTraversalDirectories(root, metadata);
-    const traversalRules = traversalDirectories
-      .map(
-        (_directory, index) =>
-          `(allow file-read-metadata (literal (param "FAROL_GIT_PARENT_${index}")))`,
-      )
-      .join("\n");
-    profile = `${COMMAND_PROFILE}\n${traversalRules}${rules === "" ? "" : `\n${rules}`}\n`;
-    parameters = [
-      "-D",
-      `FAROL_GIT=${git}`,
-      "-D",
-      `FAROL_DEVELOPER=${sandboxDeveloperRoot(git)}`,
-      "-D",
-      `FAROL_GIT_DIR=${metadata.gitDirectory}`,
-      "-D",
-      `FAROL_GIT_COMMON_DIR=${metadata.commonDirectory}`,
-      "-D",
-      `FAROL_WORKSPACE=${root}`,
-    ];
-    traversalDirectories.forEach((directory, index) => {
-      parameters.push("-D", `FAROL_GIT_PARENT_${index}=${directory}`);
-    });
-    deniedPaths.forEach((relative, index) => {
-      parameters.push(
-        "-D",
-        `FAROL_DENY_${index}=${path.join(root, ...relative.split("/"))}`,
-      );
-    });
+    ancestors = snapshotAncestors(snapshotPath);
+    if (ancestors.length > MAX_SNAPSHOT_ANCESTORS) {
+      throw new Error("snapshot path is too deep");
+    }
   } catch {
     return Promise.resolve(failure("WORKSPACE_COMMAND_UNSUPPORTED"));
   }
-
-  // Git sees only relative paths: its work tree and metadata are resolved
-  // from the working directory the helper bound to the approved root object.
+  const ancestorRules = ancestors
+    .map(
+      (_directory, index) =>
+        `(allow file-read-metadata (literal (param "FAROL_SNAPSHOT_PARENT_${index}")))`,
+    )
+    .join("\n");
+  const profile = `${COMMAND_PROFILE}\n${ancestorRules}\n`;
+  const parameters = [
+    "-D",
+    `FAROL_GIT=${git}`,
+    "-D",
+    `FAROL_DEVELOPER=${sandboxDeveloperRoot(git)}`,
+    // The reviewed executable's own directory: exec-ing it needs its bytes
+    // (and, for an ad-hoc binary, its dynamic dependencies) to be readable,
+    // not only permitted by `process-exec`. For the real reviewed Git this is
+    // always inside FAROL_DEVELOPER already; it is listed separately so this
+    // profile is provably correct for exactly the executable it was built
+    // for, whatever that executable's own location is.
+    "-D",
+    `FAROL_EXECUTABLE_DIR=${path.dirname(git)}`,
+    "-D",
+    `FAROL_SNAPSHOT=${snapshotPath}`,
+  ];
+  ancestors.forEach((directory, index) => {
+    parameters.push("-D", `FAROL_SNAPSHOT_PARENT_${index}=${directory}`);
+  });
   const launchArguments = [
     ...parameters,
     "-p",
@@ -606,16 +639,12 @@ function runGitVerification(
     ...gitArguments(command),
   ];
   const environment = {
-    GIT_CEILING_DIRECTORIES: root,
+    GIT_CEILING_DIRECTORIES: path.dirname(snapshotPath),
     GIT_ATTR_NOSYSTEM: "1",
-    GIT_COMMON_DIR: ".git",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_DIR: ".git",
-    GIT_OPTIONAL_LOCKS: "0",
     GIT_TERMINAL_PROMPT: "0",
-    GIT_WORK_TREE: ".",
-    HOME: "/var/empty",
+    HOME: snapshotPath,
     LANG: "C",
     LC_ALL: "C",
     PATH: "/usr/bin:/bin",
@@ -623,165 +652,136 @@ function runGitVerification(
   };
 
   return new Promise((resolve) => {
-    const observe = (child: ChildProcess): void => {
-      if (child.stdout === null || child.stderr === null) {
+    const child = spawn(SANDBOX_EXEC, launchArguments, {
+      cwd: snapshotPath,
+      env: environment,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (child.stdout === null || child.stderr === null) {
+      killProcessGroup(child);
+      resolve(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
+      return;
+    }
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let timedOut = false;
+    let outputTooLarge = false;
+    let cancelled = false;
+    let finished = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killProcessGroup(child);
+    }, COMMAND_TIMEOUT_MS);
+    const finish = (
+      result: ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED,
+    ): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", cancel);
+      resolve(result);
+    };
+    const cancel = (): void => {
+      if (finished || cancelled) return;
+      cancelled = true;
+      killProcessGroup(child);
+    };
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > MAX_OUTPUT_BYTES) {
+        outputTooLarge = true;
         killProcessGroup(child);
-        resolve(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
+      } else {
+        stdout.push(chunk);
+      }
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > MAX_STDERR_BYTES) {
+        outputTooLarge = true;
+        killProcessGroup(child);
+      } else {
+        stderr.push(chunk);
+      }
+    });
+    child.once("error", () =>
+      finish(
+        failure(
+          cancelled
+            ? "WORKSPACE_COMMAND_CANCELLED"
+            : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+        ),
+      ),
+    );
+    child.once("close", (code, exitSignal) => {
+      if (cancelled) {
+        finish(failure("WORKSPACE_COMMAND_CANCELLED"));
         return;
       }
-      const stdout: Buffer[] = [];
-      const stderr: Buffer[] = [];
-      let stdoutBytes = 0;
-      let stderrBytes = 0;
-      let timedOut = false;
-      let outputTooLarge = false;
-      let cancelled = false;
-      let finished = false;
-      const timer = setTimeout(() => {
-        timedOut = true;
-        killProcessGroup(child);
-      }, COMMAND_TIMEOUT_MS);
-      const finish = (
-        result: ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED,
-      ): void => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", cancel);
-        resolve(result);
-      };
-      const cancel = (): void => {
-        if (finished || cancelled) return;
-        cancelled = true;
-        killProcessGroup(child);
-      };
-      signal?.addEventListener("abort", cancel, { once: true });
-      if (signal?.aborted) cancel();
-      child.stdout.on("data", (chunk: Buffer) => {
-        stdoutBytes += chunk.length;
-        if (stdoutBytes > MAX_OUTPUT_BYTES) {
-          outputTooLarge = true;
-          killProcessGroup(child);
-        } else {
-          stdout.push(chunk);
-        }
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        stderrBytes += chunk.length;
-        if (stderrBytes > MAX_STDERR_BYTES) {
-          outputTooLarge = true;
-          killProcessGroup(child);
-        } else {
-          stderr.push(chunk);
-        }
-      });
-      child.once("error", () =>
-        finish(
-          failure(
-            cancelled
-              ? "WORKSPACE_COMMAND_CANCELLED"
-              : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
-          ),
-        ),
-      );
-      child.once("close", (code, signal) => {
-        if (cancelled) {
-          finish(failure("WORKSPACE_COMMAND_CANCELLED"));
-          return;
-        }
-        if (timedOut) {
-          finish(failure("WORKSPACE_COMMAND_TIMEOUT"));
-          return;
-        }
-        if (outputTooLarge) {
-          finish(failure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"));
-          return;
-        }
-        const produced = Buffer.concat(stdout);
-        if (
-          produced.length < EXEC_MAGIC.length ||
-          !produced.subarray(0, EXEC_MAGIC.length).equals(EXEC_MAGIC)
-        ) {
-          // The helper refused before it became the command: the root is not
-          // the approved object any more, or it could not be bound at all.
-          finish(
-            failure(
-              code === HELPER_ROOT_CHANGED
-                ? "WORKSPACE_ROOT_CHANGED"
-                : "WORKSPACE_COMMAND_FAILED",
-            ),
-          );
-          return;
-        }
-        const body = produced.subarray(EXEC_MAGIC.length);
-        const errorText = Buffer.concat(stderr).toString("utf8");
-        if (/^sandbox-exec: sandbox_apply:/mu.test(errorText)) {
-          finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
-          return;
-        }
-        if (
-          command === "git.head" &&
-          code === 1 &&
-          signal === null &&
-          errorText === "" &&
-          body.length === 0
-        ) {
-          finish(HEAD_UNRESOLVED);
-          return;
-        }
-        if (code !== 0 || signal !== null || errorText !== "") {
+      if (timedOut) {
+        finish(failure("WORKSPACE_COMMAND_TIMEOUT"));
+        return;
+      }
+      if (outputTooLarge) {
+        finish(failure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"));
+        return;
+      }
+      const body = Buffer.concat(stdout);
+      const errorText = Buffer.concat(stderr).toString("utf8");
+      if (/^sandbox-exec: sandbox_apply:/mu.test(errorText)) {
+        finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
+        return;
+      }
+      if (
+        command === "git.head" &&
+        code === 1 &&
+        exitSignal === null &&
+        errorText === "" &&
+        body.length === 0
+      ) {
+        finish(HEAD_UNRESOLVED);
+        return;
+      }
+      if (code !== 0 || exitSignal !== null || errorText !== "") {
+        finish(failure("WORKSPACE_COMMAND_FAILED"));
+        return;
+      }
+      try {
+        const output = new TextDecoder("utf-8", { fatal: true }).decode(body);
+        if (!validGitOutput(command, output)) {
           finish(failure("WORKSPACE_COMMAND_FAILED"));
           return;
         }
-        try {
-          const output = new TextDecoder("utf-8", { fatal: true }).decode(body);
-          if (!validGitOutput(command, output)) {
-            finish(failure("WORKSPACE_COMMAND_FAILED"));
-            return;
-          }
-          finish({
-            ok: true,
-            value: {
-              kind: "workspace.command",
-              command,
-              relativePath: ".",
-              exitCode: 0,
-              stdout: output,
-              stderr: "",
-              outputBytes: body.length,
-              network: "none",
-              coverage: commandCoverage(command),
-              layout:
-                metadata.gitDirectory === metadata.commonDirectory
-                  ? "primary"
-                  : "linked-worktree",
-            },
-          });
-        } catch {
-          finish(failure("WORKSPACE_COMMAND_FAILED"));
-        }
-      });
-    };
-    void launch({
-      root,
-      approvedRoot,
-      arguments: launchArguments,
-      environment,
-    }).then(
-      (launched) => {
-        if (launched === "WORKSPACE_HELPER_UNTRUSTED") {
-          resolve(failure("WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED"));
-          return;
-        }
-        observe(launched);
-      },
-      () => resolve(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE")),
-    );
+        finish({
+          ok: true,
+          value: {
+            kind: "workspace.command",
+            command,
+            relativePath: ".",
+            exitCode: 0,
+            stdout: output,
+            stderr: "",
+            outputBytes: body.length,
+            network: "none",
+            coverage: commandCoverage(command),
+            layout: "primary",
+          },
+        });
+      } catch {
+        finish(failure("WORKSPACE_COMMAND_FAILED"));
+      }
+    });
   });
 }
 
-// An early, cheap refusal. The binding itself happens in the helper, which
-// opens the root by descriptor and checks this identity before Git starts.
+// An early, cheap refusal. The binding itself happens again inside the
+// snapshot's own descriptor-bound walk, which opens the root by descriptor
+// and checks this identity before any file is read.
 async function approvedRootUnchanged(
   approved: ReadonlyWorkspaceRequest["workspace"]["approvedRoot"],
 ): Promise<boolean> {
@@ -823,7 +823,7 @@ export async function discoverLinkedGitMetadata(
 export async function executeNativeVerificationCommand(
   request: ReadonlyWorkspaceRequest,
   operation: VerificationOperation,
-  options: NativeVerificationCommandOptions = {},
+  options: NativeVerificationCommandOptions,
 ): Promise<ReadonlyWorkspaceResult> {
   if (options.signal?.aborted) {
     return failure("WORKSPACE_COMMAND_CANCELLED");
@@ -834,11 +834,13 @@ export async function executeNativeVerificationCommand(
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
-  // F1-8 is open: Git reopens absolute paths while it runs, and those paths
-  // can name a folder that took the approved root's place after the helper
-  // bound its working directory. Until Git can be confined to the approved
-  // object, no Git command runs.
-  if (options.experimentalDescriptorBoundGit !== true) {
+  if (
+    request.workspace.deniedPaths.some(
+      (relative) =>
+        !validDeniedPath(relative) ||
+        !plainPath(path.join(request.workspace.root, ...relative.split("/"))),
+    )
+  ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
   if (!(await approvedRootUnchanged(request.workspace.approvedRoot))) {
@@ -886,33 +888,59 @@ export async function executeNativeVerificationCommand(
   ) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
-  // Git runs bound to the approved root object, with relative metadata paths.
-  // Metadata outside the root (a linked worktree's) cannot be bound that way
-  // yet, so a linked worktree is refused rather than run by pathname.
   const primaryMetadata = path.join(request.workspace.root, ".git");
-  if (
-    metadata.gitDirectory !== primaryMetadata ||
-    metadata.commonDirectory !== primaryMetadata ||
-    !options.launchInApprovedRoot
-  ) {
-    return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  const linkedWorktree = metadata.gitDirectory !== primaryMetadata;
+  let externalGitDir:
+    | Readonly<{ path: string; device: string; inode: string }>
+    | undefined;
+  let externalCommonDir:
+    | Readonly<{ path: string; device: string; inode: string }>
+    | undefined;
+  if (linkedWorktree) {
+    const gitDirGrant = await directoryGrant(metadata.gitDirectory);
+    const commonDirGrant = await directoryGrant(metadata.commonDirectory);
+    if (gitDirGrant === null || commonDirGrant === null) {
+      return failure("WORKSPACE_COMMAND_FAILED");
+    }
+    externalGitDir = gitDirGrant;
+    externalCommonDir = commonDirGrant;
   }
   if (!(await approvedRootUnchanged(request.workspace.approvedRoot))) {
     return failure("WORKSPACE_ROOT_CHANGED");
   }
-  await options.beforeLaunch?.();
-  const result = await runGitVerification(
-    git,
-    request.workspace.root,
-    request.workspace.approvedRoot,
-    metadata,
-    operation.command,
-    request.workspace.deniedPaths,
-    options.launchInApprovedRoot,
-    options.signal,
-  );
-  if (result !== HEAD_UNRESOLVED) return result;
-  return (await headIsUnbornBranch(metadata))
-    ? failure("WORKSPACE_GIT_HEAD_UNBORN")
-    : failure("WORKSPACE_COMMAND_FAILED");
+  await options.beforeSnapshot?.();
+  const snapshot = await options.createSnapshot({
+    root: request.workspace.root,
+    approvedRoot: request.workspace.approvedRoot,
+    ...(externalGitDir ? { externalGitDir } : {}),
+    ...(externalCommonDir ? { externalCommonDir } : {}),
+  });
+  if (!snapshot.ok) {
+    return failure(snapshotFailureCode(snapshot.code));
+  }
+  try {
+    const result = await runGitOverSnapshot(
+      git,
+      snapshot.path,
+      operation.command,
+      options.signal,
+    );
+    if (result === HEAD_UNRESOLVED) {
+      return (await headIsUnbornBranch(metadata))
+        ? failure("WORKSPACE_GIT_HEAD_UNBORN")
+        : failure("WORKSPACE_COMMAND_FAILED");
+    }
+    if (result.ok && result.value.kind === "workspace.command") {
+      return {
+        ok: true,
+        value: {
+          ...result.value,
+          layout: linkedWorktree ? "linked-worktree" : "primary",
+        },
+      };
+    }
+    return result;
+  } finally {
+    await snapshot.remove();
+  }
 }
