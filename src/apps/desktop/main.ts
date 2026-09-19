@@ -56,6 +56,7 @@ import {
   ProductConfigurationCommandSchema,
   ProductConfigurationResultSchema,
   type ApprovedProductWorkspace,
+  type ProductConfigurationCommand,
   type ProductConfigurationResult,
   type ProductSettings,
   type WorkspaceRootIdentity,
@@ -139,7 +140,10 @@ import {
   startCodexCallerRelay,
   type CodexCallerRelayRuntime,
 } from "./codex-caller-relay";
-import { configurationAdmission } from "./configuration-admission";
+import {
+  changesComputerAuthority,
+  configurationAdmission,
+} from "./configuration-admission";
 import {
   createQuitDrain,
   type OwnedCloser,
@@ -221,6 +225,7 @@ import {
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
+import { AuthorityTransitionReservation } from "./authority-transition";
 import {
   PrivateSecureMcpLaunchStore,
   createSecureMcpLaunchContract,
@@ -348,6 +353,23 @@ let configuration: ProductConfigurationService | null = null;
 let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let connectorTaskAdmission = false;
+// F3-1b: one authority transition at a time. A command that changes Computer
+// authority holds it through its commit; a connector start and an Agent
+// admission hold it from reading the settings until they run, so neither can
+// start with authority that a concurrent change is about to replace.
+const authorityTransitions = new AuthorityTransitionReservation();
+
+function transitionRefusal(
+  heldBy: ReturnType<AuthorityTransitionReservation["current"]>,
+): ProductConfigurationResult {
+  return configurationFailure(
+    heldBy === "agent-admission"
+      ? "CODEX_HOST_TASK_IN_PROGRESS"
+      : heldBy === "connector-start"
+        ? "CONNECTOR_STOP_REQUIRED"
+        : "AUTHORITY_CHANGE_IN_PROGRESS",
+  );
+}
 let chatGptRoute: ChatGptRoute | null = null;
 // The most recent content-free block the sign-in surface reported (host,
 // permission name, or load-failure code only — see
@@ -1401,6 +1423,37 @@ async function openProductAgentSession(
     throw new Error("PRODUCT_AGENT_SESSION_BUSY");
   }
   return productAgentSessionReservation.open(key, async () => {
+    // Same reservation as the native check: from the settings this session
+    // was admitted with until it is active; stale settings are refused.
+    const agentAdmission = authorityTransitions.tryReserve("agent-admission");
+    if (!agentAdmission) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
+    try {
+      return await openAdmittedProductAgentSession(
+        input,
+        context,
+        key,
+        scheduleExpiry,
+      );
+    } finally {
+      agentAdmission.release();
+    }
+  });
+}
+
+async function openAdmittedProductAgentSession(
+  input: ProductAgentInput,
+  context: ProductAgentHostContext,
+  key: string,
+  scheduleExpiry: boolean,
+): Promise<ActiveProductAgentSession> {
+  {
+    const current = configuration?.snapshot();
+    if (
+      current?.status !== "ready" ||
+      current.settings.revision !== context.settings.revision
+    ) {
+      throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
+    }
     if (activeProductAgentSession) {
       if (
         activeProductAgentSession.taskId === input.taskId &&
@@ -1476,7 +1529,7 @@ async function openProductAgentSession(
       await client.close().catch(() => undefined);
       throw error;
     }
-  });
+  }
 }
 
 async function closeProductAgentSession(
@@ -2801,6 +2854,8 @@ async function startSecureMcpConnector(
   if (secureMcpConnectorRuntime.isRunning() && !repair) {
     return configurationFailure("CONNECTOR_ALREADY_RUNNING");
   }
+  const transition = authorityTransitions.tryReserve("connector-start");
+  if (!transition) return transitionRefusal(authorityTransitions.current());
   connectorTaskAdmission = true;
   try {
     if (repair) {
@@ -2958,6 +3013,7 @@ async function startSecureMcpConnector(
     });
   } finally {
     connectorTaskAdmission = false;
+    transition.release();
   }
 }
 
@@ -3241,6 +3297,22 @@ async function configureProduct(
     connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
   });
   if (admission !== "admitted") return configurationFailure(admission);
+  if (!changesComputerAuthority(command.kind)) {
+    return configureAdmittedProduct(command);
+  }
+  const reserved = await authorityTransitions.withReservation(
+    "authority-change",
+    () => configureAdmittedProduct(command),
+  );
+  return reserved.admitted
+    ? reserved.value
+    : transitionRefusal(reserved.heldBy);
+}
+
+async function configureAdmittedProduct(
+  command: ProductConfigurationCommand,
+): Promise<ProductConfigurationResult> {
+  if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   switch (command.kind) {
     case "connector.select-client": {
       const selected = await selectedTunnelClientExecutable();
@@ -3640,6 +3712,21 @@ async function configureProduct(
       if (activeCodexAgentCheck && activeCodexAgentCheck.key !== checkKey) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
+      // The check carries the authority read above; it holds the transition
+      // reservation until it is active, and refuses when that authority
+      // changed after it was read.
+      const agentAdmission = authorityTransitions.tryReserve("agent-admission");
+      if (!agentAdmission) {
+        return transitionRefusal(authorityTransitions.current());
+      }
+      const current = configuration.snapshot();
+      if (
+        current.status !== "ready" ||
+        current.settings.revision !== snapshot.settings.revision
+      ) {
+        agentAdmission.release();
+        return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+      }
 
       codexHostTaskAdmission = true;
       let session = activeCodexAgentCheck;
@@ -3711,6 +3798,7 @@ async function configureProduct(
             boundedRunningObserved: false,
           };
           activeCodexAgentCheck = session;
+          agentAdmission.release();
         }
 
         const check = await runCodexNativeAgentCheck({
@@ -3796,6 +3884,7 @@ async function configureProduct(
           }
         }
         codexHostTaskAdmission = false;
+        agentAdmission.release();
       }
     }
     case "host.remove-codex":
@@ -6178,8 +6267,12 @@ function reopenWindow(): void {
   void containWindowOpenFailure(ensureWindow, recoverWindowOpenFailure);
 }
 
+// Set when a quit begins; a quit drain always ends in the real quit.
+let quitInProgress = false;
+
 function isPrimaryReady(): boolean {
   return primaryStartupReady({
+    stopping: quitInProgress || runtimeStopping,
     runtimeState,
     windowReady: window !== null && !window.isDestroyed(),
     taskViewCount: [...taskViewKinds.values()].filter(
@@ -6193,6 +6286,11 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   const decision = decideSecondInstance(launchIdentity, candidate);
   if (!decision) return;
   let status = decision.status;
+  if (status === "reopened" && (quitInProgress || runtimeStopping)) {
+    // The primary is quitting: acknowledge that it cannot take this launch
+    // instead of reopening a window that is about to close.
+    status = "reopen-failed";
+  }
   if (status === "reopened") {
     try {
       await primaryStartup.whenReady();
@@ -6430,7 +6528,10 @@ async function main(): Promise<void> {
       return closers;
     },
   });
-  app.on("before-quit", (event) => quitDrain.onBeforeQuit(event));
+  app.on("before-quit", (event) => {
+    quitInProgress = true;
+    quitDrain.onBeforeQuit(event);
+  });
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });

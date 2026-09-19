@@ -38,3 +38,9 @@ export function configurationAdmission(
   }
   return "admitted";
 }
+
+// A command that changes what the Computer authorizes: it holds the authority
+// transition reservation from its admission through its commit (F3-1b).
+export function changesComputerAuthority(kind: string): boolean {
+  return agentGuardedCommands.has(kind) || connectorGuardedCommands.has(kind);
+}

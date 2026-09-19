@@ -960,6 +960,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_HOST_PROBE_FAILED",
       "CODEX_HOST_RECHECK_REQUIRED",
       "CODEX_HOST_TASK_IN_PROGRESS",
+      "AUTHORITY_CHANGE_IN_PROGRESS",
       "CODEX_HOST_DISCOVERY_FAILED",
       "CODEX_HOST_DISCOVERY_CANDIDATE_STALE",
       "ROUTE_B_UNAVAILABLE",

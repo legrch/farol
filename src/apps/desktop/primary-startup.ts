@@ -23,8 +23,13 @@ export function primaryStartupReady(state: {
   windowReady: boolean;
   taskViewCount: number;
   expectedTaskViewCount: number;
+  // A primary that is quitting or stopping its runtime is not ready, even
+  // while its window is still up: a second launch must not be told it was
+  // reopened into an app that is about to exit (F3-P2).
+  stopping?: boolean;
 }): boolean {
   return (
+    state.stopping !== true &&
     state.runtimeState === "ready" &&
     state.windowReady &&
     Number.isSafeInteger(state.expectedTaskViewCount) &&

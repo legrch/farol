@@ -88,4 +88,16 @@ describe("primary startup coordination", () => {
       ),
     ).toBe(0);
   });
+
+  it("F3-P2 is never ready while the primary is quitting or stopping", () => {
+    const ready = {
+      runtimeState: "ready" as const,
+      windowReady: true,
+      taskViewCount: 0,
+      expectedTaskViewCount: 0,
+    };
+    expect(primaryStartupReady(ready)).toBe(true);
+    expect(primaryStartupReady({ ...ready, stopping: true })).toBe(false);
+    expect(primaryStartupReady({ ...ready, stopping: false })).toBe(true);
+  });
 });

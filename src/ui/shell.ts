@@ -74,6 +74,18 @@ import {
 } from "./configuration-outcome";
 import { sidebarToggleLeft } from "./window-chrome-geometry";
 
+// Refusals that name a transition in progress or an open review finding,
+// so the owner sees why an action is unavailable instead of an error code.
+function transitionRefusalMessage(error: string): string | null {
+  if (error === "AUTHORITY_CHANGE_IN_PROGRESS") {
+    return "Another change to Computer access, a connector start or an Agent start is in progress. Try again when it has finished.";
+  }
+  if (error === "WORKSPACE_COMMAND_UNSUPPORTED") {
+    return "Git checks are off in this build: Git cannot yet be confined to the approved folder (open review finding F1-8). Listing, searching and reading files are not affected.";
+  }
+  return null;
+}
+
 // `bootstrap.productName` carries the release identity the main process
 // validates elsewhere ("Farol Next Preview"); the diagnostics row below
 // only names the app to the owner, so it reads "Farol" with its
@@ -2233,7 +2245,10 @@ async function configureProduct(
                                           : parsed.error ===
                                               "WORKSPACE_ROOT_CHANGED"
                                             ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
-                                            : (workspaceEditRefusalMessage(
+                                            : (transitionRefusalMessage(
+                                                parsed.error,
+                                              ) ??
+                                              workspaceEditRefusalMessage(
                                                 parsed.error,
                                               ) ??
                                               `Not applied · ${parsed.error}`);
