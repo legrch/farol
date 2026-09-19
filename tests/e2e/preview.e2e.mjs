@@ -8264,9 +8264,10 @@ async function signInReturnHitTest(chatGptPage) {
 // After Return the sign-in window is gone and Setup is not stale: its next
 // action follows the outcome recorded at close. On a page that was read
 // normally that outcome is "signed out" (the fixture never signs in), so the
-// step offers "Open sign-in…" at once. After a blocked navigation the
-// recorded outcome may honestly be unknown; the step must then match
-// whatever was recorded rather than the state from before the window.
+// step offers "Open sign-in…" at once — also after a blocked navigation,
+// which must not leave the route believing the still-visible page failed.
+// A caller may pass readOnClose: false only where an unknown outcome is
+// the honest expectation; the step must then match what was recorded.
 async function waitForSignInReturnOutcome(
   instance,
   { readOnClose = true } = {},
@@ -8496,7 +8497,7 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     await chatGptPage.evaluate(() =>
       document.querySelector("#farol-sign-in-banner button").click(),
     );
-    await waitForSignInReturnOutcome(signIn, { readOnClose: false });
+    await waitForSignInReturnOutcome(signIn);
     cases.push("ux34-sign-in-return-handler");
 
     // Pointer proof: a fresh sign-in window, real dispatched mouse input.
@@ -8537,9 +8538,7 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     process.stdout.write(
       `UX34_POST_BLOCKED_NAV_DIAGNOSTICS:${JSON.stringify(postBlockedNavDiagnostics)}\n`,
     );
-    await assertSignInReturnByPointer(signIn, chatGptPage, {
-      readOnClose: false,
-    });
+    await assertSignInReturnByPointer(signIn, chatGptPage);
     cases.push("ux34-sign-in-return-pointer-after-blocked-navigation");
 
     // Self-deception guard: a fixture variant adds a full-viewport overlay
