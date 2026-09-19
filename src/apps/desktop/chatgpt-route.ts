@@ -1558,7 +1558,13 @@ export class ChatGptRoute {
         "did-start-navigation",
         (_event, url, inPlace, isMainFrame) => {
           if (!isMainFrame || !this.ownsRouteContents(contents)) return;
-          this.load = inPlace && allowed(url) ? "loaded" : "failed";
+          // A navigation the policy refuses (will-navigate/will-redirect)
+          // never finishes and the current page stays: it must not leave
+          // the route believing that page failed. A refused navigation
+          // that commits or fails anyway is caught by did-navigate and
+          // did-fail-load.
+          if (!allowed(url)) return;
+          this.load = inPlace ? "loaded" : "failed";
         },
       );
       contents.on(
