@@ -96,6 +96,22 @@ describe("context task state", () => {
     });
   });
 
+  it("names the remedy for a retirement a newer conversation superseded", () => {
+    expect(
+      contextTaskPresentation({
+        epoch: 1,
+        phase: "blocked",
+        source: "retained_agent",
+        code: "SOURCE_RETIREMENT_SUPERSEDED",
+      }),
+    ).toEqual({
+      tone: "waiting",
+      label: "Return to the previous conversation",
+      attention: true,
+      locked: true,
+    });
+  });
+
   it("does not override ordinary task presentation while context is active", () => {
     expect(
       contextTaskPresentation(

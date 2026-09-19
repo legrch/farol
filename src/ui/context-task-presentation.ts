@@ -28,6 +28,17 @@ export function contextTaskPresentation(
         locked: true,
       };
     }
+    // The task's page shows a newer conversation than the one being retired.
+    // Nothing is lost or reset; the switch finishes once the page is back on
+    // the previous conversation.
+    if (context.code === "SOURCE_RETIREMENT_SUPERSEDED") {
+      return {
+        tone: "waiting",
+        label: "Return to the previous conversation",
+        attention: true,
+        locked: true,
+      };
+    }
     return {
       tone: "failed",
       label: "Context blocked",

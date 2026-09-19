@@ -399,6 +399,7 @@ export function resumeSourceRetirementCleanup(
     session.operation.checkpointId === null ||
     session.operation.hostContextRef === null ||
     (session.blockedCode !== "SOURCE_RETIREMENT_UNKNOWN" &&
+      session.blockedCode !== "SOURCE_RETIREMENT_SUPERSEDED" &&
       session.blockedCode !== "CONTEXT_SUMMARY_CLEANUP_FAILED" &&
       session.blockedCode !== "CONTEXT_RETIREMENT_STORE_FAILED")
   ) {

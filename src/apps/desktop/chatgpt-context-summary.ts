@@ -667,10 +667,16 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         // route with no conversation, or another one, proves nothing.
         const provingUrl = routeConversationUrl(route);
         if (
-          !summary ||
-          !provingUrl ||
+          summary &&
+          provingUrl &&
           summary.sourceCursor !== conversationSourceCursor(provingUrl)
         ) {
+          // The route shows a newer conversation: it is never reset, and the
+          // retirement waits, classified, until the route shows the source
+          // again.
+          return { status: "blocked", code: "SOURCE_RETIREMENT_SUPERSEDED" };
+        }
+        if (!summary || !provingUrl) {
           return {
             status: "outcome_unknown",
             code: "SOURCE_RETIREMENT_UNKNOWN",
@@ -695,16 +701,16 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       // Nothing waits between this read and the reset below. A route that
       // names no conversation has nothing left to detach; one that names
       // another conversation -- even one opened while the retirement was
-      // being recorded -- is newer, and is never touched.
+      // being recorded -- is newer, and is never touched. That state is
+      // known, not unknown: the commitment and the summary stay, nothing is
+      // reset, and the retirement finishes once the route shows the source
+      // again or no conversation at all.
       const conversationUrl = routeConversationUrl(route);
       if (
         conversationUrl !== null &&
         conversationSourceCursor(conversationUrl) !== sourceCursor
       ) {
-        return {
-          status: "outcome_unknown",
-          code: "SOURCE_RETIREMENT_UNKNOWN",
-        };
+        return { status: "blocked", code: "SOURCE_RETIREMENT_SUPERSEDED" };
       }
       detach = conversationUrl !== null;
     }

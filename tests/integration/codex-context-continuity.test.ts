@@ -23,6 +23,8 @@ import {
   replayHostCheckpoint,
 } from "../../src/modules/chat/infra/client/host-compaction-codec";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
+import { toProductTaskContext } from "../../src/apps/desktop/context-task-state";
+import { contextTaskPresentation } from "../../src/ui/context-task-presentation";
 
 const checkpointContent: CheckpointContent = {
   goal: "Finish the exact Farol Next task.",
@@ -872,6 +874,86 @@ describe("Codex host context continuity composition", () => {
     expect(summary.request).toHaveBeenCalledTimes(1);
     expect(summary.observe).not.toHaveBeenCalled();
     expect(summary.retire).toHaveBeenCalledTimes(2);
+  });
+
+  it("A10 keeps a superseded retirement blocked and resumable, then finishes it without a second summary", async () => {
+    const root = await stateRoot();
+    const summary = driver();
+    summary.retire
+      .mockResolvedValueOnce({
+        status: "blocked",
+        code: "SOURCE_RETIREMENT_SUPERSEDED",
+      })
+      .mockResolvedValueOnce({
+        status: "blocked",
+        code: "SOURCE_RETIREMENT_SUPERSEDED",
+      })
+      .mockResolvedValueOnce({ status: "retired" });
+    const store = new PrivateContextStore({ root });
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary,
+    });
+    const handoff = await continuity.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok || handoff.value.variant !== "streamed_compaction_item") {
+      throw new Error("EXPECTED_STREAMED_HANDOFF");
+    }
+    const receipt = {
+      modelId: "farol-next/mind",
+      threadId: "thread-context-1",
+      turnId: "turn-context-compact-1",
+      itemId: "host-context-compaction-superseded",
+      signal: "turn_completed" as const,
+    };
+    const replayed = replayHostCheckpoint([handoff.value.item], 262_144);
+    if (!replayed.ok) throw new Error(replayed.error.code);
+    const target = replayed.value.checkpoint.binding;
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(
+        continuity.confirmHostCompaction(receipt),
+      ).resolves.toMatchObject({ ok: false });
+      const blocked = await store.load(target);
+      expect(blocked).toMatchObject({
+        phase: "blocked",
+        epoch: 1,
+        blockedCode: "SOURCE_RETIREMENT_SUPERSEDED",
+      });
+      if (!blocked) throw new Error("EXPECTED_BLOCKED_SESSION");
+      expect(blocked.operation?.checkpointId).toBe(
+        replayed.value.checkpoint.checkpointId,
+      );
+      expect(contextTaskPresentation(toProductTaskContext(blocked))).toEqual({
+        tone: "waiting",
+        label: "Return to the previous conversation",
+        attention: true,
+        locked: true,
+      });
+    }
+    await expect(
+      store.get(target, replayed.value.checkpoint.checkpointId),
+    ).resolves.toMatchObject({
+      checkpointId: replayed.value.checkpoint.checkpointId,
+    });
+
+    await expect(
+      continuity.confirmHostCompaction(receipt),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: { phase: "active", epoch: 2 },
+    });
+    expect(summary.request).toHaveBeenCalledTimes(1);
+    expect(summary.retire).toHaveBeenCalledTimes(3);
   });
 
   it("preserves an unknown summary outcome without a second submission after restart", async () => {

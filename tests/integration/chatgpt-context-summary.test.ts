@@ -414,6 +414,128 @@ describe("ChatGPT summary-only context driver", () => {
     expect(fallback.resetConversation).not.toHaveBeenCalled();
   });
 
+  // A12: an isolated fallback belongs to its operation alone. Once the source
+  // is proven it is released whatever it shows by then, a failed release is
+  // retried without a second summary, and a route the operation does not own
+  // is never disposed.
+  async function fallbackSummarized(state: PrivateContextStore) {
+    const fallback = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: () => retained,
+        createFallback: vi.fn().mockReturnValue(fallback),
+      },
+    });
+    const selectedSource = source("canonical_history");
+    await expect(
+      summary.request({
+        request: { ...request, source: "canonical_history" },
+        source: selectedSource,
+      }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    const retire = () =>
+      summary.retire({
+        binding,
+        epoch: 1,
+        operationId: request.operationId,
+        source: selectedSource,
+      });
+    return { fallback, retained, retire };
+  }
+
+  it("A12 releases an owned fallback that shows no conversation once its source is proven", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-summary-driver-"),
+    );
+    roots.push(root);
+    let fallbackUrls: ReturnType<typeof vi.fn>[] = [];
+    class ClearingStore extends PrivateContextStore {
+      override async putRetirement(
+        candidate: Parameters<PrivateContextStore["putRetirement"]>[0],
+      ): Promise<void> {
+        await super.putRetirement(candidate);
+        // The fallback page leaves its conversation while the retirement is
+        // recorded: nothing is left to detach, but the lease is still owned.
+        for (const url of fallbackUrls) url.mockReturnValue(null);
+      }
+    }
+    const { fallback, retained, retire } = await fallbackSummarized(
+      new ClearingStore({ root }),
+    );
+    fallbackUrls = [
+      fallback.currentConversationUrl,
+      fallback.retainedConversationUrl,
+    ];
+
+    await expect(retire()).resolves.toEqual({ status: "retired" });
+    expect(fallback.dispose).toHaveBeenCalledTimes(1);
+    expect(fallback.resetConversation).not.toHaveBeenCalled();
+    expect(retained.dispose).not.toHaveBeenCalled();
+    expect(retained.resetConversation).not.toHaveBeenCalled();
+  });
+
+  it("A12 retries a failed release of an owned fallback without a second summary", async () => {
+    const { fallback, retained, retire } = await fallbackSummarized(
+      await store(),
+    );
+    fallback.dispose.mockImplementationOnce(() => {
+      throw new Error("SYNTHETIC_DISPOSE_FAILURE");
+    });
+
+    await expect(retire()).resolves.toEqual({
+      status: "outcome_unknown",
+      code: "SOURCE_RETIREMENT_UNKNOWN",
+    });
+    await expect(retire()).resolves.toEqual({ status: "retired" });
+    expect(fallback.dispose).toHaveBeenCalledTimes(2);
+    expect(fallback.runReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(fallback.resetConversation).not.toHaveBeenCalled();
+    expect(retained.dispose).not.toHaveBeenCalled();
+  });
+
+  it("A12 never disposes a retained route the operation does not own", async () => {
+    const state = await store();
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 1,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    const summary = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+    await expect(
+      summary.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed" });
+
+    await expect(
+      summary.retire({
+        binding,
+        epoch: 1,
+        operationId: request.operationId,
+        source: source(),
+      }),
+    ).resolves.toEqual({ status: "retired" });
+    expect(retained.resetConversation).toHaveBeenCalledTimes(1);
+    expect(retained.dispose).not.toHaveBeenCalled();
+  });
+
   it("does not retire a newer retained conversation after restart", async () => {
     const state = await store();
     const original = route({
@@ -457,8 +579,8 @@ describe("ChatGPT summary-only context driver", () => {
         source: source(),
       }),
     ).resolves.toEqual({
-      status: "outcome_unknown",
-      code: "SOURCE_RETIREMENT_UNKNOWN",
+      status: "blocked",
+      code: "SOURCE_RETIREMENT_SUPERSEDED",
     });
     expect(newer.resetConversation).not.toHaveBeenCalled();
     await expect(
@@ -1245,8 +1367,8 @@ describe("HR-014/F1 retained-source retirement recovery", () => {
     page.url = "https://chatgpt.com/c/newer-task-conversation";
 
     await expect(driver.retire(retirement())).resolves.toEqual({
-      status: "outcome_unknown",
-      code: "SOURCE_RETIREMENT_UNKNOWN",
+      status: "blocked",
+      code: "SOURCE_RETIREMENT_SUPERSEDED",
     });
     expect(page).toMatchObject({
       url: "https://chatgpt.com/c/newer-task-conversation",
@@ -1291,7 +1413,7 @@ describe("HR-014/F1 retained-source retirement recovery", () => {
     const state = new MovingStore({ root });
 
     await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
-      { status: "outcome_unknown", code: "SOURCE_RETIREMENT_UNKNOWN" },
+      { status: "blocked", code: "SOURCE_RETIREMENT_SUPERSEDED" },
     );
     expect(page).toMatchObject({
       url: "https://chatgpt.com/c/newer-task-conversation",
@@ -1300,6 +1422,108 @@ describe("HR-014/F1 retained-source retirement recovery", () => {
     await expect(
       state.getSummary(binding, request.operationId),
     ).resolves.not.toBeNull();
+  });
+
+  // A10: a committed retirement whose route now shows another conversation is
+  // a known, classified state -- not an unknown and not a success. Repeating
+  // it never resets the newer conversation and never loses the summary or the
+  // commitment; the retirement finishes once the route leaves that newer
+  // conversation for the source or for no conversation at all.
+  async function supersededAfterCommitment(root: string) {
+    const { route, page } = statefulRoute();
+    await summarized(new PrivateContextStore({ root }), route);
+    class MovingStore extends PrivateContextStore {
+      override async putRetirement(
+        candidate: Parameters<PrivateContextStore["putRetirement"]>[0],
+      ): Promise<void> {
+        await super.putRetirement(candidate);
+        page.url = "https://chatgpt.com/c/newer-task-conversation";
+      }
+    }
+    const state = new MovingStore({ root });
+    await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
+      { status: "blocked", code: "SOURCE_RETIREMENT_SUPERSEDED" },
+    );
+    return { state, route, page };
+  }
+
+  it("A10 keeps a superseded retirement classified across repeats without resetting the newer conversation", async () => {
+    const root = await stateRoot();
+    const { state, route, page } = await supersededAfterCommitment(root);
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await expect(
+        driverFor(new PrivateContextStore({ root }), route).retire(
+          retirement(),
+        ),
+      ).resolves.toEqual({
+        status: "blocked",
+        code: "SOURCE_RETIREMENT_SUPERSEDED",
+      });
+    }
+    expect(page).toMatchObject({
+      url: "https://chatgpt.com/c/newer-task-conversation",
+      resets: 0,
+      submissions: 1,
+    });
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+    await expect(state.getRetirement(binding)).resolves.toMatchObject({
+      operationId: request.operationId,
+      epoch: 1,
+    });
+  });
+
+  it("A10 finishes a superseded retirement once the route shows the source again", async () => {
+    const root = await stateRoot();
+    const { route, page } = await supersededAfterCommitment(root);
+    page.url = "https://chatgpt.com/c/summary-context-1";
+    const state = new PrivateContextStore({ root });
+
+    await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
+      { status: "retired" },
+    );
+    expect(page).toEqual({ url: null, resets: 1, submissions: 1 });
+    await cleanedUp(state);
+  });
+
+  it("A10 finishes a committed retirement once the route shows no conversation, without a reset", async () => {
+    const root = await stateRoot();
+    const { route, page } = await supersededAfterCommitment(root);
+    page.url = null;
+    const state = new PrivateContextStore({ root });
+
+    await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
+      { status: "retired" },
+    );
+    expect(page).toEqual({ url: null, resets: 0, submissions: 1 });
+    await cleanedUp(state);
+  });
+
+  it("A10 classifies a route that left the source before any commitment and never records one", async () => {
+    const state = new PrivateContextStore({ root: await stateRoot() });
+    const { route, page } = statefulRoute();
+    await summarized(state, route);
+    page.url = "https://chatgpt.com/c/newer-task-conversation";
+
+    await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
+      { status: "blocked", code: "SOURCE_RETIREMENT_SUPERSEDED" },
+    );
+    expect(page.resets).toBe(0);
+    await expect(state.getRetirement(binding)).resolves.toBeNull();
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.not.toBeNull();
+
+    // Only the source itself proves the retirement: back on it, the one
+    // reset follows.
+    page.url = "https://chatgpt.com/c/summary-context-1";
+    await expect(driverFor(state, route).retire(retirement())).resolves.toEqual(
+      { status: "retired" },
+    );
+    expect(page.resets).toBe(1);
+    await cleanedUp(state);
   });
 
   it("HR-014 never takes a missing retained route as proof of retirement", async () => {
