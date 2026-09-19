@@ -410,8 +410,10 @@ class SlowObservationPeer extends NativeAgentPeer {
   ): Promise<unknown> {
     if (this.slowReads && method === "thread/read") {
       this.readTimeouts.push(options?.timeoutMs ?? null);
+      // A bounded read ends just after its own timeout; an unbounded one
+      // would hold the wait for seconds, far beyond any scheduling delay.
       await new Promise<void>((resolve) =>
-        setTimeout(resolve, (options?.timeoutMs ?? 80) + 2),
+        setTimeout(resolve, (options?.timeoutMs ?? 3_000) + 2),
       );
       throw new Error("OBSERVATION_TIMEOUT");
     }
@@ -664,7 +666,11 @@ describe("native Codex Agent host", () => {
       correlation: spawned.correlation,
     });
 
-    expect(Date.now() - startedAt).toBeLessThan(50);
+    // The per-read timeouts below are the exact oracle. Wall-clock only
+    // separates a bounded wait (about 10 ms) from an unbounded one (seconds);
+    // its margin absorbs scheduler delay on a loaded machine, where 50 ms was
+    // once measured as 100.
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
     expect(peer.readTimeouts).toHaveLength(2);
     expect(peer.readTimeouts.every((timeout) => timeout !== null)).toBe(true);
     expect(
