@@ -59,6 +59,7 @@ function settings(
           label: "Approved",
           access,
           excludedPaths: ["/workspace/approved/private"],
+          rootIdentity: { device: "7", inode: "11" },
         },
       ],
     },
@@ -237,6 +238,24 @@ describe("product Agent assignment composition", () => {
     );
   });
 
+  it("F1-1 leaves a workspace without a folder identity out of the Agent approval", () => {
+    const configured = settings(7, "verification", "read");
+    const unbound = {
+      ...configured.computer,
+      workspaces: configured.computer.workspaces.map(
+        ({ rootIdentity: _unbound, ...workspace }) => workspace,
+      ),
+    };
+    const approval = productAgentApproval(unbound, {
+      ownerId: "owner-desktop",
+      capabilities: ["workspace.read"],
+      commands: "none",
+      expiresAt: 10_000,
+    });
+    expect(approval.workspaces).toEqual([]);
+    expect(approval.excludedPaths).toEqual([]);
+  });
+
   it("C05-09 projects every approved workspace as read and never carries write or network", () => {
     const configured = settings(7, "verification", "write");
 
@@ -252,7 +271,12 @@ describe("product Agent assignment composition", () => {
       computerId: configured.computer.computerId,
       generation: 7,
       workspaces: [
-        { workspaceId, root: "/workspace/approved", access: "read" },
+        {
+          workspaceId,
+          root: "/workspace/approved",
+          access: "read",
+          rootIdentity: { device: "7", inode: "11" },
+        },
       ],
       excludedPaths: [{ workspaceId, path: "/workspace/approved/private" }],
       capabilities: ["workspace.read"],

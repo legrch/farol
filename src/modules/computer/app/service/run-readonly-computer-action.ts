@@ -192,6 +192,7 @@ export class RunReadonlyComputerAction {
     }
 
     const binding = approvedWorkspaceBinding(approval, request.workspaceId);
+    if (!binding) return failure("AUTHORITY_PATH_DENIED", "computer-approval");
     let result;
     try {
       const workspaceRequest = {

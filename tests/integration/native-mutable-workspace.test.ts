@@ -11,6 +11,7 @@ import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
+import { approvedRootOf } from "../fixtures/root-identity";
 
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
@@ -46,6 +47,7 @@ function request(
     workspace: {
       workspaceId: "workspace-write-a",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: [".env"],
       writeDeniedPaths: [".git"],
     },
@@ -123,6 +125,27 @@ async function atomicSave(file: string, content: string): Promise<void> {
 }
 
 describe("native mutable Computer workspace", () => {
+  it("F1-1 refuses a mutation that names no approved folder identity", async () => {
+    const valid = request({
+      kind: "workspace.write",
+      relativePath: "created.txt",
+      content: "created\n",
+      expectedSha256: null,
+    });
+    const { approvedRoot: _identity, ...unbound } = valid.workspace;
+    await expect(
+      workspace().mutate({
+        ...valid,
+        workspace: unbound,
+      } as unknown as WorkspaceMutationRequest),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(fs.stat(path.join(root, "created.txt"))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+  });
+
   it("creates once and replaces only the expected source digest", async () => {
     const native = workspace();
     await expect(
@@ -678,6 +701,7 @@ describe("native mutable Computer workspace", () => {
       workspace: {
         workspaceId: "workspace-write-a",
         root,
+        approvedRoot: approvedRootOf(root),
         deniedPaths: [".env"],
         writeDeniedPaths: Array.from(
           { length: 64 },
@@ -735,6 +759,7 @@ describe("C05-05 cancellation of helper work", () => {
     workspace: {
       workspaceId: "workspace-write-a",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: [".env"],
     },
     operation: { kind: "workspace.read" as const, relativePath: "README.md" },

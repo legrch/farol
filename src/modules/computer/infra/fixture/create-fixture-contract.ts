@@ -13,6 +13,7 @@ import { InMemoryAuthorityRepository } from "../repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../repo/in-memory-computer-approvals";
 import {
   FIXTURE_WORKSPACE_ID,
+  FIXTURE_WORKSPACE_IDENTITY,
   FIXTURE_WORKSPACE_ROOT,
   FixtureReadonlyWorkspace,
 } from "./fixture-readonly-workspace";
@@ -44,6 +45,7 @@ export function createFixtureComputerContract(
         workspaceId: FIXTURE_WORKSPACE_ID,
         root: FIXTURE_WORKSPACE_ROOT,
         access: "read",
+        rootIdentity: FIXTURE_WORKSPACE_IDENTITY,
       },
     ],
     capabilities: ["workspace.read"],

@@ -33,6 +33,7 @@ import {
   type StateProjection,
   type StepResult,
 } from "./types";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 export type DefectId =
   | "permit_foreign_owner"
@@ -62,7 +63,12 @@ const COMPUTER_APPROVAL: ComputerApproval = {
   computerId: "hunt-computer",
   generation: 1,
   workspaces: [
-    { workspaceId: "hunt-fixture", root: FIXTURE_ROOT, access: "read" },
+    {
+      workspaceId: "hunt-fixture",
+      root: FIXTURE_ROOT,
+      access: "read",
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+    },
   ],
   capabilities: ["workspace.read"],
   network: "none",

@@ -12,6 +12,7 @@ import {
   type ReadonlyComputerLaunchContract,
 } from "../../src/modules/computer/infra/mcp/launch-contract";
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
+import { rootIdentityOf } from "../fixtures/root-identity";
 
 const workspaceRoot = "/Users/example/workspace";
 let temporaryRoot = "";
@@ -24,7 +25,12 @@ function launchContract(): ReadonlyComputerLaunchContract {
       computerId: "computer-a",
       generation: 3,
       workspaces: [
-        { workspaceId: "workspace-a", root: workspaceRoot, access: "read" },
+        {
+          workspaceId: "workspace-a",
+          root: workspaceRoot,
+          access: "read",
+          rootIdentity: rootIdentityOf(workspaceRoot),
+        },
       ],
       capabilities: ["workspace.list", "workspace.read", "workspace.search"],
       network: "none",
@@ -85,7 +91,12 @@ function mutableLaunchContract(): ReadonlyComputerLaunchContract {
       computerId: "computer-a",
       generation: 3,
       workspaces: [
-        { workspaceId: "workspace-a", root: workspaceRoot, access: "write" },
+        {
+          workspaceId: "workspace-a",
+          root: workspaceRoot,
+          access: "write",
+          rootIdentity: rootIdentityOf(workspaceRoot),
+        },
       ],
       capabilities: ["workspace.read", "workspace.write"],
       network: "none",

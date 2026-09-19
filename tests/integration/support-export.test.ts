@@ -11,6 +11,7 @@ import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "../../src/apps/desktop/product-configuration";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const roots: string[] = [];
 
@@ -51,12 +52,16 @@ describe("content-free support export", () => {
     const workspace = added.snapshot.settings.computer.workspaces[0];
     if (!workspace) throw new Error("workspace missing");
     const computerGeneration = added.snapshot.settings.computer.generation;
-    await configuration.recordComputerVerification(workspace.workspaceId, {
-      profile: "computer.local.readonly/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "c".repeat(64),
-      protocol: "readonly-workspace/1",
-    });
+    await configuration.recordComputerVerification(
+      workspace.workspaceId,
+      {
+        profile: "computer.local.readonly/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "c".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
     await configuration.recordCodexHost({
       executablePath: "/Users/private/CODEX-CANARY",
       executableSha256: "d".repeat(64),

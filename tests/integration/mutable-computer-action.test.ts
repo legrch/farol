@@ -30,6 +30,7 @@ import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/re
 import { InMemoryComputerApprovalRepository } from "../../src/modules/computer/infra/repo/in-memory-computer-approvals";
 import { InMemoryWorkspaceMutationRepository } from "../../src/modules/computer/infra/repo/in-memory-workspace-mutations";
 import { PrivateWorkspaceMutationStore } from "../../src/modules/computer/infra/repo/private-workspace-mutation-store";
+import { rootIdentityOf } from "../fixtures/root-identity";
 
 const clock = { now: () => 1_000 };
 const nextRoot = path.resolve(import.meta.dirname, "../..");
@@ -52,7 +53,14 @@ function approval(
     ownerId: "owner-preview",
     computerId: "computer-preview",
     generation: 7,
-    workspaces: [{ workspaceId: "farol", root, access }],
+    workspaces: [
+      {
+        workspaceId: "farol",
+        root,
+        access,
+        rootIdentity: rootIdentityOf(root),
+      },
+    ],
     capabilities,
     network: "none",
     commands: "none",

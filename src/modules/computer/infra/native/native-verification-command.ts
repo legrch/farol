@@ -731,7 +731,6 @@ function runGitVerification(
 async function approvedRootUnchanged(
   approved: ReadonlyWorkspaceRequest["workspace"]["approvedRoot"],
 ): Promise<boolean> {
-  if (!approved) return true;
   try {
     const measured = await lstat(approved.path, { bigint: true });
     return (

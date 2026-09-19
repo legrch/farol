@@ -11,17 +11,24 @@ import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/re
 import { ComputerExecutionAuthorityPeer } from "../../src/modules/agent/infra/peer/computer-execution-authority-peer";
 import type { AuthorityRepository } from "../../src/modules/computer/app/port/authority-repository";
 import type { ParticipantAuthority } from "../../src/modules/computer/domain/execution-authority";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const approval: ComputerApproval = {
   ownerId: "owner-preview",
   computerId: "computer-preview",
   generation: 7,
   workspaces: [
-    { workspaceId: "farol", root: "/workspace/farol", access: "write" },
+    {
+      workspaceId: "farol",
+      root: "/workspace/farol",
+      access: "write",
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+    },
     {
       workspaceId: "brain",
       root: "/workspace/brain/Work/Farol",
       access: "read",
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
     },
   ],
   capabilities: [

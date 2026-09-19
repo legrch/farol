@@ -19,6 +19,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 import { executeNativeVerificationCommand } from "../../src/modules/computer/infra/native/native-verification-command";
+import { approvedRootOf } from "../fixtures/root-identity";
 
 class FakeChild extends EventEmitter {
   readonly stdout = new EventEmitter();
@@ -42,6 +43,7 @@ function request(
     workspace: {
       workspaceId: "workspace-a",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: [],
     },
     operation: {

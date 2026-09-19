@@ -27,6 +27,7 @@ import {
 import { ReadonlyComputerContractHandler } from "../../src/modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../src/modules/computer/infra/repo/in-memory-computer-approvals";
+import { rootIdentityOf } from "../fixtures/root-identity";
 
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
@@ -73,7 +74,14 @@ describe("read-only Computer MCP adapter", () => {
       ownerId: "owner-preview",
       computerId: "computer-preview",
       generation: 7,
-      workspaces: [{ workspaceId: "farol", root, access: "read" }],
+      workspaces: [
+        {
+          workspaceId: "farol",
+          root,
+          access: "read",
+          rootIdentity: rootIdentityOf(root),
+        },
+      ],
       capabilities: [
         "workspace.list",
         "workspace.read",

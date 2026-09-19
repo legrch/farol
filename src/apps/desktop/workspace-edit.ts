@@ -22,6 +22,7 @@ import { Sha256WorkspaceMutationDigester } from "../../modules/computer/infra/na
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
 import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo/private-workspace-mutation-store";
+import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import type {
   ApprovedProductWorkspace,
   ProductSettings,
@@ -131,20 +132,19 @@ export function desktopMutableWorkspaceAction(
       ? (["workspace.write"] as const)
       : []),
   ];
+  const bound = identityBoundWorkspaces(computer.workspaces);
   const approval: ComputerApproval = {
     ownerId: DESKTOP_OWNER_ID,
     computerId: computer.computerId,
     generation: computer.generation,
-    workspaces: computer.workspaces.map((candidate) => ({
+    workspaces: bound.map((candidate) => ({
       workspaceId: candidate.workspaceId,
       root: candidate.root,
       access: candidate.access,
-      ...(candidate.rootIdentity
-        ? { rootIdentity: candidate.rootIdentity }
-        : {}),
+      rootIdentity: candidate.rootIdentity,
       ...(candidate.gitMetadata ? { gitMetadata: candidate.gitMetadata } : {}),
     })),
-    excludedPaths: computer.workspaces.flatMap((candidate) =>
+    excludedPaths: bound.flatMap((candidate) =>
       candidate.excludedPaths.map((excluded) => ({
         workspaceId: candidate.workspaceId,
         path: excluded,

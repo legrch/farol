@@ -72,7 +72,7 @@ const ReadonlyApprovedWorkspaceSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   root: AbsolutePathSchema,
   access: z.literal("read"),
-  rootIdentity: RootIdentitySchema.optional(),
+  rootIdentity: RootIdentitySchema,
   gitMetadata: GitMetadataSchema.optional(),
 });
 const ReadonlySubtreeScopeSchema = z.strictObject({
@@ -96,7 +96,7 @@ const MutableApprovedWorkspaceSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   root: AbsolutePathSchema,
   access: z.enum(["read", "write"]),
-  rootIdentity: RootIdentitySchema.optional(),
+  rootIdentity: RootIdentitySchema,
   gitMetadata: GitMetadataSchema.optional(),
 });
 const MutableSubtreeScopeSchema = z.strictObject({
@@ -371,11 +371,21 @@ export async function loadReadonlyComputerLaunchContract(
   ) {
     throw new Error("COMPUTER_LAUNCH_FILE_UNTRUSTED");
   }
+  // The launch directory is Farol's own private state; the helper is bound to
+  // the directory object measured here, like every other helper read.
+  const directory = await lstat(path.dirname(file), { bigint: true });
+  if (!directory.isDirectory())
+    throw new Error("COMPUTER_LAUNCH_FILE_UNTRUSTED");
   const result = await workspace.execute({
     workspace: {
       workspaceId: "farol-next-computer-launch",
       root: path.dirname(file),
       deniedPaths: [],
+      approvedRoot: {
+        path: path.dirname(file),
+        device: String(directory.dev),
+        inode: String(directory.ino),
+      },
     },
     operation: {
       kind: "workspace.read",

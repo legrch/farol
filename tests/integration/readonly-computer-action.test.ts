@@ -23,6 +23,7 @@ import {
 import { ReadonlyComputerContractHandler } from "../../src/modules/computer/infra/readonly-contract-handler";
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../src/modules/computer/infra/repo/in-memory-computer-approvals";
+import { approvedRootOf, rootIdentityOf } from "../fixtures/root-identity";
 
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
@@ -40,7 +41,14 @@ function approval(
     ownerId: "owner-preview",
     computerId: "computer-preview",
     generation: 7,
-    workspaces: [{ workspaceId: "farol", root, access: "read" }],
+    workspaces: [
+      {
+        workspaceId: "farol",
+        root,
+        access: "read",
+        rootIdentity: rootIdentityOf(root),
+      },
+    ],
     capabilities,
     network: "none",
     commands: "none",
@@ -414,7 +422,15 @@ describe("real read-only Computer action", () => {
     };
     const bound: ComputerApproval = {
       ...approval(),
-      workspaces: [{ workspaceId: "farol", root, access: "read", gitMetadata }],
+      workspaces: [
+        {
+          workspaceId: "farol",
+          root,
+          access: "read",
+          rootIdentity: rootIdentityOf(root),
+          gitMetadata,
+        },
+      ],
     };
     const execute = vi.fn<ReadonlyWorkspace["execute"]>(async () => ({
       ok: true,
@@ -430,6 +446,7 @@ describe("real read-only Computer action", () => {
     expect(execute.mock.calls[0]?.[0].workspace).toEqual({
       workspaceId: "farol",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: [],
       gitMetadata,
     });

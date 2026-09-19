@@ -19,7 +19,7 @@ export type ReadonlyWorkspaceDescriptor = Readonly<{
   root: string;
   deniedPaths: readonly string[];
   exactFilePaths?: readonly string[];
-  approvedRoot?: WorkspaceApprovedRoot;
+  approvedRoot: WorkspaceApprovedRoot;
   gitMetadata?: WorkspaceGitMetadataGrant;
 }>;
 

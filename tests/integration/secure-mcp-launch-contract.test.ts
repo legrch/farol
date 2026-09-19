@@ -53,6 +53,7 @@ function settings() {
           label: "Read",
           access: "read",
           excludedPaths: ["/Users/example/read/private"],
+          rootIdentity: { device: "5", inode: "98" },
         },
         {
           workspaceId: "00000000-0000-4000-8000-000000000003",
@@ -60,6 +61,7 @@ function settings() {
           label: "Write",
           access: "write",
           excludedPaths: [],
+          rootIdentity: { device: "5", inode: "97" },
         },
       ],
     },
@@ -116,11 +118,13 @@ describe("secure MCP Computer launch contract", () => {
             workspaceId: "00000000-0000-4000-8000-000000000002",
             root: "/Users/example/read",
             access: "read",
+            rootIdentity: { device: "5", inode: "98" },
           },
           {
             workspaceId: "00000000-0000-4000-8000-000000000003",
             root: "/Users/example/write",
             access: "write",
+            rootIdentity: { device: "5", inode: "97" },
           },
         ],
         excludedPaths: [
@@ -221,18 +225,21 @@ describe("secure MCP Computer launch contract", () => {
       ...configured,
       computer: {
         ...configured.computer,
-        workspaces: configured.computer.workspaces.map((workspace, index) =>
-          index === 1
-            ? {
-                ...workspace,
-                rootIdentity: { device: "5", inode: "99" },
-                gitMetadata: {
-                  gitDirectory: "/Users/example/repo/.git/worktrees/write",
-                  commonDirectory: "/Users/example/repo/.git",
-                },
-              }
-            : workspace,
-        ),
+        workspaces: configured.computer.workspaces.map((workspace, index) => {
+          if (index === 1) {
+            return {
+              ...workspace,
+              rootIdentity: { device: "5", inode: "99" },
+              gitMetadata: {
+                gitDirectory: "/Users/example/repo/.git/worktrees/write",
+                commonDirectory: "/Users/example/repo/.git",
+              },
+            };
+          }
+          // Saved before folder identities existed: it grants nothing.
+          const { rootIdentity: _unbound, ...unbound } = workspace;
+          return unbound;
+        }),
       },
     });
     const launch = createSecureMcpLaunchContract(bound, {
@@ -242,11 +249,6 @@ describe("secure MCP Computer launch contract", () => {
     });
 
     expect(launch.approval.workspaces).toEqual([
-      {
-        workspaceId: "00000000-0000-4000-8000-000000000002",
-        root: "/Users/example/read",
-        access: "read",
-      },
       {
         workspaceId: "00000000-0000-4000-8000-000000000003",
         root: "/Users/example/write",
@@ -291,6 +293,19 @@ describe("secure MCP Computer launch contract", () => {
       }),
     ).toThrow("SECURE_MCP_WORKSPACE_REQUIRED");
 
+    // F1-1: workspaces saved before folder identities grant the connector nothing.
+    const unbound = settings();
+    unbound.computer.workspaces = unbound.computer.workspaces.map(
+      ({ rootIdentity: _unbound, ...workspace }) => workspace,
+    );
+    expect(() =>
+      createSecureMcpLaunchContract(unbound, {
+        now: 1_789_516_800_000,
+        runtimeId: "runtime-unbound",
+        challengeSha256: "e".repeat(64),
+      }),
+    ).toThrow("SECURE_MCP_WORKSPACE_REQUIRED");
+
     const oversized = settings();
     oversized.computer.workspaces = Array.from({ length: 33 }, (_, index) => ({
       workspaceId: `workspace-${index}`,
@@ -298,6 +313,7 @@ describe("secure MCP Computer launch contract", () => {
       label: `Workspace ${index}`,
       access: "read" as const,
       excludedPaths: [],
+      rootIdentity: { device: "5", inode: String(1_000 + index) },
     }));
     expect(() =>
       createSecureMcpLaunchContract(oversized, {

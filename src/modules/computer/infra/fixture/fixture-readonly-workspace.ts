@@ -6,6 +6,12 @@ import type {
 
 export const FIXTURE_WORKSPACE_ID = "preview-fixture";
 export const FIXTURE_WORKSPACE_ROOT = "/farol-next-preview/fixture";
+// The fixture folder is in memory; this identity only satisfies the approval
+// shape and proves nothing about a real folder.
+export const FIXTURE_WORKSPACE_IDENTITY = Object.freeze({
+  device: "0",
+  inode: "0",
+});
 export const FIXTURE_STATUS_PATH = "status.txt";
 
 const STATUS_TEXT = "Fixture workspace is ready.\n";

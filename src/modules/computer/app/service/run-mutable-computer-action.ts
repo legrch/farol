@@ -385,10 +385,9 @@ export class RunMutableComputerAction {
       return executionHandoff;
     }
 
-    const { approvedRoot } = approvedWorkspaceBinding(
-      approval,
-      request.workspaceId,
-    );
+    const binding = approvedWorkspaceBinding(approval, request.workspaceId);
+    if (!binding) return failure("AUTHORITY_PATH_DENIED", "computer-approval");
+    const { approvedRoot } = binding;
     let result: Awaited<ReturnType<MutableWorkspace["mutate"]>>;
     try {
       result = await this.workspace.mutate(
@@ -402,7 +401,7 @@ export class RunMutableComputerAction {
               participant.grant.excludedPaths,
             ),
             writeDeniedPaths: [],
-            ...(approvedRoot ? { approvedRoot } : {}),
+            approvedRoot,
           },
           operation: request.operation,
         },

@@ -235,8 +235,8 @@ def _approved_root(request, parts):
     """
 
     approved = request.get("approvedRoot")
-    if approved is None:
-        return None
+    # No request is approved without the identity the owner verified: without
+    # it a folder that later took the same path would pass as the approved one.
     if not isinstance(approved, dict) or set(approved) != {"path", "device", "inode"}:
         refuse(EXIT_INVALID)
     approved_parts = _components(approved.get("path"), absolute=True)

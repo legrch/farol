@@ -1,5 +1,6 @@
 import type { ComputerApproval } from "../../modules/computer/domain/execution-authority";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
+import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 
 export type ProductAgentApprovalGrant = Readonly<{
   ownerId: string;
@@ -21,20 +22,19 @@ export function productAgentApproval(
   computer: ProductSettings["computer"],
   grant: ProductAgentApprovalGrant,
 ): ComputerApproval {
+  const workspaces = identityBoundWorkspaces(computer.workspaces);
   return {
     ownerId: grant.ownerId,
     computerId: computer.computerId,
     generation: computer.generation,
-    workspaces: computer.workspaces.map((workspace) => ({
+    workspaces: workspaces.map((workspace) => ({
       workspaceId: workspace.workspaceId,
       root: workspace.root,
       access: "read" as const,
-      ...(workspace.rootIdentity
-        ? { rootIdentity: workspace.rootIdentity }
-        : {}),
+      rootIdentity: workspace.rootIdentity,
       ...(workspace.gitMetadata ? { gitMetadata: workspace.gitMetadata } : {}),
     })),
-    excludedPaths: computer.workspaces.flatMap((workspace) =>
+    excludedPaths: workspaces.flatMap((workspace) =>
       workspace.excludedPaths.map((excluded) => ({
         workspaceId: workspace.workspaceId,
         path: excluded,

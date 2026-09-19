@@ -25,6 +25,7 @@ import { ReadonlyComputerContractHandler } from "../../src/modules/computer/infr
 import { InMemoryAuthorityRepository } from "../../src/modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../src/modules/computer/infra/repo/in-memory-computer-approvals";
 import type { CheckpointContent } from "../../src/modules/chat/domain/checkpoint";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const threadId = "0199c0de-0000-7000-8000-00000000a001";
 
@@ -56,6 +57,7 @@ function approval(workspaces: readonly string[]): ComputerApproval {
       workspaceId,
       root: `/${workspaceId}`,
       access: "read" as const,
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
     })),
     capabilities: ["workspace.read"],
     network: "none",

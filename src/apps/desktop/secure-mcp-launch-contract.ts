@@ -11,6 +11,7 @@ import {
 } from "../../modules/computer/infra/mcp/launch-contract";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
+import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
@@ -38,7 +39,8 @@ export function createSecureMcpLaunchContract(
   ) {
     launchError("SECURE_MCP_LAUNCH_INPUT_INVALID");
   }
-  const workspaces = settings.computer.workspaces;
+  // A workspace without the identity its verification bound grants nothing.
+  const workspaces = identityBoundWorkspaces(settings.computer.workspaces);
   if (workspaces.length === 0) launchError("SECURE_MCP_WORKSPACE_REQUIRED");
   if (workspaces.length > 32) launchError("SECURE_MCP_WORKSPACE_LIMIT");
 
@@ -79,9 +81,7 @@ export function createSecureMcpLaunchContract(
         workspaceId: workspace.workspaceId,
         root: workspace.root,
         access: workspace.access,
-        ...(workspace.rootIdentity
-          ? { rootIdentity: workspace.rootIdentity }
-          : {}),
+        rootIdentity: workspace.rootIdentity,
         ...(workspace.gitMetadata
           ? { gitMetadata: workspace.gitMetadata }
           : {}),

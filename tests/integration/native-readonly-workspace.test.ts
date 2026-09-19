@@ -7,6 +7,7 @@ import {
   NEXT_SAFE_OPEN_HELPER,
 } from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import type { ReadonlyWorkspaceRequest } from "../../src/modules/computer/app/port/readonly-workspace";
+import { approvedRootOf } from "../fixtures/root-identity";
 
 const nextRoot = path.resolve(import.meta.dirname, "../..");
 const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
@@ -19,6 +20,7 @@ function request(
     workspace: {
       workspaceId: "workspace-a",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: [".secrets", ".env"],
     },
     operation,
@@ -58,6 +60,22 @@ afterEach(async () => {
 });
 
 describe("native readonly Computer workspace", () => {
+  it("F1-1 refuses a request that names no approved folder identity", async () => {
+    const { approvedRoot: _identity, ...unbound } = request({
+      kind: "workspace.list",
+      relativePath: ".",
+    }).workspace;
+    await expect(
+      reader().execute({
+        workspace: unbound,
+        operation: { kind: "workspace.list", relativePath: "." },
+      } as unknown as ReadonlyWorkspaceRequest),
+    ).resolves.toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_INVALID_REQUEST", retry: "never" },
+    });
+  });
+
   it("attests the signed Apple Python chain before native execution", async () => {
     const workspace = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
@@ -136,6 +154,7 @@ describe("native readonly Computer workspace", () => {
       workspace: {
         workspaceId: "workspace-a",
         root,
+        approvedRoot: approvedRootOf(root),
         deniedPaths: [".secrets", ".env"],
         exactFilePaths,
       },
@@ -602,6 +621,7 @@ describe("native readonly Computer workspace", () => {
         workspace: {
           workspaceId: "workspace-a",
           root: workspaceRoot,
+          approvedRoot: approvedRootOf(workspaceRoot),
           deniedPaths: [],
         },
         operation,
@@ -640,6 +660,7 @@ describe("native readonly Computer workspace", () => {
             workspace: {
               workspaceId: "workspace-a",
               root: candidate,
+              approvedRoot: approvedRootOf(candidate),
               deniedPaths: [],
             },
             relativePath: "id_synthetic",
@@ -650,6 +671,7 @@ describe("native readonly Computer workspace", () => {
             workspace: {
               workspaceId: "workspace-a",
               root: candidate,
+              approvedRoot: approvedRootOf(candidate),
               deniedPaths: [],
               writeDeniedPaths: [],
             },
@@ -870,6 +892,7 @@ describe("native readonly Computer workspace", () => {
         workspace: {
           workspaceId: "workspace-a",
           root,
+          approvedRoot: approvedRootOf(root),
           deniedPaths: Array.from(
             { length: count },
             (_, index) => `excluded-${index}`,

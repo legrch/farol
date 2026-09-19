@@ -14,6 +14,7 @@ import {
   discoverLinkedGitMetadata,
   executeNativeVerificationCommand,
 } from "../../src/modules/computer/infra/native/native-verification-command";
+import { approvedRootOf } from "../fixtures/root-identity";
 
 const executeFile = promisify(execFile);
 const nextRoot = path.resolve(import.meta.dirname, "../..");
@@ -28,6 +29,7 @@ function request(
     workspace: {
       workspaceId: "workspace-a",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: ["private"],
       ...(gitMetadata ? { gitMetadata } : {}),
     },
@@ -44,6 +46,7 @@ function headRequest(): ReadonlyWorkspaceRequest {
     workspace: {
       workspaceId: "workspace-a",
       root,
+      approvedRoot: approvedRootOf(root),
       deniedPaths: ["private"],
     },
     operation: {
@@ -724,6 +727,7 @@ int main(void) {
           workspace: {
             workspaceId: "workspace-a",
             root: "/",
+            approvedRoot: approvedRootOf("/"),
             deniedPaths: [],
           },
           operation,
@@ -742,6 +746,7 @@ int main(void) {
           workspace: {
             workspaceId: "workspace-a",
             root,
+            approvedRoot: approvedRootOf(root),
             deniedPaths: ["../private"],
           },
           operation,
@@ -760,6 +765,7 @@ int main(void) {
           workspace: {
             workspaceId: "workspace-a",
             root,
+            approvedRoot: approvedRootOf(root),
             deniedPaths: ["private\nscope"],
           },
           operation,

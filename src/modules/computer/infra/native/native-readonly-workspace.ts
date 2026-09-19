@@ -38,8 +38,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "29d57e107fe629a2b34491f9f2ac8d9022c420ca1a724d5b820ab13c83dcf0cf",
-  size: 86_311,
+  sha256: "ceced42c46cb862579002ca9856e0215c9564cb52f82c84f8ef7a345bb37f6c9",
+  size: 86_424,
   mode: 0o644,
 });
 
@@ -358,15 +358,16 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   if (!exactKeys(value, ["workspace", "operation"])) return null;
   const candidate = value as Readonly<Record<string, unknown>>;
   const hasExactFilePaths = hasOwn(candidate.workspace, "exactFilePaths");
-  const hasApprovedRoot = hasOwn(candidate.workspace, "approvedRoot");
   const hasGitMetadata = hasOwn(candidate.workspace, "gitMetadata");
+  // Every request names the identity the owner verified; a request without
+  // one would let a folder that later took the same path pass as approved.
   if (
     !exactKeys(candidate.workspace, [
       "workspaceId",
       "root",
       "deniedPaths",
+      "approvedRoot",
       ...(hasExactFilePaths ? ["exactFilePaths"] : []),
-      ...(hasApprovedRoot ? ["approvedRoot"] : []),
       ...(hasGitMetadata ? ["gitMetadata"] : []),
     ])
   ) {
@@ -376,8 +377,7 @@ function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
   if (
     !validWorkspaceId(workspace.workspaceId) ||
     !canonicalAbsolutePath(workspace.root) ||
-    (hasApprovedRoot &&
-      !validApprovedRoot(workspace.approvedRoot, workspace.root)) ||
+    !validApprovedRoot(workspace.approvedRoot, workspace.root) ||
     (hasGitMetadata && !validGitMetadataGrant(workspace.gitMetadata)) ||
     !Array.isArray(workspace.deniedPaths) ||
     workspace.deniedPaths.length > 256 ||
@@ -507,14 +507,13 @@ function validateMutationRequest(
 ): WorkspaceMutationRequest | null {
   if (!exactKeys(value, ["workspace", "operation"])) return null;
   const candidate = value as Readonly<Record<string, unknown>>;
-  const hasApprovedRoot = hasOwn(candidate.workspace, "approvedRoot");
   if (
     !exactKeys(candidate.workspace, [
       "workspaceId",
       "root",
       "deniedPaths",
       "writeDeniedPaths",
-      ...(hasApprovedRoot ? ["approvedRoot"] : []),
+      "approvedRoot",
     ])
   ) {
     return null;
@@ -523,8 +522,7 @@ function validateMutationRequest(
   if (
     !validWorkspaceId(workspace.workspaceId) ||
     !canonicalAbsolutePath(workspace.root) ||
-    (hasApprovedRoot &&
-      !validApprovedRoot(workspace.approvedRoot, workspace.root)) ||
+    !validApprovedRoot(workspace.approvedRoot, workspace.root) ||
     !validRelativePaths(workspace.deniedPaths) ||
     !validRelativePaths(workspace.writeDeniedPaths) ||
     candidate.operation === null ||
@@ -591,11 +589,9 @@ function validateMutationRequest(
 }
 
 function approvedRootRequest(
-  workspace: Readonly<{ approvedRoot?: WorkspaceApprovedRoot }>,
-): Readonly<{ approvedRoot?: WorkspaceApprovedRoot }> {
-  return workspace.approvedRoot
-    ? { approvedRoot: { ...workspace.approvedRoot } }
-    : {};
+  workspace: Readonly<{ approvedRoot: WorkspaceApprovedRoot }>,
+): Readonly<{ approvedRoot: WorkspaceApprovedRoot }> {
+  return { approvedRoot: { ...workspace.approvedRoot } };
 }
 
 function writeDeniedPaths(

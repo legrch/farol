@@ -5,7 +5,7 @@ export type MutableWorkspaceDescriptor = Readonly<{
   root: string;
   deniedPaths: readonly string[];
   writeDeniedPaths: readonly string[];
-  approvedRoot?: WorkspaceApprovedRoot;
+  approvedRoot: WorkspaceApprovedRoot;
 }>;
 
 export type WorkspaceTextEdit = Readonly<{

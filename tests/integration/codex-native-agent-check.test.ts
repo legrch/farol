@@ -9,6 +9,7 @@ import type {
 import { PrivateAssignmentStore } from "../../src/modules/agent/infra/repo/private-assignment-store";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
 import { runCodexNativeAgentCheck } from "../../src/apps/desktop/codex-native-agent-check";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const roots: string[] = [];
 const executableSha256 = "a".repeat(64);
@@ -52,6 +53,7 @@ function settings(selectedAccess: "read" | "write" = "read") {
           label: "Primary",
           access: selectedAccess,
           excludedPaths: ["/workspace/primary/private"],
+          rootIdentity: SYNTHETIC_ROOT_IDENTITY,
         },
         {
           workspaceId: "00000000-0000-4000-8000-000000000002",
@@ -59,6 +61,7 @@ function settings(selectedAccess: "read" | "write" = "read") {
           label: "Reference",
           access: "read",
           excludedPaths: [],
+          rootIdentity: SYNTHETIC_ROOT_IDENTITY,
         },
       ],
     },

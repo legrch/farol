@@ -24,11 +24,15 @@ export type WorkspaceGitMetadataApproval = Readonly<{
   commonDirectory: string;
 }>;
 
+// A workspace is approved only together with the identity its folder had when
+// the owner verified it. Without one a folder that later took the same path
+// would be indistinguishable from the approved one, so there is no approved
+// workspace without an identity.
 export type ApprovedWorkspace = Readonly<{
   workspaceId: string;
   root: string;
   access: WorkspaceAccess;
-  rootIdentity?: WorkspaceRootIdentity | undefined;
+  rootIdentity: WorkspaceRootIdentity;
   gitMetadata?: WorkspaceGitMetadataApproval | undefined;
 }>;
 
@@ -443,17 +447,16 @@ export function approvedWorkspaceBinding(
   approval: ComputerApproval,
   workspaceId: string,
 ): Readonly<{
-  approvedRoot?: Readonly<{ path: string; device: string; inode: string }>;
+  approvedRoot: Readonly<{ path: string; device: string; inode: string }>;
   gitMetadata?: WorkspaceGitMetadataApproval;
-}> {
+}> | null {
   const approved = approval.workspaces.find(
     (workspace) => workspace.workspaceId === workspaceId,
   );
+  if (!approved) return null;
   return {
-    ...(approved?.rootIdentity
-      ? { approvedRoot: { path: approved.root, ...approved.rootIdentity } }
-      : {}),
-    ...(approved?.gitMetadata ? { gitMetadata: approved.gitMetadata } : {}),
+    approvedRoot: { path: approved.root, ...approved.rootIdentity },
+    ...(approved.gitMetadata ? { gitMetadata: approved.gitMetadata } : {}),
   };
 }
 

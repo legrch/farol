@@ -214,6 +214,7 @@ import {
 } from "./product-agent-scope";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import { probeTunnelClient } from "./tunnel-client-probe";
+import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import {
   PrivateSecureMcpLaunchStore,
   createSecureMcpLaunchContract,
@@ -492,20 +493,19 @@ function verificationWorkspaceAction(
       ? (["workspace.write"] as const)
       : []),
   ];
+  const bound = identityBoundWorkspaces(settings.computer.workspaces);
   const approval: ComputerApproval = {
     ownerId,
     computerId: settings.computer.computerId,
     generation: settings.computer.generation,
-    workspaces: settings.computer.workspaces.map((candidate) => ({
+    workspaces: bound.map((candidate) => ({
       workspaceId: candidate.workspaceId,
       root: candidate.root,
       access: candidate.access,
-      ...(candidate.rootIdentity
-        ? { rootIdentity: candidate.rootIdentity }
-        : {}),
+      rootIdentity: candidate.rootIdentity,
       ...(candidate.gitMetadata ? { gitMetadata: candidate.gitMetadata } : {}),
     })),
-    excludedPaths: settings.computer.workspaces.flatMap((candidate) =>
+    excludedPaths: bound.flatMap((candidate) =>
       candidate.excludedPaths.map((excluded) => ({
         workspaceId: candidate.workspaceId,
         path: excluded,
@@ -2979,29 +2979,33 @@ function workspaceDeniedPaths(
   );
 }
 
-// Every desktop helper call names the workspace's own exclusions and, once
-// bound, the folder identity the owner approved, so a folder that has since
-// replaced it at the same path is refused instead of trusted.
+// Every desktop helper call names the workspace's own exclusions and the folder
+// identity the owner verified, so a folder that has since replaced it at the
+// same path is refused instead of trusted. There is no call without one.
 function workspaceDescriptor(
   workspace: ApprovedProductWorkspace,
-  observedRoot?: WorkspaceRootIdentity,
+  rootIdentity: WorkspaceRootIdentity,
 ) {
-  const identity = workspace.rootIdentity ?? observedRoot;
   return {
     workspaceId: workspace.workspaceId,
     root: workspace.root,
     deniedPaths: workspaceDeniedPaths(workspace),
-    ...(identity
-      ? { approvedRoot: { path: workspace.root, ...identity } }
-      : {}),
+    approvedRoot: { path: workspace.root, ...rootIdentity },
     ...(workspace.gitMetadata ? { gitMetadata: workspace.gitMetadata } : {}),
   };
 }
 
+type VerifiedProductWorkspace = ApprovedProductWorkspace &
+  Readonly<{ rootIdentity: WorkspaceRootIdentity }>;
+
+// A workspace is verified only while the recorded verification names it at the
+// current Computer generation AND it carries the identity that verification
+// bound. A workspace saved before identities existed stays unverified until the
+// owner verifies it again; its pathname alone is never trusted.
 function verifiedProductWorkspace(
   workspaceId: string,
 ):
-  | Readonly<{ status: "verified"; workspace: ApprovedProductWorkspace }>
+  | Readonly<{ status: "verified"; workspace: VerifiedProductWorkspace }>
   | Readonly<{ status: "not_found" }>
   | Readonly<{ status: "not_verified" }> {
   const snapshot = configuration?.snapshot();
@@ -3011,21 +3015,20 @@ function verifiedProductWorkspace(
   );
   if (!workspace) return { status: "not_found" };
   const verification = snapshot.settings.setup.computer.verified;
+  const rootIdentity = workspace.rootIdentity;
   if (
     verification?.workspaceId !== workspace.workspaceId ||
-    verification.configRevision !== snapshot.settings.computer.generation
+    verification.configRevision !== snapshot.settings.computer.generation ||
+    !rootIdentity
   ) {
     return { status: "not_verified" };
   }
-  return { status: "verified", workspace };
+  return { status: "verified", workspace: { ...workspace, rootIdentity } };
 }
 
 async function selectedWorkspaceFile(
   workspace: ApprovedProductWorkspace,
-  labels: Readonly<{ title: string; buttonLabel: string }> = {
-    title: "Choose a harmless text file to verify",
-    buttonLabel: "Verify Read Access",
-  },
+  labels: Readonly<{ title: string; buttonLabel: string }>,
 ): Promise<string | "cancelled" | "invalid"> {
   let selected: string | undefined;
   const testFile =
@@ -4200,6 +4203,10 @@ async function configureProduct(
         ) {
           return configurationFailure("WORKSPACE_NOT_FOUND");
         }
+        const workspaceIdentity = workspace.rootIdentity;
+        if (!workspaceIdentity) {
+          return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+        }
         const pending = pendingChatGptReadonlyTask;
         if (pending) {
           const pendingStillCurrent =
@@ -4238,7 +4245,7 @@ async function configureProduct(
           return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
         }
         const workspaceResult = await nativeWorkspace.execute({
-          workspace: workspaceDescriptor(workspace),
+          workspace: workspaceDescriptor(workspace, workspaceIdentity),
           operation: { kind: "workspace.read", relativePath },
         });
         if (!workspaceResult.ok) {
@@ -4546,35 +4553,39 @@ async function configureProduct(
             )
           : undefined;
       if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
-      const relativePath = await selectedWorkspaceFile(workspace);
-      if (relativePath === "cancelled") {
-        return configurationFailure("WORKSPACE_FILE_PICKER_CANCELLED");
-      }
-      if (relativePath === "invalid") {
-        return configurationFailure("WORKSPACE_FILE_SELECTION_INVALID");
-      }
-      // A workspace approved before identities were recorded is bound to the
-      // folder this verification reads; the read itself is checked against it.
-      const observedRoot = workspace.rootIdentity
-        ? undefined
-        : await measuredRootIdentity(workspace.root);
-      if (observedRoot === null) {
+      // Verifying is the owner's explicit act that binds the folder. The folder
+      // at the path now is measured; one already bound must still be that
+      // object, and one saved before identities existed is bound to what is
+      // measured here only because the owner asked for this verification.
+      const measured = await measuredRootIdentity(workspace.root);
+      if (measured === null) {
         return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
       }
+      const bound = workspace.rootIdentity;
+      if (
+        bound &&
+        (bound.device !== measured.device || bound.inode !== measured.inode)
+      ) {
+        return configurationFailure("WORKSPACE_ROOT_CHANGED");
+      }
+      // A bounded top-level listing through the descriptor-bound helper proves
+      // Farol opens exactly the approved folder. It reads no file content and
+      // says nothing about reading files, writing, or Git: those have their own
+      // checks, and none of them needs the owner to pick a file here.
       const result = await nativeWorkspace.execute({
-        workspace: workspaceDescriptor(workspace, observedRoot),
-        operation: { kind: "workspace.read", relativePath },
+        workspace: workspaceDescriptor(workspace, measured),
+        operation: { kind: "workspace.list", relativePath: "." },
       });
       if (!result.ok) return workspaceReadFailure(result.error.code);
-      if (result.value.kind !== "workspace.text") {
+      if (result.value.kind !== "workspace.entries") {
         return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
       }
       // Verifying the workspace approves the linked Git metadata it has now,
       // and only that; a primary checkout needs no grant.
       const gitMetadata = await discoverLinkedGitMetadata(workspace.root);
-      // The picker and the read above take seconds, and a connector or Agent
-      // may have started meanwhile; a re-verification rebinds the authority
-      // either would carry, so it is admitted again right before it commits.
+      // The listing takes a moment, and a connector or Agent may have started
+      // meanwhile; a re-verification rebinds the authority either would carry,
+      // so it is admitted again right before it commits.
       const readmitted = configurationAdmission(command.kind, {
         agentActive: codexAgentOperationActive(),
         connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
@@ -4591,22 +4602,17 @@ async function configureProduct(
               ? "mutable-workspace/1"
               : "readonly-workspace/1",
         },
-        {
-          ...(observedRoot ? { rootIdentity: observedRoot } : {}),
-          gitMetadata,
-        },
+        { rootIdentity: measured, gitMetadata },
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
-      const text = result.value.text.slice(0, 32_768);
       return ProductConfigurationResultSchema.parse({
         ...recorded,
         evidence: {
-          kind: "computer.workspace-read",
+          kind: "computer.workspace-list",
           workspaceId: workspace.workspaceId,
-          relativePath,
-          bytes: result.value.bytes,
-          text,
-          truncated: text.length < result.value.text.length,
+          relativePath: ".",
+          entries: result.value.entries,
+          truncated: result.value.truncated,
         },
       });
     }
@@ -4619,7 +4625,10 @@ async function configureProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
       const result = await nativeWorkspace.execute({
-        workspace: workspaceDescriptor(selected.workspace),
+        workspace: workspaceDescriptor(
+          selected.workspace,
+          selected.workspace.rootIdentity,
+        ),
         operation: {
           kind: "workspace.list",
           relativePath: command.relativePath,
@@ -4650,7 +4659,10 @@ async function configureProduct(
         return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
       }
       const result = await nativeWorkspace.execute({
-        workspace: workspaceDescriptor(selected.workspace),
+        workspace: workspaceDescriptor(
+          selected.workspace,
+          selected.workspace.rootIdentity,
+        ),
         operation: {
           kind: "workspace.search",
           relativePath: command.relativePath,
@@ -4790,7 +4802,10 @@ async function configureProduct(
       }
       const prepared = await prepareWorkspaceEdit(nativeWorkspace, {
         operationId: randomUUID(),
-        workspace: workspaceDescriptor(selected.workspace),
+        workspace: workspaceDescriptor(
+          selected.workspace,
+          selected.workspace.rootIdentity,
+        ),
         computerGeneration: snapshot.settings.computer.generation,
         relativePath,
         expiresAt: Date.now() + 10 * 60_000,

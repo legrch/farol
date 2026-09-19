@@ -4,6 +4,7 @@ import type { DelegatedAgentAuthority } from "../../src/modules/agent/app/port/e
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
 import { CodexAgentWorkspaceProbe } from "../../src/apps/desktop/codex-agent-workspace-probe";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const workspaceId = "00000000-0000-4000-8000-000000000001";
 const referenceId = "00000000-0000-4000-8000-000000000002";
@@ -40,6 +41,7 @@ const settings = ProductSettingsSchema.parse({
         label: "Primary",
         access: "read",
         excludedPaths: ["/workspace/primary/private"],
+        rootIdentity: SYNTHETIC_ROOT_IDENTITY,
       },
       {
         workspaceId: referenceId,
@@ -47,6 +49,7 @@ const settings = ProductSettingsSchema.parse({
         label: "Reference",
         access: "read",
         excludedPaths: [],
+        rootIdentity: SYNTHETIC_ROOT_IDENTITY,
       },
     ],
   },
@@ -112,6 +115,10 @@ describe("Codex child workspace enforcement probe", () => {
           workspaceId,
           root: "/workspace/primary",
           deniedPaths: ["private"],
+          approvedRoot: {
+            path: "/workspace/primary",
+            ...SYNTHETIC_ROOT_IDENTITY,
+          },
         },
         operation: { kind: "workspace.list", relativePath: "." },
       });

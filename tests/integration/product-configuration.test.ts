@@ -11,6 +11,7 @@ import {
   ProductConfigurationCommandSchema,
   ProductConfigurationEvidenceSchema,
 } from "../../src/pkg/product-settings/contract";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const roots: string[] = [];
 
@@ -101,6 +102,92 @@ describe("Farol Next product configuration", () => {
     );
     await restarted.initialize();
     expect(restarted.snapshot()).toEqual(added.snapshot);
+  });
+
+  it("F1-1 withdraws a persisted verification of a workspace that has no folder identity", async () => {
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const seed = new ProductConfigurationService(store, dependencies());
+    await seed.initialize();
+    const added = await seed.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const settings = added.snapshot.settings;
+    const workspace = settings.computer.workspaces[0];
+    if (!workspace) throw new Error("workspace missing");
+    expect(workspace.rootIdentity).toBeUndefined();
+    // What a build from before folder identities saved: a verification that
+    // names a workspace bound to nothing but its pathname.
+    await store.save({
+      ...settings,
+      revision: settings.revision + 1,
+      setup: {
+        ...settings.setup,
+        computer: {
+          ...settings.setup.computer,
+          configured: true,
+          reachable: "reachable",
+          verified: {
+            profile: "computer.local.read/1",
+            runtimeGeneration: "runtime-1",
+            buildId: "c".repeat(64),
+            protocol: "readonly-workspace/1",
+            configRevision: settings.computer.generation,
+            workspaceId: workspace.workspaceId,
+            verifiedAt: "2026-09-01T00:00:00.000Z",
+          },
+          needsAction: null,
+        },
+      },
+    });
+
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: {
+        setup: {
+          computer: {
+            verified: null,
+            reachable: "unknown",
+            needsAction: expect.stringContaining("Verify Project again"),
+          },
+        },
+      },
+    });
+    // The withdrawal is durable, not only in memory.
+    const persisted = await new ProductSettingsStore({ root }).load();
+    expect(persisted?.setup.computer.verified).toBeNull();
+
+    // Only an explicit owner verification binds the folder again.
+    const verified = await restarted.recordComputerVerification(
+      workspace.workspaceId,
+      {
+        profile: "computer.local.read/1",
+        runtimeGeneration: "runtime-2",
+        buildId: "c".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: { device: "9", inode: "77" } },
+    );
+    expect(verified).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          computer: {
+            workspaces: [{ rootIdentity: { device: "9", inode: "77" } }],
+          },
+          setup: {
+            computer: { verified: { workspaceId: workspace.workspaceId } },
+          },
+        },
+      },
+    });
   });
 
   it("AUTH-10 binds a workspace approved without an identity at its next owner verification only", async () => {
@@ -866,12 +953,16 @@ describe("Farol Next product configuration", () => {
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
     const computerGeneration = added.snapshot.settings.computer.generation;
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.readonly/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "c".repeat(64),
-      protocol: "readonly-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.readonly/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "c".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
     await service.recordCodexHost({
       executablePath: "/Users/example/bin/codex",
       executableSha256: "a".repeat(64),
@@ -1020,12 +1111,16 @@ describe("Farol Next product configuration", () => {
       throw new Error("settings missing");
     }
     const computerGeneration = editable.snapshot.settings.computer.generation;
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.write/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "c".repeat(64),
-      protocol: "readonly-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.write/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "c".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
     await service.recordCodexHost({
       executablePath: "/Users/example/bin/codex",
       executableSha256: "a".repeat(64),
@@ -1313,12 +1408,16 @@ describe("Farol Next product configuration", () => {
     const workspaceId =
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.readonly/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "a".repeat(64),
-      protocol: "readonly-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.readonly/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "a".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
 
     const removed = await service.removeWorkspace(workspaceId);
 
@@ -1349,12 +1448,16 @@ describe("Farol Next product configuration", () => {
     const workspaceId =
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.readonly/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "a".repeat(64),
-      protocol: "readonly-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.readonly/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "a".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
 
     const updated = await service.updateWorkspaceExclusions(workspaceId, [
       "/Users/example/project/private",
@@ -1416,12 +1519,16 @@ describe("Farol Next product configuration", () => {
     const workspaceId =
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.readonly/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "a".repeat(64),
-      protocol: "readonly-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.readonly/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "a".repeat(64),
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
     const before = service.snapshot();
     if (before.status !== "ready") throw new Error("settings missing");
     const beforeGeneration = before.settings.computer.generation;
@@ -1476,12 +1583,16 @@ describe("Farol Next product configuration", () => {
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
     await service.updateWorkspaceAccess(workspaceId, "write");
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.write/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "a".repeat(64),
-      protocol: "mutable-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.write/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "a".repeat(64),
+        protocol: "mutable-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
 
     const unknown =
       await service.recordComputerMutationOutcomeUnknown(workspaceId);
@@ -1528,12 +1639,16 @@ describe("Farol Next product configuration", () => {
       added.snapshot.settings.computer.workspaces[0]?.workspaceId;
     if (!workspaceId) throw new Error("workspace missing");
     await service.updateWorkspaceAccess(workspaceId, "write");
-    await service.recordComputerVerification(workspaceId, {
-      profile: "computer.local.write/1",
-      runtimeGeneration: "runtime-1",
-      buildId: "a".repeat(64),
-      protocol: "mutable-workspace/1",
-    });
+    await service.recordComputerVerification(
+      workspaceId,
+      {
+        profile: "computer.local.write/1",
+        runtimeGeneration: "runtime-1",
+        buildId: "a".repeat(64),
+        protocol: "mutable-workspace/1",
+      },
+      { rootIdentity: SYNTHETIC_ROOT_IDENTITY },
+    );
     const verified = service.snapshot();
     if (verified.status !== "ready") throw new Error("settings missing");
     const pendingEdit = {

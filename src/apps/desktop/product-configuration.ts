@@ -207,6 +207,36 @@ function pendingAgentReadiness(
   };
 }
 
+// A Computer verification stands only for a workspace that carries the folder
+// identity it bound. Settings written before identities existed name workspaces
+// without one; their verification is withdrawn at load and at every commit, so
+// no consumer can treat that pathname as the folder the owner approved. Only a
+// new explicit verification measures and records the identity.
+function invalidateUnboundComputerVerification(
+  settings: ProductSettings,
+): ProductSettings {
+  const verification = settings.setup.computer.verified;
+  if (!verification) return settings;
+  const workspace = settings.computer.workspaces.find(
+    (candidate) => candidate.workspaceId === verification.workspaceId,
+  );
+  if (workspace?.rootIdentity) return settings;
+  return {
+    ...settings,
+    setup: {
+      ...settings.setup,
+      computer: {
+        ...settings.setup.computer,
+        reachable: "unknown",
+        verified: null,
+        needsAction: workspace
+          ? `Verify ${workspace.label} again so Farol binds it to the folder you approved.`
+          : "Verify a folder.",
+      },
+    },
+  };
+}
+
 function invalidateStaleAgentVerification(
   settings: ProductSettings,
 ): ProductSettings {
@@ -545,6 +575,19 @@ export class ProductConfigurationService {
     } catch (error) {
       this.current = null;
       this.currentError = settingsError(error);
+      return;
+    }
+    // Settings saved before folder identities existed may still name a
+    // verified workspace without one; withdraw that verification before any
+    // consumer reads it, and persist the withdrawal like any other change.
+    if (invalidateUnboundComputerVerification(this.current) !== this.current) {
+      const withdrawn = await this.mutate((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+      }));
+      if (!withdrawn.ok) {
+        this.current = invalidateUnboundComputerVerification(this.current);
+      }
     }
   }
 
@@ -1113,12 +1156,12 @@ export class ProductConfigurationService {
     workspaceId: string,
     input: unknown,
     observed: Readonly<{
-      rootIdentity?: WorkspaceRootIdentity;
+      rootIdentity: WorkspaceRootIdentity;
       gitMetadata?: WorkspaceGitMetadata | null;
-    }> = {},
+    }>,
   ): Promise<MutationResult> {
     const parsed = verificationInputSchema.safeParse(input);
-    const identity = WorkspaceRootIdentitySchema.optional().safeParse(
+    const identity = WorkspaceRootIdentitySchema.safeParse(
       observed.rootIdentity,
     );
     const gitMetadata = WorkspaceGitMetadataSchema.nullable()
@@ -1127,57 +1170,60 @@ export class ProductConfigurationService {
     if (!parsed.success || !identity.success || !gitMetadata.success) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    const verified = this.current.computer.workspaces.find(
-      (workspace) => workspace.workspaceId === workspaceId,
-    );
-    if (!verified) return this.failure("WORKSPACE_NOT_FOUND");
-    const bound = verified.rootIdentity;
-    if (
-      bound &&
-      identity.data &&
-      (bound.device !== identity.data.device ||
-        bound.inode !== identity.data.inode)
-    ) {
-      return this.failure("WORKSPACE_ROOT_CHANGED");
-    }
-    const rootIdentity = bound ?? identity.data;
-    const bind = (
-      workspace: ProductSettings["computer"]["workspaces"][number],
-    ) => {
-      if (workspace.workspaceId !== workspaceId) return workspace;
-      const { gitMetadata: _previous, ...rest } = workspace;
-      return {
-        ...(gitMetadata.data === undefined ? workspace : rest),
-        ...(rootIdentity ? { rootIdentity } : {}),
-        ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
+    // The comparison with the bound identity and the commit share one turn, so
+    // no other change to this workspace can land between them.
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      const verified = this.current.computer.workspaces.find(
+        (workspace) => workspace.workspaceId === workspaceId,
+      );
+      if (!verified) return this.failure("WORKSPACE_NOT_FOUND");
+      const bound = verified.rootIdentity;
+      if (
+        bound &&
+        (bound.device !== identity.data.device ||
+          bound.inode !== identity.data.inode)
+      ) {
+        return this.failure("WORKSPACE_ROOT_CHANGED");
+      }
+      const rootIdentity = identity.data;
+      const bind = (
+        workspace: ProductSettings["computer"]["workspaces"][number],
+      ) => {
+        if (workspace.workspaceId !== workspaceId) return workspace;
+        const { gitMetadata: _previous, ...rest } = workspace;
+        return {
+          ...(gitMetadata.data === undefined ? workspace : rest),
+          rootIdentity,
+          ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
+        };
       };
-    };
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        workspaces: settings.computer.workspaces.map(bind),
-      },
-      setup: {
-        ...settings.setup,
+      return this.commit((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
         computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "reachable",
-          verified: {
-            ...parsed.data,
-            configRevision: settings.computer.generation,
-            workspaceId,
-            verifiedAt: this.now(),
-          },
-          needsAction: null,
-          unavailable: null,
-          outcomeUnknown: false,
+          ...settings.computer,
+          workspaces: settings.computer.workspaces.map(bind),
         },
-      },
-    }));
+        setup: {
+          ...settings.setup,
+          computer: {
+            ...settings.setup.computer,
+            configured: true,
+            reachable: "reachable",
+            verified: {
+              ...parsed.data,
+              configRevision: settings.computer.generation,
+              workspaceId,
+              verifiedAt: this.now(),
+            },
+            needsAction: null,
+            unavailable: null,
+            outcomeUnknown: false,
+          },
+        },
+      }));
+    });
   }
 
   // Recorded before a guarded edit executes and cleared only after delivery;
@@ -1808,7 +1854,9 @@ export class ProductConfigurationService {
     let candidate: ProductSettings;
     try {
       const transformed = ProductSettingsSchema.parse(transform(before));
-      const connectorInvalidated = invalidateStaleConnectorRuntime(transformed);
+      const connectorInvalidated = invalidateStaleConnectorRuntime(
+        invalidateUnboundComputerVerification(transformed),
+      );
       const invalidated =
         invalidateStaleAgentVerification(connectorInvalidated);
       candidate = ProductSettingsSchema.parse(

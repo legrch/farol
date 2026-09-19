@@ -14,6 +14,7 @@ import {
   type TaskAdmission,
   type TaskGrant,
 } from "../../src/modules/computer/domain/execution-authority";
+import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
 const approval: ComputerApproval = {
   ownerId: "owner-preview",
@@ -24,11 +25,13 @@ const approval: ComputerApproval = {
       workspaceId: "farol",
       root: "/workspace/farol",
       access: "write",
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
     },
     {
       workspaceId: "brain",
       root: "/workspace/brain/Work/Farol",
       access: "read",
+      rootIdentity: SYNTHETIC_ROOT_IDENTITY,
     },
   ],
   capabilities: [
@@ -830,7 +833,14 @@ describe("delegated execution authority", () => {
   it("supports root-scoped approval while keeping exact scopes monotonic", () => {
     const rootApproval: ComputerApproval = {
       ...approval,
-      workspaces: [{ workspaceId: "root", root: "/", access: "read" }],
+      workspaces: [
+        {
+          workspaceId: "root",
+          root: "/",
+          access: "read",
+          rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+        },
+      ],
       capabilities: ["workspace.read"],
       commands: "none",
     };
