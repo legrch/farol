@@ -170,6 +170,57 @@ describe("EV-03/EV-08 effect observer", () => {
     ).toContain("OBSERVER_ATTEMPT_MISMATCH");
   });
 
+  it("is not healthy when it never saw the product's own process, however clean the files it hashed", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-observe-"),
+    );
+    roots.push(root);
+    const laneRoot = path.join(root, "artifacts", "e2e");
+    await fs.mkdir(laneRoot, { recursive: true });
+    // The runner does start a process, but not one the pattern names: the
+    // observer watched the files and never the product.
+    const observed = observeAttempt({
+      laneRoot,
+      lane: "sealed-package",
+      attemptId: null,
+      subject: candidate,
+      processPattern: new RegExp(`farol-observer-absent-${process.pid}`, "u"),
+      intervalMs: 100,
+      timeoutMs: 30_000,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    const attempt = await openEvidenceAttempt(laneRoot, {
+      lane: "sealed-package",
+      input: { ...candidate },
+    });
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "setTimeout(() => {}, 700)",
+        `farol-observer-other-${process.pid}`,
+      ],
+      { stdio: "ignore" },
+    );
+    children.push(child);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await fs.writeFile(
+      path.join(attempt.directory, "report.json"),
+      JSON.stringify({ status: "PASS" }),
+    );
+    await new Promise((resolve) => child.once("exit", resolve));
+    await attempt.finish("PASS", {
+      cases: [...EVIDENCE_LANES["sealed-package"].cases],
+    });
+    const receipt = await observed;
+
+    expect(receipt.attemptId).toBe(attempt.attemptId);
+    expect(receipt.effects.terminalSeenAt).not.toBeNull();
+    expect(receipt.summary.processes.max).toBe(0);
+    expect(receipt.healthy).toBe(false);
+    expect(receipt.reasons).toEqual(["PRODUCT_NOT_OBSERVED"]);
+  });
+
   it("reports an unhealthy receipt when no attempt ever appears, and never binds to a run that started before it did", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-observe-"),

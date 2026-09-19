@@ -229,9 +229,14 @@ export async function observeAttempt({
   const coversEnd =
     terminal?.endedAt !== undefined &&
     Date.parse(endedAt) >= Date.parse(terminal.endedAt);
+  // An effect observer that never saw the product's own process corroborated
+  // files only; a pattern that names no running process says nothing about
+  // the product, however clean the hashed receipts are.
+  const productObserved = (summary.processes.max ?? 0) > 0;
   const healthy =
     bound !== null &&
     terminalSeenAt !== null &&
+    productObserved &&
     summary.samples >= 2 &&
     summary.errors === 0 &&
     summary.gapTolerated &&
@@ -250,6 +255,7 @@ export async function observeAttempt({
     reasons: [
       ...(bound === null ? ["ATTEMPT_NOT_BOUND"] : []),
       ...(terminalSeenAt === null ? ["TERMINAL_NOT_OBSERVED"] : []),
+      ...(productObserved ? [] : ["PRODUCT_NOT_OBSERVED"]),
       ...(summary.samples < 2 ? ["TOO_FEW_SAMPLES"] : []),
       ...(summary.errors > 0 ? ["SAMPLING_ERRORS"] : []),
       ...(summary.gapTolerated ? [] : ["SAMPLING_GAP"]),
