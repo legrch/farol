@@ -8135,8 +8135,17 @@ if (blockedCases.length > 0) {
           width: toggleRect.width,
           height: toggleRect.height,
         },
+        // Hit-test the centre: the toggle is position: fixed, for which
+        // offsetParent is always null, so only elementFromPoint tells
+        // whether a click there reaches it rather than something on top.
         toggleReachable:
-          toggle.offsetParent !== null &&
+          (() => {
+            const hit = document.elementFromPoint(
+              toggleRect.x + toggleRect.width / 2,
+              toggleRect.y + toggleRect.height / 2,
+            );
+            return hit === toggle || toggle.contains(hit);
+          })() &&
           toggleRect.width >= 28 &&
           toggleRect.height >= 28,
       };
