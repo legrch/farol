@@ -40,6 +40,12 @@ describe("the executable architecture boundary", () => {
     ["unclassified", "ARCH_UNCLASSIFIED"],
     ["ui-to-module-infra", "ARCH_UI_TO_MODULE_INFRA"],
     ["domain-to-kernel-app", "ARCH_LAYER_DIRECTION"],
+    // Every loader form the parser can produce, not only the common ones.
+    ["optional-require-in-pure-zone", "ARCH_PURE_HOST_IMPORT"],
+    ["computed-module-require-in-pure-zone", "ARCH_PURE_HOST_IMPORT"],
+    ["import-equals-in-pure-zone", "ARCH_PURE_HOST_IMPORT"],
+    ["type-import-to-infra", "ARCH_LAYER_DIRECTION"],
+    ["create-require-loader", "ARCH_DYNAMIC_IMPORT"],
   ] as const;
 
   for (const [fixture, code] of denied) {

@@ -137,6 +137,25 @@ function importsFrom(file, violations) {
     });
   }
 
+  // `require(...)`, `require?.(...)`, `module.require(...)`,
+  // `module?.require(...)` and `module["require"](...)`.
+  function isRequireCallee(callee) {
+    if (callee?.type === "Identifier") return callee.name === "require";
+    if (
+      callee?.type !== "MemberExpression" &&
+      callee?.type !== "OptionalMemberExpression"
+    ) {
+      return false;
+    }
+    if (callee.object?.type !== "Identifier" || callee.object.name !== "module")
+      return false;
+    return callee.computed
+      ? callee.property?.type === "StringLiteral" &&
+          callee.property.value === "require"
+      : callee.property?.type === "Identifier" &&
+          callee.property.name === "require";
+  }
+
   function isNonReferenceIdentifier(node, parent, key) {
     if (!parent) return false;
     if (
@@ -183,21 +202,41 @@ function importsFrom(file, violations) {
     if (node.type === "ImportExpression") {
       addCallSpecifier(node.source, "import");
     }
-    if (node.type === "CallExpression") {
+    // `import x = require("y")` and a type position `import("y")` are
+    // dependencies as much as an import declaration is.
+    if (
+      node.type === "TSImportEqualsDeclaration" &&
+      node.moduleReference?.type === "TSExternalModuleReference"
+    ) {
+      addCallSpecifier(node.moduleReference.expression, "require");
+    }
+    if (node.type === "TSImportType") {
+      addCallSpecifier(
+        node.argument?.type === "TSLiteralType"
+          ? node.argument.literal
+          : node.argument,
+        "type import",
+      );
+    }
+    if (
+      node.type === "CallExpression" ||
+      node.type === "OptionalCallExpression"
+    ) {
       if (node.callee?.type === "Import") {
         addCallSpecifier(node.arguments[0], "import");
-      } else if (
-        (node.callee?.type === "Identifier" &&
-          node.callee.name === "require") ||
-        (node.callee?.type === "MemberExpression" &&
-          node.callee.computed === false &&
-          node.callee.object?.type === "Identifier" &&
-          node.callee.object.name === "module" &&
-          node.callee.property?.type === "Identifier" &&
-          node.callee.property.name === "require")
-      ) {
+      } else if (isRequireCallee(node.callee)) {
         addCallSpecifier(node.arguments[0], "require");
       }
+    }
+    // A loader made by createRequire takes any specifier at run time, so no
+    // edge it creates can be checked; the gate refuses the name wherever it
+    // appears, however it is reached.
+    if (node.type === "Identifier" && node.name === "createRequire") {
+      violations.push({
+        code: "ARCH_DYNAMIC_IMPORT",
+        file: relative(file),
+        detail: "createRequire makes a loader the gate cannot check",
+      });
     }
     if (
       pure &&
