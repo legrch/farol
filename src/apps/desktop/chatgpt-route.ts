@@ -616,8 +616,21 @@ export class ChatGptRoute {
   private requestSignInReturn(): void {
     const candidate = this.routeWindow;
     if (!candidate || candidate.isDestroyed()) return;
-    if (candidate.close) candidate.close();
-    else candidate.destroy();
+    const close = () => {
+      if (candidate.isDestroyed()) return;
+      if (candidate.close) candidate.close();
+      else candidate.destroy();
+    };
+    // Return is Farol's own control, so the page is read while it is still
+    // open and the window closes afterwards. A read begun inside the close
+    // itself races the teardown and usually ends as "unknown".
+    if (this.signInMode && this.pendingSignInObservation === null) {
+      const observation = this.observe();
+      this.pendingSignInObservation = observation;
+      void observation.then(close, close);
+      return;
+    }
+    close();
   }
 
   private async openRouteWindow(): Promise<ChatGptOpenResult> {
@@ -657,7 +670,7 @@ export class ChatGptRoute {
       // `destroy()` skips it entirely, which is exactly why
       // `requestSignInReturn` prefers a real `close()`. Reading it now is
       // the only way to report a truthful status rather than "unknown".
-      if (this.signInMode) {
+      if (this.signInMode && this.pendingSignInObservation === null) {
         this.pendingSignInObservation = this.observe();
       }
     });
