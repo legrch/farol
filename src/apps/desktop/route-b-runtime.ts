@@ -167,8 +167,15 @@ export class RouteBAdmission {
     this.running.delete(threadId);
   }
 
+  // A summary also waits for held initial requests: a held preparation may
+  // still be confirming a context handoff after its turn ended, and a summary
+  // must not read or advance that thread's context in the meantime.
   beginSummary(threadId: string): boolean {
-    if (this.running.has(threadId) || this.summarizing.has(threadId)) {
+    if (
+      this.running.has(threadId) ||
+      this.summarizing.has(threadId) ||
+      (this.held.get(threadId) ?? 0) > 0
+    ) {
       return false;
     }
     this.summarizing.add(threadId);
