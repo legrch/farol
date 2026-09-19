@@ -1347,9 +1347,13 @@ html[data-has-tasks="false"] .surface {
   gap: 6px;
 }
 
+/* The actions may shrink to the row's width, so once they are on their own
+   line their buttons wrap instead of holding one line wider than the panel
+   (`flex: none` kept them at their full one-line width at 640px). */
 .connection-actions {
   display: flex;
-  flex: none;
+  flex: 0 1 auto;
+  max-width: 100%;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
