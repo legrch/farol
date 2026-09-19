@@ -8349,7 +8349,12 @@ if (blockedCases.length > 0) {
     // "Return to Farol": closes the sign-in window and returns the owner
     // to Setup with a truthful (not signed in — the fixture's login
     // button was never clicked) status, never a silent close.
-    await chatGptPage.locator("#farol-sign-in-banner button").click();
+    // Playwright still counts the cancelled navigation as pending and would
+    // wait for it before a locator click, so the control is clicked in the
+    // page; its handler and the main-frame check are the same.
+    await chatGptPage.evaluate(() =>
+      document.querySelector("#farol-sign-in-banner button").click(),
+    );
     await waitForWindowCount(signIn.application, 1);
     const afterReturn = await signIn.window.evaluate(() =>
       window.farolNext.bootstrap(),
