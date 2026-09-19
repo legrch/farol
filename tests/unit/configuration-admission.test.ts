@@ -55,11 +55,13 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
         }),
       ).toBe("CONNECTOR_STOP_REQUIRED");
     }
+    // Re-verification records a new root identity and replaces the linked
+    // Git metadata grant, both of which a running connector carries.
     expect(
       configurationAdmission("computer.verify-workspace", {
         agentActive: false,
         connectorRunning: true,
       }),
-    ).toBe("admitted");
+    ).toBe("CONNECTOR_STOP_REQUIRED");
   });
 });

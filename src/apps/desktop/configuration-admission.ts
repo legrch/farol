@@ -20,6 +20,7 @@ const connectorGuardedCommands = new Set<string>([
   "computer.update-exclusions",
   "computer.update-access",
   "computer.update-commands",
+  "computer.verify-workspace",
 ]);
 
 export type ConfigurationAdmission =

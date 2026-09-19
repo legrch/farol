@@ -4569,6 +4569,17 @@ async function configureProduct(
       if (result.value.kind !== "workspace.text") {
         return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
       }
+      // Verifying the workspace approves the linked Git metadata it has now,
+      // and only that; a primary checkout needs no grant.
+      const gitMetadata = await discoverLinkedGitMetadata(workspace.root);
+      // The picker and the read above take seconds, and a connector or Agent
+      // may have started meanwhile; a re-verification rebinds the authority
+      // either would carry, so it is admitted again right before it commits.
+      const readmitted = configurationAdmission(command.kind, {
+        agentActive: codexAgentOperationActive(),
+        connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
+      });
+      if (readmitted !== "admitted") return configurationFailure(readmitted);
       const recorded = await configuration.recordComputerVerification(
         workspace.workspaceId,
         {
@@ -4582,9 +4593,7 @@ async function configureProduct(
         },
         {
           ...(observedRoot ? { rootIdentity: observedRoot } : {}),
-          // Verifying the workspace approves the linked Git metadata it has
-          // now, and only that; a primary checkout needs no grant.
-          gitMetadata: await discoverLinkedGitMetadata(workspace.root),
+          gitMetadata,
         },
       );
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
