@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   compilerProblems,
   dependencyDrift,
+  npmCliFor,
   packageRootOf,
   packageTreeDigest,
   readDependencyDigests,
@@ -156,6 +157,22 @@ describe("F3-5 build provenance", () => {
     );
     expect(result.stderr).not.toContain("at ");
   }, 120_000);
+
+  it("runs the npm of the running Node installation, never one found on PATH", () => {
+    const cli = npmCliFor(process.execPath);
+    const prefix = path.resolve(
+      path.dirname(fs.realpathSync(process.execPath)),
+      "..",
+    );
+    expect(cli).toBe(
+      path.join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
+    );
+    const lonely = fs.mkdtempSync(path.join(os.tmpdir(), "farol-no-npm-"));
+    scratch.push(lonely);
+    fs.mkdirSync(path.join(lonely, "bin"));
+    fs.writeFileSync(path.join(lonely, "bin", "node"), "");
+    expect(() => npmCliFor(path.join(lonely, "bin", "node"))).toThrow();
+  });
 
   it("takes the source identity from the system Git, not a git earlier on PATH", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "farol-fake-git-"));

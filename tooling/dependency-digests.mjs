@@ -178,6 +178,23 @@ export function compilerProblems(root, env = process.env) {
 // the lockfile's integrity), esbuild's own install step runs as it does in
 // every real install, and only that directory is hashed. No caller-supplied
 // tree can become the reviewed state.
+// The npm that belongs to the running Node installation, by its own path: a
+// `npm` found first on PATH must not decide what the clean install contains.
+export function npmCliFor(nodeExecutable = process.execPath) {
+  const cli = path.resolve(
+    path.dirname(fs.realpathSync(nodeExecutable)),
+    "..",
+    "lib",
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  const info = fs.lstatSync(cli);
+  if (!info.isFile()) throw new Error(`NPM_CLI_NOT_FOUND:${cli}`);
+  return cli;
+}
+
 export function writeDependencyDigestsFromCleanInstall(vnextRoot, roots) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "farol-clean-deps-"));
   try {
@@ -193,7 +210,13 @@ export function writeDependencyDigestsFromCleanInstall(vnextRoot, roots) {
         throw new Error(`DEPENDENCY_CLEAN_INSTALL_FAILED:${command}`);
       }
     };
-    run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+    run(process.execPath, [
+      npmCliFor(),
+      "ci",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ]);
     run(process.execPath, [path.join("node_modules", "esbuild", "install.js")]);
     const packages = {};
     for (const packageRoot of [...roots].sort()) {
