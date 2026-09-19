@@ -8279,7 +8279,15 @@ async function waitForSignInReturnOutcome(instance) {
         mode: document.querySelector("#setup-dialog")?.dataset.mode,
         open: document.querySelector("#setup-dialog")?.open,
         summary: document.querySelector("#setup-live-summary")?.textContent,
+        shellActions: window.__farolShellActions ?? null,
       }));
+      const recorded = await instance.window.evaluate(async () => {
+        const value = await window.farolNext.bootstrap();
+        return value.configuration.status === "ready"
+          ? value.configuration.settings.setup.chatgpt
+          : value.configuration.status;
+      });
+      shown.recordedChatGpt = recorded;
       throw new Error(
         `${error.message} · after Return Setup showed ${JSON.stringify(shown)}`,
         { cause: error },
@@ -8382,6 +8390,14 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
 {
   const signIn = await launch([], "secondary-visible");
   try {
+    // Instrument: record every shell action the main process sends, so a
+    // missing Return notification is told apart from an ignored one.
+    await signIn.window.evaluate(() => {
+      window.__farolShellActions = [];
+      window.farolNext.onShellAction((value) =>
+        window.__farolShellActions.push(value),
+      );
+    });
     const dialog = signIn.window.locator("#setup-dialog");
     await dialog.waitFor({ state: "visible" });
     assert.equal(await dialog.getAttribute("data-step-id"), "chatgpt");
