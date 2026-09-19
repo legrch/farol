@@ -8317,11 +8317,14 @@ if (blockedCases.length > 0) {
     // A navigation the policy does not allow: reported through
     // bootstrap().chatgptSignInBlocked (content-free: host only), not
     // silently swallowed.
+    // The Next step left the page that carries the off-policy button.
+    await chatGptPage.goto(signIn.chatGptFixture.url);
     await chatGptPage.locator('[data-testid="blocked-nav-button"]').click();
-    await signIn.window.waitForFunction(() =>
-      window.farolNext
-        .bootstrap()
-        .then((value) => value?.chatgptSignInBlocked?.kind !== undefined),
+    await waitForPageState(
+      signIn.window,
+      async () =>
+        (await window.farolNext.bootstrap())?.chatgptSignInBlocked?.kind !==
+        undefined,
     );
     const blockedBootstrap = await signIn.window.evaluate(() =>
       window.farolNext.bootstrap(),
