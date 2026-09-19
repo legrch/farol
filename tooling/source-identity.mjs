@@ -3,8 +3,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
+// The system Git by absolute path, with a fixed environment: a `git` earlier on
+// PATH, or GIT_DIR/GIT_WORK_TREE/GIT_CONFIG_* inherited from the caller, must
+// not decide which bytes count as the source a build or candidate names.
+const GIT = "/usr/bin/git";
 const gitEnvironment = Object.freeze({
-  ...process.env,
+  PATH: "/usr/bin:/bin",
+  HOME: "/var/empty",
+  TMPDIR: process.env.TMPDIR ?? "/tmp",
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_OPTIONAL_LOCKS: "0",
@@ -16,7 +22,7 @@ const gitEnvironment = Object.freeze({
 const gitMaxBuffer = 256 * 1024 * 1024;
 
 function git(repositoryRoot, arguments_, encoding = null) {
-  return execFileSync("git", ["-C", repositoryRoot, ...arguments_], {
+  return execFileSync(GIT, ["-C", repositoryRoot, ...arguments_], {
     encoding,
     env: gitEnvironment,
     maxBuffer: gitMaxBuffer,

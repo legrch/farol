@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "packages": {
+    "node_modules/@esbuild/darwin-arm64": {
+      "version": "0.28.2",
+      "treeSha256": "3d479dbb00bc8af06ed32449bbf0b211d1c43422125498483aa11b8c29c41454"
+    },
+    "node_modules/@modelcontextprotocol/core": {
+      "version": "2.0.0",
+      "treeSha256": "7610cdaf5b653e673a4873610dac278dfd100d72c025529454e4accad13c03f7"
+    },
+    "node_modules/@modelcontextprotocol/server": {
+      "version": "2.0.0",
+      "treeSha256": "ae89a77557aed461c2f4191e7ad2d33797dc9dfb9320e950b0db8731aed70bc2"
+    },
+    "node_modules/esbuild": {
+      "version": "0.28.2",
+      "treeSha256": "6f0eea5d826f07a966c5c8a41fe502c361b32e51c8368537e01bb291666cf6d0"
+    },
+    "node_modules/zod": {
+      "version": "4.6.5",
+      "treeSha256": "35750ab21d681875dcf5626c5e19c5235077e651a1d9dbb0b5b1baeb2a704780"
+    }
+  }
+}

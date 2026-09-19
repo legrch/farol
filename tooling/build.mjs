@@ -23,6 +23,12 @@ import {
   verifyNativeHelper,
 } from "./native-helper-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
+import {
+  dependencyDrift,
+  packageRootOf,
+  readDependencyDigests,
+  toolchainPackageRoots,
+} from "./dependency-digests.mjs";
 
 const root = process.cwd();
 const repositoryRoot = path.resolve(root, "..");
@@ -200,10 +206,33 @@ const identityStable =
   current.commit === initial.commit &&
   current.treeDigest === initial.treeDigest &&
   !current.dirty;
+// The compiler and every bundled package must be the bytes a clean install of
+// the committed lockfile produced; a redirected compiler binary is not.
+const drift = dependencyDrift(
+  root,
+  [
+    ...toolchainPackageRoots(),
+    ...dependencyInputs.map((entry) => packageRootOf(entry.path)),
+  ],
+  readDependencyDigests(root),
+);
+const compilerRedirected = Boolean(process.env.ESBUILD_BINARY_PATH);
+for (const entry of drift) {
+  process.stderr.write(
+    `dependency not reviewed (${entry.reason}): ${entry.packageRoot} — this build is not a candidate\n`,
+  );
+}
+if (compilerRedirected) {
+  process.stderr.write(
+    "ESBUILD_BINARY_PATH redirects the compiler — this build is not a candidate\n",
+  );
+}
 const inputExact =
   identityStable &&
   sourceInputs.length > 0 &&
-  sourceInputs.every((entry) => entry.exact === true);
+  sourceInputs.every((entry) => entry.exact === true) &&
+  drift.length === 0 &&
+  !compilerRedirected;
 const inputLedger = [...inputRecords.values()].sort((left, right) =>
   left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 );
