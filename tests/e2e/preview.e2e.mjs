@@ -2733,8 +2733,10 @@ async function gitVerificationIsOff(page, gitOff) {
       .locator("#computer-feedback")
       .textContent()
       .catch(() => null);
-    error.message = `${error.message} · Computer feedback ${JSON.stringify(shown)}`;
-    throw error;
+    throw new Error(
+      `${error.message} · Computer feedback ${JSON.stringify(shown)}`,
+      { cause: error },
+    );
   }
   return (await page.locator("#computer-feedback").textContent()) === gitOff;
 }
@@ -2754,8 +2756,12 @@ async function waitForSetup(instance, predicate, arg) {
         feedback: document.querySelector("#setup-feedback")?.textContent,
       }))
       .catch(() => null);
-    error.message = `${error.message} · setup showed ${JSON.stringify(shown)}`;
-    throw error;
+    throw new Error(
+      `${error.message} · setup showed ${JSON.stringify(shown)}`,
+      {
+        cause: error,
+      },
+    );
   }
 }
 
