@@ -151,6 +151,53 @@ describe("Codex host probe", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("accepts an executable between the old 128 MiB cap and the new 512 MiB cap", async () => {
+    // Real Codex binaries run 210-224 MiB; the old 128 MiB ceiling refused
+    // every genuine install. Truncate creates a sparse file instantly —
+    // reading it back still exercises the real chunked hash loop.
+    const selected = await fixture();
+    const target = await fs.realpath(selected.executablePath);
+    await fs.truncate(target, 200 * 1024 * 1024);
+    const runner = vi.fn<CodexProbeRunner>(async (command) => {
+      if (command.arguments[0] === "--version") {
+        return { stdout: "codex-cli 0.153.4\n", stderr: "" };
+      }
+      const schemaRoot = command.arguments[4];
+      if (!schemaRoot) throw new Error("missing schema root");
+      await writeCompatibleSchema(schemaRoot);
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await probeCodexHost(
+      {
+        executablePath: selected.executablePath,
+        scratchRoot: selected.scratchRoot,
+      },
+      { run: runner },
+    );
+
+    expect(result.version).toBe("0.153.4");
+    expect(runner).toHaveBeenCalledTimes(2);
+  }, 20_000);
+
+  it("refuses an executable over the 512 MiB cap before starting it", async () => {
+    const selected = await fixture();
+    const target = await fs.realpath(selected.executablePath);
+    await fs.truncate(target, 512 * 1024 * 1024 + 1);
+    const runner = vi.fn<CodexProbeRunner>();
+
+    await expect(
+      probeCodexHost(
+        {
+          executablePath: selected.executablePath,
+          scratchRoot: selected.scratchRoot,
+        },
+        { run: runner },
+      ),
+    ).rejects.toThrow("CODEX_HOST_EXECUTABLE_UNSAFE");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("maps an incompatible generated contract without retaining schema files", async () => {
     const selected = await fixture();
     const runner = vi.fn<CodexProbeRunner>(async (command) => {

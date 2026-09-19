@@ -12,7 +12,10 @@ import {
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
-const MAX_EXECUTABLE_BYTES = 128 * 1_024 * 1_024;
+// Real Codex binaries run 210-224 MiB on disk; Legacy's own dependency scan
+// already treats 512 MiB as the ceiling for a trusted executable, so this
+// probe matches it instead of refusing a genuine Codex install.
+const MAX_EXECUTABLE_BYTES = 512 * 1_024 * 1_024;
 const VERSION_TIMEOUT_MS = 5_000;
 const SCHEMA_TIMEOUT_MS = 15_000;
 const MAX_OUTPUT_BYTES = 256 * 1_024;

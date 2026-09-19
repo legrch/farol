@@ -1,9 +1,10 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   discoverExecutables,
@@ -16,6 +17,8 @@ import {
   type HashOutcome,
   type ReviewedTunnelClientDigests,
 } from "../../src/apps/desktop/executable-discovery";
+
+vi.mock("node:child_process", () => ({ execFile: vi.fn() }));
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -355,7 +358,11 @@ describe("executable discovery — codex signature trust", () => {
       home: "/fake-home-codex-offer",
       arch: "arm64",
       codesign: fakeCodesign({
-        [fixture.target]: { verified: true, teamIdentifier: "2DC432GLL2" },
+        [fixture.target]: {
+          verified: true,
+          trustedOpenAI: true,
+          teamIdentifier: "2DC432GLL2",
+        },
       }),
     });
 
@@ -383,11 +390,42 @@ describe("executable discovery — codex signature trust", () => {
       home: "/fake-home-codex-other-team",
       arch: "arm64",
       codesign: fakeCodesign({
-        [fixture.target]: { verified: true, teamIdentifier: "OTHERTEAM1234" },
+        [fixture.target]: {
+          verified: true,
+          trustedOpenAI: false,
+          teamIdentifier: "OTHERTEAM1234",
+        },
       }),
     });
 
     expect(result.candidates[0]?.origin).toBe("signature-other-team");
+    expect(result.candidates[0]?.verdict).toBe("needs-owner-choice");
+  });
+
+  it("never offers a binary whose TeamIdentifier text merely happens to match the OpenAI identifier if the -R requirement check itself did not pass", async () => {
+    // A forged or coincidentally-matching display string must not be
+    // sufficient on its own: `trustedOpenAI` (the actual
+    // `codesign --verify --strict -R=...` outcome) is the only source of
+    // truth classifyCodexOrigin consults for "signed-by-openai".
+    const fixture = await realFileFixture();
+    const { fs: fakeFsPort } = buildFakeFs({
+      [CODEX_HOMEBREW_ARM]: { kind: "real", target: fixture.target },
+    });
+
+    const result = await discoverExecutables("codex", {
+      fs: fakeFsPort,
+      home: "/fake-home-codex-spoofed-text",
+      arch: "arm64",
+      codesign: fakeCodesign({
+        [fixture.target]: {
+          verified: true,
+          trustedOpenAI: false,
+          teamIdentifier: "2DC432GLL2",
+        },
+      }),
+    });
+
+    expect(result.candidates[0]?.origin).not.toBe("signed-by-openai");
     expect(result.candidates[0]?.verdict).toBe("needs-owner-choice");
   });
 
@@ -402,12 +440,65 @@ describe("executable discovery — codex signature trust", () => {
       home: "/fake-home-codex-unsigned",
       arch: "arm64",
       codesign: fakeCodesign({
-        [fixture.target]: { verified: false },
+        [fixture.target]: { verified: false, trustedOpenAI: false },
       }),
     });
 
     expect(result.candidates[0]?.origin).toBe("unsigned");
     expect(result.candidates[0]?.verdict).toBe("needs-owner-choice");
+  });
+});
+
+describe("executable discovery — codesign requirement string", () => {
+  it("runs codesign --verify --strict with the OpenAI OU requirement, not just plain --verify --strict", async () => {
+    const execFileMock = vi.mocked(execFile);
+    execFileMock.mockImplementation(((...callArgs: unknown[]) => {
+      const callback = callArgs[callArgs.length - 1] as (
+        error: Error | null,
+        stdout: string,
+        stderr: string,
+      ) => void;
+      callback(null, "TeamIdentifier=2DC432GLL2\n", "");
+      return {} as ReturnType<typeof execFile>;
+    }) as unknown as typeof execFile);
+
+    const canonical = "/canonical/codesign-requirement";
+    const { fs: fakeFsPort } = buildFakeFs({
+      [CODEX_HOMEBREW_ARM]: { kind: "real", target: canonical },
+    });
+
+    const result = await discoverExecutables("codex", {
+      fs: fakeFsPort,
+      home: "/fake-home-codesign-requirement",
+      arch: "arm64",
+      hash: fakeHash({
+        [canonical]: { ok: true, bytes: 42, sha256: "a".repeat(64) },
+      }),
+    });
+
+    const calls = execFileMock.mock.calls as unknown as ReadonlyArray<
+      [string, readonly string[], unknown, unknown]
+    >;
+    const plainVerify = calls.find(
+      ([, args]) =>
+        args.includes("--verify") && !args.some((arg) => arg.startsWith("-R=")),
+    );
+    const requirementVerify = calls.find(([, args]) =>
+      args.some((arg) => arg.startsWith("-R=")),
+    );
+    expect(plainVerify).toBeDefined();
+    expect(requirementVerify).toBeDefined();
+    expect(requirementVerify?.[1]).toEqual(
+      expect.arrayContaining([
+        "--verify",
+        "--strict",
+        '-R=anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"',
+      ]),
+    );
+    // Reported TeamIdentifier stays for display even though it never
+    // decides the verdict on its own.
+    expect(result.candidates[0]?.origin).toBe("signed-by-openai");
+    expect(result.candidates[0]?.verdict).toBe("offer");
   });
 });
 
@@ -426,9 +517,14 @@ describe("executable discovery — ordering and dedupe", () => {
       home: "/fake-home-order",
       arch: "arm64",
       codesign: fakeCodesign({
-        [openaiSigned.target]: { verified: true, teamIdentifier: "2DC432GLL2" },
+        [openaiSigned.target]: {
+          verified: true,
+          trustedOpenAI: true,
+          teamIdentifier: "2DC432GLL2",
+        },
         [otherTeamSigned.target]: {
           verified: true,
+          trustedOpenAI: false,
           teamIdentifier: "OTHERTEAM1234",
         },
       }),
@@ -510,7 +606,11 @@ describe("executable discovery — bounded search surface", () => {
       home,
       arch: "arm64",
       codesign: fakeCodesign({
-        [fixture.target]: { verified: true, teamIdentifier: "2DC432GLL2" },
+        [fixture.target]: {
+          verified: true,
+          trustedOpenAI: true,
+          teamIdentifier: "2DC432GLL2",
+        },
       }),
     });
 

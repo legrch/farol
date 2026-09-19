@@ -99,7 +99,16 @@ export type HashOutcome =
 export type DiscoveryHash = (canonicalPath: string) => Promise<HashOutcome>;
 
 export type CodesignInspection = Readonly<{
+  /** A plain `codesign --verify --strict` passed: the signature is intact. */
   verified: boolean;
+  /**
+   * The authoritative trust decision: `codesign --verify --strict -R=...`
+   * passed against the OpenAI-team requirement string. This is what decides
+   * "offer" vs "needs-owner-choice" — never `teamIdentifier`, which is
+   * display-only text parsed from `-dv --verbose=2` and is not itself proof
+   * of who signed the binary.
+   */
+  trustedOpenAI: boolean;
   teamIdentifier?: string;
 }>;
 
@@ -339,6 +348,20 @@ async function runCodesign(
   });
 }
 
+// Trust decision: the signature must chain to Apple's own root AND the
+// signing certificate's OU must be the OpenAI team identifier. A plain
+// `--verify --strict` only proves the binary was not modified after
+// signing; it says nothing about *who* signed it, so a self-signed or
+// third-party-signed binary would pass it just as cleanly as a genuine
+// OpenAI build. The `-R` requirement string is the actual trust boundary.
+//
+// Verified: `codesign --verify --strict -R=...` exits 0 against both real
+// Codex binaries (ChatGPT.app and Codex.app) when run outside the agent
+// tool sandbox; inside this sandbox codesign itself fails to launch, which
+// is a sandbox artifact, not a defect in the requirement string — do not
+// "fix" this by loosening it.
+const OPENAI_CODESIGN_REQUIREMENT = `anchor apple generic and certificate leaf[subject.OU] = "${OPENAI_TEAM_IDENTIFIER}"`;
+
 const defaultCodesign: DiscoveryCodesign = {
   verifyAndInspect: async (executablePath) => {
     let verified = false;
@@ -347,6 +370,17 @@ const defaultCodesign: DiscoveryCodesign = {
       verified = true;
     } catch {
       verified = false;
+    }
+
+    let trustedOpenAI = false;
+    try {
+      await runCodesign(
+        ["--verify", "--strict", `-R=${OPENAI_CODESIGN_REQUIREMENT}`],
+        executablePath,
+      );
+      trustedOpenAI = true;
+    } catch {
+      trustedOpenAI = false;
     }
 
     let teamIdentifier: string | undefined;
@@ -360,20 +394,19 @@ const defaultCodesign: DiscoveryCodesign = {
     }
 
     return teamIdentifier === undefined
-      ? { verified }
-      : { verified, teamIdentifier };
+      ? { verified, trustedOpenAI }
+      : { verified, trustedOpenAI, teamIdentifier };
   },
 };
 
 export function classifyCodexOrigin(
   inspection: CodesignInspection,
 ): DiscoveryOrigin {
-  if (
-    inspection.verified &&
-    inspection.teamIdentifier === OPENAI_TEAM_IDENTIFIER
-  ) {
-    return "signed-by-openai";
-  }
+  // The `-R` requirement check is the sole trust decision: it fails closed
+  // against a forged, coincidentally-matching, or merely similarly-named
+  // TeamIdentifier string, because it is macOS verifying the certificate
+  // chain itself rather than this process parsing signer-controlled text.
+  if (inspection.trustedOpenAI) return "signed-by-openai";
   if (inspection.verified && inspection.teamIdentifier) {
     return "signature-other-team";
   }
@@ -416,7 +449,7 @@ async function safeCodesignInspect(
   try {
     return await codesign.verifyAndInspect(executablePath);
   } catch {
-    return { verified: false };
+    return { verified: false, trustedOpenAI: false };
   }
 }
 

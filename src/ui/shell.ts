@@ -35,6 +35,7 @@ import {
   ProductConfigurationSnapshotSchema,
   type ProductConfigurationCommand,
   type ProductConfigurationEvidence,
+  type ProductDiscoveryCandidate,
 } from "../pkg/product-settings/contract";
 import {
   advanceSetup,
@@ -52,10 +53,19 @@ import {
 import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
+  agentRouteReadiness,
+  routeReadiness,
   waitsForAgentRejoin,
   windowModeLabel,
   workspaceAccessLabel,
+  type RouteReadinessState,
 } from "./setup-presentation";
+import {
+  SETUP_MEDIA_MANIFEST,
+  findSetupMediaSlot,
+  shouldRenderClip,
+  type SetupMediaSlotId,
+} from "./setup-media";
 import {
   classifyConfigurationResponse,
   UNCONFIRMED_CONFIGURATION_MESSAGE,
@@ -196,7 +206,7 @@ let windowState: WindowState = {
 let computerTargetTaskId: string | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
-let settingsFeedbackSurface: "computer" | "settings" = "settings";
+let settingsFeedbackSurface: "computer" | "settings" | "setup" = "settings";
 let taskAdmissionFeedback = "";
 let taskMenuFeedback = "";
 let taskMenuFeedbackError = false;
@@ -221,6 +231,28 @@ let pendingChatGptPreview: Extract<
     kind: "chatgpt.readonly-task-preview" | "chatgpt.attachment-task-preview";
   }
 > | null = null;
+// Discovery replaces a blind file picker with a bounded, read-only scan the
+// main process re-verifies before ever running a chosen candidate (see
+// `reverifyDiscoveredCandidate` in main.ts). Results are cached here so the
+// Setup dialog does not re-scan on every render; `discoveryRequested` marks
+// that this session already asked once, `discoveryAdvancedOpen` tracks the
+// per-step disclosure that reveals "Use anyway" and "Choose another…".
+let discoveredCodexCandidates: Extract<
+  ProductConfigurationEvidence,
+  { kind: "host.codex-discovery" }
+> | null = null;
+let discoveredTunnelClientCandidates: Extract<
+  ProductConfigurationEvidence,
+  { kind: "connector.client-discovery" }
+> | null = null;
+let discoveryRequested: Record<"connect" | "hosts", boolean> = {
+  connect: false,
+  hosts: false,
+};
+let discoveryAdvancedOpen: Record<"connect" | "hosts", boolean> = {
+  connect: false,
+  hosts: false,
+};
 let contextPreviewBusy = false;
 let renderedGeneralSettingsRevision = -1;
 let setupConnectorError: string | null = null;
@@ -419,6 +451,7 @@ function renderRuntime(): void {
   const pill = required<HTMLDivElement>("#runtime-pill");
   const lamp = required<HTMLElement>("#runtime-pill .state-lamp");
   const label = required<HTMLElement>("#runtime-pill b");
+  const detail = required<HTMLElement>("#runtime-pill small");
   const tone =
     bootstrap.runtimeState === "ready"
       ? "running"
@@ -431,6 +464,32 @@ function renderRuntime(): void {
     bootstrap.runtimeState === "ready"
       ? "Local runtime"
       : bootstrap.runtimeState;
+  // This second line used to be a static HTML placeholder ("No live
+  // provider") that nothing ever updated, so it kept showing that text
+  // forever regardless of actual state — the sidebar half of UX34-03/04.
+  // It now agrees with the same `chatGptRouteState()` the header and New
+  // task control use.
+  detail.textContent =
+    bootstrap.runtimeState === "starting"
+      ? "Starting…"
+      : bootstrap.runtimeState === "offline"
+        ? "Runtime offline"
+        : bootstrap.runtimeState === "failed"
+          ? "Runtime failed"
+          : (() => {
+              switch (chatGptRouteState()) {
+                case "ready":
+                  return "Ready for a new task";
+                case "checking":
+                  return "Checking ChatGPT connection…";
+                case "outcome-unknown":
+                  return "ChatGPT outcome unknown";
+                case "failed":
+                  return "ChatGPT route unreachable";
+                default:
+                  return "No live provider";
+              }
+            })();
 }
 
 function renderBuildIdentity(): void {
@@ -465,9 +524,15 @@ function renderBrowser(): void {
     title.textContent = taskAdmissionFeedback
       ? "Task not created"
       : "No tasks yet";
+    // Agrees with the same `chatGptRouteState()` the header, New task
+    // control, and sidebar use: when the route is actually ready, this
+    // empty state must say so instead of unconditionally asking to
+    // "Complete Setup" (UX34-03/04).
     detail.textContent =
       taskAdmissionFeedback ||
-      "Complete Setup and connect a supported route to create the first real task.";
+      (chatGptRouteState() === "ready"
+        ? "Ready for a new task — use the + New task control above."
+        : "Complete Setup and connect a supported route to create the first real task.");
   } else if (surfaceFailed || task?.lifecycle === "failed") {
     loading.dataset.state = "failed";
     mark.className = "state-lamp failed";
@@ -660,6 +725,38 @@ function renderDossier(): void {
           : "Open Activity <span>›</span>";
 
   taskMenuComputer.disabled = !unresolvedComputerRequest(selectedTaskId);
+}
+
+// The one place that decides whether the ChatGPT route can start a new task
+// right now. The header status line, the New task control, the Setup
+// checklist and Settings all call this (or `agentRouteState` below) instead
+// of re-deriving their own boolean — see UX34-03/04 in setup-presentation.ts.
+function chatGptRouteState(): RouteReadinessState {
+  if (bootstrap.configuration.status !== "ready") return "not-configured";
+  return routeReadiness(bootstrap.configuration.settings.setup.chatgpt);
+}
+
+function computerRouteState(): RouteReadinessState {
+  if (bootstrap.configuration.status !== "ready") return "not-configured";
+  const settings = bootstrap.configuration.settings;
+  const workspace = settings.computer.workspaces[0];
+  const stale =
+    workspace !== undefined &&
+    (settings.setup.computer.verified?.workspaceId !== workspace.workspaceId ||
+      settings.setup.computer.verified.configRevision !==
+        settings.computer.generation);
+  return routeReadiness(settings.setup.computer, { stale });
+}
+
+function connectRouteState(): RouteReadinessState {
+  if (bootstrap.configuration.status !== "ready") return "not-configured";
+  return routeReadiness(bootstrap.configuration.settings.setup.connect);
+}
+
+function agentRouteState(): RouteReadinessState {
+  if (bootstrap.configuration.status !== "ready") return "not-configured";
+  const settings = bootstrap.configuration.settings;
+  return agentRouteReadiness(settings.setup.hosts, settings.setup.verify);
 }
 
 type ProductAgentReadiness =
@@ -1114,9 +1211,252 @@ function readinessDetail(readiness: Readiness): string {
   );
 }
 
+function routeStatusClass(state: RouteReadinessState): string {
+  switch (state) {
+    case "ready":
+      return "available";
+    case "action-required":
+      return "limited";
+    case "checking":
+      return "checking";
+    case "failed":
+      return "failed";
+    case "outcome-unknown":
+      return "unknown";
+    case "not-configured":
+      return "blocked";
+  }
+}
+
+function discoverySourceLabel(
+  source: ProductDiscoveryCandidate["source"],
+): string {
+  switch (source) {
+    case "chatgpt-app":
+      return "ChatGPT.app";
+    case "codex-app":
+      return "Codex.app";
+    case "homebrew":
+      return "Homebrew";
+    case "npm-global":
+      return "npm · @openai/codex (global)";
+    case "reviewed-build-dir":
+      return "Reviewed tunnel-client build";
+  }
+}
+
+function discoveryOriginLabel(
+  origin: ProductDiscoveryCandidate["origin"],
+): string {
+  switch (origin) {
+    case "signed-by-openai":
+      return "Signed by OpenAI";
+    case "reviewed-digest":
+      return "Matches the reviewed digest";
+    case "signature-other-team":
+      return "Signed by a different team";
+    case "unsigned":
+      return "Not code-signed";
+    case "unknown":
+      return "Signature could not be verified";
+  }
+}
+
+// Discovery never runs itself; the Setup dialog asks for it exactly once per
+// session per step (until a fresh scan is explicitly requested), the same
+// way every other live check here waits for an explicit action. Triggering
+// it from inside render() has to go through queueMicrotask so the async
+// configureProduct call never starts mid-render.
+function ensureDiscovery(kind: "connect" | "hosts"): void {
+  if (discoveryRequested[kind]) return;
+  discoveryRequested = { ...discoveryRequested, [kind]: true };
+  queueMicrotask(() => {
+    void configureProduct(
+      kind === "connect"
+        ? { kind: "connector.discover-client" }
+        : { kind: "host.discover-codex" },
+      kind === "connect"
+        ? "Local tunnel-client candidates discovered."
+        : "Local Codex candidates discovered.",
+    );
+  });
+}
+
+function rescanDiscovery(kind: "connect" | "hosts"): void {
+  discoveryRequested = { ...discoveryRequested, [kind]: false };
+  if (kind === "connect") discoveredTunnelClientCandidates = null;
+  else discoveredCodexCandidates = null;
+  ensureDiscovery(kind);
+  render();
+}
+
+// Inline, bounded owner instructions for the one external step Setup itself
+// cannot verify (creating a tunnel, creating a key, attaching the
+// connector inside ChatGPT). Text always renders; a <video> only appears
+// when the manifest names a clip, per `shouldRenderClip` — no clip ships
+// today, so this always falls back to text-only, exactly as the acceptance
+// criteria for the media manifest require.
+function buildMediaInstructions(slotId: SetupMediaSlotId): HTMLElement | null {
+  const slot = findSetupMediaSlot(SETUP_MEDIA_MANIFEST, slotId);
+  if (!slot) return null;
+  const container = document.createElement("details");
+  container.className = "setup-media";
+  const summary = document.createElement("summary");
+  summary.textContent = slot.title;
+  container.append(summary);
+  const list = document.createElement("ol");
+  list.className = "setup-media-steps";
+  list.append(
+    ...slot.steps.map((step) => {
+      const item = document.createElement("li");
+      item.textContent = step;
+      return item;
+    }),
+  );
+  container.append(list);
+  if (slot.clip && shouldRenderClip(slot, true)) {
+    const clip = slot.clip;
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "none";
+    video.poster = clip.poster;
+    const source = document.createElement("source");
+    source.src = clip.file;
+    const track = document.createElement("track");
+    track.kind = "captions";
+    track.src = clip.captions;
+    video.append(source, track);
+    container.append(video);
+  }
+  return container;
+}
+
+function buildDiscoveryPanel(
+  advancedKey: "connect" | "hosts",
+  discovery: Extract<
+    ProductConfigurationEvidence,
+    { kind: "host.codex-discovery" | "connector.client-discovery" }
+  > | null,
+  labels: Readonly<{
+    itemNoun: string;
+    notFoundHint: string;
+    selectCommandKind:
+      "host.select-discovered-codex" | "connector.select-discovered-client";
+    pickerCommandKind: "host.select-codex" | "connector.select-client";
+  }>,
+): HTMLElement {
+  const panel = document.createElement("div");
+  panel.className = "discovery-panel";
+
+  if (!discovery) {
+    const scanning = document.createElement("p");
+    scanning.className = "discovery-scanning";
+    scanning.textContent = `Looking for a local ${labels.itemNoun} in a few fixed, known locations…`;
+    panel.append(scanning);
+    return panel;
+  }
+
+  const offered = discovery.candidates.filter(
+    (candidate) => candidate.verdict === "offer",
+  );
+  const needsChoice = discovery.candidates.filter(
+    (candidate) => candidate.verdict === "needs-owner-choice",
+  );
+
+  function candidateCard(
+    candidate: ProductDiscoveryCandidate,
+    action: "offer" | "needs-owner-choice",
+  ): HTMLElement {
+    const card = document.createElement("article");
+    card.className = "discovery-candidate";
+    const copy = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = discoverySourceLabel(candidate.source);
+    const detail = document.createElement("small");
+    detail.textContent = `${candidate.path} · ${discoveryOriginLabel(candidate.origin)}`;
+    copy.append(title, detail);
+    const use = document.createElement("button");
+    use.type = "button";
+    use.textContent =
+      action === "offer" ? `Use this ${labels.itemNoun}` : "Use anyway";
+    use.addEventListener("click", () => {
+      void configureProduct(
+        { kind: labels.selectCommandKind, path: candidate.path },
+        `${labels.itemNoun} selected and verified.`,
+      );
+    });
+    card.append(copy, use);
+    return card;
+  }
+
+  if (offered.length > 0) {
+    const list = document.createElement("div");
+    list.className = "discovery-offered";
+    list.append(
+      ...offered.map((candidate) => candidateCard(candidate, "offer")),
+    );
+    panel.append(list);
+  } else {
+    const empty = document.createElement("p");
+    empty.className = "discovery-empty";
+    empty.textContent =
+      discovery.candidates.length === 0
+        ? `No local ${labels.itemNoun} was found. ${labels.notFoundHint}`
+        : `A local ${labels.itemNoun} was found but is not trusted automatically. Open Advanced to review it or choose another one.`;
+    panel.append(empty);
+  }
+
+  const advanced = document.createElement("details");
+  advanced.className = "discovery-advanced";
+  advanced.open = discoveryAdvancedOpen[advancedKey];
+  advanced.addEventListener("toggle", () => {
+    discoveryAdvancedOpen = {
+      ...discoveryAdvancedOpen,
+      [advancedKey]: advanced.open,
+    };
+  });
+  const summary = document.createElement("summary");
+  summary.textContent = "Advanced";
+  advanced.append(summary);
+
+  if (needsChoice.length > 0) {
+    const warning = document.createElement("p");
+    warning.className = "discovery-warning";
+    warning.textContent =
+      "Not signed by OpenAI, or the signature could not be confirmed. Only continue if you placed this file yourself.";
+    advanced.append(warning);
+    advanced.append(
+      ...needsChoice.map((candidate) =>
+        candidateCard(candidate, "needs-owner-choice"),
+      ),
+    );
+  }
+
+  const rescan = document.createElement("button");
+  rescan.type = "button";
+  rescan.textContent = "Scan again";
+  rescan.addEventListener("click", () => rescanDiscovery(advancedKey));
+  const choosePicker = document.createElement("button");
+  choosePicker.type = "button";
+  choosePicker.textContent = "Choose another…";
+  choosePicker.addEventListener("click", () => {
+    void configureProduct(
+      { kind: labels.pickerCommandKind },
+      `${labels.itemNoun} selected and verified.`,
+    );
+  });
+  const advancedActions = document.createElement("div");
+  advancedActions.className = "discovery-advanced-actions";
+  advancedActions.append(rescan, choosePicker);
+  advanced.append(advancedActions);
+  panel.append(advanced);
+
+  return panel;
+}
+
 function renderConfigurationFeedback(
   selector: string,
-  surface: "computer" | "settings",
+  surface: "computer" | "settings" | "setup",
 ): void {
   const configured = bootstrap.configuration;
   const feedback = required<HTMLParagraphElement>(selector);
@@ -1236,14 +1576,14 @@ function renderComputerConfiguration(): void {
       actions.className = "workspace-actions";
       const verify = document.createElement("button");
       verify.type = "button";
-      verify.textContent = verified ? "Recheck" : "Verify";
+      verify.textContent = verified ? "Recheck" : "Verify folder";
       verify.addEventListener("click", () => {
         void configureProduct(
           {
             kind: "computer.verify-workspace",
             workspaceId: workspace.workspaceId,
           },
-          `${workspace.label} ${workspace.access} access verified.`,
+          `Farol can open ${workspace.label}.`,
         );
       });
       const updateAccess = document.createElement("button");
@@ -1660,9 +2000,16 @@ async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
 ): Promise<boolean> {
-  settingsFeedbackSurface = command.kind.startsWith("computer.")
-    ? "computer"
-    : "settings";
+  // While Setup is open it is the only visible surface — a failure or
+  // success routed to the Computer or Settings panel behind a modal dialog
+  // would never be seen (UX34-09: the step being worked on must always show
+  // its own pending/success/failure state, not rely on Activity or a
+  // panel the dialog is covering).
+  settingsFeedbackSurface = setupJourney.open
+    ? "setup"
+    : command.kind.startsWith("computer.")
+      ? "computer"
+      : "settings";
   if (
     command.kind === "computer.verify-workspace" ||
     command.kind === "computer.list-workspace" ||
@@ -1848,11 +2195,25 @@ async function configureProduct(
     settingsFeedback = `Read ${evidence.bytes} bytes from ${evidence.relativePath}. Nothing from the file was persisted.`;
   } else if (evidence?.kind === "computer.workspace-list") {
     workspaceEvidence = evidence;
-    const location =
-      evidence.relativePath === "."
-        ? "the workspace root"
-        : evidence.relativePath;
-    settingsFeedback = `Listed ${evidence.entries.length} ${evidence.entries.length === 1 ? "entry" : "entries"} from ${location}${evidence.truncated ? " (result limited)" : ""}.`;
+    if (command.kind === "computer.verify-workspace") {
+      // This one bounded top-level listing is the whole proof: Farol can
+      // open the approved folder. It says nothing about reading file
+      // contents, writing, or Git — those are separate checks the owner
+      // can run afterward, and a blank folder (0 items) is a pass too.
+      const label =
+        parsed.snapshot.status === "ready"
+          ? (parsed.snapshot.settings.computer.workspaces.find(
+              (workspace) => workspace.workspaceId === evidence.workspaceId,
+            )?.label ?? "this folder")
+          : "this folder";
+      settingsFeedback = `Farol can open ${label} (${evidence.entries.length} ${evidence.entries.length === 1 ? "item" : "items"} at the top level).`;
+    } else {
+      const location =
+        evidence.relativePath === "."
+          ? "the workspace root"
+          : evidence.relativePath;
+      settingsFeedback = `Listed ${evidence.entries.length} ${evidence.entries.length === 1 ? "entry" : "entries"} from ${location}${evidence.truncated ? " (result limited)" : ""}.`;
+    }
   } else if (evidence?.kind === "computer.workspace-search") {
     workspaceEvidence = evidence;
     settingsFeedback = `Found ${evidence.matches.length} ${evidence.matches.length === 1 ? "match" : "matches"} for "${evidence.pattern}"${evidence.resultLimited || evidence.scanLimited ? " (result limited)" : ""}.`;
@@ -1886,6 +2247,24 @@ async function configureProduct(
     settingsFeedback = `Main → Agent → Critic verified on ${evidence.model} · one model turn · same-child bounded rejoin · durable delivery acknowledged · workspace enforcement ${evidence.workspaceEnforcement.replace("_", " ")}.`;
   } else if (evidence?.kind === "connector.client-probe") {
     settingsFeedback = `tunnel-client ${evidence.version} verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "host.codex-discovery") {
+    discoveredCodexCandidates = evidence;
+    const offered = evidence.candidates.filter(
+      (candidate) => candidate.verdict === "offer",
+    ).length;
+    settingsFeedback =
+      evidence.candidates.length === 0
+        ? "No local Codex executable was found in any searched location."
+        : `Found ${evidence.candidates.length} local ${evidence.candidates.length === 1 ? "candidate" : "candidates"}${offered > 0 ? `, ${offered} ready to use` : ", none trusted automatically"}.`;
+  } else if (evidence?.kind === "connector.client-discovery") {
+    discoveredTunnelClientCandidates = evidence;
+    const offered = evidence.candidates.filter(
+      (candidate) => candidate.verdict === "offer",
+    ).length;
+    settingsFeedback =
+      evidence.candidates.length === 0
+        ? "No local tunnel-client executable was found in any searched location."
+        : `Found ${evidence.candidates.length} local ${evidence.candidates.length === 1 ? "candidate" : "candidates"}${offered > 0 ? `, ${offered} ready to use` : ", none trusted automatically"}.`;
   } else if (evidence?.kind === "connector.runtime") {
     settingsFeedback = `Connector ${evidence.state.replace("_", " ")} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · Computer generation ${evidence.computerGeneration}.`;
   } else if (evidence?.kind === "connector.attachment") {
@@ -2155,10 +2534,29 @@ function renderSettings(): void {
     ["Native hosts", settings.setup.hosts],
     ["Native Agent", settings.setup.verify],
   ];
+  // The same four routes the header, New task control, and Setup checklist
+  // agree on (chatGptRouteState / computerRouteState / connectRouteState /
+  // agentRouteState) — "Native hosts" and "Native Agent" are the two halves
+  // of the single Codex/Agent route, so both rows carry its merged state.
+  const routeStateForLabel = (label: string): RouteReadinessState => {
+    switch (label) {
+      case "ChatGPT":
+        return chatGptRouteState();
+      case "Computer":
+        return computerRouteState();
+      case "Connection":
+        return connectRouteState();
+      case "Native hosts":
+      case "Native Agent":
+        return agentRouteState();
+      default:
+        return "not-configured";
+    }
+  };
   connections.replaceChildren(
     ...connectionStates.map(([label, state]) => {
       const row = document.createElement("div");
-      row.className = "connection-row";
+      row.className = `connection-row route-${routeStatusClass(routeStateForLabel(label))}`;
       const copy = document.createElement("div");
       const title = document.createElement("strong");
       title.textContent = `${label} · ${readinessLabel(state)}`;
@@ -2529,16 +2927,15 @@ function renderSetup(): void {
     configured.status === "ready" ? configured.settings.setup[step.id] : null;
   dialog.dataset.mode = setupJourney.mode;
   dialog.dataset.stepId = step.id;
+  renderConfigurationFeedback("#setup-feedback", "setup");
   required("#setup-eyeline").textContent = step.eyeline;
   required("#setup-title").textContent = step.title;
   required("#setup-copy").textContent = step.copy;
   const status = required<HTMLDivElement>("#setup-status");
-  const tone = readinessState?.verified
-    ? "available"
-    : readinessState?.configured || readinessState?.needsAction
-      ? "limited"
-      : "blocked";
-  status.className = `setup-status ${tone}`;
+  const stepState = readinessState
+    ? routeReadiness(readinessState)
+    : "not-configured";
+  status.className = `setup-status ${routeStatusClass(stepState)}`;
   required<HTMLElement>("#setup-status strong").textContent = readinessState
     ? readinessLabel(readinessState)
     : "Settings unavailable";
@@ -2587,7 +2984,10 @@ function renderSetup(): void {
         configured.status === "ready" && progressId
           ? configured.settings.setup[progressId]
           : null;
-      item.classList.toggle("complete", progressState?.verified != null);
+      item.classList.toggle(
+        "complete",
+        progressState !== null && routeReadiness(progressState) === "ready",
+      );
       item.classList.toggle("visited", progressState?.visited === true);
       item.classList.toggle("active", index === setupJourney.step);
       if (index === setupJourney.step)
@@ -2597,14 +2997,25 @@ function renderSetup(): void {
   required("#setup-counter").textContent =
     `Step ${setupJourney.step + 1} of ${setupSteps.length}`;
   required<HTMLButtonElement>("#setup-back").disabled = setupJourney.step === 0;
+  // "Open Browser" implies there is something to open. With no live
+  // ChatGPT task yet, closing Setup only lands on the empty Browser panel,
+  // so the last step must not promise otherwise (UX34-03/04).
+  const hasWorkingTask = bootstrap.tasks.some(
+    (task) => task.provider === "chatgpt",
+  );
   required<HTMLButtonElement>("#setup-next").textContent =
-    setupJourney.step === setupSteps.length - 1 ? "Open Browser" : "Continue";
+    setupJourney.step === setupSteps.length - 1
+      ? hasWorkingTask
+        ? "Open Browser"
+        : "Finish setup"
+      : "Continue";
   required<HTMLButtonElement>("#setup-close").hidden =
     setupJourney.mode !== "review";
   const liveAction = required<HTMLDivElement>("#setup-live-action");
   const liveSummary = required<HTMLDivElement>("#setup-live-summary");
   const livePrimary = required<HTMLButtonElement>("#setup-live-primary");
   liveAction.hidden = false;
+  livePrimary.hidden = false;
   setupPrimaryAction = null;
   if (configured.status === "error") {
     liveSummary.textContent = `Settings cannot be changed: ${configured.error}`;
@@ -2662,7 +3073,7 @@ function renderSetup(): void {
         ? "Add folder…"
         : verified
           ? "Add another…"
-          : "Verify access";
+          : "Verify folder";
     livePrimary.disabled = false;
     setupPrimaryAction = async () => {
       if (!workspace || verified) {
@@ -2677,7 +3088,7 @@ function renderSetup(): void {
           kind: "computer.verify-workspace",
           workspaceId: workspace.workspaceId,
         },
-        `${workspace.label} read access verified.`,
+        `Farol can open ${workspace.label}.`,
       );
     };
   } else if (step.id === "connect") {
@@ -2694,13 +3105,34 @@ function renderSetup(): void {
     );
     liveSummary.textContent = connector.tunnelClient
       ? readinessDetail(readiness)
-      : "Choose the exact installed tunnel-client. Farol Next verifies its profile, doctor, and run surface before saving it.";
+      : "Farol Next looks for the installed tunnel-client itself and verifies its profile, doctor, and run surface before saving it.";
+    if (!connector.tunnelClient) {
+      ensureDiscovery("connect");
+      liveSummary.append(
+        buildDiscoveryPanel("connect", discoveredTunnelClientCandidates, {
+          itemNoun: "tunnel-client",
+          notFoundHint:
+            "Install it with: brew install openai/tools/tunnel-client",
+          selectCommandKind: "connector.select-discovered-client",
+          pickerCommandKind: "connector.select-client",
+        }),
+      );
+    }
     const challenge = connectorChallengeCard(settings);
-    if (challenge) liveSummary.append(challenge);
+    if (challenge) {
+      liveSummary.append(challenge);
+      const attachInstructions = buildMediaInstructions("attach-connector");
+      if (attachInstructions) liveSummary.append(attachInstructions);
+    }
     if (
       connector.tunnelClient &&
       (connector.tunnelId === null || connector.credential === "missing")
     ) {
+      const createTunnelInstructions = buildMediaInstructions("create-tunnel");
+      if (createTunnelInstructions)
+        liveSummary.append(createTunnelInstructions);
+      const createKeyInstructions = buildMediaInstructions("create-key");
+      if (createKeyInstructions) liveSummary.append(createKeyInstructions);
       const form = document.createElement("div");
       form.className = "setup-connector-form";
       const tunnelLabel = document.createElement("label");
@@ -2745,8 +3177,9 @@ function renderSetup(): void {
         restoreInputDraft(key, keyDraft);
       });
     }
+    livePrimary.hidden = !connector.tunnelClient;
     livePrimary.textContent = !connector.tunnelClient
-      ? "Choose tunnel-client…"
+      ? ""
       : connector.tunnelId === null || connector.credential === "missing"
         ? "Save connector"
         : connector.runtime?.state === "outcome_unknown"
@@ -2757,15 +3190,10 @@ function renderSetup(): void {
               : "Connection verified"
             : "Start & check";
     livePrimary.disabled =
-      connector.runtime?.state === "ready" && connector.challenge === null;
+      !connector.tunnelClient ||
+      (connector.runtime?.state === "ready" && connector.challenge === null);
     setupPrimaryAction = async () => {
-      if (!connector.tunnelClient) {
-        await configureProduct(
-          { kind: "connector.select-client" },
-          "tunnel-client selected and verified.",
-        );
-        return;
-      }
+      if (!connector.tunnelClient) return;
       if (connector.tunnelId === null || connector.credential === "missing") {
         const tunnel = required<HTMLInputElement>("#setup-connector-tunnel");
         const key = required<HTMLInputElement>("#setup-connector-key");
@@ -2807,28 +3235,38 @@ function renderSetup(): void {
     const readiness = configured.settings.setup.hosts;
     liveSummary.textContent = host
       ? `${readinessDetail(readiness)} Codex ${host.version} is selected; a live check uses gpt-6-astra without provider fallback and stores no prompt or response.`
-      : "Choose the exact Codex executable. Farol Next will not search your shell PATH or infer a host from configuration files.";
+      : "Farol Next looks for the installed Codex executable itself, in a small set of known locations. It never searches your shell PATH or infers a host from configuration files.";
+    if (!host) {
+      ensureDiscovery("hosts");
+      liveSummary.append(
+        buildDiscoveryPanel("hosts", discoveredCodexCandidates, {
+          itemNoun: "Codex executable",
+          notFoundHint:
+            "Install the ChatGPT desktop app or the Codex CLI (`npm install -g @openai/codex`), then scan again.",
+          selectCommandKind: "host.select-discovered-codex",
+          pickerCommandKind: "host.select-codex",
+        }),
+      );
+    }
+    livePrimary.hidden = !host;
     livePrimary.textContent = !host
-      ? "Choose executable…"
+      ? ""
       : readiness.outcomeUnknown
         ? "Recheck contract"
         : host.liveVerification
           ? "Run live check again"
           : "Run live check";
-    livePrimary.disabled = false;
+    livePrimary.disabled = !host;
     setupPrimaryAction = async () => {
-      const kind = !host
-        ? "host.select-codex"
-        : readiness.outcomeUnknown
-          ? "host.verify-codex"
-          : "host.run-codex-smoke";
+      if (!host) return;
+      const kind = readiness.outcomeUnknown
+        ? "host.verify-codex"
+        : "host.run-codex-smoke";
       await configureProduct(
         { kind },
-        !host
-          ? "Codex host selected and contract verified."
-          : kind === "host.verify-codex"
-            ? "Codex host contract rechecked."
-            : "Live Codex host check completed.",
+        kind === "host.verify-codex"
+          ? "Codex host contract rechecked."
+          : "Live Codex host check completed.",
       );
     };
   } else if (step.id === "verify") {
@@ -3081,12 +3519,7 @@ function render(notify = true): void {
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
   const newTask = required<HTMLButtonElement>("#new-task");
-  const chatGptReady =
-    bootstrap.configuration.status === "ready" &&
-    bootstrap.configuration.settings.setup.chatgpt.reachable === "reachable" &&
-    bootstrap.configuration.settings.setup.chatgpt.configured &&
-    !bootstrap.configuration.settings.setup.chatgpt.outcomeUnknown &&
-    bootstrap.configuration.settings.setup.chatgpt.verified !== null;
+  const chatGptReady = chatGptRouteState() === "ready";
   required("#window-mode").textContent = windowModeLabel({
     demoMode: bootstrap.demoMode,
     taskCount: bootstrap.tasks.length,

@@ -569,6 +569,19 @@ html:not([data-full-screen="true"])[data-sidebar="overlay"] .window-bar {
   white-space: nowrap;
 }
 
+.preview-badge {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .command-button {
   min-width: 64px;
   height: 32px;
@@ -1103,6 +1116,11 @@ html[data-has-tasks="false"] .surface {
   color: var(--failed);
 }
 
+.setup-feedback {
+  margin: 6px 0 0;
+  max-width: none;
+}
+
 .settings-group {
   max-width: 940px;
   margin-top: 16px;
@@ -1254,6 +1272,31 @@ html[data-has-tasks="false"] .surface {
 
 .connection-row {
   border-top: 1px solid var(--line-soft);
+  border-left: 2px solid transparent;
+}
+
+.connection-row.route-available {
+  border-left-color: var(--complete);
+}
+
+.connection-row.route-limited {
+  border-left-color: var(--waiting);
+}
+
+.connection-row.route-failed {
+  border-left-color: var(--failed);
+}
+
+.connection-row.route-unknown {
+  border-left-color: var(--unknown);
+}
+
+.connection-row.route-checking {
+  border-left-color: var(--running);
+}
+
+.connection-row.route-blocked {
+  border-left-color: var(--unavailable);
 }
 
 .workspace-row > div,
@@ -1347,6 +1390,111 @@ html[data-has-tasks="false"] .surface {
 
 .setup-connector-form input[aria-invalid="true"] {
   border-color: var(--failed);
+}
+
+.discovery-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.discovery-scanning,
+.discovery-empty {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.discovery-offered {
+  display: grid;
+  gap: 8px;
+}
+
+.discovery-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+}
+
+.discovery-candidate > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.discovery-candidate strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discovery-candidate small {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discovery-advanced {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 8px;
+}
+
+.discovery-advanced summary {
+  cursor: pointer;
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.discovery-warning {
+  margin: 8px 0;
+  color: var(--waiting);
+  font-size: 11px;
+}
+
+.discovery-advanced-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.setup-media {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-control);
+}
+
+.setup-media summary {
+  cursor: pointer;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.setup-media-steps {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.setup-media video {
+  width: 100%;
+  margin-top: 10px;
+  border-radius: var(--radius-control);
 }
 
 .connector-form input:disabled,
@@ -2287,6 +2435,19 @@ dialog::backdrop {
 .setup-status.blocked i {
   border-radius: 1px;
   background: var(--unavailable);
+}
+
+.setup-status.failed i {
+  border-radius: 1px;
+  background: var(--failed);
+}
+
+.setup-status.unknown i {
+  background: var(--unknown);
+}
+
+.setup-status.checking i {
+  background: var(--running);
 }
 
 .setup-status strong {

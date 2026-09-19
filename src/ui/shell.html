@@ -12,7 +12,7 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:"
     />
-    <title>Farol Next Preview</title>
+    <title>Farol · Developer Preview</title>
     <link rel="stylesheet" href="shell.css" />
   </head>
   <body>
@@ -33,10 +33,10 @@
     </button>
 
     <aside class="rail" id="sidebar" aria-label="Farol sections">
-      <div class="brand" aria-label="Farol Next Preview">
+      <div class="brand" aria-label="Farol, Developer Preview">
         <span class="brand-mark" aria-hidden="true"><b>F</b></span>
         <span class="brand-copy"
-          ><strong>Farol</strong><small>Next preview</small></span
+          ><strong>Farol</strong><small>Developer Preview</small></span
         >
       </div>
 
@@ -128,7 +128,8 @@
     <header class="window-bar shell-region" aria-label="Farol window bar">
       <div class="window-identity">
         <span class="window-mark" aria-hidden="true">F</span>
-        <strong>Farol Next</strong>
+        <strong>Farol</strong>
+        <span class="preview-badge">Developer Preview</span>
         <span id="window-mode">Local preview</span>
       </div>
       <button
@@ -649,7 +650,10 @@
     >
       <div class="setup-frame">
         <header class="setup-header">
-          <div class="setup-brand"><span>F</span> Farol Next</div>
+          <div class="setup-brand">
+            <span>F</span> Farol
+            <span class="preview-badge">Developer Preview</span>
+          </div>
           <button
             id="setup-close"
             type="button"
@@ -682,6 +686,12 @@
             <div id="setup-live-summary"></div>
             <button id="setup-live-primary" type="button"></button>
           </div>
+          <p
+            class="settings-feedback setup-feedback"
+            id="setup-feedback"
+            role="status"
+            aria-live="polite"
+          ></p>
         </section>
         <footer class="setup-actions">
           <span id="setup-counter"></span>

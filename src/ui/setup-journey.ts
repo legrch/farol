@@ -27,9 +27,9 @@ export const setupSteps: readonly SetupStep[] = [
     id: "computer",
     eyeline: "Computer",
     title: "Confirm what This Mac may expose",
-    copy: "Computer access starts closed and capability-bound. Choose a folder with the native picker, then verify its read-only boundary before a task may use it.",
+    copy: "Computer access starts closed and capability-bound. Choose a folder with the native picker, then verify that Farol can open it before a task may use it.",
     details: [
-      "This verification lists only the selected workspace root; it does not read file contents.",
+      "Verifying lists only the top level of the selected folder. It does not read file contents, write anything, or touch Git — those are separate checks, available once the folder is verified. An empty folder verifies fine.",
       "Writes require a separate per-workspace grant. Commands and screenshots remain unavailable.",
     ],
   },

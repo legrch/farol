@@ -192,6 +192,10 @@ import {
   type ChatGptConversationRecord,
 } from "./chatgpt-conversation-store";
 import { probeCodexHost } from "./codex-host-probe";
+import {
+  discoverExecutables,
+  type DiscoveryCandidate,
+} from "./executable-discovery";
 import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
@@ -756,7 +760,7 @@ function createLiveChatGptRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
-    title: `${label} · Farol Next`,
+    title: `${label} · Farol`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
       recordTaskActivity(taskRunning ? "outcome_unknown" : "idle");
@@ -797,7 +801,7 @@ function createContextSummaryFallbackRoute(
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),
-    title: "Context recovery · Farol Next",
+    title: "Context recovery · Farol",
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
@@ -2016,7 +2020,7 @@ async function runProductTaskCommand(
       }
       liveTaskRoutes
         .get(command.data.taskId)
-        ?.setTitle(`${command.data.label.trim()} · Farol Next`);
+        ?.setTitle(`${command.data.label.trim()} · Farol`);
       publishTasksState();
       return taskSuccess(command.data.taskId);
     }
@@ -2189,7 +2193,7 @@ async function selectedSupportExportTarget(): Promise<string | null> {
     return target;
   }
   const options: SaveDialogOptions = {
-    title: "Export content-free Farol Next support report",
+    title: "Export content-free Farol support report",
     defaultPath: path.join(
       app.getPath("documents"),
       `Farol-Next-Support-${buildIdentity.version}.json`,
@@ -2515,6 +2519,24 @@ async function selectedWorkspace(): Promise<
   } catch {
     return "invalid";
   }
+}
+
+// A renderer-chosen discovery candidate is never trusted at face value: the
+// main process re-runs discovery itself and only accepts a path that is
+// still a current, non-refused candidate before handing it to the existing
+// execution probes (`verifyCodexExecutable` / `verifyTunnelClientExecutable`,
+// which remain the sole authority on whether a path may actually run). This
+// closes the gap between "the owner clicked a card that was true a moment
+// ago" and "this exact path is still what discovery would offer right now".
+async function reverifyDiscoveredCandidate(
+  kind: "codex" | "tunnel-client",
+  requestedPath: string,
+): Promise<DiscoveryCandidate | null> {
+  const discovered = await discoverExecutables(kind);
+  const candidate = discovered.candidates.find(
+    (entry) => entry.path === requestedPath && entry.verdict !== "refused",
+  );
+  return candidate ?? null;
 }
 
 async function selectedCodexExecutable(): Promise<
@@ -3161,6 +3183,35 @@ async function configureProduct(
       }
       return verifyTunnelClientExecutable(selected);
     }
+    case "connector.discover-client": {
+      try {
+        const discovered = await discoverExecutables("tunnel-client");
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "connector.client-discovery",
+            candidates: discovered.candidates,
+            searched: discovered.searched,
+          },
+        });
+      } catch {
+        return configurationFailure("TUNNEL_CLIENT_DISCOVERY_FAILED");
+      }
+    }
+    case "connector.select-discovered-client": {
+      if (secureMcpConnectorRuntime?.isRunning()) {
+        return configurationFailure("CONNECTOR_STOP_REQUIRED");
+      }
+      const candidate = await reverifyDiscoveredCandidate(
+        "tunnel-client",
+        command.path,
+      );
+      if (!candidate) {
+        return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+      }
+      return verifyTunnelClientExecutable(candidate.path);
+    }
     case "connector.configure": {
       if (!connectorCredentialStore || secureMcpConnectorRuntime?.isRunning()) {
         return configurationFailure(
@@ -3229,6 +3280,38 @@ async function configureProduct(
         return configurationFailure("CODEX_HOST_SELECTION_INVALID");
       }
       return verifyCodexExecutable(selected);
+    }
+    case "host.discover-codex": {
+      if (codexAgentOperationActive()) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+      try {
+        const discovered = await discoverExecutables("codex");
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "host.codex-discovery",
+            candidates: discovered.candidates,
+            searched: discovered.searched,
+          },
+        });
+      } catch {
+        return configurationFailure("CODEX_HOST_DISCOVERY_FAILED");
+      }
+    }
+    case "host.select-discovered-codex": {
+      if (codexAgentOperationActive()) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+      const candidate = await reverifyDiscoveredCandidate(
+        "codex",
+        command.path,
+      );
+      if (!candidate) {
+        return configurationFailure("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
+      }
+      return verifyCodexExecutable(candidate.path);
     }
     case "host.verify-codex": {
       if (codexAgentOperationActive()) {

@@ -371,12 +371,22 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("chatgpt.reset-conversation") }),
   z.strictObject({ kind: z.literal("support.export") }),
   z.strictObject({ kind: z.literal("host.select-codex") }),
+  z.strictObject({ kind: z.literal("host.discover-codex") }),
+  z.strictObject({
+    kind: z.literal("host.select-discovered-codex"),
+    path: CanonicalAbsolutePathSchema,
+  }),
   z.strictObject({ kind: z.literal("host.verify-codex") }),
   z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("host.run-codex-smoke") }),
   z.strictObject({ kind: z.literal("host.run-codex-agent-check") }),
   z.strictObject({ kind: z.literal("host.run-route-b-check") }),
   z.strictObject({ kind: z.literal("connector.select-client") }),
+  z.strictObject({ kind: z.literal("connector.discover-client") }),
+  z.strictObject({
+    kind: z.literal("connector.select-discovered-client"),
+    path: CanonicalAbsolutePathSchema,
+  }),
   z.strictObject({
     kind: z.literal("connector.configure"),
     tunnelId: z
@@ -504,7 +514,49 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+const DiscoveryCandidateSchema = z.strictObject({
+  requestedPath: CanonicalAbsolutePathSchema,
+  path: CanonicalAbsolutePathSchema,
+  source: z.enum([
+    "chatgpt-app",
+    "codex-app",
+    "homebrew",
+    "npm-global",
+    "reviewed-build-dir",
+  ]),
+  bytes: z.number().int().nonnegative().optional(),
+  sha256: Sha256Schema.optional(),
+  origin: z.enum([
+    "reviewed-digest",
+    "signed-by-openai",
+    "signature-other-team",
+    "unsigned",
+    "unknown",
+  ]),
+  verdict: z.enum(["offer", "needs-owner-choice", "refused"]),
+  refusalReason: z
+    .enum([
+      "not-a-regular-file",
+      "world-or-group-writable",
+      "wrong-owner",
+      "oversize",
+      "symlink-loop",
+      "unreadable",
+    ])
+    .optional(),
+});
+
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("host.codex-discovery"),
+    candidates: z.array(DiscoveryCandidateSchema).max(32),
+    searched: z.array(CanonicalAbsolutePathSchema).max(32),
+  }),
+  z.strictObject({
+    kind: z.literal("connector.client-discovery"),
+    candidates: z.array(DiscoveryCandidateSchema).max(32),
+    searched: z.array(CanonicalAbsolutePathSchema).max(32),
+  }),
   z.strictObject({
     kind: z.literal("host.codex-probe"),
     version: CodexHostSelectionSchema.shape.version,
@@ -901,6 +953,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_HOST_PROBE_FAILED",
       "CODEX_HOST_RECHECK_REQUIRED",
       "CODEX_HOST_TASK_IN_PROGRESS",
+      "CODEX_HOST_DISCOVERY_FAILED",
+      "CODEX_HOST_DISCOVERY_CANDIDATE_STALE",
       "ROUTE_B_UNAVAILABLE",
       "ROUTE_B_HOST_START_FAILED",
       "ROUTE_B_OUTCOME_UNKNOWN",
@@ -917,6 +971,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
       "TUNNEL_CLIENT_INCOMPATIBLE",
       "TUNNEL_CLIENT_PROBE_FAILED",
+      "TUNNEL_CLIENT_DISCOVERY_FAILED",
+      "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
       "CONNECTOR_CREDENTIAL_REQUIRED",
       "CONNECTOR_CREDENTIAL_STORE_FAILED",
       "CONNECTOR_WORKSPACE_REQUIRED",
@@ -958,6 +1014,9 @@ export type ProductConfigurationCommand = z.infer<
 >;
 export type ProductConfigurationEvidence = z.infer<
   typeof ProductConfigurationEvidenceSchema
+>;
+export type ProductDiscoveryCandidate = z.infer<
+  typeof DiscoveryCandidateSchema
 >;
 export type ProductConfigurationResult = z.infer<
   typeof ProductConfigurationResultSchema

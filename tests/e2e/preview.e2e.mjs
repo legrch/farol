@@ -2847,7 +2847,7 @@ async function completeSetup(
       await instance.window.waitForFunction(
         () =>
           document.querySelector("#setup-live-primary")?.textContent ===
-          "Verify access",
+          "Verify folder",
       );
       let bootstrap = await instance.window.evaluate(() =>
         window.farolNext.bootstrap(),
@@ -2875,11 +2875,22 @@ async function completeSetup(
       );
     }
     if (stepId === "hosts" && configureHost) {
+      // No configured Codex host yet: discovery owns the primary surface
+      // and the picker moves to "Choose another…" behind Advanced. The
+      // e2e fixture executable lives at a throwaway test path, so it is
+      // never a discovered candidate and must go through that picker.
       assert.equal(
-        await instance.window.locator("#setup-live-primary").innerText(),
-        "Choose executable…",
+        await instance.window.locator("#setup-live-primary").isHidden(),
+        true,
       );
-      await instance.window.locator("#setup-live-primary").click();
+      await instance.window
+        .locator("#setup-dialog .discovery-advanced summary")
+        .click();
+      await instance.window
+        .locator("#setup-dialog .discovery-advanced-actions button", {
+          hasText: "Choose another…",
+        })
+        .click();
       await instance.window.waitForFunction(
         () =>
           document.querySelector("#setup-status strong")?.textContent ===

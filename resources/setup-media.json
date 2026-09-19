@@ -1,0 +1,35 @@
+[
+  {
+    "id": "create-tunnel",
+    "title": "Create a Secure MCP Tunnel",
+    "instructionsVersion": 1,
+    "locale": "en",
+    "steps": [
+      "Open https://platform.openai.com/settings/organization/tunnels, signed in to the organization you want Farol to use.",
+      "Create a tunnel and associate it with the ChatGPT workspace you actually use. A tunnel that belongs only to the Platform organization will not appear inside ChatGPT.",
+      "Copy the tunnel's ID (it starts with tunnel_). Paste it into the Tunnel ID field on this step."
+    ]
+  },
+  {
+    "id": "create-key",
+    "title": "Create a restricted runtime key",
+    "instructionsVersion": 1,
+    "locale": "en",
+    "steps": [
+      "On the same https://platform.openai.com/settings/organization/tunnels page, open the API keys section for this organization.",
+      "Create a Restricted key scoped to Tunnels Read and Use only — never an admin or full-access key.",
+      "Copy the key once; the platform will not show it again. Paste it into the Runtime key field on this step. Farol stores it privately on this Mac only and never shows it again either."
+    ]
+  },
+  {
+    "id": "attach-connector",
+    "title": "Attach the connector inside ChatGPT",
+    "instructionsVersion": 1,
+    "locale": "en",
+    "steps": [
+      "With Developer mode on, open https://chatgpt.com/plugins in the ChatGPT workspace this tunnel belongs to.",
+      "Press the add button, name the connector, choose Tunnel as its connection type, and select the tunnel you just created (or paste its Tunnel ID).",
+      "Once Farol has started and checked its own connector on this Mac, use Check attachment on this step to confirm ChatGPT can reach it."
+    ]
+  }
+]
