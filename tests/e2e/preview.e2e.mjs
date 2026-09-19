@@ -6688,19 +6688,23 @@ try {
   );
   await normal.window
     .locator("#computer-workspaces")
-    .getByRole("button", { name: "Verify", exact: true })
+    .getByRole("button", { name: "Verify folder", exact: true })
     .click();
   await normal.window
     .locator("#computer-workspaces")
     .getByText(/read-only · verified/u)
     .waitFor();
+  // Verify proves the folder opens by identity and lists its top level; it
+  // reads no file (UX34-01), so there is no file-read evidence.
   await normal.window
-    .locator(".workspace-read-evidence")
-    .getByText("Farol Next workspace verification fixture", { exact: true })
+    .locator("#computer-feedback")
+    .getByText("Farol can open approved-workspace (1 item at the top level).", {
+      exact: true,
+    })
     .waitFor();
-  assert.match(
-    await normal.window.locator("#computer-feedback").innerText(),
-    /Read 42 bytes from README\.md\. Nothing from the file was persisted\./u,
+  assert.equal(
+    await normal.window.locator(".workspace-read-evidence").count(),
+    0,
   );
 
   const workspaceCard = normal.window
