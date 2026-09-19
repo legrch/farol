@@ -60,7 +60,15 @@ function integrityReasons(lane, attempt, candidate, observers) {
     candidate,
     observer: observerFor(observers, lane),
   });
-  return evaluation.reasons.filter(isIntegrityReason);
+  // A lane that stopped at a blocked case exits non-zero by design; the
+  // cases it executed before stopping stand. Any other non-zero exit -- a
+  // failed or interrupted run -- still refuses the attempt as evidence.
+  const blocked = attempt?.terminal?.status === "BLOCKED";
+  return evaluation.reasons.filter(
+    (reason) =>
+      isIntegrityReason(reason) &&
+      !(blocked && reason.startsWith("EXIT_NONZERO:")),
+  );
 }
 
 // Per-cited-case proof, independent of the lane's own overall label: a case

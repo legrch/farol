@@ -36,6 +36,7 @@ function fixtureAttempt(lane, attemptId, options = {}) {
     byproducts,
     verification = { receipts: [], byproducts: [] },
     terminalSha256 = TERMINAL_SHA256,
+    exitCode = 0,
   } = options;
   const contractCases = [...EVIDENCE_LANES[lane].cases];
   const normalized = cases ?? contractCases;
@@ -63,7 +64,7 @@ function fixtureAttempt(lane, attemptId, options = {}) {
         { path: requiredPath, bytes: 10, sha256: "d".repeat(64) },
       ],
     },
-    exit: { attemptId, exitCode: 0 },
+    exit: { attemptId, exitCode },
     terminalSha256,
     verification,
   };
@@ -219,6 +220,59 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
       "DEVELOPMENT_SOURCE_MISMATCH:sourceCommit",
       "HEADER_MISMATCH:developmentArtifactSha256",
     ]);
+  });
+
+  it("a case executed before a lane stopped BLOCKED proves its row; a failed run's exit does not", () => {
+    const [executedCase, blockedCase] = EVIDENCE_LANES["sealed-package"].cases;
+    const row = (attemptId) => ({
+      candidate,
+      lanes: [],
+      requirements: [
+        {
+          id: "R-EXIT",
+          u2: "DONE",
+          bindings: [
+            { lane: "sealed-package", attemptId, cases: [executedCase] },
+          ],
+        },
+      ],
+    });
+    const blockedId = "20260918T090000000Z-000000b1";
+    const blocked = fixtureAttempt("sealed-package", blockedId, {
+      status: "BLOCKED",
+      exitCode: 1,
+      cases: [executedCase],
+      blockedCases: [{ name: blockedCase, reason: "display unavailable" }],
+    });
+    const provenByBlocked = evaluateBindings({
+      ledger: row(blockedId),
+      candidate,
+      attempts: { "sealed-package": [blocked] },
+      observers: {
+        "sealed-package": observerFixture("sealed-package", blockedId),
+      },
+    });
+    expect(provenByBlocked.requirements[0].bindings[0].reasons).toEqual([]);
+    expect(provenByBlocked.requirements[0].verdict).toBe("PROVEN");
+
+    const failedId = "20260918T090000000Z-000000f1";
+    const failed = fixtureAttempt("sealed-package", failedId, {
+      status: "FAIL",
+      exitCode: 1,
+      cases: [executedCase],
+    });
+    const refusedByFailure = evaluateBindings({
+      ledger: row(failedId),
+      candidate,
+      attempts: { "sealed-package": [failed] },
+      observers: {
+        "sealed-package": observerFixture("sealed-package", failedId),
+      },
+    });
+    expect(refusedByFailure.requirements[0].bindings[0].reasons).toContain(
+      "EXIT_NONZERO:1",
+    );
+    expect(refusedByFailure.requirements[0].reasons).toEqual(["DONE_UNPROVEN"]);
   });
 
   it("a clean binding marked historical never proves a row on its own", () => {
