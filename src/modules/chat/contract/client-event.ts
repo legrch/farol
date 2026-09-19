@@ -20,6 +20,15 @@ const phase = z.enum([
   "outcome_unknown",
 ]);
 
+// A terminal event ends the turn for every consumer, so it may only name a
+// phase that is itself terminal.
+const terminalPhase = z.enum([
+  "completed",
+  "cancelled",
+  "failed",
+  "outcome_unknown",
+]);
+
 export const ClientEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({ ...identity, kind: z.literal("turn.phase"), phase }),
   z.strictObject({
@@ -61,7 +70,7 @@ export const ClientEventSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     ...identity,
     kind: z.literal("turn.terminal"),
-    phase,
+    phase: terminalPhase,
     code: z.string().min(1).max(120),
   }),
 ]);
