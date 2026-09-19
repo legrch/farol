@@ -325,6 +325,65 @@ describe("native mutable Computer workspace", () => {
     expect(await retained()).toEqual(["before\n"]);
   });
 
+  it("RB-08 reports an unknown outcome, never success, when bytes are written into the published candidate", async () => {
+    // The candidate keeps its inode when someone appends through the target,
+    // so only its bytes can tell that the edit's result is no longer what the
+    // receipt would describe.
+    const target = path.join(root, "README.md");
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "farol-candidate\n",
+        expectedSha256: digest("before\n"),
+      }),
+      {
+        testHookRequest: { phase: "after-original-check", index: null },
+        testHook: async () => {
+          await fs.appendFile(target, "external\n");
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    });
+    expect(await fs.readFile(target, "utf8")).toBe(
+      "farol-candidate\nexternal\n",
+    );
+  });
+
+  it("RB-09 reports an unknown outcome when its staging directory is no longer its own to remove", async () => {
+    const target = path.join(root, "README.md");
+    let foreign = "";
+    const result = await workspace().mutate(
+      request({
+        kind: "workspace.write",
+        relativePath: "README.md",
+        content: "farol-candidate\n",
+        expectedSha256: digest("before\n"),
+      }),
+      {
+        testHookRequest: { phase: "before-stage-removal", index: null },
+        testHook: async () => {
+          const stage = path.dirname(await stagedPath());
+          foreign = stage;
+          await fs.rename(stage, `${stage}.moved`);
+          await fs.mkdir(stage, { mode: 0o700 });
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "WORKSPACE_MUTATION_OUTCOME_UNKNOWN", retry: "never" },
+    });
+    expect(await fs.readFile(target, "utf8")).toBe("farol-candidate\n");
+    // The directory that took the stage's name is not the helper's to remove.
+    await expect(fs.stat(foreign)).resolves.toBeTruthy();
+  });
+
   it("AUTH-05 validates create-only content before creating parent directories", async () => {
     const result = await workspace().mutate(
       request({

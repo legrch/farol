@@ -1085,9 +1085,10 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
     write into it.
 
     Outcomes.  Success: a valid publication, nothing found under the helper's
-    names had to be kept, and the final observation, made after the helper's
-    last filesystem operation on the workspace, still finds the published file
-    at the target.  A save after that observation is a later write: it is
+    names had to be kept, the staging directory was removed as its own, and
+    the final observation, made after the helper's last filesystem operation
+    on the workspace, still finds the published file at the target byte for
+    byte -- same inode, a single link, size, modification time and digest.  A save after that observation is a later write: it is
     never touched, and the success stands.  Conflict (EXIT_RACE): nothing was
     published, or a displaced version was put back and the candidate came back
     unchanged -- same inode, size, modification time and bytes.  Unknown
@@ -1095,7 +1096,8 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
     published -- the target was replaced before the final observation, a newer
     save prevented or outran the undo, the candidate came back changed, the
     undo or the durability barrier failed, a create could not drop its staging
-    link, or an object had to be kept.  An unexpected error after the exchange
+    link, an object had to be kept, or the staging directory could not be
+    removed as the one this edit made.  An unexpected error after the exchange
     exits with EXIT_INTERNAL and no undo; the adapter reports that as unknown.
 
     Cleanup.  Files are deleted only inside the staging directory, and only one
@@ -1248,7 +1250,12 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
             # staged name no longer holds it, whatever is there is kept and
             # the outcome cannot be a clean success.
             kept = not _discard_owned(request, stage_fd, previous)
-        _remove_stage(parent_fd, stage_name, stage_fd)
+        _test_hook(request, "before-stage-removal", None)
+        # A staging directory that cannot be removed as the one this edit
+        # made -- renamed away, replaced, or holding something -- is kept, and
+        # the edit cannot claim a clean result.
+        if not _remove_stage(parent_fd, stage_name, stage_fd):
+            kept = True
         removal_attempted = True
         settled = True
         try:
@@ -1260,8 +1267,11 @@ def _atomic_publish(request, parent_fd, leaf, payload, previous):
             # were refused before it acted.
             refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
         # The final observation, after the helper's last filesystem operation
-        # on the workspace.
-        if not _holds_inode(parent_fd, leaf, written) or kept:
+        # on the workspace.  The inode alone would not see bytes written into
+        # the published file in place, so the whole candidate is re-read.
+        if kept or not _is_unchanged_candidate(
+            parent_fd, leaf, written, candidate_sha256
+        ):
             refuse(EXIT_MUTATION_OUTCOME_UNKNOWN)
         _test_hook(request, "after-final-check", None)
     finally:
