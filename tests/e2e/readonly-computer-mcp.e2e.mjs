@@ -91,6 +91,11 @@ const head = (
 ).stdout;
 
 const now = Date.now();
+// F1-1: an admitted workspace is bound to its folder's device/inode identity.
+const workspaceRootIdentity = await (async () => {
+  const stat = await fs.stat(workspaceRoot, { bigint: true });
+  return { device: String(stat.dev), inode: String(stat.ino) };
+})();
 const launch = {
   schema: 1,
   approval: {
@@ -98,7 +103,12 @@ const launch = {
     computerId: "computer-e2e",
     generation: 9,
     workspaces: [
-      { workspaceId: "fixture", root: workspaceRoot, access: "read" },
+      {
+        workspaceId: "fixture",
+        root: workspaceRoot,
+        access: "read",
+        rootIdentity: workspaceRootIdentity,
+      },
     ],
     capabilities: [
       "workspace.list",
@@ -256,50 +266,21 @@ try {
     bytes: 46,
   });
 
-  const status = await client.callTool({
-    name: "computer_workspace_git_status",
-    arguments: { workspaceId: "fixture" },
-  });
-  assert.equal(status.isError, undefined);
-  assert.equal(status.structuredContent?.participantId, "critic-e2e");
-  assert.deepEqual(status.structuredContent?.operation, {
-    kind: "verification.run",
-    command: "git.status",
-    relativePath: ".",
-  });
-  assert.equal(status.structuredContent?.output?.kind, "workspace.command");
-  assert.equal(status.structuredContent?.output?.command, "git.status");
-  assert.equal(status.structuredContent?.output?.exitCode, 0);
-  assert.equal(status.structuredContent?.output?.network, "none");
-  assert.equal(
-    status.structuredContent?.output?.coverage,
-    "tracked-files-only",
-  );
-  assert.equal(status.structuredContent?.output?.layout, "primary");
-
-  const exactHead = await client.callTool({
-    name: "computer_workspace_git_head",
-    arguments: { workspaceId: "fixture" },
-  });
-  assert.equal(exactHead.isError, undefined);
-  assert.equal(exactHead.structuredContent?.participantId, "critic-e2e");
-  assert.deepEqual(exactHead.structuredContent?.operation, {
-    kind: "verification.run",
-    command: "git.head",
-    relativePath: ".",
-  });
-  assert.deepEqual(exactHead.structuredContent?.output, {
-    kind: "workspace.command",
-    command: "git.head",
-    relativePath: ".",
-    exitCode: 0,
-    stdout: head,
-    stderr: "",
-    outputBytes: Buffer.byteLength(head),
-    network: "none",
-    coverage: "head-commit",
-    layout: "primary",
-  });
+  // F1-8: while Git cannot be confined to the approved folder, every Git
+  // verification is refused before a process starts.
+  for (const name of [
+    "computer_workspace_git_status",
+    "computer_workspace_git_head",
+  ]) {
+    const refused = await client.callTool({
+      name,
+      arguments: { workspaceId: "fixture" },
+    });
+    const shown = JSON.stringify(refused);
+    assert.equal(refused.isError, true, `${name} must be refused: ${shown}`);
+    assert.match(shown, /WORKSPACE_COMMAND_UNSUPPORTED/u, shown);
+    assert.equal(shown.includes('"workspace.command"'), false, shown);
+  }
 
   const injected = await client.callTool({
     name: "computer_workspace_git_status",

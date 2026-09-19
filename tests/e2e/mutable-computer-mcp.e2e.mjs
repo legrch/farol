@@ -76,12 +76,19 @@ const root = await fs.realpath(
 );
 const launchRoot = path.join(root, "launch");
 const workspaceRoot = path.join(root, "workspace");
+let workspaceRootIdentity = null;
 const launchFile = path.join(launchRoot, "computer-launch.json");
 
 try {
   await fs.chmod(root, 0o700);
   await fs.mkdir(launchRoot, { mode: 0o700 });
   await fs.mkdir(workspaceRoot, { mode: 0o700 });
+  // F1-1: an admitted workspace is bound to its folder's device/inode identity.
+  const workspaceStat = await fs.stat(workspaceRoot, { bigint: true });
+  workspaceRootIdentity = {
+    device: String(workspaceStat.dev),
+    inode: String(workspaceStat.ino),
+  };
   await fs.writeFile(path.join(workspaceRoot, "status.txt"), "before\n", {
     mode: 0o600,
   });
@@ -94,7 +101,12 @@ try {
       computerId: "computer-e2e",
       generation: 9,
       workspaces: [
-        { workspaceId: "fixture", root: workspaceRoot, access: "write" },
+        {
+          workspaceId: "fixture",
+          root: workspaceRoot,
+          access: "write",
+          rootIdentity: workspaceRootIdentity,
+        },
       ],
       capabilities: ["workspace.read", "workspace.write"],
       network: "none",
