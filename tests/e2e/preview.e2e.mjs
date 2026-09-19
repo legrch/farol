@@ -3751,6 +3751,22 @@ async function treeFilesDigest(directory) {
   return hash.digest("hex");
 }
 
+// The phase a task shows can lead the store behind it: after the handoff is
+// offered the owner still records the host's receipt. A baseline is taken
+// only once the tree has held still across several reads.
+async function waitForQuiescentTree(directory, code) {
+  let previous = null;
+  let stable = 0;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const current = await treeFilesDigest(directory);
+    stable = current === previous ? stable + 1 : 0;
+    if (stable >= 3) return current;
+    previous = current;
+    await new Promise((resolve) => setTimeout(resolve, 125));
+  }
+  throw new Error(code);
+}
+
 async function durableStateBytes(userData) {
   const files = durableStateFiles(userData);
   const digest = async (file) =>
@@ -3990,6 +4006,10 @@ async function runTwoGenerationStateProof() {
       { timeout: 15_000 },
     );
 
+    await waitForQuiescentTree(
+      durableStateFiles(instance.userData).context,
+      "E2E_CONTEXT_STORE_NOT_QUIESCENT",
+    );
     const generationAState = await generationSnapshot(instance);
     assert.equal(generationAState.settings.computer.workspaces.length, 1);
     for (const step of ["computer", "chatgpt", "hosts"]) {
@@ -4165,6 +4185,10 @@ async function runTwoGenerationStateProof() {
     );
 
     // A is refused while B owns the state, and B's state is untouched.
+    await waitForQuiescentTree(
+      durableStateFiles(instance.userData).context,
+      "E2E_CONTEXT_STORE_NOT_QUIESCENT",
+    );
     const ownedByB = await durableStateBytes(instance.userData);
     observations.stateDigests.ownedByB = ownedByB;
     assert.deepEqual(launchOtherGeneration(instance, generationA), {
