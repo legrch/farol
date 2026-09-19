@@ -24,6 +24,24 @@ const development = process.argv.includes("--development");
 const lifecycleSoak = process.argv.includes("--lifecycle-soak");
 const persistenceFault = process.argv.includes("--persistence-fault");
 const skipNativeFocus = process.argv.includes("--skip-native-focus");
+// The soak workload is seeded. The default seed reproduces the historical
+// run exactly; another seed moves the two restarts and flips the overlay
+// order, so a declared series can show the bounds hold across interleavings
+// rather than for one lucky sequence. An optional idle pause adds an
+// idle-to-busy transition at a seeded batch.
+function integerOption(name, fallback, maximum) {
+  const prefix = `--${name}=`;
+  const raw = process.argv.find((value) => value.startsWith(prefix));
+  if (raw === undefined) return fallback;
+  const value = Number(raw.slice(prefix.length));
+  assert.ok(
+    Number.isSafeInteger(value) && value >= 0 && value <= maximum,
+    `E2E_INVALID_OPTION:${name}`,
+  );
+  return value;
+}
+const soakSeed = integerOption("soak-seed", 260_917, 2 ** 31 - 1);
+const soakIdleMs = integerOption("soak-idle-ms", 0, 120_000);
 assert.equal(
   lifecycleSoak && persistenceFault,
   false,
@@ -2996,7 +3014,7 @@ async function runLiveTaskPersistenceFaultProof() {
 }
 
 const lifecycleSoakBudget = Object.freeze({
-  seed: 260_917,
+  seed: soakSeed,
   warmupCycles: 5,
   measuredCycles: 50,
   batchSize: 5,
@@ -3330,8 +3348,21 @@ async function runLifecycleSoak() {
     closeMs: [],
     overlayMs: [],
   };
-  const recoveryBatches = new Set([3, 8]);
+  // Two restarts at seeded batches, one in each half of the run; the
+  // default seed gives the historical batches 3 and 8.
+  const recoveryBatches = new Set([
+    2 + (lifecycleSoakBudget.seed % 4),
+    6 + (Math.floor(lifecycleSoakBudget.seed / 8) % 4),
+  ]);
+  const idleBatch =
+    soakIdleMs > 0
+      ? 1 + (Math.floor(lifecycleSoakBudget.seed / 32) % 10)
+      : null;
   const recoveryEvents = [];
+  const loadBefore = {
+    loadAverage: os.loadavg(),
+    freeMemoryBytes: os.freemem(),
+  };
   try {
     await completeSetup(instance, false, false, true, false);
     await lifecycleBatch(instance, lifecycleSoakBudget.warmupCycles, null);
@@ -3359,6 +3390,14 @@ async function runLifecycleSoak() {
         recoveryEvents.push({
           batch: batchNumber,
           kind: "application-restart",
+        });
+      }
+      if (batchNumber === idleBatch) {
+        await new Promise((resolve) => setTimeout(resolve, soakIdleMs));
+        recoveryEvents.push({
+          batch: batchNumber,
+          kind: "idle-pause",
+          ms: soakIdleMs,
         });
       }
       const metrics = await lifecycleMetrics(instance);
@@ -3392,22 +3431,36 @@ async function runLifecycleSoak() {
         p95: percentile(timings.overlayMs, 0.95),
       },
     };
-    assert.ok(
-      latency.createTotalMs.p95 <= lifecycleSoakBudget.createTotalP95Ms,
-    );
-    assert.ok(
-      latency.createLocalEstimateMs.p95 <=
-        lifecycleSoakBudget.createLocalEstimateP95Ms,
-    );
-    assert.ok(latency.closeMs.p95 <= lifecycleSoakBudget.closeP95Ms);
-    assert.ok(latency.overlayMs.p95 <= lifecycleSoakBudget.overlayP95Ms);
     const workingSetSlopeKiBPerBatch = linearSlope(
       samples.map((sample) => sample.workingSetSizeKiB),
     );
-    assert.ok(
-      workingSetSlopeKiBPerBatch <=
-        lifecycleSoakBudget.workingSetSlopeKiBPerBatch,
-    );
+    // Every budget is judged, and the raw measurements are written even when
+    // one is exceeded: a failed run stays evidence instead of disappearing.
+    const budgetVerdicts = {
+      createTotalP95Ms: {
+        measured: latency.createTotalMs.p95,
+        budget: lifecycleSoakBudget.createTotalP95Ms,
+      },
+      createLocalEstimateP95Ms: {
+        measured: latency.createLocalEstimateMs.p95,
+        budget: lifecycleSoakBudget.createLocalEstimateP95Ms,
+      },
+      closeP95Ms: {
+        measured: latency.closeMs.p95,
+        budget: lifecycleSoakBudget.closeP95Ms,
+      },
+      overlayP95Ms: {
+        measured: latency.overlayMs.p95,
+        budget: lifecycleSoakBudget.overlayP95Ms,
+      },
+      workingSetSlopeKiBPerBatch: {
+        measured: workingSetSlopeKiBPerBatch,
+        budget: lifecycleSoakBudget.workingSetSlopeKiBPerBatch,
+      },
+    };
+    const budgetFailures = Object.entries(budgetVerdicts)
+      .filter(([, verdict]) => !(verdict.measured <= verdict.budget))
+      .map(([name]) => name);
 
     await restart(instance);
     const restarted = await instance.window.evaluate(() =>
@@ -3419,7 +3472,7 @@ async function runLifecycleSoak() {
 
     const report = {
       schema: 1,
-      status: "PASS",
+      status: budgetFailures.length === 0 ? "PASS" : "FAIL",
       evidence: "FIXTURE_APP",
       lane: evidenceLane,
       build: development ? "development-electron" : "sealed-package",
@@ -3435,7 +3488,11 @@ async function runLifecycleSoak() {
         measuredCycles: lifecycleSoakBudget.measuredCycles,
         batchSize: lifecycleSoakBudget.batchSize,
         maxConcurrentTasks: lifecycleSoakBudget.batchSize,
-        recoveryBatches: [...recoveryBatches],
+        recoveryBatches: [...recoveryBatches].sort(
+          (left, right) => left - right,
+        ),
+        idlePause:
+          idleBatch === null ? null : { batch: idleBatch, ms: soakIdleMs },
         overlaySequence: Array.from({ length: batches }, (_, batch) =>
           (lifecycleSoakBudget.seed + batch + 1) % 2 === 0
             ? "quick-switcher"
@@ -3444,6 +3501,8 @@ async function runLifecycleSoak() {
         provider: "deterministic local ChatGPT fixture",
       },
       budgets: lifecycleSoakBudget,
+      budgetVerdicts,
+      budgetFailures,
       latency,
       resources: {
         baseline,
@@ -3478,6 +3537,10 @@ async function runLifecycleSoak() {
         release: os.release(),
         logicalCpuCount: os.cpus().length,
         totalMemoryBytes: os.totalmem(),
+        load: {
+          before: loadBefore,
+          after: { loadAverage: os.loadavg(), freeMemoryBytes: os.freemem() },
+        },
       },
     };
     await fs.writeFile(
@@ -3500,17 +3563,23 @@ async function finishSpecialLane(lane) {
       `E2E_REQUIRED_CASE_MISSING:${missing.join(",")}`,
     );
   }
-  await evidenceAttempt.finish(
-    written.status === "PASS" && missing.length === 0 ? "PASS" : "FAIL",
-    { cases: written.cases },
-  );
+  if (Array.isArray(written.budgetFailures) && written.budgetFailures.length) {
+    evidenceAttempt.recordFailure(
+      "budget",
+      `E2E_BUDGET_EXCEEDED:${written.budgetFailures.join(",")}`,
+    );
+  }
+  const passed = written.status === "PASS" && missing.length === 0;
+  await evidenceAttempt.finish(passed ? "PASS" : "FAIL", {
+    cases: written.cases,
+  });
   if (missing.length > 0) process.exit(1);
+  return passed;
 }
 
 if (lifecycleSoak) {
   await runLifecycleSoak();
-  await finishSpecialLane("lifecycle-soak");
-  process.exit(0);
+  process.exit((await finishSpecialLane("lifecycle-soak")) ? 0 : 1);
 }
 
 if (persistenceFault) {
