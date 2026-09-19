@@ -930,6 +930,28 @@ async function startChatGptFixture() {
         <button data-testid="stop-button" type="button" hidden>Stop</button>
         <section id="conversation"></section>
         <script>
+          // UX34 self-deception guard fixture (test-only): ?cover=1 adds a
+          // full-viewport overlay at the same maximal z-index the injected
+          // "Return to Farol" banner uses, counting its own clicks. Equal
+          // z-index falls back to DOM order, and the banner is injected
+          // later (on did-finish-load), so the overlay re-appends itself
+          // whenever a sibling is added, keeping it the topmost element.
+          if (new URLSearchParams(location.search).get('cover') === '1') {
+            const overlay = document.createElement('div');
+            overlay.id = 'e2e-cover-overlay';
+            overlay.dataset.testid = 'cover-overlay';
+            overlay.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:transparent;';
+            window.__farolCoverClicks = 0;
+            overlay.addEventListener('click', () => {
+              window.__farolCoverClicks += 1;
+            });
+            document.documentElement.appendChild(overlay);
+            new MutationObserver(() => {
+              if (document.documentElement.lastElementChild !== overlay) {
+                document.documentElement.appendChild(overlay);
+              }
+            }).observe(document.documentElement, { childList: true });
+          }
           const login = document.querySelector('[data-testid="login-button"]');
           const popup = document.querySelector('[data-testid="popup-button"]');
           const expire = document.querySelector('[data-testid="expire-button"]');
@@ -7892,140 +7914,13 @@ try {
   await close(reconciledFence);
 }
 
-const repeatedCaseIds = cases.filter(
-  (caseId, index) => cases.indexOf(caseId) !== index,
-);
-assert.deepEqual(
-  repeatedCaseIds,
-  [],
-  `E2E_CASE_IDS_NOT_UNIQUE:${[...new Set(repeatedCaseIds)].join(",")}`,
-);
-
-// The declared cases, not the ones this run happened to record, decide
-// whether the run is complete: a case neither executed nor explicitly blocked
-// makes the run FAIL whatever else passed.
-const missingRequiredCases = missingCases(
-  development ? "development-build" : "sealed-package",
-  cases,
-  blockedCases,
-);
-if (missingRequiredCases.length > 0) {
-  evidenceAttempt.recordFailure(
-    "contract",
-    `E2E_REQUIRED_CASE_MISSING:${missingRequiredCases.join(",")}`,
-  );
-}
-const report = {
-  schema: 1,
-  status:
-    missingRequiredCases.length > 0
-      ? "FAIL"
-      : blockedCases.length > 0
-        ? "BLOCKED"
-        : "PASS",
-  lane: development ? "development-build" : "sealed-package",
-  artifactSha256: artifact.artifactSha256,
-  sourceCommit: artifact.sourceCommit,
-  sourceTreeDigest: artifact.sourceTreeDigest,
-  sourceDirty: artifact.sourceDirty,
-  windowPolicy: {
-    visibleRun: {
-      mode: normal.presentation.mode,
-      focusedAtFirstPaint: normal.presentation.focused,
-      displayId: normal.presentation.display.id,
-      displayInternal: normal.presentation.display.internal,
-      displayPrimary: normal.presentation.display.primary,
-      selection: normal.presentation.display.selection,
-      displayCount: normal.presentation.displays.length,
-      bounds: normal.presentation.bounds,
-      workArea: normal.presentation.display.workArea,
-      nativeFocusProof: nativeFocusProofCompleted
-        ? "bounded-final-active-phase"
-        : skipNativeFocus
-          ? "blocked-owner-authorization"
-          : macHostLockState === "locked"
-            ? "blocked-host-locked"
-            : "blocked-focus-acquisition",
-      nativeFocusRequested: !skipNativeFocus,
-      macHostLockState,
-    },
-    hiddenRuns: [
-      "provider-failure",
-      "stream-failure",
-      "runtime-process-death",
-      "startup-runtime-death-after-ready",
-      "startup-runtime-death-during-first-view",
-      "startup-runtime-death-during-second-view",
-    ],
-  },
-  caseCount: cases.length,
-  uniqueCaseCount: new Set(cases).size,
-  cases,
-  blockedCases,
-  skippedCases,
-  screenshots: [
-    "live-task-watch-rail-wide.png",
-    "live-task-watch-rail-compact.png",
-    "running-browser-view.png",
-    "running-browser-compact.png",
-    "watch-sidebar-overlay-compact.png",
-    "watch-task-menu-wide.png",
-    "watch-quick-switcher-wide.png",
-    ...(nativeFocusProofCompleted ? ["watch-fullscreen-rail.png"] : []),
-    "tool-wait-wide.png",
-    "tool-wait-compact.png",
-    "complete-wide.png",
-    "complete-compact.png",
-    "settings-compact.png",
-    "setup-1-chatgpt-wide.png",
-    "setup-2-computer-wide.png",
-    "setup-3-connect-wide.png",
-    "setup-4-hosts-wide.png",
-    "setup-5-verify-wide.png",
-    "setup-review-compact.png",
-    "failure-wide.png",
-    "failure-compact.png",
-    "stream-failure-wide.png",
-    "stream-failure-compact.png",
-    "stream-failure-offline-task.png",
-    "stream-failure-survivor-task.png",
-    "process-death-wide.png",
-    "process-death-compact.png",
-  ],
-};
-for (const filename of report.screenshots) {
-  const evidence = await fs.stat(path.join(evidenceRoot, filename));
-  assert.ok(evidence.size > 1_000, `E2E_SCREENSHOT_EMPTY:${filename}`);
-}
-await fs.writeFile(
-  path.join(evidenceRoot, "report.json"),
-  `${JSON.stringify(report, null, 2)}\n`,
-);
-await evidenceAttempt.finish(report.status, {
-  cases,
-  blockedCases,
-  skippedCases,
-});
-process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-if (missingRequiredCases.length > 0) {
-  process.stderr.write(
-    `E2E_REQUIRED_CASE_MISSING:${JSON.stringify(missingRequiredCases)}\n`,
-  );
-  process.exitCode = 1;
-}
-if (blockedCases.length > 0) {
-  process.stderr.write(
-    `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,
-  );
-  process.exitCode = 1;
-}
-
-// ---------------------------------------------------------------------------
 // UX34-05 / UX34-06 / UX34-08 / UX34-07 — native layout and sign-in surface
 // checks added for the layout-and-sign-in packet. Each block owns its own
 // launch()/close() cycle so a failure here cannot perturb the sequencing or
-// shared instances the flows above depend on, and it runs only after the
-// existing report/screenshot evidence has already been written.
+// shared instances the flows above depend on. These blocks run before the
+// case aggregation, the report is written, and evidenceAttempt.finish() is
+// called, so a thrown error or a missing case here reaches the terminal
+// result instead of being silently dropped after it.
 // ---------------------------------------------------------------------------
 
 // UX34-05: Settings must stay readable — no intersecting interactive
@@ -8117,6 +8012,7 @@ if (blockedCases.length > 0) {
         `Settings has no intersecting interactive controls at ${width}px`,
       );
     }
+    cases.push("ux34-settings-widths-readable");
   } finally {
     await close(settingsWidths);
   }
@@ -8272,6 +8168,7 @@ if (blockedCases.length > 0) {
       () => document.documentElement.dataset.fullScreen === "false",
     );
     await assertToggleClearOfTrafficLights();
+    cases.push("ux34-sidebar-toggle-roundtrip");
   } finally {
     await close(sidebarRoundtrip);
   }
@@ -8281,6 +8178,153 @@ if (blockedCases.length > 0) {
 // (its own title, a "Return to Farol" control), a same-origin/allowed
 // "Next"-style navigation proceeds, a blocked navigation is reported (not
 // silent), and closing the window returns cleanly with a truthful status.
+// The Return control is proved twice: once as a DOM-handler check (a
+// programmatic click, only ever a proof that the click listener itself is
+// wired), and once as a real human-input proof (pointer and keyboard,
+// dispatched the same way Playwright drives any other real interaction,
+// with a self-deception guard showing the input proof can actually fail).
+
+// Reopening a second, third, … sign-in window from the same launched
+// instance goes through #setup-live-primary exactly as the first one did.
+// After a return, the renderer's local "already opened" flag leaves that
+// control showing "Check connection" rather than "Open sign-in…" until it
+// is clicked once (that click resolves to chatgpt.verify, not a new
+// window); only the control's own next label says whether a click will
+// open a window, so this waits on that label instead of assuming a fixed
+// number of clicks.
+async function reopenSignInFixtureWindow(instance) {
+  const primary = instance.window.locator("#setup-live-primary");
+  const label = (await primary.innerText()).trim();
+  if (label !== "Open sign-in…") {
+    await primary.click();
+    await instance.window.waitForFunction(
+      () =>
+        document.querySelector("#setup-live-primary")?.textContent ===
+        "Open sign-in…",
+    );
+  }
+  const chatGptWindow = instance.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  await primary.click();
+  const chatGptPage = await chatGptWindow;
+  await chatGptPage.waitForURL(instance.chatGptFixture.url);
+  await waitForWindowCount(instance.application, 2);
+  return chatGptPage;
+}
+
+// Diagnostics for the sign-in window's own webContents (loading state, main
+// frame URL) — content-free, used only to explain a stalled proof after a
+// cancelled navigation, never to assert on directly.
+async function signInWindowDiagnostics(application, url) {
+  return application.evaluate(({ BrowserWindow }, pageUrl) => {
+    const candidate = BrowserWindow.getAllWindows().find((entry) =>
+      entry.webContents.getURL().startsWith(pageUrl),
+    );
+    if (!candidate) return null;
+    return {
+      isLoading: candidate.webContents.isLoading(),
+      mainFrameUrl: candidate.webContents.mainFrame.url,
+    };
+  }, url);
+}
+
+// Whether a real pointer event at the Return control's own centre would
+// reach it at all: visible, enabled, and not covered by anything else at
+// that point. document.elementFromPoint is the same hit-test a real click
+// resolves against, so this is the browser's own answer, not a guess from
+// the element's presence in the DOM.
+async function signInReturnHitTest(chatGptPage) {
+  return chatGptPage.evaluate(() => {
+    const button = document.querySelector("#farol-sign-in-banner button");
+    if (!button) throw new Error("SIGN_IN_RETURN_BUTTON_MISSING");
+    const rect = button.getBoundingClientRect();
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    const hit = document.elementFromPoint(x, y);
+    const style = getComputedStyle(button);
+    return {
+      visible:
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden",
+      enabled: !button.disabled,
+      x,
+      y,
+      reachable: hit === button || button.contains(hit),
+    };
+  });
+}
+
+// The explicit, truthful outcome a Return must produce: the sign-in window
+// is gone and bootstrap reports a ready configuration with chatgpt still
+// unverified (the fixture's login button was never clicked) — never a
+// silent close and never "any navigation happened".
+async function waitForSignInReturnOutcome(instance) {
+  await waitForWindowCount(instance.application, 1);
+  const afterReturn = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(afterReturn.configuration.status, "ready");
+  if (afterReturn.configuration.status === "ready") {
+    assert.equal(
+      afterReturn.configuration.settings.setup.chatgpt.verified,
+      null,
+      "closing without signing in reports not-signed-in, not silence",
+    );
+  }
+  return afterReturn;
+}
+
+// Real dispatched pointer input at the Return control's centre — the CDP
+// Input.dispatchMouseEvent channel a real pointer uses, not a synthetic DOM
+// method call.
+async function assertSignInReturnByPointer(instance, chatGptPage) {
+  const banner = chatGptPage.locator("#farol-sign-in-banner");
+  await banner.waitFor({ state: "visible" });
+  const hit = await signInReturnHitTest(chatGptPage);
+  assert.equal(hit.visible, true, "the Return control is visible");
+  assert.equal(hit.enabled, true, "the Return control is enabled");
+  assert.equal(
+    hit.reachable,
+    true,
+    "a hit-test at the Return control's centre reaches the control",
+  );
+  await chatGptPage.mouse.click(hit.x, hit.y);
+  await waitForSignInReturnOutcome(instance);
+}
+
+// Real dispatched keyboard input: Tab to the Return control (bounded, so a
+// broken tab order fails loudly instead of hanging), then Enter.
+async function assertSignInReturnByKeyboard(instance, chatGptPage) {
+  const banner = chatGptPage.locator("#farol-sign-in-banner");
+  await banner.waitFor({ state: "visible" });
+  await chatGptPage.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+  });
+  const maxTabs = 25;
+  let reachedByTab = false;
+  for (let attempt = 0; attempt < maxTabs; attempt += 1) {
+    await chatGptPage.keyboard.press("Tab");
+    reachedByTab = await chatGptPage.evaluate(
+      () =>
+        document.activeElement ===
+        document.querySelector("#farol-sign-in-banner button"),
+    );
+    if (reachedByTab) break;
+  }
+  assert.equal(
+    reachedByTab,
+    true,
+    `Tab reaches the Return control within ${maxTabs} presses`,
+  );
+  await chatGptPage.keyboard.press("Enter");
+  await waitForSignInReturnOutcome(instance);
+}
+
 {
   const signIn = await launch([], "secondary-visible");
   try {
@@ -8291,13 +8335,7 @@ if (blockedCases.length > 0) {
       await signIn.window.locator("#setup-live-primary").innerText(),
       "Open sign-in…",
     );
-    const chatGptWindow = signIn.application.waitForEvent("window", {
-      timeout: 15_000,
-    });
-    await signIn.window.locator("#setup-live-primary").click();
-    const chatGptPage = await chatGptWindow;
-    await chatGptPage.waitForURL(signIn.chatGptFixture.url);
-    await waitForWindowCount(signIn.application, 2);
+    let chatGptPage = await reopenSignInFixtureWindow(signIn);
     assert.equal(
       await nativeWindowTitle(signIn.application, signIn.chatGptFixture.url),
       "Sign in to ChatGPT — Farol",
@@ -8305,6 +8343,7 @@ if (blockedCases.length > 0) {
     const banner = chatGptPage.locator("#farol-sign-in-banner");
     await banner.waitFor({ state: "visible" });
     assert.match(await banner.innerText(), /Return to Farol/u);
+    cases.push("ux34-sign-in-window-owned");
 
     // The fixture's own "Next" step: same origin (e2e-allowed), so the
     // sign-in surface's policy must let it proceed rather than doing
@@ -8345,29 +8384,230 @@ if (blockedCases.length > 0) {
       "Sign in to ChatGPT — Farol",
       "the blocked navigation never left the sign-in page",
     );
+    cases.push("ux34-sign-in-blocked-navigation-reported");
 
-    // "Return to Farol": closes the sign-in window and returns the owner
-    // to Setup with a truthful (not signed in — the fixture's login
-    // button was never clicked) status, never a silent close.
-    // Playwright still counts the cancelled navigation as pending and would
-    // wait for it before a locator click, so the control is clicked in the
-    // page; its handler and the main-frame check are the same.
+    // "Return to Farol" — handler proof: a programmatic DOM click in the
+    // page, which is only ever a proof the click listener itself is wired.
+    // Playwright still counts the cancelled navigation above as pending and
+    // would wait for it before a locator click, so the control is clicked
+    // via evaluate here; its handler and the main-frame check are the same
+    // one the real-input proofs below exercise.
     await chatGptPage.evaluate(() =>
       document.querySelector("#farol-sign-in-banner button").click(),
     );
-    await waitForWindowCount(signIn.application, 1);
-    const afterReturn = await signIn.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+    await waitForSignInReturnOutcome(signIn);
+    cases.push("ux34-sign-in-return-handler");
+
+    // Pointer proof: a fresh sign-in window, real dispatched mouse input.
+    chatGptPage = await reopenSignInFixtureWindow(signIn);
+    await assertSignInReturnByPointer(signIn, chatGptPage);
+    cases.push("ux34-sign-in-return-pointer");
+
+    // Keyboard proof: a fresh sign-in window, Tab then Enter.
+    chatGptPage = await reopenSignInFixtureWindow(signIn);
+    await assertSignInReturnByKeyboard(signIn, chatGptPage);
+    cases.push("ux34-sign-in-return-keyboard");
+
+    // Pointer proof after a blocked navigation: the exact path the base
+    // harness could only close through evaluate() because Playwright's own
+    // locator click waits on the cancelled navigation. Diagnostics are
+    // captured first and written to the log so a stall here explains
+    // itself instead of just timing out.
+    chatGptPage = await reopenSignInFixtureWindow(signIn);
+    await chatGptPage
+      .locator('[data-testid="blocked-nav-button"]')
+      .waitFor({ state: "visible" });
+    await chatGptPage.evaluate(() =>
+      document.querySelector('[data-testid="blocked-nav-button"]').click(),
     );
-    assert.equal(afterReturn.configuration.status, "ready");
-    if (afterReturn.configuration.status === "ready") {
-      assert.equal(
-        afterReturn.configuration.settings.setup.chatgpt.verified,
-        null,
-        "closing without signing in reports not-signed-in, not silence",
-      );
-    }
+    await waitForPageState(
+      signIn.window,
+      async () =>
+        (await window.farolNext.bootstrap())?.chatgptSignInBlocked?.kind !==
+        undefined,
+    );
+    const postBlockedNavDiagnostics = {
+      pageUrl: chatGptPage.url(),
+      window: await signInWindowDiagnostics(
+        signIn.application,
+        signIn.chatGptFixture.url,
+      ),
+    };
+    process.stdout.write(
+      `UX34_POST_BLOCKED_NAV_DIAGNOSTICS:${JSON.stringify(postBlockedNavDiagnostics)}\n`,
+    );
+    await assertSignInReturnByPointer(signIn, chatGptPage);
+    cases.push("ux34-sign-in-return-pointer-after-blocked-navigation");
+
+    // Self-deception guard: a fixture variant adds a full-viewport overlay
+    // above everything, at the same maximal z-index the banner itself uses,
+    // that counts its own clicks. This proves the pointer proof above is
+    // not secretly a no-op — a real click that cannot reach the Return
+    // control must be reported as such, while a programmatic DOM click
+    // (which never hit-tests) still closes the window.
+    chatGptPage = await reopenSignInFixtureWindow(signIn);
+    await chatGptPage.goto(`${signIn.chatGptFixture.url}?cover=1`);
+    const coveredBanner = chatGptPage.locator("#farol-sign-in-banner");
+    await coveredBanner.waitFor({ state: "visible" });
+    await chatGptPage
+      .locator('[data-testid="cover-overlay"]')
+      .waitFor({ state: "visible" });
+    // The overlay re-asserts itself as the topmost element whenever the
+    // banner script (re-)injects the banner, since both sit at the same
+    // z-index and equal z-index falls back to DOM order.
+    await waitForPageState(
+      chatGptPage,
+      () =>
+        document.querySelector('[data-testid="cover-overlay"]') ===
+        document.documentElement.lastElementChild,
+    );
+    const coveredHit = await signInReturnHitTest(chatGptPage);
+    assert.equal(
+      coveredHit.reachable,
+      false,
+      "the covering overlay defeats the hit-test at the Return control",
+    );
+    await chatGptPage.mouse.click(coveredHit.x, coveredHit.y);
+    await waitForPageState(chatGptPage, () => window.__farolCoverClicks > 0);
+    await waitForWindowCount(signIn.application, 2);
+    assert.equal(
+      await nativeWindowTitle(signIn.application, signIn.chatGptFixture.url),
+      "Sign in to ChatGPT — Farol",
+      "the covered pointer click never reached the Return control",
+    );
+    await chatGptPage.evaluate(() =>
+      document.querySelector("#farol-sign-in-banner button").click(),
+    );
+    await waitForSignInReturnOutcome(signIn);
+    cases.push("ux34-covered-return-fails-input-proof");
   } finally {
     await close(signIn);
   }
+}
+const repeatedCaseIds = cases.filter(
+  (caseId, index) => cases.indexOf(caseId) !== index,
+);
+assert.deepEqual(
+  repeatedCaseIds,
+  [],
+  `E2E_CASE_IDS_NOT_UNIQUE:${[...new Set(repeatedCaseIds)].join(",")}`,
+);
+
+// The declared cases, not the ones this run happened to record, decide
+// whether the run is complete: a case neither executed nor explicitly blocked
+// makes the run FAIL whatever else passed.
+const missingRequiredCases = missingCases(
+  development ? "development-build" : "sealed-package",
+  cases,
+  blockedCases,
+);
+if (missingRequiredCases.length > 0) {
+  evidenceAttempt.recordFailure(
+    "contract",
+    `E2E_REQUIRED_CASE_MISSING:${missingRequiredCases.join(",")}`,
+  );
+}
+const report = {
+  schema: 1,
+  status:
+    missingRequiredCases.length > 0
+      ? "FAIL"
+      : blockedCases.length > 0
+        ? "BLOCKED"
+        : "PASS",
+  lane: development ? "development-build" : "sealed-package",
+  artifactSha256: artifact.artifactSha256,
+  sourceCommit: artifact.sourceCommit,
+  sourceTreeDigest: artifact.sourceTreeDigest,
+  sourceDirty: artifact.sourceDirty,
+  windowPolicy: {
+    visibleRun: {
+      mode: normal.presentation.mode,
+      focusedAtFirstPaint: normal.presentation.focused,
+      displayId: normal.presentation.display.id,
+      displayInternal: normal.presentation.display.internal,
+      displayPrimary: normal.presentation.display.primary,
+      selection: normal.presentation.display.selection,
+      displayCount: normal.presentation.displays.length,
+      bounds: normal.presentation.bounds,
+      workArea: normal.presentation.display.workArea,
+      nativeFocusProof: nativeFocusProofCompleted
+        ? "bounded-final-active-phase"
+        : skipNativeFocus
+          ? "blocked-owner-authorization"
+          : macHostLockState === "locked"
+            ? "blocked-host-locked"
+            : "blocked-focus-acquisition",
+      nativeFocusRequested: !skipNativeFocus,
+      macHostLockState,
+    },
+    hiddenRuns: [
+      "provider-failure",
+      "stream-failure",
+      "runtime-process-death",
+      "startup-runtime-death-after-ready",
+      "startup-runtime-death-during-first-view",
+      "startup-runtime-death-during-second-view",
+    ],
+  },
+  caseCount: cases.length,
+  uniqueCaseCount: new Set(cases).size,
+  cases,
+  blockedCases,
+  skippedCases,
+  screenshots: [
+    "live-task-watch-rail-wide.png",
+    "live-task-watch-rail-compact.png",
+    "running-browser-view.png",
+    "running-browser-compact.png",
+    "watch-sidebar-overlay-compact.png",
+    "watch-task-menu-wide.png",
+    "watch-quick-switcher-wide.png",
+    ...(nativeFocusProofCompleted ? ["watch-fullscreen-rail.png"] : []),
+    "tool-wait-wide.png",
+    "tool-wait-compact.png",
+    "complete-wide.png",
+    "complete-compact.png",
+    "settings-compact.png",
+    "setup-1-chatgpt-wide.png",
+    "setup-2-computer-wide.png",
+    "setup-3-connect-wide.png",
+    "setup-4-hosts-wide.png",
+    "setup-5-verify-wide.png",
+    "setup-review-compact.png",
+    "failure-wide.png",
+    "failure-compact.png",
+    "stream-failure-wide.png",
+    "stream-failure-compact.png",
+    "stream-failure-offline-task.png",
+    "stream-failure-survivor-task.png",
+    "process-death-wide.png",
+    "process-death-compact.png",
+  ],
+};
+for (const filename of report.screenshots) {
+  const evidence = await fs.stat(path.join(evidenceRoot, filename));
+  assert.ok(evidence.size > 1_000, `E2E_SCREENSHOT_EMPTY:${filename}`);
+}
+await fs.writeFile(
+  path.join(evidenceRoot, "report.json"),
+  `${JSON.stringify(report, null, 2)}\n`,
+);
+await evidenceAttempt.finish(report.status, {
+  cases,
+  blockedCases,
+  skippedCases,
+});
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+if (missingRequiredCases.length > 0) {
+  process.stderr.write(
+    `E2E_REQUIRED_CASE_MISSING:${JSON.stringify(missingRequiredCases)}\n`,
+  );
+  process.exitCode = 1;
+}
+if (blockedCases.length > 0) {
+  process.stderr.write(
+    `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,
+  );
+  process.exitCode = 1;
 }

@@ -135,6 +135,15 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "utility-process-sigkill-during-second-view-load",
   "fault-scenarios-remain-hidden",
   "quit-terminates-exact-owned-processes",
+  "ux34-settings-widths-readable",
+  "ux34-sidebar-toggle-roundtrip",
+  "ux34-sign-in-window-owned",
+  "ux34-sign-in-blocked-navigation-reported",
+  "ux34-sign-in-return-handler",
+  "ux34-sign-in-return-pointer",
+  "ux34-sign-in-return-keyboard",
+  "ux34-sign-in-return-pointer-after-blocked-navigation",
+  "ux34-covered-return-fails-input-proof",
 ]);
 
 const SEALED_PACKAGE_CASES = Object.freeze([
