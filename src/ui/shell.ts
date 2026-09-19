@@ -1527,16 +1527,23 @@ function renderConfigurationFeedback(
 ): void {
   const configured = bootstrap.configuration;
   const feedback = required<HTMLParagraphElement>(selector);
+  // A message addressed to Setup must not vanish with the dialog: once Setup
+  // is closed (finished, or the last step dismissed it) the same message is
+  // shown on the Settings panel instead.
+  const visibleSurface =
+    settingsFeedbackSurface === "setup" && !setupJourney.open
+      ? "settings"
+      : settingsFeedbackSurface;
   feedback.textContent =
     configured.status === "error"
       ? `Settings unavailable · ${configured.error}`
-      : settingsFeedbackSurface === surface
+      : visibleSurface === surface
         ? settingsFeedback
         : "";
   feedback.classList.toggle(
     "error",
     configured.status === "error" ||
-      (settingsFeedbackSurface === surface && settingsFeedbackError),
+      (visibleSurface === surface && settingsFeedbackError),
   );
 }
 

@@ -5917,10 +5917,16 @@ try {
     totalBytes: 0,
     stagingCleanup: null,
   });
+  // A fresh profile opens first-run Setup, which is modal: the recovery
+  // notice must be on the Setup dialog the owner is looking at, not on the
+  // Settings panel the dialog covers.
+  await interruptedChatGptTask.window
+    .locator("#setup-dialog")
+    .waitFor({ state: "visible" });
   await interruptedChatGptTask.window.waitForFunction(
     () =>
       document
-        .querySelector("#settings-feedback")
+        .querySelector("#setup-feedback")
         ?.textContent?.includes("Nothing was submitted again") === true,
   );
   await waitForPageState(
@@ -6003,6 +6009,11 @@ try {
     );
   }
   await completeSetup(normal, true, true, true, true, "demo");
+  // Setup's last message is not lost with the dialog: it moves to Settings.
+  await normal.window
+    .locator("#settings-feedback")
+    .getByText("Setup saved. Limited mode is open.", { exact: true })
+    .waitFor();
   cases.push("native-codex-host-live-tool-verified");
   await deactivateForInactiveAppearanceProof(normal.application);
   await normal.window.waitForFunction(
