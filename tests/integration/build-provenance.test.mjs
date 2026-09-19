@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  cleanInstallEnvironment,
   compilerProblems,
   dependencyDrift,
   npmCliFor,
@@ -205,6 +206,42 @@ describe("F3-5 build provenance", () => {
     );
     expect(manifest.inputExact).toBe(false);
   }, 180_000);
+
+  it("gives the clean install none of the caller's hooks or npm configuration", () => {
+    const directory = fs.mkdtempSync(
+      path.join(os.tmpdir(), "farol-clean-env-"),
+    );
+    scratch.push(directory);
+    const env = cleanInstallEnvironment(directory, "/opt/node/bin/node");
+    expect(Object.keys(env).sort()).toEqual([
+      "HOME",
+      "LANG",
+      "PATH",
+      "TMPDIR",
+      "npm_config_cache",
+      "npm_config_globalconfig",
+      "npm_config_userconfig",
+    ]);
+    expect(env.HOME).toBe(directory);
+    expect(env.PATH).toBe("/opt/node/bin:/usr/bin:/bin");
+    expect(fs.readFileSync(env.npm_config_userconfig, "utf8")).toBe("");
+    expect(env.npm_config_globalconfig).toBe(env.npm_config_userconfig);
+  });
+
+  it("runs the candidate wrapper in isolated Python so no user-site hook runs", () => {
+    const taskfile = fs.readFileSync(
+      path.join(vnextRoot, "..", "Taskfile.yml"),
+      "utf8",
+    );
+    const packageTask = taskfile.slice(
+      taskfile.indexOf("  next:package:"),
+      taskfile.indexOf("  next:run:"),
+    );
+    expect(packageTask).toContain(
+      "/usr/bin/python3 -I ../scripts/assert-owner-untouched.py",
+    );
+    expect(packageTask).toContain("/usr/bin/env -i");
+  });
 
   it("takes the source identity from the system Git, not a git earlier on PATH", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "farol-fake-git-"));

@@ -195,15 +195,39 @@ export function npmCliFor(nodeExecutable = process.execPath) {
   return cli;
 }
 
+// The clean install sees none of the caller's startup hooks or npm
+// configuration: no NODE_OPTIONS/NODE_PATH/npm_config_* from the environment,
+// HOME inside the disposable directory, and empty user and global npmrc.
+// Only the package cache is shared; npm verifies every tarball from it
+// against the lockfile's integrity.
+export function cleanInstallEnvironment(
+  scratch,
+  nodeExecutable = process.execPath,
+) {
+  const emptyConfig = path.join(scratch, ".npmrc-empty");
+  fs.writeFileSync(emptyConfig, "");
+  return {
+    PATH: `${path.dirname(nodeExecutable)}:/usr/bin:/bin`,
+    HOME: scratch,
+    TMPDIR: os.tmpdir(),
+    LANG: "en_US.UTF-8",
+    npm_config_userconfig: emptyConfig,
+    npm_config_globalconfig: emptyConfig,
+    npm_config_cache: path.join(os.homedir(), ".npm"),
+  };
+}
+
 export function writeDependencyDigestsFromCleanInstall(vnextRoot, roots) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "farol-clean-deps-"));
   try {
     for (const name of ["package.json", "package-lock.json"]) {
       fs.copyFileSync(path.join(vnextRoot, name), path.join(scratch, name));
     }
+    const env = cleanInstallEnvironment(scratch);
     const run = (command, args) => {
       const result = spawnSync(command, args, {
         cwd: scratch,
+        env,
         stdio: "inherit",
       });
       if (result.status !== 0) {
