@@ -1580,6 +1580,69 @@ describe("Farol Next product configuration", () => {
     });
   });
 
+  it("C05-09 commits concurrent changes one after another, so neither erases the edit journal", async () => {
+    const root = await stateRoot();
+    let gate: Promise<void> | null = null;
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore(
+        { root },
+        {
+          // Holds exactly one commit open while another change arrives.
+          beforeCommit: async () => {
+            const held = gate;
+            gate = null;
+            if (held) await held;
+          },
+        },
+      ),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    const pendingEdit = {
+      operationId: "00000000-0000-4000-8000-0000000000cc",
+      workspaceId,
+      relativePath: "README.md",
+      computerGeneration: added.snapshot.settings.computer.generation,
+      submittedAt: "2026-09-16T10:01:00.000Z",
+    };
+    const general = {
+      openAtLaunch: "activity",
+      sidebarDefault: "rail",
+      activityDetail: "technical",
+    } as const;
+
+    let release!: () => void;
+    gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const journal = service.recordPendingWorkspaceEdit(pendingEdit);
+    const preference = service.updateGeneral(general);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    const [recorded, updated] = await Promise.all([journal, preference]);
+
+    expect(recorded.ok).toBe(true);
+    expect(updated.ok).toBe(true);
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({
+      status: "ready",
+      settings: { general, computer: { pendingEdit } },
+    });
+    expect(service.snapshot()).toEqual(restarted.snapshot());
+  });
+
   it("persists truthful ChatGPT readiness without credentials or page content", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -515,6 +516,12 @@ export class ProductConfigurationService {
   private readonly homeDirectory: string;
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
+  // One owner change at a time: each runs, with the checks its caller makes
+  // against the current settings, through to its commit before the next one
+  // clones them. Re-entrant, so a method that checks and then mutates holds
+  // one turn, not two.
+  private readonly turn = new AsyncLocalStorage<true>();
+  private tail: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly store: ProductSettingsStore,
@@ -1175,7 +1182,23 @@ export class ProductConfigurationService {
 
   // Recorded before a guarded edit executes and cleared only after delivery;
   // neither step changes Computer authority or its verification.
-  async recordPendingWorkspaceEdit(
+  recordPendingWorkspaceEdit(
+    pending: PendingWorkspaceEditDelivery,
+  ): Promise<MutationResult> {
+    return this.exclusive(() => this.recordPendingEdit(pending));
+  }
+
+  clearPendingWorkspaceEdit(operationId: string): Promise<MutationResult> {
+    return this.exclusive(() => this.clearPendingEdit(operationId));
+  }
+
+  recordComputerMutationOutcomeUnknown(
+    workspaceId: string,
+  ): Promise<MutationResult> {
+    return this.exclusive(() => this.recordMutationOutcomeUnknown(workspaceId));
+  }
+
+  private async recordPendingEdit(
     pending: PendingWorkspaceEditDelivery,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
@@ -1195,9 +1218,7 @@ export class ProductConfigurationService {
     }));
   }
 
-  async clearPendingWorkspaceEdit(
-    operationId: string,
-  ): Promise<MutationResult> {
+  private async clearPendingEdit(operationId: string): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
     if (this.current.computer.pendingEdit?.operationId !== operationId) {
       return this.failure("WORKSPACE_MUTATION_NOT_PENDING");
@@ -1209,7 +1230,7 @@ export class ProductConfigurationService {
     }));
   }
 
-  async recordComputerMutationOutcomeUnknown(
+  private async recordMutationOutcomeUnknown(
     workspaceId: string,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
@@ -1766,7 +1787,20 @@ export class ProductConfigurationService {
     }));
   }
 
-  private async mutate(
+  private exclusive<T>(work: () => Promise<T>): Promise<T> {
+    if (this.turn.getStore()) return work();
+    const run = this.tail.then(() => this.turn.run(true, work));
+    this.tail = run.catch(() => undefined);
+    return run;
+  }
+
+  private mutate(
+    transform: (settings: ProductSettings) => ProductSettings,
+  ): Promise<MutationResult> {
+    return this.exclusive(() => this.commit(transform));
+  }
+
+  private async commit(
     transform: (settings: ProductSettings) => ProductSettings,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
@@ -1798,7 +1832,9 @@ export class ProductConfigurationService {
       this.currentError = null;
       return { ok: true, snapshot: this.snapshot() };
     } catch {
-      this.current = before;
+      // The save may have landed before its read-back failed; what the disk
+      // holds is the truth, and the snapshot taken before is only a fallback.
+      this.current = (await this.store.load().catch(() => null)) ?? before;
       return this.failure("SETTINGS_WRITE_FAILED");
     }
   }
