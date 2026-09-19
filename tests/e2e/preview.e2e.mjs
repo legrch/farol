@@ -2719,6 +2719,28 @@ const setupScreens = [
   ["verify", "setup-5-verify-wide.png"],
 ];
 
+// Finishes first-run Setup with Continue only. Each step is saved before the
+// journey advances, so the next click waits for the step to change: clicking
+// ahead of the save repeats a step and the dialog never closes.
+async function finishSetupByNext(instance) {
+  const dialog = instance.window.locator("#setup-dialog");
+  await dialog.waitFor({ state: "visible" });
+  for (let step = 0; step < setupScreens.length; step += 1) {
+    const before = await dialog.getAttribute("data-step-id");
+    await instance.window.locator("#setup-next").click();
+    if (step < setupScreens.length - 1) {
+      await instance.window.waitForFunction(
+        (previous) =>
+          document
+            .querySelector("#setup-dialog")
+            ?.getAttribute("data-step-id") !== previous,
+        before,
+      );
+    }
+  }
+  await dialog.waitFor({ state: "hidden" });
+}
+
 // F1-8: the product refuses every Git verification before any process
 // starts. Resolves true when the refusal is shown, false when Git ran.
 async function gitVerificationIsOff(page, gitOff) {
@@ -7999,12 +8021,7 @@ if (blockedCases.length > 0) {
 {
   const settingsWidths = await launch([], "secondary-visible");
   try {
-    const dialog = settingsWidths.window.locator("#setup-dialog");
-    await dialog.waitFor({ state: "visible" });
-    for (let step = 0; step < setupScreens.length; step += 1) {
-      await settingsWidths.window.locator("#setup-next").click();
-    }
-    await dialog.waitFor({ state: "hidden" });
+    await finishSetupByNext(settingsWidths);
     await settingsWidths.window.locator('[data-section="settings"]').click();
     await settingsWidths.window.waitForFunction(
       () => document.documentElement.dataset.section === "settings",
@@ -8099,12 +8116,7 @@ if (blockedCases.length > 0) {
 {
   const sidebarRoundtrip = await launch([], "secondary-visible");
   try {
-    const dialog = sidebarRoundtrip.window.locator("#setup-dialog");
-    await dialog.waitFor({ state: "visible" });
-    for (let step = 0; step < setupScreens.length; step += 1) {
-      await sidebarRoundtrip.window.locator("#setup-next").click();
-    }
-    await dialog.waitFor({ state: "hidden" });
+    await finishSetupByNext(sidebarRoundtrip);
     // Mirrors window-chrome-geometry.ts's trafficLightCluster (52x16) at
     // the app's configured trafficLightPosition {x: 14, y: 18} — Electron
     // exposes only the configured origin (getWindowButtonPosition), never
