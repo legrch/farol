@@ -8266,11 +8266,25 @@ async function waitForSignInReturnOutcome(instance) {
   if (await instance.window.locator("#setup-dialog").isVisible()) {
     // The open Setup step shows the recorded outcome's next action at once,
     // not the "Check connection" it offered while the window was open.
-    await instance.window.waitForFunction(
-      () =>
-        document.querySelector("#setup-live-primary")?.textContent ===
-        "Open sign-in…",
-    );
+    try {
+      await instance.window.waitForFunction(
+        () =>
+          document.querySelector("#setup-live-primary")?.textContent ===
+          "Open sign-in…",
+      );
+    } catch (error) {
+      const shown = await instance.window.evaluate(() => ({
+        primary: document.querySelector("#setup-live-primary")?.textContent,
+        step: document.querySelector("#setup-dialog")?.dataset.stepId,
+        mode: document.querySelector("#setup-dialog")?.dataset.mode,
+        open: document.querySelector("#setup-dialog")?.open,
+        summary: document.querySelector("#setup-live-summary")?.textContent,
+      }));
+      throw new Error(
+        `${error.message} · after Return Setup showed ${JSON.stringify(shown)}`,
+        { cause: error },
+      );
+    }
   }
   const afterReturn = await instance.window.evaluate(() =>
     window.farolNext.bootstrap(),
