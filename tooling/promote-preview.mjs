@@ -62,6 +62,8 @@ function verify(artifactPath, appPath) {
   );
 }
 
+const OPEN_PROMOTION_FINDINGS = Object.freeze(["F3-3", "F3-4"]);
+
 async function main() {
   const arguments_ = process.argv.slice(2);
   const destinationOption = option(arguments_, "--destination");
@@ -72,6 +74,16 @@ async function main() {
     if (!known.has(argument))
       throw new Error(`PROMOTION_OPTION_INVALID:${argument}`);
     if (argument === "--destination") index += 1;
+  }
+  // The governing review has two open findings against promotion itself
+  // (32/Review-Rework-Handoff F3-3: the state projections accept reduced or
+  // symlinked stores their owners refuse; F3-4: no lease holds from the drain
+  // check to placement). Until both are fixed the plan is still shown, but
+  // nothing is placed.
+  if (apply && OPEN_PROMOTION_FINDINGS.length > 0) {
+    throw new Error(
+      `PROMOTION_APPLY_BLOCKED_BY_OPEN_FINDINGS:${OPEN_PROMOTION_FINDINGS.join(",")}`,
+    );
   }
 
   const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
