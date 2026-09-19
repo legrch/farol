@@ -28,6 +28,23 @@ const HEADER_FIELDS = Object.freeze([
   "artifactSha256",
 ]);
 
+// An identity is compared only once it is known to be one: two missing
+// fields are equal, and would otherwise bind an attempt that names no
+// candidate to a candidate that names nothing.
+const IDENTITY_FORMAT = Object.freeze({
+  sourceCommit: /^[0-9a-f]{40}$/u,
+  sourceTreeDigest: /^[0-9a-f]{64}$/u,
+  artifactSha256: /^[0-9a-f]{64}$/u,
+});
+
+function identityReasons(subject, prefix) {
+  return HEADER_FIELDS.filter(
+    (field) =>
+      typeof subject?.[field] !== "string" ||
+      !IDENTITY_FORMAT[field].test(subject[field]),
+  ).map((field) => `${prefix}:${field}`);
+}
+
 // Attempt-integrity reasons evaluateEligibility can produce that this tool
 // re-publishes verbatim. Everything else it produces (CASE_*, REVIEW_*,
 // BOUNDARY_*, FINDING_*, RAW_OUTCOME_*, NO_CASES_EXECUTED, ...) describes the
@@ -128,10 +145,13 @@ function locateAttempt(attempts, lane, attemptId) {
 // Everything else -- the sealed lanes and the hermetic Hunt model, which
 // compares source identity only -- is held to the sealed candidate.
 function subjectFor(lane, candidate, developmentCandidate) {
-  return EVIDENCE_LANES[lane]?.boundary?.build === "development-electron" &&
-    developmentCandidate
+  return isDevelopmentLane(lane) && developmentCandidate
     ? developmentCandidate
     : candidate;
+}
+
+function isDevelopmentLane(lane) {
+  return EVIDENCE_LANES[lane]?.boundary?.build === "development-electron";
 }
 
 function evaluateBinding(
@@ -153,15 +173,19 @@ function evaluateBinding(
       reasons: [located.mismatch],
     };
   }
+  const subject = subjectFor(lane, candidate, developmentCandidate);
   const reasons = [
-    ...integrityReasons(
-      lane,
-      located.attempt,
-      subjectFor(lane, candidate, developmentCandidate),
-      observers,
-    ),
+    ...integrityReasons(lane, located.attempt, subject, observers),
     ...caseReasons(lane, located.attempt, cases),
     ...wholeLaneReasons(located.attempt, cases),
+    // A development run measured the development build; without that
+    // build's own identity there is nothing to hold it to.
+    ...(isDevelopmentLane(lane) && !developmentCandidate
+      ? ["DEVELOPMENT_CANDIDATE_REQUIRED"]
+      : []),
+    ...(identityReasons(subject, "SUBJECT_IDENTITY_INVALID").length > 0
+      ? ["CANDIDATE_IDENTITY_INVALID"]
+      : []),
   ];
   return {
     lane,
@@ -266,9 +290,20 @@ function evaluateLaneSummary(entry, attempts, requirements) {
 }
 
 function headerReasons(ledgerCandidate, candidate, developmentCandidate) {
-  const reasons = HEADER_FIELDS.filter(
-    (field) => ledgerCandidate?.[field] !== candidate[field],
-  ).map((field) => `HEADER_MISMATCH:${field}`);
+  const reasons = [
+    ...identityReasons(candidate, "CANDIDATE_IDENTITY_INVALID"),
+    ...(developmentCandidate
+      ? identityReasons(
+          developmentCandidate,
+          "DEVELOPMENT_CANDIDATE_IDENTITY_INVALID",
+        )
+      : []),
+  ];
+  reasons.push(
+    ...HEADER_FIELDS.filter(
+      (field) => ledgerCandidate?.[field] !== candidate?.[field],
+    ).map((field) => `HEADER_MISMATCH:${field}`),
+  );
   // A development subject must be the same source, and the ledger header
   // names its build identity whenever development lanes are accepted.
   if (developmentCandidate) {
@@ -318,7 +353,12 @@ export function evaluateBindings({
       evaluateLaneSummary(entry, attempts, ledger.requirements ?? []),
     );
   const header = {
-    reasons: headerReasons(ledger.candidate, candidate, developmentCandidate),
+    reasons: [
+      ...headerReasons(ledger.candidate, candidate, developmentCandidate),
+      // A ledger that claims nothing has nothing wrong with it row by row,
+      // and would otherwise pass as a clean one.
+      ...(requirements.length === 0 ? ["LEDGER_EMPTY"] : []),
+    ],
   };
   const counts = {};
   const doneUnproven = [];
@@ -338,9 +378,9 @@ export function evaluateBindings({
   };
 }
 
-// Exit-worthy per the CLI contract: any header mismatch, any lane summary
-// that does not agree with what it names, or any DONE row that is not
-// PROVEN.
+// Exit-worthy per the CLI contract: any header reason (a mismatch, an
+// identity that is not one, an empty ledger), any lane summary that does not
+// agree with what it names, or any DONE row that is not PROVEN.
 function hasBlockingIssues(output) {
   return (
     output.header.reasons.length > 0 ||

@@ -323,6 +323,96 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
     expect(byPassed.requirements[0].verdict).toBe("PROVEN");
   });
 
+  it("refuses a ledger that declares no requirements at all", () => {
+    const result = evaluateBindings({
+      ledger: { candidate, lanes: [], requirements: [] },
+      candidate,
+      attempts: {},
+      observers: null,
+    });
+    expect(result.header.reasons).toContain("LEDGER_EMPTY");
+  });
+
+  it("refuses a candidate whose identity fields are missing or malformed, however equal they compare", () => {
+    const hollow = {
+      sourceCommit: undefined,
+      sourceTreeDigest: "x",
+      artifactSha256: undefined,
+    };
+    const attemptId = "20260918T090000000Z-000000c3";
+    const attempt = fixtureAttempt("sealed-package", attemptId, {
+      input: {
+        sourceCommit: undefined,
+        sourceTreeDigest: "x",
+        artifactSha256: undefined,
+      },
+    });
+    const result = evaluateBindings({
+      ledger: {
+        candidate: hollow,
+        lanes: [],
+        requirements: [
+          {
+            id: "R-HOLLOW",
+            u2: "DONE",
+            bindings: [
+              {
+                lane: "sealed-package",
+                attemptId,
+                cases: [EVIDENCE_LANES["sealed-package"].cases[0]],
+              },
+            ],
+          },
+        ],
+      },
+      candidate: hollow,
+      attempts: { "sealed-package": [attempt] },
+      observers: {
+        "sealed-package": observerFixture("sealed-package", attemptId, {
+          subject: { sourceCommit: undefined, artifactSha256: undefined },
+        }),
+      },
+    });
+    expect(result.header.reasons).toEqual(
+      expect.arrayContaining([
+        "CANDIDATE_IDENTITY_INVALID:sourceCommit",
+        "CANDIDATE_IDENTITY_INVALID:sourceTreeDigest",
+        "CANDIDATE_IDENTITY_INVALID:artifactSha256",
+      ]),
+    );
+    expect(result.requirements[0].verdict).toBe("UNPROVEN");
+  });
+
+  it("does not hold a development lane to the sealed subject when no development candidate is named", () => {
+    const [firstCase] = EVIDENCE_LANES["development-build"].cases;
+    const attemptId = "20260918T090000000Z-000000d4";
+    const attempt = fixtureAttempt("development-build", attemptId);
+    const result = evaluateBindings({
+      ledger: {
+        candidate,
+        lanes: [],
+        requirements: [
+          {
+            id: "R-DEV",
+            u2: "DONE",
+            bindings: [
+              { lane: "development-build", attemptId, cases: [firstCase] },
+            ],
+          },
+        ],
+      },
+      candidate,
+      attempts: { "development-build": [attempt] },
+      observers: {
+        "development-build": observerFixture("development-build", attemptId),
+      },
+    });
+    expect(result.requirements[0].bindings[0].reasons).toContain(
+      "DEVELOPMENT_CANDIDATE_REQUIRED",
+    );
+    expect(result.requirements[0].verdict).toBe("UNPROVEN");
+  });
+
   it("a clean binding marked historical never proves a row on its own", () => {
     // The same current, observed attempt as the positive control, only
     // declared historical: its integrity is clean, but a historical citation
@@ -581,7 +671,10 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
       "development-build": observerFixture("development-build", attemptId),
     };
     const ledger = {
-      candidate,
+      candidate: {
+        ...candidate,
+        developmentArtifactSha256: candidate.artifactSha256,
+      },
       lanes: [{ lane: "development-build", attemptId, rawOutcome: "PASS" }],
       requirements: [
         {
@@ -593,7 +686,13 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
         },
       ],
     };
-    const result = evaluateBindings({ ledger, candidate, attempts, observers });
+    const result = evaluateBindings({
+      ledger,
+      candidate,
+      attempts,
+      observers,
+      developmentCandidate: candidate,
+    });
     expect(result.lanes).toEqual([
       {
         lane: "development-build",
@@ -651,6 +750,7 @@ describe("evidence-bindings: proving a ledger row against real attempt receipts"
     expect(result.header.reasons).toEqual([
       "HEADER_MISMATCH:sourceCommit",
       "HEADER_MISMATCH:artifactSha256",
+      "LEDGER_EMPTY",
     ]);
   });
 
