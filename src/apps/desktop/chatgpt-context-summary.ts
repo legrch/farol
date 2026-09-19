@@ -380,6 +380,28 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
       return { status: "blocked", code: "SUMMARY_FENCE_UNAVAILABLE" };
     }
+    // The retained route is a live surface. If it now shows another
+    // conversation than the one this attempt was prepared from, the prompt
+    // would land there and the summary would bind that conversation's
+    // cursor, so nothing is sent.
+    if (routeConversationUrl(lease.route) !== attempt.conversationUrl) {
+      await this.lowerFence(input);
+      try {
+        await this.options.store.deleteSummaryAttempt(
+          input.request.binding,
+          input.request.operationId,
+        );
+      } catch {
+        return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
+      }
+      if (!this.releaseOwnedLease(input.request.operationId)) {
+        return {
+          status: "blocked",
+          code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
+        };
+      }
+      return { status: "not_submitted", code: "SUMMARY_SOURCE_MOVED" };
+    }
     let result: ChatGptReadonlyTaskResult;
     this.dispatched.add(input.request.operationId);
     try {

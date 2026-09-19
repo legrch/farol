@@ -178,6 +178,40 @@ describe("ChatGPT summary-only context driver", () => {
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
   });
 
+  it("sends nothing when the retained route shows another conversation by the time of dispatch", async () => {
+    const state = await store();
+    const retained = route({
+      state: "completed",
+      code: null,
+      deltaCount: 2,
+      observedCharacters: JSON.stringify(content).length,
+      outputText: JSON.stringify(content),
+    });
+    // Prepared from the retained conversation; the owner's live surface then
+    // moves to a newer one before the prompt would be typed.
+    retained.currentConversationUrl
+      .mockReturnValueOnce("https://chatgpt.com/c/summary-context-1")
+      .mockReturnValue("https://chatgpt.com/c/newer-conversation");
+    const driver = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: vi.fn().mockReturnValue(retained),
+        createFallback: vi.fn(),
+      },
+    });
+
+    await expect(
+      driver.request({ request, source: source() }),
+    ).resolves.toEqual({
+      status: "not_submitted",
+      code: "SUMMARY_SOURCE_MOVED",
+    });
+    expect(retained.runReadonlyTask).not.toHaveBeenCalled();
+    await expect(
+      state.getSummaryAttempt(request.binding, request.operationId),
+    ).resolves.toBeNull();
+  });
+
   it("CC-15/CC-03 raises the execution fence before the retained summary is submitted, keeps it up while the outcome is unknown, and lowers it once the turn is over", async () => {
     const state = await store();
     const events: string[] = [];
