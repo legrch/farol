@@ -2722,11 +2722,20 @@ const setupScreens = [
 // F1-8: the product refuses every Git verification before any process
 // starts. Resolves true when the refusal is shown, false when Git ran.
 async function gitVerificationIsOff(page, gitOff) {
-  await page.waitForFunction((off) => {
-    const shown =
-      document.querySelector("#computer-feedback")?.textContent ?? "";
-    return shown === off || /^Fixed Git (status|HEAD) completed/u.test(shown);
-  }, gitOff);
+  try {
+    await page.waitForFunction((off) => {
+      const shown =
+        document.querySelector("#computer-feedback")?.textContent ?? "";
+      return shown === off || /^Fixed Git (status|HEAD) completed/u.test(shown);
+    }, gitOff);
+  } catch (error) {
+    const shown = await page
+      .locator("#computer-feedback")
+      .textContent()
+      .catch(() => null);
+    error.message = `${error.message} · Computer feedback ${JSON.stringify(shown)}`;
+    throw error;
+  }
   return (await page.locator("#computer-feedback").textContent()) === gitOff;
 }
 
@@ -6811,18 +6820,11 @@ try {
   // verification returns, the same block requires the full proof again.
   const gitOff =
     "Git checks are off in this build: Git cannot yet be confined to the approved folder (open review finding F1-8). Listing, searching and reading files are not affected.";
-  await normal.window.waitForFunction((off) => {
-    const shown =
-      document.querySelector("#computer-feedback")?.textContent ?? "";
-    return shown === off || shown.startsWith("Fixed Git status completed");
-  }, gitOff);
   const gitHead = workspaceCard.getByRole("button", {
     name: "Git HEAD",
     exact: true,
   });
-  if (
-    (await normal.window.locator("#computer-feedback").textContent()) !== gitOff
-  ) {
+  if (!(await gitVerificationIsOff(normal.window, gitOff))) {
     await workspaceCard
       .locator(".workspace-query-evidence")
       .getByText(/Git status · exit 0 · \d+ bytes · network none/u)
