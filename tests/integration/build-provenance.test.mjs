@@ -51,14 +51,17 @@ describe("F3-5 build provenance", () => {
     );
   });
 
-  it("changes the package digest for one changed byte or execute bit", () => {
+  it("changes the package digest for one changed byte, execute bit or empty directory", () => {
     const { directory } = fixturePackage();
     const clean = packageTreeDigest(directory);
     fs.appendFileSync(path.join(directory, "lib", "index.js"), " ");
     const edited = packageTreeDigest(directory);
     expect(edited).not.toBe(clean);
     fs.chmodSync(path.join(directory, "lib", "index.js"), 0o755);
-    expect(packageTreeDigest(directory)).not.toBe(edited);
+    const executable = packageTreeDigest(directory);
+    expect(executable).not.toBe(edited);
+    fs.mkdirSync(path.join(directory, "empty"));
+    expect(packageTreeDigest(directory)).not.toBe(executable);
   });
 
   it("reports a mutated or unreviewed package as drift, never as exact", () => {

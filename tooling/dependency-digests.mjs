@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,6 +15,9 @@ import { fileURLToPath } from "node:url";
 export const DEPENDENCY_DIGESTS_FILE = "tooling/dependency-digests.json";
 
 // The compiler: esbuild's JavaScript API and the one platform binary it spawns.
+// Reviewed digests exist per platform; a platform without one reports its
+// compiler as not reviewed, so a build there is never a candidate (today only
+// darwin-arm64, the preview's supported target, is reviewed).
 export function toolchainPackageRoots(
   platform = process.platform,
   arch = process.arch,
@@ -53,6 +58,9 @@ export function packageTreeDigest(directory) {
       if (info.isSymbolicLink()) {
         records.push(`L\0${childRelative}\0${fs.readlinkSync(absolute)}`);
       } else if (info.isDirectory()) {
+        // Directories are entries too: an added or removed empty directory
+        // changes what a package can observe, so it changes the digest.
+        records.push(`D\0${childRelative}`);
         walk(absolute, childRelative);
       } else if (info.isFile()) {
         const digest = createHash("sha256")
@@ -107,38 +115,63 @@ export function dependencyDrift(root, packageRoots, expected) {
   return drift;
 }
 
-// `node tooling/dependency-digests.mjs --write <clean-install-root> <package-root>...`
-// writes the digests of a CLEAN `npm ci` tree. It refuses to run against the
-// working tree's own node_modules, which is exactly what it must not trust.
+// `node tooling/dependency-digests.mjs --write <package-root>...` performs the
+// clean install itself: a disposable directory receives only package.json and
+// package-lock.json, `npm ci` installs them (npm verifies every tarball against
+// the lockfile's integrity), esbuild's own install step runs as it does in
+// every real install, and only that directory is hashed. No caller-supplied
+// tree can become the reviewed state.
+export function writeDependencyDigestsFromCleanInstall(vnextRoot, roots) {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "farol-clean-deps-"));
+  try {
+    for (const name of ["package.json", "package-lock.json"]) {
+      fs.copyFileSync(path.join(vnextRoot, name), path.join(scratch, name));
+    }
+    const run = (command, args) => {
+      const result = spawnSync(command, args, {
+        cwd: scratch,
+        stdio: "inherit",
+      });
+      if (result.status !== 0) {
+        throw new Error(`DEPENDENCY_CLEAN_INSTALL_FAILED:${command}`);
+      }
+    };
+    run("npm", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]);
+    run(process.execPath, [path.join("node_modules", "esbuild", "install.js")]);
+    const packages = {};
+    for (const packageRoot of [...roots].sort()) {
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          path.join(scratch, packageRoot, "package.json"),
+          "utf8",
+        ),
+      );
+      packages[packageRoot] = {
+        version: manifest.version,
+        treeSha256: packageTreeDigest(path.join(scratch, packageRoot)),
+      };
+    }
+    fs.writeFileSync(
+      path.join(vnextRoot, DEPENDENCY_DIGESTS_FILE),
+      `${JSON.stringify({ schema: 1, packages }, null, 2)}\n`,
+    );
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const [flag, cleanRoot, ...roots] = process.argv.slice(2);
+  const [flag, ...roots] = process.argv.slice(2);
   const vnextRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   if (
     flag !== "--write" ||
-    !cleanRoot ||
     roots.length === 0 ||
-    path.resolve(cleanRoot) === vnextRoot
+    !roots.every((root) => /^node_modules\/(@[^/]+\/)?[^/]+$/u.test(root))
   ) {
     process.stderr.write(
-      "usage: dependency-digests.mjs --write <clean npm ci root> <package-root>...\n",
+      "usage: dependency-digests.mjs --write <node_modules/package>...\n",
     );
     process.exit(2);
   }
-  const packages = {};
-  for (const packageRoot of roots.sort()) {
-    const manifest = JSON.parse(
-      fs.readFileSync(
-        path.join(cleanRoot, packageRoot, "package.json"),
-        "utf8",
-      ),
-    );
-    packages[packageRoot] = {
-      version: manifest.version,
-      treeSha256: packageTreeDigest(path.join(cleanRoot, packageRoot)),
-    };
-  }
-  fs.writeFileSync(
-    path.join(vnextRoot, DEPENDENCY_DIGESTS_FILE),
-    `${JSON.stringify({ schema: 1, packages }, null, 2)}\n`,
-  );
+  writeDependencyDigestsFromCleanInstall(vnextRoot, roots);
 }
