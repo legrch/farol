@@ -742,7 +742,7 @@ async function inspectWindowPresentation(application) {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -882,6 +882,23 @@ async function startChatGptFixture() {
         <body><p data-testid="popup-ready">Secure popup ready</p></body></html>`);
       return;
     }
+    // Simulates an MFA-style "Next" step: a same-origin (e2e-allowed) form
+    // navigation to a second page, proving the sign-in surface's policy
+    // lets that ordinary step proceed rather than silently doing nothing
+    // (UX34-07's fixture test).
+    if (pathname === "/chatgpt-next") {
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy":
+          "default-src 'none'; style-src 'unsafe-inline'",
+      });
+      response.end(`<!doctype html>
+        <html><head><meta charset="utf-8"><title>ChatGPT next-step fixture</title>
+        <style>body{background:#111216;color:#f7f7f8;font:16px sans-serif;padding:32px}</style></head>
+        <body><p data-testid="next-page-ready">Next step reached</p></body></html>`);
+      return;
+    }
     if (
       pathname !== "/chatgpt" &&
       !/^\/chatgpt\/c\/[A-Za-z0-9-]{8,128}\/?$/u.test(pathname)
@@ -903,6 +920,8 @@ async function startChatGptFixture() {
         <button data-testid="login-button" type="button">Log in</button>
         <button data-testid="popup-button" type="button">Open login popup</button>
         <button data-testid="expire-button" type="button" hidden>Expire session</button>
+        <button data-testid="blocked-nav-button" type="button">Navigate off-policy</button>
+        <button data-testid="next-page-button" type="button">Next</button>
         <div id="prompt-textarea" contenteditable="true" data-virtualkeyboard="true" aria-label="Message" hidden></div>
         <input data-testid="attachment-input" type="file" multiple hidden />
         <div id="attachment-chips"></div>
@@ -967,6 +986,12 @@ async function startChatGptFixture() {
             }
           };
           popup.addEventListener('click', () => window.open('/chatgpt-popup', 'chatgpt-auth'));
+          document.querySelector('[data-testid="blocked-nav-button"]').addEventListener('click', () => {
+            location.href = 'https://example.invalid/blocked';
+          });
+          document.querySelector('[data-testid="next-page-button"]').addEventListener('click', () => {
+            location.href = '/chatgpt-next';
+          });
           composer.addEventListener('input', () => {
             updateSend();
           });
@@ -2030,7 +2055,7 @@ async function proveStartupRuntimeDeath(stage) {
             (candidate) => {
               const url = candidate.webContents.getURL();
               return (
-                candidate.getTitle() === "Farol Next Preview" &&
+                candidate.getTitle() === "Farol · Developer Preview" &&
                 url.startsWith("file:") &&
                 url.endsWith("/shell.html")
               );
@@ -2076,7 +2101,7 @@ async function proveStartupRuntimeDeath(stage) {
         const shell = BrowserWindow.getAllWindows().find((candidate) => {
           const url = candidate.webContents.getURL();
           return (
-            candidate.getTitle() === "Farol Next Preview" &&
+            candidate.getTitle() === "Farol · Developer Preview" &&
             url.startsWith("file:") &&
             url.endsWith("/shell.html")
           );
@@ -2090,7 +2115,7 @@ async function proveStartupRuntimeDeath(stage) {
         const shell = BrowserWindow.getAllWindows().find((candidate) => {
           const url = candidate.webContents.getURL();
           return (
-            candidate.getTitle() === "Farol Next Preview" &&
+            candidate.getTitle() === "Farol · Developer Preview" &&
             url.startsWith("file:") &&
             url.endsWith("/shell.html")
           );
@@ -2111,7 +2136,7 @@ async function taskSurfaces(application) {
     const shell = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -2156,7 +2181,7 @@ async function liveChatGptSurfaces(application, expectedOrigin) {
     const host = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -2223,7 +2248,7 @@ async function submitLiveChatGptTask(instance, taskId, prompt) {
       const host = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -2433,7 +2458,7 @@ async function activateForNativeFocusProof(application) {
       const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -2468,7 +2493,7 @@ async function activateForNativeFocusProof(application) {
       const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -2505,7 +2530,7 @@ async function deactivateForInactiveAppearanceProof(application) {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -2528,7 +2553,7 @@ async function setWindowSize(application, width, height) {
       const shell = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -2612,7 +2637,7 @@ async function invokeApplicationMenu(application, id) {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -2628,7 +2653,7 @@ async function nativeWindowChrome(application) {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -2652,7 +2677,7 @@ async function waitForShellFocus(application, reason) {
       const shell = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -2670,7 +2695,7 @@ async function setFullScreen(application, value) {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol Next Preview" &&
+        candidate.getTitle() === "Farol · Developer Preview" &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -3058,7 +3083,7 @@ async function runLiveTaskPersistenceFaultProof() {
         const host = BrowserWindow.getAllWindows().find((candidate) => {
           const url = candidate.webContents.getURL();
           return (
-            candidate.getTitle() === "Farol Next Preview" &&
+            candidate.getTitle() === "Farol · Developer Preview" &&
             url.startsWith("file:") &&
             url.endsWith("/shell.html")
           );
@@ -3353,7 +3378,7 @@ async function waitForLifecycleQuiescence(instance) {
         const shell = BrowserWindow.getAllWindows().find((candidate) => {
           const url = candidate.webContents.getURL();
           return (
-            candidate.getTitle() === "Farol Next Preview" &&
+            candidate.getTitle() === "Farol · Developer Preview" &&
             url.startsWith("file:") &&
             url.endsWith("/shell.html")
           );
@@ -3417,7 +3442,7 @@ async function lifecycleBatch(instance, count, timings, overlayKind = null) {
       const shell = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -7551,7 +7576,7 @@ try {
       const shell = BrowserWindow.getAllWindows().find((candidate) => {
         const url = candidate.webContents.getURL();
         return (
-          candidate.getTitle() === "Farol Next Preview" &&
+          candidate.getTitle() === "Farol · Developer Preview" &&
           url.startsWith("file:") &&
           url.endsWith("/shell.html")
         );
@@ -7827,4 +7852,328 @@ if (blockedCases.length > 0) {
     `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,
   );
   process.exitCode = 1;
+}
+
+// ---------------------------------------------------------------------------
+// UX34-05 / UX34-06 / UX34-08 / UX34-07 — native layout and sign-in surface
+// checks added for the layout-and-sign-in packet. Each block owns its own
+// launch()/close() cycle so a failure here cannot perturb the sequencing or
+// shared instances the flows above depend on, and it runs only after the
+// existing report/screenshot evidence has already been written.
+// ---------------------------------------------------------------------------
+
+// UX34-05: Settings must stay readable — no intersecting interactive
+// controls, no horizontal scroll, every action reachable — at the
+// supported minimum width and across the ~980px auto-rail breakpoint.
+{
+  const settingsWidths = await launch([], "secondary-visible");
+  try {
+    const dialog = settingsWidths.window.locator("#setup-dialog");
+    await dialog.waitFor({ state: "visible" });
+    for (let step = 0; step < setupScreens.length; step += 1) {
+      await settingsWidths.window.locator("#setup-next").click();
+    }
+    await dialog.waitFor({ state: "hidden" });
+    await settingsWidths.window.locator('[data-section="settings"]').click();
+    await settingsWidths.window.waitForFunction(
+      () => document.documentElement.dataset.section === "settings",
+    );
+    const measureSettingsLayout = () => {
+      const panel = document.querySelector(".panel.active");
+      if (!panel) throw new Error("SETTINGS_PANEL_MISSING");
+      const rectsIntersect = (a, b) =>
+        a.left < b.right &&
+        a.right > b.left &&
+        a.top < b.bottom &&
+        a.bottom > b.top;
+      const controls = [
+        ...panel.querySelectorAll("button, input, select, a[href]"),
+      ].filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return (
+          element.offsetParent !== null && rect.width > 0 && rect.height > 0
+        );
+      });
+      const rects = controls.map((element, index) => ({
+        label:
+          element.id ||
+          `${element.tagName.toLowerCase()}:${(element.textContent ?? "").trim().slice(0, 24)}:${index}`,
+        rect: element.getBoundingClientRect(),
+      }));
+      const overlaps = [];
+      for (let i = 0; i < rects.length; i += 1) {
+        for (let j = i + 1; j < rects.length; j += 1) {
+          if (rectsIntersect(rects[i].rect, rects[j].rect)) {
+            overlaps.push([rects[i].label, rects[j].label]);
+          }
+        }
+      }
+      return {
+        panelHorizontalOverflow: panel.scrollWidth > panel.clientWidth + 1,
+        documentHorizontalOverflow:
+          document.documentElement.scrollWidth > window.innerWidth + 1,
+        overlaps,
+        controlCount: rects.length,
+      };
+    };
+    for (const width of [640, 800, 979, 980, 1_100, 1_280]) {
+      await setWindowSize(settingsWidths.application, width, 700);
+      await settingsWidths.window.waitForFunction(
+        (expected) => window.innerWidth === expected,
+        width,
+      );
+      const measured = await settingsWidths.window.evaluate(
+        measureSettingsLayout,
+      );
+      assert.ok(
+        measured.controlCount > 0,
+        `Settings has reachable controls at ${width}px`,
+      );
+      assert.equal(
+        measured.panelHorizontalOverflow,
+        false,
+        `Settings panel has no horizontal scroll at ${width}px`,
+      );
+      assert.equal(
+        measured.documentHorizontalOverflow,
+        false,
+        `Farol window has no horizontal scroll at ${width}px`,
+      );
+      assert.deepEqual(
+        measured.overlaps,
+        [],
+        `Settings has no intersecting interactive controls at ${width}px`,
+      );
+    }
+  } finally {
+    await close(settingsWidths);
+  }
+}
+
+// UX34-06: the sidebar toggle must never share screen space with the
+// macOS traffic lights, at every width, and a real click on it must carry
+// the sidebar through a full -> rail -> full roundtrip, including after a
+// resize and a fullscreen enter/exit.
+{
+  const sidebarRoundtrip = await launch([], "secondary-visible");
+  try {
+    const dialog = sidebarRoundtrip.window.locator("#setup-dialog");
+    await dialog.waitFor({ state: "visible" });
+    for (let step = 0; step < setupScreens.length; step += 1) {
+      await sidebarRoundtrip.window.locator("#setup-next").click();
+    }
+    await dialog.waitFor({ state: "hidden" });
+    // Mirrors window-chrome-geometry.ts's trafficLightCluster (52x16) at
+    // the app's configured trafficLightPosition {x: 14, y: 18} — Electron
+    // exposes only the configured origin (getWindowButtonPosition), never
+    // the rendered cluster size, so both sides of this check share the
+    // same constant rather than each guessing independently.
+    const TRAFFIC_LIGHT_CLUSTER = { width: 52, height: 16 };
+    const measureChrome = (cluster) => {
+      const toggle = document.querySelector("#sidebar-toggle");
+      if (!toggle) throw new Error("SIDEBAR_TOGGLE_MISSING");
+      const toggleRect = toggle.getBoundingClientRect();
+      return {
+        sidebar: document.documentElement.dataset.sidebar ?? null,
+        toggle: {
+          x: toggleRect.x,
+          y: toggleRect.y,
+          width: toggleRect.width,
+          height: toggleRect.height,
+        },
+        toggleReachable:
+          toggle.offsetParent !== null &&
+          toggleRect.width >= 28 &&
+          toggleRect.height >= 28,
+      };
+    };
+    const trafficLightPosition = async () =>
+      sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol · Developer Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        return shell?.getWindowButtonPosition() ?? null;
+      });
+    const assertToggleClearOfTrafficLights = async () => {
+      const position = await trafficLightPosition();
+      const measured = await sidebarRoundtrip.window.evaluate(measureChrome);
+      if (position) {
+        const lightsRect = {
+          x: position.x,
+          y: Math.max(0, position.y - TRAFFIC_LIGHT_CLUSTER.height / 2),
+          width: TRAFFIC_LIGHT_CLUSTER.width,
+          height: TRAFFIC_LIGHT_CLUSTER.height,
+        };
+        const intersects =
+          measured.toggle.x < lightsRect.x + lightsRect.width &&
+          measured.toggle.x + measured.toggle.width > lightsRect.x &&
+          measured.toggle.y < lightsRect.y + lightsRect.height &&
+          measured.toggle.y + measured.toggle.height > lightsRect.y;
+        assert.equal(
+          intersects,
+          false,
+          `sidebar toggle intersects traffic lights: toggle=${JSON.stringify(measured.toggle)} lights=${JSON.stringify(lightsRect)}`,
+        );
+      }
+      assert.equal(measured.toggleReachable, true, "toggle is reachable");
+      return measured;
+    };
+    await setWindowSize(sidebarRoundtrip.application, 1_180, 760);
+    await sidebarRoundtrip.window.waitForFunction(
+      (expected) => window.innerWidth === expected,
+      1_180,
+    );
+    let state = await assertToggleClearOfTrafficLights();
+    assert.equal(state.sidebar, "full", "starts full at wide width");
+    // A real click at the toggle's center, dispatched by Playwright through
+    // the same CDP Input.dispatchMouseEvent channel a real pointer uses.
+    await sidebarRoundtrip.window.locator("#sidebar-toggle").click();
+    await sidebarRoundtrip.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "rail",
+    );
+    state = await assertToggleClearOfTrafficLights();
+    assert.equal(state.sidebar, "rail", "collapses to rail");
+    await sidebarRoundtrip.window.locator("#sidebar-toggle").click();
+    await sidebarRoundtrip.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "full",
+    );
+    state = await assertToggleClearOfTrafficLights();
+    assert.equal(state.sidebar, "full", "expands back to full");
+    // Collapse again, then resize, then confirm the toggle still works and
+    // stays clear of the traffic lights after the resize.
+    await sidebarRoundtrip.window.locator("#sidebar-toggle").click();
+    await sidebarRoundtrip.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "rail",
+    );
+    await setWindowSize(sidebarRoundtrip.application, 1_280, 800);
+    await sidebarRoundtrip.window.waitForFunction(
+      (expected) => window.innerWidth === expected,
+      1_280,
+    );
+    await assertToggleClearOfTrafficLights();
+    await sidebarRoundtrip.window.locator("#sidebar-toggle").click();
+    await sidebarRoundtrip.window.waitForFunction(
+      () => document.documentElement.dataset.sidebar === "full",
+    );
+    state = await assertToggleClearOfTrafficLights();
+    assert.equal(state.sidebar, "full", "roundtrip survives a resize");
+    // Fullscreen enter/exit: the traffic lights move out of the way
+    // entirely, and the toggle must still be present and reachable both
+    // during and after.
+    await sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
+      const shell = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol · Developer Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
+      shell?.setFullScreen(true);
+    });
+    await sidebarRoundtrip.window.waitForFunction(
+      () => document.documentElement.dataset.fullScreen === "true",
+    );
+    state = await sidebarRoundtrip.window.evaluate(measureChrome);
+    assert.equal(state.toggleReachable, true, "toggle usable in fullscreen");
+    await sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
+      const shell = BrowserWindow.getAllWindows().find((candidate) => {
+        const url = candidate.webContents.getURL();
+        return (
+          candidate.getTitle() === "Farol · Developer Preview" &&
+          url.startsWith("file:") &&
+          url.endsWith("/shell.html")
+        );
+      });
+      shell?.setFullScreen(false);
+    });
+    await sidebarRoundtrip.window.waitForFunction(
+      () => document.documentElement.dataset.fullScreen === "false",
+    );
+    await assertToggleClearOfTrafficLights();
+  } finally {
+    await close(sidebarRoundtrip);
+  }
+}
+
+// UX34-08 / UX34-07: the sign-in surface is a clearly Farol-owned window
+// (its own title, a "Return to Farol" control), a same-origin/allowed
+// "Next"-style navigation proceeds, a blocked navigation is reported (not
+// silent), and closing the window returns cleanly with a truthful status.
+{
+  const signIn = await launch([], "secondary-visible");
+  try {
+    const dialog = signIn.window.locator("#setup-dialog");
+    await dialog.waitFor({ state: "visible" });
+    assert.equal(await dialog.getAttribute("data-step-id"), "chatgpt");
+    assert.equal(
+      await signIn.window.locator("#setup-live-primary").innerText(),
+      "Open sign-in…",
+    );
+    const chatGptWindow = signIn.application.waitForEvent("window", {
+      timeout: 15_000,
+    });
+    await signIn.window.locator("#setup-live-primary").click();
+    const chatGptPage = await chatGptWindow;
+    await chatGptPage.waitForURL(signIn.chatGptFixture.url);
+    await waitForWindowCount(signIn.application, 2);
+    assert.equal(await chatGptPage.title(), "Sign in to ChatGPT — Farol");
+    const banner = chatGptPage.locator("#farol-sign-in-banner");
+    await banner.waitFor({ state: "visible" });
+    assert.match(await banner.innerText(), /Return to Farol/u);
+
+    // The fixture's own "Next" step: same origin (e2e-allowed), so the
+    // sign-in surface's policy must let it proceed rather than doing
+    // nothing.
+    await chatGptPage.locator('[data-testid="next-page-button"]').click();
+    await chatGptPage
+      .locator('[data-testid="next-page-ready"]')
+      .waitFor({ state: "visible" });
+
+    // A navigation the policy does not allow: reported through
+    // bootstrap().chatgptSignInBlocked (content-free: host only), not
+    // silently swallowed.
+    await chatGptPage.locator('[data-testid="blocked-nav-button"]').click();
+    await signIn.window.waitForFunction(() =>
+      window.farolNext
+        .bootstrap()
+        .then((value) => value?.chatgptSignInBlocked?.kind !== undefined),
+    );
+    const blockedBootstrap = await signIn.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.deepEqual(blockedBootstrap.chatgptSignInBlocked, {
+      kind: "navigation-blocked",
+      host: "example.invalid",
+    });
+    assert.equal(
+      await chatGptPage.title(),
+      "Sign in to ChatGPT — Farol",
+      "the blocked navigation never left the sign-in page",
+    );
+
+    // "Return to Farol": closes the sign-in window and returns the owner
+    // to Setup with a truthful (not signed in — the fixture's login
+    // button was never clicked) status, never a silent close.
+    await chatGptPage.locator("#farol-sign-in-banner button").click();
+    await waitForWindowCount(signIn.application, 1);
+    const afterReturn = await signIn.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(afterReturn.configuration.status, "ready");
+    if (afterReturn.configuration.status === "ready") {
+      assert.equal(
+        afterReturn.configuration.settings.setup.chatgpt.verified,
+        null,
+        "closing without signing in reports not-signed-in, not silence",
+      );
+    }
+  } finally {
+    await close(signIn);
+  }
 }

@@ -69,6 +69,75 @@ export function classifyChatGptProviderError(
 
 const hardenedRouteSessions = new WeakSet<Session>();
 
+// A dedicated sign-in surface (see `openForSignIn`) is distinct from the
+// same route being reused to run a task: it carries a title of its own, a
+// "Return to Farol" banner (this is a real, separate window rather than an
+// embedded task view, precisely so the owner is never left staring at an
+// unbranded ChatGPT page — see UX34-08), and a truthful signed-in/not/
+// unknown status reported once, when it closes.
+export type ChatGptSignInStatus =
+  "authenticated" | "not_authenticated" | "unknown";
+
+// Content-free: a host name, a permission name, or a numeric load-failure
+// code — never a URL path, a query string, or anything the page rendered.
+export type ChatGptSignInBlockedDiagnostic =
+  | Readonly<{ kind: "navigation-blocked"; host: string }>
+  | Readonly<{ kind: "popup-blocked"; host: string }>
+  | Readonly<{ kind: "permission-denied"; permission: string }>
+  | Readonly<{ kind: "load-failed"; code: number }>;
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname || "(unknown)";
+  } catch {
+    return "(unknown)";
+  }
+}
+
+const SIGN_IN_RETURN_SENTINEL = "farol-sign-in-return-to-farol";
+const SIGN_IN_BANNER_ID = "farol-sign-in-banner";
+
+// Injected on every finish-load of the sign-in surface's main frame only
+// (never a popup, and CSP does not apply to code injected this way — it
+// runs directly in the page's V8 context via the same channel DevTools
+// uses, not as a parsed <script> or inline-style attribute). Idempotent:
+// a reload or SPA navigation calls this again and it leaves an existing
+// banner alone.
+function signInBannerScript(title: string): string {
+  const bannerId = JSON.stringify(SIGN_IN_BANNER_ID);
+  const titleText = JSON.stringify(title);
+  const sentinel = JSON.stringify(SIGN_IN_RETURN_SENTINEL);
+  return `(() => {
+    if (document.getElementById(${bannerId})) return;
+    const bar = document.createElement("div");
+    bar.id = ${bannerId};
+    bar.setAttribute("role", "banner");
+    bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;background:#111216;color:#f7f7f8;font:13px -apple-system,BlinkMacSystemFont,sans-serif;border-bottom:1px solid #333;box-sizing:border-box;";
+    const label = document.createElement("span");
+    label.textContent = ${titleText};
+    label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    const returnButton = document.createElement("button");
+    returnButton.type = "button";
+    returnButton.textContent = "Return to Farol";
+    returnButton.style.cssText = "flex:none;border:1px solid #4a4a52;border-radius:6px;padding:5px 12px;background:#1d1c21;color:#f7f7f8;font:inherit;cursor:pointer;";
+    returnButton.addEventListener("click", () => {
+      console.log(${sentinel});
+    });
+    bar.append(label, returnButton);
+    document.documentElement.appendChild(bar);
+  })()`;
+}
+
+// Idempotent removal, used when the same window transitions out of the
+// sign-in surface (e.g. straight into a task) without ever closing.
+function signInBannerRemovalScript(): string {
+  const bannerId = JSON.stringify(SIGN_IN_BANNER_ID);
+  return `(() => {
+    const bar = document.getElementById(${bannerId});
+    if (bar) bar.remove();
+  })()`;
+}
+
 const activityProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -281,6 +350,15 @@ export type ChatGptRouteOptions = Readonly<{
   onDisposed?: () => void;
   taskTimeoutMs?: number;
   taskPollMs?: number;
+  // Reported exactly once per `openForSignIn` call, when its window closes
+  // (native close, the in-page "Return to Farol" control, or programmatic
+  // shutdown) — never while it stays open, so a caller cannot race the
+  // owner's own manual "Check connection".
+  onSignInOutcome?: (status: ChatGptSignInStatus) => void;
+  // Content-free diagnostics for the sign-in surface only (see
+  // `ChatGptSignInBlockedDiagnostic`): never a body, a query string, or a
+  // full URL.
+  onSignInBlocked?: (diagnostic: ChatGptSignInBlockedDiagnostic) => void;
 }>;
 
 export type ChatGptWindowPresentation =
@@ -349,6 +427,11 @@ export type ChatGptRouteSurface = Readonly<{
   ) => void;
   onClosing: (listener: () => void) => void;
   onClosed: (listener: () => void) => void;
+  // A real close (fires "close" then "closed", so a caller gets one last
+  // chance to read page state before the surface is gone), as opposed to
+  // `destroy`'s immediate teardown. Optional: only a real window (not an
+  // embedded task view) can offer it, and only the sign-in flow needs it.
+  close?: () => void;
 }>;
 
 export type ChatGptRouteSurfaceFactory = (input: {
@@ -403,6 +486,14 @@ export type ChatGptTaskObserver = Readonly<{
   ) => void | Promise<void>;
 }>;
 
+// All ChatGPT routes share one Electron session (CHATGPT_PARTITION), so its
+// permission handler is hardened once, by whichever route opens first (see
+// `hardenSession`'s WeakSet guard) — `this` inside that handler would stay
+// bound to that first route forever. This ambient pointer is read at
+// request time instead, so a permission denial is always attributed to
+// whichever route is currently acting as the sign-in surface, if any.
+let activeSignInRoute: ChatGptRoute | null = null;
+
 export class ChatGptRoute {
   private routeWindow: ChatGptRouteSurface | null = null;
   private readonly popupWindows = new Set<BrowserWindow>();
@@ -419,6 +510,10 @@ export class ChatGptRoute {
   private activityProbeStale = false;
   private activityGeneration = 0;
   private observedTaskRunning: boolean | null = null;
+  private signInMode = false;
+  private signInReported = false;
+  private pendingSignInObservation: Promise<ChatGptPageObservation> | null =
+    null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.entryUrl = options.initialUrl;
@@ -455,6 +550,58 @@ export class ChatGptRoute {
     }
   }
 
+  // The explicit "Sign in" entry point (UX34-08): opens the same route as
+  // `open()`, but titled for sign-in, carrying its own "Return to Farol"
+  // banner, and reporting a truthful signed-in/not/unknown status exactly
+  // once, when the window closes — see `onSignInOutcome` on the
+  // constructor options. It never auto-closes on detecting a signed-in
+  // page: a caller that also drives readonly tasks through this same route
+  // (see `runReadonlyTask`) may still be mid-flow re-checking sign-in
+  // state, and only the owner's own close (native or "Return to Farol")
+  // ends the sign-in surface.
+  async openForSignIn(title: string): Promise<ChatGptOpenResult> {
+    this.setTitle(title);
+    this.signInMode = true;
+    this.signInReported = false;
+    activeSignInRoute = this;
+    const result = await this.open();
+    if (result.status !== "opened") this.reportSignInOutcome("unknown");
+    return result;
+  }
+
+  private exitSignInMode(): void {
+    if (!this.signInMode) return;
+    this.signInMode = false;
+    if (activeSignInRoute === this) activeSignInRoute = null;
+    this.setTitle(this.options.title ?? "ChatGPT · Farol Next");
+    const candidate = this.routeWindow;
+    if (candidate && !candidate.isDestroyed()) {
+      void candidate.webContents
+        .executeJavaScript(signInBannerRemovalScript(), true)
+        .catch(() => undefined);
+    }
+  }
+
+  private reportSignInOutcome(status: ChatGptSignInStatus): void {
+    if (this.signInReported) return;
+    this.signInReported = true;
+    this.options.onSignInOutcome?.(status);
+  }
+
+  private reportSignInBlocked(
+    diagnostic: ChatGptSignInBlockedDiagnostic,
+  ): void {
+    if (!this.signInMode) return;
+    this.options.onSignInBlocked?.(diagnostic);
+  }
+
+  private requestSignInReturn(): void {
+    const candidate = this.routeWindow;
+    if (!candidate || candidate.isDestroyed()) return;
+    if (candidate.close) candidate.close();
+    else candidate.destroy();
+  }
+
   private async openRouteWindow(): Promise<ChatGptOpenResult> {
     const parent = this.options.parent();
     const restoreParent = parent?.isVisible() ?? false;
@@ -488,10 +635,37 @@ export class ChatGptRoute {
       );
       closingTaskRunning = this.observedTaskRunning === true;
       this.stopTaskActivityWatch();
+      // The page is still alive here (this fires before teardown); a
+      // `destroy()` skips it entirely, which is exactly why
+      // `requestSignInReturn` prefers a real `close()`. Reading it now is
+      // the only way to report a truthful status rather than "unknown".
+      if (this.signInMode) {
+        this.pendingSignInObservation = this.observe();
+      }
     });
     candidate.onClosed(() => {
       this.stopTaskActivityWatch();
       if (this.routeWindow === candidate) this.routeWindow = null;
+      if (this.signInMode) {
+        const pending = this.pendingSignInObservation;
+        this.pendingSignInObservation = null;
+        this.signInMode = false;
+        if (activeSignInRoute === this) activeSignInRoute = null;
+        void (async () => {
+          let status: ChatGptSignInStatus = "unknown";
+          try {
+            const observation = pending ? await pending : null;
+            if (observation?.state === "authenticated")
+              status = "authenticated";
+            else if (observation?.state === "signed_out")
+              status = "not_authenticated";
+          } catch {
+            // Stays "unknown" — a page that could not be read is not the
+            // same claim as a page that was read and found signed out.
+          }
+          this.reportSignInOutcome(status);
+        })();
+      }
       if (!this.disposing) {
         const retainedConversationUrl = closingConversationObserved
           ? closingConversationUrl
@@ -578,6 +752,7 @@ export class ChatGptRoute {
       },
       setTitle: (title) => candidate.setTitle(title),
       destroy: () => candidate.destroy(),
+      close: () => candidate.close(),
       onPageTitleUpdated: (listener) => {
         candidate.on("page-title-updated", (event) => listener(event));
       },
@@ -630,6 +805,7 @@ export class ChatGptRoute {
         outputText: "",
       };
     }
+    this.exitSignInMode();
     this.taskInFlight = true;
     let submissionPhase:
       "not_attempted" | "awaiting_acknowledgement" | "submitted" =
@@ -1006,6 +1182,7 @@ export class ChatGptRoute {
         turnAssistantId: input.turnAssistantId,
       };
     }
+    this.exitSignInMode();
     this.taskInFlight = true;
     let deltaCount = 0;
     let observedCharacters = 0;
@@ -1265,7 +1442,13 @@ export class ChatGptRoute {
   private hardenSession(routeSession: Session): void {
     if (hardenedRouteSessions.has(routeSession)) return;
     routeSession.setPermissionRequestHandler(
-      (_webContents, _permission, callback) => callback(false),
+      (_webContents, permission, callback) => {
+        activeSignInRoute?.reportSignInBlocked({
+          kind: "permission-denied",
+          permission,
+        });
+        callback(false);
+      },
     );
     routeSession.setPermissionCheckHandler(() => false);
     routeSession.on("will-download", (event) => event.preventDefault());
@@ -1304,10 +1487,22 @@ export class ChatGptRoute {
     const allowed = (url: string) =>
       allowedChatGptPageUrl(url, this.options.e2eOrigin);
     contents.on("will-navigate", (event, url) => {
-      if (!allowed(url)) event.preventDefault();
+      if (!allowed(url)) {
+        event.preventDefault();
+        this.reportSignInBlocked({
+          kind: "navigation-blocked",
+          host: hostOf(url),
+        });
+      }
     });
     contents.on("will-redirect", (event, url) => {
-      if (!allowed(url)) event.preventDefault();
+      if (!allowed(url)) {
+        event.preventDefault();
+        this.reportSignInBlocked({
+          kind: "navigation-blocked",
+          host: hostOf(url),
+        });
+      }
     });
     if (tracksRouteReadiness) {
       contents.on(
@@ -1319,9 +1514,10 @@ export class ChatGptRoute {
       );
       contents.on(
         "did-fail-load",
-        (_event, _code, _description, _url, isMainFrame) => {
+        (_event, code, _description, _url, isMainFrame) => {
           if (isMainFrame && this.ownsRouteContents(contents)) {
             this.load = "failed";
+            this.reportSignInBlocked({ kind: "load-failed", code });
           }
         },
       );
@@ -1331,6 +1527,20 @@ export class ChatGptRoute {
         this.reportConversationUrl(contents);
         if (this.options.onTaskActivityChanged) {
           this.startTaskActivityWatch(contents);
+        }
+        if (this.signInMode) {
+          void contents
+            .executeJavaScript(signInBannerScript(this.displayTitle), true)
+            .catch(() => undefined);
+        }
+      });
+      contents.on("console-message", (details) => {
+        if (
+          this.signInMode &&
+          details.message === SIGN_IN_RETURN_SENTINEL &&
+          this.ownsRouteContents(contents)
+        ) {
+          this.requestSignInReturn();
         }
       });
       contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
@@ -1346,7 +1556,10 @@ export class ChatGptRoute {
       });
     }
     contents.setWindowOpenHandler(({ url }) => {
-      if (!allowed(url)) return { action: "deny" };
+      if (!allowed(url)) {
+        this.reportSignInBlocked({ kind: "popup-blocked", host: hostOf(url) });
+        return { action: "deny" };
+      }
       const requested = { width: 720, height: 760 } as const;
       let presentation: ResolvedChatGptWindowPresentation;
       try {

@@ -368,6 +368,13 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
+  // A read-only refresh the renderer sends itself once it is told the
+  // sign-in window has closed (UX34-08: "returned to Setup with the status
+  // updated"). It performs no page probe of its own — the sign-in window's
+  // own close already recorded a truthful observation via
+  // `onSignInOutcome` — so it is always safe to call and never shows a
+  // "Verifying…" message the way `chatgpt.verify` does.
+  z.strictObject({ kind: z.literal("chatgpt.sign-in-return") }),
   z.strictObject({ kind: z.literal("chatgpt.reset-conversation") }),
   z.strictObject({ kind: z.literal("support.export") }),
   z.strictObject({ kind: z.literal("host.select-codex") }),

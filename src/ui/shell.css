@@ -158,7 +158,10 @@ html[data-sidebar="overlay"] .rail {
   position: fixed;
   z-index: 70;
   top: 9px;
-  left: 75px;
+  /* Computed in shell.ts from the traffic lights' actual reported position
+     (window-chrome-geometry.ts) so the two never overlap; 78px is only the
+     fallback for the instant before the first window-state push. */
+  left: var(--sidebar-toggle-left, 78px);
   width: 34px;
   height: 34px;
   display: grid;
@@ -1158,6 +1161,18 @@ html[data-has-tasks="false"] .surface {
   gap: 16px;
 }
 
+/* Below its intrinsic width (a narrow window, or a full sidebar eating into
+   the available panel width around the 980px auto-rail breakpoint), a row's
+   actions no longer fit beside its title. They wrap to their own line
+   instead of forcing the row wider than its panel — the alternative is
+   either a hidden horizontal scrollbar (`.content-panel` is `overflow:
+   auto`) or, with a non-shrinking `.connection-actions`/`.workspace-actions`
+   (`flex: none`), controls crowding on top of each other. */
+.workspace-row,
+.connection-row {
+  flex-wrap: wrap;
+}
+
 .settings-group > header p,
 .settings-group > header h2 {
   margin: 0;
@@ -1340,18 +1355,45 @@ html[data-has-tasks="false"] .surface {
   gap: 6px;
 }
 
+/* Once the connector row wraps (see `.connector-row`), its actions sit on
+   their own line below the label/form instead of beside them — flush left
+   reads as a continuation of that line, not a right-aligned afterthought. */
+.connector-row .connection-actions {
+  justify-content: flex-start;
+}
+
+.connection-row small.sign-in-blocked-notice {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--failed);
+  white-space: normal;
+}
+
+/* A fixed grid (the previous `minmax(180px,…) minmax(360px,…) auto`) never
+   shrinks below the sum of its column minimums — well over the ~700px a
+   full sidebar leaves at a 980-1100px window. Flex-wrap reflows the same
+   three groups (label, form, actions) onto their own lines instead, so the
+   row always fits the panel it is actually given. */
 .connector-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(360px, 1.4fr) auto;
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px 16px;
   padding-block: 10px;
 }
 
+.connector-row > div:first-child {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 .connector-form {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.8fr) minmax(190px, 1.2fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: end;
   gap: 8px;
+  flex: 3 1 300px;
+  min-width: 0;
 }
 
 .setup-connector-form {
@@ -1368,6 +1410,14 @@ html[data-has-tasks="false"] .surface {
   gap: 5px;
   color: var(--text-faint);
   font-size: 9px;
+}
+
+.connector-form label {
+  flex: 1 1 130px;
+}
+
+.connector-form button {
+  flex: 0 0 auto;
 }
 
 .connector-form input,
@@ -2579,15 +2629,9 @@ html[data-window-active="false"] .primary-action:not(:focus-visible) {
     grid-template-columns: 1fr;
   }
 
-  .connector-row,
-  .connector-form,
   .setup-connector-form {
     grid-template-columns: 1fr;
     align-items: stretch;
-  }
-
-  .connector-row .connection-actions {
-    justify-content: flex-start;
   }
 }
 

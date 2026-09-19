@@ -117,6 +117,8 @@ import {
   type ChatGptWindowPresentation,
   type ChatGptRouteSurface,
   type ChatGptRouteSurfaceFactory,
+  type ChatGptSignInBlockedDiagnostic,
+  type ChatGptSignInStatus,
 } from "./chatgpt-route";
 import {
   PrivateLiveTaskStore,
@@ -234,6 +236,19 @@ const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
+// `buildIdentity.product` ("Farol Next Preview") is the release identity —
+// it is validated against the packaged app name, the bundle ID, and the
+// build digest, and stays exactly that everywhere those checks read it.
+// Everywhere the app is only naming itself to the owner (the window title,
+// the macOS app menu, the About panel), it reads "Farol" with a
+// "Developer Preview" edition mark instead — the same pair the renderer's
+// own chrome already shows (see shell.html).
+const displayProductName = "Farol";
+const displayEdition = "Developer Preview";
+const displayWindowTitle = `${displayProductName} · ${displayEdition}`;
+// UX34-08: a dedicated, clearly-Farol-owned sign-in window, never a
+// standalone-looking ChatGPT tab.
+const SIGN_IN_WINDOW_TITLE = "Sign in to ChatGPT — Farol";
 const launchIdentity = readBuildLaunchIdentity(directory);
 const nativeWorkspace = new NativeReadonlyWorkspace({
   helperPath: path.join(directory, "computer-safe-open.py"),
@@ -307,6 +322,16 @@ const controlSchema = z.strictObject({
 type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(productName);
 if (process.platform === "win32") app.setAppUserModelId(bundleId);
+if (process.platform === "darwin") {
+  // macOS's default About panel otherwise reads the raw release identity
+  // (app.getName()); this is display-only and does not touch that
+  // identity, the bundle ID, or app.setName's own OS-level registration.
+  app.setAboutPanelOptions({
+    applicationName: displayProductName,
+    applicationVersion: `${buildIdentity.version} (${displayEdition})`,
+    version: buildIdentity.sourceCommit.slice(0, 12),
+  });
+}
 
 let window: BrowserWindow | null = null;
 let runtimeChild: UtilityProcess | null = null;
@@ -324,6 +349,12 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let connectorTaskAdmission = false;
 let chatGptRoute: ChatGptRoute | null = null;
+// The most recent content-free block the sign-in surface reported (host,
+// permission name, or load-failure code only — see
+// `ChatGptSignInBlockedDiagnostic`). Cleared at the start of every sign-in
+// attempt so a stale block from a previous attempt is never shown as
+// current (UX34-07).
+let chatGptSignInBlocked: ChatGptSignInBlockedDiagnostic | null = null;
 let codexContextController: CodexContextController | null = null;
 // The connector's execution fence for summary-only phases, shared with the
 // MCP process through the launch root; it exists once the controller does.
@@ -627,6 +658,7 @@ function bootstrap() {
     nativeAgent: productAgentCapabilityAvailable(),
     liveProvider: false,
     windowState: currentWindowState(),
+    chatgptSignInBlocked: chatGptSignInBlocked,
   };
 }
 
@@ -806,6 +838,43 @@ function createContextSummaryFallbackRoute(
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
   });
+}
+
+// The sign-in surface (chatgpt-route.ts) reports its outcome exactly once,
+// when its window closes — never while it stays open, and never a repeat.
+// "unknown" (the page could not be read, e.g. a load failure) is recorded
+// nowhere: it is not the same claim as an observed signed-out page, and an
+// unverifiable outcome must not silently overwrite a previously verified
+// one.
+//
+// The owner is brought back to Setup only when they were not already
+// there: the first-run Setup wizard (setupOpen) is itself a "Setup"
+// surface, and jumping to the standalone Settings screen out from under
+// an in-progress wizard step would abandon it, not return the owner to
+// it. Inside the wizard, its own "chatgpt" step already re-reads
+// configuration state on the owner's next explicit check.
+async function recordChatGptSignInOutcome(
+  status: ChatGptSignInStatus,
+): Promise<void> {
+  if (configuration && status !== "unknown") {
+    try {
+      await configuration.recordChatGptObservation(
+        status === "authenticated"
+          ? {
+              state: "authenticated",
+              profile: "chatgpt.next-partition/1",
+              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              buildId: buildIdentity.buildId,
+              protocol: "chatgpt-page-readiness/1",
+            }
+          : { state: "signed_out" },
+      );
+    } catch {
+      // Not a request a renderer is blocked on; the next explicit "Check
+      // connection" or sign-in attempt tries again.
+    }
+  }
+  if (!setupOpen) publishShellAction("open-settings");
 }
 
 // The first turn of a Codex host thread admits its task like a new Browser
@@ -3877,9 +3946,10 @@ async function configureProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
+      chatGptSignInBlocked = null;
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
-        opened = await chatGptRoute.open();
+        opened = await chatGptRoute.openForSignIn(SIGN_IN_WINDOW_TITLE);
       } catch {
         opened = { status: "unreachable" };
       }
@@ -3921,6 +3991,12 @@ async function configureProduct(
       return ProductConfigurationResultSchema.parse({
         ...recorded,
         evidence: { kind: "chatgpt.readiness", ...observed },
+      });
+    }
+    case "chatgpt.sign-in-return": {
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
       });
     }
     case "chatgpt.prepare-attachment-task": {
@@ -5188,7 +5264,7 @@ function installApplicationMenu(): void {
     ...(process.platform === "darwin"
       ? ([
           {
-            label: productName,
+            label: displayProductName,
             submenu: [
               { role: "about" },
               { type: "separator" },
@@ -5960,7 +6036,7 @@ async function createWindow(): Promise<void> {
         )
       : null;
   window = new BrowserWindow({
-    title: productName,
+    title: displayWindowTitle,
     width: initialWindowSize.width,
     height: initialWindowSize.height,
     ...(testPlacement?.bounds ?? {}),
@@ -6265,6 +6341,12 @@ async function main(): Promise<void> {
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
+    onSignInOutcome: (status) => {
+      void recordChatGptSignInOutcome(status);
+    },
+    onSignInBlocked: (diagnostic) => {
+      chatGptSignInBlocked = diagnostic;
+    },
   });
   await initializeLiveTaskState();
   await recoverProductAgentExpiry();

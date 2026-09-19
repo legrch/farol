@@ -32,6 +32,7 @@ import {
 } from "../pkg/ipc/task-surface-status";
 import {
   ProductConfigurationCommandSchema,
+  ProductConfigurationResultSchema,
   ProductConfigurationSnapshotSchema,
   type ProductConfigurationCommand,
   type ProductConfigurationEvidence,
@@ -71,6 +72,50 @@ import {
   UNCONFIRMED_CONFIGURATION_MESSAGE,
   type ConfigurationTransport,
 } from "./configuration-outcome";
+import { sidebarToggleLeft } from "./window-chrome-geometry";
+
+// `bootstrap.productName` carries the release identity the main process
+// validates elsewhere ("Farol Next Preview"); the diagnostics row below
+// only names the app to the owner, so it reads "Farol" with its
+// "Developer Preview" edition mark, matching the window title and the
+// brand mark in shell.html.
+const DISPLAY_PRODUCT_NAME = "Farol";
+const DISPLAY_EDITION = "Developer Preview";
+
+// Independently declared, not imported: `ui` never imports from
+// `apps/desktop` (architecture.config enforces it), so this mirrors
+// `ChatGptSignInBlockedDiagnostic` in chatgpt-route.ts by shape rather
+// than by reference — the same pattern `chatgptPartition` below already
+// uses for a literal owned there.
+const chatGptSignInBlockedSchema = z
+  .discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("navigation-blocked"),
+      host: z.string(),
+    }),
+    z.strictObject({ kind: z.literal("popup-blocked"), host: z.string() }),
+    z.strictObject({
+      kind: z.literal("permission-denied"),
+      permission: z.string(),
+    }),
+    z.strictObject({ kind: z.literal("load-failed"), code: z.number() }),
+  ])
+  .nullable();
+
+function chatGptSignInBlockedMessage(
+  diagnostic: NonNullable<z.infer<typeof chatGptSignInBlockedSchema>>,
+): string {
+  switch (diagnostic.kind) {
+    case "navigation-blocked":
+      return `Sign-in was blocked at ${diagnostic.host}… Farol only follows this provider's own sign-in and MFA domains.`;
+    case "popup-blocked":
+      return `Sign-in was blocked: a popup to ${diagnostic.host} was not allowed to open.`;
+    case "permission-denied":
+      return `Sign-in was blocked: the "${diagnostic.permission}" permission was refused.`;
+    case "load-failed":
+      return `Sign-in was blocked: the page failed to load (code ${diagnostic.code}).`;
+  }
+}
 
 const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
@@ -100,6 +145,7 @@ const bootstrapSchema = z.strictObject({
   nativeAgent: z.boolean(),
   liveProvider: z.literal(false),
   windowState: WindowStateSchema,
+  chatgptSignInBlocked: chatGptSignInBlockedSchema,
 });
 
 const controlSuccessSchema = z.strictObject({ ok: z.literal(true) });
@@ -445,6 +491,15 @@ function renderWindowState(): void {
     delete root.dataset.trafficLightX;
     delete root.dataset.trafficLightY;
   }
+  // The toggle's left offset is computed from the traffic lights' own
+  // reported position, not a constant, so it stays clear of them (see
+  // `window-chrome-geometry.ts`) across every window and display this
+  // reports for — a resize, a fullscreen enter/exit, or a different macOS
+  // button layout.
+  root.style.setProperty(
+    "--sidebar-toggle-left",
+    `${sidebarToggleLeft(windowState.trafficLightPosition)}px`,
+  );
 }
 
 function renderRuntime(): void {
@@ -2375,6 +2430,29 @@ async function configureProduct(
   return true;
 }
 
+// Called whenever the main process brings the owner back to Setup
+// ("open-settings" — see onShellAction below). It is always safe to call:
+// `chatgpt.sign-in-return` reads the current settings snapshot only, never
+// probes the ChatGPT page itself, and never shows a "Verifying…" message
+// the way `configureProduct` does — the sign-in surface's own window
+// close already recorded a truthful observation (UX34-08). A failure here
+// leaves the existing "Check connection" action as the correct fallback.
+async function refreshSettingsAfterReturn(): Promise<void> {
+  try {
+    const parsed = ProductConfigurationResultSchema.safeParse(
+      await window.farolNext.configure({ kind: "chatgpt.sign-in-return" }),
+    );
+    if (parsed.success && parsed.data.ok) {
+      bootstrap = { ...bootstrap, configuration: parsed.data.snapshot };
+      renderedGeneralSettingsRevision = -1;
+      renderedComputerSettingsRevision = -1;
+      render();
+    }
+  } catch {
+    // Best-effort refresh only.
+  }
+}
+
 function connectorChallengeCard(
   settings: ReadySettings,
 ): HTMLDivElement | null {
@@ -2420,7 +2498,10 @@ function connectorChallengeCard(
 function renderSettings(): void {
   const configured = bootstrap.configuration;
   const values = [
-    ["Application", `${bootstrap.productName} · ${bootstrap.bundleId}`],
+    [
+      "Application",
+      `${DISPLAY_PRODUCT_NAME} · ${DISPLAY_EDITION} · ${bootstrap.bundleId}`,
+    ],
     [
       "Build",
       `${bootstrap.build.version} · ${bootstrap.build.sourceCommit.slice(0, 12)} · ${bootstrap.build.builtAt}`,
@@ -2573,6 +2654,14 @@ function renderSettings(): void {
                 ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
                 : readinessDetail(state);
       copy.append(title, detail);
+      if (label === "ChatGPT" && bootstrap.chatgptSignInBlocked) {
+        const blocked = document.createElement("small");
+        blocked.className = "sign-in-blocked-notice";
+        blocked.textContent = chatGptSignInBlockedMessage(
+          bootstrap.chatgptSignInBlocked,
+        );
+        copy.append(blocked);
+      }
       row.append(copy);
       if (label === "ChatGPT") {
         const actions = document.createElement("span");
@@ -3885,6 +3974,7 @@ async function start(): Promise<void> {
     else if (parsed.data.action === "open-settings") {
       setupJourney = { ...setupJourney, open: false };
       selectSection("settings");
+      void refreshSettingsAfterReturn();
     } else closeOverlay();
   });
   window.farolNext.onWindowState((value) => {
