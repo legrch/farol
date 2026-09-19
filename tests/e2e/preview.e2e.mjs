@@ -4760,98 +4760,114 @@ try {
     (target) => target.primary && (target.width < 24 || target.height < 24),
   );
   assert.deepEqual(smallPrimaryTargets, [], "primary targets are 24px or more");
-  uxMeasurements.contrast = await ordinaryLiveTasks.window.evaluate(() => {
-    const parse = (color) => {
-      const match = /rgba?\(([^)]+)\)/u.exec(color);
-      if (!match) return null;
-      const [r, g, b, a = 1] = match[1].split(",").map(Number);
-      return { r, g, b, a };
-    };
-    const channel = (value) => {
-      const c = value / 255;
-      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    };
-    const luminance = ({ r, g, b }) =>
-      0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-    const blend = (top, under) => ({
-      r: top.r * top.a + under.r * (1 - top.a),
-      g: top.g * top.a + under.g * (1 - top.a),
-      b: top.b * top.a + under.b * (1 - top.a),
-      a: 1,
-    });
-    const background = (element) => {
-      let node = element;
-      while (node) {
-        const color = parse(getComputedStyle(node).backgroundColor);
-        if (color && color.a > 0) {
-          if (color.a >= 1) return color;
-          return blend(color, background(node.parentElement));
+  // Contrast is measured with the window focused and unfocused: the lanes
+  // never take focus, so the focused styling the owner sees while working
+  // would otherwise go unmeasured.
+  uxMeasurements.contrast = [];
+  for (const windowActive of ["true", "false"]) {
+    uxMeasurements.contrast.push(
+      ...(await ordinaryLiveTasks.window.evaluate((state) => {
+        const root = document.documentElement;
+        const previous = root.dataset.windowActive;
+        root.dataset.windowActive = state;
+        try {
+          const parse = (color) => {
+            const match = /rgba?\(([^)]+)\)/u.exec(color);
+            if (!match) return null;
+            const [r, g, b, a = 1] = match[1].split(",").map(Number);
+            return { r, g, b, a };
+          };
+          const channel = (value) => {
+            const c = value / 255;
+            return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+          };
+          const luminance = ({ r, g, b }) =>
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+          const blend = (top, under) => ({
+            r: top.r * top.a + under.r * (1 - top.a),
+            g: top.g * top.a + under.g * (1 - top.a),
+            b: top.b * top.a + under.b * (1 - top.a),
+            a: 1,
+          });
+          const background = (element) => {
+            let node = element;
+            while (node) {
+              const color = parse(getComputedStyle(node).backgroundColor);
+              if (color && color.a > 0) {
+                if (color.a >= 1) return color;
+                return blend(color, background(node.parentElement));
+              }
+              node = node.parentElement;
+            }
+            return (
+              parse(getComputedStyle(document.body).backgroundColor) ?? {
+                r: 10,
+                g: 10,
+                b: 13,
+                a: 1,
+              }
+            );
+          };
+          const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+          );
+          const seen = new Set();
+          const rows = [];
+          while (walker.nextNode()) {
+            const text = walker.currentNode.textContent.trim();
+            const element = walker.currentNode.parentElement;
+            if (!text || !element || seen.has(element)) continue;
+            if (element.offsetParent === null) continue;
+            seen.add(element);
+            // Inactive controls are dimmed by design and exempt from the ratio;
+            // they are recorded, not measured.
+            if (
+              element.closest(
+                "button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled='true']",
+              )
+            ) {
+              rows.push({
+                element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`,
+                exempt: "disabled",
+                passes: true,
+              });
+              continue;
+            }
+            const style = getComputedStyle(element);
+            const color = parse(style.color);
+            if (!color || color.a === 0) continue;
+            const size = Number.parseFloat(style.fontSize);
+            const weight = Number.parseInt(style.fontWeight, 10) || 400;
+            const large = size >= 24 || (size >= 18.66 && weight >= 700);
+            const under = background(element);
+            const foreground = color.a < 1 ? blend(color, under) : color;
+            const l1 = luminance(foreground);
+            const l2 = luminance(under);
+            const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+            const required = large ? 3 : 4.5;
+            rows.push({
+              element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${
+                typeof element.className === "string" &&
+                element.className.trim()
+                  ? `.${element.className.trim().split(/\s+/u).join(".")}`
+                  : ""
+              }`,
+              fontSize: size,
+              fontWeight: weight,
+              large,
+              ratio: Math.round(ratio * 100) / 100,
+              required,
+              passes: ratio >= required,
+            });
+          }
+          return rows.map((row) => ({ ...row, windowActive: state }));
+        } finally {
+          root.dataset.windowActive = previous;
         }
-        node = node.parentElement;
-      }
-      return (
-        parse(getComputedStyle(document.body).backgroundColor) ?? {
-          r: 10,
-          g: 10,
-          b: 13,
-          a: 1,
-        }
-      );
-    };
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
+      }, windowActive)),
     );
-    const seen = new Set();
-    const rows = [];
-    while (walker.nextNode()) {
-      const text = walker.currentNode.textContent.trim();
-      const element = walker.currentNode.parentElement;
-      if (!text || !element || seen.has(element)) continue;
-      if (element.offsetParent === null) continue;
-      seen.add(element);
-      // Inactive controls are dimmed by design and exempt from the ratio;
-      // they are recorded, not measured.
-      if (
-        element.closest(
-          "button:disabled, input:disabled, select:disabled, textarea:disabled, [aria-disabled='true']",
-        )
-      ) {
-        rows.push({
-          element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}`,
-          exempt: "disabled",
-          passes: true,
-        });
-        continue;
-      }
-      const style = getComputedStyle(element);
-      const color = parse(style.color);
-      if (!color || color.a === 0) continue;
-      const size = Number.parseFloat(style.fontSize);
-      const weight = Number.parseInt(style.fontWeight, 10) || 400;
-      const large = size >= 24 || (size >= 18.66 && weight >= 700);
-      const under = background(element);
-      const foreground = color.a < 1 ? blend(color, under) : color;
-      const l1 = luminance(foreground);
-      const l2 = luminance(under);
-      const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-      const required = large ? 3 : 4.5;
-      rows.push({
-        element: `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${
-          typeof element.className === "string" && element.className.trim()
-            ? `.${element.className.trim().split(/\s+/u).join(".")}`
-            : ""
-        }`,
-        fontSize: size,
-        fontWeight: weight,
-        large,
-        ratio: Math.round(ratio * 100) / 100,
-        required,
-        passes: ratio >= required,
-      });
-    }
-    return rows;
-  });
+  }
   const contrastFailures = uxMeasurements.contrast.filter((row) => !row.passes);
   assert.deepEqual(contrastFailures, [], "every visible text meets WCAG AA");
   const animatedElements = () =>
