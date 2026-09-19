@@ -8319,7 +8319,14 @@ if (blockedCases.length > 0) {
     // silently swallowed.
     // The Next step left the page that carries the off-policy button.
     await chatGptPage.goto(signIn.chatGptFixture.url);
-    await chatGptPage.locator('[data-testid="blocked-nav-button"]').click();
+    // Clicked in the page: Playwright's click would wait for the navigation
+    // it scheduled, which the sign-in policy blocks and so never finishes.
+    await chatGptPage
+      .locator('[data-testid="blocked-nav-button"]')
+      .waitFor({ state: "visible" });
+    await chatGptPage.evaluate(() =>
+      document.querySelector('[data-testid="blocked-nav-button"]').click(),
+    );
     await waitForPageState(
       signIn.window,
       async () =>
