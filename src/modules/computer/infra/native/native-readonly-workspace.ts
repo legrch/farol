@@ -151,13 +151,15 @@ type TestHookRequest = Readonly<{ phase: string; index: number | null }>;
 
 // A test may pause the helper at up to four named points in one run; the
 // callback learns which barrier (its position in the request) was reached.
+// Answering "helper-fault" makes the helper fail with an internal error at
+// that exact point, with its cleanup still running, instead of continuing.
 const MAX_TEST_BARRIERS = 4;
 
 export type NativeReadonlyWorkspaceTestOptions =
   ReadonlyWorkspaceExecutionContext &
     Readonly<{
       testHookRequest?: TestHookRequest | readonly TestHookRequest[];
-      testHook?: (barrier: number) => Promise<void>;
+      testHook?: (barrier: number) => Promise<void | "helper-fault">;
     }>;
 
 type NativeReadonlyWorkspaceOptions = Readonly<{
@@ -1132,8 +1134,11 @@ function runHelper(
           }
           handled = handled.then(async () => {
             try {
-              await options.testHook?.(barrier);
-              continuePipe.write(Buffer.from("C"));
+              const answer = await options.testHook?.(barrier);
+              // Any byte but "C" is an internal error inside the helper.
+              continuePipe.write(
+                Buffer.from(answer === "helper-fault" ? "F" : "C"),
+              );
             } catch {
               failChannel();
             }

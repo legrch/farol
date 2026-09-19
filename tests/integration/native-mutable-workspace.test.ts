@@ -1077,4 +1077,106 @@ describe("R5 guarded-edit publication and cleanup contract", () => {
     expect(await fs.readFile(target(), "utf8")).toBe("external save\n");
     expect(await leftovers()).toEqual([]);
   });
+
+  // A8: the exceptional paths after the publication point. A refused undo
+  // exchange and an internal error once the exchange happened are both
+  // unknown, never retried, and lose nothing: whatever the exchange displaced
+  // stays in staging and the candidate stays where it landed.
+  it("A8 reports a refused undo exchange as unknown and keeps every version", async () => {
+    const reached: number[] = [];
+    const moved = path.join(root, "moved-candidate");
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: [
+        { phase: "before-publish", index: null },
+        { phase: "before-undo", index: null },
+      ],
+      testHook: async (barrier: number) => {
+        reached.push(barrier);
+        // E1 lands after the identity check, so the exchange displaces it
+        // and an undo is due. Then the target -- holding the candidate -- is
+        // renamed away, so the undo exchange itself is refused.
+        if (barrier === 0) await atomicSave(target(), "external save 1\n");
+        else await fs.rename(target(), moved);
+      },
+    });
+
+    expect(reached).toEqual([0, 1]);
+    expect(result).toEqual(unknown);
+    await expect(fs.stat(target())).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(moved, "utf8")).toBe("farol-candidate\n");
+    expect(await retained()).toEqual(["external save 1\n"]);
+  });
+
+  it("A8 reports an internal error right after the exchange as unknown and keeps the displaced original", async () => {
+    let reached = 0;
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "after-exchange", index: null },
+      testHook: async () => {
+        reached += 1;
+        return "helper-fault";
+      },
+    });
+
+    expect(reached).toBe(1);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
+    expect(await retained()).toEqual(["before\n"]);
+  });
+
+  it("A8 reports an internal error after the original check as unknown and keeps the checked original", async () => {
+    let reached = 0;
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "after-original-check", index: null },
+      testHook: async () => {
+        reached += 1;
+        return "helper-fault";
+      },
+    });
+
+    expect(reached).toBe(1);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
+    expect(await retained()).toEqual(["before\n"]);
+  });
+
+  it("A8 reports an internal error before the undo as unknown and keeps the displaced save", async () => {
+    const reached: number[] = [];
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: [
+        { phase: "before-publish", index: null },
+        { phase: "before-undo", index: null },
+      ],
+      testHook: async (barrier: number) => {
+        reached.push(barrier);
+        if (barrier === 0) {
+          await atomicSave(target(), "external save 1\n");
+          return undefined;
+        }
+        return "helper-fault";
+      },
+    });
+
+    expect(reached).toEqual([0, 1]);
+    expect(result).toEqual(unknown);
+    expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
+    expect(await retained()).toEqual(["external save 1\n"]);
+  });
+
+  it("A8 positive control: without a fault the same barriers end in a clean success", async () => {
+    let reached = 0;
+    const result = await workspace().mutate(replace(), {
+      testHookRequest: { phase: "after-exchange", index: null },
+      testHook: async () => {
+        reached += 1;
+      },
+    });
+
+    expect(reached).toBe(1);
+    expect(result).toMatchObject({
+      ok: true,
+      value: { afterSha256: digest("farol-candidate\n") },
+    });
+    expect(await fs.readFile(target(), "utf8")).toBe("farol-candidate\n");
+    expect(await leftovers()).toEqual([]);
+  });
 });
