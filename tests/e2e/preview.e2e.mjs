@@ -7696,7 +7696,7 @@ try {
   process.kill(utilityPid, "SIGKILL");
   await processDeath.window
     .locator("#runtime-pill")
-    .getByText("failed")
+    .getByText("failed", { exact: true })
     .waitFor({ timeout: 5_000 });
   await processDeath.window
     .locator("#browser-loading")
