@@ -94,6 +94,9 @@ function hostOf(url: string): string {
   }
 }
 
+// How long the sign-in window's closing page read may take before the
+// outcome is reported as unknown instead of not at all.
+const SIGN_IN_CLOSE_OBSERVATION_MS = 2_000;
 const SIGN_IN_RETURN_SENTINEL = "farol-sign-in-return-to-farol";
 
 // The Return-to-Farol control is only ever added to ChatGPT's own pages. An
@@ -669,7 +672,20 @@ export class ChatGptRoute {
         void (async () => {
           let status: ChatGptSignInStatus = "unknown";
           try {
-            const observation = pending ? await pending : null;
+            // The page is read while the window closes. A read that never
+            // settles because the frame went away first must not swallow
+            // the outcome: it is bounded, and then reported as unknown.
+            const observation = pending
+              ? await Promise.race([
+                  pending,
+                  new Promise<null>((resolve) =>
+                    setTimeout(
+                      () => resolve(null),
+                      SIGN_IN_CLOSE_OBSERVATION_MS,
+                    ),
+                  ),
+                ])
+              : null;
             if (observation?.state === "authenticated")
               status = "authenticated";
             else if (observation?.state === "signed_out")
