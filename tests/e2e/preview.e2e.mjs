@@ -8300,8 +8300,16 @@ async function dispatchTolerantOfWindowClose(action) {
 // Input.dispatchMouseEvent channel a real pointer uses, not a synthetic DOM
 // method call.
 async function assertSignInReturnByPointer(instance, chatGptPage) {
-  const banner = chatGptPage.locator("#farol-sign-in-banner");
-  await banner.waitFor({ state: "visible" });
+  // A locator-based wait (banner.waitFor) is a Playwright action, and after
+  // a blocked navigation on this page Playwright's own action machinery
+  // waits "for navigation to finish…" on the cancelled navigation forever
+  // (see the blocked-navigation proof above). page.evaluate has no such
+  // wait, so readiness is polled through it instead — this proof is reused
+  // both on a fresh window and right after a blocked navigation.
+  await waitForPageState(
+    chatGptPage,
+    () => document.querySelector("#farol-sign-in-banner button") !== null,
+  );
   const hit = await signInReturnHitTest(chatGptPage);
   assert.equal(hit.visible, true, "the Return control is visible");
   assert.equal(hit.enabled, true, "the Return control is enabled");
