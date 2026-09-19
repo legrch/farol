@@ -40,6 +40,25 @@ const inputRecords = new Map();
 // No compiler code runs before the compiler is authenticated (F3-5): a
 // compiler that is not the reviewed one refuses the build instead of being
 // trusted to leave the bytes a later check would read.
+// Node startup hooks (NODE_OPTIONS, NODE_PATH, --loader/--import/--require)
+// run before this file and could stand in for the compiler. `task
+// next:package` starts the candidate build without any; a build that still
+// sees one is never exact. A preload can hide itself, so this is a second
+// line behind that clean launch, not a replacement for it.
+const startupHooks = [
+  ...(process.env.NODE_OPTIONS ? ["NODE_OPTIONS"] : []),
+  ...(process.env.NODE_PATH ? ["NODE_PATH"] : []),
+  ...process.execArgv.filter((argument) =>
+    /^(?:--(?:experimental-)?loader|--import|--require|-r)(?:=|$)/u.test(
+      argument,
+    ),
+  ),
+];
+for (const hook of startupHooks) {
+  process.stderr.write(
+    `node startup hook present (${hook}) — this build is not a candidate\n`,
+  );
+}
 const compilerRefusals = compilerProblems(root);
 if (compilerRefusals.length > 0) {
   for (const problem of compilerRefusals) {
@@ -247,7 +266,8 @@ const inputExact =
   sourceInputs.length > 0 &&
   sourceInputs.every((entry) => entry.exact === true) &&
   drift.length === 0 &&
-  !compilerRedirected;
+  !compilerRedirected &&
+  startupHooks.length === 0;
 const inputLedger = [...inputRecords.values()].sort((left, right) =>
   left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
 );

@@ -174,6 +174,38 @@ describe("F3-5 build provenance", () => {
     expect(() => npmCliFor(path.join(lonely, "bin", "node"))).toThrow();
   });
 
+  it("never marks a build exact when a Node startup hook was present", () => {
+    const preload = path.join(
+      fs.mkdtempSync(path.join(os.tmpdir(), "farol-preload-")),
+      "hook.cjs",
+    );
+    scratch.push(path.dirname(preload));
+    fs.writeFileSync(
+      preload,
+      "// a startup hook that could stand in for the compiler\n",
+    );
+    const result = spawnSync(
+      process.execPath,
+      [path.join(vnextRoot, "tooling/build.mjs")],
+      {
+        cwd: vnextRoot,
+        encoding: "utf8",
+        env: { ...process.env, NODE_OPTIONS: `--require=${preload}` },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(
+      "node startup hook present (NODE_OPTIONS) — this build is not a candidate",
+    );
+    const manifest = JSON.parse(
+      fs.readFileSync(
+        path.join(vnextRoot, "dist/app/build-manifest.json"),
+        "utf8",
+      ),
+    );
+    expect(manifest.inputExact).toBe(false);
+  }, 180_000);
+
   it("takes the source identity from the system Git, not a git earlier on PATH", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "farol-fake-git-"));
     scratch.push(bin);
