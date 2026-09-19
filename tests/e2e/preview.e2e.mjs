@@ -1817,6 +1817,20 @@ async function rejectMismatchedBuildLaunch(instance) {
   }
 }
 
+// Playwright's waitForFunction does not await a promise its predicate
+// returns: an async predicate is truthy on its first evaluation, so such a
+// wait ends whatever the state. A predicate that needs the page's async
+// bridge is polled from here instead, and every evaluation is awaited.
+async function waitForPageState(page, predicate, arg, options = {}) {
+  const deadline = Date.now() + (options.timeout ?? 30_000);
+  for (;;) {
+    const result = await page.evaluate(predicate, arg);
+    if (result) return result;
+    if (Date.now() >= deadline) throw new Error("E2E_PAGE_STATE_TIMEOUT");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function waitForWindowCount(application, count) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const actual = await application.evaluate(
@@ -3059,7 +3073,8 @@ async function runLiveTaskPersistenceFaultProof() {
       (surface) => new URL(surface.url).pathname === `/chatgpt/c/${taskId}`,
       "idle conversation URL changes before persistence fails",
     );
-    await instance.window.waitForFunction(
+    await waitForPageState(
+      instance.window,
       async (selectedTaskId) =>
         (await window.farolNext.bootstrap()).tasks.find(
           (task) => task.taskId === selectedTaskId,
@@ -3954,7 +3969,8 @@ async function runTwoGenerationStateProof() {
         ),
       "continuity turn completes in generation A",
     );
-    await instance.window.waitForFunction(
+    await waitForPageState(
+      instance.window,
       async (taskId) =>
         (await window.farolNext.bootstrap()).tasks.find(
           (task) => task.taskId === taskId,
@@ -3964,7 +3980,8 @@ async function runTwoGenerationStateProof() {
     await instance.window.evaluate((taskId) => {
       void window.farolNext.control(taskId, "compact-context-fixture");
     }, kept.taskId);
-    await instance.window.waitForFunction(
+    await waitForPageState(
+      instance.window,
       async (taskId) =>
         (await window.farolNext.bootstrap()).tasks.find(
           (task) => task.taskId === taskId,
@@ -4036,7 +4053,8 @@ async function runTwoGenerationStateProof() {
       ),
       1,
     );
-    await instance.window.waitForFunction(
+    await waitForPageState(
+      instance.window,
       async (taskId) =>
         (await window.farolNext.bootstrap()).tasks.find(
           (task) => task.taskId === taskId,
@@ -4162,12 +4180,16 @@ async function runTwoGenerationStateProof() {
       kept.taskId,
     );
     assert.deepEqual(confirmed, { ok: true, phase: "active" });
-    await instance.window.waitForFunction(async (taskId) => {
-      const task = (await window.farolNext.bootstrap()).tasks.find(
-        (candidate) => candidate.taskId === taskId,
-      );
-      return task?.context?.phase === "active" && task.context.epoch === 2;
-    }, kept.taskId);
+    await waitForPageState(
+      instance.window,
+      async (taskId) => {
+        const task = (await window.farolNext.bootstrap()).tasks.find(
+          (candidate) => candidate.taskId === taskId,
+        );
+        return task?.context?.phase === "active" && task.context.epoch === 2;
+      },
+      kept.taskId,
+    );
     const confirmedRecord = JSON.parse(await fs.readFile(files.tasks, "utf8"));
     const confirmedTask = confirmedRecord.tasks.find(
       (task) => task.taskId === kept.taskId,
@@ -4999,7 +5021,8 @@ try {
     "embedded task completes without leaving Watch Rail",
   );
   const retainedLiveConversationUrl = completedContinuitySurface.url;
-  await ordinaryLiveTasks.window.waitForFunction(
+  await waitForPageState(
+    ordinaryLiveTasks.window,
     async (taskId) =>
       (await window.farolNext.bootstrap()).tasks.find(
         (task) => task.taskId === taskId,
@@ -5023,7 +5046,8 @@ try {
     ),
     1,
   );
-  await ordinaryLiveTasks.window.waitForFunction(
+  await waitForPageState(
+    ordinaryLiveTasks.window,
     async (taskId) =>
       (await window.farolNext.bootstrap()).tasks.find(
         (task) => task.taskId === taskId,
@@ -5451,22 +5475,30 @@ try {
   await ordinaryLiveTasks.window.evaluate((taskId) => {
     void window.farolNext.control(taskId, "compact-context-fixture");
   }, pinnedTask.taskId);
-  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
-    const state = await window.farolNext.bootstrap();
-    return (
-      state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
-        "checkpoint_requested" &&
-      document.querySelector("#dossier-state b")?.textContent ===
-        "PRESERVING CONTEXT"
-    );
-  }, pinnedTask.taskId);
-  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
-    const state = await window.farolNext.bootstrap();
-    return (
-      state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
-      "handoff_offered"
-    );
-  }, pinnedTask.taskId);
+  await waitForPageState(
+    ordinaryLiveTasks.window,
+    async (taskId) => {
+      const state = await window.farolNext.bootstrap();
+      return (
+        state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
+          "checkpoint_requested" &&
+        document.querySelector("#dossier-state b")?.textContent ===
+          "PRESERVING CONTEXT"
+      );
+    },
+    pinnedTask.taskId,
+  );
+  await waitForPageState(
+    ordinaryLiveTasks.window,
+    async (taskId) => {
+      const state = await window.farolNext.bootstrap();
+      return (
+        state.tasks.find((task) => task.taskId === taskId)?.context?.phase ===
+        "handoff_offered"
+      );
+    },
+    pinnedTask.taskId,
+  );
   const repeatedCompaction = await ordinaryLiveTasks.window.evaluate(
     (taskId) => window.farolNext.control(taskId, "compact-context-fixture"),
     pinnedTask.taskId,
@@ -5616,13 +5648,17 @@ try {
   await ordinaryLiveTasks.window.waitForFunction(
     () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
   );
-  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
-    const state = await window.farolNext.bootstrap();
-    return (
-      state.tasks.find((task) => task.taskId === taskId)?.agent?.phase ===
-      "cancelled"
-    );
-  }, agentCancellationTask.taskId);
+  await waitForPageState(
+    ordinaryLiveTasks.window,
+    async (taskId) => {
+      const state = await window.farolNext.bootstrap();
+      return (
+        state.tasks.find((task) => task.taskId === taskId)?.agent?.phase ===
+        "cancelled"
+      );
+    },
+    agentCancellationTask.taskId,
+  );
   await waitForWindowCount(ordinaryLiveTasks.application, 1);
   const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
@@ -5703,11 +5739,15 @@ try {
     pinnedTask.taskId,
   );
   assert.deepEqual(confirmedContext, { ok: true, phase: "active" });
-  await ordinaryLiveTasks.window.waitForFunction(async (taskId) => {
-    const state = await window.farolNext.bootstrap();
-    const task = state.tasks.find((candidate) => candidate.taskId === taskId);
-    return task?.context?.phase === "active" && task.context.epoch === 2;
-  }, pinnedTask.taskId);
+  await waitForPageState(
+    ordinaryLiveTasks.window,
+    async (taskId) => {
+      const state = await window.farolNext.bootstrap();
+      const task = state.tasks.find((candidate) => candidate.taskId === taskId);
+      return task?.context?.phase === "active" && task.context.epoch === 2;
+    },
+    pinnedTask.taskId,
+  );
   assert.equal(
     await ordinaryLiveTasks.window.locator("#dossier-state b").innerText(),
     "COMPLETE",
@@ -5807,7 +5847,8 @@ try {
         .querySelector("#settings-feedback")
         ?.textContent?.includes("Nothing was submitted again") === true,
   );
-  await interruptedChatGptTask.window.waitForFunction(
+  await waitForPageState(
+    interruptedChatGptTask.window,
     async () =>
       (await window.farolNext.bootstrap()).chatgptRecoveryPending === false,
   );
