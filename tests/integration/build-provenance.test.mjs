@@ -243,6 +243,54 @@ describe("F3-5 build provenance", () => {
     expect(packageTask).toContain("/usr/bin/env -i");
   });
 
+  it("runs no user-site Python hook in the wrapper the exact launchers start", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-user-site-"));
+    scratch.push(home);
+    const env = { HOME: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" };
+    const userSite = execFileSync(
+      "/usr/bin/python3",
+      ["-c", "import site; print(site.getusersitepackages())"],
+      { env, encoding: "utf8" },
+    ).trim();
+    fs.mkdirSync(userSite, { recursive: true });
+    const marker = path.join(home, "hook-ran");
+    fs.writeFileSync(
+      path.join(userSite, "farol-hook.pth"),
+      `import os; open(${JSON.stringify(marker)}, "w").close()\n`,
+    );
+    // Control: an ordinary interpreter with this HOME runs the hook.
+    execFileSync("/usr/bin/python3", ["-c", "pass"], { env });
+    expect(fs.existsSync(marker)).toBe(true);
+    fs.rmSync(marker);
+    // The wrapper exactly as next:package and next:run start it.
+    execFileSync(
+      "/usr/bin/python3",
+      ["-I", "scripts/assert-owner-untouched.py", "--", "/usr/bin/true"],
+      { env, cwd: path.join(vnextRoot, "..") },
+    );
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("offers no npm alias that builds a candidate outside the clean launcher", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(vnextRoot, "package.json"), "utf8"),
+    );
+    for (const [name, command] of Object.entries(manifest.scripts)) {
+      expect(`${name}: ${command}`).not.toMatch(/tooling\/package\.mjs/u);
+    }
+    const taskfile = fs.readFileSync(
+      path.join(vnextRoot, "..", "Taskfile.yml"),
+      "utf8",
+    );
+    const runTask = taskfile.slice(
+      taskfile.indexOf("  next:run:"),
+      taskfile.indexOf("  next:preview:"),
+    );
+    expect(runTask).toContain(
+      "/usr/bin/python3 -I ./scripts/assert-owner-untouched.py",
+    );
+  });
+
   it("takes the source identity from the system Git, not a git earlier on PATH", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "farol-fake-git-"));
     scratch.push(bin);

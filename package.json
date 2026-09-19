@@ -25,7 +25,7 @@
     "hunt:model": "vitest run tests/hunt/model.test.ts",
     "hunt:report": "node tooling/hunt-report.mjs",
     "build": "node tooling/build.mjs",
-    "package": "npm run build && node tooling/package.mjs",
+    "package": "node -e \"console.error('A candidate is built only by: task next:package (clean environment, isolated wrapper).'); process.exit(1)\"",
     "verify:package": "node tooling/verify-package.mjs",
     "promote": "node tooling/promote-preview.mjs",
     "preview": "electron dist/app/main.cjs",
