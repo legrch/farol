@@ -2093,7 +2093,7 @@ async function proveStartupRuntimeDeath(stage) {
     const startupWindow = await application.firstWindow({ timeout: 15_000 });
     await startupWindow
       .locator("#runtime-pill")
-      .getByText("failed")
+      .getByText("failed", { exact: true })
       .waitFor({ timeout: 5_000 });
     assert.equal(startupWindow.isClosed(), false);
     assert.equal(
