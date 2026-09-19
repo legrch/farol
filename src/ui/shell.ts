@@ -45,7 +45,10 @@ import {
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
-import { workspaceEditToAcknowledge } from "./workspace-edit-delivery";
+import {
+  workspaceEditRefusalMessage,
+  workspaceEditToAcknowledge,
+} from "./workspace-edit-delivery";
 import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
@@ -1828,7 +1831,10 @@ async function configureProduct(
                                           : parsed.error ===
                                               "WORKSPACE_ROOT_CHANGED"
                                             ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
-                                            : `Not applied · ${parsed.error}`;
+                                            : (workspaceEditRefusalMessage(
+                                                parsed.error,
+                                              ) ??
+                                              `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

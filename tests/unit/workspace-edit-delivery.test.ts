@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigurationOutcome } from "../../src/ui/configuration-outcome";
-import { workspaceEditToAcknowledge } from "../../src/ui/workspace-edit-delivery";
+import {
+  workspaceEditRefusalMessage,
+  workspaceEditToAcknowledge,
+} from "../../src/ui/workspace-edit-delivery";
 
 const operationId = "00000000-0000-4000-8000-000000000002";
 const workspaceId = "00000000-0000-4000-8000-000000000001";
@@ -99,5 +102,28 @@ describe("guarded edit delivery acknowledgement", () => {
         applied(operationId),
       ),
     ).toBeNull();
+  });
+});
+
+describe("A6 unknown guarded-edit outcome message", () => {
+  it("never calls an unknown edit outcome not applied and says what was kept", () => {
+    const message = workspaceEditRefusalMessage(
+      "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+    );
+    expect(message).not.toBeNull();
+    expect(message).not.toMatch(/not applied/iu);
+    expect(message).toMatch(/may already be in the file/u);
+    expect(message).toMatch(/will not repeat it/u);
+    expect(message).toMatch(/deleted nothing/u);
+    expect(message).toMatch(/\.farol-stage/u);
+    // Content-free: no path of the owner's machine and no file content.
+    expect(message).not.toMatch(/\/Users\/|~\/|README/u);
+  });
+
+  it("leaves every other refusal to its own sentence", () => {
+    expect(
+      workspaceEditRefusalMessage("WORKSPACE_MUTATION_CONFLICT"),
+    ).toBeNull();
+    expect(workspaceEditRefusalMessage("WORKSPACE_PATH_REFUSED")).toBeNull();
   });
 });

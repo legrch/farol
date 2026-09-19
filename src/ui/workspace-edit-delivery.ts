@@ -44,3 +44,15 @@ export function workspaceEditToAcknowledge(
     ? command.operationId
     : null;
 }
+
+/**
+ * The owner-facing sentence for a guarded edit whose outcome is unknown, or
+ * null for any other refusal.  Unknown is never "not applied": the change may
+ * already be in the file, Farol never repeats it, and whatever the helper
+ * could not put back is kept beside the file rather than deleted.  The
+ * sentence carries no path or content.
+ */
+export function workspaceEditRefusalMessage(code: string): string | null {
+  if (code !== "WORKSPACE_MUTATION_OUTCOME_UNKNOWN") return null;
+  return "Edit outcome unknown · the change may already be in the file. Farol will not repeat it and deleted nothing: any version it could not put back stays in a hidden .farol-stage folder beside the file. Check the file before editing it again.";
+}
