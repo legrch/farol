@@ -3708,7 +3708,32 @@ function durableStateFiles(userData) {
   return {
     settings: path.join(state, "product-settings.json"),
     tasks: path.join(state, "live-tasks", "live-tasks.json"),
+    context: path.join(state, "context-continuity"),
   };
+}
+
+// One digest over every file of a tree: relative path, size and content, in
+// sorted order, so a rename, an addition or a rewrite each changes it.
+async function treeFilesDigest(directory) {
+  const hash = createHash("sha256");
+  const walk = async (current, prefix) => {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    entries.sort((left, right) => (left.name < right.name ? -1 : 1));
+    for (const entry of entries) {
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const target = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        hash.update(`d:${relative}\n`);
+        await walk(target, relative);
+      } else {
+        const bytes = await fs.readFile(target);
+        hash.update(`f:${relative}:${bytes.length}\n`);
+        hash.update(bytes);
+      }
+    }
+  };
+  await walk(directory, "");
+  return hash.digest("hex");
 }
 
 async function durableStateBytes(userData) {
@@ -3720,6 +3745,7 @@ async function durableStateBytes(userData) {
   return {
     settings: await digest(files.settings),
     tasks: await digest(files.tasks),
+    context: await treeFilesDigest(files.context),
   };
 }
 
@@ -3740,12 +3766,13 @@ async function generationSnapshot(instance) {
   return {
     settings: state.configuration.settings,
     tasks: state.tasks.map(
-      ({ taskId, sessionId, label, pinned, lifecycle }) => ({
+      ({ taskId, sessionId, label, pinned, lifecycle, context }) => ({
         taskId,
         sessionId,
         label,
         pinned,
         lifecycle,
+        context: context ?? null,
       }),
     ),
   };
@@ -3892,6 +3919,60 @@ async function runTwoGenerationStateProof() {
       kept.taskId,
     );
     assert.equal(pinned.ok, true, JSON.stringify(pinned));
+
+    // A leaves a context handoff offered on the kept task: one completed
+    // turn, then the compaction fixture has the provider write the
+    // checkpoint. The handoff is an obligation B inherits unconfirmed.
+    const keptActivated = await instance.window.evaluate(
+      (taskId) => window.farolNext.task({ kind: "task.activate", taskId }),
+      kept.taskId,
+    );
+    assert.equal(keptActivated.ok, true, JSON.stringify(keptActivated));
+    await waitForLiveChatGptSurface(
+      instance,
+      kept.taskId,
+      (surface) => surface.state.composerVisible,
+      "kept task surface before the continuity turn",
+    );
+    assert.equal(
+      await submitLiveChatGptTask(
+        instance,
+        kept.taskId,
+        "Farol two-generation continuity canary",
+      ),
+      1,
+    );
+    await waitForLiveChatGptSurface(
+      instance,
+      kept.taskId,
+      (surface) =>
+        /\/chatgpt\/c\/[A-Za-z0-9-]{8,128}$/u.test(
+          new URL(surface.url).pathname,
+        ) &&
+        surface.state.assistantText.includes(
+          "keep the read-only boundary in place",
+        ),
+      "continuity turn completes in generation A",
+    );
+    await instance.window.waitForFunction(
+      async (taskId) =>
+        (await window.farolNext.bootstrap()).tasks.find(
+          (task) => task.taskId === taskId,
+        )?.lifecycle === "completed",
+      kept.taskId,
+    );
+    await instance.window.evaluate((taskId) => {
+      void window.farolNext.control(taskId, "compact-context-fixture");
+    }, kept.taskId);
+    await instance.window.waitForFunction(
+      async (taskId) =>
+        (await window.farolNext.bootstrap()).tasks.find(
+          (task) => task.taskId === taskId,
+        )?.context?.phase === "handoff_offered",
+      kept.taskId,
+      { timeout: 15_000 },
+    );
+
     const generationAState = await generationSnapshot(instance);
     assert.equal(generationAState.settings.computer.workspaces.length, 1);
     for (const step of ["computer", "chatgpt", "hosts"]) {
@@ -3902,15 +3983,26 @@ async function runTwoGenerationStateProof() {
       );
     }
     assert.deepEqual(
-      generationAState.tasks.map(({ taskId, label, pinned, lifecycle }) => [
-        taskId,
-        label,
-        pinned,
-        lifecycle,
-      ]),
+      generationAState.tasks.map(
+        ({ taskId, label, pinned, lifecycle, context }) => [
+          taskId,
+          label,
+          pinned,
+          lifecycle,
+          context?.epoch ?? null,
+          context?.phase ?? null,
+        ],
+      ),
       [
-        [kept.taskId, "Generation A task", true, "idle"],
-        [turn.taskId, turn.label, false, "idle"],
+        [
+          kept.taskId,
+          "Generation A task",
+          true,
+          "completed",
+          1,
+          "handoff_offered",
+        ],
+        [turn.taskId, turn.label, false, "idle", null, null],
       ],
     );
 
@@ -4026,6 +4118,12 @@ async function runTwoGenerationStateProof() {
           : task,
       ),
     );
+    // A's offered handoff reaches B byte for byte: B's start neither
+    // confirms, drops nor rewrites the checkpoint store.
+    assert.equal(
+      (await durableStateBytes(instance.userData)).context,
+      ownedByA.context,
+    );
     const restoredRecord = JSON.parse(await fs.readFile(files.tasks, "utf8"));
     observations.restoredByB = { revision: restoredRecord.revision };
     assert.equal(
@@ -4056,6 +4154,39 @@ async function runTwoGenerationStateProof() {
       outcome: "identity-mismatch",
     });
     assert.deepEqual(await durableStateBytes(instance.userData), ownedByB);
+
+    // B completes the handoff A offered: the checkpoint A's provider wrote is
+    // installed by B's code, and the retained source is retired.
+    const confirmed = await instance.window.evaluate(
+      (taskId) => window.farolNext.control(taskId, "confirm-context-fixture"),
+      kept.taskId,
+    );
+    assert.deepEqual(confirmed, { ok: true, phase: "active" });
+    await instance.window.waitForFunction(async (taskId) => {
+      const task = (await window.farolNext.bootstrap()).tasks.find(
+        (candidate) => candidate.taskId === taskId,
+      );
+      return task?.context?.phase === "active" && task.context.epoch === 2;
+    }, kept.taskId);
+    const confirmedRecord = JSON.parse(await fs.readFile(files.tasks, "utf8"));
+    const confirmedTask = confirmedRecord.tasks.find(
+      (task) => task.taskId === kept.taskId,
+    );
+    assert.equal(confirmedTask?.context?.epoch, 2);
+    assert.equal(confirmedTask?.context?.phase, "active");
+    assert.equal(confirmedTask?.conversationUrl, null);
+    const contextTasks = path.join(files.context, "tasks");
+    const contextTaskDirectories = await fs.readdir(contextTasks);
+    assert.equal(contextTaskDirectories.length, 1);
+    for (const retired of ["sources", "summaries"]) {
+      assert.deepEqual(
+        await fs.readdir(
+          path.join(contextTasks, contextTaskDirectories[0], retired),
+        ),
+        [],
+        `E2E_CONTEXT_SOURCE_NOT_RETIRED:${retired}`,
+      );
+    }
 
     // B's own change survives B's restart, which rewrites nothing.
     const relabelled = await instance.window.evaluate(
@@ -4122,18 +4253,20 @@ async function runTwoGenerationStateProof() {
           ],
           observations,
           outside: [
-            "context checkpoint continuity across generations",
+            "ChatGPT dispatch-intent journal and undelivered agent results across generations (proven within one generation by the ordinary lanes)",
             "bundle placement and promotion between generations",
           ],
           cases: [
             "predecessor-qualified-by-own-pinned-verifier",
             "generation-a-establishes-owner-state",
             "second-generation-refused-while-first-owns-state",
+            "context-handoff-survives-generation-switch",
             "crash-with-running-turn-leaves-no-process",
             "interrupted-activation-leaves-state-readable",
             "second-generation-reads-first-generation-state",
             "running-turn-restored-as-outcome-unknown-without-resubmit",
             "first-generation-refused-while-second-owns-state",
+            "newer-generation-completes-older-handoff",
             "second-generation-change-survives-restart",
             "rollback-reads-newer-state-without-rewriting-it",
             "generation-bytes-unchanged",

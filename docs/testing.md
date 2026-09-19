@@ -80,14 +80,16 @@ predecessor that manifest names: the lane runs the verifier of A's own source co
 in the checkout the manifest names, after proving every file of that commit's
 `tooling/` and package manifests is byte-identical there, so A is never re-qualified
 by this candidate's tooling. B is this package. Both run in turn on one isolated user
-data directory: A completes Setup and creates, renames and pins tasks; B launched
-while A runs must be refused as `identity-mismatch` without touching A's state; A is
-killed with a provider turn running; B's first activation is killed before any window;
-B must then read A's settings byte for byte and its tasks, report the interrupted turn
-as outcome-unknown without submitting anything, refuse A while it runs, and keep its
-own change across a restart; the rollback to A must read B's state without rewriting
-it, and neither bundle's tree digest may change. Context checkpoints and bundle
-placement are outside it. The report is the `report.json` of its attempt under
+data directory: A completes Setup, creates, renames and pins tasks, and leaves a context
+handoff offered after one completed turn; B launched while A runs must be refused as
+`identity-mismatch` without touching A's state; A is killed with a provider turn
+running; B's first activation is killed before any window. B must then read A's
+settings, tasks and context store byte for byte, report the interrupted turn as
+outcome-unknown without submitting anything, refuse A while it runs, confirm the
+handoff A offered and retire its source, and keep its own change across a restart; the
+rollback to A must read B's state without rewriting it, and neither bundle's tree
+digest may change. The ChatGPT dispatch-intent journal, undelivered agent results and
+bundle placement are outside it. The report is the `report.json` of its attempt under
 `artifacts/two-generation-state/`.
 
 The final owner journey is separate from automation: `task next:run` is launched with
