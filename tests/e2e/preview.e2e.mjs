@@ -8261,35 +8261,62 @@ async function signInReturnHitTest(chatGptPage) {
 // is gone and bootstrap reports a ready configuration with chatgpt still
 // unverified (the fixture's login button was never clicked) — never a
 // silent close and never "any navigation happened".
-async function waitForSignInReturnOutcome(instance) {
+// After Return the sign-in window is gone and Setup is not stale: its next
+// action follows the outcome recorded at close. On a page that was read
+// normally that outcome is "signed out" (the fixture never signs in), so the
+// step offers "Open sign-in…" at once. After a blocked navigation the
+// recorded outcome may honestly be unknown; the step must then match
+// whatever was recorded rather than the state from before the window.
+async function waitForSignInReturnOutcome(
+  instance,
+  { readOnClose = true } = {},
+) {
   await waitForWindowCount(instance.application, 1);
+  const recorded = await waitForPageState(instance.window, async () => {
+    const value = await window.farolNext.bootstrap();
+    return value.configuration.status === "ready";
+  }).then(() =>
+    instance.window.evaluate(async () => {
+      const value = await window.farolNext.bootstrap();
+      return value.configuration.settings.setup.chatgpt;
+    }),
+  );
+  process.stdout.write(
+    `UX34_RETURN_RECORDED:${JSON.stringify({ readOnClose, recorded })}\n`,
+  );
+  if (readOnClose) {
+    assert.equal(recorded.reachable, "reachable", "Return read the page");
+    assert.equal(recorded.configured, false);
+    assert.notEqual(recorded.needsAction, null);
+  }
   if (await instance.window.locator("#setup-dialog").isVisible()) {
-    // The open Setup step shows the recorded outcome's next action at once,
-    // not the "Check connection" it offered while the window was open.
+    const expected = (() => {
+      if (
+        !recorded.visited ||
+        recorded.reachable === "unreachable" ||
+        (recorded.reachable === "reachable" &&
+          !recorded.configured &&
+          recorded.needsAction !== null)
+      ) {
+        return "Open sign-in…";
+      }
+      return recorded.verified ? "Recheck connection" : "Check connection";
+    })();
+    if (readOnClose) assert.equal(expected, "Open sign-in…");
     try {
       await instance.window.waitForFunction(
-        () =>
-          document.querySelector("#setup-live-primary")?.textContent ===
-          "Open sign-in…",
+        (label) =>
+          document.querySelector("#setup-live-primary")?.textContent === label,
+        expected,
       );
     } catch (error) {
       const shown = await instance.window.evaluate(() => ({
         primary: document.querySelector("#setup-live-primary")?.textContent,
         step: document.querySelector("#setup-dialog")?.dataset.stepId,
-        mode: document.querySelector("#setup-dialog")?.dataset.mode,
-        open: document.querySelector("#setup-dialog")?.open,
-        summary: document.querySelector("#setup-live-summary")?.textContent,
         shellActions: window.__farolShellActions ?? null,
       }));
-      const recorded = await instance.window.evaluate(async () => {
-        const value = await window.farolNext.bootstrap();
-        return value.configuration.status === "ready"
-          ? value.configuration.settings.setup.chatgpt
-          : value.configuration.status;
-      });
-      shown.recordedChatGpt = recorded;
       throw new Error(
-        `${error.message} · after Return Setup showed ${JSON.stringify(shown)}`,
+        `${error.message} · expected ${expected} after Return; Setup showed ${JSON.stringify(shown)}`,
         { cause: error },
       );
     }
@@ -8330,7 +8357,11 @@ async function dispatchTolerantOfWindowClose(action) {
 // Real dispatched pointer input at the Return control's centre — the CDP
 // Input.dispatchMouseEvent channel a real pointer uses, not a synthetic DOM
 // method call.
-async function assertSignInReturnByPointer(instance, chatGptPage) {
+async function assertSignInReturnByPointer(
+  instance,
+  chatGptPage,
+  outcome = {},
+) {
   // A locator-based wait (banner.waitFor) is a Playwright action, and after
   // a blocked navigation on this page Playwright's own action machinery
   // waits "for navigation to finish…" on the cancelled navigation forever
@@ -8352,7 +8383,7 @@ async function assertSignInReturnByPointer(instance, chatGptPage) {
   await dispatchTolerantOfWindowClose(() =>
     chatGptPage.mouse.click(hit.x, hit.y),
   );
-  await waitForSignInReturnOutcome(instance);
+  await waitForSignInReturnOutcome(instance, outcome);
 }
 
 // Real dispatched keyboard input: Tab to the Return control (bounded, so a
@@ -8465,7 +8496,7 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     await chatGptPage.evaluate(() =>
       document.querySelector("#farol-sign-in-banner button").click(),
     );
-    await waitForSignInReturnOutcome(signIn);
+    await waitForSignInReturnOutcome(signIn, { readOnClose: false });
     cases.push("ux34-sign-in-return-handler");
 
     // Pointer proof: a fresh sign-in window, real dispatched mouse input.
@@ -8506,7 +8537,9 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     process.stdout.write(
       `UX34_POST_BLOCKED_NAV_DIAGNOSTICS:${JSON.stringify(postBlockedNavDiagnostics)}\n`,
     );
-    await assertSignInReturnByPointer(signIn, chatGptPage);
+    await assertSignInReturnByPointer(signIn, chatGptPage, {
+      readOnClose: false,
+    });
     cases.push("ux34-sign-in-return-pointer-after-blocked-navigation");
 
     // Self-deception guard: a fixture variant adds a full-viewport overlay
