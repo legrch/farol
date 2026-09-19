@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  compilerProblems,
   dependencyDrift,
   packageRootOf,
   packageTreeDigest,
@@ -96,6 +97,65 @@ describe("F3-5 build provenance", () => {
       ),
     ).toEqual([]);
   });
+
+  it("refuses a package root that is a symlink instead of hashing where it points", () => {
+    const { root, directory } = fixturePackage();
+    const link = path.join(root, "node_modules", "linked");
+    fs.symlinkSync(directory, link);
+    expect(() => packageTreeDigest(link)).toThrow(
+      "DEPENDENCY_ROOT_NOT_A_DIRECTORY",
+    );
+  });
+
+  it("authenticates this checkout's compiler and refuses a redirected one", () => {
+    expect(compilerProblems(vnextRoot, {})).toEqual([]);
+    expect(
+      compilerProblems(vnextRoot, { ESBUILD_BINARY_PATH: "/usr/bin/true" }),
+    ).toContain("ESBUILD_BINARY_PATH redirects the compiler");
+  });
+
+  it("refuses a compiler whose package roots resolve outside the checkout", () => {
+    const checkout = fs.mkdtempSync(path.join(os.tmpdir(), "farol-linked-"));
+    scratch.push(checkout);
+    fs.mkdirSync(path.join(checkout, "tooling"));
+    fs.copyFileSync(
+      path.join(vnextRoot, "tooling/dependency-digests.json"),
+      path.join(checkout, "tooling/dependency-digests.json"),
+    );
+    fs.mkdirSync(path.join(checkout, "node_modules", "@esbuild"), {
+      recursive: true,
+    });
+    for (const packageRoot of toolchainPackageRoots()) {
+      fs.symlinkSync(
+        path.join(vnextRoot, packageRoot),
+        path.join(checkout, packageRoot),
+      );
+    }
+    const problems = compilerProblems(checkout, {});
+    expect(problems).toContain(
+      "node_modules/esbuild resolves outside this checkout",
+    );
+    expect(problems).toContain(
+      "node_modules/esbuild is not reviewed (unreadable)",
+    );
+  });
+
+  it("refuses to build before any compiler code runs when the compiler is not trusted", () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(vnextRoot, "tooling/build.mjs")],
+      {
+        cwd: vnextRoot,
+        encoding: "utf8",
+        env: { ...process.env, ESBUILD_BINARY_PATH: "/usr/bin/true" },
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "compiler not trusted: ESBUILD_BINARY_PATH redirects the compiler",
+    );
+    expect(result.stderr).not.toContain("at ");
+  }, 120_000);
 
   it("takes the source identity from the system Git, not a git earlier on PATH", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "farol-fake-git-"));

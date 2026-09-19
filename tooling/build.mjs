@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { build } from "esbuild";
 import {
   BUILD_ENTRIES,
   snapshotBuildEntries,
@@ -24,6 +23,7 @@ import {
 } from "./native-helper-contract.mjs";
 import { sourceSnapshot } from "./source-identity.mjs";
 import {
+  compilerProblems,
   dependencyDrift,
   packageRootOf,
   readDependencyDigests,
@@ -36,6 +36,21 @@ const output = path.join(root, "dist/app");
 const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
 const initial = sourceSnapshot(repositoryRoot, scope);
 const inputRecords = new Map();
+
+// No compiler code runs before the compiler is authenticated (F3-5): a
+// compiler that is not the reviewed one refuses the build instead of being
+// trusted to leave the bytes a later check would read.
+const compilerRefusals = compilerProblems(root);
+if (compilerRefusals.length > 0) {
+  for (const problem of compilerRefusals) {
+    process.stderr.write(`compiler not trusted: ${problem}\n`);
+  }
+  process.stderr.write(
+    "Refusing to build. Reinstall the locked dependencies with `npm ci` in vnext.\n",
+  );
+  process.exit(1);
+}
+const { build } = await import("esbuild");
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
