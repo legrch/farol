@@ -78,6 +78,17 @@ MAX_WINDOW_BYTES = 4 * 1024 * 1024
 # next offset a window reports is always a request this helper will serve.
 MAX_WINDOW_OFFSET = 2 ** 53 - 1
 
+# workspace-snapshot bounds.  A caller may ask for a smaller ceiling (clamped
+# the same way _source_ceiling clamps maxBytes for a read); it can never ask
+# for more than these.  Bytes only count entries this verb copies (the index
+# and a rewritten config) -- a hard link costs no bytes, matching the design's
+# "thousands of linkat calls and no data copy".
+MAX_SNAPSHOT_ENTRIES = 200_000
+MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+MAX_SNAPSHOT_CONFIG_BYTES = 256 * 1024
+MAX_SNAPSHOT_GITLINK_BYTES = 4096
+MAX_SNAPSHOT_DEPTH = 64
+
 EXIT_INVALID = 20
 EXIT_NOT_FOUND = 21
 EXIT_PATH_REFUSED = 22
@@ -92,6 +103,14 @@ EXIT_EDIT_NOT_UNIQUE = 30
 EXIT_EDIT_OVERLAP = 31
 EXIT_MUTATION_OUTCOME_UNKNOWN = 32
 EXIT_ROOT_CHANGED = 33
+# workspace-snapshot only, below.  Distinct from EXIT_ROOT_CHANGED (identity
+# lost while walking the approved tree itself) and from the generic codes
+# above so the caller can tell "the source moved" from "the snapshot request
+# itself cannot be satisfied".
+EXIT_SNAPSHOT_CROSS_VOLUME = 34
+EXIT_SNAPSHOT_TOO_LARGE = 35
+EXIT_SNAPSHOT_METADATA_UNAPPROVED = 36
+EXIT_SNAPSHOT_DESTINATION_INVALID = 37
 
 CONTEXT_NAMES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 CONTEXT_NAME_SET = frozenset(CONTEXT_NAMES)
@@ -2374,6 +2393,563 @@ def _dispatch_with_grep_deadline(request):
         signal.signal(signal.SIGALRM, previous_alarm)
 
 
+def _bounded_snapshot_limit(value, ceiling):
+    if value is None:
+        return ceiling
+    if type(value) is not int or value < 1 or value > ceiling:
+        refuse(EXIT_INVALID)
+    return value
+
+
+def _open_external_identity(value, grant, code):
+    """Open one absolute path from `/` and require the caller-approved identity.
+
+    Used for a linked worktree's gitdir/commondir: the relationship between
+    them was already discovered and approved outside this helper (the owner
+    verification flow this repository already has); this only confirms, right
+    now, by descriptor, that the object at `value` is still the exact one the
+    caller approved.  Any failure -- malformed grant, missing path, changed
+    identity, wrong owner, group/other-writable -- collapses to one `code`,
+    because none of the detail helps a caller who did not supply a valid grant
+    in the first place.
+    """
+
+    def resolve():
+        if not isinstance(grant, dict) or set(grant) != {"path", "device", "inode"}:
+            refuse(EXIT_INVALID)
+        if not isinstance(value, str) or value == "" or value != grant.get("path"):
+            refuse(EXIT_INVALID)
+        parts = _components(value, absolute=True)
+        device_raw = grant.get("device")
+        inode_raw = grant.get("inode")
+        if (
+            not isinstance(device_raw, str)
+            or not re.fullmatch(r"[0-9]{1,20}", device_raw)
+            or not isinstance(inode_raw, str)
+            or not re.fullmatch(r"[0-9]{1,20}", inode_raw)
+        ):
+            refuse(EXIT_INVALID)
+        descriptor = os.open("/", DIRECTORY_FLAGS)
+        try:
+            for part in parts:
+                child = _open_directory(descriptor, part)
+                os.close(descriptor)
+                descriptor = child
+            opened = os.fstat(descriptor)
+            if (
+                str(opened.st_dev) != device_raw
+                or str(opened.st_ino) != inode_raw
+                or opened.st_uid != os.getuid()
+                or opened.st_mode & 0o022
+            ):
+                refuse(EXIT_INVALID)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    try:
+        return resolve()
+    except Refusal:
+        refuse(code)
+
+
+def _open_snapshot_destination(request):
+    """Open the private destination directory the caller already created.
+
+    Farol creates this directory itself (mode 0700, inside its own runtime
+    directory) before it ever asks the helper to fill it.  The helper does not
+    trust the pathname alone: it walks to it component by component the same
+    way it walks the approved root, and refuses unless the object it finds is
+    still the exact one the caller measured (device/inode), owned by this
+    process, mode exactly 0700, and still empty.
+    """
+
+    destination = request.get("destination")
+    grant = request.get("destinationRoot")
+    if not isinstance(grant, dict) or set(grant) != {"path", "device", "inode"}:
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    if not isinstance(destination, str) or destination != grant.get("path"):
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    try:
+        parts = _components(destination, absolute=True)
+    except Refusal:
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    device_raw = grant.get("device")
+    inode_raw = grant.get("inode")
+    if (
+        not isinstance(device_raw, str)
+        or not re.fullmatch(r"[0-9]{1,20}", device_raw)
+        or not isinstance(inode_raw, str)
+        or not re.fullmatch(r"[0-9]{1,20}", inode_raw)
+    ):
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    descriptor = os.open("/", DIRECTORY_FLAGS)
+    try:
+        for part in parts:
+            try:
+                child = _open_directory(descriptor, part)
+            except Refusal:
+                refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+            os.close(descriptor)
+            descriptor = child
+        opened = os.fstat(descriptor)
+        if (
+            str(opened.st_dev) != device_raw
+            or str(opened.st_ino) != inode_raw
+            or opened.st_uid != os.getuid()
+            or stat.S_IMODE(opened.st_mode) != 0o700
+        ):
+            refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+        names, overflowed = _bounded_sorted_names(descriptor, 1)
+        if overflowed or names:
+            refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+_SNAPSHOT_CORE_BOOL_KEYS = (
+    "bare",
+    "filemode",
+    "ignorecase",
+    "precomposeunicode",
+    "symlinks",
+)
+_SNAPSHOT_CORE_DEFAULTS = {
+    "repositoryformatversion": "0",
+    "filemode": "true",
+    "bare": "false",
+    "ignorecase": "false",
+    "precomposeunicode": "false",
+    "symlinks": "true",
+}
+_SNAPSHOT_CORE_ORDER = (
+    "repositoryformatversion",
+    "filemode",
+    "bare",
+    "ignorecase",
+    "precomposeunicode",
+    "symlinks",
+)
+_SNAPSHOT_SECTION_HEADER = re.compile(r'^\[([A-Za-z0-9.-]+)(?:\s+"(?:.*)")?\]$')
+_SNAPSHOT_KEY_VALUE = re.compile(r'^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*?)\s*$')
+_SNAPSHOT_VALID_INT = re.compile(r'^[0-9]{1,9}$')
+_SNAPSHOT_VALID_BOOL = re.compile(r'^(?:true|false)$', re.IGNORECASE)
+
+
+def _minimal_git_config(text):
+    """Reduce an arbitrary `.git/config` to the fixed, safe subset it needs.
+
+    Only `[core]` keys already reviewed as inert for `git status`/`rev-parse`
+    survive, and only when their value is exactly the shape Git itself writes.
+    Every other section and key -- `include.path`, `core.fsmonitor`,
+    `core.hooksPath`, a clean/smudge filter, `core.sshCommand`, an alias, a
+    credential helper -- is dropped by construction: this function never
+    copies a line, it only ever reads five specific keys out of one section
+    and re-emits them in a fixed order.
+    """
+
+    values = dict(_SNAPSHOT_CORE_DEFAULTS)
+    section = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", ";")):
+            continue
+        header = _SNAPSHOT_SECTION_HEADER.match(stripped)
+        if header:
+            section = header.group(1).strip().lower()
+            continue
+        if section != "core":
+            continue
+        match = _SNAPSHOT_KEY_VALUE.match(stripped)
+        if not match:
+            continue
+        key = match.group(1).lower()
+        value = match.group(2)
+        if key == "repositoryformatversion" and _SNAPSHOT_VALID_INT.match(value):
+            values[key] = value
+        elif key in _SNAPSHOT_CORE_BOOL_KEYS and _SNAPSHOT_VALID_BOOL.match(value):
+            values[key] = value.lower()
+    lines = ["[core]"]
+    for key in _SNAPSHOT_CORE_ORDER:
+        lines.append("\t{} = {}".format(key, values[key]))
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def _snapshot_read_all(descriptor, ceiling, *, on_too_large):
+    before = os.fstat(descriptor)
+    if not stat.S_ISREG(before.st_mode):
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    if before.st_size < 0 or before.st_size > ceiling:
+        refuse(on_too_large)
+    chunks = []
+    remaining = before.st_size
+    while remaining:
+        chunk = os.read(descriptor, min(1024 * 1024, remaining))
+        if not chunk:
+            refuse(EXIT_RACE)
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _snapshot_create_file(dest_fd, name, payload, state):
+    state["bytes"] += len(payload)
+    if state["bytes"] > state["max_bytes"]:
+        refuse(EXIT_SNAPSHOT_TOO_LARGE)
+    descriptor = os.open(
+        name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+        mode=0o600,
+        dir_fd=dest_fd,
+    )
+    try:
+        _write_all(descriptor, payload)
+    finally:
+        os.close(descriptor)
+
+
+def _snapshot_copy_handler(source_fd, dest_fd, name, state, _depth):
+    """Copy, never link, a file Git may rewrite in place (e.g. the index)."""
+    try:
+        descriptor = os.open(name, FILE_FLAGS, dir_fd=source_fd)
+    except OSError as error:
+        _map_open_error(error, source_fd, name)
+    try:
+        payload = _snapshot_read_all(
+            descriptor,
+            state["max_bytes"] - state["bytes"],
+            on_too_large=EXIT_SNAPSHOT_TOO_LARGE,
+        )
+    finally:
+        os.close(descriptor)
+    _snapshot_create_file(dest_fd, name, payload, state)
+
+
+def _snapshot_config_handler(source_fd, dest_fd, name, state, _depth):
+    """Replace `.git/config` with its minimal, execution-free equivalent."""
+    try:
+        descriptor = os.open(name, FILE_FLAGS, dir_fd=source_fd)
+    except OSError as error:
+        _map_open_error(error, source_fd, name)
+    try:
+        payload = _snapshot_read_all(
+            descriptor,
+            MAX_SNAPSHOT_CONFIG_BYTES,
+            on_too_large=EXIT_SNAPSHOT_TOO_LARGE,
+        )
+    finally:
+        os.close(descriptor)
+    minimal = _minimal_git_config(payload.decode("utf-8", "replace"))
+    _snapshot_create_file(dest_fd, name, minimal, state)
+
+
+def _snapshot_skip_handler(_source_fd, _dest_fd, _name, _state, _depth):
+    """Drop an entry on purpose: this verb writes its own replacement later."""
+
+
+def _snapshot_symlink(source_fd, dest_fd, name):
+    try:
+        target = os.readlink(name, dir_fd=source_fd)
+    except OSError:
+        return
+    if not isinstance(target, str) or "\x00" in target or len(target) > 4096:
+        return
+    try:
+        os.symlink(target, name, dir_fd=dest_fd)
+    except OSError:
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+
+
+def _snapshot_link(source_fd, dest_fd, name, listed):
+    """Hard-link one regular file: the link resolves to the inode already
+    identified by `listed`, so a rename or replacement of `name` afterwards
+    cannot change what Git will read.  The identity is checked again after
+    the link exists, because the link call itself names `name`, not the
+    inode: if the directory changed between the earlier `stat` and this call,
+    the fresh link may not be the file this walk meant to attach.
+    """
+
+    try:
+        os.link(name, name, src_dir_fd=source_fd, dst_dir_fd=dest_fd)
+    except OSError as error:
+        if error.errno == errno.EXDEV:
+            refuse(EXIT_SNAPSHOT_CROSS_VOLUME)
+        if error.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+            refuse(EXIT_ROOT_CHANGED)
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    after = os.stat(name, dir_fd=dest_fd, follow_symlinks=False)
+    if (after.st_dev, after.st_ino) != (listed.st_dev, listed.st_ino):
+        refuse(EXIT_ROOT_CHANGED)
+
+
+def _snapshot_entry(source_fd, dest_fd, name, state, depth):
+    # `name` came from a listing already taken; between that listing and this
+    # stat, a concurrent change to the source (not only a hostile one -- a
+    # build tool deleting its own output is enough) can make it vanish or
+    # change kind.  `_listed_child` is the same guard every other walk in
+    # this helper already uses for exactly that gap.
+    listed = _listed_child(source_fd, name, missing_status=EXIT_ROOT_CHANGED)
+    if stat.S_ISDIR(listed.st_mode):
+        os.mkdir(name, mode=0o700, dir_fd=dest_fd)
+        child_source = _open_directory(source_fd, name)
+        try:
+            child_dest = os.open(name, DIRECTORY_FLAGS, dir_fd=dest_fd)
+            try:
+                _snapshot_walk(child_source, child_dest, state, depth + 1, {})
+            finally:
+                os.close(child_dest)
+        finally:
+            os.close(child_source)
+        return
+    if stat.S_ISLNK(listed.st_mode):
+        _snapshot_symlink(source_fd, dest_fd, name)
+        return
+    if not stat.S_ISREG(listed.st_mode):
+        # Neither a directory, a symlink nor a regular file: skipped, which
+        # matches what `git status`/`rev-parse` can report about it anyway.
+        return
+    if listed.st_nlink < 1:
+        refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    _snapshot_link(source_fd, dest_fd, name, listed)
+
+
+def _snapshot_walk(source_fd, dest_fd, state, depth, special):
+    """Recreate every entry of one already-open source directory inside one
+    already-open, already-empty destination directory.
+
+    `special` maps a name to a handler for entries *directly inside this
+    call* only (`.git`, then `config`/`index` one level inside it); every
+    recursive call this makes starts a fresh, empty `special`, so nothing
+    below the first two levels is ever treated specially.
+    """
+
+    if depth > MAX_SNAPSHOT_DEPTH:
+        refuse(EXIT_SNAPSHOT_TOO_LARGE)
+    before = os.fstat(source_fd)
+    remaining = state["max_entries"] - state["entries"]
+    if remaining <= 0:
+        refuse(EXIT_SNAPSHOT_TOO_LARGE)
+    names, overflowed = _bounded_sorted_names(source_fd, remaining)
+    if overflowed:
+        refuse(EXIT_SNAPSHOT_TOO_LARGE)
+    for index, name in enumerate(names):
+        if not isinstance(name, str) or name in ("", ".", "..") or "/" in name:
+            continue
+        state["entries"] += 1
+        if state["entries"] > state["max_entries"]:
+            refuse(EXIT_SNAPSHOT_TOO_LARGE)
+        _test_hook(state["request"], "snapshot-walk-entry", index)
+        handler = special.get(name)
+        if handler is not None:
+            handler(source_fd, dest_fd, name, state, depth)
+        else:
+            _snapshot_entry(source_fd, dest_fd, name, state, depth)
+    after = os.fstat(source_fd)
+    if _stable_identity(before) != _stable_identity(after):
+        refuse(EXIT_ROOT_CHANGED)
+
+
+def _snapshot_linked_worktree(source_fd, dest_fd, name, state, request):
+    """Handle a top-level `.git` that is a file: a linked worktree's pointer.
+
+    The pointer is never copied or linked as-is -- its target lives outside
+    the snapshot, and Git would follow it there, defeating the whole point.
+    Instead the two directories a linked worktree actually needs (its own
+    gitdir and the repository's common gitdir) are snapshotted into a private
+    location inside the destination, and a new pointer is written in their
+    place.  Both directories must already have been approved by identity by
+    the caller (the same owner-verified relationship
+    `resolveWorkspaceGitMetadata` already establishes); this only re-checks,
+    right now, that the approved object is still there.
+    """
+
+    try:
+        descriptor = os.open(name, FILE_FLAGS, dir_fd=source_fd)
+    except OSError as error:
+        _map_open_error(error, source_fd, name)
+    try:
+        payload = _snapshot_read_all(
+            descriptor,
+            MAX_SNAPSHOT_GITLINK_BYTES,
+            on_too_large=EXIT_SNAPSHOT_METADATA_UNAPPROVED,
+        )
+    finally:
+        os.close(descriptor)
+    try:
+        text = payload.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        refuse(EXIT_SNAPSHOT_METADATA_UNAPPROVED)
+    match = re.fullmatch(r"gitdir: ([^\x00\r\n]+)\r?\n?", text)
+    gitdir_value = match.group(1).strip() if match else None
+    if not gitdir_value or gitdir_value != match.group(1):
+        refuse(EXIT_SNAPSHOT_METADATA_UNAPPROVED)
+
+    external_gitdir = request.get("externalGitDir")
+    external_commondir = request.get("externalCommonDir")
+    gitdir_fd = _open_external_identity(
+        gitdir_value, external_gitdir, EXIT_SNAPSHOT_METADATA_UNAPPROVED
+    )
+    try:
+        commondir_path = (
+            external_commondir.get("path")
+            if isinstance(external_commondir, dict)
+            else None
+        )
+        commondir_fd = _open_external_identity(
+            commondir_path, external_commondir, EXIT_SNAPSHOT_METADATA_UNAPPROVED
+        )
+        try:
+            destination = request["destination"].rstrip("/")
+            os.mkdir(".gitmeta", mode=0o700, dir_fd=dest_fd)
+            gitmeta_fd = _open_directory(dest_fd, ".gitmeta")
+            try:
+                os.mkdir("worktree", mode=0o700, dir_fd=gitmeta_fd)
+                os.mkdir("common", mode=0o700, dir_fd=gitmeta_fd)
+                worktree_dest_fd = os.open(
+                    "worktree", DIRECTORY_FLAGS, dir_fd=gitmeta_fd
+                )
+                try:
+                    _snapshot_walk(
+                        gitdir_fd,
+                        worktree_dest_fd,
+                        state,
+                        1,
+                        {
+                            "index": _snapshot_copy_handler,
+                            "commondir": _snapshot_skip_handler,
+                            "gitdir": _snapshot_skip_handler,
+                        },
+                    )
+                    _snapshot_create_file(
+                        worktree_dest_fd,
+                        "commondir",
+                        (destination + "/.gitmeta/common\n").encode("utf-8"),
+                        state,
+                    )
+                finally:
+                    os.close(worktree_dest_fd)
+                common_dest_fd = os.open(
+                    "common", DIRECTORY_FLAGS, dir_fd=gitmeta_fd
+                )
+                try:
+                    _snapshot_walk(
+                        commondir_fd,
+                        common_dest_fd,
+                        state,
+                        1,
+                        {"config": _snapshot_config_handler},
+                    )
+                finally:
+                    os.close(common_dest_fd)
+            finally:
+                os.close(gitmeta_fd)
+        finally:
+            os.close(commondir_fd)
+    finally:
+        os.close(gitdir_fd)
+    _snapshot_create_file(
+        dest_fd,
+        name,
+        ("gitdir: " + destination + "/.gitmeta/worktree\n").encode("utf-8"),
+        state,
+    )
+
+
+def _snapshot_git_handler(request):
+    def handle(source_fd, dest_fd, name, state, depth):
+        listed = _listed_child(source_fd, name, missing_status=EXIT_ROOT_CHANGED)
+        if stat.S_ISDIR(listed.st_mode):
+            os.mkdir(name, mode=0o700, dir_fd=dest_fd)
+            child_source = _open_directory(source_fd, name)
+            try:
+                child_dest = os.open(name, DIRECTORY_FLAGS, dir_fd=dest_fd)
+                try:
+                    _snapshot_walk(
+                        child_source,
+                        child_dest,
+                        state,
+                        depth + 1,
+                        {
+                            "config": _snapshot_config_handler,
+                            "index": _snapshot_copy_handler,
+                        },
+                    )
+                finally:
+                    os.close(child_dest)
+            finally:
+                os.close(child_source)
+            return
+        if stat.S_ISLNK(listed.st_mode):
+            _snapshot_symlink(source_fd, dest_fd, name)
+            return
+        if not stat.S_ISREG(listed.st_mode):
+            return
+        _snapshot_linked_worktree(source_fd, dest_fd, name, state, request)
+
+    return handle
+
+
+def _workspace_snapshot(request):
+    """Build the private snapshot N02 describes and return its size.
+
+    Every regular file below the approved root is hard-linked in by
+    descriptor (`linkat`), never opened by name, so a rename, replacement or
+    deletion of the source afterwards cannot change what was captured.
+    `.git/config` (and a linked worktree's common config) is replaced by its
+    minimal, execution-free equivalent; `.git/index` (and a linked worktree's
+    own index) is copied, because Git may rewrite it in place.  This verb only
+    builds the snapshot; it never runs Git.
+    """
+
+    if set(request) - {
+        "operation",
+        "root",
+        "approvedRoot",
+        "destination",
+        "destinationRoot",
+        "maxEntries",
+        "maxBytes",
+        "externalGitDir",
+        "externalCommonDir",
+        "testHook",
+    }:
+        refuse(EXIT_INVALID)
+    max_entries = _bounded_snapshot_limit(request.get("maxEntries"), MAX_SNAPSHOT_ENTRIES)
+    max_bytes = _bounded_snapshot_limit(request.get("maxBytes"), MAX_SNAPSHOT_BYTES)
+    root_fd = _open_root(request)
+    try:
+        destination_fd = _open_snapshot_destination(request)
+        try:
+            source_stat = os.fstat(root_fd)
+            dest_stat = os.fstat(destination_fd)
+            if source_stat.st_dev != dest_stat.st_dev:
+                refuse(EXIT_SNAPSHOT_CROSS_VOLUME)
+            state = {
+                "entries": 0,
+                "bytes": 0,
+                "max_entries": max_entries,
+                "max_bytes": max_bytes,
+                "request": request,
+            }
+            _test_hook(request, "before-snapshot-walk", None)
+            special = {".git": _snapshot_git_handler(request)}
+            _snapshot_walk(root_fd, destination_fd, state, 0, special)
+            return json.dumps(
+                {"bytes": state["bytes"], "entries": state["entries"]},
+                ensure_ascii=True,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("ascii")
+        finally:
+            os.close(destination_fd)
+    finally:
+        os.close(root_fd)
+
+
 def _exec_verification(request):
     """Run the reviewed verification command inside the approved root object.
 
@@ -2427,14 +3003,16 @@ def _exec_verification(request):
 def main():
     try:
         request = _read_request()
-        if request.get("operation") == "exec-verification":
+        operation = request.get("operation")
+        if operation == "exec-verification":
             _exec_verification(request)
             return EXIT_INTERNAL
-        payload = (
-            _dispatch_with_grep_deadline(request)
-            if request.get("operation") == "grep"
-            else _dispatch(request)
-        )
+        if operation == "workspace-snapshot":
+            payload = _workspace_snapshot(request)
+        elif operation == "grep":
+            payload = _dispatch_with_grep_deadline(request)
+        else:
+            payload = _dispatch(request)
         os.write(1, MAGIC + struct.pack(">Q", len(payload)) + payload)
         return 0
     except Refusal as error:
