@@ -6311,12 +6311,18 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
   if (status === "reopened") {
     try {
       await primaryStartup.whenReady();
-      const outcome = await containWindowOpenFailure(
-        ensureWindow,
-        recoverWindowOpenFailure,
-      );
-      if (outcome === "failed" || !isPrimaryReady()) {
+      // Quit may have begun while this launch waited for startup: check
+      // again before opening a window that is about to close.
+      if (quitInProgress || runtimeStopping) {
         status = "reopen-failed";
+      } else {
+        const outcome = await containWindowOpenFailure(
+          ensureWindow,
+          recoverWindowOpenFailure,
+        );
+        if (outcome === "failed" || !isPrimaryReady()) {
+          status = "reopen-failed";
+        }
       }
     } catch {
       status = "reopen-failed";
