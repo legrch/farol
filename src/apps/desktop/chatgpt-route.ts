@@ -95,6 +95,21 @@ function hostOf(url: string): string {
 }
 
 const SIGN_IN_RETURN_SENTINEL = "farol-sign-in-return-to-farol";
+
+// The Return-to-Farol control is only ever added to ChatGPT's own pages. An
+// identity provider's page (Google, Apple, Microsoft) is never modified: a
+// sign-in or MFA step there runs exactly as the provider serves it, and the
+// window's title and close button still return the owner to Farol.
+function isChatGptPage(url: string, homeUrl: string): boolean {
+  const host = hostOf(url);
+  return (
+    host === hostOf(homeUrl) ||
+    host === "chatgpt.com" ||
+    host.endsWith(".chatgpt.com") ||
+    host === "openai.com" ||
+    host.endsWith(".openai.com")
+  );
+}
 const SIGN_IN_BANNER_ID = "farol-sign-in-banner";
 
 // Injected on every finish-load of the sign-in surface's main frame only
@@ -112,7 +127,7 @@ function signInBannerScript(title: string): string {
     const bar = document.createElement("div");
     bar.id = ${bannerId};
     bar.setAttribute("role", "banner");
-    bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 14px;background:#111216;color:#f7f7f8;font:13px -apple-system,BlinkMacSystemFont,sans-serif;border-bottom:1px solid #333;box-sizing:border-box;";
+    bar.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 32px);padding:6px 6px 6px 12px;background:#111216;color:#f7f7f8;font:12px -apple-system,BlinkMacSystemFont,sans-serif;border:1px solid #333;border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.35);box-sizing:border-box;";
     const label = document.createElement("span");
     label.textContent = ${titleText};
     label.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
@@ -1528,7 +1543,10 @@ export class ChatGptRoute {
         if (this.options.onTaskActivityChanged) {
           this.startTaskActivityWatch(contents);
         }
-        if (this.signInMode) {
+        if (
+          this.signInMode &&
+          isChatGptPage(contents.getURL(), this.options.homeUrl)
+        ) {
           void contents
             .executeJavaScript(signInBannerScript(this.displayTitle), true)
             .catch(() => undefined);
@@ -1538,6 +1556,7 @@ export class ChatGptRoute {
         if (
           this.signInMode &&
           details.message === SIGN_IN_RETURN_SENTINEL &&
+          isChatGptPage(contents.getURL(), this.options.homeUrl) &&
           this.ownsRouteContents(contents)
         ) {
           this.requestSignInReturn();
