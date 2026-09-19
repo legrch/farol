@@ -147,6 +147,9 @@ describe("read-only Computer MCP adapter", () => {
           helper: NEXT_SAFE_OPEN_HELPER,
           attestInterpreter: async () => "/usr/bin/python3",
           attestGit: async () => git,
+          // This test covers the MCP plumbing of the Git tool; the product
+          // itself refuses Git while F1-8 is open.
+          experimentalDescriptorBoundGit: true,
         }),
         { now: () => 1_000 },
       ),

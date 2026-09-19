@@ -834,7 +834,11 @@ describe("native readonly Computer workspace", () => {
             relativePath: ".",
           }),
         ),
-      ).resolves.toEqual(changed);
+        // While F1-8 is open the product refuses Git before any check.
+      ).resolves.toEqual({
+        ok: false,
+        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+      });
       await expect(
         workspace.readEditSnapshot({
           workspace: {

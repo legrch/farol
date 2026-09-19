@@ -70,6 +70,7 @@ async function execute(
   return executeNativeVerificationCommand(input, input.operation, {
     ...(attestGit ? { attestGit } : {}),
     ...(signal ? { signal } : {}),
+    experimentalDescriptorBoundGit: true,
     // The reviewed helper's launch, replaced by the process mock so each test
     // controls what the bound command does.
     launchInApprovedRoot: async (launch) => {

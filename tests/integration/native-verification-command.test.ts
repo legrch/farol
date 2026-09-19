@@ -66,6 +66,7 @@ function workspace(
     helper: NEXT_SAFE_OPEN_HELPER,
     attestInterpreter: async () => "/usr/bin/python3",
     attestGit,
+    experimentalDescriptorBoundGit: true,
   });
 }
 
@@ -129,10 +130,24 @@ afterEach(async () => {
 });
 
 describe("native verification command", () => {
+  it("F1-8 the product refuses every Git verification while the finding is open", async () => {
+    const product = new NativeReadonlyWorkspace({
+      helperPath: sourceHelper,
+      helper: NEXT_SAFE_OPEN_HELPER,
+    });
+    for (const input of [request(), headRequest()]) {
+      await expect(product.execute(input)).resolves.toEqual({
+        ok: false,
+        error: { code: "WORKSPACE_COMMAND_UNSUPPORTED", retry: "never" },
+      });
+    }
+  });
+
   it("attests and caches the reviewed Apple Git chain before production execution", async () => {
     const productionWorkspace = new NativeReadonlyWorkspace({
       helperPath: sourceHelper,
       helper: NEXT_SAFE_OPEN_HELPER,
+      experimentalDescriptorBoundGit: true,
     });
 
     await expect(productionWorkspace.execute(request())).resolves.toMatchObject(
@@ -902,6 +917,7 @@ int main(void) {
       input.operation,
       {
         attestGit: async () => git,
+        experimentalDescriptorBoundGit: true,
         launchInApprovedRoot: approvedRootLauncher({
           helperSource: () => fs.readFile(sourceHelper),
           attestInterpreter: async () => "/usr/bin/python3",

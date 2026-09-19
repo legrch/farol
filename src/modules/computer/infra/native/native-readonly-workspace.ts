@@ -170,6 +170,12 @@ type NativeReadonlyWorkspaceOptions = Readonly<{
   helper: SafeOpenHelperRecord;
   attestInterpreter?: () => Promise<string>;
   attestGit?: () => Promise<string>;
+  // Git verification stays unavailable in the product (review finding F1-8):
+  // binding Git's first working directory to the approved root object does
+  // not bind the absolute paths Git reopens while it runs, and the Seatbelt
+  // profile still grants the approved pathname. Only tests of that mechanism
+  // turn it on.
+  experimentalDescriptorBoundGit?: true;
   // The owner's home, whose credential stores stay denied whichever root is
   // selected. Defaults to this process's home directory.
   homeDirectory?: string;
@@ -1581,6 +1587,9 @@ export class NativeReadonlyWorkspace
         },
         validated.operation,
         {
+          ...(this.options.experimentalDescriptorBoundGit
+            ? { experimentalDescriptorBoundGit: true as const }
+            : {}),
           launchInApprovedRoot: approvedRootLauncher({
             helperSource: () => this.helperSource(),
             attestInterpreter: () => this.attestInterpreter(),

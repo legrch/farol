@@ -80,6 +80,9 @@ export type ApprovedRootLauncher = (
 
 export type NativeVerificationCommandOptions = Readonly<{
   attestGit?: () => Promise<string>;
+  // See NativeReadonlyWorkspaceOptions.experimentalDescriptorBoundGit: absent
+  // in the product, so every Git verification is refused (F1-8 open).
+  experimentalDescriptorBoundGit?: true;
   launchInApprovedRoot?: ApprovedRootLauncher;
   // Test seam: runs after the last pathname check and before the launch, the
   // window a replacement of the root used to exploit.
@@ -829,6 +832,13 @@ export async function executeNativeVerificationCommand(
     (operation.command !== "git.status" && operation.command !== "git.head") ||
     operation.relativePath !== "."
   ) {
+    return failure("WORKSPACE_COMMAND_UNSUPPORTED");
+  }
+  // F1-8 is open: Git reopens absolute paths while it runs, and those paths
+  // can name a folder that took the approved root's place after the helper
+  // bound its working directory. Until Git can be confined to the approved
+  // object, no Git command runs.
+  if (options.experimentalDescriptorBoundGit !== true) {
     return failure("WORKSPACE_COMMAND_UNSUPPORTED");
   }
   if (!(await approvedRootUnchanged(request.workspace.approvedRoot))) {
