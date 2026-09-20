@@ -448,6 +448,13 @@ describe("workspace snapshot (N02)", () => {
 
   // A clone across two volumes is impossible: this proves the refusal fires
   // for a real device boundary rather than only when the request says so.
+  //
+  // S35-TA-7: every case below attaches a volume, so none of them fits
+  // vitest's 5 s default on a loaded machine — this one was measured at
+  // 5.7 s in a full run at load average 44 while passing in well under a
+  // second idle. The budget is the only thing widened; the assertions are
+  // untouched. A test that passes alone and fails in the suite is a red
+  // that gets explained away rather than read.
   it("refuses when the destination volume cannot hold a clone of the source", async () => {
     const disk = await attachRamDisk("cross-volume");
     if (disk === null) return;
@@ -461,7 +468,7 @@ describe("workspace snapshot (N02)", () => {
     } finally {
       execFileSync("hdiutil", ["detach", disk.device]);
     }
-  });
+  }, 60_000);
 
   // Source and destination on one volume that cannot clone at all (HFS+):
   // the refusal is distinct from the cross-volume one, and nothing falls
@@ -492,7 +499,7 @@ describe("workspace snapshot (N02)", () => {
     } finally {
       execFileSync("hdiutil", ["detach", disk.device]);
     }
-  });
+  }, 60_000);
 
   // The two tests above prove the clone/EXDEV mechanism with a plain
   // directory: a request that never touches Git. This one drives the actual
@@ -565,7 +572,15 @@ describe("workspace snapshot (N02)", () => {
     } finally {
       execFileSync("hdiutil", ["detach", disk.device]);
     }
-  });
+    // S35-TA-7: this case attaches a volume, runs `git init`, makes a
+    // commit, spawns the attested helper AND builds a snapshot, so it is
+    // several times the work of the two mechanism cases above and does not
+    // fit vitest's 5 s default on a loaded machine (measured: 14.1 s before
+    // failing, while passing in 2 s idle). The budget is the only thing
+    // widened — every assertion above is unchanged — following the same
+    // per-test budgets `native-verification-command.test.ts` already uses
+    // for its real-Git cases.
+  }, 60_000);
 
   it("carries the structural extensions through the reduced config and reduces config.worktree the same way", async () => {
     await initRepo(root);
