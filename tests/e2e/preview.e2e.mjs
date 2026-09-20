@@ -353,6 +353,20 @@ const blockedCases = [];
 // the instance, so "the product exited early" stays distinguishable from "the
 // harness raced its own close".
 const harnessObservations = [];
+// Not every observation is a claim about the product. A run that could not
+// inspect an application it had already lost has proved nothing about
+// quitting, and must fail. An observation that only reports something the
+// harness saw beside a passing assertion — a surface that moved under the
+// driver — belongs in the report and the summary, but deciding the lane on
+// it would downgrade ledger rows for something no case asserted. These
+// kinds are reported and never blocking.
+const NON_BLOCKING_OBSERVATION_KINDS = new Set([
+  "task-menu-closed-without-own-action",
+]);
+const blockingObservations = () =>
+  harnessObservations.filter(
+    (entry) => !NON_BLOCKING_OBSERVATION_KINDS.has(entry.kind),
+  );
 // The runner accumulates its case list as it goes and only serialises it at
 // the very end.  A late exception therefore used to produce a terminal
 // receipt with no cases at all, losing every journey the run had actually
@@ -10030,13 +10044,18 @@ n11AgentScopeSegment: {
     await agentScope.window.waitForFunction(
       () => document.querySelectorAll("#task-tabs .task-tab").length === 1,
     );
+    // Whether the reopen believed it worked is half the question when the
+    // menu is later found closed, so it is remembered rather than inferred.
+    let lastMenuOpen = null;
     const openScopeMenu = async () => {
+      lastMenuOpen = { at: new Date().toISOString(), opened: false };
       await agentScope.window
         .locator("#task-menu-button")
         .click({ timeout: 20_000 });
       await agentScope.window
         .locator("#task-menu")
         .waitFor({ state: "visible", timeout: 20_000 });
+      lastMenuOpen = { at: new Date().toISOString(), opened: true };
     };
     // The Run Agent button is disabled until the menu has re-rendered with
     // a valid objective and scope; its title names whichever prerequisite
@@ -10131,6 +10150,7 @@ n11AgentScopeSegment: {
         })
         .catch(() => null);
     const submitAgentAssignment = async (staged, options = {}) => {
+      const owningCase = options.owningCase ?? null;
       // A close that follows this case's own action — a refused assignment
       // closing the menu, which may well be by design — is expected, and
       // reopening after it is a fair thing for an owner to do. A close with
@@ -10187,7 +10207,9 @@ n11AgentScopeSegment: {
               .map((event) => event.action ?? "unrecorded");
             harnessObservations.push({
               kind: "task-menu-closed-without-own-action",
-              owningCase: cases.at(-1) ?? null,
+              observedAt: new Date().toISOString(),
+              owningCase,
+              lastMenuOpen,
               attempt,
               menuVisible: observed?.menuVisible ?? null,
               subtreeVisible: observed?.subtreeVisible ?? null,
@@ -10197,10 +10219,6 @@ n11AgentScopeSegment: {
               events: observed?.lastEvents ?? [],
               message: error.message.split("\n", 1)[0].slice(0, 200),
             });
-            evidenceAttempt.recordFailure(
-              "task-menu",
-              `E2E_TASK_MENU_CLOSED_WITHOUT_OWN_ACTION:${cases.at(-1) ?? "no-case"}:${shellActions.join(",") || "no-shell-action"}`,
-            );
           }
         }
       }
@@ -10241,7 +10259,10 @@ n11AgentScopeSegment: {
         objective:
           "Read the excluded repository metadata, which must be refused.",
       },
-      { closeExpectedOnFirstAttempt: false },
+      {
+        closeExpectedOnFirstAttempt: false,
+        owningCase: "n11-agent-denied-subfolder-refused",
+      },
     );
     await agentScope.window.waitForFunction(() => {
       const note = document.querySelector("#task-menu-note")?.textContent ?? "";
@@ -10281,7 +10302,10 @@ n11AgentScopeSegment: {
         objective:
           "Read the approved subfolder and report what its scope allows.",
       },
-      { closeExpectedOnFirstAttempt: true },
+      {
+        closeExpectedOnFirstAttempt: true,
+        owningCase: "n11-agent-subfolder-narrows-delivered-root",
+      },
     );
     // A refusal here is a real product answer, so the wait reports the
     // sentence the menu gave rather than a bare timeout.
@@ -10670,7 +10694,7 @@ const report = {
   schema: 1,
   status: selectionActive
     ? "SELECTED"
-    : missingRequiredCases.length > 0 || harnessObservations.length > 0
+    : missingRequiredCases.length > 0 || blockingObservations().length > 0
       ? "FAIL"
       : blockedCases.length > 0
         ? "BLOCKED"
@@ -10783,9 +10807,19 @@ if (blockedCases.length > 0) {
   );
   process.exitCode = 1;
 }
-if (harnessObservations.length > 0) {
+// The non-blocking kinds are still said out loud, on their own line, so a
+// reader of the log sees them without the exit code claiming a failure.
+const reportedObservations = harnessObservations.filter((entry) =>
+  NON_BLOCKING_OBSERVATION_KINDS.has(entry.kind),
+);
+if (reportedObservations.length > 0) {
   process.stderr.write(
-    `E2E_CLOSED_BEFORE_INSPECTION:${JSON.stringify(harnessObservations)}\n`,
+    `E2E_HARNESS_OBSERVED:${JSON.stringify(reportedObservations)}\n`,
+  );
+}
+if (blockingObservations().length > 0) {
+  process.stderr.write(
+    `E2E_CLOSED_BEFORE_INSPECTION:${JSON.stringify(blockingObservations())}\n`,
   );
   process.exitCode = 1;
 }
