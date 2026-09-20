@@ -153,6 +153,20 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "n04b-model-apply-writes-managed-block",
   "n04b-model-connected-after-served-request",
   "n04b-model-rollback-restores-config",
+  "n04b-model-preview-decline-idempotent",
+  "n04b-model-default-provider-consented",
+  "n04b-model-rotate-refuses-stale-bearer",
+  "n04b-model-rollback-restores-owner-bytes",
+  "n09-connector-start-names-earliest-unmet-prerequisite",
+  "n09-connector-started-with-synthetic-client",
+  "n09-connector-running-freezes-its-own-configuration",
+  "n09-connector-stop-clears-runtime-and-challenge",
+  "n09-attach-challenge-answered-by-local-peer",
+  "n09-attach-challenge-answered-exactly-once",
+  "n09-attach-verified-from-its-own-receipt",
+  "n10-computer-second-workspace-added-from-panel",
+  "n10-computer-workspace-removed-from-panel-and-settings",
+  "n10-computer-guarded-edit-cancelled-file-unchanged",
 ]);
 
 const SEALED_PACKAGE_CASES = Object.freeze([

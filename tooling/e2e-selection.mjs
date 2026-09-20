@@ -121,6 +121,12 @@ export const SELECTABLE_SEGMENTS = Object.freeze([
     cases: ["ux34-covered", "ux34-sign"],
   }),
   Object.freeze({ name: "n04b-model", cases: ["n04b-model"] }),
+  Object.freeze({ name: "n09-connector", cases: ["n09-connector"] }),
+  Object.freeze({
+    name: "n09-connector-attachment",
+    cases: ["n09-attach"],
+  }),
+  Object.freeze({ name: "n10-computer-panel", cases: ["n10-computer"] }),
 ]);
 
 export const SELECTION_OPTION_PREFIX = "--only=";

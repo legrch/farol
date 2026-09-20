@@ -9189,8 +9189,954 @@ n04bModelSegment: {
       "rollback restores config.toml to not existing, exactly as it was before Farol's change",
     );
     cases.push("n04b-model-rollback-restores-config");
+
+    // The six cases above walk the unchecked default path once. Everything
+    // below is the rest of the card: previewing is genuinely repeatable,
+    // the separately consented default-provider selection, a rotation the
+    // running endpoint honours, and a rollback that has owner bytes to
+    // restore rather than an absent file.
+    // The model card rewrites `#settings-feedback` from its own evidence, so
+    // the sentence the owner reads is the evidence's, not the optimistic one
+    // the click sent. Matching it is therefore also an assertion about which
+    // evidence came back.
+    const modelFeedback = async (pattern) => {
+      try {
+        await modelControl.window.waitForFunction(
+          (source) =>
+            new RegExp(source, "u").test(
+              document.querySelector("#settings-feedback")?.textContent ?? "",
+            ),
+          pattern.source,
+        );
+      } catch (error) {
+        // A wait that times out names what the card actually said and what
+        // the file under it looked like, so the next run is a fix rather
+        // than another guess.
+        const shown = await modelControl.window
+          .evaluate(() => ({
+            feedback: document.querySelector("#settings-feedback")?.textContent,
+            readiness: document.querySelector("#model-readiness")?.textContent,
+            message: document.querySelector("#model-config-message")
+              ?.textContent,
+          }))
+          .catch(() => null);
+        const config = await fs
+          .stat(configPath)
+          .then(async (entry) => ({
+            mode: (entry.mode & 0o777).toString(8),
+            head: (await fs.readFile(configPath, "utf8")).slice(0, 240),
+          }))
+          .catch(() => null);
+        throw new Error(
+          `${error.message} · expected ${pattern.source} · card ${JSON.stringify(shown)} · config ${JSON.stringify(config)}`,
+          { cause: error },
+        );
+      }
+    };
+
+    // Previewing is not a state change. Proving that needs a second preview
+    // that is observably a second preview, so the consent is changed and
+    // changed back: the plan must visibly gain the selection and visibly
+    // lose it again, and end byte-identical to the first plan with nothing
+    // written in between. A plain "click preview twice" would pass even if
+    // the second click had done nothing at all.
+    await modelControl.window.locator("#model-preview-btn").click();
+    await modelFeedback(/before applying it\.$/u);
+    const firstPlan = await modelControl.window
+      .locator("#model-config-diff")
+      .innerText();
+    // `[model_providers.farol]` contains the substring `model_provider`, so
+    // the selection is recognised by its own managed marker, never by that
+    // substring.
+    assert.doesNotMatch(firstPlan, /MANAGED MODEL_PROVIDER SELECTION/u);
+
+    await modelControl.window.locator("#model-select-default").click();
+    await modelControl.window.locator("#model-preview-btn").click();
+    await modelControl.window.waitForFunction(() =>
+      document
+        .querySelector("#model-config-diff")
+        ?.textContent?.includes("MANAGED MODEL_PROVIDER SELECTION"),
+    );
+    await modelControl.window.locator("#model-select-default").click();
+    assert.equal(
+      await modelControl.window.locator("#model-select-default").isChecked(),
+      false,
+    );
+    await modelControl.window.locator("#model-preview-btn").click();
+    await modelControl.window.waitForFunction(
+      () =>
+        document
+          .querySelector("#model-config-diff")
+          ?.textContent?.includes("MANAGED MODEL_PROVIDER SELECTION") === false,
+    );
+    assert.equal(
+      await modelControl.window.locator("#model-config-diff").innerText(),
+      firstPlan,
+      "withdrawing the consent returns the plan to exactly the first one",
+    );
+    assert.equal(
+      await fs.stat(configPath).then(
+        () => true,
+        () => false,
+      ),
+      false,
+      "three previews and three declines still write nothing",
+    );
+    cases.push("n04b-model-preview-decline-idempotent");
+
+    // The default-provider selection is a separate consent, and the suite
+    // has only ever exercised the unchecked path — E2E asserts above that
+    // `model_provider` is absent when the box is left alone. Check it with
+    // a real pointer click and the previewed plan must gain the selection,
+    // and applying must write it as its own managed region.
+    await modelControl.window.locator("#model-select-default").click();
+    assert.equal(
+      await modelControl.window.locator("#model-select-default").isChecked(),
+      true,
+    );
+    await modelControl.window.locator("#model-preview-btn").click();
+    await modelControl.window.waitForFunction(
+      () =>
+        document
+          .querySelector("#model-config-diff")
+          ?.textContent?.includes("MANAGED MODEL_PROVIDER SELECTION") === true,
+    );
+    await modelControl.window.locator("#model-apply-btn").click();
+    // The applied sentence names the separately consented half explicitly.
+    await modelFeedback(
+      /^Applied the Farol connection and set it as the default provider\./u,
+    );
+    const defaultedConfig = await fs.readFile(configPath, "utf8");
+    assert.match(defaultedConfig, /\[model_providers\.farol\]/u);
+    assert.match(defaultedConfig, /^model_provider = "farol"$/mu);
+    assert.doesNotMatch(defaultedConfig, /\[profiles\./u);
+    cases.push("n04b-model-default-provider-consented");
+
+    // Rotation is one transaction over a running endpoint: the new literal
+    // must authenticate, the previous one must stop authenticating, and the
+    // owner's config must carry the new literal rather than the old.
+    const tokenPath = path.join(stateRoot, "model-endpoint-token");
+    const staleToken = (await fs.readFile(tokenPath, "utf8")).trim();
+    assert.equal(defaultedConfig.includes(staleToken), true);
+    await modelControl.window.locator("#model-rotate-btn").click();
+    await modelFeedback(
+      /^Rotated the Farol Model token and rewrote it in your Codex config\.toml\. The old token no longer works;/u,
+    );
+    const rotatedToken = (await fs.readFile(tokenPath, "utf8")).trim();
+    assert.notEqual(
+      rotatedToken,
+      staleToken,
+      "rotation issues a new literal rather than reusing the old one",
+    );
+    const rotatedPort = (
+      await fs.readFile(path.join(stateRoot, "model-endpoint-port"), "utf8")
+    ).trim();
+    const modelRequest = (bearer) =>
+      fetch(`http://127.0.0.1:${rotatedPort}/responses`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${bearer}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "farol-next/mind",
+          stream: true,
+          store: false,
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "say hi" }],
+            },
+          ],
+          tools: [],
+          client_metadata: {
+            session_id: "0199c0de-0000-7000-8000-00000000e2e2",
+            thread_id: "0199c0de-0000-7000-8000-00000000e2e2",
+            turn_id: "turn-e2e-model-2",
+            root_turn_id: "turn-e2e-model-2",
+          },
+        }),
+      });
+    const refused = await modelRequest(staleToken);
+    assert.equal(
+      refused.status,
+      401,
+      "the endpoint refuses the literal it issued before the rotation",
+    );
+    const accepted = await modelRequest(rotatedToken);
+    assert.equal(accepted.status, 200);
+    assert.match(
+      await accepted.text(),
+      new RegExp(syntheticReply.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
+    const rotatedConfig = await fs.readFile(configPath, "utf8");
+    assert.equal(
+      rotatedConfig.includes(rotatedToken),
+      true,
+      "the managed block carries the literal the endpoint now accepts",
+    );
+    assert.equal(
+      rotatedConfig.includes(staleToken),
+      false,
+      "the managed block no longer carries a literal the endpoint refuses",
+    );
+    cases.push("n04b-model-rotate-refuses-stale-bearer");
+
+    // Rollback against a config the owner already owned. The existing case
+    // restores "the file did not exist"; this one restores bytes, which is
+    // the case an owner with a real Codex config actually meets.
+    await modelControl.window.locator("#model-rollback-btn").click();
+    await modelFeedback(/^Removed Farol's managed block from config\.toml;/u);
+    // The consent goes back off: this case is about the managed block's
+    // rollback over owner bytes, and the separately consented selection
+    // would only add a second region to the same claim.
+    await modelControl.window.locator("#model-select-default").click();
+    assert.equal(
+      await modelControl.window.locator("#model-select-default").isChecked(),
+      false,
+    );
+    const ownerConfig = [
+      "# the owner's own Codex configuration",
+      'model = "gpt-6-astra"',
+      "",
+      "[model_providers.owner_written]",
+      'name = "Owner written"',
+      'base_url = "http://127.0.0.1:1/v1"',
+      'wire_api = "responses"',
+      "",
+    ].join("\n");
+    await fs.writeFile(configPath, ownerConfig, { mode: 0o600 });
+    await modelControl.window.locator("#model-preview-btn").click();
+    await modelFeedback(/before applying it\.$/u);
+    await modelControl.window.locator("#model-apply-btn").click();
+    await modelFeedback(/^Applied the Farol connection/u);
+    const mixedConfig = await fs.readFile(configPath, "utf8");
+    assert.equal(
+      mixedConfig.includes(ownerConfig.trimEnd()),
+      true,
+      "applying leaves the owner's own bytes intact beside Farol's region",
+    );
+    assert.match(mixedConfig, /\[model_providers\.farol\]/u);
+    await modelControl.window.locator("#model-rollback-btn").click();
+    await modelFeedback(/^Removed Farol's managed block from config\.toml;/u);
+    assert.equal(
+      await fs.readFile(configPath, "utf8"),
+      ownerConfig,
+      "rollback restores the owner's config byte for byte",
+    );
+    cases.push("n04b-model-rollback-restores-owner-bytes");
   } finally {
     await close(modelControl);
+  }
+}
+
+// Materialises the synthetic tunnel client as an executable outside the
+// repository, so Farol probes, runs and supervises a real file exactly as it
+// would the owner's own `tunnel-client`. The fixture speaks only loopback;
+// what it stands in for, and what it therefore cannot prove, is stated at the
+// top of `tunnel-client.fixture.cjs`.
+async function startTunnelClientFixture() {
+  const fixtureRoot = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-next-e2e-tunnel-"),
+  );
+  const source = await fs.readFile(
+    path.join(root, "tests/e2e/tunnel-client.fixture.cjs"),
+    "utf8",
+  );
+  const executable = path.join(fixtureRoot, "tunnel-client");
+  // The probe refuses a group- or world-writable executable, so 0700 is not
+  // tidiness: a looser mode is a refusal, not a warning.
+  await fs.writeFile(executable, `#!${process.execPath}\n${source}`, {
+    mode: 0o700,
+  });
+  return { root: fixtureRoot, executable };
+}
+
+// Where the fixture leaves its record of the `init` Farol ran. The runtime
+// hands every tunnel-client invocation a fixed environment, so a harness
+// variable cannot reach the child; `TUNNEL_CLIENT_STATE_DIR` can, and it
+// points here.
+function tunnelInitRecordPath(userData) {
+  return path.join(
+    userData,
+    "farol-next-state",
+    "secure-mcp-connector",
+    "state",
+    "farol-e2e-tunnel-init.json",
+  );
+}
+
+// N09 — the Connection row in Settings, end to end through its own controls.
+// Until now the suite reached `connector.start` only by calling the IPC
+// bridge directly, with nothing configured, so the refusal codes were all it
+// could see. This drives the row the way the owner does: choose a client,
+// save a route, meet each unmet prerequisite by name, start a real supervised
+// child, then stop it.
+//
+// What is proven here is the local half and only the local half. Farol
+// decides readiness by polling a loopback health URL the tunnel client
+// writes, and this fixture is a synthetic tunnel client that answers on
+// 127.0.0.1 and reaches nothing else. A real tunnel registered with the
+// provider, and the route from a real ChatGPT session through it, are
+// outside every code path this test touches and are not claimed by it.
+n09ConnectorSegment: {
+  if (!segmentSelected("n09-connector")) break n09ConnectorSegment;
+  const tunnelFixture = await startTunnelClientFixture();
+  const connector = await launch([], "hidden", "demo", {
+    environment: { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture.executable },
+  });
+  try {
+    // Setup is finished WITHOUT approving a folder, because the prerequisite
+    // this journey exists for is the one an owner cannot see from here: the
+    // connector serves an approved workspace, and until wave 3 the primary
+    // action was dead while every requirement it named was satisfied.
+    await finishSetupByNext(connector);
+    await connector.window.locator('[data-section="settings"]').click();
+    await connector.window.waitForFunction(
+      () => document.documentElement.dataset.section === "settings",
+    );
+    const connectionRow = connector.window
+      .locator("#connection-readiness .connection-row.connector-row")
+      .first();
+    // One evaluated read of the whole row, rather than a locator per
+    // assertion. Locators in this harness carry no action timeout, so a
+    // control that never appears hangs the run instead of naming itself.
+    // This read cannot hang, and every assertion below prints what the row
+    // actually showed.
+    const connectionState = () =>
+      connector.window.evaluate(() => {
+        const row = document.querySelector(
+          "#connection-readiness .connection-row.connector-row",
+        );
+        if (!row) {
+          return {
+            present: false,
+            rows: [
+              ...document.querySelectorAll(
+                "#connection-readiness .connection-row",
+              ),
+            ].map((candidate) => candidate.textContent?.slice(0, 80) ?? ""),
+          };
+        }
+        return {
+          present: true,
+          title: row.querySelector("strong")?.textContent ?? null,
+          detail: row.querySelector("small")?.textContent ?? null,
+          challenge: row.querySelector(".connector-challenge") !== null,
+          buttons: [...row.querySelectorAll("button")].map((button) => ({
+            label: button.textContent,
+            disabled: button.disabled,
+            title: button.getAttribute("title"),
+          })),
+        };
+      });
+    const clickRowButton = async (label) => {
+      const before = await connectionState();
+      assert.ok(
+        before.present && before.buttons.some((b) => b.label === label),
+        `the Connection row must offer ${label} · ${JSON.stringify(before)}`,
+      );
+      await connectionRow
+        .getByRole("button", { name: label, exact: true })
+        .click({ timeout: 20_000 });
+    };
+    const startState = async () => {
+      const state = await connectionState();
+      const start = state.buttons?.find((button) =>
+        [
+          "Start & check",
+          "Check attachment",
+          "Running",
+          "Repair explicitly",
+        ].includes(button.label),
+      );
+      assert.ok(
+        start,
+        `the Connection row must offer a primary action · ${JSON.stringify(state)}`,
+      );
+      return { start, state };
+    };
+    // Connector commands rewrite `#settings-feedback` from their own
+    // evidence, so matching the sentence is also an assertion about which
+    // evidence came back.
+    const connectorFeedback = (pattern) =>
+      connector.window.waitForFunction(
+        (source) =>
+          new RegExp(source, "u").test(
+            document.querySelector("#settings-feedback")?.textContent ?? "",
+          ),
+        pattern.source,
+      );
+
+    // Each prerequisite in turn, named by the control that is refusing.
+    const noClient = await startState();
+    assert.equal(noClient.start.disabled, true, JSON.stringify(noClient.state));
+    assert.equal(
+      noClient.start.title,
+      "Choose the tunnel client first.",
+      JSON.stringify(noClient.state),
+    );
+    await clickRowButton("Choose client…");
+    await connectorFeedback(
+      /^tunnel-client \S+ verified · \S+ · executable [0-9a-f]{12}\.$/u,
+    );
+    const noTunnel = await startState();
+    assert.equal(noTunnel.start.disabled, true, JSON.stringify(noTunnel.state));
+    assert.equal(
+      noTunnel.start.title,
+      "Enter the tunnel ID and save the route first.",
+      JSON.stringify(noTunnel.state),
+    );
+
+    await connector.window
+      .locator("#settings-connector-tunnel")
+      .fill("tunnel_farol_next_e2e");
+    await connector.window
+      .locator("#settings-connector-key")
+      .fill("farol-next-e2e-runtime-key-0001");
+    await clickRowButton("Save route");
+    await connectorFeedback(/^Connector route saved\.$/u);
+    // The one an owner could not discover from this surface.
+    const noWorkspace = await startState();
+    assert.equal(
+      noWorkspace.start.disabled,
+      true,
+      JSON.stringify(noWorkspace.state),
+    );
+    assert.equal(
+      noWorkspace.start.title,
+      "Approve at least one workspace in Computer first. The connector serves that workspace, so it cannot start without one.",
+      JSON.stringify(noWorkspace.state),
+    );
+    cases.push("n09-connector-start-names-earliest-unmet-prerequisite");
+
+    // Satisfy it where the sentence says to, then come back.
+    await connector.window.locator('[data-section="computer"]').click();
+    await connector.window.locator('[data-panel="computer"].active').waitFor();
+    await connector.window.locator("#add-workspace").click();
+    await connector.window
+      .locator("#computer-feedback")
+      .getByText("Read-only workspace saved and read back.", { exact: true })
+      .waitFor();
+    await connector.window.locator('[data-section="settings"]').click();
+    await connector.window.waitForFunction(
+      () => document.documentElement.dataset.section === "settings",
+    );
+    await connector.window.waitForFunction(() => {
+      const button = [
+        ...document.querySelectorAll("#connection-readiness button"),
+      ].find((candidate) => candidate.textContent === "Start & check");
+      return button instanceof HTMLButtonElement && !button.disabled;
+    });
+    const readyToStart = await startState();
+    assert.equal(
+      readyToStart.start.title,
+      null,
+      JSON.stringify(readyToStart.state),
+    );
+
+    await clickRowButton("Start & check");
+    await connectorFeedback(
+      /^Connector ready · runtime [0-9a-z-]{12} · Computer generation \d+\.$/u,
+    );
+    // Farol ran the client's own `init` before starting it, and the record
+    // the fixture kept is what proves the product asked for the profile and
+    // tunnel it says it did — not a Farol-authored binary, and not a route
+    // this test invented.
+    const initArgv = JSON.parse(
+      await fs.readFile(tunnelInitRecordPath(connector.userData), "utf8"),
+    );
+    assert.equal(initArgv.includes("--tunnel-id"), true);
+    assert.equal(
+      initArgv[initArgv.indexOf("--tunnel-id") + 1],
+      "tunnel_farol_next_e2e",
+    );
+    const runtimeSnapshot = await connector.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    const runtime =
+      runtimeSnapshot.configuration.settings.connectors.secureMcp.runtime;
+    assert.equal(runtime.state, "ready");
+    assert.equal(
+      runtimeSnapshot.configuration.settings.connectors.secureMcp.credential,
+      "stored",
+    );
+    // A started connector asks for exactly one thing next, and shows the
+    // challenge it wants answered.
+    await connector.window.waitForFunction(
+      () =>
+        document.querySelector("#connection-readiness .connector-challenge") !==
+        null,
+    );
+    const challenged = await connectionState();
+    assert.equal(challenged.challenge, true, JSON.stringify(challenged));
+    cases.push("n09-connector-started-with-synthetic-client");
+
+    // While it runs, its own configuration is frozen, and each control that
+    // refuses says why rather than being merely grey.
+    assert.equal(
+      await connector.window.locator("#settings-connector-tunnel").isDisabled(),
+      true,
+    );
+    assert.equal(
+      await connector.window.locator("#settings-connector-key").isDisabled(),
+      true,
+    );
+    const runningState = await connectionState();
+    const replaceClient = runningState.buttons?.find(
+      (button) => button.label === "Replace client…",
+    );
+    assert.ok(replaceClient, JSON.stringify(runningState));
+    assert.equal(replaceClient.disabled, true, JSON.stringify(runningState));
+    assert.equal(
+      replaceClient.title,
+      "Stop the connector before replacing its client.",
+      JSON.stringify(runningState),
+    );
+    cases.push("n09-connector-running-freezes-its-own-configuration");
+
+    // Stop clears the runtime proof rather than only the button state.
+    await clickRowButton("Stop");
+    await connectorFeedback(/^Connector stopped and runtime proof cleared\.$/u);
+    const stopped = await connector.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(
+      stopped.configuration.settings.connectors.secureMcp.runtime,
+      null,
+    );
+    assert.equal(
+      stopped.configuration.settings.connectors.secureMcp.challenge,
+      null,
+    );
+    const afterStop = await connectionState();
+    assert.equal(
+      afterStop.buttons?.find((button) => button.label === "Stop")?.title,
+      "The connector is not running.",
+      JSON.stringify(afterStop),
+    );
+    assert.equal(afterStop.challenge, false, JSON.stringify(afterStop));
+    cases.push("n09-connector-stop-clears-runtime-and-challenge");
+  } finally {
+    await close(connector);
+    await fs.rm(tunnelFixture.root, { recursive: true, force: true });
+  }
+}
+
+// N09b — the attachment challenge, answered by the smallest honest local
+// peer, and checked by the product's own verdict.
+//
+// Read this before reading the case. Farol's attachment proof is a local
+// challenge and a local receipt: the connector is asked to call
+// `farol_next_connector_verify` once with the challenge Farol minted, the
+// production MCP server records a write-once receipt, and
+// `connector.check-attachment` decides the verdict from that receipt. This
+// segment plays the connector's part by speaking MCP over stdio to the same
+// `computer-mcp` entry, under the same launch contract Farol itself wrote,
+// with the challenge read off the card the owner would read it from.
+//
+// So what this proves is exact and bounded: Farol mints a challenge, shows
+// it, accepts exactly one answer to it, records a content-free receipt, and
+// turns that receipt into a verified attachment through its own button.
+// What it does NOT prove, and what no local test can: that a real tunnel
+// registered with the provider routes anything to this machine, that the
+// real third-party tunnel client behaves as the product assumes, or that a
+// real ChatGPT session can reach this tool at all. Those three remain
+// unproven and are named as such in the acceptance pack. "Verified" here is
+// the product's verdict over a real receipt, not a claim about the remote
+// half.
+n09ConnectorAttachmentSegment: {
+  if (!segmentSelected("n09-connector-attachment")) {
+    break n09ConnectorAttachmentSegment;
+  }
+  const attachFixture = await startTunnelClientFixture();
+  const attaching = await launch([], "hidden", "demo", {
+    environment: { FAROL_NEXT_E2E_TUNNEL_CLIENT: attachFixture.executable },
+  });
+  let peer = null;
+  try {
+    await completeSetup(attaching, false, true);
+    await attaching.window.locator('[data-section="settings"]').click();
+    await attaching.window.waitForFunction(
+      () => document.documentElement.dataset.section === "settings",
+    );
+    const row = attaching.window
+      .locator("#connection-readiness .connection-row")
+      .filter({ hasText: "Connection · " });
+    const feedback = (pattern) =>
+      attaching.window.waitForFunction(
+        (source) =>
+          new RegExp(source, "u").test(
+            document.querySelector("#settings-feedback")?.textContent ?? "",
+          ),
+        pattern.source,
+      );
+    await row
+      .getByRole("button", { name: "Choose client…", exact: true })
+      .click();
+    await feedback(/^tunnel-client \S+ verified/u);
+    await attaching.window
+      .locator("#settings-connector-tunnel")
+      .fill("tunnel_farol_next_attach");
+    await attaching.window
+      .locator("#settings-connector-key")
+      .fill("farol-next-e2e-runtime-key-0002");
+    await row.getByRole("button", { name: "Save route", exact: true }).click();
+    await feedback(/^Connector route saved\.$/u);
+    await row
+      .getByRole("button", { name: "Start & check", exact: true })
+      .click();
+    await feedback(/^Connector ready · runtime/u);
+
+    // The challenge and the workspace id are taken from the card the owner
+    // is told to copy them from, not from a snapshot the UI never showed.
+    const challengeCard = row.locator(".connector-challenge");
+    await challengeCard.waitFor();
+    const challengeRows = await challengeCard.locator("code").allInnerTexts();
+    assert.equal(
+      challengeRows.length,
+      2,
+      "the card shows exactly the challenge and the workspace it names",
+    );
+    const [challengeValue, challengeWorkspaceId] = challengeRows.map((value) =>
+      value.trim(),
+    );
+    assert.match(challengeValue, /^[a-z0-9][a-z0-9-]*$/u);
+
+    // The peer. It runs the production MCP entry under the launch contract
+    // Farol wrote for this connector generation — no stub, no fake receipt.
+    // `loadReadonlyComputerLaunchContract` refuses a path that is not
+    // canonical, and the harness's isolated home sits under the symlinked
+    // `/var/folders` form of the temporary directory — so the peer must be
+    // handed the resolved path, exactly as the tunnel client would be.
+    const launchContract = await fs.realpath(
+      path.join(
+        attaching.userData,
+        "farol-next-state",
+        "secure-mcp-connector",
+        "computer-authority",
+        "computer-launch.json",
+      ),
+    );
+    assert.equal(
+      JSON.parse(await fs.readFile(launchContract, "utf8"))
+        .connectorVerification.challengeSha256,
+      createHash("sha256").update(challengeValue).digest("hex"),
+      "the challenge on the card is the one the launch contract pinned",
+    );
+    const { Client } = await import("@modelcontextprotocol/client");
+    const { StdioClientTransport } =
+      await import("@modelcontextprotocol/client/stdio");
+    const peerCommand = development
+      ? {
+          command: process.execPath,
+          args: [path.join(root, "dist/app/computer-mcp.cjs")],
+          env: undefined,
+        }
+      : {
+          command: path.join(
+            appPath,
+            "Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+          ),
+          args: [path.join(appPath, "Contents/Resources/app/computer-mcp.cjs")],
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            ...Object.fromEntries(
+              ["HOME", "PATH", "TMPDIR"]
+                .map((name) => [name, process.env[name]])
+                .filter(([, value]) => value !== undefined),
+            ),
+          },
+        };
+    const transport = new StdioClientTransport({
+      command: peerCommand.command,
+      args: [...peerCommand.args, "--launch-contract", launchContract],
+      cwd: root,
+      stderr: "pipe",
+      ...(peerCommand.env ? { env: peerCommand.env } : {}),
+    });
+    // The peer's own child refuses an untrusted launch on stderr and then
+    // exits, which reaches the client only as "Connection closed". Keep its
+    // reason, so a refusal names itself instead of looking like a transport
+    // fault.
+    let peerStderr = "";
+    transport.stderr?.on("data", (chunk) => {
+      peerStderr += String(chunk);
+    });
+    peer = new Client({
+      name: "farol-next-e2e-connector-peer",
+      version: "1.0.0",
+    });
+    try {
+      await peer.connect(transport);
+    } catch (error) {
+      throw new Error(
+        `${error.message} · the MCP peer refused this launch contract · stderr ${JSON.stringify(peerStderr.slice(0, 400))} · contract ${launchContract}`,
+        { cause: error },
+      );
+    }
+    assert.equal(
+      (await peer.listTools()).tools.some(
+        (tool) => tool.name === "farol_next_connector_verify",
+      ),
+      true,
+      "the verify tool exists only because this launch contract pinned a challenge",
+    );
+    const verified = await peer.callTool({
+      name: "farol_next_connector_verify",
+      arguments: {
+        challenge: challengeValue,
+        workspaceId: challengeWorkspaceId,
+      },
+    });
+    assert.equal(verified.isError ?? false, false);
+    const receiptPath = path.join(
+      path.dirname(launchContract),
+      "connector-verification-receipt.json",
+    );
+    const receipt = JSON.parse(await fs.readFile(receiptPath, "utf8"));
+    assert.equal((await fs.stat(receiptPath)).mode & 0o777, 0o600);
+    assert.equal(
+      receipt.challengeSha256,
+      createHash("sha256").update(challengeValue).digest("hex"),
+    );
+    // The receipt is evidence, not a transcript: it carries no path, no
+    // file name and no content from the workspace it read.
+    const receiptText = JSON.stringify(receipt);
+    assert.doesNotMatch(receiptText, /README|approved-workspace|fixture/u);
+    assert.doesNotMatch(
+      receiptText,
+      new RegExp(
+        attaching.workspaceRoot.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"),
+        "u",
+      ),
+    );
+    cases.push("n09-attach-challenge-answered-by-local-peer");
+
+    // One answer, ever. A second call cannot overwrite the receipt.
+    // The refusal may arrive as a tool error or as a rejected call; either
+    // is a refusal, and neither may leave a second receipt.
+    const replayed = await peer
+      .callTool({
+        name: "farol_next_connector_verify",
+        arguments: {
+          challenge: challengeValue,
+          workspaceId: challengeWorkspaceId,
+        },
+      })
+      .then(
+        (value) => ({ refused: value.isError === true, detail: value }),
+        (error) => ({ refused: true, detail: { message: String(error) } }),
+      );
+    assert.equal(replayed.refused, true, "a replayed answer is refused");
+    assert.match(
+      JSON.stringify(replayed.detail),
+      /CONNECTOR_VERIFICATION_ALREADY_RECORDED/u,
+    );
+    assert.deepEqual(
+      JSON.parse(await fs.readFile(receiptPath, "utf8")),
+      receipt,
+      "a second answer leaves the one recorded receipt untouched",
+    );
+    cases.push("n09-attach-challenge-answered-exactly-once");
+
+    // The product's own verdict, through its own button.
+    await row
+      .getByRole("button", { name: "Check attachment", exact: true })
+      .click();
+    await feedback(/^ChatGPT attachment verified · workspace /u);
+    await attaching.window.waitForFunction(
+      () => document.querySelectorAll(".connector-challenge").length === 0,
+    );
+    const attached = await attaching.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    const secureMcp = attached.configuration.settings.connectors.secureMcp;
+    assert.equal(secureMcp.challenge, null);
+    assert.equal(secureMcp.attachment.workspaceId, challengeWorkspaceId);
+    assert.equal(secureMcp.runtime.state, "ready");
+    cases.push("n09-attach-verified-from-its-own-receipt");
+  } finally {
+    await peer?.close().catch(() => undefined);
+    await close(attaching);
+    await fs.rm(attachFixture.root, { recursive: true, force: true });
+  }
+}
+
+// N10 — the Computer panel's own controls. Every approved folder the suite
+// has ever added arrived through Setup's `#setup-live-primary`, so the
+// panel's own `Add folder…`, a workspace `Remove`, and the guarded edit's
+// `Cancel` had no covering case at all. Each is a real click on the real
+// control in the real panel: the folder picker is answered through the same
+// `FAROL_NEXT_E2E_WORKSPACE_ROOT` seam `launch()` already uses for the first
+// folder, and nothing else is substituted — the click, the
+// `computer.add-workspace` / `computer.remove-workspace` /
+// `computer.cancel-workspace-edit` handlers, their validation and the
+// settings write are the production ones.
+//
+// The segment owns its own instance so a failure here cannot perturb the
+// shared ones, and it runs hidden: every assertion below is DOM state, file
+// bytes and the settings read-back, none of which needs a visible window.
+n10ComputerPanelSegment: {
+  if (!segmentSelected("n10-computer-panel")) break n10ComputerPanelSegment;
+  const panel = await launch([], "hidden", "demo");
+  try {
+    // One approved, verified folder, added the only way the suite could add
+    // one until now. Everything after this point is the panel's own work.
+    await completeSetup(panel, false, true);
+    await panel.window.locator('[data-section="computer"]').click();
+    await panel.window.locator('[data-panel="computer"].active').waitFor();
+    const workspaceList = panel.window.locator("#computer-workspaces");
+    assert.equal(await workspaceList.locator(".workspace-card").count(), 1);
+
+    // A second, genuinely different folder with its own content. Only the
+    // picker's answer is seeded, in the running main process, exactly as the
+    // launch environment seeds the first one.
+    const secondRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(panel.isolatedHome, "second-workspace-")),
+    );
+    const secondLabel = path.basename(secondRoot);
+    await fs.writeFile(
+      path.join(secondRoot, "NOTES.md"),
+      "Farol Next second workspace fixture\n",
+      { mode: 0o600 },
+    );
+    await panel.application.evaluate(({ app }, root) => {
+      process.env.FAROL_NEXT_E2E_WORKSPACE_ROOT = root;
+      return app.isReady();
+    }, secondRoot);
+
+    await panel.window.locator("#add-workspace").click();
+    await panel.window
+      .locator("#computer-feedback")
+      .getByText("Read-only workspace saved and read back.", { exact: true })
+      .waitFor();
+    await workspaceList
+      .locator(".workspace-card")
+      .filter({ hasText: secondLabel })
+      .waitFor();
+    assert.equal(await workspaceList.locator(".workspace-card").count(), 2);
+    const twoWorkspaces = await panel.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.deepEqual(
+      twoWorkspaces.configuration.settings.computer.workspaces
+        .map((workspace) => workspace.root)
+        .sort(),
+      [panel.workspaceRoot, secondRoot].sort(),
+      "the second folder is a distinct approved root, not a re-approval of the first",
+    );
+    assert.equal(
+      twoWorkspaces.configuration.settings.computer.workspaces.every(
+        (workspace) => workspace.access === "read",
+      ),
+      true,
+      "a folder added from the panel is read-only until write authority is granted explicitly",
+    );
+    cases.push("n10-computer-second-workspace-added-from-panel");
+
+    // Remove takes it out of the list and out of the settings the next
+    // window would read back — not merely out of this render.
+    const secondCard = workspaceList
+      .locator(".workspace-card")
+      .filter({ hasText: secondLabel });
+    await secondCard
+      .getByRole("button", { name: "Remove", exact: true })
+      .click();
+    await panel.window
+      .locator("#computer-feedback")
+      .getByText(`${secondLabel} approval removed.`, { exact: true })
+      .waitFor();
+    await panel.window.waitForFunction(
+      (expected) =>
+        document.querySelectorAll("#computer-workspaces .workspace-card")
+          .length === expected,
+      1,
+    );
+    const afterRemoval = await panel.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.deepEqual(
+      afterRemoval.configuration.settings.computer.workspaces.map(
+        (workspace) => workspace.root,
+      ),
+      [panel.workspaceRoot],
+      "the removed root is gone from the settings read-back, not only from the list",
+    );
+    assert.equal(
+      afterRemoval.configuration.settings.computer.generation >
+        twoWorkspaces.configuration.settings.computer.generation,
+      true,
+      "removing an approved root advances the Computer generation",
+    );
+    cases.push("n10-computer-workspace-removed-from-panel-and-settings");
+
+    // Cancel on a prepared guarded edit: the evidence panel closes, the
+    // feedback says so, and the file on disk still has its original bytes.
+    const firstCard = workspaceList
+      .locator(".workspace-card")
+      .filter({ hasText: "approved-workspace" });
+    const beforeCancel = await fs.readFile(panel.workspaceFile, "utf8");
+    await firstCard
+      .getByRole("button", { name: "Enable edits", exact: true })
+      .click();
+    await firstCard.getByText(/guarded edits · not verified/u).waitFor();
+    await firstCard
+      .getByRole("button", { name: "Verify folder", exact: true })
+      .click();
+    await firstCard.getByText(/guarded edits · verified/u).waitFor();
+    await firstCard
+      .getByRole("button", { name: "Edit file…", exact: true })
+      .click();
+    const cancelReview = firstCard.locator(".workspace-mutation-evidence");
+    await cancelReview.getByText(/README\.md · \d+ bytes · source/u).waitFor();
+    await cancelReview
+      .getByLabel("Find exact text in approved-workspace", { exact: true })
+      .fill("workspace verification");
+    await cancelReview
+      .getByLabel("Replacement text for approved-workspace", { exact: true })
+      .fill("a replacement that must never be written");
+    await cancelReview
+      .getByRole("button", { name: "Cancel", exact: true })
+      .click();
+    await panel.window
+      .locator("#computer-feedback")
+      .getByText("Guarded edit cancelled.", { exact: true })
+      .waitFor();
+    await panel.window.waitForFunction(
+      () =>
+        document.querySelectorAll(".workspace-mutation-evidence").length === 0,
+    );
+    assert.equal(
+      await fs.readFile(panel.workspaceFile, "utf8"),
+      beforeCancel,
+      "a cancelled guarded edit leaves the file byte-identical",
+    );
+    assert.equal(
+      (await panel.window.evaluate(() => window.farolNext.bootstrap()))
+        .configuration.settings.computer.pendingEdit,
+      null,
+      "a cancelled preview never becomes a durable pending operation",
+    );
+    cases.push("n10-computer-guarded-edit-cancelled-file-unchanged");
+
+    // NOT COVERED HERE: a guarded edit whose result never reaches the
+    // window. main.ts makes the operation id durable before anything
+    // executes — "so a lost response or a restart leaves this exact
+    // operation to observe" — and the renderer acknowledges nothing it
+    // could not confirm, so the product is built for this; the suite still
+    // does not exercise it, and the acceptance pack says so rather than
+    // letting the green above imply otherwise. Two routes were measured and
+    // both are recorded so neither is tried again blind: wrapping the
+    // renderer's own transport for one call is impossible because the
+    // contextBridge object refuses assignment, and restoring the
+    // pre-acknowledgement record into `product-settings.json` and
+    // restarting did not complete inside the lane's budget. The second is
+    // the right shape and needs its own bounded debugging session, not a
+    // place in a freeze candidate.
+  } finally {
+    await close(panel);
   }
 }
 const repeatedCaseIds = cases.filter(
