@@ -10038,12 +10038,24 @@ n11AgentScopeSegment: {
     await agentScope.window.waitForFunction(
       () => document.documentElement.dataset.section === "browser",
     );
-    const scopeTask = agentScope.window.locator("#new-task");
-    await scopeTask.waitFor({ state: "visible", timeout: 20_000 });
-    await scopeTask.click();
-    await agentScope.window.waitForFunction(
-      () => document.querySelectorAll("#task-tabs .task-tab").length === 1,
-    );
+    // One task per assignment. A refused scope can leave the Agent on that
+    // task outcome-unknown, and this product will not submit another
+    // assignment for a task whose outcome it does not know — correctly. So
+    // the second journey gets its own task rather than inheriting whatever
+    // the first left behind.
+    const newScopeTask = async (expected) => {
+      await agentScope.window.locator("#new-task").click({ timeout: 20_000 });
+      await agentScope.window.waitForFunction(
+        (count) =>
+          document.querySelectorAll("#task-tabs .task-tab").length === count,
+        expected,
+      );
+      const state = await agentScope.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      return state.tasks.at(-1).taskId;
+    };
+    let scopeTaskId = await newScopeTask(1);
     // Whether the reopen believed it worked is half the question when the
     // menu is later found closed, so it is remembered rather than inferred.
     let lastMenuOpen = null;
@@ -10087,6 +10099,18 @@ n11AgentScopeSegment: {
       await agentScope.window
         .locator("#task-menu-agent")
         .click({ timeout: 20_000 });
+      // The menu refuses a submission while a previous task operation is
+      // still finishing, and says so. That is a correct answer, not an
+      // admission, so it is surfaced here as a retryable attempt rather
+      // than left to look like a lost admission thirty seconds later.
+      await agentScope.window.waitForFunction(() => {
+        const note =
+          document.querySelector("#task-menu-note")?.textContent ?? "";
+        return (
+          note.length > 0 &&
+          note !== "Another task operation is still finishing."
+        );
+      });
     };
     // The menu closes on a refusal, and the relative-root field is hidden
     // until the menu has re-rendered for the chosen mode. Reopen what is
@@ -10193,6 +10217,27 @@ n11AgentScopeSegment: {
           return;
         } catch (error) {
           lastFailure = error;
+          // A click that timed out waiting for a control is not proof that
+          // nothing was dispatched. Re-typing over an assignment that did
+          // land would submit it twice, which is the one thing this product
+          // refuses to do and the last thing a test should force. Ask the
+          // product whether this task already carries an assignment, and if
+          // it does, stop: the submission happened.
+          const alreadySubmitted = await agentScope.window
+            .evaluate(async (taskId) => {
+              const value = await window.farolNext.bootstrap();
+              const task = value.tasks.find(
+                (candidate) => candidate.taskId === taskId,
+              );
+              return task?.agent != null;
+            }, scopeTaskId)
+            .catch(() => false);
+          if (alreadySubmitted) {
+            process.stdout.write(
+              `E2E_TASK_MENU attempts=${attempt} already-submitted\n`,
+            );
+            return;
+          }
           const observed = await menuObservation();
           const expected = attempt === 1 && closeExpectedOnFirstAttempt;
           attemptLog.push({
@@ -10288,6 +10333,19 @@ n11AgentScopeSegment: {
       `a refused assignment delivers no envelope · note ${JSON.stringify(refusedNote)}`,
     );
     cases.push("n11-agent-denied-subfolder-refused");
+
+    // A fresh task, for the reason stated above. Opening its menu is left
+    // to `selectSubtreeScope()` inside the retry: an unguarded click here
+    // would be the one interaction in this journey with nothing to catch
+    // it, which is exactly how the previous run died.
+    // The task menu is an overlay and it covers New task. Close it the way
+    // an owner would before reaching for the control behind it, rather than
+    // clicking at something that is not actionable.
+    await agentScope.window.keyboard.press("Escape");
+    await agentScope.window
+      .locator("#task-menu")
+      .waitFor({ state: "hidden", timeout: 20_000 });
+    scopeTaskId = await newScopeTask(2);
 
     // One subfolder, and one exclusion, both typed into their own controls.
     // This one follows the refusal above, which closes the menu, so a close
