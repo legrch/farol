@@ -12,6 +12,10 @@ import type {
   AgentAuthorityPort,
   DelegatedAgentAuthority,
 } from "../../src/modules/agent/app/port/execution-authority";
+import type {
+  AssignmentRepository,
+  StoredAssignment,
+} from "../../src/modules/agent/app/port/assignment-repository";
 import {
   agentAssignmentCommandFingerprint,
   RunAgentAssignment,
@@ -24,6 +28,7 @@ import {
   markChildOutcomeUnknown,
   startAssignment,
   type AssignmentAuthority,
+  type AssignmentIdentity,
   type ChildCorrelation,
 } from "../../src/modules/agent/domain/assignment";
 import { PrivateAssignmentStore } from "../../src/modules/agent/infra/repo/private-assignment-store";
@@ -153,6 +158,30 @@ class RejoinHost implements AgentHost {
   }
 }
 
+// Counts real `save` calls on a REAL, injected `AssignmentRepository`
+// (the store passed in by the caller) instead of standing in for it: every
+// call still reaches disk. This is what makes "never duplicated" provable —
+// a duplicate delivery would show up as a second `save` on an already
+// -acknowledged record, not as a wrong return value.
+class CountingAssignments implements AssignmentRepository {
+  saveCalls = 0;
+
+  constructor(private readonly inner: AssignmentRepository) {}
+
+  admit(record: StoredAssignment) {
+    return this.inner.admit(record);
+  }
+
+  load(identity: AssignmentIdentity) {
+    return this.inner.load(identity);
+  }
+
+  save(record: StoredAssignment) {
+    this.saveCalls += 1;
+    return this.inner.save(record);
+  }
+}
+
 async function descendants(root: string): Promise<string[]> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   const nested = await Promise.all(
@@ -259,6 +288,102 @@ describe("private Agent assignment persistence", () => {
     expect(retainedHost.spawnCalls).toBe(0);
     expect(retainedHost.waitCalls).toBe(0);
   });
+
+  // LIF-10-adjacent: the sibling test above proves a *pending* result
+  // survives a restart untouched. It never proves the other half of
+  // "never dropped or duplicated" — that a crash-then-retry acknowledgement
+  // (the parent process dies right after committing the ack to disk, then
+  // restarts and retries the very same acknowledgement) lands on a fresh,
+  // independently-opened store as a no-op rather than a second durable
+  // write. Table: the retried correlation is either the same delivered
+  // result (must stay a no-op) or a foreign one (must be refused) — both
+  // read the on-disk record through a brand-new store instance, never the
+  // one the first acknowledgement used.
+  it.each([
+    {
+      label: "the same result",
+      resultRef: "result-durable-a" as const,
+      outcome: "acknowledged" as const,
+    },
+    {
+      label: "a foreign result",
+      resultRef: "result-foreign" as const,
+      outcome: "rejected" as const,
+    },
+  ])(
+    "retries an acknowledgement for $label through a fresh store without a second durable write",
+    async ({ resultRef, outcome }) => {
+      const root = await stateRoot();
+      const store = new PrivateAssignmentStore({ root });
+      await store.admit(preparedRecord());
+      const running = runningRecord();
+      await store.save(running);
+      const completed = completeAssignment(running.assignment, child);
+      if (!completed.ok) throw new Error(completed.error.code);
+      await store.save({
+        assignment: completed.value,
+        resultRef: "result-durable-a",
+        parentDelivery: "pending",
+        workspaceEnforcement: "verified",
+      });
+
+      // First acknowledgement: a real parent-delivery commit to disk.
+      const firstAttempt = new CountingAssignments(
+        new PrivateAssignmentStore({ root }),
+      );
+      await expect(
+        new AcknowledgeAgentResult(firstAttempt).execute({
+          correlation: child,
+          parentParticipantId: assignmentAuthority.parentParticipantId,
+          resultRef: "result-durable-a",
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { parentDelivery: "acknowledged" },
+      });
+      expect(firstAttempt.saveCalls).toBe(1);
+
+      // Simulated crash-then-restart retry: an independently constructed
+      // store re-reads the record that actually reached disk, never the
+      // first attempt's in-memory copy.
+      const retryAttempt = new CountingAssignments(
+        new PrivateAssignmentStore({ root }),
+      );
+      const retry = await new AcknowledgeAgentResult(retryAttempt).execute({
+        correlation: child,
+        parentParticipantId: assignmentAuthority.parentParticipantId,
+        resultRef,
+      });
+
+      if (outcome === "acknowledged") {
+        expect(retry).toMatchObject({
+          ok: true,
+          value: {
+            parentDelivery: "acknowledged",
+            resultRef: "result-durable-a",
+          },
+        });
+      } else {
+        expect(retry).toMatchObject({
+          ok: false,
+          error: { code: "AGENT_DELIVERY_CORRELATION" },
+        });
+      }
+      // Neither outcome performs a second durable write: the
+      // already-acknowledged short circuit never calls save, and a foreign
+      // result is refused before it gets that far. This is the control —
+      // if the short circuit at `acknowledge-agent-result.ts` were removed,
+      // this assertion is what would turn red (see mutation record).
+      expect(retryAttempt.saveCalls).toBe(0);
+
+      await expect(
+        new PrivateAssignmentStore({ root }).load(command.identity),
+      ).resolves.toMatchObject({
+        parentDelivery: "acknowledged",
+        resultRef: "result-durable-a",
+      });
+    },
+  );
 
   it("keeps the previous durable phase when replacement is interrupted", async () => {
     const root = await stateRoot();
