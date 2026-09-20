@@ -1004,6 +1004,119 @@ describe("ChatGPT summary-only context driver", () => {
     expect(fallback.dispose).not.toHaveBeenCalled();
   });
 
+  it("F2-2 recovers a completed retained result across a real restart after a publication failure, without a second submission", async () => {
+    const state = await store();
+    const putSummary = vi
+      .spyOn(state, "putSummary")
+      .mockRejectedValueOnce(new Error("synthetic summary store failure"));
+    const retained = route({
+      state: "outcome_unknown",
+      code: null,
+      deltaCount: 0,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    retained.runReadonlyTask.mockImplementationOnce(
+      async (_prompt, _attachments, observer) => {
+        await observer?.onDispatchIntent?.();
+        await observer?.onCorrelation?.({
+          turnUserId: "summary-user-pub-fail",
+          turnAssistantId: "summary-assistant-pub-fail",
+        });
+        return {
+          state: "completed",
+          code: null,
+          deltaCount: 1,
+          observedCharacters: JSON.stringify(content).length,
+          outputText: JSON.stringify(content),
+          turnUserId: "summary-user-pub-fail",
+          turnAssistantId: "summary-assistant-pub-fail",
+        };
+      },
+    );
+    const first = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: { retained: () => retained, createFallback: vi.fn() },
+    });
+
+    await expect(
+      first.request({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    expect(putSummary).toHaveBeenCalledTimes(1);
+    // The publication failed: nothing durable proves the summary exists yet,
+    // and the correlated attempt is still the only record of what happened.
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toBeNull();
+    await expect(
+      state.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toMatchObject({
+      phase: "possible_send",
+      turnUserId: "summary-user-pub-fail",
+      turnAssistantId: "summary-assistant-pub-fail",
+    });
+
+    // A real restart: a fresh driver instance, a fresh route instance (the
+    // app reconnected to the same retained conversation), over the same
+    // on-disk store. Nothing here is the same in-memory object as `first`.
+    const recovered = Object.assign(
+      route({
+        state: "outcome_unknown",
+        code: null,
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: "",
+      }),
+      {
+        observeReadonlyTask: vi.fn(async () => ({
+          state: "completed" as const,
+          code: null,
+          deltaCount: 1,
+          observedCharacters: JSON.stringify(content).length,
+          outputText: JSON.stringify(content),
+          turnUserId: "summary-user-pub-fail",
+          turnAssistantId: "summary-assistant-pub-fail",
+        })),
+      },
+    );
+    const restarted = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: vi.fn().mockReturnValue(recovered),
+        createFallback: vi.fn(),
+      },
+    });
+
+    await expect(
+      restarted.observe({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    expect(recovered.runReadonlyTask).not.toHaveBeenCalled();
+    expect(recovered.observeReadonlyTask).toHaveBeenCalledTimes(1);
+    expect(putSummary).toHaveBeenCalledTimes(2);
+    await expect(
+      state.getSummary(binding, request.operationId),
+    ).resolves.toMatchObject({ content });
+    await expect(
+      state.getSummaryAttempt(binding, request.operationId),
+    ).resolves.toBeNull();
+
+    // A second restart is idempotent: the durable summary answers directly,
+    // with no route work and no further publication at all.
+    const secondRestartRetained = vi.fn();
+    const secondRestart = new ChatGptContextSummaryDriver({
+      store: state,
+      routes: {
+        retained: secondRestartRetained,
+        createFallback: vi.fn(),
+      },
+    });
+    await expect(
+      secondRestart.observe({ request, source: source() }),
+    ).resolves.toMatchObject({ status: "completed", content });
+    expect(secondRestartRetained).not.toHaveBeenCalled();
+    expect(putSummary).toHaveBeenCalledTimes(2);
+  });
+
   it("releases a definitely unsubmitted fallback before a clean later attempt", async () => {
     const state = await store();
     const first = route({

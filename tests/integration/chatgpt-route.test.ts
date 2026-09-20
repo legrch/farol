@@ -379,6 +379,86 @@ describe("ChatGPT route submission boundary", () => {
     expect(submissions).toBe(1);
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
   });
+
+  it("F2-3 refuses to type into the composer after a navigation between preflight and dispatch", async () => {
+    let currentUrl = "https://chatgpt.com/";
+    const executeJavaScript = vi.fn().mockImplementationOnce(async () => {
+      // The page navigated to a different conversation while this exact
+      // script ran: the click that would actually submit must never reach
+      // whatever this page is now showing.
+      currentUrl = "https://chatgpt.com/c/another-conversation";
+      return prepared;
+    });
+    const candidate = route();
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      webContents: {
+        executeJavaScript: routedExecutor(executeJavaScript, {
+          running: false,
+        }),
+        getURL: () => currentUrl,
+      },
+    });
+
+    await expect(
+      candidate.runReadonlyTask("do not type into another conversation"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    // Only the prompt-composer script ran; the click that actually submits
+    // never reached the page the route navigated to underneath it.
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+  });
+
+  it("F2-3 refuses a later retry once navigation is observed mid-loop, without submitting twice", async () => {
+    let currentUrl = "https://chatgpt.com/";
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        // The click control was not yet ready, and the page navigated away
+        // right after this read.
+        currentUrl = "https://chatgpt.com/c/another-conversation";
+        return { activated: false };
+      });
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(3_000)
+      .mockReturnValueOnce(4_000)
+      .mockReturnValueOnce(6_000)
+      .mockReturnValue(9_000);
+    const candidate = route();
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      webContents: {
+        executeJavaScript: routedExecutor(executeJavaScript, {
+          running: false,
+        }),
+        getURL: () => currentUrl,
+      },
+    });
+
+    await expect(
+      candidate.runReadonlyTask("read the selected file"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    // The composer was typed once and the send control was read once (not
+    // yet activated); the retry that would have clicked send on the
+    // navigated-to page never ran.
+    expect(executeJavaScript).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("ChatGPT route streaming observation", () => {

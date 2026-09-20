@@ -484,6 +484,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_UI_UNRECOGNIZED"
     | "CHATGPT_COMPOSER_UNAVAILABLE"
     | "CHATGPT_SUBMIT_UNAVAILABLE"
+    | "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
     | "CHATGPT_TASK_PAGE_LOST"
     | "CHATGPT_TASK_ERROR"
     | "CHATGPT_USAGE_LIMITED"
@@ -915,6 +916,24 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      // The page identity `observe()` just validated, checked once before
+      // dispatch. Every remaining step before the click that actually
+      // submits (the activity read, typing the prompt, an attachment
+      // upload, and each retry of the click itself) re-checks this exact
+      // identity first: a navigation in between must never let a later step
+      // act on a conversation nobody validated. Once the click is
+      // acknowledged, the page is already committed and the poll loop below
+      // owns tracking it from there.
+      const dispatchIdentityUrl = candidate.webContents.getURL();
+      const dispatchIdentityLost = (): boolean => {
+        const active = this.routeWindow;
+        return (
+          !active ||
+          active !== candidate ||
+          active.isDestroyed() ||
+          active.webContents.getURL() !== dispatchIdentityUrl
+        );
+      };
       let activityCandidate: unknown;
       try {
         activityCandidate = await candidate.webContents.executeJavaScript(
@@ -950,6 +969,15 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      if (dispatchIdentityLost()) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
       const prepared = preparedTaskSchema.safeParse(
         await candidate.webContents.executeJavaScript(
           prepareTaskScript(prompt),
@@ -965,6 +993,15 @@ export class ChatGptRoute {
         };
       }
       if (attachments.length > 0) {
+        if (dispatchIdentityLost()) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         const uploaded = await uploadChatGptAttachments(
           candidate.webContents,
           attachments,
@@ -981,6 +1018,15 @@ export class ChatGptRoute {
       }
       const submitDeadline = Date.now() + 5_000;
       while (Date.now() < submitDeadline) {
+        if (dispatchIdentityLost()) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         await observer.onDispatchIntent?.();
         submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
