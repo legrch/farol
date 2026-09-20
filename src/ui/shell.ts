@@ -1672,10 +1672,16 @@ function renderComputerConfiguration(): void {
   commandPolicy.replaceChildren(commandRow);
 
   const computerState = settings.setup.computer;
-  computerReadiness.textContent = readinessLabel(computerState);
+  // The workspace card below says "not verified · Verify folder" for exactly
+  // this data once the verification has been outgrown. This badge used to
+  // read the raw record and keep saying Verified beside it.
+  const computerStale = setupStepStale(settings, "computer");
+  computerReadiness.textContent = readinessLabel(computerState, {
+    stale: computerStale,
+  });
   computerReadiness.classList.toggle(
     "verified",
-    computerState.verified !== null,
+    computerState.verified !== null && !computerStale,
   );
   if (settings.computer.workspaces.length === 0) {
     const empty = document.createElement("div");
@@ -2806,13 +2812,19 @@ function renderSettings(): void {
   }
 
   const computerState = settings.setup.computer;
-  computerReadiness.textContent = readinessLabel(computerState);
+  // The workspace card below says "not verified · Verify folder" for exactly
+  // this data once the verification has been outgrown. This badge used to
+  // read the raw record and keep saying Verified beside it.
+  const computerStale = setupStepStale(settings, "computer");
+  computerReadiness.textContent = readinessLabel(computerState, {
+    stale: computerStale,
+  });
   computerReadiness.classList.toggle(
     "verified",
-    computerState.verified !== null,
+    computerState.verified !== null && !computerStale,
   );
   const workspaceCount = settings.computer.workspaces.length;
-  computerSummary.textContent = `${settings.computer.name} · ${workspaceCount} approved ${workspaceCount === 1 ? "workspace" : "workspaces"} · ${readinessDetail(computerState)}`;
+  computerSummary.textContent = `${settings.computer.name} · ${workspaceCount} approved ${workspaceCount === 1 ? "workspace" : "workspaces"} · ${readinessDetail(computerState, { stale: computerStale })}`;
 
   const connectionStates: readonly [string, Readiness][] = [
     ["ChatGPT", settings.setup.chatgpt],
