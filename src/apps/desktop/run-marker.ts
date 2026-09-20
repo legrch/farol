@@ -45,6 +45,31 @@ import { z } from "zod";
 //   never guessed at, because guessing here either places a generation over
 //   a running app or refuses a promotion forever.
 //
+// What `processStart` does NOT close, and why that is accepted (S35-H1R).
+// `ps -o lstart=` prints whole seconds ("Sun Sep 20 14:42:06 2026"), so two
+// processes that started inside the same wall-clock second read identically.
+// A pid reused within that one second by a process that also happens to
+// wear the crashed writer's number is therefore indistinguishable from the
+// writer, and the marker is classified `running`. Both halves of that are
+// deliberate:
+//
+// - The direction is fail-closed. The wrong answer this residual can
+//   produce is `running` for a generation that crashed — a promotion
+//   refused. It cannot produce `crashed` for a generation that is running,
+//   which is the outcome that would place over a live app's state. The
+//   owner clears a false `running` by starting the app and quitting it
+//   normally, which removes the marker on a confirmed drain.
+// - There is no cheaper exact identity available here. A process's real
+//   unique identity on macOS is its kernel start timestamp at microsecond
+//   resolution (`proc_pidinfo`/`KERN_PROC`), reachable only from native
+//   code; this module is plain TypeScript that Node's unflagged type
+//   stripping must be able to load from a `.mjs` CLI, and it deliberately
+//   shells out to nothing but `/bin/ps` with fixed arguments. Adding
+//   another `ps` column (`command=`, `etime=`) would narrow the window
+//   without closing it — still whole seconds, still not an identity — while
+//   changing the recorded string shape that older markers are compared
+//   against. The residual is left documented rather than half-closed.
+//
 // Boot time is `Date.now() - os.uptime() * 1000`, rounded to whole seconds
 // because `os.uptime()` itself is whole seconds, and compared with a small
 // tolerance because the two readings are taken at different instants and
@@ -178,6 +203,12 @@ export function processAlive(pid: number): boolean {
  * turn two different processes into the same answer. `execFileSync` with a
  * fixed absolute path and fixed arguments: nothing here takes a caller's
  * command.
+ *
+ * Its resolution is one second, which leaves the residual the module
+ * comment above describes: two processes started inside the same second
+ * read identically. That can only over-report `running`, never
+ * `crashed`, so it refuses a promotion rather than placing over a live
+ * generation.
  */
 export function readProcessStart(pid: number): string | null {
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
@@ -227,7 +258,10 @@ export function classifyRunMarker(
   if (!sameBoot(marker.bootTime, probe.bootTime)) return "crashed";
   // S35-H1-3: same boot and a live pid is not yet the app. Pids are reused
   // within one boot, so the process now holding this number must be shown
-  // to be the one that wrote the marker.
+  // to be the one that wrote the marker. `ps` resolves to one second, so a
+  // reuse inside that second reads as the writer and is reported `running`
+  // — the fail-closed side of the residual documented at the top of this
+  // module.
   const current = probe.processStart(marker.pid);
   if (marker.processStart === null || current === null) return "boot_unknown";
   return current === marker.processStart ? "running" : "crashed";
