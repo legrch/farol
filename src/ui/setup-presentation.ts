@@ -269,3 +269,65 @@ export function nativeHostActionPrerequisite(
     ? null
     : `Choose a Codex executable before you ${action} it.`;
 }
+
+export type SetupConnectPrimary = Readonly<{
+  hidden: boolean;
+  label: string;
+  disabled: boolean;
+  /** Why it is disabled, or null when it is not. */
+  reason: string | null;
+}>;
+
+/**
+ * Setup's own primary action on the Connect step: its caption, whether it can
+ * be pressed, and why not.
+ *
+ * Settings' sibling button already asked connectorStartPrerequisite, which
+ * includes the approved workspace the connector serves. This one hand-rolled
+ * a shorter predicate and left that condition out, so with no approved
+ * workspace Setup offered "Start & check" and the backend refused it. The
+ * caption and the disabled flag were also derived separately, which is how
+ * they came to disagree about which action the button was even offering.
+ *
+ * The workspace requirement belongs to starting, not to saving: the "Save
+ * connector" branch writes the route and must stay available before any
+ * workspace exists.
+ */
+export function setupConnectPrimary(
+  connector: Readonly<{
+    tunnelClient: unknown | null;
+    tunnelId: string | null;
+    credential: "missing" | "stored";
+    runtime: Readonly<{ state: string }> | null;
+    challenge: unknown | null;
+  }>,
+  workspaceCount: number,
+): SetupConnectPrimary {
+  if (connector.tunnelClient === null) {
+    return { hidden: true, label: "", disabled: true, reason: null };
+  }
+  if (connector.tunnelId === null || connector.credential === "missing") {
+    return {
+      hidden: false,
+      label: "Save connector",
+      disabled: false,
+      reason: null,
+    };
+  }
+  const attachmentCheckPending =
+    connector.runtime?.state === "ready" && connector.challenge !== null;
+  const label =
+    connector.runtime?.state === "outcome_unknown"
+      ? "Repair explicitly"
+      : connector.runtime?.state === "ready"
+        ? attachmentCheckPending
+          ? "Check attachment"
+          : "Connection verified"
+        : "Start & check";
+  const reason = connectorStartPrerequisite(
+    connector,
+    workspaceCount,
+    attachmentCheckPending,
+  );
+  return { hidden: false, label, disabled: reason !== null, reason };
+}

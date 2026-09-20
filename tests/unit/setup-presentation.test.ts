@@ -10,6 +10,7 @@ import {
   readinessLabel,
   nativeHostActionPrerequisite,
   routeReadiness,
+  setupConnectPrimary,
   setupStepStale,
   waitsForAgentRejoin,
   windowModeLabel,
@@ -446,5 +447,78 @@ describe("why a connection or host control cannot be used yet", () => {
       );
       expect(nativeHostActionPrerequisite(true, action)).toBeNull();
     }
+  });
+});
+
+describe("Setup's own primary action on the Connect step", () => {
+  const saved = {
+    tunnelClient: { version: "1.2.3" },
+    tunnelId: "tunnel_abc",
+    credential: "stored" as const,
+    runtime: null,
+    challenge: null,
+  };
+
+  it("does not offer to start what the backend will refuse", () => {
+    // The approved workspace is the condition this step used to omit while
+    // Settings' sibling already enforced it. With none, Setup offered
+    // "Start & check" and pressing it was refused.
+    const withoutWorkspace = setupConnectPrimary(saved, 0);
+    expect(withoutWorkspace.label).toBe("Start & check");
+    expect(withoutWorkspace.disabled).toBe(true);
+    expect(withoutWorkspace.reason).toContain("Approve at least one workspace");
+  });
+
+  it("offers it once a workspace exists", () => {
+    const ready = setupConnectPrimary(saved, 1);
+    expect(ready).toEqual({
+      hidden: false,
+      label: "Start & check",
+      disabled: false,
+      reason: null,
+    });
+  });
+
+  it("keeps saving the route available before any workspace exists", () => {
+    // The workspace belongs to starting, not to saving; a step that refused
+    // to save the route until a workspace existed would be a new dead end.
+    for (const unsaved of [
+      { ...saved, tunnelId: null },
+      { ...saved, credential: "missing" as const },
+    ]) {
+      const primary = setupConnectPrimary(unsaved, 0);
+      expect(primary.label).toBe("Save connector");
+      expect(primary.disabled).toBe(false);
+    }
+  });
+
+  it("hides itself with no client chosen", () => {
+    expect(
+      setupConnectPrimary({ ...saved, tunnelClient: null }, 1).hidden,
+    ).toBe(true);
+  });
+
+  it("keeps the captions it had, each agreeing with its own disabled flag", () => {
+    const running = setupConnectPrimary(
+      { ...saved, runtime: { state: "ready" } },
+      1,
+    );
+    expect(running.label).toBe("Connection verified");
+    expect(running.disabled).toBe(true);
+    expect(running.reason).toBe("The connector is already running.");
+
+    const pending = setupConnectPrimary(
+      { ...saved, runtime: { state: "ready" }, challenge: {} },
+      1,
+    );
+    expect(pending.label).toBe("Check attachment");
+    expect(pending.disabled).toBe(false);
+
+    const unknown = setupConnectPrimary(
+      { ...saved, runtime: { state: "outcome_unknown" } },
+      1,
+    );
+    expect(unknown.label).toBe("Repair explicitly");
+    expect(unknown.disabled).toBe(false);
   });
 });

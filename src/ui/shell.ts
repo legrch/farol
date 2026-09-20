@@ -78,6 +78,7 @@ import {
   readinessLabel,
   nativeHostActionPrerequisite,
   routeReadiness,
+  setupConnectPrimary,
   setupStepStale,
   waitsForAgentRejoin,
   windowModeLabel,
@@ -3648,21 +3649,21 @@ function renderSetup(): void {
         restoreInputDraft(key, keyDraft);
       });
     }
-    livePrimary.hidden = !connector.tunnelClient;
-    livePrimary.textContent = !connector.tunnelClient
-      ? ""
-      : connector.tunnelId === null || connector.credential === "missing"
-        ? "Save connector"
-        : connector.runtime?.state === "outcome_unknown"
-          ? "Repair explicitly"
-          : connector.runtime?.state === "ready"
-            ? connector.challenge
-              ? "Check attachment"
-              : "Connection verified"
-            : "Start & check";
-    livePrimary.disabled =
-      !connector.tunnelClient ||
-      (connector.runtime?.state === "ready" && connector.challenge === null);
+    // Caption, disabled flag and reason from one function, and the same
+    // prerequisite Settings' sibling button uses — including the approved
+    // workspace the connector serves, which this step used to omit.
+    const connectPrimary = setupConnectPrimary(
+      connector,
+      configured.settings.computer.workspaces.length,
+    );
+    livePrimary.hidden = connectPrimary.hidden;
+    livePrimary.textContent = connectPrimary.label;
+    livePrimary.disabled = connectPrimary.disabled;
+    if (connectPrimary.reason !== null) {
+      livePrimary.title = connectPrimary.reason;
+    } else {
+      livePrimary.removeAttribute("title");
+    }
     setupPrimaryAction = async () => {
       if (!connector.tunnelClient) return;
       if (connector.tunnelId === null || connector.credential === "missing") {
