@@ -259,6 +259,11 @@ import {
   type ProductAgentContext,
   type ProductAgentHostContext,
 } from "./product-agent-context";
+import {
+  productAgentSessionExpiryVerdict,
+  persistedProductAgentExpiryVerdict,
+  productAgentExpiryRecoveryVerdict,
+} from "./product-agent-expiry";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import {
   FarolModelLifecycle,
@@ -1703,14 +1708,16 @@ function armProductAgentExpiry(
   session.expiryTimer = setTimeout(
     () => {
       session.expiryTimer = null;
-      if (
-        activeProductAgentSession !== session ||
-        liveTaskRegistry.get(session.taskId)?.agent?.phase !== "running"
-      ) {
-        return;
-      }
-      if (taskMutationInFlight) {
-        armProductAgentExpiry(session, 100);
+      const now = Date.now();
+      const verdict = productAgentSessionExpiryVerdict({
+        sessionIsActive: activeProductAgentSession === session,
+        taskPhase: liveTaskRegistry.get(session.taskId)?.agent?.phase,
+        mutationInFlight: taskMutationInFlight,
+        now,
+      });
+      if (verdict.action === "noop") return;
+      if (verdict.action === "reschedule") {
+        armProductAgentExpiry(session, verdict.atMs - now);
         return;
       }
       taskMutationInFlight = true;
@@ -1736,11 +1743,21 @@ function schedulePersistedProductAgentExpiry(
     () => {
       persistedProductAgentExpiry = null;
       const task = liveTaskRegistry.get(taskId);
-      if (task?.agent?.phase !== "running") return;
-      if (taskMutationInFlight) {
-        schedulePersistedProductAgentExpiry(taskId, input, 100);
+      const now = Date.now();
+      const verdict = persistedProductAgentExpiryVerdict({
+        taskPhase: task?.agent?.phase,
+        mutationInFlight: taskMutationInFlight,
+        now,
+      });
+      if (verdict.action === "noop") return;
+      if (verdict.action === "reschedule") {
+        schedulePersistedProductAgentExpiry(taskId, input, verdict.atMs - now);
         return;
       }
+      // Unreachable in practice: `verdict.action === "expire"` only when
+      // `taskPhase === "running"`, which requires `task` to exist. The
+      // check narrows `task` for TypeScript rather than adding a new branch.
+      if (!task) return;
       taskMutationInFlight = true;
       void cancelProductAgentTask(task).finally(() => {
         taskMutationInFlight = false;
@@ -1756,21 +1773,39 @@ async function recoverProductAgentExpiry(): Promise<void> {
   const task = liveTaskRegistry
     .snapshot()
     .tasks.find((candidate) => candidate.agent?.phase === "running");
-  if (!task || !productAgentStore) return;
-  let input: ProductAgentInput | null;
-  try {
-    input = await productAgentStore.load(task.taskId);
-  } catch {
-    input = null;
+  let input: ProductAgentInput | null = null;
+  if (task && productAgentStore) {
+    try {
+      input = await productAgentStore.load(task.taskId);
+    } catch {
+      input = null;
+    }
   }
-  if (!input || !productAgentAssignmentMatches(task.agent!, input)) {
+  const now = Date.now();
+  const verdict = productAgentExpiryRecoveryVerdict({
+    hasRunningTask: task !== undefined,
+    storeAvailable: productAgentStore !== null,
+    input,
+    assignmentMatches:
+      task !== undefined && input !== null
+        ? productAgentAssignmentMatches(task.agent!, input)
+        : false,
+    now,
+  });
+  if (verdict.action === "noop") return;
+  // Both remaining branches (`unknown` and `reschedule`) are only ever
+  // produced when `hasRunningTask` was true, which requires `task` to
+  // exist. The check narrows `task` for TypeScript rather than adding a new
+  // branch.
+  if (!task) return;
+  if (verdict.action === "unknown") {
     await persistProductAgentSummary(
       task.taskId,
       productAgentUnknownSummaryFromTask(task.agent!),
     ).catch(() => undefined);
     return;
   }
-  schedulePersistedProductAgentExpiry(task.taskId, input);
+  schedulePersistedProductAgentExpiry(task.taskId, input!, verdict.atMs - now);
 }
 
 async function performProductAgentCancellation(
