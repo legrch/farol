@@ -40,6 +40,100 @@ const unavailableHandler: FarolModelTurnHandler = async () => ({
   reason: "FAROL_MODEL_ROUTE_UNAVAILABLE",
 });
 
+/** The already-running Route B provider this endpoint reaches as a client. */
+export type RouteBModelEndpointTarget = Readonly<{
+  baseUrl: string;
+  token: string;
+}>;
+
+/**
+ * Builds the endpoint's real production handler: an ordinary loopback HTTP
+ * client of the product's own Route B provider (`startRouteBRuntime`), which
+ * already implements the real chat-turn route — `RouteBAdmission`, the
+ * task's `RouteBConversationSurface.runReadonlyTask`, and the tool relay —
+ * behind its own OpenAI-compatible `/v1/responses` surface. This handler
+ * never reimplements that machinery; it forwards the request body once, with
+ * the provider's own internal token (never the caller's), and relays back
+ * whatever the provider answers.
+ *
+ * Because it is the same running provider instance the product's own
+ * internally-launched host also talks to, admission is not merely "the same
+ * way" — it is the exact same `RouteBAdmission`, so a turn on a thread
+ * admitted from either entry point refuses the other with
+ * `ROUTE_B_THREAD_BUSY`, delivered exactly as the provider already renders
+ * it: a `response.failed` SSE frame, never a queued second submission.
+ *
+ * `target` is read once per request (not captured at construction) because
+ * the runtime starts after this endpoint does and can also close before it;
+ * `target() === null` — runtime not started yet, or already closed — answers
+ * `FAROL_MODEL_ROUTE_UNAVAILABLE`, matching the pre-wiring default exactly.
+ * Exactly one fetch is attempted; a network failure or a non-2xx upstream
+ * answer is surfaced once, never retried and never queued.
+ */
+export function routeBModelTurnHandler(
+  target: () => RouteBModelEndpointTarget | null,
+): FarolModelTurnHandler {
+  return async (request) => {
+    const upstream = target();
+    if (!upstream) {
+      return { ok: false, reason: "FAROL_MODEL_ROUTE_UNAVAILABLE" };
+    }
+    let response: Response;
+    try {
+      response = await fetch(`${upstream.baseUrl}/responses`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${upstream.token}`,
+        },
+        body: JSON.stringify(request.body ?? {}),
+      });
+    } catch {
+      // No retry: the caller sees one truthful, content-free refusal.
+      return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
+    }
+    const text = await response.text().catch(() => "");
+    if (!response.ok) {
+      return { ok: false, reason: routeRefusalCode(response.status, text) };
+    }
+    // A 200 body may itself carry a `response.failed` frame (a refusal or an
+    // `outcome_unknown` turn the provider already rendered) — relayed as-is,
+    // never reinterpreted, so nothing here invents a certainty the route did
+    // not report.
+    return { ok: true, events: parseSseEvents(text) };
+  };
+}
+
+function routeRefusalCode(status: number, body: string): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown } };
+    if (typeof parsed.error?.code === "string") return parsed.error.code;
+  } catch {
+    // Falls through to the generic, content-free code below.
+  }
+  return `FAROL_MODEL_ROUTE_REFUSED_${status}`;
+}
+
+function parseSseEvents(text: string): FarolModelSseEvent[] {
+  const events: FarolModelSseEvent[] = [];
+  for (const block of text.split("\n\n")) {
+    if (block.trim().length === 0) continue;
+    let event: string | undefined;
+    let rawData: string | undefined;
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event: ")) event = line.slice("event: ".length);
+      else if (line.startsWith("data: ")) rawData = line.slice("data: ".length);
+    }
+    if (event === undefined || rawData === undefined) continue;
+    try {
+      events.push({ event, data: JSON.parse(rawData) });
+    } catch {
+      events.push({ event, data: rawData });
+    }
+  }
+  return events;
+}
+
 export type FarolModelEndpointEvidence = Readonly<{
   requestsAccepted: number;
   requestsRejected: number;

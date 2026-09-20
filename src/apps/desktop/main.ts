@@ -236,6 +236,7 @@ import {
   FarolModelLifecycle,
   type FarolModelLifecycleStatus,
 } from "./farol-model-lifecycle";
+import { routeBModelTurnHandler } from "./farol-model-endpoint";
 import {
   applyFarolModelConfigBlock,
   applyFarolModelProviderSelection,
@@ -6700,8 +6701,11 @@ async function main(): Promise<void> {
     tempPath: app.getPath("temp"),
   });
   // Starts with the app, on the persisted port, and never autospawns a
-  // host: see Decisions.md N04, item 1. The real chat-turn route is not
-  // wired yet (packet N04b escalation) — every request is refused with
+  // host: see Decisions.md N04, item 1. The real chat-turn route (packet
+  // N04c) is the already-running Route B provider: `routeBModelTurnHandler`
+  // reads `routeBRuntime` at call time (it starts after this endpoint does,
+  // via `initializeRouteBRuntime()` below, and can also close before it), so
+  // a request before start or after close still answers
   // FAROL_MODEL_ROUTE_UNAVAILABLE, never silently dropped or fabricated.
   // The one exception is this exact E2E seam: with FAROL_NEXT_E2E=1 *and*
   // FAROL_MODEL_E2E_SYNTHETIC_REPLY set, requests get a synthetic
@@ -6714,9 +6718,9 @@ async function main(): Promise<void> {
       : undefined;
   modelLifecycle = new FarolModelLifecycle({
     stateRoot: modelEndpointStateRoot(),
-    ...(modelSyntheticReply
-      ? { handler: syntheticModelTurnHandler(modelSyntheticReply) }
-      : {}),
+    handler: modelSyntheticReply
+      ? syntheticModelTurnHandler(modelSyntheticReply)
+      : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
   });
   try {
     await modelLifecycle.start();
