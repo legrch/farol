@@ -263,6 +263,114 @@ export async function readConnectorVerificationReceipt(
   }
 }
 
+/**
+ * Whether a receipt found on disk is THIS running connector's answer to THIS
+ * challenge, at the Computer generation the owner's settings carry now.
+ *
+ * S35-TA-6: this decision used to live inside `main.ts`, which exports
+ * nothing and which no test loads, so nothing could exercise it — the only
+ * thing a test could do was restate it and assert on the copy. It is the
+ * verdict that decides whether a connector counts as attached, so a silent
+ * wrong answer here attaches a connector the owner never verified, or one
+ * verified against a workspace or a Computer generation that no longer
+ * applies. The same reason the ChatGPT journal lease, the registry's durable
+ * writes and the Computer workspace composition were moved out.
+ *
+ * Every refusal is the same closed answer on purpose: a caller renders
+ * `CONNECTOR_ATTACHMENT_INVALID` for all of them, because telling an
+ * unverified connector WHICH check refused it tells it what to forge next.
+ * `reason` is for the owner's diagnostics, never for the wire.
+ */
+export type ConnectorAttachmentVerdict =
+  | Readonly<{ attached: true }>
+  | Readonly<{
+      attached: false;
+      reason:
+        | "challenge-mismatch"
+        | "binding-not-current"
+        | "workspace-not-approved"
+        | "recorded-at-unreadable"
+        | "challenge-time-unreadable"
+        | "recorded-before-challenge";
+    }>;
+
+export type ConnectorAttachmentCheck = Readonly<{
+  receipt: ConnectorVerificationReceipt;
+  /** The challenge this runtime prepared, and when it prepared it. */
+  challenge: Readonly<{ challengeSha256: string; preparedAt: string }>;
+  /** The Computer generation the owner's settings carry right now. */
+  computerGeneration: number;
+  /** The workspace ids the owner has approved right now. */
+  approvedWorkspaceIds: readonly string[];
+}>;
+
+/**
+ * The receipt's binding names the one runtime participant this product
+ * creates for a connector verification, at the current generation, for the
+ * one operation a verification performs. A receipt whose binding names
+ * anything else — another participant, another epoch, another operation —
+ * is somebody else's receipt, whatever else about it matches.
+ */
+export function connectorReceiptBindingIsCurrent(
+  receipt: ConnectorVerificationReceipt,
+  computerGeneration: number,
+): boolean {
+  const participantPrefix = "secure-mcp-main-";
+  if (!receipt.participantId.startsWith(participantPrefix)) return false;
+  const runtimeId = receipt.participantId.slice(participantPrefix.length);
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
+      runtimeId,
+    ) &&
+    receipt.ownerId === "owner-desktop" &&
+    receipt.sessionId === `secure-mcp-session-${runtimeId}` &&
+    receipt.taskId === `secure-mcp-task-${runtimeId}` &&
+    receipt.turnId === `secure-mcp-turn-${runtimeId}` &&
+    receipt.taskEpoch === computerGeneration &&
+    receipt.generation === computerGeneration &&
+    receipt.operation === "workspace.list"
+  );
+}
+
+export function checkConnectorAttachment(
+  input: ConnectorAttachmentCheck,
+): ConnectorAttachmentVerdict {
+  const { receipt, challenge, computerGeneration, approvedWorkspaceIds } =
+    input;
+  if (receipt.challengeSha256 !== challenge.challengeSha256) {
+    return { attached: false, reason: "challenge-mismatch" };
+  }
+  if (!connectorReceiptBindingIsCurrent(receipt, computerGeneration)) {
+    return { attached: false, reason: "binding-not-current" };
+  }
+  if (!approvedWorkspaceIds.includes(receipt.workspaceId)) {
+    return { attached: false, reason: "workspace-not-approved" };
+  }
+  const recordedAt = Date.parse(receipt.recordedAt);
+  const preparedAt = Date.parse(challenge.preparedAt);
+  if (!Number.isFinite(recordedAt)) {
+    return { attached: false, reason: "recorded-at-unreadable" };
+  }
+  // S35-TA-6: the same question asked of the other side, which the version
+  // of this code that lived in `main.ts` did not ask. `Date.parse` answers
+  // NaN for a timestamp it cannot read, and EVERY comparison against NaN is
+  // false — so `recordedAt < preparedAt` silently succeeded and the replay
+  // check below fell OPEN for any receipt whose digest and binding matched.
+  // An unreadable challenge time means the replay order cannot be
+  // established, which is a refusal, not a pass.
+  if (!Number.isFinite(preparedAt)) {
+    return { attached: false, reason: "challenge-time-unreadable" };
+  }
+  // Replay order. A receipt recorded BEFORE the challenge it claims to
+  // answer cannot be an answer to it: it is an older receipt being replayed
+  // against a newer challenge, and the digests matching proves only that
+  // whoever replayed it had the old one.
+  if (recordedAt < preparedAt) {
+    return { attached: false, reason: "recorded-before-challenge" };
+  }
+  return { attached: true };
+}
+
 export async function clearConnectorVerificationReceipt(
   root: string,
 ): Promise<void> {

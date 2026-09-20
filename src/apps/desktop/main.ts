@@ -283,6 +283,7 @@ import {
 } from "./secure-mcp-launch-contract";
 import { SecureMcpConnectorRuntime } from "./secure-mcp-connector-runtime";
 import {
+  checkConnectorAttachment,
   clearConnectorVerificationReceipt,
   readConnectorVerificationReceipt,
 } from "../../modules/computer/infra/mcp/connector-verification-receipt";
@@ -3325,29 +3326,6 @@ async function startSecureMcpConnector(
   }
 }
 
-function connectorReceiptBindingIsCurrent(
-  receipt: NonNullable<
-    Awaited<ReturnType<typeof readConnectorVerificationReceipt>>
-  >,
-  computerGeneration: number,
-): boolean {
-  const participantPrefix = "secure-mcp-main-";
-  if (!receipt.participantId.startsWith(participantPrefix)) return false;
-  const runtimeId = receipt.participantId.slice(participantPrefix.length);
-  return (
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u.test(
-      runtimeId,
-    ) &&
-    receipt.ownerId === "owner-desktop" &&
-    receipt.sessionId === `secure-mcp-session-${runtimeId}` &&
-    receipt.taskId === `secure-mcp-task-${runtimeId}` &&
-    receipt.turnId === `secure-mcp-turn-${runtimeId}` &&
-    receipt.taskEpoch === computerGeneration &&
-    receipt.generation === computerGeneration &&
-    receipt.operation === "workspace.list"
-  );
-}
-
 async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
   if (!configuration || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -3380,21 +3358,23 @@ async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
     if (receipt === null) {
       return configurationFailure("CONNECTOR_ATTACHMENT_NOT_FOUND");
     }
-    const workspaceApproved = snapshot.settings.computer.workspaces.some(
-      (workspace) => workspace.workspaceId === receipt.workspaceId,
-    );
-    const recordedAt = Date.parse(receipt.recordedAt);
-    const preparedAt = Date.parse(challenge.preparedAt);
-    if (
-      receipt.challengeSha256 !== challenge.challengeSha256 ||
-      !connectorReceiptBindingIsCurrent(
-        receipt,
-        snapshot.settings.computer.generation,
-      ) ||
-      !workspaceApproved ||
-      !Number.isFinite(recordedAt) ||
-      recordedAt < preparedAt
-    ) {
+    // S35-TA-6: the verdict itself lives in `connector-verification-receipt.ts`
+    // so it can be exercised; what stays here is reading the snapshot, which
+    // only `main.ts` can do. Every refusal renders as the same closed code:
+    // telling an unverified connector which check refused it tells it what to
+    // forge next.
+    const verdict = checkConnectorAttachment({
+      receipt,
+      challenge: {
+        challengeSha256: challenge.challengeSha256,
+        preparedAt: challenge.preparedAt,
+      },
+      computerGeneration: snapshot.settings.computer.generation,
+      approvedWorkspaceIds: snapshot.settings.computer.workspaces.map(
+        (workspace) => workspace.workspaceId,
+      ),
+    });
+    if (!verdict.attached) {
       return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
     }
     const receiptSha256 = createHash("sha256")
