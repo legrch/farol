@@ -61,6 +61,8 @@ import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
   agentRouteReadiness,
+  readinessDetail,
+  readinessLabel,
   routeReadiness,
   waitsForAgentRejoin,
   windowModeLabel,
@@ -1305,33 +1307,6 @@ function renderActivity(): void {
           })(),
         ]
       : []),
-  );
-}
-
-function readinessLabel(readiness: Readiness): string {
-  if (readiness.verified) return "Verified";
-  if (readiness.outcomeUnknown) return "Outcome unknown";
-  if (readiness.unavailable) return "Unavailable";
-  if (readiness.needsAction) return "Needs action";
-  if (readiness.reachable === "reachable") return "Reachable · verify";
-  if (readiness.reachable === "unreachable") return "Unreachable";
-  if (readiness.configured) return "Configured · verify";
-  return "Needs action";
-}
-
-function readinessDetail(readiness: Readiness): string {
-  if (readiness.verified) {
-    return `Verified ${new Intl.DateTimeFormat(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(readiness.verified.verifiedAt))}`;
-  }
-  return (
-    readiness.needsAction ??
-    readiness.unavailable ??
-    (readiness.reachable === "unreachable"
-      ? "The configured route could not be reached."
-      : "No verification has been recorded.")
   );
 }
 
@@ -3131,19 +3106,25 @@ function renderSettings(): void {
         const agentNeedsRejoin = waitsForAgentRejoin(agentState);
         const agent = document.createElement("button");
         agent.type = "button";
-        agent.textContent = agentProof
-          ? "Agent verified"
-          : agentNeedsRejoin
-            ? "Rejoin Agent"
-            : "Verify Agent";
+        // Outcome-unknown first, exactly as agentRouteReadiness decides it.
+        // An earlier proof does not describe the attempt that ended unknown,
+        // and a button reading "Agent verified" over an unknown outcome is
+        // this product saying the one thing it must never say.
+        agent.textContent = agentState.outcomeUnknown
+          ? "Agent outcome unknown"
+          : agentProof
+            ? "Agent verified"
+            : agentNeedsRejoin
+              ? "Rejoin Agent"
+              : "Verify Agent";
         agent.disabled =
           agentProof !== null || agentState.outcomeUnknown || !agentCanRun;
-        agent.title = agentProof
-          ? agentProof.workspaceEnforcement === "verified"
-            ? "Lineage, workspace enforcement, and delivery are verified"
-            : "Lineage and delivery are verified; native workspace enforcement remains not verified"
-          : agentState.outcomeUnknown
-            ? "Inspect the existing Codex task before deliberate recovery"
+        agent.title = agentState.outcomeUnknown
+          ? "Inspect the existing Codex task before deliberate recovery"
+          : agentProof
+            ? agentProof.workspaceEnforcement === "verified"
+              ? "Lineage, workspace enforcement, and delivery are verified"
+              : "Lineage and delivery are verified; native workspace enforcement remains not verified"
             : !agentCanRun
               ? "Run the live Codex host check and verify one workspace first"
               : agentNeedsRejoin

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentRouteReadiness,
+  readinessDetail,
+  readinessLabel,
   routeReadiness,
   waitsForAgentRejoin,
   windowModeLabel,
@@ -217,5 +219,85 @@ describe("setup presentation", () => {
         "checking",
       );
     });
+  });
+});
+
+// The label and the state must never disagree. Both of these situations used
+// to read "Verified": an attempt that ended with an unknown outcome on a
+// route that had been verified before, and a verification the current setup
+// has outgrown. Each is the state model being contradicted by the sentence
+// printed next to it.
+describe("what the owner reads beside a route's state", () => {
+  const verified = {
+    ...readiness,
+    needsAction: null,
+    verified: verifiedRecord,
+  };
+
+  it("never calls an unknown outcome verified, whatever was proven before", () => {
+    const unknown = { ...verified, outcomeUnknown: true };
+    expect(routeReadiness(unknown)).toBe("outcome-unknown");
+    expect(readinessLabel(unknown)).toBe("Outcome unknown");
+    expect(readinessDetail(unknown)).toContain("unknown outcome");
+    // The earlier proof is still mentioned, but as something that does not
+    // describe this attempt — never as the attempt's own result.
+    expect(readinessDetail(unknown)).toContain("does not describe it");
+  });
+
+  it("says so even when nothing was ever verified", () => {
+    const unknown = { ...readiness, outcomeUnknown: true };
+    expect(readinessLabel(unknown)).toBe("Outcome unknown");
+    expect(readinessDetail(unknown)).toBe(
+      "The last attempt ended with an unknown outcome.",
+    );
+  });
+
+  it("agrees with the amber state when a verification has gone stale", () => {
+    expect(routeReadiness(verified, { stale: true })).toBe("action-required");
+    expect(readinessLabel(verified, { stale: true })).toBe("Verify again");
+    expect(readinessDetail(verified, { stale: true })).toContain(
+      "no longer matches",
+    );
+  });
+
+  it("still reads verified when the verification is current", () => {
+    expect(routeReadiness(verified)).toBe("ready");
+    expect(readinessLabel(verified)).toBe("Verified");
+    expect(readinessDetail(verified)).toMatch(/^Verified /u);
+  });
+
+  it("keeps every label in step with the state for the remaining routes", () => {
+    const cases = [
+      [blank, {}, "not-configured", "Needs action"],
+      [readiness, {}, "action-required", "Needs action"],
+      [
+        { ...readiness, needsAction: null, unavailable: "No host." },
+        {},
+        "failed",
+        "Unavailable",
+      ],
+      [
+        { ...readiness, needsAction: null, reachable: "unreachable" as const },
+        {},
+        "failed",
+        "Unreachable",
+      ],
+      [
+        { ...blank, reachable: "reachable" as const },
+        {},
+        "action-required",
+        "Reachable · verify",
+      ],
+      [
+        { ...blank, configured: true },
+        {},
+        "action-required",
+        "Configured · verify",
+      ],
+    ] as const;
+    for (const [record, options, state, label] of cases) {
+      expect(routeReadiness(record, options)).toBe(state);
+      expect(readinessLabel(record, options)).toBe(label);
+    }
   });
 });

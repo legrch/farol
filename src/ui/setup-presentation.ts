@@ -51,6 +51,62 @@ export function routeReadiness(
   return "not-configured";
 }
 
+// What the owner reads for a route, in the same order `routeReadiness`
+// decides it.
+//
+// These two used to live in shell.ts and answered a different question from
+// the state beside them. Both began `if (readiness.verified) return
+// "Verified"`, so a route carrying an earlier proof read "Verified" while
+// its own state was `outcome-unknown` — the one thing this product must
+// never do — and a stale proof read "Verified" beside the amber border that
+// `routeReadiness(..., { stale })` had already decided. The label and the
+// state must come from the same order, so the order lives here once.
+export function readinessLabel(
+  readiness: Readiness,
+  options: Readonly<{ stale?: boolean }> = {},
+): string {
+  if (readiness.outcomeUnknown) return "Outcome unknown";
+  if (readiness.verified !== null && !options.stale) return "Verified";
+  if (readiness.unavailable) return "Unavailable";
+  if (readiness.reachable === "unreachable") return "Unreachable";
+  if (readiness.needsAction) return "Needs action";
+  // An earlier success that no longer matches the current workspace or
+  // config generation. It is not a failure and not a fresh verification.
+  if (readiness.verified !== null) return "Verify again";
+  if (readiness.reachable === "reachable") return "Reachable · verify";
+  if (readiness.configured) return "Configured · verify";
+  return "Needs action";
+}
+
+export function readinessDetail(
+  readiness: Readiness,
+  options: Readonly<{ stale?: boolean }> = {},
+): string {
+  const verifiedAt = (verified: NonNullable<Readiness["verified"]>): string =>
+    new Intl.DateTimeFormat(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(verified.verifiedAt));
+  if (readiness.outcomeUnknown) {
+    return readiness.verified !== null
+      ? `The last attempt ended with an unknown outcome. The earlier verification of ${verifiedAt(readiness.verified)} does not describe it.`
+      : "The last attempt ended with an unknown outcome.";
+  }
+  if (readiness.verified !== null && !options.stale) {
+    return `Verified ${verifiedAt(readiness.verified)}`;
+  }
+  if (readiness.verified !== null) {
+    return `Verified ${verifiedAt(readiness.verified)}, and that verification no longer matches the current setup. Verify it again.`;
+  }
+  return (
+    readiness.needsAction ??
+    readiness.unavailable ??
+    (readiness.reachable === "unreachable"
+      ? "The configured route could not be reached."
+      : "No verification has been recorded.")
+  );
+}
+
 // Codex/Agent is two setup steps — the host selection/contract and the
 // native Agent lineage check — presented to the owner as one route. It is
 // "ready" only once the Agent lineage check itself has a verified record; a
