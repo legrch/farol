@@ -45,6 +45,7 @@ import {
   journalUnderPromotionLease,
   PromotionPendingRefusal,
 } from "./chatgpt-journal-lease";
+import { admitProductAgentRejoin } from "./product-agent-rejoin";
 import {
   workspaceDeniedPaths,
   workspaceDescriptor,
@@ -2200,45 +2201,34 @@ async function runProductTaskCommand(
         }
         publishTasksState();
       } else {
-        const rejoinable =
-          task.agent?.phase === "running" ||
-          (task.agent?.phase === "completed" &&
-            task.agent.parentDelivery === "pending" &&
-            task.agent.resultAvailable);
-        if (!rejoinable) return taskFailure("AGENT_REJOIN_UNAVAILABLE");
-        try {
-          const stored = await productAgentStore!.load(task.taskId);
-          if (!stored) return taskFailure("AGENT_REJOIN_UNAVAILABLE");
-          input = stored;
-        } catch {
-          return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
+        // S35-TA-11: the admission itself is `admitProductAgentRejoin`, so
+        // the one thing that matters here — that the settings are read AFTER
+        // the awaited load, not before — is exercised by tests rather than
+        // asserted in a comment. `readSettings` is passed as a thunk for
+        // exactly that reason: the module, not this call site, decides when
+        // it runs.
+        const admitted = await admitProductAgentRejoin({
+          agent: task.agent,
+          loadInput: () => productAgentStore!.load(task.taskId),
+          readSettings: () => {
+            const snapshot = configuration?.snapshot();
+            return snapshot?.status === "ready" ? snapshot.settings : null;
+          },
+          store: productAgentStore,
+          buildId: buildIdentity.buildId,
+          assignmentMatches: productAgentAssignmentMatches,
+        });
+        if (!admitted.ok) {
+          if (admitted.recordUnknownSummary) {
+            await persistProductAgentSummary(
+              task.taskId,
+              productAgentUnknownSummaryFromTask(task.agent!),
+            ).catch(() => undefined);
+          }
+          return taskFailure(admitted.refusal);
         }
-        if (!productAgentAssignmentMatches(task.agent!, input)) {
-          await persistProductAgentSummary(
-            task.taskId,
-            productAgentUnknownSummaryFromTask(task.agent!),
-          ).catch(() => undefined);
-          return taskFailure("AGENT_REJOIN_UNAVAILABLE");
-        }
-        const rejoinAgentSnapshot = configuration?.snapshot();
-        context = productAgentContext(
-          input.workspaceId,
-          rejoinAgentSnapshot?.status === "ready"
-            ? rejoinAgentSnapshot.settings
-            : null,
-          productAgentStore,
-          buildIdentity.buildId,
-        );
-        if (
-          !context ||
-          !productAgentInputMatchesContext(
-            input,
-            context,
-            buildIdentity.buildId,
-          )
-        ) {
-          return taskFailure("AGENT_NOT_READY");
-        }
+        input = admitted.input;
+        context = admitted.context;
       }
       return executeProductAgent(
         task,
