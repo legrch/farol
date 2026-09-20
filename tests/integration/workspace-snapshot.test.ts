@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { NEXT_SAFE_OPEN_HELPER } from "../../src/modules/computer/infra/native/native-readonly-workspace";
+import {
+  NativeReadonlyWorkspace,
+  NEXT_SAFE_OPEN_HELPER,
+} from "../../src/modules/computer/infra/native/native-readonly-workspace";
 import {
   createWorkspaceSnapshot,
   type WorkspaceSnapshotOptions,
@@ -486,6 +489,79 @@ describe("workspace snapshot (N02)", () => {
         code: "SNAPSHOT_CLONE_UNSUPPORTED",
       });
       expect(await fs.readdir(runtime)).toEqual([]);
+    } finally {
+      execFileSync("hdiutil", ["detach", disk.device]);
+    }
+  });
+
+  // The two tests above prove the clone/EXDEV mechanism with a plain
+  // directory: a request that never touches Git. This one drives the actual
+  // end-to-end statement an audit flagged as unproven -- a `git.status`
+  // against a *real, approved Git repository* whose root happens to live on
+  // another volume must refuse with the same closed code instead of
+  // answering, through the exact production route the desktop and the
+  // Computer MCP server call (`NativeReadonlyWorkspace.execute`), not the
+  // snapshot layer alone. The repository lives on the second volume and the
+  // runtime directory (where the private snapshot would be built) stays on
+  // the default one from `beforeEach`, so the two are genuinely on different
+  // devices -- the same real boundary the mechanism test above exercises,
+  // just with the source and destination swapped and a real repository in
+  // place of a plain directory.
+  it("refuses git.status through the production route when the approved repository root sits on another volume", async () => {
+    const disk = await attachRamDisk("git-status-cross-volume");
+    if (disk === null) return;
+    try {
+      const repoRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(disk.mountPoint, "repo-")),
+      );
+      await fs.chmod(repoRoot, 0o700);
+      await initRepo(repoRoot);
+      await fs.writeFile(
+        path.join(repoRoot, "tracked.txt"),
+        "SECOND-VOLUME-SENTINEL\n",
+        { mode: 0o600 },
+      );
+      git(repoRoot, "add", "-A");
+      git(repoRoot, "commit", "-q", "-m", "init");
+
+      const workspace = new NativeReadonlyWorkspace({
+        helperPath: sourceHelper,
+        helper: NEXT_SAFE_OPEN_HELPER,
+        attestInterpreter: async () => "/usr/bin/python3",
+        // Resolved the same way the sibling native-verification-command
+        // tests resolve it: the real reviewed Apple Git, without repeating
+        // the full codesign/version attestation chain (already proven
+        // elsewhere) on every run of this one.
+        attestGit: async () =>
+          execFileSync("/usr/bin/xcrun", ["--find", "git"], {
+            encoding: "utf8",
+          }).trim(),
+        runtimeDirectory,
+      });
+
+      const result = await workspace.execute({
+        workspace: {
+          workspaceId: "workspace-cross-volume",
+          root: repoRoot,
+          approvedRoot: approvedRootOf(repoRoot),
+          deniedPaths: [],
+        },
+        operation: {
+          kind: "verification.run",
+          command: "git.status",
+          relativePath: ".",
+        },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        error: { code: "WORKSPACE_SNAPSHOT_CROSS_VOLUME", retry: "never" },
+      });
+      // Refused before any clone and before any Git process ever ran: no
+      // snapshot survives under the runtime directory this route was given,
+      // and the repository's own tracked content never reaches the result.
+      expect(await fs.readdir(runtimeDirectory)).toEqual([]);
+      expect(JSON.stringify(result)).not.toContain("SECOND-VOLUME-SENTINEL");
     } finally {
       execFileSync("hdiutil", ["detach", disk.device]);
     }
