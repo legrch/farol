@@ -259,7 +259,13 @@ export const ApprovedProductWorkspaceSchema = z
       context.addIssue({ code: "custom", message: "duplicate exclusions" });
     }
     for (const excluded of workspace.excludedPaths) {
-      if (excluded !== workspace.root && !excluded.startsWith(prefix)) {
+      // S35-TA-4: strictly BELOW the root, and the root itself is not below
+      // itself. An exclusion equal to the root used to be exempt here, but it
+      // matches no `<root>/` prefix, so the descriptor built from it denied
+      // nothing: a workspace saying "exclude everything" would have read as
+      // "exclude nothing". The state is refused at the source rather than
+      // carried into a consumer that cannot express it.
+      if (!excluded.startsWith(prefix)) {
         context.addIssue({ code: "custom", message: "exclusion escapes root" });
       }
     }

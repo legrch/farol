@@ -21,21 +21,14 @@ import type {
  * The workspace's exclusions as the root-relative prefixes the descriptor
  * carries.
  *
- * KNOWN GAP, deliberately pinned rather than papered over: the settings
- * contract permits an exclusion equal to the root itself
- * (`ApprovedProductWorkspaceSchema`'s refinement exempts `excluded ===
- * workspace.root`), and such an entry matches no `<root>/` prefix, so it is
- * dropped here and the resulting descriptor denies nothing. That direction is
- * fail-OPEN: settings that say "exclude everything" would read as "exclude
- * nothing". It is not reachable through the product today — the only writer,
- * `computer.update-exclusions`, joins the root with a relative path whose
- * schema rejects an empty segment, `.` and `..`, so every exclusion it stores
- * is strictly under the root — and the settings store refuses a file that
- * fails validation, so no other writer reaches it either. The clean closure
- * is to forbid the state in the schema, which is a different owner's file;
- * `workspaceRootIsExcluded` below lets a caller detect it meanwhile, and the
- * test table records the current behaviour so a schema change cannot silently
- * alter it.
+ * An exclusion that is not below `<root>/` is carried by nothing, which is
+ * correct for a path outside the workspace and would have been fail-OPEN for
+ * one naming the root itself: settings saying "exclude everything" reading as
+ * "exclude nothing". `ApprovedProductWorkspaceSchema` used to exempt
+ * `excluded === workspace.root` from "exclusion escapes root"; S35-TA-4
+ * removed that exemption, so the one shape this function cannot express is
+ * now invalid settings and never reaches it. `workspaceRootIsExcluded` below
+ * remains as the detector for that shape.
  */
 export function workspaceDeniedPaths(
   workspace: ApprovedProductWorkspace,

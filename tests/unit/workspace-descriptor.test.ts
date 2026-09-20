@@ -185,19 +185,37 @@ describe("workspace denied paths", () => {
     });
   }
 
-  // The known gap, pinned so it cannot change unnoticed. The settings schema
-  // exempts `excluded === root` from "exclusion escapes root", and such an
-  // entry matches no `<root>/` prefix, so the descriptor denies nothing: a
-  // workspace that says "exclude everything" would read as "exclude nothing".
-  // Not reachable through the product — `computer.update-exclusions` joins the
-  // root with a relative path whose schema rejects an empty segment, `.` and
-  // `..` — but the fail-open direction is recorded here rather than left to be
-  // discovered, and `workspaceRootIsExcluded` is what a caller checks.
-  it("S35-TA-4 an exclusion naming the root itself is carried by nothing, and is detectable", () => {
-    const workspace = workspaceOf({ excludedPaths: [ROOT] });
-    expect(workspaceDeniedPaths(workspace)).toEqual([]);
-    expect(workspaceRootIsExcluded(workspace)).toBe(true);
-    // The ordinary case must not trip the detector.
+  // The gap this file used to record, now closed at its source. An exclusion
+  // equal to the approved root matches no `<root>/` prefix, so a descriptor
+  // built from it denied nothing — a workspace saying "exclude everything"
+  // reading as "exclude nothing". The schema no longer accepts it, so the
+  // state cannot reach the consumer at all: settings carrying one are refused
+  // as invalid, exactly like any other invalid state, rather than loaded and
+  // silently read as permissive.
+  it("S35-TA-4 settings that exclude the approved root itself are invalid", () => {
+    expect(() =>
+      settingsOf({ workspaces: [workspaceOf({ excludedPaths: [ROOT] })] }),
+    ).toThrow(/exclusion escapes root/u);
+    // And the ordinary shapes it must not catch: a path below the root, and
+    // the filesystem root excluding one of its children.
+    expect(() =>
+      settingsOf({
+        workspaces: [workspaceOf({ excludedPaths: [`${ROOT}/a`] })],
+      }),
+    ).not.toThrow();
+    expect(() =>
+      settingsOf({
+        workspaces: [workspaceOf({ root: "/", excludedPaths: ["/etc"] })],
+      }),
+    ).not.toThrow();
+  });
+
+  // The detector stays exported: it is what a caller uses to recognise the
+  // shape if one ever arrives from somewhere the schema does not guard.
+  it("S35-TA-4 the root-exclusion detector still names that exact shape and nothing else", () => {
+    expect(
+      workspaceRootIsExcluded(workspaceOf({ excludedPaths: [ROOT] })),
+    ).toBe(true);
     expect(workspaceRootIsExcluded(workspaceOf({ excludedPaths: [] }))).toBe(
       false,
     );
