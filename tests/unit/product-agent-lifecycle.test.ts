@@ -14,6 +14,11 @@ import {
   productAgentHostContext,
   productAgentInputMatchesContext,
 } from "../../src/apps/desktop/product-agent-context";
+import {
+  productAgentSessionExpiryVerdict,
+  persistedProductAgentExpiryVerdict,
+  productAgentExpiryRecoveryVerdict,
+} from "../../src/apps/desktop/product-agent-expiry";
 
 // `product-agent-context.test.ts` and `product-agent-expiry.test.ts` each
 // prove their module answers correctly for ONE state, taken in isolation.
@@ -67,6 +72,9 @@ const BUILD_ID = "5".repeat(64);
 const DELEGATION_DIGEST = "7".repeat(64);
 const PARENT_THREAD_SHA = "8".repeat(64);
 const CHILD_THREAD_SHA = "9".repeat(64);
+
+/** A fixed instant used by sequences 3-5's expiry-decision tables below. */
+const NOW = 1_000_000;
 
 function readiness() {
   return {
@@ -555,21 +563,185 @@ describe("sequence 2: the world moves between the two decisions", () => {
   });
 });
 
-describe.skip("sequence 3: cancellation and absent previous state (BLOCKED: product-agent-expiry.ts does not exist in this worktree; see file header)", () => {
-  it.skip("productAgentExpiryRecoveryVerdict: no stored input at all -> unknown/input_unavailable, never reschedule", () => {});
-  it.skip("productAgentExpiryRecoveryVerdict: a stored input whose assignment binding does not match the running task -> unknown/assignment_mismatch, never reschedule", () => {});
-  it.skip("productAgentExpiryRecoveryVerdict: no running task -> noop/no_running_task, never reschedule", () => {});
-  it.skip("productAgentExpiryRecoveryVerdict: no store -> noop/store_unavailable, never reschedule", () => {});
+describe("sequence 3: cancellation and absent previous state", () => {
+  // A cancelled, or never-persisted, reservation must never be re-armed.
+  // Each row removes one thing recovery needs (a running task, a store, a
+  // loaded input, or a matching binding) and asserts both the exact verdict
+  // and that the action is never "reschedule" -- re-arming a timer nobody
+  // is tracking, or against an input that no longer describes the running
+  // assignment, is the failure mode this guards against.
+
+  it("productAgentExpiryRecoveryVerdict: no stored input at all -> unknown/input_unavailable, never reschedule", () => {
+    const verdict = productAgentExpiryRecoveryVerdict({
+      hasRunningTask: true,
+      storeAvailable: true,
+      input: null,
+      assignmentMatches: false,
+      now: NOW,
+    });
+    expect(verdict).toEqual({ action: "unknown", reason: "input_unavailable" });
+    expect(verdict.action).not.toBe("reschedule");
+  });
+
+  it("productAgentExpiryRecoveryVerdict: a stored input whose assignment binding does not match the running task -> unknown/assignment_mismatch, never reschedule", () => {
+    const verdict = productAgentExpiryRecoveryVerdict({
+      hasRunningTask: true,
+      storeAvailable: true,
+      input: productAgentInputOf(),
+      assignmentMatches: false,
+      now: NOW,
+    });
+    expect(verdict).toEqual({
+      action: "unknown",
+      reason: "assignment_mismatch",
+    });
+    expect(verdict.action).not.toBe("reschedule");
+  });
+
+  it("productAgentExpiryRecoveryVerdict: no running task -> noop/no_running_task, never reschedule", () => {
+    const verdict = productAgentExpiryRecoveryVerdict({
+      hasRunningTask: false,
+      storeAvailable: true,
+      input: null,
+      assignmentMatches: false,
+      now: NOW,
+    });
+    expect(verdict).toEqual({ action: "noop", reason: "no_running_task" });
+    expect(verdict.action).not.toBe("reschedule");
+  });
+
+  it("productAgentExpiryRecoveryVerdict: no store -> noop/store_unavailable, never reschedule", () => {
+    const verdict = productAgentExpiryRecoveryVerdict({
+      hasRunningTask: true,
+      storeAvailable: false,
+      input: null,
+      assignmentMatches: false,
+      now: NOW,
+    });
+    expect(verdict).toEqual({ action: "noop", reason: "store_unavailable" });
+    expect(verdict.action).not.toBe("reschedule");
+  });
 });
 
-describe.skip("sequence 4: concurrent entry (BLOCKED: product-agent-expiry.ts does not exist in this worktree; see file header)", () => {
-  it.skip("two productAgentSessionExpiryVerdict calls for the same task from the same state agree with each other", () => {});
-  it.skip("a timer firing while recovery runs on the same state never lets one path say expire while the other says reschedule", () => {});
+describe("sequence 4: concurrent entry", () => {
+  // These are pure functions: "concurrent" means the same input evaluated
+  // twice must agree with itself, and the two call sites that can observe
+  // one task's state at the same instant -- a live timer firing, and
+  // startup recovery for that same running task -- must never hand back
+  // contradictory actions for it.
+
+  it("two productAgentSessionExpiryVerdict calls for the same task from the same state agree with each other", () => {
+    // Two independently-built object literals with identical field values
+    // (not two references to one object), so agreement cannot be an
+    // artifact of shared identity.
+    const first = productAgentSessionExpiryVerdict({
+      sessionIsActive: true,
+      taskPhase: "running",
+      mutationInFlight: true,
+      now: NOW,
+    });
+    const second = productAgentSessionExpiryVerdict({
+      sessionIsActive: true,
+      taskPhase: "running",
+      mutationInFlight: true,
+      now: NOW,
+    });
+    expect(first).toEqual(second);
+    // Pinned, not just mutually equal: both must land on the one verdict
+    // this state actually produces.
+    expect(first).toEqual({ action: "reschedule", atMs: NOW + 100 });
+  });
+
+  it("a timer firing while recovery runs on the same state never lets one path say expire while the other says reschedule", () => {
+    // A mutation already in flight is the shared signal that must make
+    // every path retreat rather than race a cancellation: the live timer's
+    // own fire verdict already reschedules instead of expiring
+    // (DECISIVE-1, pinned in product-agent-expiry.test.ts). This proves
+    // recovery, asked about the identical running task with a still-valid
+    // binding, agrees rather than independently deciding "unknown" and
+    // dropping the reservation the busy fire path is about to retry.
+    const input = productAgentInputOf();
+
+    const fireVerdict = persistedProductAgentExpiryVerdict({
+      taskPhase: "running",
+      mutationInFlight: true,
+      now: NOW,
+    });
+    const recoveryVerdict = productAgentExpiryRecoveryVerdict({
+      hasRunningTask: true,
+      storeAvailable: true,
+      input,
+      assignmentMatches: true,
+      now: NOW,
+    });
+
+    expect(fireVerdict).toEqual({ action: "reschedule", atMs: NOW + 100 });
+    expect(recoveryVerdict).toEqual({
+      action: "reschedule",
+      atMs: Math.max(NOW, input.expiresAt),
+    });
+    // Neither call resolves the shared, contended task by cancelling it.
+    expect(fireVerdict.action).not.toBe("expire");
+    expect(recoveryVerdict.action).not.toBe("unknown");
+  });
 });
 
-describe.skip("sequence 5: ordering within a decision (BLOCKED: product-agent-expiry.ts does not exist in this worktree; see file header)", () => {
-  it.skip("productAgentExpiryRecoveryVerdict: !hasRunningTask AND !storeAvailable -> no_running_task wins over store_unavailable", () => {});
-  it.skip("productAgentExpiryRecoveryVerdict: !input AND !assignmentMatches -> input_unavailable wins over assignment_mismatch", () => {});
-  it.skip('productAgentSessionExpiryVerdict: !sessionIsActive AND taskPhase !== "running" -> session_superseded wins over task_not_running', () => {});
-  it.skip('productAgentSessionExpiryVerdict/persistedProductAgentExpiryVerdict: taskPhase !== "running" AND mutationInFlight -> task_not_running wins over reschedule', () => {});
+describe("sequence 5: ordering within a decision", () => {
+  // Every guard clause below is a real precedence choice: swapping the
+  // order of an `if` changes which `reason` the owner is told without
+  // changing whether the outcome is "noop" or "unknown". Nothing but this
+  // table pins the order.
+
+  it("productAgentExpiryRecoveryVerdict: !hasRunningTask AND !storeAvailable -> no_running_task wins over store_unavailable", () => {
+    expect(
+      productAgentExpiryRecoveryVerdict({
+        hasRunningTask: false,
+        storeAvailable: false,
+        input: null,
+        assignmentMatches: false,
+        now: NOW,
+      }),
+    ).toEqual({ action: "noop", reason: "no_running_task" });
+  });
+
+  it("productAgentExpiryRecoveryVerdict: !input AND !assignmentMatches -> input_unavailable wins over assignment_mismatch", () => {
+    expect(
+      productAgentExpiryRecoveryVerdict({
+        hasRunningTask: true,
+        storeAvailable: true,
+        input: null,
+        assignmentMatches: false,
+        now: NOW,
+      }),
+    ).toEqual({ action: "unknown", reason: "input_unavailable" });
+  });
+
+  it('productAgentSessionExpiryVerdict: !sessionIsActive AND taskPhase !== "running" -> session_superseded wins over task_not_running', () => {
+    expect(
+      productAgentSessionExpiryVerdict({
+        sessionIsActive: false,
+        taskPhase: "completed",
+        mutationInFlight: false,
+        now: NOW,
+      }),
+    ).toEqual({ action: "noop", reason: "session_superseded" });
+  });
+
+  it('productAgentSessionExpiryVerdict/persistedProductAgentExpiryVerdict: taskPhase !== "running" AND mutationInFlight -> task_not_running wins over reschedule', () => {
+    expect(
+      productAgentSessionExpiryVerdict({
+        sessionIsActive: true,
+        taskPhase: "completed",
+        mutationInFlight: true,
+        now: NOW,
+      }),
+    ).toEqual({ action: "noop", reason: "task_not_running" });
+    expect(
+      persistedProductAgentExpiryVerdict({
+        taskPhase: "completed",
+        mutationInFlight: true,
+        now: NOW,
+      }),
+    ).toEqual({ action: "noop", reason: "task_not_running" });
+  });
 });
