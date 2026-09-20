@@ -48,6 +48,11 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import { TaskMenuTrace } from "./task-menu-trace";
 import {
+  AgentDraftStore,
+  EMPTY_AGENT_DRAFT,
+  type AgentDraftFields,
+} from "./agent-draft";
+import {
   agentActionPrerequisite,
   agentFieldPrerequisite,
   agentWorkspaceFixedReason,
@@ -338,7 +343,9 @@ let taskMenuFeedbackError = false;
 // silences apart, and this does.
 const taskMenuTrace = new TaskMenuTrace(() => Math.round(performance.now()));
 let taskMenuBusy = false;
-let taskAgentDraftTaskId = "";
+// The owner's Agent assignment text, held here rather than only in the
+// fields, so an unowned shell action that closes the menu cannot take it.
+const taskAgentDraft = new AgentDraftStore();
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
@@ -1037,6 +1044,26 @@ function writeTaskMenuTrace(): void {
   note.dataset.phase = taskMenuTrace.phase();
 }
 
+function readAgentDraftFields(): AgentDraftFields {
+  return {
+    mode: required<HTMLSelectElement>("#task-agent-scope").value,
+    objective: required<HTMLTextAreaElement>("#task-agent-objective").value,
+    subtree: required<HTMLInputElement>("#task-agent-subtree").value,
+    paths: required<HTMLTextAreaElement>("#task-agent-paths").value,
+    exclusions: required<HTMLTextAreaElement>("#task-agent-exclusions").value,
+  };
+}
+
+function writeAgentDraftFields(fields: AgentDraftFields): void {
+  required<HTMLSelectElement>("#task-agent-scope").value = fields.mode;
+  required<HTMLTextAreaElement>("#task-agent-objective").value =
+    fields.objective;
+  required<HTMLInputElement>("#task-agent-subtree").value = fields.subtree;
+  required<HTMLTextAreaElement>("#task-agent-paths").value = fields.paths;
+  required<HTMLTextAreaElement>("#task-agent-exclusions").value =
+    fields.exclusions;
+}
+
 function renderTaskMenu(): void {
   const task = taskById(selectedTaskId);
   const live = task?.provider === "chatgpt";
@@ -1073,6 +1100,14 @@ function renderTaskMenu(): void {
   const exclusions = required<HTMLTextAreaElement>("#task-agent-exclusions");
   const scopeHelp = required<HTMLElement>("#task-agent-scope-help");
   const objective = required<HTMLTextAreaElement>("#task-agent-objective");
+  // Whatever rebuilt this menu — a render, a reopen after an unowned shell
+  // action, a task state push — the owner's own text goes back before
+  // anything below reads the fields, so the assignment is built from it.
+  const heldDraft = taskAgentDraft.restore(task.taskId);
+  if (heldDraft) writeAgentDraftFields(heldDraft);
+  // Whatever rebuilt this menu — a render, a reopen after an unowned shell
+  // action, a task state push — the owner's own text goes back before
+  // anything below reads the fields, so the assignment is built from it.
   const runAgent = required<HTMLButtonElement>("#task-menu-agent");
   const agentState = required<HTMLElement>("#task-agent-state");
   const agentLamp = required<HTMLElement>("#task-agent-state .state-lamp");
@@ -4170,6 +4205,11 @@ function closeOverlay(): void {
     void cancelContextPreview();
     return;
   }
+  // The owner dismissing the menu is one of the three things that drops the
+  // Agent draft. The menu closing for any other reason — an `open-settings`
+  // shell action published when a route window closed, for one — does not
+  // come through here, which is the whole point.
+  if (shellOverlay === "task-menu") taskAgentDraft.clear();
   sidebarOverlayOpen = false;
   shellOverlay = "none";
   render();
@@ -4253,14 +4293,11 @@ function openTaskMenu(): void {
   taskMenuFeedbackError = false;
   if (task?.provider === "chatgpt") {
     required<HTMLInputElement>("#task-menu-name").value = task.label;
-    if (taskAgentDraftTaskId !== task.taskId) {
-      taskAgentDraftTaskId = task.taskId;
-      required<HTMLTextAreaElement>("#task-agent-objective").value = "";
-      required<HTMLSelectElement>("#task-agent-scope").value = "workspace";
-      required<HTMLInputElement>("#task-agent-subtree").value = "";
-      required<HTMLTextAreaElement>("#task-agent-paths").value = "";
-      required<HTMLTextAreaElement>("#task-agent-exclusions").value = "";
-    }
+    // A different task is a different assignment: the store drops the old
+    // draft and the fields go back to their defaults. Same rule as before,
+    // now the only place that decides it.
+    taskAgentDraft.select(task.taskId);
+    if (!taskAgentDraft.held()) writeAgentDraftFields(EMPTY_AGENT_DRAFT);
   }
   sidebarOverlayOpen = false;
   shellOverlay = "task-menu";
@@ -4674,17 +4711,21 @@ async function start(): Promise<void> {
       renameLiveTask();
     },
   );
-  required<HTMLTextAreaElement>("#task-agent-objective").addEventListener(
-    "input",
-    renderTaskMenu,
-  );
+  const captureAgentDraft = (): void => {
+    taskAgentDraft.capture(selectedTaskId, readAgentDraftFields());
+    renderTaskMenu();
+  };
   for (const selector of [
+    "#task-agent-objective",
     "#task-agent-scope",
     "#task-agent-subtree",
     "#task-agent-paths",
     "#task-agent-exclusions",
   ]) {
-    required<HTMLElement>(selector).addEventListener("input", renderTaskMenu);
+    required<HTMLElement>(selector).addEventListener(
+      "input",
+      captureAgentDraft,
+    );
   }
   required<HTMLButtonElement>("#task-menu-agent").addEventListener(
     "click",
@@ -4723,6 +4764,7 @@ async function start(): Promise<void> {
         },
         "Agent assignment admitted.",
       );
+      taskAgentDraft.clear();
     },
   );
   required<HTMLButtonElement>("#task-menu-pin").addEventListener(
