@@ -50,6 +50,10 @@ import {
   type LiveTaskAdmission,
 } from "./live-task-registry";
 import {
+  journalUnderPromotionLease,
+  PromotionPendingRefusal,
+} from "./chatgpt-journal-lease";
+import {
   acquirePromotionLease,
   releasePromotionLease,
   verifyPromotionLease,
@@ -825,31 +829,6 @@ async function markLiveTaskRunningDurable(taskId: string): Promise<boolean> {
     }
   });
   return outcome.ok;
-}
-
-class PromotionPendingRefusal extends Error {
-  constructor() {
-    super("CHATGPT_TASK_PROMOTION_PENDING");
-  }
-}
-
-// S35-03: a ChatGPT one-shot task's journal writes (`prepare`,
-// `markDispatchIntent`) are exactly the obligations a promotion's drain check
-// refuses on (`CHATGPT_DISPATCH_PREPARED`, `CHATGPT_DELIVERY_PENDING`), so
-// each takes the same cross-process lease for its durable write. A live
-// promotion refuses the task with its own readable code instead of racing
-// the placement it has already validated.
-async function journalUnderPromotionLease<T>(
-  work: () => Promise<T>,
-): Promise<T> {
-  const outcome = await liveTaskRegistry.withPromotionLease(async (fence) => {
-    // S35-H1-1: `work` IS the journal write, so the fence immediately
-    // before it is the fence immediately before the durable write.
-    await fence();
-    return work();
-  });
-  if (!outcome.ok) throw new PromotionPendingRefusal();
-  return outcome.value;
 }
 
 function chatGptTaskAdmissionReady(): boolean {
@@ -4528,7 +4507,7 @@ async function configureAdmittedProduct(
       }
       try {
         const journal = chatGptTaskJournal;
-        await journalUnderPromotionLease(() =>
+        await journalUnderPromotionLease(liveTaskRegistry, () =>
           journal.prepare({
             operationId,
             kind: "attachment",
@@ -4629,7 +4608,7 @@ async function configureAdmittedProduct(
       }
       try {
         const journal = chatGptTaskJournal;
-        await journalUnderPromotionLease(() =>
+        await journalUnderPromotionLease(liveTaskRegistry, () =>
           journal.markDispatchIntent(pending.operationId),
         );
       } catch (error) {
@@ -4885,7 +4864,7 @@ async function configureAdmittedProduct(
         }
         try {
           const journal = chatGptTaskJournal;
-          await journalUnderPromotionLease(() =>
+          await journalUnderPromotionLease(liveTaskRegistry, () =>
             journal.prepare({
               operationId,
               kind: "readonly",
@@ -4983,7 +4962,7 @@ async function configureAdmittedProduct(
       }
       try {
         const journal = chatGptTaskJournal;
-        await journalUnderPromotionLease(() =>
+        await journalUnderPromotionLease(liveTaskRegistry, () =>
           journal.markDispatchIntent(pending.operationId),
         );
       } catch (error) {
