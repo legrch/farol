@@ -366,3 +366,71 @@ export function routeRowDetail(
   if (state === "ready") return readinessDetail(readiness);
   return readinessDetail(readiness, { stale: true });
 }
+
+export type AgentVerifyStepPresentation = Readonly<{
+  summary: string;
+  label: string;
+  disabled: boolean;
+}>;
+
+/**
+ * Setup's verify step: the sentence, the button's caption and whether it can
+ * be pressed.
+ *
+ * The sentence tested outcomeUnknown; the caption did not test it at all. So
+ * with an unknown outcome and a child still running, the sentence said to
+ * inspect the existing Codex task before deliberate recovery while the button
+ * directly beneath it offered "Rejoin Agent".
+ *
+ * Outcome-unknown comes first here, ahead of any earlier proof, for the same
+ * reason agentRouteReadiness puts it first: an earlier verification does not
+ * describe the attempt that ended unknown.
+ */
+export function agentVerifyStepPresentation(
+  state: Readonly<{
+    outcomeUnknown: boolean;
+    proof: Readonly<{ model: string; workspaceEnforcement: string }> | null;
+    needsRejoin: boolean;
+    prerequisitesReady: boolean;
+  }>,
+): AgentVerifyStepPresentation {
+  if (state.outcomeUnknown) {
+    return {
+      summary:
+        "The native Agent outcome is unknown. Inspect the existing Codex task before deliberate recovery.",
+      label: "Agent outcome unknown",
+      disabled: true,
+    };
+  }
+  if (state.proof !== null) {
+    return {
+      summary:
+        state.proof.workspaceEnforcement === "verified"
+          ? `Main → Agent → Critic completed with one ${state.proof.model} turn, verified native workspace enforcement, and durable acknowledged delivery.`
+          : `Main → Agent → Critic completed with one ${state.proof.model} turn and durable acknowledged delivery. Native workspace enforcement remains not verified.`,
+      label: "Agent verified",
+      disabled: true,
+    };
+  }
+  if (state.needsRejoin) {
+    return {
+      summary:
+        "The same native child is still running. Rejoin it without creating another child or model turn.",
+      label: "Rejoin Agent",
+      disabled: !state.prerequisitesReady,
+    };
+  }
+  return state.prerequisitesReady
+    ? {
+        summary:
+          "Ready to verify lineage, unchanged TaskGrant transport, bounded same-child rejoin and durable parent delivery.",
+        label: "Verify Agent",
+        disabled: false,
+      }
+    : {
+        summary:
+          "Run the live Codex host check and verify one workspace first.",
+        label: "Verify Agent",
+        disabled: true,
+      };
+}

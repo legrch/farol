@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentRouteReadiness,
+  agentVerifyStepPresentation,
   connectorChoosePrerequisite,
   connectorStartPrerequisite,
   connectorStopPrerequisite,
@@ -589,5 +590,81 @@ describe("a connections row's words against its own tone", () => {
     ] as const) {
       expect(routeRowLabel(state, verified)).not.toBe("Verified");
     }
+  });
+});
+
+describe("Setup's verify step, sentence and button together", () => {
+  const base = {
+    outcomeUnknown: false,
+    proof: null,
+    needsRejoin: false,
+    prerequisitesReady: true,
+  };
+  const proof = { model: "gpt-6-astra", workspaceEnforcement: "verified" };
+
+  it("does not offer a rejoin under a sentence telling the owner not to", () => {
+    // The sentence tested outcomeUnknown and the caption did not test it at
+    // all, so this exact state showed "Rejoin Agent" beneath "Inspect the
+    // existing Codex task before deliberate recovery."
+    const shown = agentVerifyStepPresentation({
+      ...base,
+      outcomeUnknown: true,
+      needsRejoin: true,
+    });
+    expect(shown.summary).toContain("Inspect the existing Codex task");
+    expect(shown.label).toBe("Agent outcome unknown");
+    expect(shown.disabled).toBe(true);
+  });
+
+  it("puts an unknown outcome ahead of an earlier proof", () => {
+    const shown = agentVerifyStepPresentation({
+      ...base,
+      outcomeUnknown: true,
+      proof,
+    });
+    expect(shown.label).toBe("Agent outcome unknown");
+    expect(shown.summary).toContain("unknown");
+  });
+
+  it("keeps the proof wording and its two enforcement cases", () => {
+    expect(agentVerifyStepPresentation({ ...base, proof }).summary).toContain(
+      "verified native workspace enforcement",
+    );
+    expect(
+      agentVerifyStepPresentation({
+        ...base,
+        proof: { ...proof, workspaceEnforcement: "not_verified" },
+      }).summary,
+    ).toContain("remains not verified");
+    expect(agentVerifyStepPresentation({ ...base, proof }).disabled).toBe(true);
+  });
+
+  it("offers a rejoin only once its prerequisites are met", () => {
+    expect(
+      agentVerifyStepPresentation({ ...base, needsRejoin: true }).disabled,
+    ).toBe(false);
+    expect(
+      agentVerifyStepPresentation({
+        ...base,
+        needsRejoin: true,
+        prerequisitesReady: false,
+      }).disabled,
+    ).toBe(true);
+  });
+
+  it("keeps the two remaining captions and their sentences", () => {
+    expect(agentVerifyStepPresentation(base)).toEqual({
+      summary:
+        "Ready to verify lineage, unchanged TaskGrant transport, bounded same-child rejoin and durable parent delivery.",
+      label: "Verify Agent",
+      disabled: false,
+    });
+    expect(
+      agentVerifyStepPresentation({ ...base, prerequisitesReady: false }),
+    ).toEqual({
+      summary: "Run the live Codex host check and verify one workspace first.",
+      label: "Verify Agent",
+      disabled: true,
+    });
   });
 });

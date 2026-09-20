@@ -71,6 +71,7 @@ import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
   agentRouteReadiness,
+  agentVerifyStepPresentation,
   connectorChoosePrerequisite,
   connectorStartPrerequisite,
   connectorStopPrerequisite,
@@ -3762,24 +3763,18 @@ function renderSetup(): void {
       settings.setup.computer.reachable === "reachable" &&
       !settings.setup.computer.outcomeUnknown;
     const needsRejoin = waitsForAgentRejoin(readiness);
-    liveSummary.textContent = proof
-      ? proof.workspaceEnforcement === "verified"
-        ? `Main → Agent → Critic completed with one ${proof.model} turn, verified native workspace enforcement, and durable acknowledged delivery.`
-        : `Main → Agent → Critic completed with one ${proof.model} turn and durable acknowledged delivery. Native workspace enforcement remains not verified.`
-      : readiness.outcomeUnknown
-        ? "The native Agent outcome is unknown. Inspect the existing Codex task before deliberate recovery."
-        : needsRejoin
-          ? "The same native child is still running. Rejoin it without creating another child or model turn."
-          : prerequisitesReady
-            ? "Ready to verify lineage, unchanged TaskGrant transport, bounded same-child rejoin and durable parent delivery."
-            : "Run the live Codex host check and verify one workspace first.";
-    livePrimary.textContent = proof
-      ? "Agent verified"
-      : needsRejoin
-        ? "Rejoin Agent"
-        : "Verify Agent";
-    livePrimary.disabled =
-      proof !== null || readiness.outcomeUnknown || !prerequisitesReady;
+    // The sentence and the caption from one function, with outcome-unknown
+    // first: the caption used to omit it entirely, so "Rejoin Agent" could
+    // sit under a sentence telling the owner to inspect before recovering.
+    const verifyStep = agentVerifyStepPresentation({
+      outcomeUnknown: readiness.outcomeUnknown,
+      proof,
+      needsRejoin,
+      prerequisitesReady,
+    });
+    liveSummary.textContent = verifyStep.summary;
+    livePrimary.textContent = verifyStep.label;
+    livePrimary.disabled = verifyStep.disabled;
     setupPrimaryAction = async () => {
       await configureProduct(
         { kind: "host.run-codex-agent-check" },
