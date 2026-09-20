@@ -8241,6 +8241,74 @@ ux34SettingsWidthsSegment: {
       );
     }
     cases.push("ux34-settings-widths-readable");
+
+    // Setup's detail list prints values the owner supplies and the product
+    // cannot shorten — the workspace root most of all, which has no space to
+    // break at. Give the step a real approved folder, reopen Setup on it,
+    // and measure the list at the supported minimum width.
+    const added = await settingsWidths.window.evaluate(() =>
+      window.farolNext.configure({ kind: "computer.add-workspace" }),
+    );
+    assert.equal(added.ok, true, "the fixture workspace is approved");
+    await settingsWidths.window.locator("#review-setup").click();
+    const reviewed = settingsWidths.window.locator("#setup-dialog");
+    await reviewed.waitFor({ state: "visible" });
+    // Review opens on the last persisted step; walk back to the one that
+    // prints the workspace root.
+    while ((await reviewed.getAttribute("data-step-id")) !== "computer") {
+      const before = await reviewed.getAttribute("data-step-id");
+      assert.notEqual(before, "chatgpt", "walked past the computer step");
+      await settingsWidths.window.locator("#setup-back").click();
+      await settingsWidths.window.waitForFunction(
+        (previous) =>
+          document
+            .querySelector("#setup-dialog")
+            ?.getAttribute("data-step-id") !== previous,
+        before,
+      );
+    }
+    await setWindowSize(settingsWidths.application, 640, 700);
+    await settingsWidths.window.waitForFunction(
+      () => window.innerWidth === 640,
+    );
+    const setupDetails = await settingsWidths.window.evaluate((root) => {
+      const list = document.querySelector("#setup-details");
+      if (!list) throw new Error("SETUP_DETAILS_MISSING");
+      const printed = list.innerText;
+      const dialog = document.querySelector("#setup-dialog");
+      const dialogBox = dialog.getBoundingClientRect();
+      const overflowing = [...list.querySelectorAll("li")]
+        .filter(
+          (item) =>
+            item.getBoundingClientRect().right > dialogBox.right + 1 ||
+            item.scrollWidth > item.clientWidth + 1,
+        )
+        .map((item) => item.textContent?.slice(0, 40));
+      return {
+        printsRoot: printed.includes(root),
+        overflowing,
+        documentHorizontalOverflow:
+          document.documentElement.scrollWidth > window.innerWidth + 1,
+      };
+    }, settingsWidths.workspaceRoot);
+    assert.equal(
+      setupDetails.printsRoot,
+      true,
+      "the step prints the approved workspace root it was given",
+    );
+    assert.deepEqual(
+      setupDetails.overflowing,
+      [],
+      "no Setup detail line escapes the dialog at 640px",
+    );
+    assert.equal(
+      setupDetails.documentHorizontalOverflow,
+      false,
+      "the window has no horizontal scroll at 640px with a real workspace root",
+    );
+    await settingsWidths.window.locator("#setup-close").click();
+    await reviewed.waitFor({ state: "hidden" });
+    cases.push("ux34-settings-setup-details-bounded");
   } finally {
     await close(settingsWidths);
   }
