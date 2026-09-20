@@ -2987,6 +2987,41 @@ async function finishSetupByDoubleClick(instance) {
   return shown;
 }
 
+// A wait for the task menu's sentence that says which silence it hit.
+//
+// The note is written by one renderer path; a command can settle without
+// that path ever running (an empty selection, a selection that is no longer
+// a live ChatGPT task, or a command that closed the menu). A bare wait on
+// the text cannot tell those apart from a slow IPC, so it expires with
+// nothing to report — which is exactly how this failed twice on 19434d33.
+// The renderer publishes its own phase on the note; print it.
+async function waitForTaskMenuNote(instance, expected) {
+  try {
+    await instance.window.waitForFunction(
+      (text) => document.querySelector("#task-menu-note")?.textContent === text,
+      expected,
+    );
+  } catch (error) {
+    const shown = await instance.window
+      .evaluate(() => {
+        const note = document.querySelector("#task-menu-note");
+        return {
+          text: note?.textContent ?? null,
+          phase: note?.dataset.phase ?? null,
+          trace: note?.dataset.trace ?? null,
+          menuHidden: document.querySelector("#task-menu")?.hidden ?? null,
+          livePanelHidden:
+            document.querySelector("#task-menu-live")?.hidden ?? null,
+        };
+      })
+      .catch(() => null);
+    throw new Error(
+      `task menu never said ${JSON.stringify(expected)} · ${JSON.stringify(shown)}`,
+      { cause: error },
+    );
+  }
+}
+
 // A Setup wait that times out names what the dialog showed instead, so a
 // failure under load is told apart from a refusal without another run.
 async function waitForSetup(instance, predicate, arg) {
@@ -5261,6 +5296,98 @@ liveTasksSegment: try {
     path.join(evidenceRoot, "ux-measurements.json"),
     `${JSON.stringify(uxMeasurements, null, 2)}\n`,
   );
+  // The RU/EN label above has spaces, so it wraps whatever the CSS says.
+  // Activity's task column takes the same owner label with nothing to break
+  // at, and it is a grid item, whose automatic minimum is its own content.
+  const unbreakableLabel = "Z".repeat(80);
+  const renamedUnbreakable = await ordinaryLiveTasks.window.evaluate(
+    ({ taskId, label }) =>
+      window.farolNext.task({ kind: "task.rename", taskId, label }),
+    { taskId: selectedLiveTaskId, label: unbreakableLabel },
+  );
+  assert.equal(
+    renamedUnbreakable.ok,
+    true,
+    "an 80-character label is accepted",
+  );
+  await ordinaryLiveTasks.window.locator('[data-section="activity"]').click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () => document.documentElement.dataset.section === "activity",
+  );
+  await setWindowSize(ordinaryLiveTasks.application, 640, 700);
+  await ordinaryLiveTasks.window.waitForFunction(
+    () => window.innerWidth === 640,
+  );
+  // If Activity has no task cell at this point in the block, say what it
+  // did have. A bare wait would spend its whole timeout and then report
+  // nothing about the state that caused it — which is the failure shape
+  // this pair of cases exists to remove, so it must not be their own.
+  try {
+    await ordinaryLiveTasks.window.waitForFunction(
+      () =>
+        document.querySelectorAll("#activity-list .activity-task").length > 0,
+      undefined,
+      { timeout: 5_000 },
+    );
+  } catch {
+    const shown = await ordinaryLiveTasks.window
+      .evaluate(() => ({
+        section: document.documentElement.dataset.section ?? null,
+        rows: document.querySelectorAll("#activity-list li").length,
+        cells: document.querySelectorAll("#activity-list .activity-task")
+          .length,
+        text: (document.querySelector("#activity-list")?.innerText ?? "").slice(
+          0,
+          200,
+        ),
+      }))
+      .catch(() => null);
+    assert.fail(
+      `Activity shows no task cell to measure · ${JSON.stringify(shown)}`,
+    );
+  }
+  const activityBounds = await ordinaryLiveTasks.window.evaluate((label) => {
+    const list = document.querySelector("#activity-list");
+    const listBox = list.getBoundingClientRect();
+    const cells = [...list.querySelectorAll(".activity-task")];
+    return {
+      showsLabel: cells.some((cell) => cell.textContent === label),
+      escaping: cells
+        .filter(
+          (cell) =>
+            cell.getBoundingClientRect().right > listBox.right + 1 ||
+            cell.scrollWidth > cell.clientWidth + 1,
+        )
+        .map((cell) => Math.round(cell.getBoundingClientRect().width)),
+      documentHorizontalOverflow:
+        document.documentElement.scrollWidth > window.innerWidth + 1,
+    };
+  }, unbreakableLabel);
+  assert.equal(
+    activityBounds.showsLabel,
+    true,
+    "Activity prints the renamed task's own label",
+  );
+  assert.deepEqual(
+    activityBounds.escaping,
+    [],
+    "no Activity task cell escapes the list at 640px",
+  );
+  assert.equal(
+    activityBounds.documentHorizontalOverflow,
+    false,
+    "the window has no horizontal scroll at 640px with an unbreakable label",
+  );
+  cases.push("live-task-activity-label-bounded");
+  await setWindowSize(ordinaryLiveTasks.application, 1_280, 860);
+  await ordinaryLiveTasks.window.waitForFunction(
+    () => window.innerWidth === 1_280,
+  );
+  await ordinaryLiveTasks.window.locator('[data-section="browser"]').click();
+  await ordinaryLiveTasks.window.waitForFunction(
+    () => document.documentElement.dataset.section === "browser",
+  );
+
   const renamedBack = await ordinaryLiveTasks.window.evaluate(
     ({ taskId, label }) =>
       window.farolNext.task({ kind: "task.rename", taskId, label }),
@@ -5334,16 +5461,9 @@ liveTasksSegment: try {
     .locator("#task-menu-name")
     .fill("Pinned continuity task");
   await ordinaryLiveTasks.window.locator("#task-menu-rename").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent ===
-      "Task renamed.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Task renamed.");
   await ordinaryLiveTasks.window.locator("#task-menu-pin").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent === "Task pinned.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Task pinned.");
   assert.equal(
     await ordinaryLiveTasks.window.locator("#task-menu-cancel").isDisabled(),
     true,
@@ -5458,11 +5578,7 @@ liveTasksSegment: try {
     true,
   );
   await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent ===
-      "Provider stop confirmed.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Provider stop confirmed.");
   const cancelledState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -5552,11 +5668,7 @@ liveTasksSegment: try {
     true,
   );
   await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent ===
-      "Agent assignment admitted.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
   assert.equal(
     await ordinaryLiveTasks.window.locator("#task-menu-agent span").innerText(),
     "Rejoin Agent",
@@ -5624,11 +5736,7 @@ liveTasksSegment: try {
       "Hold the approved read-only workspace while Farol proves exact native cancellation.",
     );
   await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent ===
-      "Agent assignment admitted.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
   assert.equal(
     await ordinaryLiveTasks.window.locator("#task-menu-cancel").isEnabled(),
     true,
@@ -5640,11 +5748,7 @@ liveTasksSegment: try {
     true,
   );
   await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent ===
-      "Agent cancellation confirmed.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent cancellation confirmed.");
   await ordinaryLiveTasks.window.waitForFunction(
     () =>
       document.querySelector("#task-agent-state small")?.textContent ===
@@ -5982,11 +6086,7 @@ liveTasksSegment: try {
       "Remain active until the persisted authority expires across an application restart.",
     );
   await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-menu-note")?.textContent ===
-      "Agent assignment admitted.",
-  );
+  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
   const expiringAgentState = await ordinaryLiveTasks.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );

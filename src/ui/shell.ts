@@ -46,6 +46,7 @@ import {
   setupSteps,
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
+import { TaskMenuTrace } from "./task-menu-trace";
 import {
   agentActionPrerequisite,
   agentFieldPrerequisite,
@@ -332,6 +333,10 @@ let settingsFeedbackSurface: "computer" | "settings" | "setup" = "settings";
 let taskAdmissionFeedback = "";
 let taskMenuFeedback = "";
 let taskMenuFeedbackError = false;
+// Why a task-menu command's sentence did or did not reach the note. See
+// task-menu-trace.ts: a wait on the note's text cannot tell the three
+// silences apart, and this does.
+const taskMenuTrace = new TaskMenuTrace(() => Math.round(performance.now()));
 let taskMenuBusy = false;
 let taskAgentDraftTaskId = "";
 let chatGptSignInOpened = false;
@@ -1004,12 +1009,57 @@ function productAgentScopeSelection(): ProductAgentScopeSelection | null {
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * Put the task menu's sentence in the DOM.
+ *
+ * This used to be inline, two hundred lines below `renderTaskMenu`'s
+ * `if (!live || !task) return;`. A command that settled into a state where
+ * the selection was empty or no longer a live ChatGPT task therefore set its
+ * success sentence on the module variable and then returned above the only
+ * line that would have shown it — so the sentence could never appear, and a
+ * wait for it could only expire. Both sites now call this.
+ */
+function writeTaskMenuNote(state: Parameters<typeof taskMenuNote>[0]): void {
+  const note = document.querySelector<HTMLElement>("#task-menu-note");
+  if (!note) return;
+  if (state.feedback) taskMenuTrace.noted();
+  note.dataset.error = String(taskMenuFeedbackError);
+  note.textContent = taskMenuNote(state);
+  writeTaskMenuTrace();
+}
+
+// The trace has to be readable even when renderTaskMenu returned before it
+// could write the note — which is the case worth reading.
+function writeTaskMenuTrace(): void {
+  const note = document.querySelector<HTMLElement>("#task-menu-note");
+  if (!note) return;
+  note.dataset.trace = taskMenuTrace.serialize();
+  note.dataset.phase = taskMenuTrace.phase();
+}
+
 function renderTaskMenu(): void {
   const task = taskById(selectedTaskId);
   const live = task?.provider === "chatgpt";
   required<HTMLElement>("#task-menu-live").hidden = !live;
   required<HTMLElement>("#task-menu-fixture").hidden = live;
-  if (!live || !task) return;
+  if (!live || !task) {
+    // No live task to advise about — but a command's own result sentence
+    // still has to reach the owner, which is exactly what returning here
+    // used to prevent.
+    taskMenuTrace.skipped(task ? "not-live" : "no-task");
+    writeTaskMenuNote({
+      feedback: taskMenuFeedback,
+      busy: taskMenuBusy,
+      contextLocked: false,
+      contextLabel: null,
+      agentLocked: false,
+      agentRunning: false,
+      uncertain: false,
+      agentUnavailable: null,
+      lifecycle: task?.lifecycle ?? "",
+    });
+    return;
+  }
 
   const name = required<HTMLInputElement>("#task-menu-name");
   const rename = required<HTMLButtonElement>("#task-menu-rename");
@@ -1231,9 +1281,7 @@ function renderTaskMenu(): void {
     ? "Use task order"
     : "Keep first";
 
-  const note = required<HTMLElement>("#task-menu-note");
-  note.dataset.error = String(taskMenuFeedbackError);
-  note.textContent = taskMenuNote({
+  writeTaskMenuNote({
     feedback: taskMenuFeedback,
     busy: taskMenuBusy,
     contextLocked,
@@ -4280,26 +4328,31 @@ async function runTaskMenuCommand(
   taskMenuBusy = true;
   taskMenuFeedback = "";
   taskMenuFeedbackError = false;
+  taskMenuTrace.dispatch(command.kind);
   render();
   try {
     const parsed = ProductTaskCommandResultSchema.safeParse(
       await window.farolNext.task(command),
     );
     if (!parsed.success) {
+      taskMenuTrace.settle("invalid");
       taskMenuFeedback = "The task route returned an invalid result.";
       taskMenuFeedbackError = true;
       return;
     }
     applyTasksState(parsed.data.state);
     if (!parsed.data.ok) {
+      taskMenuTrace.settle("refused");
       taskMenuFeedback = taskMenuErrorMessage(parsed.data.error);
       taskMenuFeedbackError = true;
       return;
     }
+    taskMenuTrace.settle("ok");
     selectedTaskId = parsed.data.selectedTaskId ?? "";
     taskMenuFeedback = successMessage;
     if (closeAfterSuccess) {
       shellOverlay = "none";
+      taskMenuTrace.skipped("menu-closed");
       return;
     }
     const task = taskById(selectedTaskId);
@@ -4307,11 +4360,13 @@ async function runTaskMenuCommand(
       required<HTMLInputElement>("#task-menu-name").value = task.label;
     }
   } catch {
+    taskMenuTrace.settle("threw");
     taskMenuFeedback = "The task operation could not be completed.";
     taskMenuFeedbackError = true;
   } finally {
     taskMenuBusy = false;
     render();
+    writeTaskMenuTrace();
   }
 }
 
