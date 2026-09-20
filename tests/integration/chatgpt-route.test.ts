@@ -1235,7 +1235,14 @@ describe("ChatGPT sign-in return", () => {
       onClosing: vi.fn((listener: () => void) => closing.add(listener)),
       onClosed: vi.fn((listener: () => void) => closed.add(listener)),
     };
-    return { surface, contents, close, destroy, nativeClose };
+    return {
+      surface,
+      contents,
+      close,
+      destroy,
+      nativeClose,
+      executeJavaScript,
+    };
   }
 
   function emitReturn(contents: EventEmitter & { mainFrame: unknown }) {
@@ -1248,7 +1255,7 @@ describe("ChatGPT sign-in return", () => {
   it("closes once and reports exactly one outcome for two Return clicks in a row, from the bound when the page read never settles", async () => {
     vi.useFakeTimers();
     try {
-      const { surface, contents, close } = signInSurface();
+      const { surface, contents, close, executeJavaScript } = signInSurface();
       const outcomes: string[] = [];
       const candidate = new ChatGptRoute({
         homeUrl: "https://chatgpt.com/",
@@ -1260,6 +1267,7 @@ describe("ChatGPT sign-in return", () => {
         onSignInOutcome: (status) => outcomes.push(status),
       });
       await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+      expect(executeJavaScript).not.toHaveBeenCalled();
 
       emitReturn(contents);
       emitReturn(contents);
@@ -1267,6 +1275,10 @@ describe("ChatGPT sign-in return", () => {
       // still in flight, joins that read rather than closing the window
       // under it: nothing closes until the read answers or its bound ends.
       expect(close).not.toHaveBeenCalled();
+      // Joining means ONE read, not two racing reads of the same page: a
+      // second `executeJavaScript` would be a second answer nobody reports
+      // and a second chance to observe a page mid-teardown.
+      expect(executeJavaScript).toHaveBeenCalledTimes(1);
 
       // The bound expires: both joined clicks resolve to the same close,
       // which happens exactly once, and the one outcome is the bound's.
@@ -1296,14 +1308,13 @@ describe("ChatGPT sign-in return", () => {
       try {
         let resolveRead!: (value: unknown) => void;
         const { surface, contents, close } = signInSurface();
-        Object.assign(contents, {
-          executeJavaScript: vi.fn(
-            () =>
-              new Promise((resolve) => {
-                resolveRead = resolve;
-              }),
-          ),
-        });
+        const executeJavaScript = vi.fn(
+          () =>
+            new Promise((resolve) => {
+              resolveRead = resolve;
+            }),
+        );
+        Object.assign(contents, { executeJavaScript });
         const outcomes: string[] = [];
         const candidate = new ChatGptRoute({
           homeUrl: "https://chatgpt.com/",
@@ -1315,10 +1326,15 @@ describe("ChatGPT sign-in return", () => {
           onSignInOutcome: (status) => outcomes.push(status),
         });
         await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+        expect(executeJavaScript).not.toHaveBeenCalled();
 
         emitReturn(contents);
         emitReturn(contents);
         expect(close).not.toHaveBeenCalled();
+        // One read serves both clicks; `resolveRead` below therefore
+        // settles the only read there is, and both clicks observe its
+        // answer rather than one of two racing reads.
+        expect(executeJavaScript).toHaveBeenCalledTimes(1);
 
         // The page answers the read the first click started, well inside
         // the bound. The second click did not tear the page down under it,
@@ -1327,6 +1343,7 @@ describe("ChatGPT sign-in return", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(close).toHaveBeenCalledTimes(1);
         expect(outcomes).toEqual([expected]);
+        expect(executeJavaScript).toHaveBeenCalledTimes(1);
 
         // The bound that raced the read expires later and changes nothing.
         await vi.advanceTimersByTimeAsync(2_000);
