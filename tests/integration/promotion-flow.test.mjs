@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import {
@@ -14,7 +16,10 @@ import {
 } from "../../tooling/promotion-obligations.mjs";
 import { assertPromotionDestination } from "../../tooling/promotion-destination.mjs";
 import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry.ts";
-import { isPromotionLeaseHeldSync } from "../../src/apps/desktop/promotion-lease.ts";
+
+const roleChildScript = fileURLToPath(
+  new URL("./fixtures/promotion-role-child.mjs", import.meta.url),
+);
 
 // Composes the same pieces `tooling/promote-preview.mjs` does for
 // `--apply`, without spawning the CLI: acquire the generation-owned lease,
@@ -170,32 +175,160 @@ describe("promotion flow: lease held from the drain check through placement", ()
     }
   });
 
-  it("refuses to admit work while promotion holds the lease, and admits again once it is released", async () => {
+  it("S35-03/2 the registry's own admission wiring refuses while a live promotion holds the lease, and admits again once it is released", async () => {
     const homeRoot = await home();
     const userData = userDataOf(homeRoot);
     const registry = new LiveTaskRegistry(5, {
-      isHeld: () => isPromotionLeaseHeldSync(userData),
+      acquireForAdmission: async () => {
+        const handle = await acquirePromotionLease(userData, "app-gen", "admission");
+        if (!handle) return null;
+        return { release: () => releasePromotionLease(handle) };
+      },
     });
-    expect(registry.admit(fixtureTask())).toMatchObject({ status: "admitted" });
+    await expect(
+      registry.admitDurable(fixtureTask(), async () => {}),
+    ).resolves.toMatchObject({ status: "admitted" });
 
     // Impersonates a separate promotion process: pid 1 always exists and is
-    // never this test's own pid, so the registry's sync check (using its
-    // own real pid as "self") sees a genuinely different, live holder —
-    // exactly what a real cross-process promotion CLI would look like.
+    // never this test's own pid, so a real, live-checked acquire sees a
+    // genuinely different, live holder — exactly what a real cross-process
+    // promotion CLI would look like.
     const lease = await acquirePromotionLease(userData, "gen-z", "promotion", {
       pid: 1,
     });
     expect(lease).not.toBeNull();
     try {
-      expect(
-        registry.admit(fixtureTask({ taskId: "task-b", sessionId: "task-b", turnId: "turn-b" })),
-      ).toMatchObject({ status: "promotion_pending" });
+      await expect(
+        registry.admitDurable(
+          fixtureTask({ taskId: "task-b", sessionId: "task-b", turnId: "turn-b" }),
+          async () => {},
+        ),
+      ).resolves.toMatchObject({ status: "promotion_pending" });
     } finally {
       await releasePromotionLease(lease);
     }
 
-    expect(
-      registry.admit(fixtureTask({ taskId: "task-c", sessionId: "task-c", turnId: "turn-c" })),
-    ).toMatchObject({ status: "admitted" });
+    await expect(
+      registry.admitDurable(
+        fixtureTask({ taskId: "task-c", sessionId: "task-c", turnId: "turn-c" }),
+        async () => {},
+      ),
+    ).resolves.toMatchObject({ status: "admitted" });
+  });
+
+  function spawnRoleChild(userData, role, generation, ...files) {
+    return spawn(process.execPath, [roleChildScript, userData, role, generation, ...files], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  }
+
+  function collectOutput(child) {
+    const chunks = [];
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    return () => Buffer.concat(chunks).toString("utf8");
+  }
+
+  function waitForLine(child, needle) {
+    return new Promise((resolve, reject) => {
+      let buffer = "";
+      const onData = (chunk) => {
+        buffer += chunk.toString("utf8");
+        if (buffer.includes(needle)) {
+          child.stdout.off("data", onData);
+          resolve();
+        }
+      };
+      child.stdout.on("data", onData);
+      child.once("error", reject);
+      setTimeout(() => reject(new Error(`timed out waiting for ${needle}`)), 10_000).unref();
+    });
+  }
+
+  function waitForClose(child) {
+    return new Promise((resolve) => child.once("close", (code) => resolve(code)));
+  }
+
+  // S35-03/2, real-process form of the packet's required scenario: admission
+  // sees no lease, is paused before its durable attempt; promotion (a real,
+  // separate process) then takes the lease; admission resumes and tries to
+  // start work; exactly one of the two wins, and placement is never blocked
+  // by the loser.
+  it("S35-03/2 two real processes: admission paused before its attempt loses to a promotion already holding the lease, and placement proceeds", async () => {
+    const homeRoot = await home();
+    await ensureUserData(homeRoot);
+    const userData = userDataOf(homeRoot);
+    const handshake = await fs.mkdtemp(
+      path.join(await realTemporaryRoot(), "farol-next-flow-handshake-"),
+    );
+    roots.push(handshake);
+    const admissionReady = path.join(handshake, "admission-ready");
+    const admissionGo = path.join(handshake, "admission-go");
+    const promotionReady = path.join(handshake, "promotion-ready");
+    const promotionRelease = path.join(handshake, "promotion-release");
+
+    const admission = spawnRoleChild(
+      userData,
+      "admission",
+      "app-gen",
+      admissionReady,
+      admissionGo,
+    );
+    const admissionOutput = collectOutput(admission);
+    const promotion = spawnRoleChild(
+      userData,
+      "promotion",
+      "gen-promo",
+      "",
+      "",
+      promotionReady,
+      promotionRelease,
+    );
+    const promotionOutput = collectOutput(promotion);
+
+    try {
+      // Admission has checked ("sees no lease") and is now paused, before it
+      // ever attempts to acquire.
+      await waitForLine(admission, "HELD:false");
+      await expect
+        .poll(() => fs.access(admissionReady).then(() => true, () => false), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+
+      // Promotion — a real, separate process — takes the lease for real
+      // (this is its drain-check-through-placement window) while admission
+      // is still paused.
+      await waitForLine(promotion, "ACQUIRED");
+      await expect
+        .poll(() => fs.access(promotionReady).then(() => true, () => false), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+      const heldByPromotion = JSON.parse(
+        await fs.readFile(path.join(userData, "farol-next-state", "promotion.lease"), "utf8"),
+      );
+      expect(heldByPromotion.generation).toBe("gen-promo");
+
+      // Admission resumes and tries to start work: it must lose,
+      // deterministically, with its own refusal.
+      await fs.writeFile(admissionGo, "go");
+      const admissionCode = await waitForClose(admission);
+      expect(admissionOutput()).toBe("HELD:false\nREFUSED\n");
+      expect(admissionCode).toBe(1);
+
+      // The loser never blocked placement: promotion proceeds and releases
+      // on its own schedule, holding the exact same record throughout.
+      const stillPromotion = JSON.parse(
+        await fs.readFile(path.join(userData, "farol-next-state", "promotion.lease"), "utf8"),
+      );
+      expect(stillPromotion).toEqual(heldByPromotion);
+      await fs.writeFile(promotionRelease, "release");
+      const promotionCode = await waitForClose(promotion);
+      expect(promotionOutput()).toMatch(/^HELD:(false|true)\nACQUIRED\nRELEASED\n$/u);
+      expect(promotionCode).toBe(0);
+    } finally {
+      admission.kill("SIGKILL");
+      promotion.kill("SIGKILL");
+    }
   });
 });

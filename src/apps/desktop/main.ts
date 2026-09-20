@@ -44,8 +44,11 @@ import {
   type ProductTaskAgent,
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
-import { LiveTaskRegistry } from "./live-task-registry";
-import { isPromotionLeaseHeldSync } from "./promotion-lease";
+import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
+import {
+  acquirePromotionLease,
+  releasePromotionLease,
+} from "./promotion-lease";
 import {
   reconcileTaskContexts,
   toProductTaskContext,
@@ -409,8 +412,22 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   failed: number;
 }> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
+// S35-03/2: takes the SAME cross-process lease a promotion holds from
+// before its drain check through placement, for the whole durable admission
+// — not merely a synchronous check of it (see `live-task-registry.ts`'s
+// `PromotionLeaseGuard`). A contended acquire (the lease flips holder to
+// holder faster than this admission can retry) refuses admission rather
+// than surfacing `PROMOTION_LEASE_CONTENTION` as an unrelated crash.
 const liveTaskRegistry = new LiveTaskRegistry(5, {
-  isHeld: () => isPromotionLeaseHeldSync(app.getPath("userData")),
+  acquireForAdmission: async () => {
+    const handle = await acquirePromotionLease(
+      app.getPath("userData"),
+      buildIdentity.buildId,
+      "admission",
+    ).catch(() => null);
+    if (!handle) return null;
+    return { release: () => releasePromotionLease(handle) };
+  },
 });
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
@@ -946,7 +963,15 @@ async function admitRouteBTask(
       pinned: false,
       lifecycle: "running",
     };
-    const admitted = liveTaskRegistry.admit(task);
+    // S35-03/2: admits and persists under the same cross-process lease a
+    // promotion holds, so this cannot land in the gap after a promotion's
+    // drain check validated nothing running and before its placement.
+    let admitted: LiveTaskAdmission;
+    try {
+      admitted = await liveTaskRegistry.admitDurable(task, persistLiveTaskState);
+    } catch {
+      return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
+    }
     if (admitted.status === "capacity") {
       return { ok: false, code: "TASK_CAPACITY_REACHED" };
     }
@@ -955,14 +980,6 @@ async function admitRouteBTask(
     }
     const route = createLiveChatGptRoute(task.taskId, task.label);
     liveTaskConversationUrls.set(task.taskId, null);
-    try {
-      await persistLiveTaskState();
-    } catch {
-      liveTaskRegistry.rollback(before);
-      liveTaskConversationUrls.delete(task.taskId);
-      route.dispose();
-      return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
-    }
     liveTaskRoutes.set(task.taskId, route);
     publishTasksState();
     if (!(await openLiveTaskSurface(task.taskId))) {
@@ -2118,25 +2135,42 @@ async function runProductTaskCommand(
         } catch {
           return taskFailure("AGENT_INPUT_STATE_UNAVAILABLE");
         }
-        if (
-          !liveTaskRegistry.setAgent(task.taskId, {
-            assignmentBindingSha256: productAgentAssignmentBinding(input),
-            phase: "running",
-            workspaceId: input.workspaceId,
-            parentDelivery: "not_applicable",
-            workspaceEnforcement: "not_applicable",
-            resultAvailable: false,
-          })
-        ) {
-          return taskFailure("TASK_NOT_FOUND");
-        }
-        try {
-          await persistLiveTaskState();
-        } catch {
-          liveTaskRegistry.rollback(before);
+        // S35-03/4: starting a native Agent turns this task into the SAME
+        // `AGENT_RUNNING` obligation a promotion's drain check refuses on,
+        // so it takes the same cross-process lease `admitDurable` does for
+        // a brand new task — not only new admission is guarded.
+        const agentStart = await liveTaskRegistry.withPromotionLease(
+          async (): Promise<
+            | Readonly<{ ok: true }>
+            | Readonly<{ ok: false; code: "TASK_NOT_FOUND" | "TASK_STATE_UNAVAILABLE" }>
+          > => {
+            if (
+              !liveTaskRegistry.setAgent(task.taskId, {
+                assignmentBindingSha256: productAgentAssignmentBinding(input),
+                phase: "running",
+                workspaceId: input.workspaceId,
+                parentDelivery: "not_applicable",
+                workspaceEnforcement: "not_applicable",
+                resultAvailable: false,
+              })
+            ) {
+              return { ok: false, code: "TASK_NOT_FOUND" };
+            }
+            try {
+              await persistLiveTaskState();
+            } catch {
+              liveTaskRegistry.rollback(before);
+              await productAgentStore!.remove(task.taskId).catch(() => undefined);
+              return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
+            }
+            return { ok: true };
+          },
+        );
+        if (!agentStart.ok) {
           await productAgentStore!.remove(task.taskId).catch(() => undefined);
-          return taskFailure("TASK_STATE_UNAVAILABLE");
+          return taskFailure("TASK_ROUTE_UNAVAILABLE");
         }
+        if (!agentStart.value.ok) return taskFailure(agentStart.value.code);
         publishTasksState();
       } else {
         const rejoinable =
@@ -2283,7 +2317,14 @@ async function runProductTaskCommand(
       pinned: false,
       lifecycle: "idle",
     };
-    const admitted = liveTaskRegistry.admit(task);
+    // S35-03/2: see `admitRouteBTask` above — admits and persists under the
+    // same cross-process lease a promotion holds through placement.
+    let admitted: LiveTaskAdmission;
+    try {
+      admitted = await liveTaskRegistry.admitDurable(task, persistLiveTaskState);
+    } catch {
+      return taskFailure("TASK_STATE_UNAVAILABLE");
+    }
     if (admitted.status === "capacity") {
       return taskFailure("TASK_CAPACITY_REACHED");
     }
@@ -2292,14 +2333,6 @@ async function runProductTaskCommand(
     }
     const route = createLiveChatGptRoute(task.taskId, task.label);
     liveTaskConversationUrls.set(task.taskId, null);
-    try {
-      await persistLiveTaskState();
-    } catch {
-      liveTaskRegistry.rollback(before);
-      liveTaskConversationUrls.delete(task.taskId);
-      route.dispose();
-      return taskFailure("TASK_STATE_UNAVAILABLE");
-    }
     liveTaskRoutes.set(task.taskId, route);
     selectedTaskId = task.taskId;
     section = "browser";

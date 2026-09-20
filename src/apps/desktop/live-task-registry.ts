@@ -13,13 +13,19 @@ export type LiveTaskAdmission =
   | Readonly<{ status: "admitted"; task: ProductTask }>
   | Readonly<{ status: "capacity" | "duplicate" | "promotion_pending" }>;
 
-// The other half of the promotion lease's mutual exclusion (see
-// `promotion-lease.ts`): a momentary, synchronous check of the same lease
-// file a promotion holds from before its drain check through placement. A
-// task admitted after that check completes cannot be admitted once the
-// lease is visible, which is exactly the gap the drain check's two reads
-// cannot fence by themselves.
-export type PromotionLeaseGuard = Readonly<{ isHeld(): boolean }>;
+// S35-03/2: a lease that is only ever checked, never held, excludes
+// nothing — a promotion could take the lease and validate drained in the
+// gap right after this check passed and before admission's own durable
+// write lands. `acquireForAdmission` takes the SAME cross-process lease a
+// promotion holds from before its drain check through placement, for the
+// whole durable admission (`admitDurable` below): the in-memory check, the
+// push, and the write that makes it visible on disk all happen while it is
+// held. Whichever side actually holds the lease wins; the other gets its
+// own refusal, deterministically, not from a race.
+export type PromotionLeaseHold = Readonly<{ release(): Promise<void> }>;
+export type PromotionLeaseGuard = Readonly<{
+  acquireForAdmission(): Promise<PromotionLeaseHold | null>;
+}>;
 
 export class LiveTaskRegistry {
   private readonly tasks: ProductTask[] = [];
@@ -34,11 +40,12 @@ export class LiveTaskRegistry {
     }
   }
 
+  // In-memory admission only: capacity and identity, nothing durable, no
+  // cross-process exclusion. Real callers that make a task visible on disk
+  // must go through `admitDurable` instead — see its comment for why a
+  // lease *check* here would not be enough.
   admit(candidate: ProductTask): LiveTaskAdmission {
     const task = ProductTaskSchema.parse(candidate);
-    if (this.promotionLease?.isHeld()) {
-      return { status: "promotion_pending" };
-    }
     if (this.tasks.length >= this.capacity) return { status: "capacity" };
     if (
       this.tasks.some(
@@ -53,6 +60,53 @@ export class LiveTaskRegistry {
     this.tasks.push(task);
     this.revision += 1;
     return { status: "admitted", task: { ...task } };
+  }
+
+  // Admits a task and makes it durable while holding the cross-process
+  // promotion lease for the whole sequence: the in-memory `admit` above, and
+  // `persist` (the caller's write to the live-task store). If `persist`
+  // throws, the in-memory admission is rolled back before the lease is
+  // released and before the error is rethrown, so a failed durable write
+  // never leaves a task visible only in memory.
+  async admitDurable(
+    candidate: ProductTask,
+    persist: () => Promise<void>,
+  ): Promise<LiveTaskAdmission> {
+    const before = this.snapshot();
+    const outcome = await this.withPromotionLease(async () => {
+      const admitted = this.admit(candidate);
+      if (admitted.status !== "admitted") return admitted;
+      try {
+        await persist();
+      } catch (error) {
+        this.rollback(before);
+        throw error;
+      }
+      return admitted;
+    });
+    return outcome.ok ? outcome.value : { status: "promotion_pending" };
+  }
+
+  // S35-03/4: the SAME cross-process exclusion `admitDurable` uses, exposed
+  // for every other write that turns this generation's state into a
+  // promotion obligation — starting a native Agent on an already-admitted
+  // task (`AGENT_RUNNING`), for instance — not only admitting a brand new
+  // task. `work` runs the in-memory mutation and its durable persist
+  // together, exactly as it would without a lease; the only difference is
+  // that a live promotion excludes it instead of racing it. Returns
+  // `{ok:false}` (never throwing) when a live promotion already holds the
+  // lease, so the caller can map that to its own ordinary refusal.
+  async withPromotionLease<T>(
+    work: () => Promise<T>,
+  ): Promise<Readonly<{ ok: true; value: T }> | Readonly<{ ok: false }>> {
+    if (!this.promotionLease) return { ok: true, value: await work() };
+    const hold = await this.promotionLease.acquireForAdmission();
+    if (!hold) return { ok: false };
+    try {
+      return { ok: true, value: await work() };
+    } finally {
+      await hold.release();
+    }
   }
 
   get(taskId: string): ProductTask | null {
