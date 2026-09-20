@@ -9872,6 +9872,15 @@ n09ConnectorAttachmentSegment: {
   }
 }
 
+// One line per segment boundary. A lane that runs every segment in one
+// process and stops answering says nothing about where it stopped; this
+// makes that readable from the log alone, at the cost of two lines.
+function segmentMark(name, phase) {
+  process.stdout.write(
+    `E2E_SEGMENT ${name} ${phase} ${new Date().toISOString()}\n`,
+  );
+}
+
 // N11 — the Agent's scope controls, and what the native host was actually
 // handed. The suite proves an `exact` assignment and the untouched default,
 // whose wire form is `{mode: "subtree", root: workspaceRoot}` — the default,
@@ -9886,8 +9895,30 @@ n09ConnectorAttachmentSegment: {
 // here re-proves lineage; it asserts only what the scope controls deliver.
 n11AgentScopeSegment: {
   if (!segmentSelected("n11-agent-scope")) break n11AgentScopeSegment;
+  segmentMark("n11-agent-scope", "start");
   const agentScope = await launch([], "hidden", "ordinary");
   try {
+    // The instrument this case asked for. `renderTaskMenu()` rebuilds on
+    // task and runtime events, so when a typed value disappears the only
+    // thing worth knowing is which event moved the menu. These listeners
+    // are additive observation — the product's own listeners still run and
+    // nothing is replaced — and they record only an event's name and time,
+    // never its content.
+    await agentScope.window.evaluate(() => {
+      const observed = [];
+      globalThis.__farolE2EMenuEvents = observed;
+      const record = (name) => () => {
+        observed.push({ name, at: Date.now() });
+        if (observed.length > 64) observed.shift();
+      };
+      window.farolNext.onRuntimeState(record("runtimeState"));
+      window.farolNext.onTaskSurfaceState(record("taskSurfaceState"));
+      window.farolNext.onTasksState(record("tasksState"));
+      window.farolNext.onRuntimeEvent(record("runtimeEvent"));
+      window.farolNext.onLayout(record("layout"));
+      window.farolNext.onWindowState(record("windowState"));
+      window.farolNext.onShellAction(record("shellAction"));
+    });
     // A real subfolder with its own file, and an excludable sibling, so the
     // narrowing below is a claim about real paths rather than strings.
     const subfolder = path.join(agentScope.workspaceRoot, "notes");
@@ -10074,8 +10105,25 @@ n11AgentScopeSegment: {
     // instrument exists this retry is an accommodation of a surface whose
     // behaviour is only partly explained, and it should not be read as
     // evidence that the surface is sound.
+    const menuObservation = () =>
+      agentScope.window
+        .evaluate(() => {
+          const menu = document.querySelector("#task-menu");
+          const field = document.querySelector("#task-agent-subtree");
+          const events = globalThis.__farolE2EMenuEvents ?? [];
+          return {
+            menuVisible:
+              menu instanceof HTMLElement && menu.offsetParent !== null,
+            subtreeVisible:
+              field instanceof HTMLElement && field.offsetParent !== null,
+            scope: document.querySelector("#task-agent-scope")?.value ?? null,
+            lastEvents: events.slice(-6),
+          };
+        })
+        .catch(() => null);
     const submitAgentAssignment = async (staged) => {
       let lastFailure = null;
+      const attemptLog = [];
       for (let attempt = 1; attempt <= 4; attempt += 1) {
         try {
           await selectSubtreeScope();
@@ -10100,13 +10148,21 @@ n11AgentScopeSegment: {
             "the task menu kept the owner's typed scope up to the click",
           );
           await runAgentWhenReady();
+          process.stdout.write(
+            `E2E_TASK_MENU attempts=${attempt} ${JSON.stringify(attemptLog)}\n`,
+          );
           return;
         } catch (error) {
           lastFailure = error;
+          attemptLog.push({
+            attempt,
+            reason: error.message.slice(0, 160),
+            observed: await menuObservation(),
+          });
         }
       }
       throw new Error(
-        `E2E_TASK_MENU_REBUILD_LOST_INPUT after 4 attempts · ${lastFailure?.message ?? "unknown"}`,
+        `E2E_TASK_MENU_REBUILD_LOST_INPUT after 4 attempts · ${JSON.stringify(attemptLog)}`,
         { cause: lastFailure },
       );
     };
@@ -10231,6 +10287,7 @@ n11AgentScopeSegment: {
     cases.push("n11-agent-exclusion-reaches-the-delivered-assignment");
   } finally {
     await close(agentScope);
+    segmentMark("n11-agent-scope", "end");
   }
 }
 
@@ -10250,6 +10307,7 @@ n11AgentScopeSegment: {
 // bytes and the settings read-back, none of which needs a visible window.
 n10ComputerPanelSegment: {
   if (!segmentSelected("n10-computer-panel")) break n10ComputerPanelSegment;
+  segmentMark("n10-computer-panel", "start");
   const panel = await launch([], "hidden", "demo");
   try {
     // One approved, verified folder, added the only way the suite could add
@@ -10522,6 +10580,7 @@ n10ComputerPanelSegment: {
     cases.push("n10-computer-lost-edit-reply-redelivered-after-restart");
   } finally {
     await close(panel);
+    segmentMark("n10-computer-panel", "end");
   }
 }
 const repeatedCaseIds = cases.filter(
