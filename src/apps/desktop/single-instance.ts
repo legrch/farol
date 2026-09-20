@@ -279,6 +279,30 @@ async function readAcknowledgement(
   }
 }
 
+/**
+ * How many published acknowledgements are present that this launch is not
+ * waiting for.
+ *
+ * A timeout has two very different causes and one message today. Either the
+ * primary published nothing, or it published an acknowledgement addressed to
+ * a different launch — which means the two sides disagree about the nonce and
+ * no amount of waiting will ever help. The count says which, and a count of
+ * files is content-free.
+ */
+export async function foreignAcknowledgementCount(
+  userData: string,
+  candidate: unknown,
+): Promise<number> {
+  const request = parseRequest(candidate);
+  if (!request) throw new Error("INSTANCE_REQUEST_INVALID");
+  const entries = await fs
+    .readdir(acknowledgementDirectory(userData))
+    .catch(() => [] as string[]);
+  return entries.filter(
+    (entry) => entry.endsWith(".json") && entry !== `${request.nonce}.json`,
+  ).length;
+}
+
 export async function waitForInstanceAcknowledgement(
   userData: string,
   candidate: unknown,

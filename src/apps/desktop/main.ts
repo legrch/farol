@@ -91,6 +91,7 @@ import {
   acknowledgementFailureCode,
   createInstanceRequest,
   decideSecondInstance,
+  foreignAcknowledgementCount,
   readBuildLaunchIdentity,
   sameLaunchIdentity,
   waitForInstanceAcknowledgement,
@@ -7175,7 +7176,7 @@ async function main(): Promise<void> {
 
 if (!app.requestSingleInstanceLock(instanceRequest)) {
   void waitForInstanceAcknowledgement(app.getPath("userData"), instanceRequest)
-    .then((acknowledgement) => {
+    .then(async (acknowledgement) => {
       const accepted =
         acknowledgement?.status === "reopened" &&
         sameLaunchIdentity(launchIdentity, acknowledgement);
@@ -7189,6 +7190,18 @@ if (!app.requestSingleInstanceLock(instanceRequest)) {
           "Farol Next refused the second launch because the running build could not be verified as this exact candidate.\n",
         );
         process.stderr.write(`${secondInstanceResultPrefix}${outcome}\n`);
+        if (acknowledgement === null) {
+          // Nothing arrived within the deadline. Say whether the primary
+          // published nothing at all, or published for a launch that is not
+          // this one — the second is a disagreement no wait can resolve.
+          const foreign = await foreignAcknowledgementCount(
+            app.getPath("userData"),
+            instanceRequest,
+          ).catch(() => -1);
+          process.stderr.write(
+            `${secondInstanceAcknowledgementPrefix}${foreign === 0 ? "absent" : `foreign:${foreign}`}\n`,
+          );
+        }
         app.quit();
         return;
       }
