@@ -505,6 +505,79 @@ describe("Farol Model loopback endpoint", () => {
     expect(isLoopbackAddress(undefined)).toBe(false);
   });
 
+  // S35-TA-2: the seal is the endpoint's terminal state. It is what a
+  // caller takes when it can no longer say what the token file holds, so
+  // it must hold with the socket still bound, with the token file still
+  // carrying a usable literal, and with no I/O of its own that could fail.
+  it("S35-TA-2 a sealed endpoint refuses the very token its own state file still carries, on the still-bound port", async () => {
+    const { endpoint, port, token } = await started();
+
+    const before = await post(port, codexRequest(), {
+      authorization: `Bearer ${token}`,
+    });
+    expect(before.status).toBe(200);
+    await before.text();
+
+    endpoint.seal();
+    expect(endpoint.isSealed).toBe(true);
+
+    // Still listening, the token file untouched — and every request
+    // refused with the same anonymous 401 an endpoint with no token gives.
+    const after = await post(port, codexRequest(), {
+      authorization: `Bearer ${token}`,
+    });
+    expect(after.status).toBe(401);
+    expect(after.headers.get("www-authenticate")).toBe("Bearer");
+    expect(await after.json()).toEqual({ error: { code: "unauthorized" } });
+    expect(endpoint.evidence().lastRejectedReason).toBe("FAROL_MODEL_SEALED");
+
+    // The authenticated identity probe is behind the same check, so a
+    // sealed endpoint does not identify itself either.
+    const identity = await fetch(
+      `http://127.0.0.1:${port}${FAROL_MODEL_IDENTITY_PATH}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(identity.status).toBe(401);
+    await identity.text();
+  });
+
+  it("S35-TA-2 a sealed endpoint cannot be restarted, and seals stay set across a stop", async () => {
+    const { endpoint, port, token } = await started();
+    endpoint.seal();
+    await endpoint.stop();
+
+    await expect(endpoint.start()).rejects.toThrow(
+      "FAROL_MODEL_ENDPOINT_SEALED",
+    );
+    expect(endpoint.isSealed).toBe(true);
+    // Nothing on the port any more, and nothing that could put it back.
+    await expect(
+      post(port, codexRequest(), { authorization: `Bearer ${token}` }),
+    ).rejects.toThrow();
+  });
+
+  it("S35-TA-2 stop() resolves only once the port has actually stopped accepting connections", async () => {
+    const { endpoint, port } = await started();
+
+    await endpoint.stop();
+
+    // The moment `stop()` resolved, a fresh connection must be refused —
+    // not merely "the endpoint says it stopped".
+    await expect(
+      new Promise((resolve, reject) => {
+        const socket = net.connect({ host: "127.0.0.1", port });
+        socket.once("connect", () => {
+          socket.destroy();
+          reject(new Error("the port was still accepting connections"));
+        });
+        socket.once("error", () => resolve(undefined));
+      }),
+    ).resolves.toBeUndefined();
+    expect(endpoint.port).toBeUndefined();
+    // Idempotent: a second stop is a no-op, not a second close.
+    await expect(endpoint.stop()).resolves.toBeUndefined();
+  });
+
   it("binds only 127.0.0.1, so a real external connection cannot reach it", async () => {
     const state = new FarolModelRuntimeState(await stateRoot());
     const endpoint = trackedEndpoint(state, syntheticHandler);

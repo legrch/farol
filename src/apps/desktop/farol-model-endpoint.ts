@@ -16,6 +16,7 @@ import { FarolModelRuntimeState } from "./farol-model-runtime-state";
 //   1. peer must be loopback                          → 403, anonymous body
 //   2. no `Origin` header (a Codex host never sends one; a browser always
 //      does)                                          → 403, anonymous body
+//   2a. not sealed (S35-TA-2)                         → 401, anonymous body
 //   3. bearer token, compared in constant time        → 401, anonymous body
 //   4. route: POST /responses or GET /farol-model/identity → 404
 //   5. body bounded at 1 MiB, refused while it is still arriving → 413
@@ -256,6 +257,13 @@ export class FarolModelEndpoint {
   readonly instanceNonce: string = randomBytes(16).toString("hex");
   private server: ReturnType<typeof http.createServer> | undefined;
   private boundPort: number | undefined;
+  // S35-TA-2: the terminal fail-closed state. Set in memory, with no I/O
+  // that can fail, the instant a caller decides this endpoint must accept
+  // nothing — before any attempt to close the listener, because closing
+  // can itself fail and would otherwise leave the endpoint serving a
+  // literal nobody can account for. Nothing clears it; a sealed endpoint
+  // is finished.
+  private sealed = false;
   private requestsAccepted = 0;
   private requestsRejected = 0;
   private lastAcceptedAtIso: string | undefined;
@@ -280,6 +288,22 @@ export class FarolModelEndpoint {
     return this.boundPort;
   }
 
+  /**
+   * Refuses every request from this moment on, synchronously and without
+   * touching the filesystem. The caller uses this when it can no longer
+   * guarantee what the token file holds: whatever that file now carries,
+   * and whether or not the listener can be closed afterwards, nothing
+   * authenticates against this endpoint again.
+   */
+  seal(): void {
+    this.sealed = true;
+  }
+
+  /** Whether `seal()` has been called. Never returns to false. */
+  get isSealed(): boolean {
+    return this.sealed;
+  }
+
   /** The one model this endpoint serves. */
   get servedModel(): string {
     return this.model;
@@ -295,6 +319,9 @@ export class FarolModelEndpoint {
   }
 
   async start(): Promise<Readonly<{ port: number }>> {
+    // S35-TA-2: a sealed endpoint is not restartable. Binding again would
+    // put the poisoned token back into service under a fresh socket.
+    if (this.sealed) throw new Error("FAROL_MODEL_ENDPOINT_SEALED");
     if (this.server) {
       return { port: this.expectPort() };
     }
@@ -311,15 +338,27 @@ export class FarolModelEndpoint {
     return { port };
   }
 
+  /**
+   * Resolves only once the server has actually stopped listening; a close
+   * that fails rejects and leaves this endpoint still holding its server,
+   * rather than reporting a stop that did not happen. In-flight requests
+   * are allowed to finish, as they always were — only idle connections are
+   * closed underneath them.
+   *
+   * S35-TA-2: a caller that needs a guarantee rather than best effort
+   * seals the endpoint first. `stop()` rejecting then costs nothing,
+   * because a sealed endpoint refuses every request whether or not its
+   * socket is still bound.
+   */
   async stop(): Promise<void> {
     const server = this.server;
-    this.server = undefined;
-    this.boundPort = undefined;
     if (!server) return;
     server.closeIdleConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+    this.server = undefined;
+    this.boundPort = undefined;
     await this.state.clearLiveness();
   }
 
@@ -377,6 +416,14 @@ export class FarolModelEndpoint {
     }
     if (request.headers.origin !== undefined) {
       this.refuseAnonymously(response, 403, "FAROL_MODEL_ORIGIN_PRESENT");
+      return;
+    }
+    // S35-TA-2: before the token file is even read. Whatever it holds, a
+    // sealed endpoint accepts nothing, and it refuses through exactly the
+    // path an endpoint with no token at all uses — same status, same
+    // anonymous body, no extra work for an unauthenticated caller to time.
+    if (this.sealed) {
+      this.refuseAnonymously(response, 401, "FAROL_MODEL_SEALED");
       return;
     }
     const token = await this.state.currentToken();

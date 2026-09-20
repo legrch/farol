@@ -2542,7 +2542,12 @@ function modelStatusEvidencePayload(
   requestsServed: number;
   occupant?: "unprobed" | "farol" | "foreign" | "vacated";
 }> | null {
-  if (status.state === "not_running") return null;
+  // S35-TA-2: a sealed endpoint accepts nothing, so it reports exactly
+  // what the caller of a dead endpoint gets — `MODEL_ENDPOINT_UNAVAILABLE`
+  // from the `null` below. It is deliberately not a new evidence value:
+  // `model.status` is a cross-process contract, and "unavailable" is the
+  // true statement about an endpoint that will never serve again.
+  if (status.state === "not_running" || status.state === "sealed") return null;
   if (status.state === "port_conflict") {
     return {
       kind: "model.status",
@@ -2603,7 +2608,14 @@ function syntheticModelTurnHandler(
 async function farolModelProviderSpec(): Promise<FarolModelProviderSpec | null> {
   if (!modelLifecycle) return null;
   const status = modelLifecycle.status();
-  if (status.state === "not_running" || status.state === "port_conflict") {
+  // S35-TA-2: a sealed endpoint must never produce a provider spec — a
+  // block written from one would point an ordinary Codex at a port that
+  // refuses every request.
+  if (
+    status.state === "not_running" ||
+    status.state === "port_conflict" ||
+    status.state === "sealed"
+  ) {
     return null;
   }
   const token = await modelLifecycle.runtimeState.currentToken();

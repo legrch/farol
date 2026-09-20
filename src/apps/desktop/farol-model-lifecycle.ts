@@ -42,6 +42,10 @@ export type FarolModelPortOccupant =
 
 export type FarolModelLifecycleStatus =
   | Readonly<{ state: "not_running" }>
+  // S35-TA-2: the endpoint refuses every request and cannot be restarted.
+  // `port` is the port it last held: the socket may still be bound, since
+  // sealing deliberately does not depend on the close succeeding.
+  | Readonly<{ state: "sealed"; port: number | undefined }>
   | Readonly<{
       state: "port_conflict";
       port: number;
@@ -129,6 +133,11 @@ export class FarolModelLifecycle {
   private endpointInstance: FarolModelEndpoint | undefined;
   private portConflict: number | undefined;
   private occupant: FarolModelPortOccupant = "unprobed";
+  // S35-TA-2: set when this process can no longer say what the token file
+  // holds. It is the guarantee the fail-closed path rests on; closing the
+  // listener is only the tidy-up that follows it.
+  private sealed = false;
+  private sealedPort: number | undefined;
   // S35-H2-1R: one rotation at a time. `rotateAndRewrite` is a transaction
   // over two places that must agree — the endpoint's token file and the
   // owner's Codex config — and two of them running at once can interleave
@@ -161,6 +170,9 @@ export class FarolModelLifecycle {
    * again while already running is a no-op.
    */
   async start(): Promise<void> {
+    // S35-TA-2: a sealed lifecycle stays sealed. Building a fresh endpoint
+    // would serve the same private token file the seal exists to disown.
+    if (this.sealed) return;
     if (this.endpointInstance) return;
     const endpoint = new FarolModelEndpoint({
       state: this.state,
@@ -184,12 +196,34 @@ export class FarolModelLifecycle {
     this.endpointInstance = endpoint;
   }
 
-  /** Stops the endpoint and clears its liveness marker. A no-op when not running. */
+  /**
+   * Stops the endpoint and clears its liveness marker. A no-op when not
+   * running. A close that fails rejects, and this lifecycle lets go of the
+   * endpoint either way, so a second `stop()` does not retry a close that
+   * has already failed once.
+   *
+   * S35-TA-2: letting go is safe only because a caller that needs the
+   * endpoint to accept nothing seals it first — the running server's
+   * request handler holds that same sealed endpoint, so its refusal
+   * survives this reference being dropped.
+   */
   async stop(): Promise<void> {
     const endpoint = this.endpointInstance;
     this.endpointInstance = undefined;
     if (!endpoint) return;
     await endpoint.stop();
+  }
+
+  /**
+   * The terminal fail-closed state, taken synchronously and with no I/O
+   * that can fail: from here every request this endpoint receives is
+   * refused, whatever the token file holds and whether or not the socket
+   * can be closed afterwards.
+   */
+  private sealEndpoint(): void {
+    this.sealed = true;
+    this.sealedPort ??= this.endpointInstance?.port;
+    this.endpointInstance?.seal();
   }
 
   /**
@@ -247,6 +281,9 @@ export class FarolModelLifecycle {
   private async runRotation(
     ports: FarolModelRotatePorts,
   ): Promise<FarolModelRotateOutcome> {
+    // S35-TA-2: a sealed endpoint serves nothing, so there is no token to
+    // rotate and nothing a rewritten block could reach.
+    if (this.sealed) return { ok: false, code: "MODEL_ENDPOINT_UNAVAILABLE" };
     const previousToken = await this.state.currentToken();
     const before = await ports.spec();
     if (!before) return { ok: false, code: "MODEL_ENDPOINT_UNAVAILABLE" };
@@ -346,8 +383,8 @@ export class FarolModelLifecycle {
         await this.state.clearToken();
       } catch {
         // Clearing IS the restore here, so there is no second attempt to
-        // make: the endpoint is stopped instead.
-        await this.stop().catch(() => undefined);
+        // make: the endpoint is sealed instead.
+        await this.failClosed();
         return { ok: false, code: "FAROL_MODEL_ROTATE_RESTORE_FAILED" };
       }
     } else {
@@ -357,7 +394,7 @@ export class FarolModelLifecycle {
         try {
           await this.state.clearToken();
         } catch {
-          await this.stop().catch(() => undefined);
+          await this.failClosed();
         }
         return { ok: false, code: "FAROL_MODEL_ROTATE_RESTORE_FAILED" };
       }
@@ -372,12 +409,38 @@ export class FarolModelLifecycle {
   }
 
   /**
+   * S35-TA-2: the one place the endpoint is disowned. The seal is taken
+   * first and cannot fail; closing the listener is then attempted for
+   * tidiness and its failure changes nothing, because the sealed endpoint
+   * the running server dispatches into refuses every request either way.
+   *
+   * This used to be `await this.stop().catch(() => undefined)` alone,
+   * which made the whole promise — the endpoint accepts the previous
+   * literal or nothing — conditional on a close succeeding. A close that
+   * failed left the freshly minted token in the file (clearing it is what
+   * failed) and the socket bound, so the endpoint went on accepting a
+   * literal the owner's config does not carry.
+   */
+  private async failClosed(): Promise<void> {
+    this.sealEndpoint();
+    // Only tidy-up from here. It is still awaited so that the ordinary
+    // case — a close that works — leaves nothing bound and nothing
+    // pending. Residual: a close that hangs (a keep-alive connection that
+    // goes idle just after `closeIdleConnections`) stalls this rotation's
+    // return. It cannot serve a turn while it stalls, because the seal
+    // above is already in force, so this is an availability residual and
+    // not a way back into the endpoint.
+    await this.stop().catch(() => undefined);
+  }
+
+  /**
    * A snapshot for the Setup/Settings control. `connected` is reported
    * only once the endpoint has actually served a request from a host — a
    * written config file or a found executable is never evidence of a
    * connection.
    */
   status(): FarolModelLifecycleStatus {
+    if (this.sealed) return { state: "sealed", port: this.sealedPort };
     const endpoint = this.endpointInstance;
     if (!endpoint || endpoint.port === undefined) {
       if (this.portConflict !== undefined) {

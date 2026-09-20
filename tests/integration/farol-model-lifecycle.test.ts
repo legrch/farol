@@ -833,10 +833,221 @@ describe("Farol Model endpoint lifecycle", () => {
         code: "FAROL_MODEL_ROTATE_RESTORE_FAILED",
       });
       expect(mintedToken).toBeDefined();
-      // Stopped outright: the token it was left holding cannot be used
-      // against it, because nothing is listening on the port any more.
-      expect(lifecycle.status()).toEqual({ state: "not_running" });
+      // Sealed, then stopped: the token it was left holding cannot be
+      // used against it, and S35-TA-2 makes the refusal independent of
+      // this close having worked. Both are asserted — the seal is the
+      // guarantee, the closed port is the tidy-up that followed it.
+      expect(lifecycle.status()).toEqual({ state: "sealed", port });
       await expect(postTurn(port, mintedToken)).rejects.toThrow();
+    });
+
+    // S35-TA-2 (round-3 P1). Both fail-closed branches ended in
+    // `await this.stop().catch(() => undefined)`, so the promise that
+    // every request is refused rested entirely on closing the listener.
+    // When the close itself fails — and the token file still carries the
+    // literal this rotation minted, because clearing it is what failed in
+    // the first place — the endpoint stayed live accepting a value the
+    // owner's config does not carry. The refusal must not depend on
+    // `stop()` succeeding: entering the fail-closed path seals the
+    // endpoint first, in memory, with no I/O that can fail.
+    //
+    // The table below is the whole state space of the fail-closed path, so
+    // a later case does not need another round:
+    //
+    // | previous token | restoreToken | clearToken | endpoint.stop() | outcome                             |
+    // |----------------|--------------|------------|-----------------|-------------------------------------|
+    // | set            | ok           | —          | not reached     | BLOCK_NOT_UPDATED, old literal back |
+    // | set            | throws       | ok         | not reached     | RESTORE_FAILED, sealed, nothing works |
+    // | set            | throws       | throws     | ok              | RESTORE_FAILED, sealed, stopped     |
+    // | set            | throws       | throws     | throws          | RESTORE_FAILED, sealed, still bound |
+    // | unset          | —            | ok         | not reached     | RESTORE_FAILED, sealed, nothing works |
+    // | unset          | —            | throws     | ok              | RESTORE_FAILED, sealed, stopped     |
+    // | unset          | —            | throws     | throws          | RESTORE_FAILED, sealed, still bound |
+    //
+    // The failing step is `apply` in each row below; `spec` and `preview`
+    // reach the same `undoRotation` and are covered by the S35-H2-1R
+    // serialization cases above.
+    /** Makes the endpoint's own close fail, leaving the socket bound. */
+    function breakEndpointStop(lifecycle: FarolModelLifecycle): void {
+      const endpoint = lifecycle.endpoint;
+      expect(endpoint).toBeDefined();
+      Object.defineProperty(endpoint!, "stop", {
+        configurable: true,
+        value: async () => {
+          throw new Error("FAROL_MODEL_ENDPOINT_CLOSE_FAILED");
+        },
+      });
+    }
+
+    /** Makes a runtime-state write fail, as an unwritable state directory does. */
+    function breakStateWrite(
+      lifecycle: FarolModelLifecycle,
+      method: "restoreToken" | "clearToken",
+    ): void {
+      Object.defineProperty(lifecycle.runtimeState, method, {
+        configurable: true,
+        value: async () => {
+          throw new Error("FAROL_MODEL_STATE_UNSAFE");
+        },
+      });
+    }
+
+    it("S35-TA-2 seals the endpoint when the restore fails and the close fails too: the port is still bound and refuses both literals", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = portsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const before = await lifecycle.runtimeState.currentToken();
+      expect(before).toBeDefined();
+
+      breakStateWrite(lifecycle, "restoreToken");
+      breakStateWrite(lifecycle, "clearToken");
+      breakEndpointStop(lifecycle);
+
+      let mintedToken: string | undefined;
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          mintedToken = await lifecycle.runtimeState.currentToken();
+          throw new Error("config write crashed");
+        },
+      });
+
+      expect(rotated).toEqual({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_RESTORE_FAILED",
+      });
+      expect(mintedToken).toBeDefined();
+      expect(mintedToken).not.toBe(before);
+      // The token file still carries the minted literal — clearing it is
+      // exactly what failed — and the socket is still bound, because the
+      // close failed. Neither of those may make the endpoint usable.
+      expect(await lifecycle.runtimeState.currentToken()).toBe(mintedToken);
+
+      const minted = await postTurn(port, mintedToken);
+      expect(minted.status).toBe(401);
+      await minted.text();
+      const old = await postTurn(port, before);
+      expect(old.status).toBe(401);
+      await old.text();
+      expect(lifecycle.status()).toEqual({ state: "sealed", port });
+    });
+
+    it("S35-TA-2 seals the endpoint when the rotation began with no token, clearing fails and the close fails too", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = mintingPortsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const earlier = await lifecycle.runtimeState.currentToken();
+      await lifecycle.runtimeState.clearToken();
+      expect(await lifecycle.runtimeState.currentToken()).toBeUndefined();
+
+      breakStateWrite(lifecycle, "clearToken");
+      breakEndpointStop(lifecycle);
+
+      let mintedToken: string | undefined;
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          mintedToken = await lifecycle.runtimeState.currentToken();
+          throw new Error("config write crashed");
+        },
+      });
+
+      expect(rotated).toEqual({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_RESTORE_FAILED",
+      });
+      expect(mintedToken).toBeDefined();
+      expect(await lifecycle.runtimeState.currentToken()).toBe(mintedToken);
+
+      const minted = await postTurn(port, mintedToken);
+      expect(minted.status).toBe(401);
+      await minted.text();
+      const old = await postTurn(port, earlier);
+      expect(old.status).toBe(401);
+      await old.text();
+      expect(lifecycle.status()).toEqual({ state: "sealed", port });
+    });
+
+    it("S35-TA-2 a sealed endpoint stays sealed: start() does not revive it and its evidence records the refusals", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = portsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      breakStateWrite(lifecycle, "restoreToken");
+      breakStateWrite(lifecycle, "clearToken");
+      breakEndpointStop(lifecycle);
+      await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          throw new Error("config write crashed");
+        },
+      });
+      expect(lifecycle.status()).toEqual({ state: "sealed", port });
+
+      // A later `start()` must not build a fresh endpoint over the same
+      // poisoned token file: that would un-seal the refusal.
+      await lifecycle.start();
+      expect(lifecycle.status()).toEqual({ state: "sealed", port });
+      const again = await postTurn(
+        port,
+        await lifecycle.runtimeState.currentToken(),
+      );
+      expect(again.status).toBe(401);
+      await again.text();
+
+      // A second rotation cannot move the token of a sealed endpoint.
+      await expect(lifecycle.rotateAndRewrite(base)).resolves.toEqual({
+        ok: false,
+        code: "MODEL_ENDPOINT_UNAVAILABLE",
+      });
+    });
+
+    it("S35-TA-2 an ordinary failed rewrite that restores cleanly does not seal the endpoint", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = portsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const before = await lifecycle.runtimeState.currentToken();
+
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          throw new Error("config write crashed");
+        },
+      });
+
+      expect(rotated).toEqual({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+      });
+      // The restore worked, so the endpoint is exactly as the rotation
+      // found it — listening, and accepting the literal the config
+      // carries. Nothing was sealed by an ordinary refusal.
+      expect(lifecycle.status().state).toBe("listening");
+      const old = await postTurn(port, before);
+      expect(old.status).toBe(200);
+      await old.text();
+      expect(lifecycle.status().state).toBe("connected");
     });
 
     it("refuses before the token moves when the endpoint is not running", async () => {
