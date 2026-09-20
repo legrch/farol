@@ -90,6 +90,21 @@ describe("real-host report identity", () => {
       code: "FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING",
     },
     {
+      name: "no host binary, so which executable answered is unknown",
+      report: identity({ hostBinary: undefined }),
+      code: "FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING",
+    },
+    {
+      name: "a null host binary, which buildReportIdentity used to emit freely",
+      report: identity({ hostBinary: null }),
+      code: "FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING",
+    },
+    {
+      name: "an empty host binary",
+      report: identity({ hostBinary: "" }),
+      code: "FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING",
+    },
+    {
       name: "the Node the shell happened to have, not one this project builds with",
       report: identity({ nodeVersion: "22.19.0" }),
       code: "FAROL_MODEL_E2E_REPORT_NODE_UNSUPPORTED",
@@ -106,6 +121,28 @@ describe("real-host report identity", () => {
     expect(() =>
       assertReportIdentity(identity({ build: { buildId: "c".repeat(64) } })),
     ).not.toThrow();
+  });
+
+  it("S35-TA-10 buildReportIdentity refuses to emit a report that cannot name its host", () => {
+    // R4 P2: the builder emitted `hostBinary ?? null` and the validator never
+    // looked, so a run could pass while naming the version of an executable
+    // it did not identify. Two reports from two different `codex` binaries
+    // on one machine were indistinguishable.
+    expect(() =>
+      buildReportIdentity({
+        repositoryRoot,
+        hostVersion: "codex-cli 0.153.4",
+        nodeVersion: SUPPORTED_NODE_VERSIONS[0],
+      }),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+    expect(() =>
+      buildReportIdentity({
+        repositoryRoot,
+        hostBinary: "",
+        hostVersion: "codex-cli 0.153.4",
+        nodeVersion: SUPPORTED_NODE_VERSIONS[0],
+      }),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
   });
 
   it("S35-TA-5 accepts every Node version this project builds with", () => {

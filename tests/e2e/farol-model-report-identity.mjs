@@ -29,13 +29,21 @@ export const SUPPORTED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export function buildReportIdentity(options) {
   const { repositoryRoot, hostBinary, hostVersion, nodeVersion, build } =
     options;
+  // S35-TA-10 (R4 P2): the builder used to emit `hostBinary ?? null` and the
+  // validator never looked at it, so a report could carry a host VERSION
+  // without naming the executable that produced it — two `codex` binaries on
+  // one machine, and two reports nothing could tell apart. A report that
+  // cannot say which executable it exercised is not built at all.
+  if (typeof hostBinary !== "string" || hostBinary.length === 0) {
+    throw new Error("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+  }
   const source = sourceIdentity(repositoryRoot);
   return {
     sourceCommit: source.commit,
     sourceTreeDigest: source.treeDigest,
     sourceDirty: source.dirty,
     build: build ?? "source-level",
-    hostBinary: hostBinary ?? null,
+    hostBinary,
     hostVersion: hostVersion ?? null,
     nodeVersion,
   };
@@ -68,6 +76,14 @@ export function assertReportIdentity(report) {
   }
   // A report whose host or Node is unknown cannot say what it exercised
   // either: both are part of the claim, not decoration.
+  // Both halves of "which host answered": the executable and its version.
+  // The version alone identifies a release, not the binary that ran.
+  if (
+    typeof identity.hostBinary !== "string" ||
+    identity.hostBinary.length === 0
+  ) {
+    throw new Error("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+  }
   if (
     typeof identity.hostVersion !== "string" ||
     identity.hostVersion.length === 0
