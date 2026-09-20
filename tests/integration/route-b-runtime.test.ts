@@ -122,6 +122,21 @@ describe("Route B runtime composed as the product composes it", () => {
     );
   });
 
+  // The relay's Unix socket path must stay under `codex-caller-relay.ts`'s
+  // 100-byte limit. `os.tmpdir()` alone can already spend 50-90+ bytes on
+  // macOS (`/private/var/folders/<xx>/<per-user random>/T`), so anchoring
+  // the relay's root there — plus this test's own descriptive prefix and
+  // `mkdtemp`'s random suffix — pushes the socket path over the limit
+  // depending only on how long the environment's per-user temp directory
+  // happens to be, not on anything the test is proving. Anchor the relay's
+  // root in a short, fixed system directory instead, decoupled from
+  // TMPDIR/os.tmpdir(), so the outcome does not depend on the environment.
+  async function relaySocketRoot(): Promise<string> {
+    const root = await fs.realpath(await fs.mkdtemp(path.join("/tmp", "fr-")));
+    roots.push(root);
+    return root;
+  }
+
   async function compose(
     surfaces: RouteBTaskSurfaces,
     task: ChatGptContextSummaryRoute,
@@ -319,10 +334,7 @@ describe("Route B runtime composed as the product composes it", () => {
   });
 
   it("correlates one host tool that ChatGPT invokes through the caller relay", async () => {
-    const relayRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-relay-")),
-    );
-    roots.push(relayRoot);
+    const relayRoot = await relaySocketRoot();
     const relay = await startCodexCallerRelay({ root: relayRoot });
     try {
       const client = new CodexCallerRelayClient(relay.endpoint);
@@ -448,10 +460,7 @@ describe("Route B runtime composed as the product composes it", () => {
   });
 
   it("CCR-03/CCR-07 owns each thread once: no summary during its turn, no turn during its summary, neighbours continue", async () => {
-    const relayRoot = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-relay-")),
-    );
-    roots.push(relayRoot);
+    const relayRoot = await relaySocketRoot();
     const relay = await startCodexCallerRelay({ root: relayRoot });
     try {
       const client = new CodexCallerRelayClient(relay.endpoint);

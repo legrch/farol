@@ -62,6 +62,21 @@ async function tempRoot(prefix: string): Promise<string> {
   return root;
 }
 
+// The relay's Unix socket path must stay under `codex-caller-relay.ts`'s
+// 100-byte limit. `os.tmpdir()` alone can already spend 50-90+ bytes on
+// macOS (`/private/var/folders/<xx>/<per-user random>/T`), so anchoring the
+// relay's root there via `tempRoot()` — whose descriptive prefix and
+// `mkdtemp`'s random suffix add more on top — pushes the socket path over
+// the limit depending only on how long the environment's per-user temp
+// directory happens to be, not on anything this test is proving. Anchor the
+// relay's root in a short, fixed system directory instead, decoupled from
+// TMPDIR/os.tmpdir(), so the outcome does not depend on the environment.
+async function relaySocketRoot(): Promise<string> {
+  const root = await fs.realpath(await fs.mkdtemp(path.join("/tmp", "fr-")));
+  roots.push(root);
+  return root;
+}
+
 async function compose(
   surfaces: RouteBTaskSurfaces,
   task: ChatGptContextSummaryRoute,
@@ -167,7 +182,7 @@ async function extractEvents(
 describe("Farol Model endpoint dispatches through the real Route B provider (packet N04c)", () => {
   it("carries one real tool roundtrip: the route calls a host tool and the endpoint's answer carries its result", async () => {
     relayHandle = await startCodexCallerRelay({
-      root: await tempRoot("farol-model-endpoint-relay-"),
+      root: await relaySocketRoot(),
     });
     const client = new CodexCallerRelayClient(relayHandle.endpoint);
     const invocations: unknown[] = [];
