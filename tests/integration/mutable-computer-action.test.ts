@@ -248,6 +248,52 @@ describe("authorized mutable Computer action", () => {
     );
   });
 
+  it("composes authority, durable admission and the attested native mutation for a text edit", async () => {
+    const native = new NativeReadonlyWorkspace({
+      helperPath: sourceHelper,
+      helper: NEXT_SAFE_OPEN_HELPER,
+      attestInterpreter: async () => "/usr/bin/python3",
+    });
+    await expect(
+      service(
+        native,
+        new PrivateWorkspaceMutationStore({ root: stateRoot }),
+      ).execute({
+        operationId: "mutation-edit-a",
+        ownerId: "owner-preview",
+        sessionId: "session-a",
+        taskId: "task-a",
+        taskEpoch: 3,
+        participantId: "critic-a",
+        turnId: "turn-a",
+        generation: 2,
+        callId: "call-edit-a",
+        workspaceId: "farol",
+        operation: {
+          kind: "workspace.edit",
+          relativePath: "README.md",
+          edits: [{ oldText: "before", newText: "after edit" }],
+          expectedSha256: digest("before\n"),
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        operation: "edit",
+        resultRetention: "durable",
+        receipt: {
+          operation: "edit",
+          replacements: 1,
+          beforeSha256: digest("before\n"),
+          afterSha256: digest("after edit\n"),
+        },
+      },
+    });
+    expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
+      "after edit\n",
+    );
+  });
+
   it("passes task-grant exclusions to the native mutation boundary", async () => {
     const available = participants().map((participant) =>
       participant.participantId === "critic-a"
