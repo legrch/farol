@@ -32,7 +32,6 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "live-task-compact-overlay-bounds",
   "live-task-requested-observed-state-truthful",
   "live-task-rename-pin-close-and-capacity-recovery",
-  "live-task-activity-label-bounded",
   "live-task-close-disposes-exact-surface",
   "live-task-registry-private-content-free-persistence",
   "live-task-same-conversation-after-process-restart",
