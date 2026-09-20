@@ -139,3 +139,26 @@ export function agentActionPrerequisite(
   }
   return null;
 }
+
+/**
+ * Why the selected task cannot be renamed, or null when it can.
+ *
+ * The handler began `if (task?.provider !== "chatgpt") return;` — a silent
+ * return, with the control enabled. The menu renders its live panel from the
+ * same selected task, so the two normally agree; they disagree when the
+ * selection changes between the render that showed the button and the click
+ * that reaches the handler, and then Rename did nothing at all: no command,
+ * no feedback, the note unchanged. A press that produces no effect and no
+ * sentence is indistinguishable from a hang, which is how it reached us —
+ * as a thirty-second wait for a message that was never going to arrive.
+ */
+export function taskRenamePrerequisite(
+  state: Readonly<{ busy: boolean; provider: string | null; label: string }>,
+): string | null {
+  if (state.busy) return TASK_MENU_BUSY_NOTE;
+  if (state.provider !== "chatgpt") {
+    return "Only a live ChatGPT task can be renamed.";
+  }
+  if (state.label.trim().length === 0) return "Enter a name for this task.";
+  return null;
+}

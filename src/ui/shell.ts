@@ -50,6 +50,7 @@ import {
   agentActionPrerequisite,
   agentWorkspaceFixedReason,
   reviewComputerRequestPrerequisite,
+  taskRenamePrerequisite,
   TASK_MENU_BUSY_NOTE,
   taskMenuNote,
 } from "./task-menu-presentation";
@@ -1068,9 +1069,17 @@ function renderTaskMenu(): void {
   // rests on one gets the same answer the note is already giving.
   const busyReason = taskMenuBusy ? TASK_MENU_BUSY_NOTE : null;
   name.disabled = busyReason !== null;
-  rename.disabled = busyReason !== null;
   pin.disabled = busyReason !== null;
-  for (const control of [name, rename, pin]) {
+  // Rename carries one more condition than the other two: the handler
+  // refuses a task it cannot rename, and used to refuse it in silence.
+  const renameReason = taskRenamePrerequisite({
+    busy: taskMenuBusy,
+    provider: task.provider,
+    label: name.value,
+  });
+  rename.disabled = renameReason !== null;
+  rename.title = renameReason ?? "Rename this task";
+  for (const control of [name, pin]) {
     if (busyReason !== null) control.title = busyReason;
     else control.removeAttribute("title");
   }
@@ -4545,10 +4554,23 @@ async function start(): Promise<void> {
   );
   const renameLiveTask = () => {
     const task = taskById(selectedTaskId);
-    if (task?.provider !== "chatgpt") return;
-    const label = required<HTMLInputElement>("#task-menu-name").value.trim();
+    const input = required<HTMLInputElement>("#task-menu-name");
+    const reason = taskRenamePrerequisite({
+      busy: taskMenuBusy,
+      provider: task?.provider ?? null,
+      label: input.value,
+    });
+    if (reason !== null) {
+      // Never a silent return. The control is disabled for each of these,
+      // so reaching here means the selection changed under the open menu —
+      // and that must produce a sentence, not nothing.
+      taskMenuFeedback = reason;
+      taskMenuFeedbackError = true;
+      render();
+      return;
+    }
     void runTaskMenuCommand(
-      { kind: "task.rename", taskId: task.taskId, label },
+      { kind: "task.rename", taskId: task!.taskId, label: input.value.trim() },
       "Task renamed.",
     );
   };

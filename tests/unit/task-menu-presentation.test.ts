@@ -3,6 +3,7 @@ import {
   agentActionPrerequisite,
   agentWorkspaceFixedReason,
   reviewComputerRequestPrerequisite,
+  taskRenamePrerequisite,
   TASK_MENU_BUSY_NOTE,
   taskMenuNote,
   type TaskMenuNoteState,
@@ -204,5 +205,42 @@ describe("why Run or Rejoin Agent cannot be pressed", () => {
 
   it("has nothing to say when the assignment can run", () => {
     expect(agentActionPrerequisite(runnable)).toBeNull();
+  });
+});
+
+describe("why the selected task cannot be renamed", () => {
+  const renameable = { busy: false, provider: "chatgpt", label: "A name" };
+
+  it("names the one condition the handler used to swallow", () => {
+    // `if (task?.provider !== "chatgpt") return;` — enabled control, silent
+    // return, no command and no feedback. A press with no effect and no
+    // sentence reads exactly like a hang, and is how this reached us: as a
+    // thirty-second wait for a message that was never going to arrive.
+    expect(taskRenamePrerequisite({ ...renameable, provider: "fixture" })).toBe(
+      "Only a live ChatGPT task can be renamed.",
+    );
+    expect(taskRenamePrerequisite({ ...renameable, provider: null })).toBe(
+      "Only a live ChatGPT task can be renamed.",
+    );
+  });
+
+  it("asks for a name rather than renaming a task to nothing", () => {
+    expect(taskRenamePrerequisite({ ...renameable, label: "   " })).toBe(
+      "Enter a name for this task.",
+    );
+  });
+
+  it("puts the in-flight command first, as the other controls do", () => {
+    expect(
+      taskRenamePrerequisite({
+        ...renameable,
+        busy: true,
+        provider: "fixture",
+      }),
+    ).toBe(TASK_MENU_BUSY_NOTE);
+  });
+
+  it("has nothing to say for a live task with a name", () => {
+    expect(taskRenamePrerequisite(renameable)).toBeNull();
   });
 });
