@@ -29,7 +29,11 @@ const RECEIPTS = new Set([
   "exit.json",
   "interrupted.json",
 ]);
-const TERMINAL_STATUSES = new Set(["PASS", "FAIL", "BLOCKED"]);
+// SELECTED is a deliberately partial run: the runner drove only the segments
+// a `--only` selector named.  It is a terminal outcome so the attempt closes
+// honestly, and it is not PASS, so `evidence-eligibility` — which rejects
+// every non-PASS outcome — can never bind it.
+const TERMINAL_STATUSES = new Set(["PASS", "FAIL", "BLOCKED", "SELECTED"]);
 const EVIDENCE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const MAX_FAILURE_TEXT = 500;
 
@@ -320,7 +324,7 @@ class EvidenceAttempt {
     const byproducts = byproductsSync(this.directory);
     const empty = byproducts.find((record) => record.bytes === 0);
     let outcome = status;
-    if (empty && status === "PASS") {
+    if (empty && (status === "PASS" || status === "SELECTED")) {
       // An empty capture can never certify a passing run.
       this.recordFailure("evidence", `EVIDENCE_EMPTY_BYPRODUCT:${empty.path}`);
       outcome = "FAIL";

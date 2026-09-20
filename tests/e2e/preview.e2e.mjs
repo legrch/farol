@@ -13,6 +13,10 @@ import { candidatePaths } from "../../tooling/candidate-contract.mjs";
 import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
 import { missingCases } from "../../tooling/evidence-cases.mjs";
 import {
+  createSelection,
+  isSegmentSelected,
+} from "../../tooling/e2e-selection.mjs";
+import {
   assertBuildIdentity,
   createBuildIdentity,
 } from "../../tooling/build-identity-contract.mjs";
@@ -49,6 +53,22 @@ function integerOption(name, fallback, maximum) {
 }
 const soakSeed = integerOption("soak-seed", 260_917, 2 ** 31 - 1);
 const soakIdleMs = integerOption("soak-idle-ms", 0, 120_000);
+
+// Targeted repro: `--only=<selector>[,<selector>…]` runs only the lane
+// segments a selector names; tooling/e2e-selection.mjs owns the map and
+// rejects a selector that matches nothing.  A selected run is reported as
+// SELECTED and never PASS, so it can neither be bound as evidence nor stand
+// in for a lane's required cases.
+const selection = createSelection(process.argv);
+const selectionActive = selection !== null;
+const segmentSelected = (name) => isSegmentSelected(selection, name);
+// Each special lane drives one declared workload end to end, so combining it
+// with a partial selection would name an attempt after more than it ran.
+assert.equal(
+  selectionActive && (lifecycleSoak || persistenceFault || twoGenerationState),
+  false,
+  "E2E_SELECTION_EXCLUSIVE_WITH_SPECIAL_LANE",
+);
 assert.ok(
   [lifecycleSoak, persistenceFault, twoGenerationState].filter(Boolean)
     .length <= 1,
@@ -4544,7 +4564,8 @@ await proveSecondLaunchRejectsFailedStartup();
 cases.push("second-launch-rejects-failed-primary-startup");
 
 const ordinary = await launch([], "hidden", "ordinary");
-try {
+ordinaryStartupSegment: try {
+  if (!segmentSelected("ordinary-startup")) break ordinaryStartupSegment;
   const ordinaryBootstrap = await ordinary.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -4592,7 +4613,8 @@ if (await writeWindowTopologyBlockedReport(ordinary.presentation)) {
 }
 
 const ordinaryLiveTasks = await launch([], "secondary-visible", "ordinary");
-try {
+liveTasksSegment: try {
+  if (!segmentSelected("live-tasks")) break liveTasksSegment;
   await completeSetup(ordinaryLiveTasks, false, true, true, true, "ordinary");
   const newTask = ordinaryLiveTasks.window.locator("#new-task");
   await newTask.waitFor({ state: "visible" });
@@ -6019,7 +6041,8 @@ try {
 const interruptedChatGptTask = await launch([], "hidden", "ordinary", {
   seedChatGptDispatchIntent: true,
 });
-try {
+chatgptRecoverySegment: try {
+  if (!segmentSelected("chatgpt-recovery")) break chatgptRecoverySegment;
   const recoveredJournal = await waitForChatGptJournalPhase(
     interruptedChatGptTask.userData,
     "delivery_acknowledged",
@@ -6076,7 +6099,8 @@ try {
 }
 
 const normal = await launch([], "secondary-visible");
-try {
+demoMainSegment: try {
+  if (!segmentSelected("demo-main")) break demoMainSegment;
   if (!development) {
     const launchIdentity = await normal.application.evaluate(({ app }) => ({
       name: app.getName(),
@@ -7589,7 +7613,8 @@ try {
 }
 
 const legacyFirst = await startLegacyAppFixture();
-try {
+legacyStartOrderSegment: try {
+  if (!segmentSelected("legacy-start-order")) break legacyStartOrderSegment;
   await probeLegacyAppFixture(legacyFirst);
   const nextAfterLegacy = await launch();
   try {
@@ -7605,7 +7630,8 @@ try {
 }
 
 const failed = await launch(["--preview-failure"]);
-try {
+providerFailureSegment: try {
+  if (!segmentSelected("provider-failure")) break providerFailureSegment;
   await completeSetup(failed);
   await failed.window
     .locator('[data-task-id="task-atlantic"] small')
@@ -7630,7 +7656,8 @@ try {
 }
 
 const streamFailure = await launch(["--preview-stream-failure"]);
-try {
+streamFailureSegment: try {
+  if (!segmentSelected("stream-failure")) break streamFailureSegment;
   await completeSetup(streamFailure);
   await streamFailure.window
     .locator('[data-task-id="task-atlantic"] small')
@@ -7705,7 +7732,8 @@ try {
 
 const processDeath = await launch();
 let nextFirstLegacy = null;
-try {
+processDeathSegment: try {
+  if (!segmentSelected("process-death")) break processDeathSegment;
   await completeSetup(processDeath);
   nextFirstLegacy = await startLegacyAppFixture();
   await probeLegacyAppFixture(nextFirstLegacy);
@@ -7767,17 +7795,19 @@ try {
   await close(processDeath);
 }
 
-for (const stage of [
-  "after-runtime-ready",
-  "during-first-view-load",
-  "during-second-view-load",
-]) {
-  await proveStartupRuntimeDeath(stage);
-  cases.push(`utility-process-sigkill-${stage}`);
+if (segmentSelected("process-death")) {
+  for (const stage of [
+    "after-runtime-ready",
+    "during-first-view-load",
+    "during-second-view-load",
+  ]) {
+    await proveStartupRuntimeDeath(stage);
+    cases.push(`utility-process-sigkill-${stage}`);
+  }
+  cases.push("fault-scenarios-remain-hidden");
+  assert.ok(quitProofs >= 8, `E2E_QUIT_PROOF_INCOMPLETE:${quitProofs}`);
+  cases.push("quit-terminates-exact-owned-processes");
 }
-cases.push("fault-scenarios-remain-hidden");
-assert.ok(quitProofs >= 8, `E2E_QUIT_PROOF_INCOMPLETE:${quitProofs}`);
-cases.push("quit-terminates-exact-owned-processes");
 
 // The "held:false desktop witness": at startup, `initializeCodexContextController`,
 // `reconcileContextAfterRestart` (which recovers and records the summary
@@ -7819,7 +7849,8 @@ function ownedProcessFingerprint(application) {
 const heldFalseFence = await launch([], "hidden", "ordinary", {
   seedUnheldExecutionFence: true,
 });
-try {
+fenceUnheldSegment: try {
+  if (!segmentSelected("fence-unheld")) break fenceUnheldSegment;
   const recovery = await readSummaryFenceRecovery(heldFalseFence.userData);
   assert.equal(recovery.status, "kept");
   assert.equal(recovery.code, "EXECUTION_FENCE_UNRECONCILED");
@@ -7869,7 +7900,8 @@ try {
 }
 
 const reconciledFence = await launch([], "hidden", "ordinary");
-try {
+fenceReconciledSegment: try {
+  if (!segmentSelected("fence-reconciled")) break fenceReconciledSegment;
   const recovery = await readSummaryFenceRecovery(reconciledFence.userData);
   assert.equal(recovery.status, "reconciled");
 
@@ -7899,7 +7931,8 @@ try {
 // UX34-05: Settings must stay readable — no intersecting interactive
 // controls, no horizontal scroll, every action reachable — at the
 // supported minimum width and across the ~980px auto-rail breakpoint.
-{
+ux34SettingsWidthsSegment: {
+  if (!segmentSelected("ux34-settings-widths")) break ux34SettingsWidthsSegment;
   const settingsWidths = await launch([], "secondary-visible");
   try {
     await finishSetupByNext(settingsWidths);
@@ -8020,7 +8053,8 @@ try {
 // macOS traffic lights, at every width, and a real click on it must carry
 // the sidebar through a full -> rail -> full roundtrip, including after a
 // resize and a fullscreen enter/exit.
-{
+ux34SidebarToggleSegment: {
+  if (!segmentSelected("ux34-sidebar-toggle")) break ux34SidebarToggleSegment;
   const sidebarRoundtrip = await launch([], "secondary-visible");
   try {
     await finishSetupByNext(sidebarRoundtrip);
@@ -8436,7 +8470,8 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
   await waitForSignInReturnOutcome(instance);
 }
 
-{
+ux34SignInReturnSegment: {
+  if (!segmentSelected("ux34-sign-in-return")) break ux34SignInReturnSegment;
   const signIn = await launch([], "secondary-visible");
   try {
     // Instrument: record every shell action the main process sends, so a
@@ -8613,7 +8648,8 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
 // for this — never the owner's Codex, never a live ChatGPT account, and the
 // request that flips the indicator is a plain loopback HTTP call this test
 // makes itself, exactly as an ordinary Codex host would.
-{
+n04bModelSegment: {
+  if (!segmentSelected("n04b-model")) break n04bModelSegment;
   const syntheticReply = "farol model e2e reply";
   const modelControl = await launch([], "secondary-visible", "demo", {
     environment: { FAROL_MODEL_E2E_SYNTHETIC_REPLY: syntheticReply },
@@ -8790,11 +8826,17 @@ assert.deepEqual(
 // The declared cases, not the ones this run happened to record, decide
 // whether the run is complete: a case neither executed nor explicitly blocked
 // makes the run FAIL whatever else passed.
-const missingRequiredCases = missingCases(
-  development ? "development-build" : "sealed-package",
-  cases,
-  blockedCases,
-);
+// A selected run reproduces part of the lane on purpose, so the lane's
+// required cases are not its contract.  It is reported as SELECTED, never
+// PASS, which is what keeps it out of every binding and out of any claim
+// that the lane's required cases were satisfied.
+const missingRequiredCases = selectionActive
+  ? []
+  : missingCases(
+      development ? "development-build" : "sealed-package",
+      cases,
+      blockedCases,
+    );
 if (missingRequiredCases.length > 0) {
   evidenceAttempt.recordFailure(
     "contract",
@@ -8803,12 +8845,14 @@ if (missingRequiredCases.length > 0) {
 }
 const report = {
   schema: 1,
-  status:
-    missingRequiredCases.length > 0
+  status: selectionActive
+    ? "SELECTED"
+    : missingRequiredCases.length > 0
       ? "FAIL"
       : blockedCases.length > 0
         ? "BLOCKED"
         : "PASS",
+  selection,
   lane: development ? "development-build" : "sealed-package",
   artifactSha256: artifact.artifactSha256,
   sourceCommit: artifact.sourceCommit,
@@ -8880,9 +8924,18 @@ const report = {
     "process-death-compact.png",
   ],
 };
+// A selected run only produces the captures of the segments it ran, so the
+// completeness check belongs to a full lane.  A capture that does exist must
+// still be non-empty in either case.
 for (const filename of report.screenshots) {
-  const evidence = await fs.stat(path.join(evidenceRoot, filename));
-  assert.ok(evidence.size > 1_000, `E2E_SCREENSHOT_EMPTY:${filename}`);
+  const capture = await fs
+    .stat(path.join(evidenceRoot, filename))
+    .catch(() => null);
+  if (capture === null) {
+    assert.ok(selectionActive, `E2E_SCREENSHOT_MISSING:${filename}`);
+    continue;
+  }
+  assert.ok(capture.size > 1_000, `E2E_SCREENSHOT_EMPTY:${filename}`);
 }
 await fs.writeFile(
   path.join(evidenceRoot, "report.json"),
