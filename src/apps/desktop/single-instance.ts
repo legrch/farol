@@ -65,6 +65,27 @@ function parseRequest(value: unknown): InstanceRequest | null {
   return parsed.success ? parsed.data : null;
 }
 
+/**
+ * The reasons publishing an acknowledgement can fail, as a fixed vocabulary.
+ *
+ * The primary cannot print the error itself: a filesystem error carries the
+ * user-data path, and this product does not put private paths in a log. A
+ * token from this list says what went wrong without saying where.
+ */
+const ACKNOWLEDGEMENT_FAILURES = new Set([
+  "INSTANCE_REQUEST_INVALID",
+  "INSTANCE_ACK_DIRECTORY_UNSAFE",
+  "INSTANCE_ACK_UNSAFE",
+  "INSTANCE_ACK_INVALID",
+]);
+
+export function acknowledgementFailureCode(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (typeof code === "string" && /^[A-Z][A-Z0-9]*$/u.test(code)) return code;
+  const message = error instanceof Error ? error.message : "";
+  return ACKNOWLEDGEMENT_FAILURES.has(message) ? message : "unknown";
+}
+
 export function sameLaunchIdentity(
   left: LaunchIdentity,
   right: LaunchIdentity,

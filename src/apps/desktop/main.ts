@@ -88,6 +88,7 @@ import {
   windowAllClosedAction,
 } from "./lifecycle-policy";
 import {
+  acknowledgementFailureCode,
   createInstanceRequest,
   decideSecondInstance,
   readBuildLaunchIdentity,
@@ -304,6 +305,8 @@ const nativeWorkspace = new NativeReadonlyWorkspace({
 });
 const instanceRequest = createInstanceRequest(launchIdentity);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
+const secondInstanceAcknowledgementPrefix =
+  "FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:";
 const primaryStartup = new PrimaryStartup();
 const startupDelayMs = previewStartupDelay(
   process.argv,
@@ -6853,9 +6856,15 @@ async function handleSecondInstance(candidate: unknown): Promise<void> {
       status,
       launchIdentity,
     );
-  } catch {
+  } catch (error) {
     // The secondary process fails closed if this bounded acknowledgement is
     // unavailable. Never reopen a mismatched build merely to make it exit 0.
+    // Say that it happened, though: without this line the secondary waits its
+    // whole deadline and reports "unverified" for a reason nothing on the
+    // primary's side ever recorded. The token is content-free by contract.
+    process.stderr.write(
+      `${secondInstanceAcknowledgementPrefix}${acknowledgementFailureCode(error)}\n`,
+    );
   }
 }
 
