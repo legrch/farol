@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentRouteReadiness,
+  connectorStartPrerequisite,
   computerVerificationStale,
   readinessDetail,
   readinessLabel,
@@ -353,5 +354,69 @@ describe("one definition of a stale Computer verification", () => {
     for (const stepId of ["chatgpt", "connect", "hosts", "verify"]) {
       expect(setupStepStale(settings, stepId)).toBe(false);
     }
+  });
+});
+
+// The fifth condition on "Start & check" is the one the row never showed:
+// the connector serves an approved workspace, and Computer is where those
+// live, so a fully configured tunnel still cannot start without one.
+describe("why the connection cannot start yet", () => {
+  const ready = {
+    tunnelClient: { version: "1.2.3" },
+    tunnelId: "tunnel_abc",
+    credential: "stored" as const,
+    runtime: null,
+  };
+
+  it("has nothing left to say once every prerequisite is met", () => {
+    expect(connectorStartPrerequisite(ready, 1, false)).toBeNull();
+  });
+
+  it("names the approved workspace, which is the one the row never showed", () => {
+    const reason = connectorStartPrerequisite(ready, 0, false);
+    expect(reason).toContain("Approve at least one workspace");
+    expect(reason).toContain("Computer");
+  });
+
+  it("names the earliest unmet prerequisite, in the order the owner meets them", () => {
+    expect(
+      connectorStartPrerequisite({ ...ready, tunnelClient: null }, 0, false),
+    ).toBe("Choose the tunnel client first.");
+    expect(
+      connectorStartPrerequisite({ ...ready, tunnelId: null }, 0, false),
+    ).toBe("Enter the tunnel ID and save the route first.");
+    expect(
+      connectorStartPrerequisite({ ...ready, credential: "missing" }, 0, false),
+    ).toBe("Save the runtime key for this tunnel first.");
+  });
+
+  it("explains a running connector rather than a missing prerequisite", () => {
+    expect(
+      connectorStartPrerequisite(
+        { ...ready, runtime: { state: "ready" } },
+        1,
+        false,
+      ),
+    ).toBe("The connector is already running.");
+  });
+
+  it("lets a running connector be pressed while its attachment is unchecked", () => {
+    expect(
+      connectorStartPrerequisite(
+        { ...ready, runtime: { state: "ready" } },
+        1,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it("lets an outcome-unknown runtime be repaired", () => {
+    expect(
+      connectorStartPrerequisite(
+        { ...ready, runtime: { state: "outcome_unknown" } },
+        1,
+        false,
+      ),
+    ).toBeNull();
   });
 });

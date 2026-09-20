@@ -61,6 +61,7 @@ import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
   agentRouteReadiness,
+  connectorStartPrerequisite,
   readinessDetail,
   readinessLabel,
   routeReadiness,
@@ -3014,12 +3015,16 @@ function renderSettings(): void {
               : connector.runtime?.state === "ready"
                 ? "Running"
                 : "Start & check";
-        start.disabled =
-          connector.tunnelClient === null ||
-          connector.tunnelId === null ||
-          connector.credential !== "stored" ||
-          settings.computer.workspaces.length === 0 ||
-          (connector.runtime?.state === "ready" && !attachmentCheckPending);
+        // One predicate for both the state and the reason, so they cannot
+        // drift: the button is disabled exactly when there is a prerequisite
+        // left to name, and it names that one.
+        const startPrerequisite = connectorStartPrerequisite(
+          connector,
+          settings.computer.workspaces.length,
+          attachmentCheckPending,
+        );
+        start.disabled = startPrerequisite !== null;
+        if (startPrerequisite !== null) start.title = startPrerequisite;
         start.addEventListener("click", () => {
           if (attachmentCheckPending) {
             void configureProduct(

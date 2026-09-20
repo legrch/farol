@@ -143,6 +143,48 @@ export function readinessDetail(
   );
 }
 
+// Why the connection's "Start & check" cannot be pressed yet, or null when
+// it can.
+//
+// The button is disabled by five conditions and used to name none of them.
+// Four are visible in the row beside it — the client, the tunnel, the key,
+// and a runtime that is already running — but the fifth is not mentioned
+// anywhere on the surface: starting the connector needs an approved
+// workspace, which lives in Computer. An owner who had correctly chosen a
+// client, pasted a tunnel id and stored a key saw a dead primary action with
+// every requirement it named already satisfied.
+//
+// The button's disabled state is derived from this function rather than
+// re-deriving the same predicate beside it, so the reason and the state
+// cannot drift apart the way the readiness label and its state once did.
+export function connectorStartPrerequisite(
+  connector: Readonly<{
+    tunnelClient: unknown | null;
+    tunnelId: string | null;
+    credential: "missing" | "stored";
+    runtime: Readonly<{ state: string }> | null;
+  }>,
+  workspaceCount: number,
+  attachmentCheckPending: boolean,
+): string | null {
+  if (connector.tunnelClient === null) {
+    return "Choose the tunnel client first.";
+  }
+  if (connector.tunnelId === null) {
+    return "Enter the tunnel ID and save the route first.";
+  }
+  if (connector.credential !== "stored") {
+    return "Save the runtime key for this tunnel first.";
+  }
+  if (workspaceCount === 0) {
+    return "Approve at least one workspace in Computer first. The connector serves that workspace, so it cannot start without one.";
+  }
+  if (connector.runtime?.state === "ready" && !attachmentCheckPending) {
+    return "The connector is already running.";
+  }
+  return null;
+}
+
 // Codex/Agent is two setup steps — the host selection/contract and the
 // native Agent lineage check — presented to the owner as one route. It is
 // "ready" only once the Agent lineage check itself has a verified record; a
