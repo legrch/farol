@@ -91,6 +91,7 @@ import {
   writeInstanceAcknowledgement,
 } from "./single-instance";
 import {
+  parseAllowPrimaryDisplay,
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
 } from "./window-placement";
@@ -294,6 +295,9 @@ const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-next";
 const contextModel = "farol-next/mind" as const;
 const windowMode = parsePreviewWindowMode(process.argv);
+// Explicit-only: the owner-handed overnight run passes this itself. Its
+// absence keeps every display-selection outcome exactly as before.
+const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
 const demoTasks = [
   {
@@ -6454,6 +6458,7 @@ async function createWindow(): Promise<void> {
           screen.getAllDisplays(),
           screen.getPrimaryDisplay().id,
           initialWindowSize,
+          allowPrimaryDisplay,
         )
       : null;
   window = new BrowserWindow({
@@ -6530,6 +6535,7 @@ function selectedVisibleTestPlacement(
     screen.getAllDisplays(),
     screen.getPrimaryDisplay().id,
     requested,
+    allowPrimaryDisplay,
   );
 }
 
@@ -6567,8 +6573,10 @@ function reconcileVisibleTestDisplay(): void {
       window.setBounds(selectedVisibleTestPlacement(initialWindowSize).bounds);
       window.showInactive();
     } catch {
-      // The accepted test policy has no primary-display fallback. A later
-      // display event can re-evaluate and reveal this exact owned window.
+      // The accepted test policy has a primary-display fallback only when the
+      // owner explicitly passed --allow-primary-display; otherwise none
+      // exists here. A later display event can re-evaluate and reveal this
+      // exact owned window.
     }
   }
   for (const route of managedChatGptRoutes) {

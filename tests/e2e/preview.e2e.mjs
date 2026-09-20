@@ -26,6 +26,11 @@ const lifecycleSoak = process.argv.includes("--lifecycle-soak");
 const persistenceFault = process.argv.includes("--persistence-fault");
 const twoGenerationState = process.argv.includes("--two-generation-state");
 const skipNativeFocus = process.argv.includes("--skip-native-focus");
+// AGENTS.md (commit 6cbe53fd): an owner-handed overnight run with no second
+// display may use the built-in display, shown inactive only for the proof.
+// This flag is the sole way in; its absence leaves every topology outcome
+// below unchanged.
+const allowPrimaryDisplay = process.argv.includes("--allow-primary-display");
 // The soak workload is seeded. The default seed reproduces the historical
 // run exactly; another seed moves the two restarts and flips the overlay
 // order, so a declared series can show the bounds hold across interleavings
@@ -335,18 +340,29 @@ function visibleWindowTopologyBlock(presentation) {
   const displays = [...presentation.displays].sort(
     (left, right) => left.id - right.id,
   );
-  const selected =
+  const nonPrimarySelected =
     displays.find((display) => !display.primary && display.internal) ??
     displays.find((display) => !display.primary);
+  let selected = nonPrimarySelected;
+  let ownerAllowedPrimary = false;
   if (!selected) {
-    return {
-      code: "SECONDARY_DISPLAY_UNAVAILABLE",
-      reason: "no non-primary display is available for visible native evidence",
-      ownerAction:
-        "Provide one non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
-      requested,
-      selectedDisplay: null,
-    };
+    if (!allowPrimaryDisplay) {
+      return {
+        code: "SECONDARY_DISPLAY_UNAVAILABLE",
+        reason: "no non-primary display is available for visible native evidence",
+        ownerAction:
+          "Provide one non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
+        requested,
+        selectedDisplay: null,
+        allowedPrimaryDisplay: false,
+      };
+    }
+    // Explicit owner allowance and no non-primary display: fall back to the
+    // built-in primary display (AGENTS.md, commit 6cbe53fd). The window still
+    // must never take focus; assertVisibleWindowPlacement enforces that.
+    selected = displays.find((display) => display.primary);
+    assert.ok(selected, "E2E_PRIMARY_DISPLAY_MISSING");
+    ownerAllowedPrimary = true;
   }
   if (
     selected.workArea.width < requested.width ||
@@ -354,12 +370,15 @@ function visibleWindowTopologyBlock(presentation) {
   ) {
     return {
       code: "VISIBLE_TEST_VIEWPORT_UNAVAILABLE",
-      reason:
-        "the selected non-primary display cannot preserve the exact visible test viewport",
-      ownerAction:
-        "Provide a non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
+      reason: ownerAllowedPrimary
+        ? "the owner-allowed built-in primary display cannot preserve the exact visible test viewport"
+        : "the selected non-primary display cannot preserve the exact visible test viewport",
+      ownerAction: ownerAllowedPrimary
+        ? "Provide a built-in display with at least 1180x760 available work area, then rerun this exact lane."
+        : "Provide a non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
       requested,
       selectedDisplay: selected,
+      allowedPrimaryDisplay: ownerAllowedPrimary,
     };
   }
   return null;
@@ -393,6 +412,7 @@ async function writeWindowTopologyBlockedReport(presentation) {
         displays: presentation.displays,
         nativeFocusProof: "not-attempted-topology-unavailable",
         nativeFocusRequested: !skipNativeFocus,
+        allowedPrimaryDisplay: topologyBlock.allowedPrimaryDisplay,
         macHostLockState,
       },
       hiddenRuns: ["ordinary-product-preflight"],
@@ -777,9 +797,7 @@ async function inspectWindowPresentation(application) {
             ? selected.internal
               ? "non-primary-internal"
               : "non-primary"
-            : selected.internal
-              ? "internal-primary-fallback"
-              : "primary-fallback",
+            : "owner-allowed-primary",
         workArea: selected.workArea,
       },
       displays,
@@ -790,13 +808,21 @@ async function inspectWindowPresentation(application) {
 function assertVisibleWindowPlacement(presentation) {
   assert.equal(presentation.mode, "secondary-visible");
   assert.equal(presentation.visible, true);
+  // Native focus stays out of scope regardless of which display was used:
+  // this assertion never relaxes, allowance or not.
   assert.equal(presentation.focused, false);
   const preferred = presentation.displays.filter(
     (display) => !display.primary && display.internal,
   );
   const secondary = presentation.displays.filter((display) => !display.primary);
-  assert.ok(secondary.length > 0, "E2E_SECONDARY_DISPLAY_UNAVAILABLE");
-  if (preferred.length > 0) {
+  if (secondary.length === 0) {
+    // Only the explicit owner allowance reaches this branch (AGENTS.md,
+    // commit 6cbe53fd); visibleWindowTopologyBlock already refused the lane
+    // otherwise, before any window was ever created.
+    assert.ok(allowPrimaryDisplay, "E2E_SECONDARY_DISPLAY_UNAVAILABLE");
+    assert.equal(presentation.display.primary, true);
+    assert.equal(presentation.display.internal, true);
+  } else if (preferred.length > 0) {
     assert.equal(presentation.display.internal, true);
     assert.equal(presentation.display.primary, false);
   } else {
@@ -1589,6 +1615,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     ...(mode === "demo" ? ["--demo"] : []),
     `--user-data-dir=${userData}`,
     `--preview-window-mode=${windowMode}`,
+    ...(allowPrimaryDisplay ? ["--allow-primary-display"] : []),
     ...extraArgs,
   ];
   const launchEnvironment = {
@@ -8778,6 +8805,7 @@ const report = {
       displayInternal: normal.presentation.display.internal,
       displayPrimary: normal.presentation.display.primary,
       selection: normal.presentation.display.selection,
+      allowedPrimaryDisplay,
       displayCount: normal.presentation.displays.length,
       bounds: normal.presentation.bounds,
       workArea: normal.presentation.display.workArea,

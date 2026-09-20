@@ -18,11 +18,15 @@ export interface PreviewWindowPlacement {
   readonly displayId: number;
   readonly internal: boolean;
   readonly primary: boolean;
-  readonly selection: "non-primary-internal" | "non-primary";
+  readonly selection:
+    | "non-primary-internal"
+    | "non-primary"
+    | "owner-allowed-primary";
   readonly bounds: PreviewRectangle;
 }
 
 const modePrefix = "--preview-window-mode=";
+const allowPrimaryDisplayFlag = "--allow-primary-display";
 
 export function parsePreviewWindowMode(
   arguments_: readonly string[],
@@ -38,6 +42,15 @@ export function parsePreviewWindowMode(
     throw new Error("PREVIEW_WINDOW_MODE_INVALID");
   }
   return values[0];
+}
+
+// Owner-handed overnight runs with no second display pass this flag
+// explicitly; its absence keeps today's behavior unchanged (no primary-display
+// fallback). AGENTS.md (commit 6cbe53fd) is the accepted policy this encodes.
+export function parseAllowPrimaryDisplay(
+  arguments_: readonly string[],
+): boolean {
+  return arguments_.includes(allowPrimaryDisplayFlag);
 }
 
 function centeredBounds(
@@ -78,6 +91,7 @@ export function selectPreviewWindowPlacement(
   displays: readonly PreviewDisplay[],
   primaryDisplayId: number,
   requested: Readonly<{ width: number; height: number }>,
+  allowPrimaryDisplay = false,
 ): PreviewWindowPlacement {
   if (displays.length === 0) {
     throw new Error("WINDOW_DISPLAY_UNAVAILABLE");
@@ -90,10 +104,19 @@ export function selectPreviewWindowPlacement(
     (display) => display.id !== primaryDisplayId && display.internal,
   );
   const nonPrimary = ordered.find((display) => display.id !== primaryDisplayId);
-  const selected = nonPrimaryInternal ?? nonPrimary;
+  // The owner-handed allowance reaches here only through the explicit
+  // --allow-primary-display flag (window-placement.ts's own parser). It never
+  // substitutes for a real non-primary display when one exists.
+  const ownerAllowedPrimary =
+    allowPrimaryDisplay && !nonPrimary ? primary : undefined;
+  const selected = nonPrimaryInternal ?? nonPrimary ?? ownerAllowedPrimary;
   if (!selected) throw new Error("SECONDARY_DISPLAY_UNAVAILABLE");
   const isPrimary = selected.id === primaryDisplayId;
-  const selection = nonPrimaryInternal ? "non-primary-internal" : "non-primary";
+  const selection = nonPrimaryInternal
+    ? "non-primary-internal"
+    : nonPrimary
+      ? "non-primary"
+      : "owner-allowed-primary";
 
   return {
     displayId: selected.id,

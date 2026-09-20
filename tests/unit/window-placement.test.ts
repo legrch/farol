@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  parseAllowPrimaryDisplay,
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
   type PreviewDisplay,
@@ -134,5 +135,97 @@ describe("preview window placement", () => {
         height: 760,
       }),
     ).toThrow("WINDOW_PRIMARY_DISPLAY_MISSING");
+  });
+
+  it("still refuses visible automation with only the primary display when the owner allowance is not passed", () => {
+    const primaryInternal: PreviewDisplay = {
+      id: 1,
+      internal: true,
+      bounds: { x: 0, y: 0, width: 1000, height: 700 },
+      workArea: { x: 0, y: 24, width: 1000, height: 650 },
+    };
+
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [primaryInternal],
+        primaryInternal.id,
+        { width: 1180, height: 760 },
+        false,
+      ),
+    ).toThrow("SECONDARY_DISPLAY_UNAVAILABLE");
+  });
+
+  it("falls back to the built-in primary display only when explicitly allowed and no non-primary display exists", () => {
+    const primaryInternal: PreviewDisplay = {
+      id: 1,
+      internal: true,
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
+      workArea: { x: 0, y: 25, width: 1512, height: 949 },
+    };
+
+    const placement = selectPreviewWindowPlacement(
+      [primaryInternal],
+      primaryInternal.id,
+      { width: 1180, height: 760 },
+      true,
+    );
+
+    expect(placement).toEqual({
+      displayId: primaryInternal.id,
+      internal: true,
+      primary: true,
+      selection: "owner-allowed-primary",
+      bounds: { x: 166, y: 119, width: 1180, height: 760 },
+    });
+  });
+
+  it("prefers a real non-primary display over the owner allowance even when the allowance is passed", () => {
+    const placement = selectPreviewWindowPlacement(
+      [externalPrimary, builtInSecondary],
+      externalPrimary.id,
+      { width: 1180, height: 760 },
+      true,
+    );
+
+    expect(placement.selection).toBe("non-primary-internal");
+    expect(placement.primary).toBe(false);
+  });
+
+  it("still enforces the viewport requirement on the owner-allowed primary display", () => {
+    const tooSmallPrimary: PreviewDisplay = {
+      id: 1,
+      internal: true,
+      bounds: { x: 0, y: 0, width: 1000, height: 700 },
+      workArea: { x: 0, y: 24, width: 1000, height: 650 },
+    };
+
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [tooSmallPrimary],
+        tooSmallPrimary.id,
+        { width: 1180, height: 760 },
+        true,
+      ),
+    ).toThrow("VISIBLE_TEST_VIEWPORT_UNAVAILABLE");
+  });
+});
+
+describe("allow-primary-display flag", () => {
+  it("is explicit-only: absent unless the exact flag is passed", () => {
+    expect(parseAllowPrimaryDisplay(["electron", "main.cjs"])).toBe(false);
+    expect(
+      parseAllowPrimaryDisplay([
+        "electron",
+        "main.cjs",
+        "--preview-window-mode=secondary-visible",
+      ]),
+    ).toBe(false);
+    expect(
+      parseAllowPrimaryDisplay([
+        "electron",
+        "main.cjs",
+        "--allow-primary-display",
+      ]),
+    ).toBe(true);
   });
 });
