@@ -71,6 +71,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import esbuild from "esbuild";
+import {
+  assertReportIdentity,
+  buildReportIdentity,
+  SUPPORTED_NODE_VERSIONS,
+} from "./farol-model-report-identity.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -136,11 +141,34 @@ const report = {
   hostBinary: null,
   discoveredHostBinary: null,
   hostVersion: null,
+  // S35-TA-5: filled once the host is known; a report without it is refused
+  // rather than written (see `writeReport`).
+  identity: null,
   model: ROUTE_B_MODEL,
   hostTuning: FAROL_MODEL_HOST_TUNING,
   phases: [],
   error: null,
 };
+
+/**
+ * Everything this script started that holds a socket. A phase that throws used
+ * to leave its endpoint listening, and since an open server keeps Node's event
+ * loop alive, a FAILED run never exited: four runs from one afternoon were
+ * still holding ports twenty minutes later. Registered on creation, stopped in
+ * `main`'s `finally` whatever happened.
+ */
+const started = [];
+
+function track(stoppable) {
+  started.push(stoppable);
+  return stoppable;
+}
+
+async function stopEverything() {
+  for (const stoppable of started.splice(0).reverse()) {
+    await stoppable.stop().catch(() => undefined);
+  }
+}
 
 /** What the synthetic upstream observed and how it should behave next. */
 const upstream = {
@@ -360,12 +388,45 @@ async function findRealCodex() {
   }
 }
 
-/** The environment a phase runs the host in: never the owner's CODEX_HOME. */
+/**
+ * The environment a phase runs the host in: never the owner's CODEX_HOME,
+ * and never the Node the shell happened to have.
+ *
+ * S35-TA-5: the host was inheriting whatever `node` was first on PATH — on
+ * this machine v22.19.0, which this project does not build with — so a run
+ * could pass against a runtime the product never ships on and the report
+ * would not say so. `pinnedNodeBin` is put first; if the pinned Node cannot
+ * be found the script fails loudly rather than quietly using another one.
+ */
 function hostEnvironment(codexHome, extra = {}) {
   const environment = { ...process.env };
   delete environment.FAROL_MODEL_TOKEN;
-  return { ...environment, CODEX_HOME: codexHome, ...extra };
+  return {
+    ...environment,
+    PATH: `${pinnedNodeBin}${path.delimiter}${process.env.PATH ?? ""}`,
+    CODEX_HOME: codexHome,
+    ...extra,
+  };
 }
+
+/**
+ * The directory holding the Node this script itself runs on, required to be
+ * one of the project's supported versions. Running the journey on an
+ * unsupported Node is a refusal, not a warning: the alternative is a green
+ * report about a runtime the product does not ship on.
+ */
+function resolvePinnedNodeBin() {
+  if (!SUPPORTED_NODE_VERSIONS.includes(process.versions.node)) {
+    throw new Error(
+      `FAROL_MODEL_E2E_NODE_UNSUPPORTED: running on Node ${process.versions.node}, ` +
+        `this project builds with ${SUPPORTED_NODE_VERSIONS.join(" or ")}. ` +
+        `Re-run with the pinned Node first on PATH.`,
+    );
+  }
+  return path.dirname(process.execPath);
+}
+
+const pinnedNodeBin = resolvePinnedNodeBin();
 
 function logRun(label, run) {
   console.log(`--- codex exec (${label}) exit=${run.code} stdout ---`);
@@ -394,6 +455,9 @@ async function phase(id, body) {
 
 async function writeReport() {
   report.finishedAtIso = new Date().toISOString();
+  // S35-TA-5: a run that cannot say which bytes it exercised is not evidence
+  // of anything, whatever its phases did. Refused here, not filtered later.
+  assertReportIdentity(report);
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(`REPORT: ${reportPath}`);
@@ -405,11 +469,13 @@ async function main() {
   try {
     const stateRoot = path.join(root, "private", "model-endpoint");
     const state = new FarolModelRuntimeState(stateRoot);
-    const endpoint = new FarolModelEndpoint({
-      state,
-      model: ROUTE_B_MODEL,
-      handler: turnHandler,
-    });
+    const endpoint = track(
+      new FarolModelEndpoint({
+        state,
+        model: ROUTE_B_MODEL,
+        handler: turnHandler,
+      }),
+    );
     const { port } = await endpoint.start();
     const token = await state.currentToken();
     assert.ok(token, "endpoint must mint a token on start");
@@ -432,6 +498,24 @@ async function main() {
     report.hostBinary = codexBin;
     const { stdout: versionOut } = await execFileAsync(codexBin, ["--version"]);
     report.hostVersion = versionOut.trim();
+    // S35-TA-5: which bytes of Farol this run exercised, derived through the
+    // same `sourceIdentity` the ordinary lanes use, plus which host answered
+    // and which Node launched it. Deliberately not an evidence attempt: this
+    // journey has no lane contract yet and stays a witness note on the Route
+    // B rows until one exists.
+    report.identity = buildReportIdentity({
+      repositoryRoot: path.resolve(here, "../.."),
+      hostBinary: codexBin,
+      hostVersion: report.hostVersion,
+      nodeVersion: process.versions.node,
+    });
+    console.log(
+      `IDENTITY: source ${report.identity.sourceCommit}` +
+        `${report.identity.sourceDirty ? " (dirty)" : ""}` +
+        ` · tree ${report.identity.sourceTreeDigest.slice(0, 12)}` +
+        ` · ${report.identity.build}` +
+        ` · node ${report.identity.nodeVersion}`,
+    );
     console.log(`Using real host binary: ${codexBin}`);
     console.log(`Host version: ${report.hostVersion}`);
 
@@ -747,11 +831,13 @@ async function main() {
       '# the owner\'s own file\nmodel_reasoning_effort = "low"\n\n';
     await fs.writeFile(appConfig, OWNER_PREAMBLE, { mode: 0o600 });
 
-    const appLifecycle = new FarolModelLifecycle({
-      stateRoot: path.join(root, "private", "app-model-endpoint"),
-      model: ROUTE_B_MODEL,
-      handler: turnHandler,
-    });
+    const appLifecycle = track(
+      new FarolModelLifecycle({
+        stateRoot: path.join(root, "private", "app-model-endpoint"),
+        model: ROUTE_B_MODEL,
+        handler: turnHandler,
+      }),
+    );
 
     await phase("app-host-discovery", async () => {
       // The product's own discovery, not this script's `which`.
@@ -1072,11 +1158,13 @@ async function main() {
       await appLifecycle.stop();
       assert.deepEqual(appLifecycle.status(), { state: "not_running" });
 
-      const restarted = new FarolModelLifecycle({
-        stateRoot: path.join(root, "private", "app-model-endpoint"),
-        model: ROUTE_B_MODEL,
-        handler: turnHandler,
-      });
+      const restarted = track(
+        new FarolModelLifecycle({
+          stateRoot: path.join(root, "private", "app-model-endpoint"),
+          model: ROUTE_B_MODEL,
+          handler: turnHandler,
+        }),
+      );
       await restarted.start();
       const portAfter = restarted.status().port;
       assert.equal(
@@ -1178,6 +1266,8 @@ async function main() {
     report.status = "PASS";
     process.exitCode = EXIT_PASS;
   } finally {
+    // Whatever happened above, nothing this script started may outlive it.
+    await stopEverything();
     // The host copies a plugins tree into `<CODEX_HOME>/.tmp` and removes
     // it as it exits, so a recursive remove issued at the same instant can
     // see ENOTEMPTY. That is the host tidying its own scratch directory,
