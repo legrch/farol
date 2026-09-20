@@ -48,6 +48,12 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
 import {
+  modelDisconnectedReadiness,
+  modelDisconnectedSummary,
+  modelEvidenceAbsenceAfterFailure,
+  type ModelEvidenceAbsence,
+} from "./model-presentation";
+import {
   workspaceEditRefusalMessage,
   workspaceEditToAcknowledge,
 } from "./workspace-edit-delivery";
@@ -350,6 +356,10 @@ let modelStatusEvidence: Extract<
   ProductConfigurationEvidence,
   { kind: "model.status" }
 > | null = null;
+// Why there is no status evidence: never connected in this session, or an
+// endpoint that stopped accepting requests. The card must not report the
+// second as the first.
+let modelEvidenceAbsence: ModelEvidenceAbsence = "no-evidence-yet";
 let modelConfigPreviewEvidence: Extract<
   ProductConfigurationEvidence,
   { kind: "model.config-preview" }
@@ -2248,8 +2258,13 @@ async function configureProduct(
       pendingChatGptPreview = null;
       if (shellOverlay === "context-preview") shellOverlay = "none";
     }
-    if (parsed.error === "MODEL_ENDPOINT_UNAVAILABLE") {
+    const absence = modelEvidenceAbsenceAfterFailure(
+      parsed.error,
+      command.kind,
+    );
+    if (absence) {
       modelStatusEvidence = null;
+      modelEvidenceAbsence = absence;
     }
     const cancellation = [
       "WORKSPACE_PICKER_CANCELLED",
@@ -2423,6 +2438,7 @@ async function configureProduct(
     settingsFeedback = `Saved ${evidence.fileName} · ${evidence.bytes} bytes · ${evidence.sha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "model.status") {
     modelStatusEvidence = evidence;
+    modelEvidenceAbsence = "no-evidence-yet";
     settingsFeedback =
       evidence.state === "connected"
         ? `Farol Model connected on port ${evidence.port} · ${evidence.requestsServed} request${evidence.requestsServed === 1 ? "" : "s"} served.`
@@ -3235,7 +3251,7 @@ function renderModelSection(): void {
         ? "Listening"
         : status?.state === "port_conflict"
           ? "Port conflict"
-          : "Not connected";
+          : modelDisconnectedReadiness(modelEvidenceAbsence);
   readiness.classList.toggle("verified", status?.state === "connected");
   summary.textContent =
     status?.state === "connected"
@@ -3244,7 +3260,7 @@ function renderModelSection(): void {
         ? `Listening on port ${status.port}, waiting for a request from your Codex host.`
         : status?.state === "port_conflict"
           ? modelPortConflictText(status.port, status.occupant)
-          : "Not connected. Preview the connection to see what Farol would change in your Codex config.toml.";
+          : modelDisconnectedSummary(modelEvidenceAbsence);
 
   if (!document.activeElement || document.activeElement !== selectDefault) {
     selectDefault.checked = modelSelectAsDefault;
