@@ -49,3 +49,23 @@ export function taskMenuNote(state: TaskMenuNoteState): string {
     ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
     : "Close removes this local task and its window. It does not cancel provider work.";
 }
+
+/**
+ * Why the Agent's approved-workspace field cannot be changed.
+ *
+ * It was a `<select>`, and it was always filled with exactly one option —
+ * the single verified workspace, or a "No verified workspace" placeholder.
+ * It had no change listener because there was never a second value to pick,
+ * so it looked like a chooser that did nothing. It is a fixed value, and it
+ * should say which value and why.
+ *
+ * The field's own `.value` is still what the Agent assignment reads, and a
+ * disabled `<select>` keeps that value; only the appearance of choice goes.
+ */
+export function agentWorkspaceFixedReason(
+  hasVerifiedWorkspace: boolean,
+): string {
+  return hasVerifiedWorkspace
+    ? "Farol delegates to the one workspace it has verified for this Computer. Verify another in Computer to change this."
+    : "No workspace has been verified yet. Approve one in Computer and verify it before delegating.";
+}

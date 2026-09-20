@@ -46,7 +46,10 @@ import {
   setupSteps,
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
-import { taskMenuNote } from "./task-menu-presentation";
+import {
+  agentWorkspaceFixedReason,
+  taskMenuNote,
+} from "./task-menu-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
 import {
   modelDisconnectedReadiness,
@@ -1048,7 +1051,11 @@ function renderTaskMenu(): void {
     contextLocked ||
     (!agentRunning && (task.lifecycle !== "running" || agentLocked));
   close.disabled = taskMenuBusy || agentLocked;
-  workspace.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  // Never a chooser: it holds exactly one option in both branches above, so
+  // present it as the fixed value it is and say why it is fixed. Its own
+  // value is still what the assignment reads.
+  workspace.disabled = true;
+  workspace.title = agentWorkspaceFixedReason(readiness.ready);
   scopeMode.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   subtree.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   paths.disabled = taskMenuBusy || agentLocked || !readiness.ready;

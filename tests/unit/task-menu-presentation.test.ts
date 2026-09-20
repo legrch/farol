@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentWorkspaceFixedReason,
   TASK_MENU_BUSY_NOTE,
   taskMenuNote,
   type TaskMenuNoteState,
@@ -80,5 +81,25 @@ describe("the task menu's one sentence", () => {
         uncertain: true,
       }),
     ).toMatch(/^Handoff is still active\./u);
+  });
+});
+
+describe("the Agent's approved-workspace field", () => {
+  it("says which workspace it is fixed to, and where to change it", () => {
+    const reason = agentWorkspaceFixedReason(true);
+    expect(reason).toContain("one workspace it has verified");
+    expect(reason).toContain("Computer");
+  });
+
+  it("names the prerequisite when nothing has been verified yet", () => {
+    const reason = agentWorkspaceFixedReason(false);
+    expect(reason).toContain("No workspace has been verified");
+    expect(reason).toContain("Approve one in Computer");
+  });
+
+  it("always has something to say, so the field is never silently inert", () => {
+    for (const ready of [true, false]) {
+      expect(agentWorkspaceFixedReason(ready).length).toBeGreaterThan(0);
+    }
   });
 });
