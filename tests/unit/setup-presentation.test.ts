@@ -10,6 +10,8 @@ import {
   readinessLabel,
   nativeHostActionPrerequisite,
   routeReadiness,
+  routeRowDetail,
+  routeRowLabel,
   setupConnectPrimary,
   setupStepStale,
   waitsForAgentRejoin,
@@ -520,5 +522,72 @@ describe("Setup's own primary action on the Connect step", () => {
     );
     expect(unknown.label).toBe("Repair explicitly");
     expect(unknown.disabled).toBe(false);
+  });
+});
+
+describe("a connections row's words against its own tone", () => {
+  const verified = {
+    ...readiness,
+    needsAction: null,
+    verified: verifiedRecord,
+  };
+
+  it("never says Verified for a route whose merged state is unknown", () => {
+    // The Native Agent row's tone comes from agentRouteReadiness, which
+    // checks outcome-unknown across BOTH halves of the Codex route. Its
+    // words came from the verify record alone, which can still hold a proof.
+    expect(routeRowLabel("outcome-unknown", verified)).toBe("Outcome unknown");
+    expect(routeRowDetail("outcome-unknown", verified)).toContain(
+      "unknown outcome",
+    );
+  });
+
+  it("never says Verified for a route whose verification has gone stale", () => {
+    expect(routeRowLabel("action-required", verified)).toBe("Verify again");
+    expect(routeRowDetail("action-required", verified)).toContain(
+      "no longer matches",
+    );
+  });
+
+  it("says Verified exactly when the merged state is ready", () => {
+    expect(routeRowLabel("ready", verified)).toBe("Verified");
+    expect(routeRowDetail("ready", verified)).toMatch(/^Verified /u);
+  });
+
+  it("keeps the nuance the state alone cannot express", () => {
+    expect(
+      routeRowLabel("failed", {
+        ...readiness,
+        needsAction: null,
+        unavailable: "No host.",
+      }),
+    ).toBe("Unavailable");
+    expect(
+      routeRowLabel("failed", {
+        ...readiness,
+        needsAction: null,
+        reachable: "unreachable",
+      }),
+    ).toBe("Unreachable");
+    expect(
+      routeRowLabel("action-required", { ...blank, reachable: "reachable" }),
+    ).toBe("Reachable · verify");
+    expect(
+      routeRowLabel("action-required", { ...blank, configured: true }),
+    ).toBe("Configured · verify");
+    expect(routeRowLabel("not-configured", blank)).toBe("Needs action");
+  });
+
+  it("agrees with the tone for every state a route can be in", () => {
+    // The contradiction this replaces was exactly one word appearing under
+    // the wrong tone, so the invariant is worth stating directly.
+    for (const state of [
+      "not-configured",
+      "action-required",
+      "failed",
+      "outcome-unknown",
+    ] as const) {
+      expect(routeRowLabel(state, verified)).not.toBe("Verified");
+    }
   });
 });

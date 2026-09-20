@@ -331,3 +331,38 @@ export function setupConnectPrimary(
   );
   return { hidden: false, label, disabled: reason !== null, reason };
 }
+
+/**
+ * The words on a Settings connections row, for a route whose tone comes from
+ * the merged route state.
+ *
+ * The row's colour came from routeStateForLabel — the merged, stale-aware
+ * state, where agentRouteReadiness checks outcome-unknown first and the
+ * Computer route knows whether its verification has been outgrown. The words
+ * came from readinessLabel on the raw per-field record, which knows neither.
+ * So "Native Agent · Verified" appeared beside a route-unknown tone, and
+ * "Computer · Verified" beside a stale one.
+ *
+ * The record still supplies the nuance the state cannot express — Unreachable
+ * against Unavailable, Reachable · verify against Configured · verify — but
+ * it can no longer say Verified for a route that is not.
+ */
+export function routeRowLabel(
+  state: RouteReadinessState,
+  readiness: Readiness,
+): string {
+  if (state === "outcome-unknown") return "Outcome unknown";
+  if (state === "ready") return "Verified";
+  return readinessLabel(readiness, { stale: true });
+}
+
+export function routeRowDetail(
+  state: RouteReadinessState,
+  readiness: Readiness,
+): string {
+  if (state === "outcome-unknown") {
+    return readinessDetail({ ...readiness, outcomeUnknown: true });
+  }
+  if (state === "ready") return readinessDetail(readiness);
+  return readinessDetail(readiness, { stale: true });
+}

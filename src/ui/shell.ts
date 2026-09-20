@@ -78,6 +78,8 @@ import {
   readinessLabel,
   nativeHostActionPrerequisite,
   routeReadiness,
+  routeRowDetail,
+  routeRowLabel,
   setupConnectPrimary,
   setupStepStale,
   waitsForAgentRejoin,
@@ -2840,22 +2842,26 @@ function renderSettings(): void {
   connections.replaceChildren(
     ...connectionStates.map(([label, state]) => {
       const row = document.createElement("div");
-      row.className = `connection-row route-${routeStatusClass(routeStateForLabel(label))}`;
+      // The tone and the words come from the same state. They used to be
+      // read from two different places: the merged, stale-aware route state
+      // for the colour and the raw per-field record for the sentence.
+      const rowState = routeStateForLabel(label);
+      row.className = `connection-row route-${routeStatusClass(rowState)}`;
       const copy = document.createElement("div");
       const title = document.createElement("strong");
-      title.textContent = `${label} · ${readinessLabel(state)}`;
+      title.textContent = `${label} · ${routeRowLabel(rowState, state)}`;
       const detail = document.createElement("small");
       detail.textContent =
         label === "ChatGPT"
-          ? `${readinessDetail(state)} · Conversation: ${bootstrap.chatgptConversationState.replace("_", " ")}`
+          ? `${routeRowDetail(rowState, state)} · Conversation: ${bootstrap.chatgptConversationState.replace("_", " ")}`
           : label === "Connection"
-            ? `${readinessDetail(state)} · ${settings.connectors.secureMcp.tunnelClient ? `tunnel-client ${settings.connectors.secureMcp.tunnelClient.version}` : "client not selected"} · tunnel ${settings.connectors.secureMcp.tunnelId ?? "not set"} · credential ${settings.connectors.secureMcp.credential} · runtime ${settings.connectors.secureMcp.runtime?.state ?? "stopped"}`
+            ? `${routeRowDetail(rowState, state)} · ${settings.connectors.secureMcp.tunnelClient ? `tunnel-client ${settings.connectors.secureMcp.tunnelClient.version}` : "client not selected"} · tunnel ${settings.connectors.secureMcp.tunnelId ?? "not set"} · credential ${settings.connectors.secureMcp.credential} · runtime ${settings.connectors.secureMcp.runtime?.state ?? "stopped"}`
             : label === "Native hosts" && settings.nativeHosts.codex
-              ? `${readinessDetail(state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
+              ? `${routeRowDetail(rowState, state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
               : label === "Native Agent" &&
                   settings.nativeHosts.codex?.agentVerification
-                ? `${readinessDetail(state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
-                : readinessDetail(state);
+                ? `${routeRowDetail(rowState, state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
+                : routeRowDetail(rowState, state);
       copy.append(title, detail);
       if (label === "ChatGPT" && bootstrap.chatgptSignInBlocked) {
         const blocked = document.createElement("small");
