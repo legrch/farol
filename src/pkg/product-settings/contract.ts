@@ -529,6 +529,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     selectAsDefault: z.boolean(),
   }),
   z.strictObject({ kind: z.literal("model.rollback") }),
+  z.strictObject({ kind: z.literal("model.rotate-token") }),
 ]);
 
 const DiscoveryCandidateSchema = z.strictObject({
@@ -900,6 +901,9 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     state: z.enum(["port_conflict", "listening", "connected"]),
     port: z.number().int().positive().nullable(),
     requestsServed: z.number().int().nonnegative(),
+    // On a port conflict: what the authenticated loopback identity probe
+    // found holding the port, once "Check status" has looked.
+    occupant: z.enum(["unprobed", "farol", "foreign", "vacated"]).optional(),
   }),
   z.strictObject({
     kind: z.literal("model.config-preview"),
@@ -910,14 +914,21 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
       "update",
       "conflict",
       "insecure_permissions",
+      "symlink",
+      "malformed",
     ]),
     providerBlockDiff: z.string().optional(),
+    // The diff never carries a bearer-token literal; this says one was
+    // replaced by the fixed placeholder.
+    providerBlockTokenRedacted: z.boolean().optional(),
     providerBlockConflicts: z
       .array(z.strictObject({ table: z.string(), line: z.string() }))
       .optional(),
     providerBlockInsecureMode: z.number().int().nonnegative().optional(),
     providerSelectionRequested: z.boolean(),
-    providerSelectionStatus: z.enum(["noop", "install", "conflict"]).optional(),
+    providerSelectionStatus: z
+      .enum(["noop", "install", "update", "conflict", "symlink", "malformed"])
+      .optional(),
     providerSelectionDiff: z.string().optional(),
     providerSelectionConflicts: z
       .array(z.strictObject({ table: z.string(), line: z.string() }))
@@ -928,11 +939,29 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     providerBlockApplied: z.boolean(),
     providerSelectionApplied: z.boolean(),
     restartStep: z.literal("restart_codex_to_apply"),
+    // Read-only process-table scan for the verified Codex executable at
+    // apply time: decides which restart note the control shows.
+    codexHost: z.enum(["running", "not_running", "unknown"]),
   }),
   z.strictObject({
     kind: z.literal("model.config-rollback"),
     providerBlockRestored: z.boolean(),
     providerSelectionRestored: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("model.token-rotated"),
+    // True when the consented block carried the old literal and was
+    // rewritten in place with the new one.
+    providerBlockUpdated: z.boolean(),
+    providerBlockStatus: z.enum([
+      "noop",
+      "install",
+      "update",
+      "conflict",
+      "insecure_permissions",
+      "symlink",
+      "malformed",
+    ]),
   }),
 ]);
 
@@ -1056,6 +1085,9 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "MODEL_CONFIG_INSECURE_PERMISSIONS",
       "MODEL_CONFIG_APPLY_FAILED",
       "MODEL_CONFIG_ROLLBACK_FAILED",
+      "MODEL_CONFIG_SYMLINK",
+      "MODEL_CONFIG_MALFORMED",
+      "MODEL_TOKEN_ROTATE_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

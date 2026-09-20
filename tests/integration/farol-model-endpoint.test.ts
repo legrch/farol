@@ -1,18 +1,28 @@
+import http from "node:http";
+import net from "node:net";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  FAROL_MODEL_IDENTITY_PATH,
+  FAROL_MODEL_MAX_BODY_BYTES,
   FarolModelEndpoint,
   FarolModelEndpointPortConflictError,
+  isFarolModelIdentity,
   isLoopbackAddress,
+  type FarolModelEndpointOptions,
   type FarolModelTurnHandler,
 } from "../../src/apps/desktop/farol-model-endpoint";
 import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runtime-state";
 
 const roots: string[] = [];
 const endpoints: FarolModelEndpoint[] = [];
+
+// The one model the endpoint serves in these tests (the Route B model in
+// production; main.ts passes ROUTE_B_MODEL).
+const MODEL = "farol-next/mind";
 
 afterEach(async () => {
   await Promise.all(endpoints.splice(0).map((endpoint) => endpoint.stop()));
@@ -34,10 +44,14 @@ async function stateRoot(): Promise<string> {
 function trackedEndpoint(
   state: FarolModelRuntimeState,
   handler?: FarolModelTurnHandler,
+  extra: Partial<Omit<FarolModelEndpointOptions, "state" | "handler">> = {},
 ): FarolModelEndpoint {
-  const endpoint = new FarolModelEndpoint(
-    handler === undefined ? { state } : { state, handler },
-  );
+  const endpoint = new FarolModelEndpoint({
+    state,
+    model: MODEL,
+    ...(handler === undefined ? {} : { handler }),
+    ...extra,
+  });
   endpoints.push(endpoint);
   return endpoint;
 }
@@ -53,16 +67,57 @@ const syntheticHandler: FarolModelTurnHandler = async () => ({
   ],
 });
 
+/** Exactly the request shape an ordinary Codex host sends to `/responses`. */
+function codexRequest(model: string = MODEL, text = "say hi") {
+  return {
+    model,
+    stream: true,
+    store: false,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+      },
+    ],
+    tools: [],
+    client_metadata: {
+      session_id: "0199c0de-0000-7000-8000-00000000c001",
+      thread_id: "0199c0de-0000-7000-8000-00000000c001",
+      turn_id: "turn-endpoint-1",
+      root_turn_id: "turn-endpoint-1",
+    },
+  };
+}
+
 async function post(
   port: number,
   body: unknown,
   headers: Record<string, string>,
+  route = "/responses",
 ): Promise<Response> {
-  return fetch(`http://127.0.0.1:${port}/responses`, {
+  return fetch(`http://127.0.0.1:${port}${route}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
+}
+
+async function started(
+  handler: FarolModelTurnHandler = syntheticHandler,
+  extra: Partial<Omit<FarolModelEndpointOptions, "state" | "handler">> = {},
+): Promise<{
+  endpoint: FarolModelEndpoint;
+  state: FarolModelRuntimeState;
+  port: number;
+  token: string;
+}> {
+  const state = new FarolModelRuntimeState(await stateRoot());
+  const endpoint = trackedEndpoint(state, handler, extra);
+  const { port } = await endpoint.start();
+  const token = await state.currentToken();
+  if (!token) throw new Error("FAROL_MODEL_TOKEN_MISSING_IN_TEST");
+  return { endpoint, state, port, token };
 }
 
 describe("Farol Model loopback endpoint", () => {
@@ -99,19 +154,12 @@ describe("Farol Model loopback endpoint", () => {
     expect((await third.start()).port).toBe(port);
   });
 
-  it("serves an authenticated request and records the evidence", async () => {
-    const state = new FarolModelRuntimeState(await stateRoot());
-    const endpoint = trackedEndpoint(state, syntheticHandler);
-    const { port } = await endpoint.start();
-    const token = await state.currentToken();
+  it("serves an authenticated request in the ordinary Codex shape and records the evidence", async () => {
+    const { endpoint, port, token } = await started();
 
-    const response = await post(
-      port,
-      { model: "farol" },
-      {
-        authorization: `Bearer ${token}`,
-      },
-    );
+    const response = await post(port, codexRequest(), {
+      authorization: `Bearer ${token}`,
+    });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     const text = await response.text();
@@ -120,34 +168,93 @@ describe("Farol Model loopback endpoint", () => {
     const evidence = endpoint.evidence();
     expect(evidence.requestsAccepted).toBe(1);
     expect(evidence.lastAcceptedAtIso).toBeDefined();
+    expect(JSON.stringify(evidence)).not.toContain(token);
   });
 
-  it("refuses a request without a token", async () => {
-    const state = new FarolModelRuntimeState(await stateRoot());
-    const endpoint = trackedEndpoint(state, syntheticHandler);
-    const { port } = await endpoint.start();
+  it("refuses a request without a token: 401, a generic body, and the precise reason only in the evidence", async () => {
+    const { endpoint, port } = await started();
 
-    const response = await post(port, {}, {});
+    const response = await post(port, codexRequest(), {});
     expect(response.status).toBe(401);
+    expect(response.headers.get("www-authenticate")).toBe("Bearer");
+    const body = await response.text();
+    expect(body).not.toMatch(/farol/iu);
+    expect(body).not.toContain("FAROL_");
     expect(endpoint.evidence().requestsRejected).toBe(1);
     expect(endpoint.evidence().lastRejectedReason).toBe(
       "FAROL_MODEL_TOKEN_MISSING",
     );
   });
 
-  it("refuses a request with the wrong token", async () => {
-    const state = new FarolModelRuntimeState(await stateRoot());
-    const endpoint = trackedEndpoint(state, syntheticHandler);
-    const { port } = await endpoint.start();
+  it("refuses a wrong token, a token off by one character, and an empty bearer, all with the same generic 401", async () => {
+    const { endpoint, port, token } = await started();
 
-    const response = await post(
-      port,
-      {},
-      { authorization: "Bearer not-the-token" },
-    );
-    expect(response.status).toBe(401);
+    for (const presented of [
+      "Bearer not-the-token",
+      `Bearer ${token.slice(0, -1)}${token.endsWith("A") ? "B" : "A"}`,
+      `Bearer ${token}x`,
+      "Bearer ",
+      token,
+    ]) {
+      const response = await post(port, codexRequest(), {
+        authorization: presented,
+      });
+      expect(response.status).toBe(401);
+      expect(await response.text()).not.toMatch(/farol/iu);
+    }
     expect(endpoint.evidence().lastRejectedReason).toBe(
       "FAROL_MODEL_TOKEN_INVALID",
+    );
+    expect(endpoint.evidence().requestsAccepted).toBe(0);
+  });
+
+  it("authenticates before any route is dispatched: an anonymous caller learns nothing about which routes exist", async () => {
+    const { endpoint, port, token } = await started();
+
+    for (const [method, route] of [
+      ["POST", "/nope"],
+      ["GET", FAROL_MODEL_IDENTITY_PATH],
+      ["GET", "/"],
+      ["DELETE", "/responses"],
+    ] as const) {
+      const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+        method,
+      });
+      expect(response.status).toBe(401);
+      expect(await response.text()).not.toMatch(/farol/iu);
+    }
+
+    // Authenticated, the missing route is a precise 404.
+    const authenticated = await post(
+      port,
+      codexRequest(),
+      {
+        authorization: `Bearer ${token}`,
+      },
+      "/nope",
+    );
+    expect(authenticated.status).toBe(404);
+    const payload = (await authenticated.json()) as { error: { code: string } };
+    expect(payload.error.code).toBe("FAROL_MODEL_ROUTE_NOT_FOUND");
+    expect(endpoint.evidence().requestsAccepted).toBe(0);
+  });
+
+  it("refuses any request that carries an Origin header with 403, even with a valid token", async () => {
+    let handled = 0;
+    const { endpoint, port, token } = await started(async () => {
+      handled += 1;
+      return syntheticHandler({ body: undefined, headers: {} });
+    });
+
+    const response = await post(port, codexRequest(), {
+      authorization: `Bearer ${token}`,
+      origin: "http://127.0.0.1:5173",
+    });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toMatch(/farol/iu);
+    expect(handled).toBe(0);
+    expect(endpoint.evidence().lastRejectedReason).toBe(
+      "FAROL_MODEL_ORIGIN_PRESENT",
     );
   });
 
@@ -158,12 +265,235 @@ describe("Farol Model loopback endpoint", () => {
     const { port } = await endpoint.start();
     const token = await state.currentToken();
 
-    const response = await post(port, {}, { authorization: `Bearer ${token}` });
+    const response = await post(port, codexRequest(), {
+      authorization: `Bearer ${token}`,
+    });
     expect(response.status).toBe(502);
     const payload = (await response.json()) as { error: { code: string } };
     expect(payload.error.code).toBe("FAROL_MODEL_ROUTE_UNAVAILABLE");
     // Content-free: no upstream detail, no stack, no internal path.
     expect(JSON.stringify(payload)).not.toMatch(/\/(Users|home)\//u);
+  });
+
+  it("refuses any model but the one it serves with 422 FAROL_MODEL_MODEL_MISMATCH that names the required value (P1-1)", async () => {
+    let handled = 0;
+    const { endpoint, port, token } = await started(async () => {
+      handled += 1;
+      return syntheticHandler({ body: undefined, headers: {} });
+    });
+
+    for (const body of [
+      codexRequest("farol-model"),
+      codexRequest("gpt-5"),
+      { ...codexRequest(), model: undefined },
+      {},
+    ]) {
+      const response = await post(port, body, {
+        authorization: `Bearer ${token}`,
+      });
+      expect(response.status).toBe(422);
+      const payload = (await response.json()) as {
+        error: { code: string; expected_model: string; message: string };
+      };
+      expect(payload.error.code).toBe("FAROL_MODEL_MODEL_MISMATCH");
+      expect(payload.error.expected_model).toBe(MODEL);
+      expect(payload.error.message).toContain(`"${MODEL}"`);
+    }
+    expect(handled).toBe(0);
+    expect(endpoint.evidence().requestsAccepted).toBe(0);
+    expect(endpoint.servedModel).toBe(MODEL);
+
+    // A body that is not JSON at all is a 400, not a mismatch.
+    const notJson = await fetch(`http://127.0.0.1:${port}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: "{not json",
+    });
+    expect(notJson.status).toBe(400);
+    expect(
+      ((await notJson.json()) as { error: { code: string } }).error.code,
+    ).toBe("FAROL_MODEL_BODY_INVALID");
+  });
+
+  it("requires a model at construction", async () => {
+    const state = new FarolModelRuntimeState(await stateRoot());
+    expect(() => new FarolModelEndpoint({ state, model: "" })).toThrow(
+      "FAROL_MODEL_ENDPOINT_MODEL_REQUIRED",
+    );
+  });
+
+  it("bounds the request body at 1 MiB: a declared oversize is refused up front", async () => {
+    let handled = 0;
+    const { port, token } = await started(async () => {
+      handled += 1;
+      return syntheticHandler({ body: undefined, headers: {} });
+    });
+    expect(FAROL_MODEL_MAX_BODY_BYTES).toBe(1024 * 1024);
+
+    const padded = {
+      ...codexRequest(),
+      padding: "x".repeat(FAROL_MODEL_MAX_BODY_BYTES),
+    };
+    const response = await post(port, padded, {
+      authorization: `Bearer ${token}`,
+    });
+    expect(response.status).toBe(413);
+    const payload = (await response.json()) as { error: { code: string } };
+    expect(payload.error.code).toBe("FAROL_MODEL_BODY_TOO_LARGE");
+    expect(handled).toBe(0);
+  });
+
+  it("refuses a streamed oversize body while it is still arriving, before buffering completes", async () => {
+    let handled = 0;
+    const { port, token } = await started(async () => {
+      handled += 1;
+      return syntheticHandler({ body: undefined, headers: {} });
+    });
+
+    const chunk = Buffer.alloc(64 * 1024, 0x78);
+    const totalChunks = 64; // 4 MiB, four times the bound.
+    // Paced so the 413 (due after the 17th chunk) is observed while the
+    // upload is demonstrably still in progress, not raced against loopback.
+    const paceMs = 5;
+    let sent = 0;
+    let sentAtResponse: number | undefined;
+    const status = await new Promise<number>((resolve, reject) => {
+      const request = http.request(
+        {
+          host: "127.0.0.1",
+          port,
+          method: "POST",
+          path: "/responses",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "transfer-encoding": "chunked",
+          },
+        },
+        (response) => {
+          sentAtResponse = sent;
+          response.resume();
+          resolve(response.statusCode ?? 0);
+        },
+      );
+      request.on("error", (error) => {
+        // Once the server has answered, a write error on the remainder is
+        // the connection being dropped, which is the expected outcome.
+        if (sentAtResponse === undefined) reject(error);
+      });
+      const pump = () => {
+        if (sent >= totalChunks) {
+          request.end();
+          return;
+        }
+        sent += 1;
+        request.write(chunk, () => setTimeout(pump, paceMs));
+      };
+      pump();
+    });
+    expect(status).toBe(413);
+    expect(sentAtResponse).toBeDefined();
+    expect(sentAtResponse!).toBeLessThan(totalChunks);
+    expect(sentAtResponse!).toBeGreaterThanOrEqual(16);
+    expect(handled).toBe(0);
+  });
+
+  it("closes a connection that never finishes its headers (headersTimeout) and rejects inverted timeouts", async () => {
+    const state = new FarolModelRuntimeState(await stateRoot());
+    expect(
+      () =>
+        new FarolModelEndpoint({
+          state,
+          model: MODEL,
+          timeouts: { headersTimeoutMs: 500, requestTimeoutMs: 100 },
+        }),
+    ).toThrow("FAROL_MODEL_ENDPOINT_TIMEOUTS_INVALID");
+
+    const { port } = await started(syntheticHandler, {
+      timeouts: {
+        headersTimeoutMs: 200,
+        requestTimeoutMs: 400,
+        connectionsCheckingIntervalMs: 50,
+      },
+    });
+    let received = "";
+    const closedWithin = await new Promise<number>((resolve, reject) => {
+      const startedAt = Date.now();
+      const socket = net.connect({ host: "127.0.0.1", port }, () => {
+        socket.write("POST /responses HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+      });
+      // Read what the server sends: a paused socket would sit on its
+      // unread 408 and never reach `close`.
+      socket.on("data", (data: Buffer) => {
+        received += data.toString("utf8");
+      });
+      socket.on("close", () => resolve(Date.now() - startedAt));
+      socket.on("error", () => undefined);
+      setTimeout(() => reject(new Error("socket was not closed")), 4_000);
+    });
+    expect(closedWithin).toBeLessThan(4_000);
+    expect(received.startsWith("HTTP/1.1 408 ")).toBe(true);
+  });
+
+  it("treats an empty or unparsable token file as no token: never authenticates `Bearer ` and re-mints on demand", async () => {
+    const { endpoint, state, port, token } = await started();
+    const tokenFile = path.join(
+      (state as unknown as { root: string }).root,
+      "model-endpoint-token",
+    );
+
+    for (const damaged of ["", "\n", "not a token\n", `${token}\n`]) {
+      await fs.writeFile(tokenFile, damaged, { mode: 0o600 });
+      expect(await state.currentToken()).toBeUndefined();
+      const empty = await post(port, codexRequest(), {
+        authorization: "Bearer ",
+      });
+      expect(empty.status).toBe(401);
+      const stale = await post(port, codexRequest(), {
+        authorization: `Bearer ${token}`,
+      });
+      expect(stale.status).toBe(401);
+      expect(endpoint.evidence().lastRejectedReason).toBe(
+        "FAROL_MODEL_TOKEN_UNSET",
+      );
+    }
+
+    const minted = await state.ensureToken();
+    expect(minted).not.toBe(token);
+    const served = await post(port, codexRequest(), {
+      authorization: `Bearer ${minted}`,
+    });
+    expect(served.status).toBe(200);
+    await served.text();
+  });
+
+  it("answers the authenticated identity probe with its own instance nonce, without counting it as a served turn", async () => {
+    const { endpoint, port, token } = await started();
+
+    const response = await fetch(
+      `http://127.0.0.1:${port}${FAROL_MODEL_IDENTITY_PATH}`,
+      { headers: { authorization: `Bearer ${token}` } },
+    );
+    expect(response.status).toBe(200);
+    const identity: unknown = await response.json();
+    expect(isFarolModelIdentity(identity)).toBe(true);
+    if (isFarolModelIdentity(identity)) {
+      expect(identity.instance).toBe(endpoint.instanceNonce);
+      expect(identity.pid).toBe(process.pid);
+      expect(identity.port).toBe(port);
+    }
+    expect(endpoint.evidence().requestsAccepted).toBe(0);
+    expect(JSON.stringify(identity)).not.toContain(token);
+
+    // A second endpoint instance has a different nonce.
+    const other = trackedEndpoint(
+      new FarolModelRuntimeState(await stateRoot()),
+      syntheticHandler,
+    );
+    expect(other.instanceNonce).not.toBe(endpoint.instanceNonce);
   });
 
   it("classifies loopback addresses precisely (the guard's decision function)", () => {

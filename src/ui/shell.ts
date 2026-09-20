@@ -332,6 +332,9 @@ let modelConfigPreviewEvidence: Extract<
 > | null = null;
 let modelSelectAsDefault = false;
 let modelConfigApplied = false;
+// From the last apply: whether a Codex started from the verified
+// executable was running at that moment (read-only process-table scan).
+let modelConfigCodexHost: "running" | "not_running" | "unknown" | null = null;
 let renderedGeneralSettingsRevision = -1;
 let setupConnectorError: string | null = null;
 let renderedComputerSettingsRevision = -1;
@@ -2285,17 +2288,26 @@ async function configureProduct(
                                                     "MODEL_CONFIG_CONFLICT"
                                                   ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
                                                   : parsed.error ===
-                                                        "MODEL_CONFIG_APPLY_FAILED" ||
-                                                      parsed.error ===
-                                                        "MODEL_CONFIG_ROLLBACK_FAILED"
-                                                    ? "config.toml could not be changed. Nothing was left half-written."
-                                                    : (transitionRefusalMessage(
-                                                        parsed.error,
-                                                      ) ??
-                                                      workspaceEditRefusalMessage(
-                                                        parsed.error,
-                                                      ) ??
-                                                      `Not applied · ${parsed.error}`);
+                                                      "MODEL_CONFIG_SYMLINK"
+                                                    ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
+                                                    : parsed.error ===
+                                                        "MODEL_CONFIG_MALFORMED"
+                                                      ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
+                                                      : parsed.error ===
+                                                          "MODEL_TOKEN_ROTATE_FAILED"
+                                                        ? "Token rotation did not complete. Check status and preview the connection before trying again."
+                                                        : parsed.error ===
+                                                              "MODEL_CONFIG_APPLY_FAILED" ||
+                                                            parsed.error ===
+                                                              "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                          ? "config.toml could not be changed. Nothing was left half-written."
+                                                          : (transitionRefusalMessage(
+                                                              parsed.error,
+                                                            ) ??
+                                                            workspaceEditRefusalMessage(
+                                                              parsed.error,
+                                                            ) ??
+                                                            `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
@@ -2358,30 +2370,44 @@ async function configureProduct(
         ? `Farol Model connected on port ${evidence.port} · ${evidence.requestsServed} request${evidence.requestsServed === 1 ? "" : "s"} served.`
         : evidence.state === "listening"
           ? `Farol Model is listening on port ${evidence.port}, waiting for a request.`
-          : `Farol Model wants port ${evidence.port}, but something else is already using it.`;
+          : modelPortConflictText(evidence.port, evidence.occupant);
   } else if (evidence?.kind === "model.config-preview") {
     modelConfigPreviewEvidence = evidence;
     modelConfigApplied = false;
     settingsFeedback =
       evidence.providerBlockStatus === "insecure_permissions"
         ? `Refusing to write the connection: ${evidence.configPath} is readable by group or other (mode ${evidence.providerBlockInsecureMode?.toString(8)}). Fix its permissions first.`
-        : evidence.providerBlockStatus === "conflict"
-          ? `${evidence.configPath} already has a hand-written entry with the same name — nothing will be overwritten.`
-          : evidence.providerBlockStatus === "noop"
-            ? "The connection is already configured exactly this way."
-            : `Review the exact change to ${evidence.configPath} before applying it.`;
+        : evidence.providerBlockStatus === "symlink"
+          ? `Refusing to touch ${evidence.configPath}: it is a symbolic link. Farol only writes a regular file.`
+          : evidence.providerBlockStatus === "malformed"
+            ? `${evidence.configPath} has a damaged Farol marker. Repair or remove the marked block by hand, then preview again.`
+            : evidence.providerBlockStatus === "conflict"
+              ? `${evidence.configPath} already has a hand-written entry with the same name — nothing will be overwritten.`
+              : evidence.providerBlockStatus === "noop"
+                ? "The connection is already configured exactly this way."
+                : `Review the exact change to ${evidence.configPath} before applying it.`;
   } else if (evidence?.kind === "model.config-applied") {
     modelConfigApplied = true;
-    settingsFeedback = evidence.providerSelectionApplied
-      ? "Applied the Farol connection and set it as the default provider. Close and reopen your Codex host to pick this up."
-      : "Applied the Farol connection. Close and reopen your Codex host to pick this up.";
+    modelConfigCodexHost = evidence.codexHost;
+    settingsFeedback = `${
+      evidence.providerSelectionApplied
+        ? "Applied the Farol connection and set it as the default provider."
+        : "Applied the Farol connection."
+    } ${modelRestartNoteText(evidence.codexHost)}`;
   } else if (evidence?.kind === "model.config-rollback") {
     modelConfigPreviewEvidence = null;
     modelConfigApplied = false;
+    modelConfigCodexHost = null;
     settingsFeedback =
       evidence.providerBlockRestored || evidence.providerSelectionRestored
-        ? "Restored config.toml to what it was before Farol's change."
+        ? "Removed Farol's managed block from config.toml; everything else in the file is as you left it."
         : "There was nothing to roll back.";
+  } else if (evidence?.kind === "model.token-rotated") {
+    settingsFeedback = evidence.providerBlockUpdated
+      ? "Rotated the Farol Model token and rewrote it in your Codex config.toml. The old token no longer works; a running Codex needs a restart to use the new one."
+      : evidence.providerBlockStatus === "install"
+        ? "Rotated the Farol Model token. The connection is not written to config.toml yet, so nothing else changed."
+        : `Rotated the Farol Model token, but config.toml was not updated (${evidence.providerBlockStatus.replace("_", " ")}). Preview the connection to see why.`;
   } else if (evidence?.kind === "host.codex-probe") {
     settingsFeedback = `Codex ${evidence.version} contract verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.route-b") {
@@ -3093,6 +3119,40 @@ function renderSettings(): void {
   renderModelSection();
 }
 
+// Port-conflict wording by what the authenticated loopback identity probe
+// found holding the port (`unprobed` until "Check status" has looked).
+function modelPortConflictText(
+  port: number | null,
+  occupant: "unprobed" | "farol" | "foreign" | "vacated" | undefined,
+): string {
+  switch (occupant) {
+    case "farol":
+      return `Port ${port} is in use by another running Farol Model endpoint. Quit the other Farol Next, then restart this one.`;
+    case "foreign":
+      return `Port ${port} is in use by something that is not this Farol. Free the port or quit that program, then restart Farol Next.`;
+    case "vacated":
+      return `Port ${port} was busy when Farol started and is free now. Restart Farol Next to use it.`;
+    default:
+      return `Port ${port} was already in use when Farol started. Check status to find out by what.`;
+  }
+}
+
+// The restart note after an apply, from the read-only host-presence scan
+// `main.ts` runs at apply time. Detection covers a Codex started from the
+// verified executable path; anything else reads as unknown.
+function modelRestartNoteText(
+  codexHost: "running" | "not_running" | "unknown" | null,
+): string {
+  switch (codexHost) {
+    case "running":
+      return "Codex is running: finish or restart it, then the connection is used.";
+    case "not_running":
+      return "Codex is not running: the connection is used at its next start.";
+    default:
+      return "If Codex is running, finish or restart it; otherwise the connection is used at its next start.";
+  }
+}
+
 // Farol Model's own status/preview/apply/rollback card. It reads only the
 // ephemeral evidence this session has already fetched or applied — it
 // never polls on its own, and connected is only ever reported once
@@ -3125,7 +3185,7 @@ function renderModelSection(): void {
       : status?.state === "listening"
         ? `Listening on port ${status.port}, waiting for a request from your Codex host.`
         : status?.state === "port_conflict"
-          ? `Port ${status.port} is already in use by something else.`
+          ? modelPortConflictText(status.port, status.occupant)
           : "Not connected. Preview the connection to see what Farol would change in your Codex config.toml.";
 
   if (!document.activeElement || document.activeElement !== selectDefault) {
@@ -3159,14 +3219,32 @@ function renderModelSection(): void {
     applyBtn.hidden = true;
     rollbackBtn.hidden = true;
     restartNote.hidden = true;
+  } else if (
+    preview.providerBlockStatus === "symlink" ||
+    preview.providerBlockStatus === "malformed"
+  ) {
+    message.hidden = false;
+    message.textContent =
+      preview.providerBlockStatus === "symlink"
+        ? `Refusing to touch ${preview.configPath}: it is a symbolic link. Farol only writes a regular file.`
+        : `${preview.configPath} has a damaged Farol marker. Repair or remove the marked block by hand, then preview again.`;
+    diff.hidden = true;
+    diff.textContent = "";
+    applyBtn.hidden = true;
+    rollbackBtn.hidden = true;
+    restartNote.hidden = true;
   } else {
     message.hidden = true;
     const diffText = [
+      preview.providerBlockTokenRedacted
+        ? "# The token literal is redacted in this preview; the file receives the real value."
+        : undefined,
       preview.providerBlockDiff,
-      preview.providerSelectionStatus === "install"
+      preview.providerSelectionStatus === "install" ||
+      preview.providerSelectionStatus === "update"
         ? preview.providerSelectionDiff
         : preview.providerSelectionStatus === "conflict"
-          ? `(default-provider selection skipped: a hand-written model_provider line already exists)`
+          ? `(default-provider selection skipped: a hand-written model_provider or model line already exists)`
           : undefined,
     ]
       .filter((value): value is string => Boolean(value))
@@ -3178,8 +3256,7 @@ function renderModelSection(): void {
     rollbackBtn.hidden = !modelConfigApplied;
     restartNote.hidden = !modelConfigApplied;
     if (modelConfigApplied) {
-      restartNote.textContent =
-        "Close and reopen your Codex host to pick up this change.";
+      restartNote.textContent = modelRestartNoteText(modelConfigCodexHost);
     }
   }
   previewBtn.disabled = false;
@@ -4653,6 +4730,15 @@ async function start(): Promise<void> {
       void configureProduct(
         { kind: "model.rollback" },
         "Farol Model connection rolled back.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#model-rotate-btn").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "model.rotate-token" },
+        "Farol Model token rotated.",
       );
     },
   );

@@ -7,15 +7,32 @@
 // Codex, and never contacts a live account: the upstream is this process's
 // own synthetic SSE responder, reachable only on 127.0.0.1.
 //
-// Run with: node tests/e2e/farol-model-codex-exec.e2e.mjs
+// Run with: node tests/e2e/farol-model-codex-exec.e2e.mjs [--report=<file>]
 //
-// The three TypeScript modules under test import each other by
-// extensionless specifier (this repo's normal style, resolved by `tsc`'s
-// Bundler moduleResolution and by Vitest's esbuild transform). Node's own
-// ESM loader requires exact, extensioned specifiers even under
-// --experimental-transform-types, so this script bundles the same three
-// files with esbuild — the toolchain already depends on for `tooling/
-// build.mjs` — into one temporary ESM module and imports that instead of
+// Phases (each recorded in the machine-readable report):
+//   env-key-overrides     env_key delivery, provider picked per call with
+//                         `-c model_provider=… -c model=…`
+//   env-key-selection     same delivery, provider picked by the consented
+//                         selection region alone, no `-c` at all
+//   bearer-token-config   the production delivery: the token literal in a
+//                         0600 config.toml, NO token in the environment, no
+//                         `-c`; the endpoint must see `Authorization: Bearer
+//                         <token>` and serve exactly one request
+//   no-retry-on-failure   the upstream fails once; with the block's
+//                         request_max_retries = 0 the host must send exactly
+//                         one request and fail, never a second submission
+//
+// Exit codes: 0 PASS · 1 FAIL · 3 REAL_HOST_UNAVAILABLE (no `codex` on
+// PATH: the config+endpoint plumbing is not the real-host claim, so this is
+// deliberately not a pass).
+//
+// The TypeScript modules under test import each other by extensionless
+// specifier (this repo's normal style, resolved by `tsc`'s Bundler
+// moduleResolution and by Vitest's esbuild transform). Node's own ESM
+// loader requires exact, extensioned specifiers even under
+// --experimental-transform-types, so this script bundles the same files
+// with esbuild — the toolchain already depends on for `tooling/build.mjs`
+// — into one temporary ESM module and imports that instead of
 // reimplementing or duplicating their logic.
 
 import assert from "node:assert/strict";
@@ -29,7 +46,27 @@ import esbuild from "esbuild";
 
 const execFileAsync = promisify(execFile);
 
+const EXIT_PASS = 0;
+const EXIT_FAIL = 1;
+const EXIT_REAL_HOST_UNAVAILABLE = 3;
+
 const here = path.dirname(fileURLToPath(import.meta.url));
+const reportArgument = process.argv
+  .slice(2)
+  .find((argument) => argument.startsWith("--report="));
+const reportPath = path.resolve(
+  reportArgument
+    ? reportArgument.slice("--report=".length)
+    : path.join(
+        here,
+        "..",
+        "..",
+        "artifacts",
+        "farol-model-codex-exec",
+        "report.json",
+      ),
+);
+
 const bundleEntry = path.join(here, "farol-model-codex-exec.e2e.entry.ts");
 const bundleOutput = path.join(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-model-e2e-bundle-")),
@@ -42,102 +79,112 @@ await esbuild.build({
   platform: "node",
   format: "esm",
   target: "node22",
+  logLevel: "silent",
 });
 const {
   FarolModelRuntimeState,
   FarolModelEndpoint,
+  FAROL_MODEL_HOST_TUNING,
   applyFarolModelConfigBlock,
   applyFarolModelProviderSelection,
+  ROUTE_B_MODEL,
 } = await import(bundleOutput);
 
-const spec = {
-  providerName: "farol",
-  displayName: "Farol Model",
-  baseUrl: "",
-  model: "farol-model",
-  wireApi: "responses",
-  delivery: { mode: "env-key", envKeyName: "FAROL_MODEL_TOKEN" },
+const REPLY_TEXT = "farol model e2e reply";
+const CODEX_EXEC_TIMEOUT_MS = 45_000;
+
+const report = {
+  status: "FAIL",
+  startedAtIso: new Date().toISOString(),
+  finishedAtIso: null,
+  hostBinary: null,
+  hostVersion: null,
+  model: ROUTE_B_MODEL,
+  hostTuning: FAROL_MODEL_HOST_TUNING,
+  phases: [],
+  error: null,
+};
+
+/** What the synthetic upstream observed and how it should behave next. */
+const upstream = {
+  calls: 0,
+  failNext: false,
+  authorizations: [],
+  models: [],
 };
 
 const turnHandler = async (request) => {
-  const auth = request.headers.authorization;
-  assert.ok(auth?.startsWith("Bearer "), "codex must send a bearer token");
-  const text = "farol model e2e reply";
+  upstream.calls += 1;
+  upstream.authorizations.push(request.headers.authorization ?? null);
+  upstream.models.push(request.body?.model ?? null);
+  if (upstream.failNext) {
+    upstream.failNext = false;
+    return { ok: false, reason: "FAROL_MODEL_E2E_SYNTHETIC_FAILURE" };
+  }
   const itemId = "msg_e2e";
-  const events = [
-    {
-      event: "response.created",
-      data: {
-        type: "response.created",
-        response: {
-          id: "resp_e2e",
-          object: "response",
-          status: "in_progress",
-          output: [],
+  const message = {
+    id: itemId,
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: REPLY_TEXT, annotations: [] }],
+  };
+  return {
+    ok: true,
+    events: [
+      {
+        event: "response.created",
+        data: {
+          type: "response.created",
+          response: {
+            id: "resp_e2e",
+            object: "response",
+            status: "in_progress",
+            output: [],
+          },
         },
       },
-    },
-    {
-      event: "response.output_item.added",
-      data: {
-        type: "response.output_item.added",
-        output_index: 0,
-        item: {
-          id: itemId,
-          type: "message",
-          status: "in_progress",
-          role: "assistant",
-          content: [],
+      {
+        event: "response.output_item.added",
+        data: {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...message, status: "in_progress", content: [] },
         },
       },
-    },
-    {
-      event: "response.output_text.delta",
-      data: {
-        type: "response.output_text.delta",
-        item_id: itemId,
-        output_index: 0,
-        content_index: 0,
-        delta: text,
-      },
-    },
-    {
-      event: "response.output_item.done",
-      data: {
-        type: "response.output_item.done",
-        output_index: 0,
-        item: {
-          id: itemId,
-          type: "message",
-          status: "completed",
-          role: "assistant",
-          content: [{ type: "output_text", text, annotations: [] }],
+      {
+        event: "response.output_text.delta",
+        data: {
+          type: "response.output_text.delta",
+          item_id: itemId,
+          output_index: 0,
+          content_index: 0,
+          delta: REPLY_TEXT,
         },
       },
-    },
-    {
-      event: "response.completed",
-      data: {
-        type: "response.completed",
-        response: {
-          id: "resp_e2e",
-          object: "response",
-          status: "completed",
-          output: [
-            {
-              id: itemId,
-              type: "message",
-              status: "completed",
-              role: "assistant",
-              content: [{ type: "output_text", text, annotations: [] }],
-            },
-          ],
-          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      {
+        event: "response.output_item.done",
+        data: {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: message,
         },
       },
-    },
-  ];
-  return { ok: true, events };
+      {
+        event: "response.completed",
+        data: {
+          type: "response.completed",
+          response: {
+            id: "resp_e2e",
+            object: "response",
+            status: "completed",
+            output: [message],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      },
+    ],
+  };
 };
 
 async function runCodexExec(codexBin, environment, extraArgs) {
@@ -155,7 +202,7 @@ async function runCodexExec(codexBin, environment, extraArgs) {
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       reject(new Error("FAROL_MODEL_E2E_CODEX_EXEC_TIMEOUT"));
-    }, 30_000);
+    }, CODEX_EXEC_TIMEOUT_MS);
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString("utf8");
     });
@@ -187,30 +234,60 @@ async function findRealCodex() {
   }
 }
 
+/** The environment a phase runs the host in: never the owner's CODEX_HOME. */
+function hostEnvironment(codexHome, extra = {}) {
+  const environment = { ...process.env };
+  delete environment.FAROL_MODEL_TOKEN;
+  return { ...environment, CODEX_HOME: codexHome, ...extra };
+}
+
+function logRun(label, run) {
+  console.log(`--- codex exec (${label}) exit=${run.code} stdout ---`);
+  console.log(run.stdout);
+  if (run.stderr) {
+    console.log(`--- codex exec (${label}) stderr ---`);
+    console.log(run.stderr);
+  }
+}
+
+async function phase(id, body) {
+  const startedAt = Date.now();
+  const entry = { id, status: "FAIL", durationMs: 0, details: {} };
+  report.phases.push(entry);
+  console.log(`=== phase ${id} ===`);
+  try {
+    entry.details = (await body()) ?? {};
+    entry.status = "PASS";
+  } catch (error) {
+    entry.error = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
+    entry.durationMs = Date.now() - startedAt;
+  }
+}
+
+async function writeReport() {
+  report.finishedAtIso = new Date().toISOString();
+  await fs.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`REPORT: ${reportPath}`);
+  console.log(`STATUS: ${report.status}`);
+}
+
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-model-e2e-"));
   try {
     const stateRoot = path.join(root, "private", "model-endpoint");
-    const codexHome = path.join(root, "codex-home");
-    await fs.mkdir(codexHome, { recursive: true });
-
     const state = new FarolModelRuntimeState(stateRoot);
-    const endpoint = new FarolModelEndpoint({ state, handler: turnHandler });
+    const endpoint = new FarolModelEndpoint({
+      state,
+      model: ROUTE_B_MODEL,
+      handler: turnHandler,
+    });
     const { port } = await endpoint.start();
     const token = await state.currentToken();
     assert.ok(token, "endpoint must mint a token on start");
-
-    const configPath = path.join(codexHome, "config.toml");
-    const appliedSpec = { ...spec, baseUrl: `http://127.0.0.1:${port}` };
-    const applyResult = await applyFarolModelConfigBlock(
-      configPath,
-      appliedSpec,
-    );
-    assert.equal(applyResult.status, "applied");
-
-    const configContents = await fs.readFile(configPath, "utf8");
-    console.log("--- managed config.toml ---");
-    console.log(configContents);
+    const baseUrl = `http://127.0.0.1:${port}`;
 
     const codexBin = await findRealCodex();
     if (!codexBin) {
@@ -222,103 +299,291 @@ async function main() {
           "rather than claiming the real-host case.",
       );
       await endpoint.stop();
-      process.exitCode = 0;
+      report.status = "REAL_HOST_UNAVAILABLE";
+      process.exitCode = EXIT_REAL_HOST_UNAVAILABLE;
       return;
     }
-
-    console.log(`Using real host binary: ${codexBin}`);
+    report.hostBinary = codexBin;
     const { stdout: versionOut } = await execFileAsync(codexBin, ["--version"]);
-    console.log(`Host version: ${versionOut.trim()}`);
+    report.hostVersion = versionOut.trim();
+    console.log(`Using real host binary: ${codexBin}`);
+    console.log(`Host version: ${report.hostVersion}`);
 
-    const environment = {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      [appliedSpec.delivery.envKeyName]: token,
+    /** Runs the host once and returns what the endpoint saw during that run. */
+    async function observedRun(label, codexHome, environment, extraArgs) {
+      const before = endpoint.evidence();
+      const callsBefore = upstream.calls;
+      const authBefore = upstream.authorizations.length;
+      const run = await runCodexExec(codexBin, environment, extraArgs);
+      logRun(label, run);
+      const after = endpoint.evidence();
+      return {
+        run,
+        codexHome,
+        accepted: after.requestsAccepted - before.requestsAccepted,
+        rejected: after.requestsRejected - before.requestsRejected,
+        upstreamCalls: upstream.calls - callsBefore,
+        authorizations: upstream.authorizations.slice(authBefore),
+        models: upstream.models.slice(authBefore),
+        lastRejectedReason: after.lastRejectedReason ?? null,
+      };
+    }
+
+    // ------------------------------------------------------------------
+    const envKeyHome = path.join(root, "codex-home-env-key");
+    await fs.mkdir(envKeyHome, { recursive: true });
+    const envKeyConfig = path.join(envKeyHome, "config.toml");
+    const envKeySpec = {
+      providerName: "farol",
+      displayName: "Farol Model",
+      baseUrl,
+      model: ROUTE_B_MODEL,
+      wireApi: "responses",
+      delivery: { mode: "env-key", envKeyName: "FAROL_MODEL_TOKEN" },
     };
 
-    const beforeEvidence = endpoint.evidence();
-    assert.equal(beforeEvidence.requestsAccepted, 0);
+    await phase("env-key-overrides", async () => {
+      const applied = await applyFarolModelConfigBlock(
+        envKeyConfig,
+        envKeySpec,
+      );
+      assert.equal(applied.status, "applied");
+      const config = await fs.readFile(envKeyConfig, "utf8");
+      console.log("--- managed config.toml (env-key) ---");
+      console.log(config);
+      assert.ok(
+        !config.includes("[profiles."),
+        "never a [profiles.<name>] table",
+      );
+      assert.ok(config.includes("request_max_retries = 0"));
+      assert.ok(config.includes("stream_max_retries = 0"));
+      assert.ok(config.includes("requires_openai_auth = false"));
+      assert.ok(config.includes("stream_idle_timeout_ms = 120000"));
 
-    // Selecting the provider via `-c` overrides (the way a one-shot
-    // invocation, or a Setup UI that shells out per-call, would pick
-    // Farol) exercises the model_providers entry itself — the part of the
-    // managed block this host version fully supports.
-    const { code, stdout, stderr } = await runCodexExec(codexBin, environment, [
-      "-c",
-      `model_provider=${appliedSpec.providerName}`,
-      "-c",
-      `model=${appliedSpec.model}`,
-    ]);
-    console.log("--- codex exec stdout ---");
-    console.log(stdout);
-    if (stderr) {
-      console.log("--- codex exec stderr ---");
-      console.log(stderr);
-    }
-    assert.equal(code, 0, `codex exec must exit 0, exit=${code}`);
+      const observed = await observedRun(
+        "env-key, -c overrides",
+        envKeyHome,
+        hostEnvironment(envKeyHome, { FAROL_MODEL_TOKEN: token }),
+        ["-c", "model_provider=farol", "-c", `model=${ROUTE_B_MODEL}`],
+      );
+      assert.equal(
+        observed.run.code,
+        0,
+        `codex exec must exit 0, exit=${observed.run.code}`,
+      );
+      assert.ok(
+        observed.run.stdout.includes(REPLY_TEXT),
+        "codex must print the model's reply",
+      );
+      assert.equal(
+        observed.accepted,
+        1,
+        `exactly one served request, saw ${observed.accepted}`,
+      );
+      assert.equal(
+        observed.rejected,
+        0,
+        `no rejected request, saw ${observed.rejected}`,
+      );
+      assert.deepEqual(observed.authorizations, [`Bearer ${token}`]);
+      assert.deepEqual(observed.models, [ROUTE_B_MODEL]);
+      return {
+        exitCode: observed.run.code,
+        accepted: observed.accepted,
+        rejected: observed.rejected,
+        authorizationMatched: true,
+        model: observed.models[0],
+      };
+    });
 
-    const afterEvidence = endpoint.evidence();
-    assert.ok(
-      afterEvidence.requestsAccepted >= 1,
-      `expected the endpoint to have served at least one request, evidence=${JSON.stringify(afterEvidence)}`,
-    );
-    assert.ok(
-      stdout.includes("farol model e2e reply"),
-      "codex must print the model's reply",
-    );
+    await phase("env-key-selection", async () => {
+      // N04 addendum: selecting the provider is a second, separately
+      // consented root-table region — `model_provider` and `model` — so a
+      // plain `codex exec` needs no per-call `-c` override at all.
+      const selected = await applyFarolModelProviderSelection(
+        envKeyConfig,
+        envKeySpec,
+      );
+      assert.equal(selected.status, "applied");
+      const config = await fs.readFile(envKeyConfig, "utf8");
+      console.log("--- config.toml with provider selection (env-key) ---");
+      console.log(config);
+      assert.ok(config.includes('model_provider = "farol"'));
+      assert.ok(config.includes(`model = "${ROUTE_B_MODEL}"`));
+
+      const observed = await observedRun(
+        "env-key, consented selection",
+        envKeyHome,
+        hostEnvironment(envKeyHome, { FAROL_MODEL_TOKEN: token }),
+        [],
+      );
+      assert.equal(
+        observed.run.code,
+        0,
+        `codex exec must exit 0, exit=${observed.run.code}`,
+      );
+      assert.ok(
+        observed.run.stdout.includes(REPLY_TEXT),
+        "codex must print the model's reply using the consented selection alone",
+      );
+      assert.equal(observed.accepted, 1);
+      assert.equal(observed.rejected, 0);
+      assert.deepEqual(observed.models, [ROUTE_B_MODEL]);
+      return {
+        exitCode: observed.run.code,
+        accepted: observed.accepted,
+        rejected: observed.rejected,
+      };
+    });
+
+    // ------------------------------------------------------------------
+    const bearerHome = path.join(root, "codex-home-bearer-token");
+    await fs.mkdir(bearerHome, { recursive: true });
+    const bearerConfig = path.join(bearerHome, "config.toml");
+    const bearerSpec = {
+      ...envKeySpec,
+      delivery: { mode: "bearer-token", token },
+    };
+
+    await phase("bearer-token-config", async () => {
+      // The production delivery (the Setup control builds exactly this
+      // spec): the literal in a file this module creates 0600, nothing in
+      // the environment, and the consented selection so no `-c` is needed.
+      const applied = await applyFarolModelConfigBlock(
+        bearerConfig,
+        bearerSpec,
+      );
+      assert.equal(applied.status, "applied");
+      const selected = await applyFarolModelProviderSelection(
+        bearerConfig,
+        bearerSpec,
+      );
+      assert.equal(selected.status, "applied");
+      const mode = (await fs.stat(bearerConfig)).mode & 0o777;
+      assert.equal(
+        mode,
+        0o600,
+        `config.toml must be 0600, was ${mode.toString(8)}`,
+      );
+      const config = await fs.readFile(bearerConfig, "utf8");
+      console.log(
+        "--- managed config.toml (bearer-token; token redacted in this log) ---",
+      );
+      console.log(config.split(token).join("<token>"));
+      assert.ok(config.includes(`experimental_bearer_token = "${token}"`));
+      assert.ok(!config.includes("env_key"));
+
+      const environment = hostEnvironment(bearerHome);
+      assert.equal(
+        environment.FAROL_MODEL_TOKEN,
+        undefined,
+        "no token in the environment",
+      );
+      const observed = await observedRun(
+        "bearer-token, no env, no -c",
+        bearerHome,
+        environment,
+        [],
+      );
+      assert.equal(
+        observed.run.code,
+        0,
+        `codex exec must exit 0, exit=${observed.run.code}`,
+      );
+      assert.ok(
+        observed.run.stdout.includes(REPLY_TEXT),
+        "codex must print the fixture reply",
+      );
+      assert.equal(
+        observed.accepted,
+        1,
+        `exactly one served request, saw ${observed.accepted}`,
+      );
+      assert.equal(
+        observed.rejected,
+        0,
+        `no rejected request, saw ${observed.rejected}`,
+      );
+      assert.equal(observed.upstreamCalls, 1);
+      assert.deepEqual(
+        observed.authorizations,
+        [`Bearer ${token}`],
+        "the host must present exactly Authorization: Bearer <token>",
+      );
+      assert.deepEqual(observed.models, [ROUTE_B_MODEL]);
+      return {
+        exitCode: observed.run.code,
+        configMode: mode.toString(8),
+        tokenInEnvironment: false,
+        overrides: [],
+        accepted: observed.accepted,
+        rejected: observed.rejected,
+        authorizationMatched: true,
+        model: observed.models[0],
+      };
+    });
+
+    await phase("no-retry-on-failure", async () => {
+      // The upstream fails exactly once. With request_max_retries = 0 in the
+      // block, the host must give up after one request; a retry would show
+      // up here as a second request that the (now healthy) upstream would
+      // happily serve.
+      upstream.failNext = true;
+      const observed = await observedRun(
+        "bearer-token, upstream fails once",
+        bearerHome,
+        hostEnvironment(bearerHome),
+        [],
+      );
+      assert.notEqual(
+        observed.run.code,
+        0,
+        "codex exec must fail when the one request fails",
+      );
+      assert.equal(
+        observed.accepted + observed.rejected,
+        1,
+        `the endpoint must see exactly one request, saw accepted=${observed.accepted} rejected=${observed.rejected}`,
+      );
+      assert.equal(observed.rejected, 1);
+      assert.equal(observed.upstreamCalls, 1);
+      assert.equal(
+        observed.lastRejectedReason,
+        "FAROL_MODEL_E2E_SYNTHETIC_FAILURE",
+      );
+      assert.equal(upstream.failNext, false);
+      assert.ok(
+        !observed.run.stdout.includes(REPLY_TEXT),
+        "no reply may be printed for a failed turn",
+      );
+      return {
+        exitCode: observed.run.code,
+        requestsSeen: observed.accepted + observed.rejected,
+        rejected: observed.rejected,
+        lastRejectedReason: observed.lastRejectedReason,
+      };
+    });
 
     console.log(
       "OBSERVED_RESULT: endpoint evidence =",
-      JSON.stringify(afterEvidence),
+      JSON.stringify(endpoint.evidence()),
     );
-
-    // N04 addendum: the managed block never writes a `[profiles.<name>]`
-    // table (codex-cli 0.153.4 treats one as legacy and refuses --profile
-    // against it). Selecting the provider is instead a second, separately
-    // consented top-level `model_provider = …` line. Applying it here lets
-    // `codex exec` pick Farol as the default with no per-call `-c`
-    // overrides at all.
-    const configAfterBlock = await fs.readFile(configPath, "utf8");
-    assert.ok(
-      !configAfterBlock.includes("[profiles."),
-      "the managed block must never write a [profiles.<name>] table",
-    );
-    const selectionResult = await applyFarolModelProviderSelection(
-      configPath,
-      appliedSpec.providerName,
-    );
-    assert.equal(selectionResult.status, "applied");
-    const configAfterSelection = await fs.readFile(configPath, "utf8");
-    console.log("--- config.toml with provider selection ---");
-    console.log(configAfterSelection);
-
-    const defaultRun = await runCodexExec(codexBin, environment, []);
-    console.log("--- codex exec (default provider) stdout ---");
-    console.log(defaultRun.stdout);
-    if (defaultRun.stderr) {
-      console.log("--- codex exec (default provider) stderr ---");
-      console.log(defaultRun.stderr);
-    }
-    assert.equal(
-      defaultRun.code,
-      0,
-      `codex exec with the consented default provider must exit 0, exit=${defaultRun.code}`,
-    );
-    assert.ok(
-      defaultRun.stdout.includes("farol model e2e reply"),
-      "codex must print the model's reply using the consented default provider alone",
-    );
-    console.log(
-      "CONFIRMED_SELECTION: a separately consented top-level model_provider line is enough, no per-call -c override needed",
-    );
-
     await endpoint.stop();
+    report.status = "PASS";
+    process.exitCode = EXIT_PASS;
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 }
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error(error);
-  process.exitCode = 1;
-});
+  report.status = "FAIL";
+  report.error = error instanceof Error ? error.message : String(error);
+  process.exitCode = EXIT_FAIL;
+} finally {
+  await writeReport();
+  await fs.rm(path.dirname(bundleOutput), { recursive: true, force: true });
+}

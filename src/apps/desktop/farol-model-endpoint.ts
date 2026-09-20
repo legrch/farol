@@ -1,3 +1,4 @@
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -8,8 +9,21 @@ import { FarolModelRuntimeState } from "./farol-model-runtime-state";
 // LaunchAgent, no daemon, no autospawn, and it never listens on anything but
 // loopback. The turn itself is delegated to an injected handler so this
 // module stays independent of the specific product route that answers a
-// model turn today; wiring the real route is a separate, named follow-up
-// (see the worker report for packet N04).
+// model turn today; `routeBModelTurnHandler` below is the production one.
+//
+// Request pipeline, in this order and with no route dispatched before the
+// caller is authenticated:
+//   1. peer must be loopback                          → 403, anonymous body
+//   2. no `Origin` header (a Codex host never sends one; a browser always
+//      does)                                          → 403, anonymous body
+//   3. bearer token, compared in constant time        → 401, anonymous body
+//   4. route: POST /responses or GET /farol-model/identity → 404
+//   5. body bounded at 1 MiB, refused while it is still arriving → 413
+//   6. `model` must be the one model this endpoint serves → 422
+//   7. the turn handler
+// "Anonymous body" means a caller that has not authenticated sees no
+// FAROL_* code, only a generic status, so a port scan cannot fingerprint
+// Farol; the precise reason is kept in `evidence()` for the owner.
 
 /** One SSE frame of an OpenAI Responses API stream. */
 export type FarolModelSseEvent = Readonly<{
@@ -39,6 +53,35 @@ const unavailableHandler: FarolModelTurnHandler = async () => ({
   ok: false,
   reason: "FAROL_MODEL_ROUTE_UNAVAILABLE",
 });
+
+export const FAROL_MODEL_RESPONSES_PATH = "/responses";
+/** Authenticated identity probe: answers this endpoint's own instance nonce. */
+export const FAROL_MODEL_IDENTITY_PATH = "/farol-model/identity";
+export const FAROL_MODEL_MAX_BODY_BYTES = 1024 * 1024;
+export const FAROL_MODEL_PRODUCT = "farol-model";
+
+/** What `GET /farol-model/identity` answers to an authenticated caller. */
+export type FarolModelIdentity = Readonly<{
+  product: typeof FAROL_MODEL_PRODUCT;
+  /** Fresh per endpoint instance; never persisted. */
+  instance: string;
+  pid: number;
+  port: number;
+}>;
+
+export function isFarolModelIdentity(
+  value: unknown,
+): value is FarolModelIdentity {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.product === FAROL_MODEL_PRODUCT &&
+    typeof candidate.instance === "string" &&
+    candidate.instance.length > 0 &&
+    typeof candidate.pid === "number" &&
+    typeof candidate.port === "number"
+  );
+}
 
 /** The already-running Route B provider this endpoint reaches as a client. */
 export type RouteBModelEndpointTarget = Readonly<{
@@ -141,11 +184,29 @@ export type FarolModelEndpointEvidence = Readonly<{
   lastRejectedReason: string | undefined;
 }>;
 
+/**
+ * Bounds on how long a client may take to deliver a request. They cover the
+ * request only — headers and body — never the time a model turn takes to
+ * answer, so a slow turn is unaffected while a half-open connection cannot
+ * hold a slot indefinitely.
+ */
+export type FarolModelEndpointTimeouts = Readonly<{
+  requestTimeoutMs?: number;
+  headersTimeoutMs?: number;
+  /** How often Node sweeps connections for the two timeouts above. */
+  connectionsCheckingIntervalMs?: number;
+}>;
+
 export type FarolModelEndpointOptions = Readonly<{
   state: FarolModelRuntimeState;
+  /** The one model this endpoint serves; any other `model` is refused (422). */
+  model: string;
   handler?: FarolModelTurnHandler;
   /** Host loopback address to bind; defaults to 127.0.0.1 (IPv4 only). */
   host?: string;
+  timeouts?: FarolModelEndpointTimeouts;
+  /** Request-body bound in bytes; defaults to 1 MiB. */
+  maxBodyBytes?: number;
 }>;
 
 export class FarolModelEndpointPortConflictError extends Error {
@@ -153,6 +214,19 @@ export class FarolModelEndpointPortConflictError extends Error {
     super(`FAROL_MODEL_ENDPOINT_PORT_CONFLICT:${port}`);
   }
 }
+
+const DEFAULT_TIMEOUTS: Required<FarolModelEndpointTimeouts> = {
+  requestTimeoutMs: 30_000,
+  headersTimeoutMs: 10_000,
+  connectionsCheckingIntervalMs: 5_000,
+};
+
+/** How long a refused, still-arriving body is drained before the connection drops. */
+const BODY_LINGER_MS = 2_000;
+
+type BodyRead =
+  | Readonly<{ ok: true; raw: string }>
+  | Readonly<{ ok: false; reason: "too_large" | "aborted" }>;
 
 /**
  * The loopback endpoint. `start()` binds the persisted port when one is
@@ -162,8 +236,13 @@ export class FarolModelEndpointPortConflictError extends Error {
  */
 export class FarolModelEndpoint {
   private readonly state: FarolModelRuntimeState;
+  private readonly model: string;
   private readonly handler: FarolModelTurnHandler;
   private readonly host: string;
+  private readonly timeouts: Required<FarolModelEndpointTimeouts>;
+  private readonly maxBodyBytes: number;
+  /** Identifies this exact endpoint instance to an authenticated prober. */
+  readonly instanceNonce: string = randomBytes(16).toString("hex");
   private server: ReturnType<typeof http.createServer> | undefined;
   private boundPort: number | undefined;
   private requestsAccepted = 0;
@@ -172,13 +251,27 @@ export class FarolModelEndpoint {
   private lastRejectedReason: string | undefined;
 
   constructor(options: FarolModelEndpointOptions) {
+    if (options.model.length === 0) {
+      throw new Error("FAROL_MODEL_ENDPOINT_MODEL_REQUIRED");
+    }
     this.state = options.state;
+    this.model = options.model;
     this.handler = options.handler ?? unavailableHandler;
     this.host = options.host ?? "127.0.0.1";
+    this.timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts };
+    this.maxBodyBytes = options.maxBodyBytes ?? FAROL_MODEL_MAX_BODY_BYTES;
+    if (this.timeouts.headersTimeoutMs > this.timeouts.requestTimeoutMs) {
+      throw new Error("FAROL_MODEL_ENDPOINT_TIMEOUTS_INVALID");
+    }
   }
 
   get port(): number | undefined {
     return this.boundPort;
+  }
+
+  /** The one model this endpoint serves. */
+  get servedModel(): string {
+    return this.model;
   }
 
   evidence(): FarolModelEndpointEvidence {
@@ -212,6 +305,7 @@ export class FarolModelEndpoint {
     this.server = undefined;
     this.boundPort = undefined;
     if (!server) return;
+    server.closeIdleConnections();
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
@@ -226,12 +320,20 @@ export class FarolModelEndpoint {
   }
 
   private async bind(requestedPort: number): Promise<number> {
-    const server = http.createServer((request, response) => {
-      this.handleRequest(request, response).catch(() => {
-        if (!response.headersSent) response.writeHead(500);
-        response.end();
-      });
-    });
+    const server = http.createServer(
+      {
+        requestTimeout: this.timeouts.requestTimeoutMs,
+        headersTimeout: this.timeouts.headersTimeoutMs,
+        connectionsCheckingInterval:
+          this.timeouts.connectionsCheckingIntervalMs,
+      },
+      (request, response) => {
+        this.handleRequest(request, response).catch(() => {
+          if (!response.headersSent) response.writeHead(500);
+          response.end();
+        });
+      },
+    );
     try {
       await new Promise<void>((resolve, reject) => {
         server.once("error", (error) => reject(error));
@@ -259,31 +361,79 @@ export class FarolModelEndpoint {
   ): Promise<void> {
     const remote = request.socket.remoteAddress;
     if (!isLoopbackAddress(remote)) {
-      this.reject(response, 403, "FAROL_MODEL_NON_LOOPBACK");
+      this.refuseAnonymously(response, 403, "FAROL_MODEL_NON_LOOPBACK");
       return;
     }
-    if (request.method !== "POST" || request.url !== "/responses") {
-      this.reject(response, 404, "FAROL_MODEL_ROUTE_NOT_FOUND");
+    if (request.headers.origin !== undefined) {
+      this.refuseAnonymously(response, 403, "FAROL_MODEL_ORIGIN_PRESENT");
       return;
     }
     const token = await this.state.currentToken();
     if (token === undefined) {
-      this.reject(response, 401, "FAROL_MODEL_TOKEN_UNSET");
+      this.refuseAnonymously(response, 401, "FAROL_MODEL_TOKEN_UNSET");
       return;
     }
     const authorization = request.headers.authorization;
     if (authorization === undefined) {
-      this.reject(response, 401, "FAROL_MODEL_TOKEN_MISSING");
+      this.refuseAnonymously(response, 401, "FAROL_MODEL_TOKEN_MISSING");
       return;
     }
-    if (authorization !== `Bearer ${token}`) {
-      this.reject(response, 401, "FAROL_MODEL_TOKEN_INVALID");
+    if (!bearerMatches(authorization, token)) {
+      this.refuseAnonymously(response, 401, "FAROL_MODEL_TOKEN_INVALID");
       return;
     }
 
-    const body = await readJsonBody(request);
+    // Authenticated from here on: codes may name Farol.
+    const url = request.url ?? "";
+    if (request.method === "GET" && url === FAROL_MODEL_IDENTITY_PATH) {
+      const identity: FarolModelIdentity = {
+        product: FAROL_MODEL_PRODUCT,
+        instance: this.instanceNonce,
+        pid: process.pid,
+        port: this.expectPort(),
+      };
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(identity));
+      return;
+    }
+    if (request.method !== "POST" || url !== FAROL_MODEL_RESPONSES_PATH) {
+      this.reject(response, 404, "FAROL_MODEL_ROUTE_NOT_FOUND");
+      return;
+    }
+
+    const body = await this.readBody(request);
+    if (!body.ok) {
+      if (body.reason === "too_large") {
+        // Refused while the body is still arriving. The rest of it is
+        // drained, never buffered, for a bounded moment so the 413 reaches a
+        // peer that is mid-upload instead of being pre-empted by the TCP
+        // reset an immediate close would cause; then the connection drops.
+        this.reject(response, 413, "FAROL_MODEL_BODY_TOO_LARGE");
+        this.lingerThenClose(request);
+      }
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = body.raw.length === 0 ? undefined : JSON.parse(body.raw);
+    } catch {
+      this.reject(response, 400, "FAROL_MODEL_BODY_INVALID");
+      return;
+    }
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      (parsed as { model?: unknown }).model !== this.model
+    ) {
+      this.reject(response, 422, "FAROL_MODEL_MODEL_MISMATCH", {
+        expected_model: this.model,
+        message: `This Farol Model endpoint serves only model ${JSON.stringify(this.model)}; the Farol-managed selection in config.toml sets it.`,
+      });
+      return;
+    }
+
     const outcome = await this.handler({
-      body,
+      body: parsed,
       headers: flattenHeaders(request.headers),
     });
     if (!outcome.ok) {
@@ -305,13 +455,110 @@ export class FarolModelEndpoint {
     response.end();
   }
 
-  private reject(response: ServerResponse, status: number, reason: string) {
+  /**
+   * Buffers the request body up to `maxBodyBytes`. The bound is checked on
+   * the declared length first and then on every chunk, so an oversized
+   * body is refused as soon as it crosses the line, not after it has all
+   * been read into memory.
+   */
+  private readBody(request: IncomingMessage): Promise<BodyRead> {
+    const declared = Number(request.headers["content-length"]);
+    if (Number.isFinite(declared) && declared > this.maxBodyBytes) {
+      return Promise.resolve({ ok: false, reason: "too_large" });
+    }
+    return new Promise<BodyRead>((resolve) => {
+      const chunks: Buffer[] = [];
+      let total = 0;
+      let settled = false;
+      const settle = (value: BodyRead) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      request.on("data", (chunk: Buffer) => {
+        if (settled) return;
+        total += chunk.length;
+        if (total > this.maxBodyBytes) {
+          chunks.length = 0;
+          settle({ ok: false, reason: "too_large" });
+          return;
+        }
+        chunks.push(chunk);
+      });
+      request.on("end", () =>
+        settle({ ok: true, raw: Buffer.concat(chunks).toString("utf8") }),
+      );
+      request.on("error", () => settle({ ok: false, reason: "aborted" }));
+      request.on("close", () => settle({ ok: false, reason: "aborted" }));
+    });
+  }
+
+  /**
+   * After an early refusal of a body still in flight: keep reading and
+   * discarding what the client sends until its body ends or the linger
+   * bound passes, then drop the connection. Nothing read here is kept.
+   */
+  private lingerThenClose(request: IncomingMessage): void {
+    const close = () => {
+      clearTimeout(timer);
+      request.socket.destroy();
+    };
+    const timer = setTimeout(close, BODY_LINGER_MS);
+    timer.unref();
+    if (request.readableEnded || request.complete) {
+      close();
+      return;
+    }
+    request.once("end", close);
+    request.once("close", () => clearTimeout(timer));
+    request.resume();
+  }
+
+  /** A refusal an authenticated caller may read: a stable FAROL_* code. */
+  private reject(
+    response: ServerResponse,
+    status: number,
+    reason: string,
+    detail?: Readonly<Record<string, string>>,
+  ) {
     this.requestsRejected += 1;
     this.lastRejectedReason = reason;
-    // Content-free: the reason is a stable code, never upstream detail.
+    // Content-free beyond the code: never upstream detail.
     response.writeHead(status, { "content-type": "application/json" });
-    response.end(JSON.stringify({ error: { code: reason } }));
+    response.end(
+      JSON.stringify({ error: { code: reason, ...(detail ?? {}) } }),
+    );
   }
+
+  /**
+   * A refusal for a caller that has not authenticated. The body names no
+   * product and no FAROL_* code; the reason is recorded for `evidence()`
+   * only.
+   */
+  private refuseAnonymously(
+    response: ServerResponse,
+    status: 401 | 403,
+    reason: string,
+  ) {
+    this.requestsRejected += 1;
+    this.lastRejectedReason = reason;
+    response.writeHead(status, {
+      "content-type": "application/json",
+      ...(status === 401 ? { "www-authenticate": "Bearer" } : {}),
+    });
+    response.end(
+      JSON.stringify({
+        error: { code: status === 401 ? "unauthorized" : "forbidden" },
+      }),
+    );
+  }
+}
+
+/** Constant-time bearer comparison; digesting first hides the length too. */
+function bearerMatches(authorization: string, token: string): boolean {
+  const expected = createHash("sha256").update(`Bearer ${token}`).digest();
+  const presented = createHash("sha256").update(authorization).digest();
+  return timingSafeEqual(expected, presented);
 }
 
 export function isLoopbackAddress(address: string | undefined): boolean {
@@ -320,20 +567,6 @@ export function isLoopbackAddress(address: string | undefined): boolean {
     address === "::1" ||
     address === "::ffff:127.0.0.1"
   );
-}
-
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(chunk as Buffer);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (raw.length === 0) return undefined;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 function flattenHeaders(

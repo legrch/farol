@@ -7,7 +7,8 @@
 // `startCodexCallerRelay`, never a live ChatGPT account or Codex), point a
 // real `FarolModelEndpoint` at it through `routeBModelTurnHandler`, and
 // drive every request through the endpoint's own loopback HTTP surface —
-// proving the endpoint, not just the runtime underneath it.
+// proving the endpoint, not just the runtime underneath it. Every request
+// body is the shape an ordinary Codex sends, including the Route B model.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +31,7 @@ import {
 } from "../../src/apps/desktop/farol-model-endpoint";
 import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runtime-state";
 import {
+  ROUTE_B_MODEL,
   startRouteBRuntime,
   type RouteBRuntime,
   type RouteBTaskSurfaces,
@@ -112,6 +114,7 @@ async function startEndpoint(
   );
   endpoint = new FarolModelEndpoint({
     state,
+    model: ROUTE_B_MODEL,
     handler: routeBModelTurnHandler(() => route.endpoint),
   });
   const { port } = await endpoint.start();
@@ -135,6 +138,7 @@ function postToEndpoint(
   });
 }
 
+/** Exactly what an ordinary Codex sends: the Route B model, streamed, unstored. */
 function initialRequest(
   turnId: string,
   text: string,
@@ -142,7 +146,7 @@ function initialRequest(
   input: unknown[] = [],
 ) {
   return {
-    model: "farol-next/mind",
+    model: ROUTE_B_MODEL,
     stream: true,
     store: false,
     input: [
@@ -183,6 +187,22 @@ async function extractEvents(
     });
   }
   return events;
+}
+
+/**
+ * The provider's internal route token is the endpoint's own credential
+ * toward Route B; it must never appear in what a caller receives nor in
+ * the evidence the owner's UI reads.
+ */
+function expectNoRouteTokenLeak(
+  route: RouteBRuntime,
+  served: FarolModelEndpoint,
+  ...payloads: readonly string[]
+): void {
+  const internal = route.endpoint.token;
+  expect(internal.length).toBeGreaterThan(0);
+  for (const payload of payloads) expect(payload).not.toContain(internal);
+  expect(JSON.stringify(served.evidence())).not.toContain(internal);
 }
 
 describe("Farol Model endpoint dispatches through the real Route B provider (packet N04c)", () => {
@@ -256,7 +276,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
         strict: true,
       },
     ];
-    const { port, token } = await startEndpoint(route);
+    const { endpoint: served, port, token } = await startEndpoint(route);
     const initial = initialRequest("turn-endpoint-tool", "Add 2 and 3.", tools);
 
     const first = await postToEndpoint(port, token, initial);
@@ -304,6 +324,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
         output: "5",
       },
     ]);
+    expectNoRouteTokenLeak(route, served, firstStream, finalStream);
   });
 
   it("refuses a second turn on the same thread while the first is admitted, with no queued second submission", async () => {
@@ -344,7 +365,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
       { surfaceFor: async () => ({ ok: true, surface: task }) },
       task,
     );
-    const { port, token } = await startEndpoint(route);
+    const { endpoint: served, port, token } = await startEndpoint(route);
 
     const running = postToEndpoint(
       port,
@@ -361,6 +382,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
       initialRequest("turn-busy-2", "A different request on the same thread."),
     );
     expect(second.status).toBe(200);
+    const secondText = await second.clone().text();
     const secondEvents = await extractEvents(second);
     const secondFailure = secondEvents.find(
       (event) => event.event === "response.failed",
@@ -373,8 +395,10 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
     releaseFirst();
     const firstResponse = await running;
     expect(firstResponse.status).toBe(200);
-    expect(await firstResponse.text()).toContain("First turn finished.");
+    const firstText = await firstResponse.text();
+    expect(firstText).toContain("First turn finished.");
     expect(route.owns(threadId)).toBe(false);
+    expectNoRouteTokenLeak(route, served, firstText, secondText);
   });
 
   it("surfaces an interrupted turn as unknown through the endpoint, with no retry", async () => {
@@ -393,7 +417,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
       { surfaceFor: async () => ({ ok: true, surface: task }) },
       task,
     );
-    const { port, token } = await startEndpoint(route);
+    const { endpoint: served, port, token } = await startEndpoint(route);
 
     const response = await postToEndpoint(
       port,
@@ -401,6 +425,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
       initialRequest("turn-unknown-1", "This turn gets interrupted."),
     );
     expect(response.status).toBe(200);
+    const text = await response.clone().text();
     const events = await extractEvents(response);
     const failure = events.find((event) => event.event === "response.failed");
     expect(failure?.data).toMatchObject({
@@ -411,6 +436,7 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
     );
     // Exactly one attempt: the endpoint never retries an unknown outcome.
     expect(attempts).toBe(1);
+    expectNoRouteTokenLeak(route, served, text);
   });
 
   it("answers FAROL_MODEL_ROUTE_UNAVAILABLE when no Route B runtime is running yet", async () => {
@@ -422,19 +448,63 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
     );
     endpoint = new FarolModelEndpoint({
       state,
+      model: ROUTE_B_MODEL,
       handler: routeBModelTurnHandler(() => null),
     });
     const { port } = await endpoint.start();
     const token = await state.currentToken();
     if (!token) throw new Error("FAROL_MODEL_TOKEN_MISSING_IN_TEST");
 
-    const response = await postToEndpoint(port, token, {});
+    const response = await postToEndpoint(
+      port,
+      token,
+      initialRequest("turn-unwired-1", "Nothing is wired yet."),
+    );
     expect(response.status).toBe(502);
     const payload = (await response.json()) as { error: { code: string } };
     expect(payload.error.code).toBe("FAROL_MODEL_ROUTE_UNAVAILABLE");
   });
 
-  it("still refuses a missing token and a non-loopback peer when wired to the real route", async () => {
+  it("refuses a request for any model but the Route B model before it reaches the provider", async () => {
+    let runs = 0;
+    const task: ChatGptContextSummaryRoute = {
+      runReadonlyTask: async (): Promise<ChatGptReadonlyTaskResult> => {
+        runs += 1;
+        return {
+          state: "completed",
+          code: null,
+          deltaCount: 0,
+          observedCharacters: 0,
+          outputText: "",
+        };
+      },
+      currentConversationUrl: () => null,
+      retainedConversationUrl: () => null,
+      resetConversation: () => undefined,
+      dispose: () => undefined,
+    };
+    const route = await compose(
+      { surfaceFor: async () => ({ ok: true, surface: task }) },
+      task,
+    );
+    const { endpoint: served, port, token } = await startEndpoint(route);
+
+    const response = await postToEndpoint(port, token, {
+      ...initialRequest("turn-wrong-model", "Hello."),
+      model: "farol-model",
+    });
+    expect(response.status).toBe(422);
+    const text = await response.text();
+    const payload = JSON.parse(text) as {
+      error: { code: string; expected_model: string };
+    };
+    expect(payload.error.code).toBe("FAROL_MODEL_MODEL_MISMATCH");
+    expect(payload.error.expected_model).toBe(ROUTE_B_MODEL);
+    expect(runs).toBe(0);
+    expectNoRouteTokenLeak(route, served, text);
+  });
+
+  it("still refuses a missing token when wired to the real route", async () => {
     const task: ChatGptContextSummaryRoute = {
       runReadonlyTask: async (): Promise<ChatGptReadonlyTaskResult> => ({
         state: "completed",
@@ -452,13 +522,16 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
       { surfaceFor: async () => ({ ok: true, surface: task }) },
       task,
     );
-    const { port } = await startEndpoint(route);
+    const { endpoint: served, port } = await startEndpoint(route);
 
     const missing = await fetch(`http://127.0.0.1:${port}/responses`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify(initialRequest("turn-anonymous", "Hello.")),
     });
     expect(missing.status).toBe(401);
+    const text = await missing.text();
+    expect(text).not.toMatch(/farol/iu);
+    expectNoRouteTokenLeak(route, served, text);
   });
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Farol Model credential helper.
+// Farol Model token helper.
 //
 // Prints the current Farol Model endpoint token to stdout and exits 0, or
 // exits non-zero with a single readable reason line on stderr. It reads
@@ -18,14 +18,18 @@
 // GUI-launched, shell-less request. See the packet N04 report for the
 // escalation this confirms.
 //
-// Usage: farol-model-credential-helper.mjs --state-root <private-state-dir>
+// Usage: farol-model-token-helper.mjs --state-root <private-state-dir>
 
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const TOKEN_FILE = "model-endpoint-token";
 const LIVENESS_FILE = "model-endpoint-liveness";
+
+// Mirrors `isFarolModelToken` in farol-model-runtime-state.ts: 32 random
+// bytes as base64url, 43 characters. Anything else on disk is no token.
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/u;
 
 function fail(reason) {
   process.stderr.write(`${reason}\n`);
@@ -40,14 +44,29 @@ function parseArgs(argv) {
   return argv[index + 1];
 }
 
-async function assertPrivateFile(target) {
-  const info = await fs.lstat(target);
+/**
+ * Why a file at Farol's private state root must not be trusted, or null
+ * when it is a plain, singly linked, owner-only file owned by `expectedUid`.
+ * Exported so the decision is testable without a differently owned file,
+ * which an unprivileged test cannot create.
+ */
+export function privateFileProblem(info, expectedUid) {
   if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-    throw new Error("unsafe file");
+    return "unsafe file";
+  }
+  if (expectedUid !== undefined && info.uid !== expectedUid) {
+    return "file is not owned by the current user";
   }
   if ((info.mode & 0o077) !== 0) {
-    throw new Error("file is not private");
+    return "file is not private";
   }
+  return null;
+}
+
+async function assertPrivateFile(target) {
+  const info = await fs.lstat(target);
+  const problem = privateFileProblem(info, process.geteuid?.());
+  if (problem !== null) throw new Error(problem);
   return info;
 }
 
@@ -63,7 +82,7 @@ function processIsAlive(pid) {
 async function main() {
   const stateRoot = parseArgs(process.argv.slice(2));
   if (!stateRoot || !path.isAbsolute(stateRoot)) {
-    fail("farol-model-credential-helper: missing --state-root <absolute-path>");
+    fail("farol-model-token-helper: missing --state-root <absolute-path>");
     return;
   }
 
@@ -111,16 +130,23 @@ async function main() {
     fail(`Farol is running but has no token yet (${error?.message ?? error})`);
     return;
   }
-  if (!token) {
-    fail("Farol is running but has no token yet");
+  if (!token || !TOKEN_SHAPE.test(token)) {
+    fail("Farol is running but has no usable token yet");
     return;
   }
 
   process.stdout.write(token);
 }
 
-main().catch((error) => {
-  fail(
-    `farol-model-credential-helper: unexpected failure (${error?.message ?? error})`,
-  );
-});
+// Run only when invoked as a program; importing the module (for the
+// exported check above) must not read anything or exit.
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  main().catch((error) => {
+    fail(
+      `farol-model-token-helper: unexpected failure (${error?.message ?? error})`,
+    );
+  });
+}

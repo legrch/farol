@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runtime-state";
+import {
+  FarolModelRuntimeState,
+  isFarolModelToken,
+} from "../../src/apps/desktop/farol-model-runtime-state";
 
 const roots: string[] = [];
 
@@ -29,6 +32,7 @@ describe("Farol Model runtime state", () => {
     expect(await state.currentToken()).toBeUndefined();
     const minted = await state.ensureToken();
     expect(minted.length).toBeGreaterThan(20);
+    expect(isFarolModelToken(minted)).toBe(true);
     expect(await state.ensureToken()).toBe(minted);
     expect(await state.currentToken()).toBe(minted);
 
@@ -44,6 +48,43 @@ describe("Farol Model runtime state", () => {
     const rotated = await state.rotateToken();
     expect(rotated).not.toBe(first);
     expect(await state.currentToken()).toBe(rotated);
+  });
+
+  it("treats an empty or unparsable token file as no token at all, and re-mints on demand", async () => {
+    const root = await stateRoot();
+    const state = new FarolModelRuntimeState(root);
+    const minted = await state.ensureToken();
+    const tokenFile = path.join(root, "model-endpoint-token");
+
+    for (const damaged of [
+      "",
+      "\n",
+      "not a token",
+      `${minted}\n`,
+      "=".repeat(43),
+    ]) {
+      await fs.writeFile(tokenFile, damaged, { mode: 0o600 });
+      expect(await state.currentToken()).toBeUndefined();
+    }
+
+    const reminted = await state.ensureToken();
+    expect(reminted).not.toBe(minted);
+    expect(isFarolModelToken(reminted)).toBe(true);
+    expect(await fs.readFile(tokenFile, "utf8")).toBe(reminted);
+    expect(await state.currentToken()).toBe(reminted);
+  });
+
+  it("accepts exactly the minted shape: 43 base64url characters", () => {
+    expect(isFarolModelToken("A".repeat(43))).toBe(true);
+    expect(isFarolModelToken(`${"a".repeat(21)}-_${"Z".repeat(20)}`)).toBe(
+      true,
+    );
+    expect(isFarolModelToken("A".repeat(42))).toBe(false);
+    expect(isFarolModelToken("A".repeat(44))).toBe(false);
+    expect(isFarolModelToken("")).toBe(false);
+    expect(isFarolModelToken(`${"A".repeat(42)}=`)).toBe(false);
+    expect(isFarolModelToken(`${"A".repeat(43)}\n`)).toBe(false);
+    expect(isFarolModelToken(`${"A".repeat(42)}+`)).toBe(false);
   });
 
   it("persists a port once and reports it back across instances", async () => {

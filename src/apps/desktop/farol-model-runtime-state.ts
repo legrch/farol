@@ -5,8 +5,8 @@ import path from "node:path";
 
 // Private, on-disk state for the Farol Model loopback endpoint: the bearer
 // token Codex authenticates with, the port the endpoint binds and reuses
-// across launches, and a liveness marker the shipped credential helper reads
-// to tell "Farol is running" from "Farol is not running" without a network
+// across launches, and a liveness marker the shipped token helper reads to
+// tell "Farol is running" from "Farol is not running" without a network
 // round trip. Every file here is 0600, inside a 0700 root this process owns
 // — the same shape `connector-key-store.ts` uses for the tunnel credential.
 
@@ -17,6 +17,19 @@ const LIVENESS_FILE = "model-endpoint-liveness";
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
+
+/**
+ * The only shape a minted token ever has: 32 random bytes as base64url, 43
+ * characters, nothing else. Anything on disk that does not match — an empty
+ * file, a stray newline, a hand-edited value — is treated as no token at
+ * all, so the endpoint can never end up accepting `Bearer ` with nothing
+ * after it.
+ */
+const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/u;
+
+export function isFarolModelToken(value: string): boolean {
+  return TOKEN_SHAPE.test(value);
+}
 
 export type FarolModelLiveness = Readonly<{
   pid: number;
@@ -98,7 +111,7 @@ async function readPrivateFile(
 /**
  * Private on-disk state for one Farol Model endpoint instance: the bearer
  * token Codex authenticates with, the port persisted across launches, and a
- * liveness marker the credential helper reads.
+ * liveness marker the token helper reads.
  */
 export class FarolModelRuntimeState {
   constructor(private readonly root: string) {
@@ -121,17 +134,22 @@ export class FarolModelRuntimeState {
     if ((info.mode & 0o077) !== 0) await fs.chmod(this.root, 0o700);
   }
 
-  /** Returns the current token, minting one on first use. */
+  /**
+   * Returns the current token, minting one on first use — and re-minting
+   * when the file on disk is empty or does not hold a well-formed token.
+   */
   async ensureToken(): Promise<string> {
-    await this.ensureRoot();
-    const existing = await readPrivateFile(this.root, TOKEN_FILE);
-    if (existing !== undefined && existing.length > 0) return existing;
+    const existing = await this.currentToken();
+    if (existing !== undefined) return existing;
     return this.rotateToken();
   }
 
+  /** The current token, or undefined when there is none or the file is unusable. */
   async currentToken(): Promise<string | undefined> {
     await this.ensureRoot();
-    return readPrivateFile(this.root, TOKEN_FILE);
+    const raw = await readPrivateFile(this.root, TOKEN_FILE);
+    if (raw === undefined || !isFarolModelToken(raw)) return undefined;
+    return raw;
   }
 
   /** Rotates the token on demand; the previous token stops authenticating. */

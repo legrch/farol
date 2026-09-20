@@ -8675,6 +8675,12 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
       .innerText();
     assert.match(diffText, /\[model_providers\.farol\]/u);
     assert.match(diffText, /experimental_bearer_token/u);
+    // The literal never reaches the renderer: a fixed placeholder does.
+    assert.match(diffText, /<redacted: Farol Model token>/u);
+    assert.doesNotMatch(
+      diffText,
+      /experimental_bearer_token = "[A-Za-z0-9_-]{43}"/u,
+    );
     assert.doesNotMatch(diffText, /\[profiles\./u);
     assert.equal(
       await fs.stat(configPath).then(
@@ -8724,7 +8730,27 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
         authorization: `Bearer ${token}`,
         "content-type": "application/json",
       },
-      body: JSON.stringify({ model: "farol-model", input: "say hi" }),
+      // The one model the endpoint serves is the Route B model; any other
+      // `model` is refused with 422 before the turn handler runs.
+      body: JSON.stringify({
+        model: "farol-next/mind",
+        stream: true,
+        store: false,
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "say hi" }],
+          },
+        ],
+        tools: [],
+        client_metadata: {
+          session_id: "0199c0de-0000-7000-8000-00000000e2e1",
+          thread_id: "0199c0de-0000-7000-8000-00000000e2e1",
+          turn_id: "turn-e2e-model-1",
+          root_turn_id: "turn-e2e-model-1",
+        },
+      }),
     });
     assert.equal(served.status, 200);
     const servedBody = await served.text();

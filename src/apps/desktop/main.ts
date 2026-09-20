@@ -259,6 +259,7 @@ import {
   rollbackFarolModelProviderSelection,
   type FarolModelProviderSpec,
 } from "./farol-model-config-block";
+import { detectCodexHostPresence } from "./farol-model-host-presence";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
@@ -2552,6 +2553,7 @@ function modelStatusEvidencePayload(
   state: "port_conflict" | "listening" | "connected";
   port: number | null;
   requestsServed: number;
+  occupant?: "unprobed" | "farol" | "foreign" | "vacated";
 }> | null {
   if (status.state === "not_running") return null;
   if (status.state === "port_conflict") {
@@ -2560,6 +2562,7 @@ function modelStatusEvidencePayload(
       state: "port_conflict",
       port: status.port,
       requestsServed: 0,
+      occupant: status.occupant,
     };
   }
   return {
@@ -2622,10 +2625,28 @@ async function farolModelProviderSpec(): Promise<FarolModelProviderSpec | null> 
     providerName: "farol",
     displayName: "Farol Model",
     baseUrl: `http://127.0.0.1:${status.port}`,
-    model: "farol-model",
+    // The one model the endpoint serves is the Route B model: the same
+    // constant the endpoint validates against and the provider accepts.
+    model: ROUTE_B_MODEL,
     wireApi: "responses",
     delivery: { mode: "bearer-token", token },
   };
+}
+
+// Whether a Codex started from the verified executable is running right
+// now: it decides which restart note the control shows after an apply. A
+// read-only process-table scan; `unknown` when no host is verified yet or
+// the table cannot be read. Never signals or starts anything.
+async function farolModelCodexHostPresence(): Promise<
+  "running" | "not_running" | "unknown"
+> {
+  const snapshot = configuration ? configuration.snapshot() : null;
+  const executablePath =
+    snapshot && snapshot.status === "ready"
+      ? snapshot.settings.nativeHosts.codex?.executablePath
+      : undefined;
+  if (!executablePath) return "unknown";
+  return (await detectCodexHostPresence({ executablePath })).state;
 }
 
 function secureMcpCredentialRoot(): string {
@@ -5556,7 +5577,11 @@ async function configureAdmittedProduct(
       if (!modelLifecycle) {
         return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
       }
-      const payload = modelStatusEvidencePayload(modelLifecycle.status());
+      // `checkStatus()` adds one read-only loopback probe of a conflicting
+      // port so the status can say what holds it.
+      const payload = modelStatusEvidencePayload(
+        await modelLifecycle.checkStatus(),
+      );
       if (!payload) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
       return ProductConfigurationResultSchema.parse({
         ok: true,
@@ -5571,11 +5596,10 @@ async function configureAdmittedProduct(
       const blockPreview = await previewFarolModelConfigBlock(configPath, spec);
       const selectionPreview =
         command.selectAsDefault &&
-        blockPreview.status !== "insecure_permissions"
-          ? await previewFarolModelProviderSelection(
-              configPath,
-              spec.providerName,
-            )
+        blockPreview.status !== "insecure_permissions" &&
+        blockPreview.status !== "symlink" &&
+        blockPreview.status !== "malformed"
+          ? await previewFarolModelProviderSelection(configPath, spec)
           : null;
       return ProductConfigurationResultSchema.parse({
         ok: true,
@@ -5586,7 +5610,10 @@ async function configureAdmittedProduct(
           providerBlockStatus: blockPreview.status,
           ...(blockPreview.status === "install" ||
           blockPreview.status === "update"
-            ? { providerBlockDiff: blockPreview.diff }
+            ? {
+                providerBlockDiff: blockPreview.diff,
+                providerBlockTokenRedacted: blockPreview.tokenRedacted,
+              }
             : {}),
           ...(blockPreview.status === "conflict"
             ? { providerBlockConflicts: blockPreview.conflicts }
@@ -5598,7 +5625,8 @@ async function configureAdmittedProduct(
           ...(selectionPreview
             ? {
                 providerSelectionStatus: selectionPreview.status,
-                ...(selectionPreview.status === "install"
+                ...(selectionPreview.status === "install" ||
+                selectionPreview.status === "update"
                   ? { providerSelectionDiff: selectionPreview.diff }
                   : {}),
                 ...(selectionPreview.status === "conflict"
@@ -5621,17 +5649,32 @@ async function configureAdmittedProduct(
         if (blockResult.status === "conflict") {
           return configurationFailure("MODEL_CONFIG_CONFLICT");
         }
+        if (blockResult.status === "symlink") {
+          return configurationFailure("MODEL_CONFIG_SYMLINK");
+        }
+        if (blockResult.status === "malformed") {
+          return configurationFailure("MODEL_CONFIG_MALFORMED");
+        }
         let selectionApplied = false;
         if (command.selectAsDefault) {
           const selectionResult = await applyFarolModelProviderSelection(
             configPath,
-            spec.providerName,
+            spec,
           );
           if (selectionResult.status === "conflict") {
             return configurationFailure("MODEL_CONFIG_CONFLICT");
           }
+          if (selectionResult.status === "symlink") {
+            return configurationFailure("MODEL_CONFIG_SYMLINK");
+          }
+          if (selectionResult.status === "malformed") {
+            return configurationFailure("MODEL_CONFIG_MALFORMED");
+          }
           selectionApplied = selectionResult.status === "applied";
         }
+        // A host that is running read its config at start and needs a
+        // restart; one that is not picks the block up at its next start.
+        const codexHost = await farolModelCodexHostPresence();
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
@@ -5640,6 +5683,7 @@ async function configureAdmittedProduct(
             providerBlockApplied: blockResult.status === "applied",
             providerSelectionApplied: selectionApplied,
             restartStep: "restart_codex_to_apply",
+            codexHost,
           },
         });
       } catch {
@@ -5649,16 +5693,24 @@ async function configureAdmittedProduct(
     case "model.rollback": {
       const configPath = farolModelCodexConfigPath();
       try {
-        // The selection (if any) was always applied after the provider
-        // block, and its own backup snapshot is the file as it stood right
-        // then — including that block. Undoing it first, then undoing the
-        // block, unwinds both operations back to the true pre-Farol bytes;
-        // the reverse order would restore the block backup (pre-Farol)
-        // and then overwrite it with the selection backup (post-block),
-        // silently reintroducing the block rollback had just removed.
+        // Each rollback removes exactly its own managed region from the
+        // file's current bytes — never a backup — so the order only decides
+        // which refusal is reported first when a marker is damaged.
         const selectionRollback =
           await rollbackFarolModelProviderSelection(configPath);
+        if (selectionRollback.status === "symlink") {
+          return configurationFailure("MODEL_CONFIG_SYMLINK");
+        }
+        if (selectionRollback.status === "malformed") {
+          return configurationFailure("MODEL_CONFIG_MALFORMED");
+        }
         const blockRollback = await rollbackFarolModelConfigBlock(configPath);
+        if (blockRollback.status === "symlink") {
+          return configurationFailure("MODEL_CONFIG_SYMLINK");
+        }
+        if (blockRollback.status === "malformed") {
+          return configurationFailure("MODEL_CONFIG_MALFORMED");
+        }
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
@@ -5670,6 +5722,38 @@ async function configureAdmittedProduct(
         });
       } catch {
         return configurationFailure("MODEL_CONFIG_ROLLBACK_FAILED");
+      }
+    }
+    case "model.rotate-token": {
+      if (!modelLifecycle) {
+        return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
+      }
+      try {
+        // The old token stops authenticating at once: the endpoint reads
+        // the token per request. An installed block carries the literal
+        // and is rewritten in place with the new one; a block that is not
+        // installed is not installed by this action.
+        await modelLifecycle.rotateToken();
+        const spec = await farolModelProviderSpec();
+        if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
+        const configPath = farolModelCodexConfigPath();
+        const preview = await previewFarolModelConfigBlock(configPath, spec);
+        let providerBlockUpdated = false;
+        if (preview.status === "update") {
+          const applied = await applyFarolModelConfigBlock(configPath, spec);
+          providerBlockUpdated = applied.status === "applied";
+        }
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "model.token-rotated",
+            providerBlockUpdated,
+            providerBlockStatus: preview.status,
+          },
+        });
+      } catch {
+        return configurationFailure("MODEL_TOKEN_ROTATE_FAILED");
       }
     }
   }
@@ -6862,6 +6946,7 @@ async function main(): Promise<void> {
       : undefined;
   modelLifecycle = new FarolModelLifecycle({
     stateRoot: modelEndpointStateRoot(),
+    model: ROUTE_B_MODEL,
     handler: modelSyntheticReply
       ? syntheticModelTurnHandler(modelSyntheticReply)
       : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
