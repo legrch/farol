@@ -18,6 +18,10 @@ import {
   type CheckpointEnvelope,
 } from "../../src/modules/chat/domain/checkpoint";
 import { PrivateContextStore } from "../../src/modules/chat/infra/repo/private-context-store";
+import {
+  CodexContextContinuity,
+  type CodexContextSummaryDriver,
+} from "../../src/apps/desktop/codex-context-continuity";
 
 const binding: ContextBinding = {
   ownerId: "owner-preview",
@@ -974,5 +978,175 @@ describe("private context persistence", () => {
         content: { ...content, goal: "x".repeat(4_096) },
       }),
     ).rejects.toThrow("CHECKPOINT_CONTENT_OVERSIZED");
+  });
+
+  // CC-3-CYCLE: a task must survive three consecutive ordinary context
+  // cycles (create -> use -> summarise/retire -> reuse), each carried by a
+  // NEW `PrivateContextStore` instance, not an in-memory object this test
+  // still holds. Every other durability test in this file proves at most
+  // one restart at the store layer alone; none drives the real
+  // `CodexContextContinuity` composition (the actual create/retire
+  // entrypoint) through more than one cycle. This is one sequential test
+  // rather than `it.each`, because the three cycles are not independent
+  // cases: cycle 2 depends on exactly what cycle 1 left on `stateRoot`, and
+  // cycle 3 on cycle 2. The `cycles` array below is the enumerated table
+  // this one test walks; each entry's own reuse-then-create-then-retire
+  // block is the repeated unit.
+  it("keeps one task's context intact through three consecutive ordinary cycles, each carried by a new store instance", async () => {
+    const stateRoot = await root();
+    const ownerId = "owner-preview";
+    const providerProfileId = "profile-isolated-next";
+    const modelId = "farol-next/mind";
+    const threadId = "thread-three-cycles";
+    const taskBinding: ContextBinding = {
+      ownerId,
+      taskId: threadId,
+      hostThreadId: threadId,
+      sessionId: threadId,
+      providerProfileId,
+      modelId,
+      mode: "mind",
+    };
+    // Control: an unrelated task's binding must stay untouched throughout,
+    // so a passing assertion below cannot be explained by "there was
+    // something on disk" rather than "this task's own state was there".
+    const foreignBinding: ContextBinding = {
+      ...taskBinding,
+      taskId: "thread-unrelated",
+      hostThreadId: "thread-unrelated",
+      sessionId: "thread-unrelated",
+    };
+
+    function cycleSummary(label: string): CodexContextSummaryDriver {
+      const cycleContent: CheckpointContent = {
+        ...content,
+        goal: `${label} cycle: ${content.goal}`,
+      };
+      const receipt = {
+        status: "completed" as const,
+        providerOperationId: `provider-${label}`,
+        sourceCursor: `cursor-${label}`,
+        content: cycleContent,
+      };
+      return {
+        selectSource: async () => "retained_agent" as const,
+        request: async () => receipt,
+        observe: async () => receipt,
+        retire: async () => ({ status: "retired" as const }),
+      };
+    }
+
+    function markerlessReuseTurn(turnId: string) {
+      return {
+        body: {
+          model: modelId,
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [{ type: "input_text", text: "Continue the task." }],
+            },
+          ],
+          client_metadata: {
+            session_id: threadId,
+            thread_id: threadId,
+            turn_id: turnId,
+          },
+        },
+      };
+    }
+
+    const cycles = ["first", "second", "third"] as const;
+    let previousLabel: (typeof cycles)[number] | null = null;
+
+    for (const [index, label] of cycles.entries()) {
+      const expectedEpochAfterRetire = index + 2; // 1 -> 2 -> 3 -> 4
+
+      // A fresh store AND a fresh composition instance: nothing but what
+      // actually reached `stateRoot` on disk crosses this boundary.
+      const store = new PrivateContextStore({ root: stateRoot });
+      const continuity = new CodexContextContinuity({
+        ownerId,
+        providerProfileId,
+        store,
+        summary: cycleSummary(label),
+      });
+
+      // "reuse": prove the PREVIOUS cycle's retirement is durable before
+      // this cycle overwrites it. The first cycle has nothing to reuse yet.
+      if (previousLabel) {
+        const resumed = await continuity.prepareTurn(
+          markerlessReuseTurn(`turn-reuse-${label}`),
+        );
+        if (!resumed.ok) throw new Error(resumed.error.code);
+        expect(resumed.value.trustedContext).toContain(previousLabel);
+      }
+
+      // "create" + "use": an ordinary compaction summarizing history so far.
+      const handoff = await continuity.compact({
+        endpoint: "responses_compact",
+        body: {
+          model: modelId,
+          input: [
+            {
+              type: "message",
+              role: "user",
+              content: [
+                { type: "input_text", text: `${label} cycle history.` },
+              ],
+            },
+          ],
+        },
+        metadataHeader: JSON.stringify({
+          thread_id: threadId,
+          turn_id: `turn-compact-${label}`,
+        }),
+      });
+      if (!handoff.ok) throw new Error(handoff.error.code);
+      expect(handoff.value.variant).toBe("unary_replacement_history");
+
+      // "summarise/retire": the host confirms, retiring the old epoch and
+      // activating the next one.
+      const confirmed = await continuity.confirmHostCompaction({
+        modelId,
+        threadId,
+        turnId: `turn-compact-${label}`,
+        itemId: `item-${label}`,
+        signal: "turn_completed",
+      });
+      expect(confirmed).toMatchObject({
+        ok: true,
+        value: { phase: "active", epoch: expectedEpochAfterRetire },
+      });
+
+      // A fifth, unrelated store instance never sees this task's state
+      // under a foreign binding (the control case).
+      await expect(
+        new PrivateContextStore({ root: stateRoot }).load(foreignBinding),
+      ).resolves.toBeNull();
+
+      previousLabel = label;
+    }
+
+    // The third cycle's own retirement is read back by a final, brand-new
+    // store instance and composition object that never performed any of
+    // the three cycles above: the whole chain survived independently of
+    // any in-memory object this test still holds.
+    const verifyStore = new PrivateContextStore({ root: stateRoot });
+    await expect(verifyStore.load(taskBinding)).resolves.toMatchObject({
+      phase: "active",
+      epoch: 4,
+    });
+    const verifyContinuity = new CodexContextContinuity({
+      ownerId,
+      providerProfileId,
+      store: verifyStore,
+      summary: cycleSummary("verification"),
+    });
+    const finalReuse = await verifyContinuity.prepareTurn(
+      markerlessReuseTurn("turn-reuse-verification"),
+    );
+    if (!finalReuse.ok) throw new Error(finalReuse.error.code);
+    expect(finalReuse.value.trustedContext).toContain("third");
   });
 });
