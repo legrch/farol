@@ -6,6 +6,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  applyFarolModelConfigBlock,
+  previewFarolModelConfigBlock,
+  type FarolModelProviderSpec,
+} from "../../src/apps/desktop/farol-model-config-block";
+import {
   FarolModelLifecycle,
   type FarolModelLifecycleOptions,
 } from "../../src/apps/desktop/farol-model-lifecycle";
@@ -321,6 +326,183 @@ describe("Farol Model endpoint lifecycle", () => {
     await fresh.text();
     // No restart happened: same endpoint, same port.
     expect(lifecycleExpectedPort(lifecycle)).toBe(port);
+  });
+
+  // S35-H2-1. The owner-facing rotation is one operation: the endpoint's
+  // token and the literal in the owner's Codex config move together, or
+  // neither moves. These run against the real endpoint — the old and new
+  // tokens are tried against it — and against a real config.toml.
+  describe("rotateAndRewrite (S35-H2-1)", () => {
+    async function configRoot(): Promise<string> {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-model-rotate-"),
+      );
+      roots.push(root);
+      return path.join(root, "config.toml");
+    }
+
+    function portsFor(
+      lifecycle: FarolModelLifecycle,
+      configPath: string,
+    ): Readonly<{
+      configPath: string;
+      spec: () => Promise<FarolModelProviderSpec | null>;
+      preview: typeof previewFarolModelConfigBlock;
+      apply: typeof applyFarolModelConfigBlock;
+    }> {
+      return {
+        configPath,
+        // The same shape `main.ts`'s `farolModelProviderSpec` builds.
+        spec: async () => {
+          const status = lifecycle.status();
+          if (status.state !== "listening" && status.state !== "connected") {
+            return null;
+          }
+          const token = await lifecycle.runtimeState.currentToken();
+          if (!token) return null;
+          return {
+            providerName: "farol",
+            displayName: "Farol Model",
+            baseUrl: `http://127.0.0.1:${status.port}`,
+            model: MODEL,
+            wireApi: "responses",
+            delivery: { mode: "bearer-token", token },
+          };
+        },
+        preview: previewFarolModelConfigBlock,
+        apply: applyFarolModelConfigBlock,
+      };
+    }
+
+    it("rewrites the installed block with the new literal: the new token authenticates and the old one is refused", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const ports = portsFor(lifecycle, configPath);
+
+      const installed = await ports.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const before = await lifecycle.runtimeState.currentToken();
+      expect(before).toBeDefined();
+      expect(await fs.readFile(configPath, "utf8")).toContain(before!);
+
+      const rotated = await lifecycle.rotateAndRewrite(ports);
+      expect(rotated).toEqual({
+        ok: true,
+        providerBlockUpdated: true,
+        providerBlockStatus: "update",
+      });
+
+      const after = await lifecycle.runtimeState.currentToken();
+      expect(after).toBeDefined();
+      expect(after).not.toBe(before);
+      // The owner's config carries the literal the endpoint now accepts.
+      const text = await fs.readFile(configPath, "utf8");
+      expect(text).toContain(after!);
+      expect(text).not.toContain(before!);
+      const fresh = await postTurn(port, after);
+      expect(fresh.status).toBe(200);
+      await fresh.text();
+      const stale = await postTurn(port, before);
+      expect(stale.status).toBe(401);
+      await stale.text();
+    });
+
+    it("refuses with FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED when the installed block's END marker is torn, and the old token still authenticates", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const ports = portsFor(lifecycle, configPath);
+
+      const installed = await ports.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const before = await lifecycle.runtimeState.currentToken();
+      expect(before).toBeDefined();
+
+      // The block's END marker is gone: the file is no longer a shape this
+      // product will rewrite.
+      const torn = (await fs.readFile(configPath, "utf8")).replace(
+        "# END FAROL MANAGED BLOCK",
+        "# END FAROL MANAGED BLOC",
+      );
+      await fs.writeFile(configPath, torn, { mode: 0o600 });
+
+      const rotated = await lifecycle.rotateAndRewrite(ports);
+      expect(rotated).toMatchObject({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+      });
+
+      // The token never moved, so the literal the owner's Codex config
+      // still carries is still the one the endpoint accepts.
+      expect(await lifecycle.runtimeState.currentToken()).toBe(before);
+      const answered = await postTurn(port, before);
+      expect(answered.status).toBe(200);
+      await answered.text();
+      expect(await fs.readFile(configPath, "utf8")).toContain(before!);
+    });
+
+    it("puts the previous token back when the rewrite fails after the rotation", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const ports = portsFor(lifecycle, configPath);
+
+      const installed = await ports.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const before = await lifecycle.runtimeState.currentToken();
+      expect(before).toBeDefined();
+
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...ports,
+        // The preflight passes; the rewrite itself then fails, which is
+        // the window a preflight alone cannot close.
+        apply: async () => ({ status: "malformed" }),
+      });
+      expect(rotated).toMatchObject({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+      });
+
+      expect(await lifecycle.runtimeState.currentToken()).toBe(before);
+      const answered = await postTurn(port, before);
+      expect(answered.status).toBe(200);
+      await answered.text();
+    });
+
+    it("rotates without installing anything when no managed block is present", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const ports = portsFor(lifecycle, configPath);
+      const before = await lifecycle.runtimeState.currentToken();
+
+      const rotated = await lifecycle.rotateAndRewrite(ports);
+      expect(rotated).toMatchObject({ ok: true, providerBlockUpdated: false });
+
+      const after = await lifecycle.runtimeState.currentToken();
+      expect(after).not.toBe(before);
+      const fresh = await postTurn(port, after);
+      expect(fresh.status).toBe(200);
+      await fresh.text();
+      // No block was installed by a rotation.
+      await expect(fs.lstat(configPath)).rejects.toThrow();
+    });
+
+    it("refuses before the token moves when the endpoint is not running", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      const configPath = await configRoot();
+      await expect(
+        lifecycle.rotateAndRewrite(portsFor(lifecycle, configPath)),
+      ).resolves.toEqual({ ok: false, code: "MODEL_ENDPOINT_UNAVAILABLE" });
+    });
   });
 
   it("start() is idempotent while already running", async () => {

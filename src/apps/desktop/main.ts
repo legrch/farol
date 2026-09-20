@@ -5770,27 +5770,26 @@ async function configureAdmittedProduct(
         return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
       }
       try {
-        // The old token stops authenticating at once: the endpoint reads
-        // the token per request. An installed block carries the literal
-        // and is rewritten in place with the new one; a block that is not
-        // installed is not installed by this action.
-        await modelLifecycle.rotateToken();
-        const spec = await farolModelProviderSpec();
-        if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
-        const configPath = farolModelCodexConfigPath();
-        const preview = await previewFarolModelConfigBlock(configPath, spec);
-        let providerBlockUpdated = false;
-        if (preview.status === "update") {
-          const applied = await applyFarolModelConfigBlock(configPath, spec);
-          providerBlockUpdated = applied.status === "applied";
-        }
+        // S35-H2-1: one operation, not two. `rotateAndRewrite` inspects the
+        // installed block BEFORE the token moves, so a block it cannot
+        // rewrite refuses while the owner's Codex config still
+        // authenticates, and a rewrite that fails after the rotation puts
+        // the previous token back. A block that is not installed is still
+        // not installed by this action.
+        const rotated = await modelLifecycle.rotateAndRewrite({
+          configPath: farolModelCodexConfigPath(),
+          spec: farolModelProviderSpec,
+          preview: previewFarolModelConfigBlock,
+          apply: applyFarolModelConfigBlock,
+        });
+        if (!rotated.ok) return configurationFailure(rotated.code);
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
           evidence: {
             kind: "model.token-rotated",
-            providerBlockUpdated,
-            providerBlockStatus: preview.status,
+            providerBlockUpdated: rotated.providerBlockUpdated,
+            providerBlockStatus: rotated.providerBlockStatus,
           },
         });
       } catch {

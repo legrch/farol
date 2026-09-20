@@ -961,6 +961,10 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
       "insecure_permissions",
       "symlink",
       "malformed",
+      // S35-H2-1: no managed block is installed, so none was rewritten.
+      "not_present",
+      // The rewrite that carried the new literal actually landed.
+      "applied",
     ]),
   }),
 ]);
@@ -1096,6 +1100,10 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "MODEL_CONFIG_SYMLINK",
       "MODEL_CONFIG_MALFORMED",
       "MODEL_TOKEN_ROTATE_FAILED",
+      // S35-H2-1: the installed Codex block could not be rewritten with
+      // the new literal, so the token was not moved (or was put back);
+      // the owner's config still authenticates.
+      "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

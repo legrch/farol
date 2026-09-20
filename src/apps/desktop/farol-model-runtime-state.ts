@@ -160,6 +160,22 @@ export class FarolModelRuntimeState {
     return token;
   }
 
+  /**
+   * Puts a token this process previously read back in place. Used only to
+   * undo a rotation whose config-block rewrite then failed (S35-H2-1): the
+   * owner's Codex config still carries the earlier literal, so leaving the
+   * new token in place would silently stop that config authenticating.
+   * Refuses anything that is not a well-formed token, so this can never
+   * install a value a caller invented.
+   */
+  async restoreToken(token: string): Promise<void> {
+    if (!isFarolModelToken(token)) {
+      stateError("FAROL_MODEL_STATE_TOKEN_INVALID");
+    }
+    await this.ensureRoot();
+    await atomicWrite(this.root, TOKEN_FILE, token);
+  }
+
   async persistPort(port: number): Promise<void> {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new Error("FAROL_MODEL_STATE_PORT_INVALID");

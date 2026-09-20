@@ -6,6 +6,11 @@ import {
   type FarolModelEndpointTimeouts,
   type FarolModelTurnHandler,
 } from "./farol-model-endpoint";
+import type {
+  FarolModelConfigApplyResult,
+  FarolModelConfigPreview,
+  FarolModelProviderSpec,
+} from "./farol-model-config-block";
 import { FarolModelRuntimeState } from "./farol-model-runtime-state";
 
 // Owns the Farol Model endpoint's app-level lifecycle. See Decisions.md
@@ -63,6 +68,55 @@ export type FarolModelLifecycleOptions = Readonly<{
 }>;
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
+
+/** What `rotateAndRewrite` reports about the managed Codex config block. */
+export type FarolModelBlockStatus =
+  | FarolModelConfigPreview["status"]
+  | FarolModelConfigApplyResult["status"]
+  | "not_present";
+
+export type FarolModelRotateOutcome =
+  | Readonly<{
+      ok: true;
+      providerBlockUpdated: boolean;
+      providerBlockStatus: FarolModelBlockStatus;
+    }>
+  | Readonly<{
+      ok: false;
+      code:
+        "MODEL_ENDPOINT_UNAVAILABLE" | "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED";
+      providerBlockStatus?: FarolModelBlockStatus;
+    }>;
+
+/**
+ * Everything `rotateAndRewrite` needs from outside itself: where the
+ * owner's Codex config lives, how to describe this endpoint right now
+ * (`spec` is read twice, because the token it carries changes underneath),
+ * and the two config-block operations. Injected rather than imported so
+ * the orchestration can be driven without a running Electron app.
+ */
+export type FarolModelRotatePorts = Readonly<{
+  configPath: string;
+  spec: () => Promise<FarolModelProviderSpec | null>;
+  preview: (
+    configPath: string,
+    spec: FarolModelProviderSpec,
+  ) => Promise<FarolModelConfigPreview>;
+  apply: (
+    configPath: string,
+    spec: FarolModelProviderSpec,
+  ) => Promise<FarolModelConfigApplyResult>;
+}>;
+
+// The block states a rotation may proceed over: absent, or present in a
+// shape this product can rewrite. `symlink`, `malformed`, `conflict` and
+// `insecure_permissions` are the states that used to be skipped silently.
+const REWRITABLE: ReadonlySet<string> = new Set([
+  "not_present",
+  "install",
+  "update",
+  "noop",
+]);
 
 export class FarolModelLifecycle {
   private readonly state: FarolModelRuntimeState;
@@ -130,9 +184,104 @@ export class FarolModelLifecycle {
    * very next request, because the endpoint reads the token per request.
    * A config block that carries the old literal must be re-applied by the
    * caller (the block apply is idempotent and rewrites in place).
+   *
+   * Prefer `rotateAndRewrite` for the owner-facing rotation: rotating on
+   * its own, while an installed block carries the old literal, is exactly
+   * the state this product must not leave behind.
    */
   async rotateToken(): Promise<string> {
     return this.state.rotateToken();
+  }
+
+  /**
+   * The owner-facing rotation, as one operation: mint a new token AND make
+   * the owner's Codex config carry it, or change nothing.
+   *
+   * S35-H2-1: rotating first and rewriting afterwards was two operations
+   * pretending to be one. When the installed block could not be rewritten
+   * — a torn END marker, a conflict, a symlinked config, insecure
+   * permissions — the rotation had already happened and the rewrite was
+   * simply skipped, yet the result said `ok`. The owner's Codex kept a
+   * literal the endpoint no longer accepts, and nothing said so.
+   *
+   * The block is therefore inspected BEFORE the token moves. A block that
+   * cannot be rewritten refuses with `FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED`
+   * and the old token still authenticates. A block that is simply not
+   * installed is still not installed by this action, and the rotation
+   * proceeds. If the rewrite fails after the rotation anyway, the previous
+   * token is put back, so the owner's config and the endpoint agree either
+   * way — the one outcome this operation will not produce is a config that
+   * authenticates nowhere.
+   */
+  async rotateAndRewrite(
+    ports: FarolModelRotatePorts,
+  ): Promise<FarolModelRotateOutcome> {
+    const previousToken = await this.state.currentToken();
+    const before = await ports.spec();
+    if (!before) return { ok: false, code: "MODEL_ENDPOINT_UNAVAILABLE" };
+
+    const preflight = await ports.preview(ports.configPath, before);
+    if (!REWRITABLE.has(preflight.status)) {
+      // Nothing has moved: the endpoint still accepts the token the
+      // owner's config carries.
+      return {
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+        providerBlockStatus: preflight.status,
+      };
+    }
+    // `noop` means an installed block already carries the current literal;
+    // after the rotation it must become an `update`. Both are "installed".
+    const installed =
+      preflight.status === "update" || preflight.status === "noop";
+
+    await this.state.rotateToken();
+    const restore = async (): Promise<void> => {
+      if (previousToken !== undefined) {
+        await this.state.restoreToken(previousToken);
+      }
+    };
+
+    if (!installed) {
+      return {
+        ok: true,
+        providerBlockUpdated: false,
+        providerBlockStatus: preflight.status,
+      };
+    }
+
+    const after = await ports.spec();
+    if (!after) {
+      await restore();
+      return {
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+        providerBlockStatus: "not_present",
+      };
+    }
+    const planned = await ports.preview(ports.configPath, after);
+    if (planned.status !== "update") {
+      await restore();
+      return {
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+        providerBlockStatus: planned.status,
+      };
+    }
+    const applied = await ports.apply(ports.configPath, after);
+    if (applied.status !== "applied") {
+      await restore();
+      return {
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+        providerBlockStatus: applied.status,
+      };
+    }
+    return {
+      ok: true,
+      providerBlockUpdated: true,
+      providerBlockStatus: "update",
+    };
   }
 
   /**
