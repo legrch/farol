@@ -176,6 +176,23 @@ export class FarolModelRuntimeState {
     await atomicWrite(this.root, TOKEN_FILE, token);
   }
 
+  /**
+   * Removes the token file, so the endpoint answers every request 401
+   * `FAROL_MODEL_TOKEN_UNSET` until a new one is minted (the next
+   * `start()`, or the owner running Preview/Apply again).
+   *
+   * The one closed outcome left when a rotation cannot undo itself
+   * (S35-H2-1R): the endpoint is holding a literal the owner's Codex
+   * config does not carry, and the previous literal could not be put back.
+   * Accepting nothing is safer than accepting a token the owner has no way
+   * to produce and no way to see. Throws when the file exists and cannot
+   * be removed; the caller must treat that as the failure it is.
+   */
+  async clearToken(): Promise<void> {
+    await this.ensureRoot();
+    await fs.rm(path.join(this.root, TOKEN_FILE), { force: true });
+  }
+
   async persistPort(port: number): Promise<void> {
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
       throw new Error("FAROL_MODEL_STATE_PORT_INVALID");

@@ -2328,17 +2328,20 @@ async function configureProduct(
                                                                             "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
                                                                           ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
                                                                           : parsed.error ===
-                                                                                "MODEL_CONFIG_APPLY_FAILED" ||
-                                                                              parsed.error ===
-                                                                                "MODEL_CONFIG_ROLLBACK_FAILED"
-                                                                            ? "config.toml could not be changed. Nothing was left half-written."
-                                                                            : (transitionRefusalMessage(
-                                                                                parsed.error,
-                                                                              ) ??
-                                                                              workspaceEditRefusalMessage(
-                                                                                parsed.error,
-                                                                              ) ??
-                                                                              `Not applied · ${parsed.error}`);
+                                                                              "FAROL_MODEL_ROTATE_RESTORE_FAILED"
+                                                                            ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                            : parsed.error ===
+                                                                                  "MODEL_CONFIG_APPLY_FAILED" ||
+                                                                                parsed.error ===
+                                                                                  "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                                              ? "config.toml could not be changed. Nothing was left half-written."
+                                                                              : (transitionRefusalMessage(
+                                                                                  parsed.error,
+                                                                                ) ??
+                                                                                workspaceEditRefusalMessage(
+                                                                                  parsed.error,
+                                                                                ) ??
+                                                                                `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

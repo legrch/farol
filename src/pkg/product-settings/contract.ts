@@ -1104,6 +1104,10 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       // the new literal, so the token was not moved (or was put back);
       // the owner's config still authenticates.
       "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+      // S35-H2-1R: the rewrite failed AND the previous token could not be
+      // put back, so the endpoint was left accepting nothing rather than a
+      // literal the owner's config does not carry.
+      "FAROL_MODEL_ROTATE_RESTORE_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

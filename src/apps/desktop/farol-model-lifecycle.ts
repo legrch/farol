@@ -84,7 +84,12 @@ export type FarolModelRotateOutcome =
   | Readonly<{
       ok: false;
       code:
-        "MODEL_ENDPOINT_UNAVAILABLE" | "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED";
+        | "MODEL_ENDPOINT_UNAVAILABLE"
+        | "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
+        // S35-H2-1R: the rewrite failed AND the previous token could not be
+        // put back. The endpoint has been left accepting nothing rather
+        // than a literal the owner's config does not carry.
+        | "FAROL_MODEL_ROTATE_RESTORE_FAILED";
       providerBlockStatus?: FarolModelBlockStatus;
     }>;
 
@@ -124,6 +129,14 @@ export class FarolModelLifecycle {
   private endpointInstance: FarolModelEndpoint | undefined;
   private portConflict: number | undefined;
   private occupant: FarolModelPortOccupant = "unprobed";
+  // S35-H2-1R: one rotation at a time. `rotateAndRewrite` is a transaction
+  // over two places that must agree — the endpoint's token file and the
+  // owner's Codex config — and two of them running at once can interleave
+  // so that an earlier rotation's restore lands after a later one's apply,
+  // leaving the endpoint accepting a literal the config does not carry.
+  // A plain promise chain is the whole mechanism: the second caller waits
+  // for the first to finish, failure included.
+  private rotations: Promise<unknown> = Promise.resolve();
 
   constructor(options: FarolModelLifecycleOptions) {
     this.options = options;
@@ -212,8 +225,26 @@ export class FarolModelLifecycle {
    * token is put back, so the owner's config and the endpoint agree either
    * way — the one outcome this operation will not produce is a config that
    * authenticates nowhere.
+   *
+   * S35-H2-1R makes that hold in three more places. Overlapping rotations
+   * are serialized, so no restore can land after a later rotation's apply.
+   * A step that REJECTS after the token moved (not merely one that returns
+   * an unusable status) restores it too, rather than leaving the endpoint
+   * ahead of the config. And when the restore itself cannot be written,
+   * the operation fails closed: the token is cleared so the endpoint
+   * accepts nothing at all, and the distinct
+   * `FAROL_MODEL_ROTATE_RESTORE_FAILED` says so instead of reporting the
+   * ordinary "nothing moved" refusal.
    */
-  async rotateAndRewrite(
+  rotateAndRewrite(
+    ports: FarolModelRotatePorts,
+  ): Promise<FarolModelRotateOutcome> {
+    const run = this.rotations.then(() => this.runRotation(ports));
+    this.rotations = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runRotation(
     ports: FarolModelRotatePorts,
   ): Promise<FarolModelRotateOutcome> {
     const previousToken = await this.state.currentToken();
@@ -236,11 +267,6 @@ export class FarolModelLifecycle {
       preflight.status === "update" || preflight.status === "noop";
 
     await this.state.rotateToken();
-    const restore = async (): Promise<void> => {
-      if (previousToken !== undefined) {
-        await this.state.restoreToken(previousToken);
-      }
-    };
 
     if (!installed) {
       return {
@@ -250,38 +276,78 @@ export class FarolModelLifecycle {
       };
     }
 
-    const after = await ports.spec();
-    if (!after) {
-      await restore();
-      return {
-        ok: false,
-        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
-        providerBlockStatus: "not_present",
-      };
+    // Past this point the endpoint accepts a literal the owner's config
+    // does not carry, so every remaining step is wrapped: a rejection is
+    // exactly as much of a failed rewrite as an unusable status, and the
+    // token goes back either way. A rejection carries no status, so none
+    // is reported rather than an earlier one being passed off as this
+    // step's answer.
+    let after: FarolModelProviderSpec | null;
+    try {
+      after = await ports.spec();
+    } catch {
+      return this.undoRotation(previousToken);
     }
-    const planned = await ports.preview(ports.configPath, after);
+    if (!after) return this.undoRotation(previousToken, "not_present");
+
+    let planned: FarolModelConfigPreview;
+    try {
+      planned = await ports.preview(ports.configPath, after);
+    } catch {
+      return this.undoRotation(previousToken);
+    }
     if (planned.status !== "update") {
-      await restore();
-      return {
-        ok: false,
-        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
-        providerBlockStatus: planned.status,
-      };
+      return this.undoRotation(previousToken, planned.status);
     }
-    const applied = await ports.apply(ports.configPath, after);
+
+    let applied: FarolModelConfigApplyResult;
+    try {
+      applied = await ports.apply(ports.configPath, after);
+    } catch {
+      return this.undoRotation(previousToken);
+    }
     if (applied.status !== "applied") {
-      await restore();
-      return {
-        ok: false,
-        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
-        providerBlockStatus: applied.status,
-      };
+      return this.undoRotation(previousToken, applied.status);
     }
     return {
       ok: true,
       providerBlockUpdated: true,
       providerBlockStatus: "update",
     };
+  }
+
+  /**
+   * Puts the token the owner's config still carries back, and reports the
+   * rewrite as not done. When the restore cannot be written, the endpoint
+   * would otherwise be left accepting a literal nobody can produce: the
+   * token is cleared so every request is refused 401 until the owner runs
+   * Preview/Apply again, and — if even that fails, which means this
+   * process can no longer write its own private state — the endpoint is
+   * stopped outright. Both are the closed direction; neither is silent.
+   */
+  private async undoRotation(
+    previousToken: string | undefined,
+    providerBlockStatus?: FarolModelBlockStatus,
+  ): Promise<FarolModelRotateOutcome> {
+    if (previousToken !== undefined) {
+      try {
+        await this.state.restoreToken(previousToken);
+      } catch {
+        try {
+          await this.state.clearToken();
+        } catch {
+          await this.stop().catch(() => undefined);
+        }
+        return { ok: false, code: "FAROL_MODEL_ROTATE_RESTORE_FAILED" };
+      }
+    }
+    return providerBlockStatus === undefined
+      ? { ok: false, code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED" }
+      : {
+          ok: false,
+          code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+          providerBlockStatus,
+        };
   }
 
   /**

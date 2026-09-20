@@ -13,6 +13,7 @@ import {
 import {
   FarolModelLifecycle,
   type FarolModelLifecycleOptions,
+  type FarolModelRotatePorts,
 } from "../../src/apps/desktop/farol-model-lifecycle";
 
 const roots: string[] = [];
@@ -494,6 +495,215 @@ describe("Farol Model endpoint lifecycle", () => {
       await fresh.text();
       // No block was installed by a rotation.
       await expect(fs.lstat(configPath)).rejects.toThrow();
+    });
+
+    // S35-H2-1R. The rotation is a transaction, and these are the three
+    // ways it could still leave the endpoint and the owner's config
+    // disagreeing: two owner rotations overlapping, a step that rejects
+    // instead of returning a status, and a restore that cannot be written.
+    it("S35-H2-1R serializes two overlapping rotations, so the literal the config carries is always the one the endpoint accepts", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = portsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const original = await lifecycle.runtimeState.currentToken();
+      expect(original).toBeDefined();
+
+      const events: string[] = [];
+      const traced = (
+        tag: string,
+        apply: FarolModelRotatePorts["apply"],
+      ): FarolModelRotatePorts => ({
+        configPath,
+        spec: async () => {
+          events.push(`${tag}:spec`);
+          return base.spec();
+        },
+        preview: async (path, spec) => {
+          events.push(`${tag}:preview`);
+          return base.preview(path, spec);
+        },
+        apply: async (path, spec) => {
+          events.push(`${tag}:apply`);
+          return apply(path, spec);
+        },
+      });
+
+      let firstApplyEntered!: () => void;
+      const applyEntered = new Promise<void>((resolve) => {
+        firstApplyEntered = resolve;
+      });
+      let releaseFirstApply!: () => void;
+      const applyReleased = new Promise<void>((resolve) => {
+        releaseFirstApply = resolve;
+      });
+
+      // The first rotation parks inside its apply, with its token already
+      // rotated and the owner's config still carrying the old literal.
+      const first = lifecycle.rotateAndRewrite(
+        traced("A", async () => {
+          firstApplyEntered();
+          await applyReleased;
+          throw new Error("config write crashed");
+        }),
+      );
+      await applyEntered;
+
+      // The second rotation is asked for right there, and given real time
+      // to run. Serialized, it does nothing at all until the first one has
+      // finished putting the previous token back.
+      const second = lifecycle.rotateAndRewrite(traced("B", base.apply));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(events).toEqual([
+        "A:spec",
+        "A:preview",
+        "A:spec",
+        "A:preview",
+        "A:apply",
+      ]);
+
+      releaseFirstApply();
+      const [a, b] = await Promise.all([first, second]);
+      expect(a).toMatchObject({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+      });
+      expect(b).toMatchObject({ ok: true, providerBlockUpdated: true });
+      expect(events).toEqual([
+        "A:spec",
+        "A:preview",
+        "A:spec",
+        "A:preview",
+        "A:apply",
+        "B:spec",
+        "B:preview",
+        "B:spec",
+        "B:preview",
+        "B:apply",
+      ]);
+
+      // The invariant the mutex exists for: no restore from an earlier
+      // rotation may land after a later one's apply.
+      const finalToken = await lifecycle.runtimeState.currentToken();
+      expect(finalToken).toBeDefined();
+      const text = await fs.readFile(configPath, "utf8");
+      expect(text).toContain(finalToken!);
+      expect(text).not.toContain(original!);
+      const fresh = await postTurn(port, finalToken);
+      expect(fresh.status).toBe(200);
+      await fresh.text();
+      const stale = await postTurn(port, original);
+      expect(stale.status).toBe(401);
+      await stale.text();
+    });
+
+    it.each(["spec", "preview", "apply"] as const)(
+      "S35-H2-1R puts the previous token back when the post-rotation %s rejects instead of returning a status",
+      async (failing) => {
+        const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+        await lifecycle.start();
+        const port = lifecycleExpectedPort(lifecycle);
+        const configPath = await configRoot();
+        const base = portsFor(lifecycle, configPath);
+
+        const installed = await base.spec();
+        expect(installed).not.toBeNull();
+        await applyFarolModelConfigBlock(configPath, installed!);
+        const before = await lifecycle.runtimeState.currentToken();
+        expect(before).toBeDefined();
+
+        let specCalls = 0;
+        let previewCalls = 0;
+        const rotated = await lifecycle.rotateAndRewrite({
+          configPath,
+          spec: async () => {
+            specCalls += 1;
+            if (failing === "spec" && specCalls > 1) {
+              throw new Error("spec crashed");
+            }
+            return base.spec();
+          },
+          preview: async (path, spec) => {
+            previewCalls += 1;
+            if (failing === "preview" && previewCalls > 1) {
+              throw new Error("preview crashed");
+            }
+            return base.preview(path, spec);
+          },
+          apply: async (path, spec) => {
+            if (failing === "apply") throw new Error("apply crashed");
+            return base.apply(path, spec);
+          },
+        });
+
+        // A rejection is not a status, so none is reported — but the
+        // outcome is the same typed refusal a bad status gets.
+        expect(rotated).toEqual({
+          ok: false,
+          code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+        });
+        expect(await lifecycle.runtimeState.currentToken()).toBe(before);
+        const answered = await postTurn(port, before);
+        expect(answered.status).toBe(200);
+        await answered.text();
+        expect(await fs.readFile(configPath, "utf8")).toContain(before!);
+      },
+    );
+
+    it("S35-H2-1R fails closed when the restore itself fails: the endpoint accepts neither literal and the failure is typed", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = portsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const before = await lifecycle.runtimeState.currentToken();
+      expect(before).toBeDefined();
+
+      // The private state directory has become unwritable for the restore
+      // — the one case where the rotation cannot undo itself.
+      Object.defineProperty(lifecycle.runtimeState, "restoreToken", {
+        configurable: true,
+        value: async () => {
+          throw new Error("FAROL_MODEL_STATE_UNSAFE");
+        },
+      });
+
+      let rotatedToken: string | undefined;
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          rotatedToken = await lifecycle.runtimeState.currentToken();
+          throw new Error("config write crashed");
+        },
+      });
+
+      expect(rotated).toEqual({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_RESTORE_FAILED",
+      });
+      expect(rotatedToken).toBeDefined();
+      expect(rotatedToken).not.toBe(before);
+
+      // Neither literal authenticates: the owner's config carries the old
+      // one, the endpoint was left holding the new one, and accepting
+      // nothing is the only closed outcome left until Preview/Apply runs.
+      expect(await lifecycle.runtimeState.currentToken()).toBeUndefined();
+      const old = await postTurn(port, before);
+      expect(old.status).toBe(401);
+      await old.text();
+      const minted = await postTurn(port, rotatedToken);
+      expect(minted.status).toBe(401);
+      await minted.text();
+      expect(await fs.readFile(configPath, "utf8")).toContain(before!);
     });
 
     it("refuses before the token moves when the endpoint is not running", async () => {
