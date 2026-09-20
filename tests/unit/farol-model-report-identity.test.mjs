@@ -31,23 +31,135 @@ function identity(overrides = {}) {
 }
 
 describe("real-host report identity", () => {
-  it("S35-TA-5 derives this checkout's commit and vnext tree digest through the same helper the ordinary lanes use", () => {
+  const LOCATED = "/Users/ac/.nvm/versions/node/v22.19.0/bin/codex";
+  const DISCOVERED = "/Applications/ChatGPT.app/Contents/Resources/codex";
+  const LOADER = Object.freeze({
+    kind: "source-level",
+    bundlePath: "/tmp/farol-model-e2e-bundle-x/bundle.mjs",
+  });
+
+  function hostsOf() {
+    return [
+      {
+        binary: LOCATED,
+        version: "codex-cli 0.153.4",
+        phases: ["env-key-overrides", "no-retry-on-failure"],
+      },
+      {
+        binary: DISCOVERED,
+        version: "codex-cli 0.153.4",
+        phases: ["app-host-discovery", "app-tool-roundtrip"],
+      },
+    ];
+  }
+
+  function reportOf(overrides = {}, phases = undefined) {
+    return {
+      phases: phases ?? [
+        { id: "env-key-overrides" },
+        { id: "no-retry-on-failure" },
+        { id: "app-host-discovery" },
+        { id: "app-tool-roundtrip" },
+      ],
+      identity: {
+        sourceCommit: "a".repeat(40),
+        sourceTreeDigest: "b".repeat(64),
+        sourceDirty: false,
+        loader: LOADER,
+        hosts: hostsOf(),
+        nodeVersion: SUPPORTED_NODE_VERSIONS[0],
+        ...overrides,
+      },
+    };
+  }
+
+  it("S35-TA-12 attributes every phase to exactly one recorded binary", () => {
+    const report = reportOf();
+    expect(assertReportIdentity(report)).toBe(report.identity);
+  });
+
+  it("S35-TA-12 derives the identity through the same helper the ordinary lanes use", () => {
     const built = buildReportIdentity({
-      repositoryRoot,
-      hostBinary: "/usr/local/bin/codex",
-      hostVersion: "codex-cli 0.153.4",
+      repositoryRoot: path.resolve(import.meta.dirname, "../.."),
+      loader: LOADER,
+      hosts: hostsOf(),
       nodeVersion: SUPPORTED_NODE_VERSIONS[0],
     });
     expect(built.sourceCommit).toMatch(/^[0-9a-f]{40}$/u);
     expect(built.sourceTreeDigest).toMatch(/^[0-9a-f]{64}$/u);
-    expect(typeof built.sourceDirty).toBe("boolean");
-    // This journey bundles the TypeScript under test and never loads
-    // `dist/app`, and says so rather than leaving a reader to assume.
-    expect(built.build).toBe("source-level");
-    expect(assertReportIdentity({ identity: built })).toBe(built);
+    expect(built.loader).toEqual(LOADER);
+    expect(built.hosts.map((h) => h.binary)).toEqual([LOCATED, DISCOVERED]);
   });
 
-  // One row per way a report can fail to say what it exercised.
+  // THE TWO ROWS THIS PACKET EXISTS FOR.
+  it("S35-TA-12 refuses a report whose phase no recorded binary claims", () => {
+    // `app-rotation-then-host` ran, and nothing says which binary answered
+    // it. Before this, the report simply did not mention the problem.
+    expect(() =>
+      assertReportIdentity(
+        reportOf({}, [
+          { id: "env-key-overrides" },
+          { id: "app-rotation-then-host" },
+        ]),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
+  });
+
+  it("S35-TA-12 refuses a missing or malformed loader descriptor", () => {
+    expect(() => assertReportIdentity(reportOf({ loader: undefined }))).toThrow(
+      "FAROL_MODEL_E2E_REPORT_LOADER_MISSING",
+    );
+    // The old default: a bare string claiming source-level, with nothing
+    // saying what was actually loaded.
+    expect(() =>
+      assertReportIdentity(reportOf({ loader: "source-level" })),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_LOADER_MISSING");
+    expect(() =>
+      assertReportIdentity(reportOf({ loader: { kind: "source-level" } })),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_LOADER_INVALID");
+    expect(() =>
+      assertReportIdentity(
+        reportOf({ loader: { kind: "built", buildId: "not-a-digest" } }),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_LOADER_INVALID");
+  });
+
+  it("S35-TA-12 the builder refuses the same shapes rather than emitting them", () => {
+    const base = {
+      repositoryRoot: path.resolve(import.meta.dirname, "../.."),
+      hosts: hostsOf(),
+      nodeVersion: SUPPORTED_NODE_VERSIONS[0],
+    };
+    expect(() => buildReportIdentity(base)).toThrow(
+      "FAROL_MODEL_E2E_REPORT_LOADER_MISSING",
+    );
+    expect(() =>
+      buildReportIdentity({ ...base, loader: LOADER, hosts: [] }),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+    expect(() =>
+      buildReportIdentity({
+        ...base,
+        loader: LOADER,
+        hosts: [{ binary: "", version: "v", phases: ["a"] }],
+      }),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+    expect(() =>
+      buildReportIdentity({
+        ...base,
+        loader: LOADER,
+        hosts: [{ binary: LOCATED, version: "v", phases: [] }],
+      }),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_PHASES_MISSING");
+  });
+
+  it("S35-TA-12 refuses a phase claimed by two binaries, which would attribute it to neither", () => {
+    const hosts = hostsOf();
+    hosts[1].phases.push("env-key-overrides");
+    expect(() => assertReportIdentity(reportOf({ hosts }))).toThrow(
+      "FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS",
+    );
+  });
+
   const refusals = [
     {
       name: "no identity block at all",
@@ -55,100 +167,58 @@ describe("real-host report identity", () => {
       code: "FAROL_MODEL_E2E_REPORT_IDENTITY_MISSING",
     },
     {
-      name: "an identity that is not an object",
-      report: { identity: "a".repeat(40) },
-      code: "FAROL_MODEL_E2E_REPORT_IDENTITY_MISSING",
-    },
-    {
-      name: "no source commit",
-      report: identity({ sourceCommit: undefined }),
-      code: "FAROL_MODEL_E2E_REPORT_SOURCE_COMMIT_INVALID",
-    },
-    {
       name: "an abbreviated source commit",
-      report: identity({ sourceCommit: "a".repeat(7) }),
+      report: reportOf({ sourceCommit: "a".repeat(7) }),
       code: "FAROL_MODEL_E2E_REPORT_SOURCE_COMMIT_INVALID",
     },
     {
       name: "no source tree digest",
-      report: identity({ sourceTreeDigest: undefined }),
+      report: reportOf({ sourceTreeDigest: undefined }),
       code: "FAROL_MODEL_E2E_REPORT_SOURCE_TREE_DIGEST_INVALID",
     },
     {
       name: "a dirty flag that was never determined",
-      report: identity({ sourceDirty: undefined }),
+      report: reportOf({ sourceDirty: undefined }),
       code: "FAROL_MODEL_E2E_REPORT_SOURCE_DIRTY_INVALID",
     },
     {
-      name: "a build that is neither source-level nor a real build id",
-      report: identity({ build: { buildId: "not-a-digest" } }),
-      code: "FAROL_MODEL_E2E_REPORT_BUILD_INVALID",
-    },
-    {
-      name: "no host version, so which codex answered is unknown",
-      report: identity({ hostVersion: undefined }),
+      name: "a host with no version, so which release answered is unknown",
+      report: reportOf({
+        hosts: [{ binary: LOCATED, phases: ["env-key-overrides"] }],
+      }),
       code: "FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING",
     },
     {
-      name: "no host binary, so which executable answered is unknown",
-      report: identity({ hostBinary: undefined }),
-      code: "FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING",
-    },
-    {
-      name: "a null host binary, which buildReportIdentity used to emit freely",
-      report: identity({ hostBinary: null }),
-      code: "FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING",
-    },
-    {
-      name: "an empty host binary",
-      report: identity({ hostBinary: "" }),
-      code: "FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING",
-    },
-    {
       name: "the Node the shell happened to have, not one this project builds with",
-      report: identity({ nodeVersion: "22.19.0" }),
+      report: reportOf({ nodeVersion: "22.19.0" }),
       code: "FAROL_MODEL_E2E_REPORT_NODE_UNSUPPORTED",
     },
   ];
 
   for (const refusal of refusals) {
-    it(`S35-TA-5 refuses a report with ${refusal.name}`, () => {
+    it(`S35-TA-12 refuses a report with ${refusal.name}`, () => {
       expect(() => assertReportIdentity(refusal.report)).toThrow(refusal.code);
     });
   }
 
-  it("S35-TA-5 accepts a journey that ran built bytes, named by its build id", () => {
+  it("S35-TA-12 accepts a journey that ran built bytes", () => {
     expect(() =>
-      assertReportIdentity(identity({ build: { buildId: "c".repeat(64) } })),
+      assertReportIdentity(
+        reportOf({
+          loader: {
+            kind: "built",
+            buildId: "c".repeat(64),
+            artifactSha256: "d".repeat(64),
+          },
+        }),
+      ),
     ).not.toThrow();
   });
 
-  it("S35-TA-10 buildReportIdentity refuses to emit a report that cannot name its host", () => {
-    // R4 P2: the builder emitted `hostBinary ?? null` and the validator never
-    // looked, so a run could pass while naming the version of an executable
-    // it did not identify. Two reports from two different `codex` binaries
-    // on one machine were indistinguishable.
-    expect(() =>
-      buildReportIdentity({
-        repositoryRoot,
-        hostVersion: "codex-cli 0.153.4",
-        nodeVersion: SUPPORTED_NODE_VERSIONS[0],
-      }),
-    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
-    expect(() =>
-      buildReportIdentity({
-        repositoryRoot,
-        hostBinary: "",
-        hostVersion: "codex-cli 0.153.4",
-        nodeVersion: SUPPORTED_NODE_VERSIONS[0],
-      }),
-    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
-  });
-
-  it("S35-TA-5 accepts every Node version this project builds with", () => {
+  it("S35-TA-12 accepts every Node version this project builds with", () => {
     for (const nodeVersion of SUPPORTED_NODE_VERSIONS) {
       expect(() =>
-        assertReportIdentity(identity({ nodeVersion })),
+        assertReportIdentity(reportOf({ nodeVersion })),
       ).not.toThrow();
     }
   });

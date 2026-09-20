@@ -18,42 +18,82 @@ import { sourceIdentity } from "../../tooling/source-identity.mjs";
 export const SUPPORTED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 
 /**
- * The identity block for a source-level journey: this checkout's commit, the
- * digest of its `vnext` tree, and whether the working tree differed from it.
+ * The identity block. Two things it must not flatten:
  *
- * `build` is `"source-level"` because the journey bundles the TypeScript under
- * test with esbuild and never loads `dist/app`; a journey that did would carry
- * that build's own id and artifact digest instead, and saying "source-level"
- * is how a reader tells the two apart rather than assuming.
+ * `loader` is REQUIRED and has no default. The journey either bundled the
+ * TypeScript under test and imported that (`kind: "source-level"`, with the
+ * bundle it actually loaded) or ran built bytes (`kind: "built"`, with that
+ * build's id and artifact digest). A default would let a report claim the
+ * first while doing the second; the caller has to say which, because only
+ * the caller knows.
+ *
+ * `hosts` is a LIST, because one journey runs more than one binary. Measured
+ * on this machine: `which codex` finds a Node shim, while the product's own
+ * discovery offers the signed ChatGPT.app binary, and the phases that test
+ * discovery deliberately run the latter. Both report `codex-cli 0.153.4`, so
+ * the version does not tell them apart. Each entry carries the phase ids it
+ * answered, and `assertReportIdentity` refuses a report containing a phase
+ * no entry claims — otherwise a reader can see which binaries were involved
+ * without being able to attribute a single result to one.
  */
 export function buildReportIdentity(options) {
-  const { repositoryRoot, hostBinary, hostVersion, nodeVersion, build } =
-    options;
-  // S35-TA-10 (R4 P2): the builder used to emit `hostBinary ?? null` and the
-  // validator never looked at it, so a report could carry a host VERSION
-  // without naming the executable that produced it — two `codex` binaries on
-  // one machine, and two reports nothing could tell apart. A report that
-  // cannot say which executable it exercised is not built at all.
-  if (typeof hostBinary !== "string" || hostBinary.length === 0) {
-    throw new Error("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
-  }
+  const { repositoryRoot, loader, hosts, nodeVersion } = options;
+  assertLoader(loader);
+  assertHosts(hosts);
   const source = sourceIdentity(repositoryRoot);
   return {
     sourceCommit: source.commit,
     sourceTreeDigest: source.treeDigest,
     sourceDirty: source.dirty,
-    build: build ?? "source-level",
-    hostBinary,
-    hostVersion: hostVersion ?? null,
+    loader,
+    hosts: hosts.map((host) => ({
+      binary: host.binary,
+      version: host.version ?? null,
+      phases: [...host.phases],
+    })),
     nodeVersion,
   };
 }
 
-/**
- * Refuses a report that cannot be attributed. A run that passed every phase
- * but cannot say which bytes it exercised is not evidence of anything, so the
- * script fails rather than writing one.
- */
+function assertLoader(loader) {
+  if (!loader || typeof loader !== "object") {
+    throw new Error("FAROL_MODEL_E2E_REPORT_LOADER_MISSING");
+  }
+  if (loader.kind === "source-level") {
+    if (
+      typeof loader.bundlePath !== "string" ||
+      loader.bundlePath.length === 0
+    ) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_LOADER_INVALID");
+    }
+    return;
+  }
+  if (loader.kind === "built") {
+    if (
+      !/^[0-9a-f]{64}$/u.test(loader.buildId ?? "") ||
+      !/^[0-9a-f]{64}$/u.test(loader.artifactSha256 ?? "")
+    ) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_LOADER_INVALID");
+    }
+    return;
+  }
+  throw new Error("FAROL_MODEL_E2E_REPORT_LOADER_INVALID");
+}
+
+function assertHosts(hosts) {
+  if (!Array.isArray(hosts) || hosts.length === 0) {
+    throw new Error("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+  }
+  for (const host of hosts) {
+    if (typeof host?.binary !== "string" || host.binary.length === 0) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
+    }
+    if (!Array.isArray(host.phases) || host.phases.length === 0) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_HOST_PHASES_MISSING");
+    }
+  }
+}
+
 export function assertReportIdentity(report) {
   const identity = report?.identity;
   if (!identity || typeof identity !== "object") {
@@ -68,30 +108,32 @@ export function assertReportIdentity(report) {
   if (typeof identity.sourceDirty !== "boolean") {
     throw new Error("FAROL_MODEL_E2E_REPORT_SOURCE_DIRTY_INVALID");
   }
-  if (
-    identity.build !== "source-level" &&
-    !/^[0-9a-f]{64}$/u.test(identity.build?.buildId ?? "")
-  ) {
-    throw new Error("FAROL_MODEL_E2E_REPORT_BUILD_INVALID");
-  }
-  // A report whose host or Node is unknown cannot say what it exercised
-  // either: both are part of the claim, not decoration.
-  // Both halves of "which host answered": the executable and its version.
-  // The version alone identifies a release, not the binary that ran.
-  if (
-    typeof identity.hostBinary !== "string" ||
-    identity.hostBinary.length === 0
-  ) {
-    throw new Error("FAROL_MODEL_E2E_REPORT_HOST_BINARY_MISSING");
-  }
-  if (
-    typeof identity.hostVersion !== "string" ||
-    identity.hostVersion.length === 0
-  ) {
-    throw new Error("FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING");
+  assertLoader(identity.loader);
+  assertHosts(identity.hosts);
+  for (const host of identity.hosts) {
+    if (typeof host.version !== "string" || host.version.length === 0) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING");
+    }
   }
   if (!SUPPORTED_NODE_VERSIONS.includes(identity.nodeVersion)) {
     throw new Error("FAROL_MODEL_E2E_REPORT_NODE_UNSUPPORTED");
+  }
+  // Every phase the report contains must be attributable to exactly one
+  // recorded binary. A phase no entry claims is the failure this exists for:
+  // the report would name binaries without saying which produced a result.
+  const claimed = new Map();
+  for (const host of identity.hosts) {
+    for (const phase of host.phases) {
+      if (claimed.has(phase)) {
+        throw new Error("FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS");
+      }
+      claimed.set(phase, host.binary);
+    }
+  }
+  for (const phase of report.phases ?? []) {
+    if (!claimed.has(phase.id)) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
+    }
   }
   return identity;
 }

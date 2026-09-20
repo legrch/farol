@@ -342,6 +342,7 @@ function functionCallEvents(item) {
 }
 
 async function runCodexExec(codexBin, environment, extraArgs) {
+  if (activePhaseId) hostRuns.push({ phase: activePhaseId, binary: codexBin });
   return new Promise((resolve, reject) => {
     const child = spawn(
       codexBin,
@@ -437,7 +438,17 @@ function logRun(label, run) {
   }
 }
 
+// S35-TA-12: which binary answered which phase, recorded where the host is
+// actually executed rather than inferred from phase names. One journey runs
+// two binaries — the located shim and the binary discovery offers — and both
+// report the same version, so nothing else distinguishes them.
+let activePhaseId = null;
+const hostRuns = [];
+/** `codex --version` per binary: two binaries can report the same string. */
+const hostVersions = new Map();
+
 async function phase(id, body) {
+  activePhaseId = id;
   const startedAt = Date.now();
   const entry = { id, status: "FAIL", durationMs: 0, details: {} };
   report.phases.push(entry);
@@ -455,6 +466,37 @@ async function phase(id, body) {
 
 async function writeReport() {
   report.finishedAtIso = new Date().toISOString();
+  // S35-TA-12: built here, not earlier, because only here are BOTH binaries
+  // and the full phase list known — discovery runs inside a phase. `hosts`
+  // is grouped from what actually executed, so attribution is recorded
+  // rather than assumed.
+  const byBinary = new Map();
+  for (const run of hostRuns) {
+    const phases = byBinary.get(run.binary) ?? [];
+    if (!phases.includes(run.phase)) phases.push(run.phase);
+    byBinary.set(run.binary, phases);
+  }
+  if (byBinary.size > 0) {
+    report.identity = buildReportIdentity({
+      repositoryRoot: path.resolve(here, "../.."),
+      loader: { kind: "source-level", bundlePath: bundleOutput },
+      hosts: [...byBinary].map(([binary, phases]) => ({
+        binary,
+        version: hostVersions.get(binary) ?? report.hostVersion,
+        phases,
+      })),
+      nodeVersion: process.versions.node,
+    });
+    console.log(
+      `IDENTITY: source ${report.identity.sourceCommit}` +
+        `${report.identity.sourceDirty ? " (dirty)" : ""}` +
+        ` · ${report.identity.loader.kind}` +
+        ` · node ${report.identity.nodeVersion}` +
+        report.identity.hosts
+          .map((h) => `\n  ${h.binary} -> ${h.phases.join(", ")}`)
+          .join(""),
+    );
+  }
   // S35-TA-5: a run that cannot say which bytes it exercised is not evidence
   // of anything, whatever its phases did. Refused here, not filtered later.
   assertReportIdentity(report);
@@ -498,26 +540,12 @@ async function main() {
     report.hostBinary = codexBin;
     const { stdout: versionOut } = await execFileAsync(codexBin, ["--version"]);
     report.hostVersion = versionOut.trim();
+    hostVersions.set(codexBin, report.hostVersion);
     // S35-TA-5: which bytes of Farol this run exercised, derived through the
     // same `sourceIdentity` the ordinary lanes use, plus which host answered
     // and which Node launched it. Deliberately not an evidence attempt: this
     // journey has no lane contract yet and stays a witness note on the Route
     // B rows until one exists.
-    report.identity = buildReportIdentity({
-      repositoryRoot: path.resolve(here, "../.."),
-      hostBinary: codexBin,
-      hostVersion: report.hostVersion,
-      nodeVersion: process.versions.node,
-    });
-    console.log(
-      `IDENTITY: source ${report.identity.sourceCommit}` +
-        `${report.identity.sourceDirty ? " (dirty)" : ""}` +
-        ` · tree ${report.identity.sourceTreeDigest.slice(0, 12)}` +
-        ` · ${report.identity.build}` +
-        ` · node ${report.identity.nodeVersion}`,
-    );
-    console.log(`Using real host binary: ${codexBin}`);
-    console.log(`Host version: ${report.hostVersion}`);
 
     /** Runs the host once and returns what the endpoint saw during that run. */
     async function observedRun(label, codexHome, environment, extraArgs) {
@@ -892,6 +920,14 @@ async function main() {
       if (offers.length > 0) {
         discoveredHostBin = offers[0].path;
         report.discoveredHostBinary = discoveredHostBin;
+        // Its own `--version`: the two binaries can report the same string,
+        // which is exactly why the binary is recorded and not just this.
+        const discoveredVersion = await execFileAsync(discoveredHostBin, [
+          "--version",
+        ]).catch(() => null);
+        if (discoveredVersion) {
+          hostVersions.set(discoveredHostBin, discoveredVersion.stdout.trim());
+        }
         console.log(`application journey will run: ${discoveredHostBin}`);
       }
       return {
