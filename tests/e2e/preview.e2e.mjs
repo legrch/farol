@@ -2931,6 +2931,54 @@ async function finishSetupByNext(instance) {
   await dialog.waitFor({ state: "hidden" });
 }
 
+// Finishes first-run Setup the way a novice does: two real pointer clicks on
+// Continue, as fast as the input stack delivers them, at every step.
+//
+// finishSetupByNext() waits for each save before the next click because a
+// programmatic click that does not wait repeats a step. A person double
+// -clicking is a different thing, and the product has to survive it: one
+// double click must advance exactly one step, never two, and must not leave
+// the dialog wedged. Returns the step ids in the order they were actually
+// shown, so a skipped step is visible rather than merely not asserted.
+async function finishSetupByDoubleClick(instance) {
+  const dialog = instance.window.locator("#setup-dialog");
+  await dialog.waitFor({ state: "visible" });
+  const shown = [];
+  for (let step = 0; step < setupScreens.length; step += 1) {
+    const before = await dialog.getAttribute("data-step-id");
+    shown.push(before);
+    // Hit-test the centre before clicking it: Continue is inside a modal,
+    // and a click that lands on an overlay proves nothing about the button.
+    const target = await instance.window.evaluate(() => {
+      const next = document.querySelector("#setup-next");
+      if (!next) throw new Error("E2E_SETUP_NEXT_MISSING");
+      const rect = next.getBoundingClientRect();
+      const x = rect.x + rect.width / 2;
+      const y = rect.y + rect.height / 2;
+      const hit = document.elementFromPoint(x, y);
+      return { x, y, reachable: hit === next || next.contains(hit) };
+    });
+    assert.equal(
+      target.reachable,
+      true,
+      `Continue is clickable at its centre on step ${before}`,
+    );
+    await instance.window.mouse.click(target.x, target.y);
+    await instance.window.mouse.click(target.x, target.y);
+    if (step < setupScreens.length - 1) {
+      await instance.window.waitForFunction(
+        (previous) =>
+          document
+            .querySelector("#setup-dialog")
+            ?.getAttribute("data-step-id") !== previous,
+        before,
+      );
+    }
+  }
+  await dialog.waitFor({ state: "hidden" });
+  return shown;
+}
+
 // A Setup wait that times out names what the dialog showed instead, so a
 // failure under load is told apart from a refusal without another run.
 async function waitForSetup(instance, predicate, arg) {
@@ -8173,7 +8221,21 @@ ux34SidebarToggleSegment: {
   if (!segmentSelected("ux34-sidebar-toggle")) break ux34SidebarToggleSegment;
   const sidebarRoundtrip = await launch([], "secondary-visible");
   try {
-    await finishSetupByNext(sidebarRoundtrip);
+    // First run is also where a novice meets the only repeated-click hazard
+    // on this path. One double click per step, five steps, and the dialog
+    // must move through them one at a time and then close.
+    const doubleClicked = await finishSetupByDoubleClick(sidebarRoundtrip);
+    assert.deepEqual(
+      doubleClicked,
+      setupScreens.map(([stepId]) => stepId),
+      "a double click advances exactly one step, never skipping one",
+    );
+    assert.equal(
+      await sidebarRoundtrip.window.locator("#setup-dialog").isVisible(),
+      false,
+      "the last double click closes Setup rather than wedging it",
+    );
+    cases.push("ux34-sidebar-setup-continue-double-click");
     // Mirrors window-chrome-geometry.ts's trafficLightCluster (52x16) at
     // the app's configured trafficLightPosition {x: 14, y: 18} — Electron
     // exposes only the configured origin (getWindowButtonPosition), never
