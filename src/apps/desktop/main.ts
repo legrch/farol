@@ -254,10 +254,14 @@ import {
   PrivateProductAgentStore,
   type ProductAgentInput,
 } from "./product-agent-store";
+import { resolveProductAgentScope } from "./product-agent-scope";
 import {
-  productAgentScopeMatchesWorkspace,
-  resolveProductAgentScope,
-} from "./product-agent-scope";
+  productAgentContext,
+  productAgentHostContext,
+  productAgentInputMatchesContext,
+  type ProductAgentContext,
+  type ProductAgentHostContext,
+} from "./product-agent-context";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
 import {
   FarolModelLifecycle,
@@ -1404,75 +1408,18 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
   }
 }
 
-type ProductAgentContext = Readonly<{
-  settings: ProductSettings;
-  host: NonNullable<ProductSettings["nativeHosts"]["codex"]>;
-  workspace: ApprovedProductWorkspace;
-}>;
-
-type ProductAgentHostContext = Readonly<
-  Pick<ProductAgentContext, "settings" | "host">
->;
-
-function productAgentContext(workspaceId: string): ProductAgentContext | null {
-  const snapshot = configuration?.snapshot();
-  if (snapshot?.status !== "ready" || !productAgentStore) return null;
-  const settings = snapshot.settings;
-  const selected = settings.nativeHosts.codex;
-  const live = selected?.liveVerification;
-  const agent = selected?.agentVerification;
-  const workspace = settings.computer.workspaces.find(
-    (candidate) => candidate.workspaceId === workspaceId,
-  );
-  const verified = settings.setup.computer.verified;
-  if (
-    !selected ||
-    !live ||
-    live.executableSha256 !== selected.executableSha256 ||
-    live.schemaSha256 !== selected.schemaSha256 ||
-    live.buildId !== buildIdentity.buildId ||
-    !agent ||
-    agent.executableSha256 !== selected.executableSha256 ||
-    agent.schemaSha256 !== selected.schemaSha256 ||
-    agent.buildId !== buildIdentity.buildId ||
-    agent.workspaceId !== workspaceId ||
-    agent.computerGeneration !== settings.computer.generation ||
-    agent.workspaceEnforcement !== "verified" ||
-    !workspace ||
-    !verified ||
-    verified.workspaceId !== workspace.workspaceId ||
-    verified.configRevision !== settings.computer.generation ||
-    verified.buildId !== buildIdentity.buildId ||
-    settings.setup.computer.reachable !== "reachable" ||
-    settings.setup.computer.outcomeUnknown
-  ) {
-    return null;
-  }
-  return { settings, host: selected, workspace };
-}
-
 function productAgentCapabilityAvailable(): boolean {
   const snapshot = configuration?.snapshot();
   if (snapshot?.status !== "ready") return false;
   const workspaceId = snapshot.settings.setup.computer.verified?.workspaceId;
-  return workspaceId ? productAgentContext(workspaceId) !== null : false;
-}
-
-function productAgentHostContext(
-  input: ProductAgentInput,
-): ProductAgentHostContext | null {
-  const snapshot = configuration?.snapshot();
-  if (snapshot?.status !== "ready") return null;
-  const selected = snapshot.settings.nativeHosts.codex;
-  if (
-    !selected ||
-    selected.executableSha256 !== input.executableSha256 ||
-    selected.schemaSha256 !== input.schemaSha256 ||
-    input.buildId !== buildIdentity.buildId
-  ) {
-    return null;
-  }
-  return { settings: snapshot.settings, host: selected };
+  return workspaceId
+    ? productAgentContext(
+        workspaceId,
+        snapshot.settings,
+        productAgentStore,
+        buildIdentity.buildId,
+      ) !== null
+    : false;
 }
 
 function productAgentInput(
@@ -1520,24 +1467,6 @@ function productAgentSessionKey(input: ProductAgentInput): string {
     input.scope,
     input.excludedPaths,
   ]);
-}
-
-function productAgentInputMatchesContext(
-  input: ProductAgentInput,
-  context: ProductAgentContext,
-): boolean {
-  return (
-    input.computerGeneration === context.settings.computer.generation &&
-    input.workspaceId === context.workspace.workspaceId &&
-    productAgentScopeMatchesWorkspace(
-      context.workspace.root,
-      context.workspace.excludedPaths,
-      input,
-    ) &&
-    input.executableSha256 === context.host.executableSha256 &&
-    input.schemaSha256 === context.host.schemaSha256 &&
-    input.buildId === buildIdentity.buildId
-  );
 }
 
 async function openProductAgentSession(
@@ -1995,7 +1924,14 @@ async function cancelProductAgentTask(
   const assignments = new PrivateAssignmentStore({
     root: codexAgentAssignmentRoot(),
   });
-  const context = productAgentHostContext(input);
+  const hostContextSnapshot = configuration?.snapshot();
+  const context = productAgentHostContext(
+    input,
+    hostContextSnapshot?.status === "ready"
+      ? hostContextSnapshot.settings
+      : null,
+    buildIdentity.buildId,
+  );
   if (!context) return tombstoneUnavailableProductAgent(input, assignments);
   let session: ActiveProductAgentSession;
   try {
@@ -2012,7 +1948,7 @@ async function executeProductAgent(
   context: ProductAgentContext,
   admission: "new" | "rejoin",
 ): Promise<ProductTaskCommandResult> {
-  if (!productAgentInputMatchesContext(input, context)) {
+  if (!productAgentInputMatchesContext(input, context, buildIdentity.buildId)) {
     return taskFailure("AGENT_NOT_READY");
   }
   let session: ActiveProductAgentSession;
@@ -2195,7 +2131,15 @@ async function runProductTaskCommand(
         ) {
           return taskFailure("AGENT_ALREADY_RUNNING");
         }
-        context = productAgentContext(command.data.workspaceId);
+        const startAgentSnapshot = configuration?.snapshot();
+        context = productAgentContext(
+          command.data.workspaceId,
+          startAgentSnapshot?.status === "ready"
+            ? startAgentSnapshot.settings
+            : null,
+          productAgentStore,
+          buildIdentity.buildId,
+        );
         if (!context) return taskFailure("AGENT_NOT_READY");
         const candidate = productAgentInput(
           task,
@@ -2262,8 +2206,23 @@ async function runProductTaskCommand(
           ).catch(() => undefined);
           return taskFailure("AGENT_REJOIN_UNAVAILABLE");
         }
-        context = productAgentContext(input.workspaceId);
-        if (!context || !productAgentInputMatchesContext(input, context)) {
+        const rejoinAgentSnapshot = configuration?.snapshot();
+        context = productAgentContext(
+          input.workspaceId,
+          rejoinAgentSnapshot?.status === "ready"
+            ? rejoinAgentSnapshot.settings
+            : null,
+          productAgentStore,
+          buildIdentity.buildId,
+        );
+        if (
+          !context ||
+          !productAgentInputMatchesContext(
+            input,
+            context,
+            buildIdentity.buildId,
+          )
+        ) {
           return taskFailure("AGENT_NOT_READY");
         }
       }
