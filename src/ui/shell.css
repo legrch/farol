@@ -1193,7 +1193,8 @@ html[data-has-tasks="false"] .surface {
    auto`) or, with a non-shrinking `.connection-actions`/`.workspace-actions`
    (`flex: none`), controls crowding on top of each other. */
 .workspace-row,
-.connection-row {
+.connection-row,
+.settings-group-actions {
   flex-wrap: wrap;
 }
 
