@@ -36,7 +36,7 @@ export function taskPage(task: TaskPageIdentity, token: string): string {
     :root { color-scheme: dark; font-family: "Avenir Next", system-ui, sans-serif; background: #10202a; color: #dde8e6; }
     body { margin: 0; padding: 34px clamp(28px, 5vw, 70px); min-height: 100vh; box-sizing: border-box; }
     .eyeline { color: #76c8bb; font-size: 13px; letter-spacing: .04em; }
-    h1 { font-size: clamp(27px, 4vw, 42px); line-height: 1.08; margin: 14px 0 26px; max-width: 720px; }
+    h1 { font-size: clamp(27px, 4vw, 42px); line-height: 1.08; margin: 14px 0 26px; max-width: 720px; overflow-wrap: anywhere; }
     .answer { max-width: 720px; font-size: 18px; line-height: 1.65; white-space: pre-wrap; }
     .state { min-height: 88px; margin-top: 30px; }
     .status { display: inline-flex; gap: 8px; align-items: center; color: #a9bcba; }

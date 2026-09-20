@@ -987,6 +987,7 @@ html[data-has-tasks="false"] .surface {
 }
 
 .permission-sheet small {
+  overflow-wrap: anywhere;
   color: var(--text-faint);
   font-size: 10px;
 }
@@ -1028,6 +1029,8 @@ html[data-has-tasks="false"] .surface {
 }
 
 .scope-list dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
   color: var(--text);
 }
 
@@ -1119,6 +1122,7 @@ html[data-has-tasks="false"] .surface {
 .settings-feedback {
   min-height: 18px;
   max-width: 940px;
+  overflow-wrap: anywhere;
   margin: -18px 0 14px;
   color: var(--text-soft);
   font-size: 11px;
@@ -1621,6 +1625,7 @@ html[data-has-tasks="false"] .surface {
 
 .connector-challenge p,
 .connector-challenge small {
+  overflow-wrap: anywhere;
   color: var(--text-soft);
   font-size: 9px;
   line-height: 1.5;
@@ -1722,6 +1727,7 @@ html[data-has-tasks="false"] .surface {
 .workspace-read-evidence strong,
 .workspace-query-evidence strong,
 .workspace-mutation-evidence strong {
+  overflow-wrap: anywhere;
   color: var(--text-soft);
   font-family: var(--font-mono);
   font-size: 9px;
@@ -1790,6 +1796,7 @@ html[data-has-tasks="false"] .surface {
 
 .workspace-query-evidence li {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .workspace-query-evidence ol li {
@@ -1799,6 +1806,7 @@ html[data-has-tasks="false"] .surface {
 }
 
 .workspace-query-evidence code {
+  overflow-wrap: anywhere;
   color: var(--text-soft);
   font-family: var(--font-mono);
 }
@@ -2205,7 +2213,9 @@ dialog::backdrop {
   width: 100%;
   min-height: 48px;
   display: grid;
-  grid-template-columns: 1fr auto;
+  /* minmax(0, …) so the label column can shrink: a grid item's automatic
+     minimum is its own content, and the label is the owner's task name. */
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 5px 12px;
   border: 0;
@@ -2223,8 +2233,11 @@ dialog::backdrop {
 }
 
 .command-results button span {
+  overflow: hidden;
   font-size: 13px;
   font-weight: 570;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .command-results button small {
@@ -2335,6 +2348,7 @@ dialog::backdrop {
   gap: 5px;
   margin: 0;
   padding-left: 18px;
+  overflow-wrap: anywhere;
   color: var(--text-faint);
   font-family: var(--font-mono);
   font-size: 10px;
