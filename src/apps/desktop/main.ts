@@ -50,6 +50,12 @@ import {
   PromotionPendingRefusal,
 } from "./chatgpt-journal-lease";
 import {
+  workspaceDeniedPaths,
+  workspaceDescriptor,
+  verifiedProductWorkspace as verifiedWorkspaceOf,
+  type VerifiedProductWorkspaceResult,
+} from "./workspace-descriptor";
+import {
   acquirePromotionLease,
   releasePromotionLease,
   verifyPromotionLease,
@@ -3419,60 +3425,16 @@ async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
   }
 }
 
-function workspaceDeniedPaths(
-  workspace: ApprovedProductWorkspace,
-): readonly string[] {
-  const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
-  return workspace.excludedPaths.flatMap((excluded) =>
-    excluded.startsWith(prefix) ? [excluded.slice(prefix.length)] : [],
-  );
-}
-
-// Every desktop helper call names the workspace's own exclusions and the folder
-// identity the owner verified, so a folder that has since replaced it at the
-// same path is refused instead of trusted. There is no call without one.
-function workspaceDescriptor(
-  workspace: ApprovedProductWorkspace,
-  rootIdentity: WorkspaceRootIdentity,
-) {
-  return {
-    workspaceId: workspace.workspaceId,
-    root: workspace.root,
-    deniedPaths: workspaceDeniedPaths(workspace),
-    approvedRoot: { path: workspace.root, ...rootIdentity },
-    ...(workspace.gitMetadata ? { gitMetadata: workspace.gitMetadata } : {}),
-  };
-}
-
-type VerifiedProductWorkspace = ApprovedProductWorkspace &
-  Readonly<{ rootIdentity: WorkspaceRootIdentity }>;
-
-// A workspace is verified only while the recorded verification names it at the
-// current Computer generation AND it carries the identity that verification
-// bound. A workspace saved before identities existed stays unverified until the
-// owner verifies it again; its pathname alone is never trusted.
+// S35-TA-4: the composition itself lives in `workspace-descriptor.ts`, so the
+// denied list, the bound identity and the verification rule are exercised by
+// tests rather than restated in them. What stays here is reading the current
+// snapshot, which only `main.ts` can do.
 function verifiedProductWorkspace(
   workspaceId: string,
-):
-  | Readonly<{ status: "verified"; workspace: VerifiedProductWorkspace }>
-  | Readonly<{ status: "not_found" }>
-  | Readonly<{ status: "not_verified" }> {
+): VerifiedProductWorkspaceResult {
   const snapshot = configuration?.snapshot();
   if (!snapshot || snapshot.status !== "ready") return { status: "not_found" };
-  const workspace = snapshot.settings.computer.workspaces.find(
-    (candidate) => candidate.workspaceId === workspaceId,
-  );
-  if (!workspace) return { status: "not_found" };
-  const verification = snapshot.settings.setup.computer.verified;
-  const rootIdentity = workspace.rootIdentity;
-  if (
-    verification?.workspaceId !== workspace.workspaceId ||
-    verification.configRevision !== snapshot.settings.computer.generation ||
-    !rootIdentity
-  ) {
-    return { status: "not_verified" };
-  }
-  return { status: "verified", workspace: { ...workspace, rootIdentity } };
+  return verifiedWorkspaceOf(snapshot.settings, workspaceId);
 }
 
 async function selectedWorkspaceFile(
