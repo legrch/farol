@@ -59,8 +59,32 @@ function settings(generation = 7, commands: "none" | "verification" = "none") {
   });
 }
 
+// A current delegated authority: shape version 1 with concrete provenance on
+// every scope and exclusion, exactly as the Computer contract handler stamps
+// them. A fixture without that provenance models a legacy record, which the
+// probe now reports as `unverified-provenance` rather than `task-grant`
+// (see agent-authority-provenance-chain.test.ts); these cases assert the
+// task-grant semantics of a current record, so the fixture declares it.
 function authority(
   overrides: Partial<DelegatedAgentAuthority> = {},
+): DelegatedAgentAuthority {
+  const merged = authorityRecord(overrides);
+  return {
+    ...merged,
+    authorityShapeVersion: 1,
+    workspaces: merged.workspaces.map((workspace) => ({
+      restrictionSource: "task-grant" as const,
+      ...workspace,
+    })),
+    excludedPaths: merged.excludedPaths.map((excluded) => ({
+      restrictionSource: "task-grant" as const,
+      ...excluded,
+    })),
+  };
+}
+
+function authorityRecord(
+  overrides: Partial<DelegatedAgentAuthority>,
 ): DelegatedAgentAuthority {
   return {
     authorityId: "authority-a",
