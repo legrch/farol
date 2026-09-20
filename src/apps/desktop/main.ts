@@ -5340,10 +5340,15 @@ async function configureAdmittedProduct(
         if (!recorded.ok) {
           return configurationFailure("SETTINGS_WRITE_FAILED");
         }
-        const result = await applyWorkspaceEdit(action, pending, {
-          oldText: command.oldText,
-          newText: command.newText,
-        });
+        const result = await applyWorkspaceEdit(
+          action,
+          pending,
+          {
+            oldText: command.oldText,
+            newText: command.newText,
+          },
+          configuration.releaseWorkspaceEditLease.bind(configuration),
+        );
         if (!result.ok) {
           if (result.error.code === "WORKSPACE_MUTATION_OUTCOME_UNKNOWN") {
             await configuration.recordComputerMutationOutcomeUnknown(
@@ -6695,6 +6700,25 @@ async function main(): Promise<void> {
     new ProductSettingsStore({
       root: path.join(app.getPath("userData"), "farol-next-state"),
     }),
+    {
+      // S35-N03d: the same cross-process lease `liveTaskRegistry` takes for
+      // admission (same lease file, same "admission" role — see the guard
+      // above), so a guarded edit's durable critical phase excludes a live
+      // promotion exactly the way a Chat turn or a native Agent start
+      // already does. A contended acquire refuses the edit with its own
+      // readable code rather than surfacing lease contention as a crash.
+      promotionLease: {
+        acquireForAdmission: async () => {
+          const handle = await acquirePromotionLease(
+            app.getPath("userData"),
+            buildIdentity.buildId,
+            "admission",
+          ).catch(() => null);
+          if (!handle) return null;
+          return { release: () => releasePromotionLease(handle) };
+        },
+      },
+    },
   );
   await configuration.initialize();
   productAgentStore = new PrivateProductAgentStore({
