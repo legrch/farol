@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  approveToolPrerequisite,
   guardedEditApplyPrerequisite,
   searchMatchDisplay,
   workspaceSearchPrerequisite,
@@ -51,5 +52,37 @@ describe("why a Computer control cannot be used yet", () => {
     expect(guardedEditApplyPrerequisite("", "")).toBe(
       "Enter the exact text to replace.",
     );
+  });
+});
+
+describe("why a bounded approval cannot be released", () => {
+  const waiting = {
+    hasWaitingTask: true,
+    runtimeReady: true,
+    surfaceFailed: false,
+  };
+
+  it("names the runtime, which the summary never did", () => {
+    // The summary said "One task is waiting for your bounded approval."
+    // beside a dead button whenever the runtime was not ready.
+    expect(
+      approveToolPrerequisite({ ...waiting, runtimeReady: false }),
+    ).toContain("local runtime is not ready");
+  });
+
+  it("names a failed task surface, which the summary never did either", () => {
+    expect(
+      approveToolPrerequisite({ ...waiting, surfaceFailed: true }),
+    ).toContain("page failed");
+  });
+
+  it("keeps the one condition the summary did name", () => {
+    expect(approveToolPrerequisite({ ...waiting, hasWaitingTask: false })).toBe(
+      "No request is waiting.",
+    );
+  });
+
+  it("has nothing to say when the approval can be released", () => {
+    expect(approveToolPrerequisite(waiting)).toBeNull();
   });
 });

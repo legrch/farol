@@ -54,6 +54,7 @@ import {
   taskMenuNote,
 } from "./task-menu-presentation";
 import {
+  approveToolPrerequisite,
   guardedEditApplyPrerequisite,
   searchMatchDisplay,
   workspaceSearchPrerequisite,
@@ -1230,13 +1231,20 @@ function renderComputer(): void {
   const waitingTask = pendingComputerTask();
   computerTargetTaskId = waitingTask?.taskId ?? null;
   const button = required<HTMLButtonElement>("#approve-tool");
-  button.disabled =
-    !waitingTask ||
-    bootstrap.runtimeState !== "ready" ||
-    taskSurfaceStatuses.get(waitingTask.taskId)?.state === "failed";
-  required("#computer-summary").textContent = waitingTask
-    ? "One task is waiting for your bounded approval."
-    : "No request is waiting.";
+  // The flag and the sentence from one function: three conditions disabled
+  // this control and the summary named only the first of them.
+  const approvePrerequisite = approveToolPrerequisite({
+    hasWaitingTask: waitingTask !== null,
+    runtimeReady: bootstrap.runtimeState === "ready",
+    surfaceFailed:
+      waitingTask !== null &&
+      taskSurfaceStatuses.get(waitingTask.taskId)?.state === "failed",
+  });
+  button.disabled = approvePrerequisite !== null;
+  if (approvePrerequisite !== null) button.title = approvePrerequisite;
+  else button.removeAttribute("title");
+  required("#computer-summary").textContent =
+    approvePrerequisite ?? "One task is waiting for your bounded approval.";
   required("#computer-task").textContent = waitingTask
     ? `Task · ${taskLabel(waitingTask)}`
     : "No selected request";

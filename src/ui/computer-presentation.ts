@@ -50,3 +50,28 @@ export function guardedEditApplyPrerequisite(
   }
   return null;
 }
+
+/**
+ * Why the bounded approval cannot be released yet, or null when it can.
+ *
+ * Three conditions disabled it and the summary beside it named one: that no
+ * request was waiting. A runtime that is not ready, and a task surface that
+ * has failed, both left the control dead under a summary saying a task was
+ * waiting for the owner's approval.
+ */
+export function approveToolPrerequisite(
+  state: Readonly<{
+    hasWaitingTask: boolean;
+    runtimeReady: boolean;
+    surfaceFailed: boolean;
+  }>,
+): string | null {
+  if (!state.hasWaitingTask) return "No request is waiting.";
+  if (!state.runtimeReady) {
+    return "The local runtime is not ready. The request stays waiting until it is.";
+  }
+  if (state.surfaceFailed) {
+    return "This task's page failed. Reopen or restart it before releasing the approval.";
+  }
+  return null;
+}
