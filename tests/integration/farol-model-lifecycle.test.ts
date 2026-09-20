@@ -706,6 +706,139 @@ describe("Farol Model endpoint lifecycle", () => {
       expect(await fs.readFile(configPath, "utf8")).toContain(before!);
     });
 
+    // S35-H2-1R2. `undoRotation` restored, cleared and stopped only when
+    // there WAS a previous token. A rotation that begins while the runtime
+    // holds none — the token file gone, the owner's config still carrying
+    // an earlier literal — therefore kept the freshly minted token after a
+    // failed rewrite, so the endpoint went on accepting a value nothing
+    // the owner has can produce. The invariant is one sentence for both
+    // cases: after a failed rewrite the endpoint accepts exactly what it
+    // accepted before the rotation started — the previous literal, or
+    // nothing.
+    //
+    // `ensureToken` is what makes that starting state reachable through a
+    // spec: it is what `start()` itself does, and "no token on disk" is
+    // exactly the state a previous rotation that failed closed leaves
+    // behind.
+    function mintingPortsFor(
+      lifecycle: FarolModelLifecycle,
+      configPath: string,
+    ): FarolModelRotatePorts {
+      const base = portsFor(lifecycle, configPath);
+      return {
+        ...base,
+        spec: async () => {
+          const status = lifecycle.status();
+          if (status.state !== "listening" && status.state !== "connected") {
+            return null;
+          }
+          return {
+            providerName: "farol",
+            displayName: "Farol Model",
+            baseUrl: `http://127.0.0.1:${status.port}`,
+            model: MODEL,
+            wireApi: "responses",
+            delivery: {
+              mode: "bearer-token",
+              token: await lifecycle.runtimeState.ensureToken(),
+            },
+          };
+        },
+      };
+    }
+
+    it("S35-H2-1R2 clears the minted token when the rotation began with none, so a failed rewrite leaves the endpoint accepting nothing", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = mintingPortsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      const literal = await lifecycle.runtimeState.currentToken();
+      expect(literal).toBeDefined();
+
+      // The endpoint accepts nothing when the rotation starts, while the
+      // owner's config still carries the earlier literal.
+      await lifecycle.runtimeState.clearToken();
+      expect(await lifecycle.runtimeState.currentToken()).toBeUndefined();
+      const configBefore = await fs.readFile(configPath, "utf8");
+
+      let mintedToken: string | undefined;
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          mintedToken = await lifecycle.runtimeState.currentToken();
+          throw new Error("config write crashed");
+        },
+      });
+
+      expect(rotated).toEqual({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED",
+      });
+      expect(mintedToken).toBeDefined();
+      expect(mintedToken).not.toBe(literal);
+
+      // Exactly what it accepted before the rotation: nothing. Neither the
+      // literal the owner's config carries nor the token this rotation
+      // minted authenticates.
+      expect(await lifecycle.runtimeState.currentToken()).toBeUndefined();
+      const old = await postTurn(port, literal);
+      expect(old.status).toBe(401);
+      await old.text();
+      const minted = await postTurn(port, mintedToken);
+      expect(minted.status).toBe(401);
+      await minted.text();
+      // The failed rewrite left the owner's config byte for byte alone.
+      expect(await fs.readFile(configPath, "utf8")).toBe(configBefore);
+    });
+
+    it("S35-H2-1R2 stops the endpoint when the rotation began with no token and clearing the minted one fails", async () => {
+      const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
+      await lifecycle.start();
+      const port = lifecycleExpectedPort(lifecycle);
+      const configPath = await configRoot();
+      const base = mintingPortsFor(lifecycle, configPath);
+
+      const installed = await base.spec();
+      expect(installed).not.toBeNull();
+      await applyFarolModelConfigBlock(configPath, installed!);
+      await lifecycle.runtimeState.clearToken();
+      expect(await lifecycle.runtimeState.currentToken()).toBeUndefined();
+
+      // The private state directory has become unwritable, so removing the
+      // minted token fails as well — the one case left where this process
+      // cannot put the endpoint back the way it found it.
+      Object.defineProperty(lifecycle.runtimeState, "clearToken", {
+        configurable: true,
+        value: async () => {
+          throw new Error("FAROL_MODEL_STATE_UNSAFE");
+        },
+      });
+
+      let mintedToken: string | undefined;
+      const rotated = await lifecycle.rotateAndRewrite({
+        ...base,
+        apply: async () => {
+          mintedToken = await lifecycle.runtimeState.currentToken();
+          throw new Error("config write crashed");
+        },
+      });
+
+      expect(rotated).toEqual({
+        ok: false,
+        code: "FAROL_MODEL_ROTATE_RESTORE_FAILED",
+      });
+      expect(mintedToken).toBeDefined();
+      // Stopped outright: the token it was left holding cannot be used
+      // against it, because nothing is listening on the port any more.
+      expect(lifecycle.status()).toEqual({ state: "not_running" });
+      await expect(postTurn(port, mintedToken)).rejects.toThrow();
+    });
+
     it("refuses before the token moves when the endpoint is not running", async () => {
       const lifecycle = newLifecycle(await disposableStateRoot(), emptyTurn);
       const configPath = await configRoot();

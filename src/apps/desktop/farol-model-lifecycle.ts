@@ -317,19 +317,40 @@ export class FarolModelLifecycle {
   }
 
   /**
-   * Puts the token the owner's config still carries back, and reports the
-   * rewrite as not done. When the restore cannot be written, the endpoint
-   * would otherwise be left accepting a literal nobody can produce: the
-   * token is cleared so every request is refused 401 until the owner runs
-   * Preview/Apply again, and — if even that fails, which means this
-   * process can no longer write its own private state — the endpoint is
-   * stopped outright. Both are the closed direction; neither is silent.
+   * Puts the endpoint back the way the rotation found it, and reports the
+   * rewrite as not done. The invariant is one sentence: after a failed
+   * rewrite the endpoint accepts exactly what it accepted before the
+   * rotation started — the previous literal, or nothing at all.
+   *
+   * So there are two restores, not one. With a previous token, that token
+   * goes back, because the owner's config still carries it. With none
+   * (S35-H2-1R2: the token file was absent or unusable when the rotation
+   * began, which is also the state a previous rotation that failed closed
+   * leaves behind), "back" means removing the token this rotation minted:
+   * leaving it in place would have the endpoint accepting a literal the
+   * owner's config does not carry and nobody can read.
+   *
+   * When that restore cannot be written, the endpoint would be left
+   * accepting a literal nobody can produce: the token is cleared so every
+   * request is refused 401 until the owner runs Preview/Apply again, and —
+   * if even that fails, which means this process can no longer write its
+   * own private state — the endpoint is stopped outright. Both are the
+   * closed direction; neither is silent.
    */
   private async undoRotation(
     previousToken: string | undefined,
     providerBlockStatus?: FarolModelBlockStatus,
   ): Promise<FarolModelRotateOutcome> {
-    if (previousToken !== undefined) {
+    if (previousToken === undefined) {
+      try {
+        await this.state.clearToken();
+      } catch {
+        // Clearing IS the restore here, so there is no second attempt to
+        // make: the endpoint is stopped instead.
+        await this.stop().catch(() => undefined);
+        return { ok: false, code: "FAROL_MODEL_ROTATE_RESTORE_FAILED" };
+      }
+    } else {
       try {
         await this.state.restoreToken(previousToken);
       } catch {
