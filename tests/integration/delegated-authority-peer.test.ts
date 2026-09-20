@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DelegateExecutionAuthority } from "../../src/modules/computer/app/service/delegate-execution-authority";
 import {
   createParticipantAuthority,
+  delegateParticipantAuthority,
   deriveTaskGrant,
   type ComputerApproval,
   type TaskAdmission,
@@ -92,6 +93,51 @@ function createPeer() {
     contract,
     peer: new ComputerExecutionAuthorityPeer(contract),
     repository,
+  };
+}
+
+// A `ParticipantAuthority` shaped exactly like a record produced before
+// provenance existed: both a workspace scope and an exclusion carry
+// "unknown" `restrictionSource`. `deriveTaskGrant` and `narrowTaskGrant`
+// never produce "unknown" themselves (see their own comments in
+// `execution-authority.ts`), so this has to be built by hand, the same way
+// `codex-agent-workspace-probe.ts`'s `participant()` reconstructs a record
+// whose `authorityShapeVersion` was never 1.
+function unverifiableProvenanceParent(): ParticipantAuthority {
+  return {
+    participantId: "legacy-main-a",
+    parentParticipantId: null,
+    role: "main",
+    mutationOwnership: "task",
+    grant: {
+      authorityId: "authority-legacy-a",
+      ownerId: "owner-preview",
+      sessionId: "session-a",
+      taskId: "task-a",
+      taskEpoch: 3,
+      computerId: "computer-preview",
+      computerGeneration: 7,
+      workspaces: [
+        {
+          workspaceId: "farol",
+          mode: "subtree",
+          root: "/workspace/farol",
+          access: "write",
+          restrictionSource: "unknown",
+        },
+      ],
+      excludedPaths: [
+        {
+          workspaceId: "farol",
+          path: "/workspace/farol/.env",
+          restrictionSource: "unknown",
+        },
+      ],
+      capabilities: approval.capabilities,
+      network: "none",
+      commands: "verification",
+      expiresAt: 10_000,
+    },
   };
 }
 
@@ -422,6 +468,129 @@ describe("Agent -> Computer delegated-authority peer", () => {
         source: "authority-store",
         retry: "never",
       },
+    });
+  });
+
+  // PINS TODAY'S BEHAVIOUR. THIS IS NOT AN ENDORSEMENT OF IT.
+  //
+  // `ExecutionAuthorityContractHandler.delegate` deliberately THROWS
+  // `AUTHORITY_GRANT_PROVENANCE_INVALID` from `grantedWorkspaceSource` /
+  // `grantedExclusionSource` (see that file's own comment) rather than
+  // wire-encode a scope or exclusion whose provenance nobody can verify as
+  // an ordinary "task-grant" — a loud failure over a silent mislabel, and we
+  // agree with that choice. `ComputerExecutionAuthorityPeer.delegate` has no
+  // try/catch around the contract call, so when a parent's grant still
+  // carries "unknown" and survives untouched to the encode step, the Agent
+  // port's returned promise REJECTS instead of resolving to an
+  // `AgentAuthorityDecision`. That rejection is fail-closed in the sense
+  // that matters to the caller: whoever calls `peer.delegate` never receives
+  // a decision it could act on, so nothing is granted to it. Whether the
+  // port should instead resolve to `{ok: false, source:
+  // "unverified-provenance"}` — the same failure source `authorizeTaskAction`
+  // already reports for an action an unknown-sourced restriction denies — is
+  // a PRODUCT DECISION recorded in the acceptance pack, and is deliberately
+  // NOT taken here. A future reader must not mistake a passing test here for
+  // an endorsement that throwing is the desired design; it only pins what
+  // the code does today.
+  //
+  // Arrangement: no narrowing. The parent's grant (workspace scope and
+  // exclusion both "unknown") is passed straight through
+  // `delegateParticipantAuthority` unchanged, so the first workspace scope
+  // the handler tries to encode is the one that throws.
+  //
+  // The delegate participant ("agent-legacy") is pre-admitted into the
+  // repository with content byte-identical to what this exact delegation
+  // recomputes (via the real `delegateParticipantAuthority`), so
+  // `InMemoryAuthorityRepository.admit` takes its non-mutating "existing"
+  // branch. That is what makes "nothing observable changed in the
+  // repository" a claim this test can actually prove for both sides of the
+  // delegation, parent and delegate alike — see the next test for a related
+  // arrangement where a fresh, never-before-seen delegate id is not left
+  // untouched.
+  it("rejects a parent grant with unverifiable provenance instead of mislabeling it, and leaves the authority store unchanged", async () => {
+    const legacy = unverifiableProvenanceParent();
+    const admission = {
+      participantId: "agent-legacy",
+      role: "agent" as const,
+      mutationOwnership: "task" as const,
+    };
+    const preAdmitted = delegateParticipantAuthority(legacy, admission);
+    if (!preAdmitted.ok) throw new Error(preAdmitted.error.code);
+
+    const repository = new InMemoryAuthorityRepository([
+      legacy,
+      preAdmitted.value,
+    ]);
+    const peer = new ComputerExecutionAuthorityPeer(
+      new ExecutionAuthorityContractHandler(
+        new DelegateExecutionAuthority(repository, { now: () => 1_000 }),
+      ),
+    );
+
+    const beforeChild = await repository.get("agent-legacy");
+    const beforeParent = await repository.get("legacy-main-a");
+
+    await expect(
+      peer.delegate({
+        identity,
+        parentParticipantId: "legacy-main-a",
+        participantId: "agent-legacy",
+        role: "agent",
+        mutationOwnership: "task",
+      }),
+    ).rejects.toThrow("AUTHORITY_GRANT_PROVENANCE_INVALID");
+
+    // Nothing was granted: the repository holds exactly what it held before
+    // this call, for both the delegate and its parent. A failing delegation
+    // here admitted nothing new and rewrote nothing existing.
+    await expect(repository.get("agent-legacy")).resolves.toEqual(beforeChild);
+    await expect(repository.get("legacy-main-a")).resolves.toEqual(
+      beforeParent,
+    );
+  });
+
+  // A related fact the test above deliberately does not claim, so it is
+  // pinned separately instead of being silently out of scope:
+  // `DelegateExecutionAuthority.execute` awaits
+  // `this.authorities.admit(...)` — which DOES durably store a brand-new
+  // delegate — and only returns to the handler afterward. The handler's
+  // provenance throw happens strictly after that store call already
+  // completed. So a delegation for a participant id that was never admitted
+  // before leaves an authority record behind (one this same handler would
+  // refuse to encode a second time, for the same reason), even though the
+  // caller's promise rejects and it never receives a decision. This does
+  // not contradict "nothing was granted" from the caller's point of view —
+  // no usable `AgentAuthorityDecision` ever reaches it — but it means that
+  // claim does not extend to "the store is untouched in every case", and a
+  // reader must not generalize the previous test that far. Whether leaving
+  // this unusable record behind is acceptable is the same product decision
+  // noted above, and is equally not taken here.
+  it("still admits a brand-new delegate before the same unverifiable-provenance throw, leaving an unusable record stored", async () => {
+    const legacy = unverifiableProvenanceParent();
+    const repository = new InMemoryAuthorityRepository([legacy]);
+    const peer = new ComputerExecutionAuthorityPeer(
+      new ExecutionAuthorityContractHandler(
+        new DelegateExecutionAuthority(repository, { now: () => 1_000 }),
+      ),
+    );
+
+    await expect(repository.get("agent-fresh")).resolves.toBeNull();
+
+    await expect(
+      peer.delegate({
+        identity,
+        parentParticipantId: "legacy-main-a",
+        participantId: "agent-fresh",
+        role: "agent",
+        mutationOwnership: "task",
+      }),
+    ).rejects.toThrow("AUTHORITY_GRANT_PROVENANCE_INVALID");
+
+    await expect(repository.get("agent-fresh")).resolves.toMatchObject({
+      participantId: "agent-fresh",
+      grant: expect.objectContaining({
+        workspaces: [expect.objectContaining({ restrictionSource: "unknown" })],
+      }),
     });
   });
 });
