@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,11 @@ import {
   releasePromotionLease,
   verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
+import {
+  journalUnderPromotionLease,
+  PromotionPendingRefusal,
+} from "../../src/apps/desktop/chatgpt-journal-lease";
+import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
 import type { ProductTask } from "../../src/modules/chat/contract/product-task";
 
 // S35-H1-1. One entry check is not a fence: `withPromotionLease` used to
@@ -54,6 +60,17 @@ async function userData(): Promise<string> {
   );
   roots.push(root);
   return root;
+}
+
+/**
+ * The real journal `main.ts` builds, on a real private directory under the
+ * same user-data root the lease lives in — the same layout
+ * `chatGptTaskJournalRoot()` uses.
+ */
+function journalFor(root: string): PrivateChatGptTaskJournal {
+  return new PrivateChatGptTaskJournal({
+    root: path.join(root, "farol-next-state", "chatgpt-task-journal"),
+  });
 }
 
 function waitForLine(
@@ -229,38 +246,63 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     expect(registry.get("task-a")?.agent ?? null).toBeNull();
   });
 
-  // The ChatGPT one-shot journal (`journalUnderPromotionLease` in
-  // `main.ts`): `work` IS the durable journal write, so the fence sits
-  // immediately before it and a stolen lease refuses before `prepare` runs.
-  it("S35-H1-1 a journal write under a stolen lease refuses with CHATGPT_TASK_PROMOTION_PENDING and never calls prepare", async () => {
+  // The ChatGPT one-shot journal. `journalUnderPromotionLease` (in
+  // `chatgpt-journal-lease.ts`) is the function `main.ts` calls at all four
+  // journal call sites, and `work` IS the durable journal write, so the
+  // fence sits immediately before it and a stolen lease refuses before the
+  // write runs.
+  //
+  // S35-H1R2: these used to drive a test-local replica of that wrapper over
+  // a mocked journal, which proved the replica fenced and said nothing
+  // about the production call path. The real function, the real
+  // `PrivateChatGptTaskJournal` on a real private directory, the real
+  // registry and the real second process are all here now; the journal file
+  // on disk is the evidence that no obligation was recorded.
+  it("S35-H1R2 a journal prepare under a stolen lease refuses with CHATGPT_TASK_PROMOTION_PENDING and writes no record", async () => {
     const root = await userData();
-    const prepared: string[] = [];
-    const journal = {
-      prepare: async (operationId: string) => {
-        prepared.push(operationId);
-      },
-    };
+    const journal = journalFor(root);
+    const operationId = randomUUID();
     const guard = racingLeaseGuard(root, () => stealLease(root));
     const registry = new LiveTaskRegistry(5, guard);
 
-    // `journalUnderPromotionLease`, verbatim: fence, then the journal write,
-    // and `!ok` raised as the refusal `main.ts` renders as
-    // `CHATGPT_TASK_PROMOTION_PENDING`.
-    const journalUnderPromotionLease = async (
-      work: () => Promise<void>,
-    ): Promise<void> => {
-      const outcome = await registry.withPromotionLease(async (fence) => {
-        await fence();
-        return work();
-      });
-      if (!outcome.ok) throw new Error("CHATGPT_TASK_PROMOTION_PENDING");
-      return outcome.value;
-    };
+    const refusal = await journalUnderPromotionLease(registry, () =>
+      journal.prepare({ operationId, kind: "readonly" }),
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    // The exact refusal `main.ts` maps to `CHATGPT_TASK_PROMOTION_PENDING`
+    // — by class, because that is what the call sites branch on.
+    expect(refusal).toBeInstanceOf(PromotionPendingRefusal);
+    expect((refusal as Error).message).toBe("CHATGPT_TASK_PROMOTION_PENDING");
+    // Nothing was prepared: a promotion's drain check finds no
+    // `CHATGPT_DISPATCH_PREPARED` obligation left behind by this attempt.
+    expect(await journal.load()).toBeNull();
+    // Two checks: the entry one (which passed) and the fence immediately
+    // before the durable write (which refused).
+    expect(guard.verifies()).toBe(2);
+  });
+
+  it("S35-H1R2 control: the same journal prepare lands when nobody steals the lease", async () => {
+    const root = await userData();
+    const journal = journalFor(root);
+    const operationId = randomUUID();
+    const guard = racingLeaseGuard(root, null);
+    const registry = new LiveTaskRegistry(5, guard);
 
     await expect(
-      journalUnderPromotionLease(() => journal.prepare("operation-a")),
-    ).rejects.toThrow("CHATGPT_TASK_PROMOTION_PENDING");
-    expect(prepared).toEqual([]);
+      journalUnderPromotionLease(registry, () =>
+        journal.prepare({ operationId, kind: "readonly" }),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(await journal.load()).toMatchObject({
+      operationId,
+      kind: "readonly",
+      phase: "prepared",
+    });
+    expect(guard.verifies()).toBe(2);
   });
 
   // S35-H1R: the journal has TWO durable writes under the same wrapper —
@@ -269,71 +311,53 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
   // check refuses on, so both must be fenced; only the first one was
   // covered here. The second write happens later in the same task, with
   // the window between its entry check and its write just as open.
-  it("S35-H1R a dispatch-intent write under a stolen lease refuses with CHATGPT_TASK_PROMOTION_PENDING and never calls markDispatchIntent", async () => {
+  it("S35-H1R a dispatch-intent write under a stolen lease refuses and leaves the record prepared", async () => {
     const root = await userData();
-    const dispatched: string[] = [];
-    const journal = {
-      markDispatchIntent: async (operationId: string) => {
-        dispatched.push(operationId);
-      },
-    };
+    const journal = journalFor(root);
+    const operationId = randomUUID();
+    // The task's first durable write already landed; this is the second
+    // one, which `main.ts` makes immediately before submission.
+    await journal.prepare({ operationId, kind: "readonly" });
     const guard = racingLeaseGuard(root, () => stealLease(root));
     const registry = new LiveTaskRegistry(5, guard);
 
-    // `journalUnderPromotionLease`, verbatim, exactly as the `prepare` case
-    // above replicates it.
-    const journalUnderPromotionLease = async (
-      work: () => Promise<void>,
-    ): Promise<void> => {
-      const outcome = await registry.withPromotionLease(async (fence) => {
-        await fence();
-        return work();
-      });
-      if (!outcome.ok) throw new Error("CHATGPT_TASK_PROMOTION_PENDING");
-      return outcome.value;
-    };
+    const refusal = await journalUnderPromotionLease(registry, () =>
+      journal.markDispatchIntent(operationId),
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
 
-    await expect(
-      journalUnderPromotionLease(() =>
-        journal.markDispatchIntent("operation-b"),
-      ),
-    ).rejects.toThrow("CHATGPT_TASK_PROMOTION_PENDING");
-    expect(dispatched).toEqual([]);
+    expect(refusal).toBeInstanceOf(PromotionPendingRefusal);
+    expect((refusal as Error).message).toBe("CHATGPT_TASK_PROMOTION_PENDING");
+    // Still merely prepared: no `CHATGPT_DELIVERY_PENDING` obligation was
+    // recorded for a turn this process is not going to submit.
+    expect(await journal.load()).toMatchObject({
+      operationId,
+      phase: "prepared",
+    });
+    expect(guard.verifies()).toBe(2);
   });
 
   it("S35-H1R control: the same dispatch-intent write lands when nobody steals the lease", async () => {
     const root = await userData();
-    const dispatched: string[] = [];
-    const journal = {
-      markDispatchIntent: async (operationId: string) => {
-        dispatched.push(operationId);
-      },
-    };
+    const journal = journalFor(root);
+    const operationId = randomUUID();
+    await journal.prepare({ operationId, kind: "readonly" });
     const guard = racingLeaseGuard(root, null);
     const registry = new LiveTaskRegistry(5, guard);
 
-    const outcome = await registry.withPromotionLease(async (fence) => {
-      await fence();
-      return journal.markDispatchIntent("operation-b");
+    await expect(
+      journalUnderPromotionLease(registry, () =>
+        journal.markDispatchIntent(operationId),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(await journal.load()).toMatchObject({
+      operationId,
+      phase: "dispatch_intent",
     });
-
-    expect(outcome.ok).toBe(true);
-    expect(dispatched).toEqual(["operation-b"]);
-  });
-
-  it("S35-H1-1 control: the same journal write lands when nobody steals the lease", async () => {
-    const root = await userData();
-    const prepared: string[] = [];
-    const guard = racingLeaseGuard(root, null);
-    const registry = new LiveTaskRegistry(5, guard);
-
-    const outcome = await registry.withPromotionLease(async (fence) => {
-      await fence();
-      prepared.push("operation-a");
-    });
-
-    expect(outcome.ok).toBe(true);
-    expect(prepared).toEqual(["operation-a"]);
+    expect(guard.verifies()).toBe(2);
   });
 
   it("S35-H1-1 a registry built without a lease guard hands work an unfenced no-op, exactly as before", async () => {
