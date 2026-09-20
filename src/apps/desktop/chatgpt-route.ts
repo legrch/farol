@@ -263,7 +263,14 @@ const readinessProbe = `(() => {
 // compare it against the page's own location as their first act: the main
 // process cannot check anything between dispatching a script and the script
 // running, so the last check before typing or clicking happens in-page.
-function prepareTaskScript(prompt: string, expectedHref: string): string {
+// Exported for the in-page navigation-guard tests (S35-H2-4), which
+// evaluate these exact source strings in `node:vm` against a stub page:
+// the guard has to be proven on the bytes that are dispatched, not on a
+// paraphrase of them.
+export function prepareTaskScript(
+  prompt: string,
+  expectedHref: string,
+): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
@@ -306,7 +313,7 @@ function prepareTaskScript(prompt: string, expectedHref: string): string {
   })()`;
 }
 
-function activateTaskScript(expectedHref: string): string {
+export function activateTaskScript(expectedHref: string): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { StagedChatGptAttachment } from "../../src/apps/desktop/chatgpt-attachment-staging";
@@ -22,7 +23,9 @@ vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
 import {
   ChatGptRoute,
   ChatGptSignInBlockLedger,
+  activateTaskScript,
   classifyChatGptProviderError,
+  prepareTaskScript,
   resolveChatGptWindowPresentation,
   type ChatGptRouteSurfaceFactory,
   type ChatGptSignInBlockedDiagnostic,
@@ -1648,5 +1651,183 @@ describe("ChatGPT sign-in blocked diagnostics (UX34-07)", () => {
       kind: "permission-denied",
       permission: "media",
     });
+  });
+});
+
+// S35-H2-4. The main process cannot check anything between dispatching a
+// submission script and that script running, so the last check before
+// typing or clicking happens in-page: both scripts compare the page's own
+// `location.href` with the identity the caller validated and return
+// `{ navigated: true }` without touching anything when they differ.
+//
+// These evaluate the real source strings the route dispatches, in
+// `node:vm`, against a stub page whose composer and send button record any
+// contact. A paraphrase of the guard would prove nothing about the bytes
+// that are actually sent to the renderer.
+describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
+  const expectedHref = "https://chatgpt.com/c/abc-123";
+
+  type Contacts = Readonly<{
+    focused: number;
+    typed: string[];
+    events: string[];
+    clicked: number;
+    replaced: number;
+  }>;
+
+  function pageContext(href: string): Readonly<{
+    context: vm.Context;
+    contacts: Contacts;
+  }> {
+    const contacts = {
+      focused: 0,
+      typed: [] as string[],
+      events: [] as string[],
+      clicked: 0,
+      replaced: 0,
+    };
+
+    class StubElement {
+      value = "";
+      disabled = false;
+      focus(): void {
+        contacts.focused += 1;
+      }
+      click(): void {
+        contacts.clicked += 1;
+      }
+      replaceChildren(): void {
+        contacts.replaced += 1;
+      }
+      dispatchEvent(event: { type: string }): boolean {
+        contacts.events.push(event.type);
+        return true;
+      }
+      getBoundingClientRect(): Readonly<{ width: number; height: number }> {
+        return { width: 320, height: 48 };
+      }
+      closest(): null {
+        return null;
+      }
+      getAttribute(): null {
+        return null;
+      }
+    }
+
+    class HTMLElement extends StubElement {}
+    class HTMLTextAreaElement extends HTMLElement {}
+    class HTMLButtonElement extends HTMLElement {}
+
+    const composer = new HTMLTextAreaElement();
+    const send = new HTMLButtonElement();
+
+    // The value setter the prepare script reaches for, instrumented.
+    Object.defineProperty(HTMLTextAreaElement.prototype, "value", {
+      configurable: true,
+      get() {
+        return "";
+      },
+      set(next: string) {
+        contacts.typed.push(next);
+      },
+    });
+
+    class InputEvent {
+      readonly type = "input";
+      constructor(
+        _type: string,
+        readonly init: unknown,
+      ) {}
+    }
+
+    const document = {
+      querySelector: (selector: string): unknown => {
+        if (selector.includes("prompt-textarea")) return composer;
+        if (selector.includes("send-button") || selector.includes("Send")) {
+          return send;
+        }
+        return null;
+      },
+      querySelectorAll: (): readonly unknown[] => [],
+      createTextNode: (text: string) => ({ text }),
+    };
+
+    const context = vm.createContext({
+      location: { href },
+      document,
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+      getBoundingClientRect: () => ({ width: 320, height: 48 }),
+      HTMLElement,
+      HTMLTextAreaElement,
+      HTMLButtonElement,
+      InputEvent,
+      Set,
+      Object,
+      RegExp,
+      Array,
+    });
+    return { context, contacts };
+  }
+
+  it("prepareTaskScript returns { navigated: true } and never touches the composer when the page has navigated", () => {
+    const { context, contacts } = pageContext("https://chatgpt.com/c/other");
+    const result = vm.runInContext(
+      prepareTaskScript("Secret prompt.", expectedHref),
+      context,
+    );
+    expect(result).toEqual({ navigated: true });
+    expect(contacts.focused).toBe(0);
+    expect(contacts.typed).toEqual([]);
+    expect(contacts.replaced).toBe(0);
+    expect(contacts.events).toEqual([]);
+  });
+
+  it("activateTaskScript returns { navigated: true } and never clicks send when the page has navigated", () => {
+    const { context, contacts } = pageContext("https://chatgpt.com/c/other");
+    const result = vm.runInContext(activateTaskScript(expectedHref), context);
+    expect(result).toEqual({ navigated: true });
+    expect(contacts.clicked).toBe(0);
+  });
+
+  it("control: on the expected href both scripts reach the composer and the send button", () => {
+    const prepareRun = pageContext(expectedHref);
+    const prepared = vm.runInContext(
+      prepareTaskScript("Secret prompt.", expectedHref),
+      prepareRun.context,
+    );
+    expect(prepared).toMatchObject({ ready: true });
+    expect(prepareRun.contacts.focused).toBe(1);
+    expect(prepareRun.contacts.typed).toEqual(["Secret prompt."]);
+    expect(prepareRun.contacts.events).toEqual(["input"]);
+
+    const activateRun = pageContext(expectedHref);
+    const activated = vm.runInContext(
+      activateTaskScript(expectedHref),
+      activateRun.context,
+    );
+    expect(activated).toEqual({ activated: true });
+    expect(activateRun.contacts.clicked).toBe(1);
+  });
+
+  it("the guard is an exact comparison: a query string, a fragment or a trailing slash is a different page", () => {
+    for (const href of [
+      `${expectedHref}?x=1`,
+      `${expectedHref}#top`,
+      `${expectedHref}/`,
+      "https://chatgpt.com/",
+    ]) {
+      const { context, contacts } = pageContext(href);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Secret prompt.", expectedHref),
+          context,
+        ),
+      ).toEqual({ navigated: true });
+      expect(
+        vm.runInContext(activateTaskScript(expectedHref), context),
+      ).toEqual({ navigated: true });
+      expect(contacts.typed).toEqual([]);
+      expect(contacts.clicked).toBe(0);
+    }
   });
 });
