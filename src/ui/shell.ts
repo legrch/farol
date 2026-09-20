@@ -46,6 +46,7 @@ import {
   setupSteps,
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
+import { taskMenuNote } from "./task-menu-presentation";
 import { searchMatchDisplay } from "./computer-presentation";
 import {
   modelDisconnectedReadiness,
@@ -1156,19 +1157,16 @@ function renderTaskMenu(): void {
 
   const note = required<HTMLElement>("#task-menu-note");
   note.dataset.error = String(taskMenuFeedbackError);
-  note.textContent =
-    taskMenuFeedback ||
-    (contextLocked
-      ? `${context?.label ?? "Context transition"} is still active. Farol will not cancel, close, or delegate this task until the exact context operation is reconciled.`
-      : agentLocked
-        ? agentRunning
-          ? "Agent state is retained before native execution. Cancel interrupts this exact native child; Close stays unavailable until cancellation or delivery is reconciled."
-          : "Agent state is retained before native execution. Closing and provider cancellation stay unavailable until the same assignment is reconciled."
-        : uncertain
-          ? "Outcome unknown is not Failed. Farol will not submit this Agent assignment again."
-          : task.lifecycle === "running"
-            ? "Cancel requests a provider stop. Closing only removes the local task and does not prove provider cancellation."
-            : "Close removes this local task and its window. It does not cancel provider work.");
+  note.textContent = taskMenuNote({
+    feedback: taskMenuFeedback,
+    busy: taskMenuBusy,
+    contextLocked,
+    contextLabel: context?.label ?? null,
+    agentLocked,
+    agentRunning,
+    uncertain,
+    lifecycle: task.lifecycle,
+  });
 }
 
 function pendingComputerTask(): PreviewTask | null {
