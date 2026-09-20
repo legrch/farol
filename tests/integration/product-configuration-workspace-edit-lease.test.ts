@@ -1,6 +1,8 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ProductConfigurationService,
@@ -9,7 +11,9 @@ import {
 } from "../../src/apps/desktop/product-configuration";
 import {
   acquirePromotionLease,
+  promotionLeasePath,
   releasePromotionLease,
+  verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
 import {
   applyWorkspaceEdit,
@@ -31,15 +35,71 @@ import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 // `tooling/promote-preview.mjs` uses for role "promotion", to prove a real
 // promotion attempt and a real guarded edit now exclude each other.
 
+const childScript = fileURLToPath(
+  new URL("./fixtures/promotion-lease-child.mjs", import.meta.url),
+);
+
 const roots: string[] = [];
+const children: ReturnType<typeof spawn>[] = [];
 
 afterEach(async () => {
+  await Promise.all(children.splice(0).map((child) => killAndWait(child)));
   await Promise.all(
     roots
       .splice(0)
       .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
+
+function waitForLine(
+  child: ReturnType<typeof spawn>,
+  needle: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let buffer = "";
+    const onData = (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      if (buffer.includes(needle)) {
+        child.stdout?.off("data", onData);
+        resolve();
+      }
+    };
+    child.stdout?.on("data", onData);
+    child.once("error", reject);
+    setTimeout(
+      () => reject(new Error(`timed out waiting for ${needle}`)),
+      10_000,
+    ).unref();
+  });
+}
+
+function killAndWait(child: ReturnType<typeof spawn>): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    child.once("close", () => resolve());
+    child.kill("SIGKILL");
+  });
+}
+
+/**
+ * The adversary, exactly as `promotion-lease-fence.test.ts` builds it:
+ * the lease file this hold locks is removed by name and a real second
+ * process takes its replacement. After this returns, two live holders
+ * exist and only the fence can tell them apart.
+ */
+async function stealLease(root: string): Promise<void> {
+  await fs.unlink(promotionLeasePath(root));
+  const holder = spawn(
+    process.execPath,
+    [childScript, root, "hold", "adversary-generation"],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  children.push(holder);
+  await waitForLine(holder, "ACQUIRED");
+}
 
 async function userData(): Promise<string> {
   const root = await fs.mkdtemp(
@@ -68,6 +128,32 @@ function admissionLeaseGuard(
       const handle = await acquirePromotionLease(root, generation, "admission");
       if (!handle) return null;
       return { release: () => releasePromotionLease(handle) };
+    },
+  };
+}
+
+/**
+ * The same admission lease, with the real `verifyPromotionLease` as its
+ * fence, counting how many times the service takes it: once on entry, and
+ * once more immediately before the durable settings write.
+ */
+function fencedLeaseGuard(
+  root: string,
+  generation: string,
+): WorkspaceEditLeaseGuard & { verifies: () => number } {
+  let verifies = 0;
+  return {
+    verifies: () => verifies,
+    acquireForAdmission: async () => {
+      const handle = await acquirePromotionLease(root, generation, "admission");
+      if (!handle) return null;
+      return {
+        release: () => releasePromotionLease(handle),
+        verify: async () => {
+          verifies += 1;
+          return verifyPromotionLease(handle);
+        },
+      };
     },
   };
 }
@@ -322,5 +408,123 @@ describe("guarded workspace edit takes the promotion lease", () => {
       { oldText: "old", newText: "new" },
     );
     expect(applied.ok).toBe(false);
+  });
+});
+
+// S35-H1R. Taking the lease and verifying it once on entry is not a fence:
+// `recordPendingEdit` checked the hold and then went on to `mutate`, whose
+// own durable write happens several awaits later, inside
+// `ProductSettingsStore.save`. A lease deleted and re-taken in that window
+// left two holders and the edit was written straight through. The fence now
+// sits where the bytes actually move — the last thing before the rename
+// that commits `product-settings.json`.
+//
+// The adversary is the real one: a real lease file, unlinked by name, and
+// the same `fixtures/promotion-lease-child.mjs` holder process the other
+// lease tests use taking the replacement inode. Only the instant is the
+// test's own — the store's `beforeCommit` seam fires it once, after the
+// entry check has passed and while the write is already under way.
+describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
+  function storeWithSeam(
+    root: string,
+    seam: { steal: (() => Promise<void>) | null },
+  ): ProductSettingsStore {
+    return new ProductSettingsStore(
+      { root: path.join(root, "farol-next-state") },
+      {
+        beforeCommit: async () => {
+          const pending = seam.steal;
+          seam.steal = null;
+          if (pending) await pending();
+        },
+      },
+    );
+  }
+
+  function settingsFileOf(root: string): string {
+    return path.join(root, "farol-next-state", "product-settings.json");
+  }
+
+  it("S35-H1R refuses, releases the hold and leaves the settings bytes untouched when the lease is stolen between the entry check and the write", async () => {
+    const root = await userData();
+    const generation = "generation-fence";
+    const seam: { steal: (() => Promise<void>) | null } = { steal: null };
+    const guard = fencedLeaseGuard(root, generation);
+    const service = new ProductConfigurationService(
+      storeWithSeam(root, seam),
+      dependencies(guard),
+    );
+    await service.initialize();
+    const workspace = await verifiedWriteWorkspace(service);
+    const delivery = deliveryOf(
+      "00000000-0000-4000-8000-0000000000ee",
+      workspace,
+      "2026-09-20T10:05:00.000Z",
+    );
+    const bytesBefore = await fs.readFile(settingsFileOf(root), "utf8");
+
+    seam.steal = () => stealLease(root);
+    const refused = await service.recordPendingWorkspaceEdit(delivery);
+
+    expect(refused).toMatchObject({
+      ok: false,
+      error: "WORKSPACE_MUTATION_PROMOTION_PENDING",
+    });
+    expect(refused.snapshot).toMatchObject({
+      status: "ready",
+      settings: { computer: { pendingEdit: null } },
+    });
+    // Nothing moved on disk: a promotion reading these bytes right now
+    // still sees no pending edit, and no revision was spent on a refusal.
+    expect(await fs.readFile(settingsFileOf(root), "utf8")).toBe(bytesBefore);
+    // Both checks ran: the entry one (which passed) and the fence
+    // immediately before the durable write (which refused).
+    expect(guard.verifies()).toBe(2);
+
+    // The hold this edit took is released rather than leaked: the thief is
+    // the only holder left, and the edit's own operation has nothing
+    // outstanding.
+    await service.releaseWorkspaceEditLease(delivery.operationId);
+  });
+
+  it("S35-H1R control: the same edit records, and the same two checks run, when nobody steals the lease", async () => {
+    const root = await userData();
+    const generation = "generation-fence-control";
+    const seam: { steal: (() => Promise<void>) | null } = { steal: null };
+    const guard = fencedLeaseGuard(root, generation);
+    const service = new ProductConfigurationService(
+      storeWithSeam(root, seam),
+      dependencies(guard),
+    );
+    await service.initialize();
+    const workspace = await verifiedWriteWorkspace(service);
+    const delivery = deliveryOf(
+      "00000000-0000-4000-8000-0000000000ff",
+      workspace,
+      "2026-09-20T10:06:00.000Z",
+    );
+
+    const recorded = await service.recordPendingWorkspaceEdit(delivery);
+
+    expect(recorded).toMatchObject({ ok: true });
+    expect(recorded.snapshot).toMatchObject({
+      status: "ready",
+      settings: {
+        computer: { pendingEdit: { operationId: delivery.operationId } },
+      },
+    });
+    expect(await fs.readFile(settingsFileOf(root), "utf8")).toContain(
+      delivery.operationId,
+    );
+    expect(guard.verifies()).toBe(2);
+
+    // The lease is still held by this edit until its outcome is recorded.
+    const promotionAttempt = await acquirePromotionLease(
+      root,
+      generation,
+      "promotion",
+    );
+    expect(promotionAttempt).toBeNull();
+    await service.releaseWorkspaceEditLease(delivery.operationId);
   });
 });

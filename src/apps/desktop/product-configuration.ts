@@ -33,6 +33,26 @@ type StoreHooks = Readonly<{
   beforeCommit?: () => Promise<void>;
 }>;
 
+// A per-write fence, supplied by the caller of one mutation rather than
+// installed on the store for its whole life. `beforeWrite` is the LAST
+// thing `save` does before the rename that makes the new settings durable,
+// so a check placed here is a check on the write itself and not on some
+// earlier moment the write is merely expected to follow. Throwing from it
+// abandons the write with the target untouched.
+type StoreWriteFence = Readonly<{
+  beforeWrite?: () => Promise<void>;
+}>;
+
+// The one throw `beforeWrite` may raise on this path: the promotion lease a
+// guarded edit holds is no longer the lease on disk. Carried as its own
+// class so `commit` can report the edit's readable refusal instead of the
+// generic write failure every other `save` error becomes.
+class WorkspaceEditLeaseLost extends Error {
+  constructor() {
+    super("WORKSPACE_MUTATION_PROMOTION_PENDING");
+  }
+}
+
 export type ProductSettingsStoreOptions = Readonly<{ root: string }>;
 
 // The same cross-process exclusion `LiveTaskRegistry.admitDurable` and
@@ -473,7 +493,10 @@ export class ProductSettingsStore {
     }
   }
 
-  async save(settings: ProductSettings): Promise<void> {
+  async save(
+    settings: ProductSettings,
+    fence: StoreWriteFence = {},
+  ): Promise<void> {
     const validated = ProductSettingsSchema.parse(settings);
     await this.ensureRoot();
     const serialized = `${JSON.stringify(validated, null, 2)}\n`;
@@ -502,6 +525,10 @@ export class ProductSettingsStore {
       await handle.close();
       handle = undefined;
       await this.hooks.beforeCommit?.();
+      // Last before the bytes become durable: a fence that refuses here
+      // leaves the target exactly as it was, and the temporary file is
+      // removed by the `finally` below.
+      await fence.beforeWrite?.();
       await fs.rename(temporary, target);
       await fs.chmod(target, 0o600);
       await this.syncRoot();
@@ -1337,11 +1364,28 @@ export class ProductConfigurationService {
       await lease.release();
       return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
     }
-    const result = await this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: { ...settings.computer, pendingEdit: parsed.data },
-    }));
+    // S35-H1R: the check above is the entry check, several awaits before
+    // anything durable happens. The write that first makes
+    // `EDIT_DELIVERY_PENDING` observable is inside `mutate`, so the hold is
+    // verified AGAIN immediately before those bytes move; a lease deleted
+    // and re-taken in between (two live holders) refuses there instead of
+    // being written straight through.
+    const verifyHold = lease?.verify?.bind(lease);
+    const fence: StoreWriteFence = verifyHold
+      ? {
+          beforeWrite: async () => {
+            if (!(await verifyHold())) throw new WorkspaceEditLeaseLost();
+          },
+        }
+      : {};
+    const result = await this.mutate(
+      (settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        computer: { ...settings.computer, pendingEdit: parsed.data },
+      }),
+      fence,
+    );
     if (!result.ok) {
       // The durable write never landed: nothing for the lease to protect.
       await lease?.release();
@@ -1936,12 +1980,14 @@ export class ProductConfigurationService {
 
   private mutate(
     transform: (settings: ProductSettings) => ProductSettings,
+    fence: StoreWriteFence = {},
   ): Promise<MutationResult> {
-    return this.exclusive(() => this.commit(transform));
+    return this.exclusive(() => this.commit(transform, fence));
   }
 
   private async commit(
     transform: (settings: ProductSettings) => ProductSettings,
+    fence: StoreWriteFence = {},
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
     const before = structuredClone(this.current);
@@ -1962,7 +2008,7 @@ export class ProductConfigurationService {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     try {
-      await this.store.save(candidate);
+      await this.store.save(candidate, fence);
       const readBack = await this.store.load();
       if (
         readBack === null ||
@@ -1973,10 +2019,15 @@ export class ProductConfigurationService {
       this.current = readBack;
       this.currentError = null;
       return { ok: true, snapshot: this.snapshot() };
-    } catch {
+    } catch (error) {
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
       this.current = (await this.store.load().catch(() => null)) ?? before;
+      // A fence refusal is not a write failure: nothing was written at all,
+      // and the caller gets the reason rather than a generic disk error.
+      if (error instanceof WorkspaceEditLeaseLost) {
+        return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
+      }
       return this.failure("SETTINGS_WRITE_FAILED");
     }
   }
