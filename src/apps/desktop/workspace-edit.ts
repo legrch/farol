@@ -249,22 +249,34 @@ export async function observeWorkspaceEdit(
   }
 }
 
-export function applyWorkspaceEdit(
+// `releaseWorkspaceEditLease` is optional and, when supplied, is the exact
+// counterpart of `ProductConfigurationService.recordPendingEdit` taking the
+// promotion lease for this operation: it runs in a `finally` around the
+// mutation itself, so it fires once this edit's outcome is durably recorded
+// (completed, failed, or outcome-unknown) — not before, and not later, no
+// matter which of those three ways `execute` settles. Left unset, this call
+// behaves exactly as it did before the lease existed.
+export async function applyWorkspaceEdit(
   action: RunMutableComputerAction,
   pending: PendingWorkspaceEdit,
   edit: Readonly<{ oldText: string; newText: string }>,
+  releaseWorkspaceEditLease?: (operationId: string) => Promise<void>,
 ): Promise<MutableComputerActionResult> {
-  return action.execute({
-    ...desktopMutationIdentity(pending),
-    turnId: pending.operationId,
-    generation: pending.computerGeneration,
-    callId: pending.operationId,
-    workspaceId: pending.workspaceId,
-    operation: {
-      kind: "workspace.edit",
-      relativePath: pending.relativePath,
-      edits: [{ oldText: edit.oldText, newText: edit.newText }],
-      expectedSha256: pending.beforeSha256,
-    },
-  });
+  try {
+    return await action.execute({
+      ...desktopMutationIdentity(pending),
+      turnId: pending.operationId,
+      generation: pending.computerGeneration,
+      callId: pending.operationId,
+      workspaceId: pending.workspaceId,
+      operation: {
+        kind: "workspace.edit",
+        relativePath: pending.relativePath,
+        edits: [{ oldText: edit.oldText, newText: edit.newText }],
+        expectedSha256: pending.beforeSha256,
+      },
+    });
+  } finally {
+    await releaseWorkspaceEditLease?.(pending.operationId);
+  }
 }
