@@ -13,16 +13,12 @@ import {
   type SaveDialogOptions,
   type UtilityProcess,
 } from "electron";
-import { constants as fsConstants } from "node:fs";
 import {
   chmod,
   lstat,
   mkdir,
-  open,
   readFile,
   realpath,
-  rename,
-  rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -169,10 +165,10 @@ import {
 } from "./configuration-admission";
 import {
   createQuitDrain,
-  serializeQuitReceipt,
   type OwnedCloser,
   type QuitDrainReceipt,
 } from "./quit-drain";
+import { writeQuitReceipt } from "./quit-receipt-store";
 import {
   currentBootTimeMs,
   removeRunMarker,
@@ -1131,40 +1127,22 @@ async function recordSummaryFenceRecovery(
 
 // The outcome of the last quit's drain: F3-3's reader (the tooling-side
 // `promotion-obligations.mjs` and its `promotion-lease.ts` counterpart) both
-// insist on a private regular file with no symlink standing in for it, so
-// this write earns that the same way `live-task-store.ts` does — a private
-// temporary file created next to the target, synced, then renamed over it,
-// never a direct write that a concurrent reader or a symlinked target could
-// observe half-written or redirected. The bytes themselves come from the
-// shared `quit-receipt.ts` contract (N03/D1): the reader validates against
-// the same schema this serializer refuses to violate, so the two can no
-// longer disagree about a field the way they did about `at`.
+// insist on a private regular file with no symlink standing in for it.
+//
+// S35-TA-8: that discipline now lives in `quit-receipt-store.ts`, where it
+// can be tested. The version here claimed parity with `live-task-store.ts`
+// in a comment while skipping three of the things the store does — the
+// private-root check, the replaceable-target check and the directory sync
+// after the rename — and nothing could catch that, because `main.ts` exports
+// nothing and no test loads it. The bytes still come from the shared
+// `quit-receipt.ts` contract, so writer and reader cannot disagree about a
+// field the way they once did about `at`.
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
-  const directory = path.join(app.getPath("userData"), "farol-next-state");
-  const file = path.join(directory, "last-quit.json");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const serialized = serializeQuitReceipt(receipt, new Date().toISOString());
-  const temporary = path.join(directory, `.last-quit.json.${randomUUID()}.tmp`);
-  let handle;
-  try {
-    handle = await open(
-      temporary,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        (fsConstants.O_NOFOLLOW ?? 0),
-      0o600,
-    );
-    await handle.writeFile(serialized, "utf8");
-    await handle.sync();
-    await handle.close();
-    handle = undefined;
-    await rename(temporary, file);
-    await chmod(file, 0o600);
-  } finally {
-    await handle?.close().catch(() => undefined);
-    await rm(temporary, { force: true }).catch(() => undefined);
-  }
+  await writeQuitReceipt(
+    path.join(app.getPath("userData"), "farol-next-state"),
+    receipt,
+    new Date().toISOString(),
+  );
 }
 
 // The relay socket path must stay under the 104-byte Unix socket limit, so it
