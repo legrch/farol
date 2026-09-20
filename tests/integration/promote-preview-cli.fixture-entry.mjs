@@ -43,6 +43,11 @@ process.exitCode = await runPromotionCli(cliArguments, {
   },
   // The run marker's boot probe: the fixture's markers are written with
   // this same instant, so "same boot" is decided by the test, not by a
-  // machine whose uptime a sandbox may refuse to report.
-  activation: { bootTime: fixture.bootTime },
+  // machine whose uptime a sandbox may refuse to report. Its process-start
+  // probe is fixed for the same reason: the test decides which pid still
+  // wears the process that wrote the marker (S35-H1-3).
+  activation: {
+    bootTime: fixture.bootTime,
+    processStart: (pid) => fixture.processStart?.[String(pid)] ?? null,
+  },
 });

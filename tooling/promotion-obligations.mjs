@@ -25,6 +25,7 @@ import {
   RunMarkerSchema,
   classifyRunMarker,
   currentBootTimeMs,
+  readProcessStart,
   processAlive,
 } from "../src/apps/desktop/run-marker.ts";
 
@@ -227,8 +228,9 @@ async function readStateFiles(state) {
 // change the state meanwhile.
 //
 // `options.bootTime` (this machine's boot time as `currentBootTimeMs`
-// reports it, or null when it cannot be read) and `options.isAlive` are the
-// run marker's probes; a caller that leaves them out gets the real machine.
+// reports it, or null when it cannot be read), `options.isAlive` and
+// `options.processStart` (one pid's `ps -o lstart=` reading) are the run
+// marker's probes; a caller that leaves them out gets the real machine.
 export async function activationObligations(userData, options = {}) {
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_USER_DATA_NOT_ABSOLUTE");
@@ -300,10 +302,12 @@ export async function activationObligations(userData, options = {}) {
 
   // The run marker is written at app start and removed only after a
   // confirmed drain (see `run-marker.ts`). Present, it means the app is
-  // still running (a live pid written on this boot) or it stopped without
-  // confirming its drain (a dead pid, or a pid from another boot). A marker
-  // whose boot cannot be established on either side is not classified at
-  // all: it is reported unreadable rather than guessed at.
+  // still running (a live pid, written on this boot, whose process start
+  // time still matches the marker's) or it stopped without confirming its
+  // drain (a dead pid, a pid from another boot, or a pid reused within this
+  // boot by another process). A marker whose boot or whose process start
+  // time cannot be established on either side is not classified at all: it
+  // is reported unreadable rather than guessed at.
   const marker = confirmed["running"];
   if (marker.status === "unreadable") {
     unreadable.push(`running:${marker.reason}`);
@@ -312,6 +316,7 @@ export async function activationObligations(userData, options = {}) {
       bootTime:
         options.bootTime === undefined ? currentBootTimeMs() : options.bootTime,
       isAlive: options.isAlive ?? processAlive,
+      processStart: options.processStart ?? readProcessStart,
     });
     if (verdict === "running") {
       obligations.push(`APP_RUNNING:${marker.value.pid}`);

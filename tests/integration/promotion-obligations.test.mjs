@@ -113,6 +113,10 @@ async function writeQuitReceipt(root, drained, unconfirmed = []) {
 // so they never depend on the machine's real boot time, which a sandbox
 // may refuse to report.
 const BOOT = 1_758_000_000_000;
+// The opaque `ps -o lstart=` token these markers record, and the reading
+// the probe gives back for the same pid (S35-H1-3).
+const START = "Sat Sep 20 10:00:00 2026";
+const started = () => START;
 
 async function writeTasks(root, tasks, overrides = {}) {
   await writeFile(
@@ -712,10 +716,16 @@ describe("Q-08 activation obligations", () => {
       drained: true,
     });
 
-    await writeRunMarker(state, { pid: 4242, now: 1_000, bootTime: BOOT });
+    await writeRunMarker(state, {
+      pid: 4242,
+      now: 1_000,
+      bootTime: BOOT,
+      processStart: START,
+    });
     const running = await activationObligations(root, {
       bootTime: BOOT,
       isAlive: (pid) => pid === 4242,
+      processStart: started,
     });
     expect(running).toMatchObject({
       drained: false,
@@ -731,6 +741,7 @@ describe("Q-08 activation obligations", () => {
     const crashed = await activationObligations(root, {
       bootTime: BOOT,
       isAlive: () => false,
+      processStart: started,
     });
     expect(crashed).toMatchObject({
       drained: false,
@@ -742,6 +753,7 @@ describe("Q-08 activation obligations", () => {
     const rebooted = await activationObligations(root, {
       bootTime: BOOT + 3_600_000,
       isAlive: () => true,
+      processStart: started,
     });
     expect(rebooted).toMatchObject({
       obligations: ["QUIT_UNCONFIRMED:crash"],
@@ -751,6 +763,7 @@ describe("Q-08 activation obligations", () => {
     const unknown = await activationObligations(root, {
       bootTime: null,
       isAlive: () => true,
+      processStart: started,
     });
     expect(unknown).toMatchObject({
       drained: false,
@@ -759,13 +772,21 @@ describe("Q-08 activation obligations", () => {
     });
     // ... but a dead pid is a crash on any boot.
     await expect(
-      activationObligations(root, { bootTime: null, isAlive: () => false }),
+      activationObligations(root, {
+        bootTime: null,
+        isAlive: () => false,
+        processStart: started,
+      }),
     ).resolves.toMatchObject({ obligations: ["QUIT_UNCONFIRMED:crash"] });
 
     // The marker names an undrained receipt's obligation alongside its own.
     await writeQuitReceipt(root, false, ["route-b"]);
     await expect(
-      activationObligations(root, { bootTime: BOOT, isAlive: () => false }),
+      activationObligations(root, {
+        bootTime: BOOT,
+        isAlive: () => false,
+        processStart: started,
+      }),
     ).resolves.toMatchObject({
       obligations: ["QUIT_UNCONFIRMED:route-b", "QUIT_UNCONFIRMED:crash"],
     });
@@ -774,8 +795,67 @@ describe("Q-08 activation obligations", () => {
     await fs.rm(path.join(state, "running.json"));
     await writeQuitReceipt(root, true);
     await expect(
-      activationObligations(root, { bootTime: BOOT, isAlive: () => true }),
+      activationObligations(root, {
+        bootTime: BOOT,
+        isAlive: () => true,
+        processStart: started,
+      }),
     ).resolves.toMatchObject({ drained: true });
+  });
+
+  // S35-H1-3: a pid alone is not an identity within one boot. A marker left
+  // by a crash can name a number the kernel has since handed to something
+  // else, and the obligation reader must not call that the running app.
+  it("S35-H1-3 a live pid on this boot whose process start time differs is QUIT_UNCONFIRMED:crash, and an unreadable start time is never guessed", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-next-state");
+    await writeTasks(root, [task({ lifecycle: "completed" })]);
+    await writeQuitReceipt(root, true);
+    await writeRunMarker(state, {
+      pid: 4242,
+      now: 1_000,
+      bootTime: BOOT,
+      processStart: START,
+    });
+
+    const reused = await activationObligations(root, {
+      bootTime: BOOT,
+      isAlive: () => true,
+      processStart: () => "Sat Sep 20 13:20:41 2026",
+    });
+    expect(reused).toMatchObject({
+      drained: false,
+      unreadable: [],
+      obligations: ["QUIT_UNCONFIRMED:crash"],
+    });
+    expect(() => assertActivationDrained(reused)).toThrow(
+      "PROMOTION_DRAIN_REQUIRED:QUIT_UNCONFIRMED:crash",
+    );
+
+    // `ps` unavailable, or silent for a pid that is alive: unreadable, so
+    // the promotion refuses on that rather than on a guess either way.
+    const unreadable = await activationObligations(root, {
+      bootTime: BOOT,
+      isAlive: () => true,
+      processStart: () => null,
+    });
+    expect(unreadable).toMatchObject({
+      drained: false,
+      obligations: [],
+      unreadable: ["running:BOOT_UNKNOWN"],
+    });
+
+    // The same marker with the matching reading is still the running app.
+    const running = await activationObligations(root, {
+      bootTime: BOOT,
+      isAlive: () => true,
+      processStart: started,
+    });
+    expect(running).toMatchObject({
+      drained: false,
+      unreadable: [],
+      obligations: ["APP_RUNNING:4242"],
+    });
   });
 
   it("N03/D2 treats a run marker it cannot read as unreadable, and notices one that appears between its two reads", async () => {
@@ -787,8 +867,13 @@ describe("Q-08 activation obligations", () => {
       pid: 4242,
       startedAt: "2026-09-20T10:00:00.000Z",
       bootTime: BOOT,
+      processStart: START,
     };
-    const probes = { bootTime: BOOT, isAlive: () => true };
+    const probes = {
+      bootTime: BOOT,
+      isAlive: () => true,
+      processStart: started,
+    };
     const cases = [
       ["CORRUPT", "{not json", 0o600],
       ["MALFORMED", JSON.stringify({ schema: 1, pid: 4242 }), 0o600],
@@ -832,7 +917,12 @@ describe("Q-08 activation obligations", () => {
     const report = await activationObligations(root, {
       ...probes,
       beforeConfirmation: () =>
-        writeRunMarker(state, { pid: 4242, now: 1_000, bootTime: BOOT }),
+        writeRunMarker(state, {
+          pid: 4242,
+          now: 1_000,
+          bootTime: BOOT,
+          processStart: START,
+        }),
     });
     expect(report).toMatchObject({ drained: false, changed: ["running"] });
     expect(() => assertActivationDrained(report)).toThrow(

@@ -36,6 +36,8 @@ const leaseChild = fileURLToPath(
 );
 // Any whole-second epoch instant; every marker below is written with it.
 const FIXTURE_BOOT = 1_758_000_000_000;
+// The opaque `ps -o lstart=` token this fixture's markers record.
+const FIXTURE_PROCESS_START = "Sat Sep 20 10:00:00 2026";
 const roots = [];
 
 afterEach(async () => {
@@ -136,6 +138,10 @@ async function fixture() {
         dirty: false,
       },
       bootTime: FIXTURE_BOOT,
+      // S35-H1-3: the CLI's process-start probe, pid -> `ps -o lstart=`
+      // token. This process is the one the "running app" markers name, and
+      // it still wears the token they record.
+      processStart: { [String(process.pid)]: FIXTURE_PROCESS_START },
     }),
     { mode: 0o600 },
   );
@@ -359,6 +365,7 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       pid: await exitedChildPid(),
       now: Date.now(),
       bootTime: FIXTURE_BOOT,
+      processStart: FIXTURE_PROCESS_START,
     });
     const crashed = await f.cli("--apply", "--destination", f.destination);
     expect(crashed.code).toBe(1);
@@ -373,6 +380,7 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       pid: process.pid,
       now: Date.now(),
       bootTime: FIXTURE_BOOT,
+      processStart: FIXTURE_PROCESS_START,
     });
     const running = await f.cli("--apply", "--destination", f.destination);
     expect(running.code).toBe(1);
@@ -385,12 +393,30 @@ describe("promote-preview CLI as a process: the composition around a seeded prof
       pid: process.pid,
       now: Date.now(),
       bootTime: FIXTURE_BOOT - 86_400_000,
+      processStart: FIXTURE_PROCESS_START,
     });
     const rebooted = await f.cli("--apply", "--destination", f.destination);
     expect(rebooted.code).toBe(1);
     expect(rebooted.stderr).toContain(
       "PROMOTION_DRAIN_REQUIRED:QUIT_UNCONFIRMED:crash",
     );
+    expect(await absent(f.destination)).toBe(true);
+
+    // S35-H1-3: the same live pid, on the same boot, but the process
+    // wearing the number now started at a different time — the marker's
+    // writer is gone and its number was reused.
+    await writeRunMarker(state, {
+      pid: process.pid,
+      now: Date.now(),
+      bootTime: FIXTURE_BOOT,
+      processStart: `${FIXTURE_PROCESS_START} (reused)`,
+    });
+    const reused = await f.cli("--apply", "--destination", f.destination);
+    expect(reused.code).toBe(1);
+    expect(reused.stderr).toContain(
+      "PROMOTION_DRAIN_REQUIRED:QUIT_UNCONFIRMED:crash",
+    );
+    expect(reused.stderr).not.toContain("APP_RUNNING");
     expect(await absent(f.destination)).toBe(true);
 
     // A confirmed drain removes the marker; only then does it promote.

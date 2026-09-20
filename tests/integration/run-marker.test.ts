@@ -11,6 +11,7 @@ import {
   classifyRunMarker,
   currentBootTimeMs,
   processAlive,
+  readProcessStart,
   readRunMarker,
   removeRunMarker,
   runMarkerPath,
@@ -23,6 +24,10 @@ const roots: string[] = [];
 // real boot time, which a sandbox may refuse to report.
 const BOOT = 1_758_000_000_000;
 const startedAt = "2026-09-20T10:00:00.000Z";
+// The opaque `ps -o lstart=` token the writer recorded for itself.
+const START = "Sat Sep 20 10:00:00 2026";
+// The same pid on the same boot after the number was handed out again.
+const REUSED_START = "Sat Sep 20 13:20:41 2026";
 const now = Date.parse(startedAt);
 
 afterEach(async () => {
@@ -57,8 +62,15 @@ describe("run marker", () => {
       pid: 4242,
       now,
       bootTime: BOOT,
+      processStart: START,
     });
-    expect(first).toEqual({ schema: 1, pid: 4242, startedAt, bootTime: BOOT });
+    expect(first).toEqual({
+      schema: 1,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: START,
+    });
     const file = runMarkerPath(root);
     const info = await fs.lstat(file);
     expect(info.isFile()).toBe(true);
@@ -79,6 +91,7 @@ describe("run marker", () => {
       pid: 4343,
       now,
       bootTime: null,
+      processStart: null,
     });
     expect(await readRunMarker(root)).toEqual({
       status: "read",
@@ -89,22 +102,42 @@ describe("run marker", () => {
 
   it("refuses a relative root, an invalid pid, and replacing anything that is not a private regular file", async () => {
     await expect(
-      writeRunMarker("relative", { pid: 1, now, bootTime: BOOT }),
+      writeRunMarker("relative", {
+        pid: 1,
+        now,
+        bootTime: BOOT,
+        processStart: START,
+      }),
     ).rejects.toThrow("RUN_MARKER_ROOT_NOT_ABSOLUTE");
     const root = await stateRoot();
     await expect(
-      writeRunMarker(root, { pid: 0, now, bootTime: BOOT }),
+      writeRunMarker(root, {
+        pid: 0,
+        now,
+        bootTime: BOOT,
+        processStart: START,
+      }),
     ).rejects.toThrow();
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
     await fs.mkdir(runMarkerPath(root));
     await expect(
-      writeRunMarker(root, { pid: 1, now, bootTime: BOOT }),
+      writeRunMarker(root, {
+        pid: 1,
+        now,
+        bootTime: BOOT,
+        processStart: START,
+      }),
     ).rejects.toThrow("RUN_MARKER_UNSAFE");
   });
 
   it("removes only the marker this pid wrote", async () => {
     const root = await stateRoot();
-    await writeRunMarker(root, { pid: 4242, now, bootTime: BOOT });
+    await writeRunMarker(root, {
+      pid: 4242,
+      now,
+      bootTime: BOOT,
+      processStart: START,
+    });
     expect(await removeRunMarker(root, 9_999)).toEqual({
       removed: false,
       reason: "OTHER_PID",
@@ -122,10 +155,23 @@ describe("run marker", () => {
     const root = await stateRoot();
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
     const file = runMarkerPath(root);
-    const valid = { schema: 1, pid: 4242, startedAt, bootTime: BOOT };
+    const valid = {
+      schema: 1,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: START,
+    };
     const cases: Array<[string, string, number]> = [
       ["CORRUPT", "{not json", 0o600],
       ["MALFORMED", JSON.stringify({ schema: 1, pid: 4242 }), 0o600],
+      // A marker written before the process-start binding existed: not
+      // classified from a pid alone, reported unreadable instead.
+      [
+        "MALFORMED",
+        JSON.stringify({ schema: 1, pid: 4242, startedAt, bootTime: BOOT }),
+        0o600,
+      ],
       ["MALFORMED", JSON.stringify({ ...valid, extra: true }), 0o600],
       [
         "MALFORMED",
@@ -172,56 +218,158 @@ describe("run marker", () => {
   });
 
   it("classifies a marker: a dead pid is a crash on any boot, a live pid is running only on the same boot, an unknown boot is never guessed", () => {
-    const marker = { schema: 1 as const, pid: 4242, startedAt, bootTime: BOOT };
+    const marker = {
+      schema: 1 as const,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: START,
+    };
     const alive = () => true;
     const dead = () => false;
-    expect(classifyRunMarker(marker, { bootTime: BOOT, isAlive: alive })).toBe(
-      "running",
-    );
+    // The writer's own process is still the one wearing this pid.
+    const same = () => START;
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: BOOT,
+        isAlive: alive,
+        processStart: same,
+      }),
+    ).toBe("running");
     expect(
       classifyRunMarker(marker, {
         bootTime: BOOT + SAME_BOOT_TOLERANCE_MS,
         isAlive: alive,
+        processStart: same,
       }),
     ).toBe("running");
     expect(
       classifyRunMarker(marker, {
         bootTime: BOOT - SAME_BOOT_TOLERANCE_MS,
         isAlive: alive,
+        processStart: same,
       }),
     ).toBe("running");
     expect(
       classifyRunMarker(marker, {
         bootTime: BOOT + SAME_BOOT_TOLERANCE_MS + 1,
         isAlive: alive,
+        processStart: same,
       }),
     ).toBe("crashed");
     expect(
       classifyRunMarker(marker, {
         bootTime: BOOT - 86_400_000,
         isAlive: alive,
+        processStart: same,
       }),
     ).toBe("crashed");
-    expect(classifyRunMarker(marker, { bootTime: BOOT, isAlive: dead })).toBe(
-      "crashed",
-    );
-    expect(classifyRunMarker(marker, { bootTime: null, isAlive: alive })).toBe(
-      "boot_unknown",
-    );
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: BOOT,
+        isAlive: dead,
+        processStart: same,
+      }),
+    ).toBe("crashed");
+    expect(
+      classifyRunMarker(marker, {
+        bootTime: null,
+        isAlive: alive,
+        processStart: same,
+      }),
+    ).toBe("boot_unknown");
     expect(
       classifyRunMarker(
         { ...marker, bootTime: null },
-        { bootTime: BOOT, isAlive: alive },
+        { bootTime: BOOT, isAlive: alive, processStart: same },
       ),
     ).toBe("boot_unknown");
     expect(
       classifyRunMarker(
         { ...marker, bootTime: null },
-        { bootTime: null, isAlive: dead },
+        { bootTime: null, isAlive: dead, processStart: same },
       ),
     ).toBe("crashed");
     expect(sameBoot(BOOT, null)).toBe(false);
     expect(sameBoot(null, BOOT)).toBe(false);
+  });
+
+  // S35-H1-3. A pid is unique only while its process lives: the kernel hands
+  // the same number out again within one boot, so a marker left by a crash
+  // could name a pid that now belongs to a shell or a daemon, and the boot
+  // time alone would call the crashed generation "running" for as long as
+  // that unrelated process lives.
+  it("S35-H1-3 a live pid on this boot whose process started at another time is a crash, not the running app", () => {
+    const marker = {
+      schema: 1 as const,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: START,
+    };
+    const probe = { bootTime: BOOT, isAlive: () => true };
+
+    // The number was reused: same pid, same boot, a different process.
+    expect(
+      classifyRunMarker(marker, { ...probe, processStart: () => REUSED_START }),
+    ).toBe("crashed");
+    // Only an exact match on the writer's own recorded token is running.
+    expect(
+      classifyRunMarker(marker, { ...probe, processStart: () => START }),
+    ).toBe("running");
+    // Not a prefix, not a trimmed variant: the token is compared verbatim.
+    expect(
+      classifyRunMarker(marker, {
+        ...probe,
+        processStart: () => `${START} `,
+      }),
+    ).toBe("crashed");
+  });
+
+  it("S35-H1-3 never guesses when either side's process start time is unreadable", () => {
+    const marker = {
+      schema: 1 as const,
+      pid: 4242,
+      startedAt,
+      bootTime: BOOT,
+      processStart: START,
+    };
+    const probe = { bootTime: BOOT, isAlive: () => true };
+
+    // `ps` is unavailable, or answers nothing for a pid that is alive.
+    expect(
+      classifyRunMarker(marker, { ...probe, processStart: () => null }),
+    ).toBe("boot_unknown");
+    // The writer could not read its own start time.
+    expect(
+      classifyRunMarker(
+        { ...marker, processStart: null },
+        { ...probe, processStart: () => START },
+      ),
+    ).toBe("boot_unknown");
+    // A dead pid still needs no reading at all.
+    expect(
+      classifyRunMarker(
+        { ...marker, processStart: null },
+        { bootTime: BOOT, isAlive: () => false, processStart: () => null },
+      ),
+    ).toBe("crashed");
+  });
+
+  it("S35-H1-3 reads this process's own start time from ps, the same token twice, and nothing for a pid that never ran", async () => {
+    const mine = readProcessStart(process.pid);
+    // A sandbox may deny `ps`; that yields null, which is the documented
+    // outcome and is classified `boot_unknown`, never guessed.
+    if (mine !== null) {
+      expect(mine.length).toBeGreaterThan(0);
+      expect(readProcessStart(process.pid)).toBe(mine);
+      // pid 1 exists on every macOS and started before this process did.
+      expect(readProcessStart(1)).not.toBe(mine);
+    }
+    expect(readProcessStart(await exitedChildPid())).toBeNull();
+    expect(readProcessStart(0)).toBeNull();
+    expect(readProcessStart(-1)).toBeNull();
+    expect(readProcessStart(1.5)).toBeNull();
   });
 
   it("liveness: this process is alive, an exited child is not, and a process this user may not signal counts as alive", async () => {

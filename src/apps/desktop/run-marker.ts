@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
@@ -31,10 +32,18 @@ import { z } from "zod";
 //   pid that is now, say, a shell or a daemon, and liveness alone would call
 //   the crashed generation "running" for as long as that unrelated process
 //   lives. A marker whose boot time is not this boot's is a crash, whatever
-//   its pid is doing now. Pid reuse within one boot is not excluded; that
-//   would need the process's own start time, which this product reads from
-//   no tool it can trust from a sandbox, and its failure mode is a refusal
-//   (`APP_RUNNING`) the owner clears by starting and quitting the app.
+//   its pid is doing now.
+// - `processStart` closes pid reuse *within* one boot, which the boot time
+//   alone cannot (S35-H1-3). It is the exact `ps -o lstart= -p <pid>` string
+//   the writer read for itself, kept verbatim and compared verbatim against
+//   the same reading for the marker's pid now: a different process wearing
+//   that number started at a different time, so the string differs and the
+//   marker is a crash. Only an exact match on a live pid on this boot is
+//   `running`. `ps` is the one reading available here, and it may be
+//   unavailable (a sandbox that denies it) or answer nothing for a pid that
+//   is alive; either way the marker is reported `boot_unknown` — unreadable,
+//   never guessed at, because guessing here either places a generation over
+//   a running app or refuses a promotion forever.
 //
 // Boot time is `Date.now() - os.uptime() * 1000`, rounded to whole seconds
 // because `os.uptime()` itself is whole seconds, and compared with a small
@@ -75,6 +84,12 @@ export const RunMarkerSchema = z.strictObject({
   // Milliseconds since the epoch at which the writer's machine booted,
   // rounded to whole seconds; null when the writer could not read it.
   bootTime: z.number().int().nonnegative().nullable(),
+  // The writer's own `ps -o lstart= -p <pid>` line, trimmed, or null when
+  // that reading could not be taken. A marker written by a build that did
+  // not record it does not parse, and is therefore reported unreadable
+  // rather than classified: the closed outcome, and the one that keeps this
+  // field from silently degrading back into a pid-only check.
+  processStart: z.string().min(1).max(128).nullable(),
 });
 
 export type RunMarker = z.infer<typeof RunMarkerSchema>;
@@ -86,6 +101,10 @@ export type RunMarkerProbe = Readonly<{
   // when it cannot be read.
   bootTime: number | null;
   isAlive: (pid: number) => boolean;
+  // This machine's `ps -o lstart= -p <pid>` reading for one pid right now,
+  // or null when `ps` is unavailable or answers nothing for it. Injected so
+  // a test can drive every branch without a real process of its own.
+  processStart: (pid: number) => string | null;
 }>;
 
 export type RunMarkerUnreadableReason =
@@ -151,6 +170,31 @@ export function processAlive(pid: number): boolean {
   }
 }
 
+/**
+ * One pid's start time as `ps` prints it (`-o lstart=`), trimmed, or null
+ * when `ps` cannot be run, exits non-zero, or prints nothing. The string is
+ * never parsed: it is an opaque token compared for equality with the one
+ * the marker recorded, so no locale, format or clock interpretation can
+ * turn two different processes into the same answer. `execFileSync` with a
+ * fixed absolute path and fixed arguments: nothing here takes a caller's
+ * command.
+ */
+export function readProcessStart(pid: number): string | null {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  let printed: string;
+  try {
+    printed = execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    });
+  } catch {
+    return null;
+  }
+  const trimmed = printed.trim();
+  return trimmed.length === 0 || trimmed.length > 128 ? null : trimmed;
+}
+
 export function sameBoot(
   markerBootTime: number | null,
   currentBootTime: number | null,
@@ -165,10 +209,12 @@ export function sameBoot(
 /**
  * What a present marker means. A dead pid is a crash on any boot: the
  * writer stopped without confirming its drain. A live pid is the running
- * app only when the marker was written on this boot; on another boot the
- * number belongs to someone else, and the writer crashed before the
- * reboot. When either side's boot time is unknown, a live pid cannot be
- * attributed at all, and the reader must say so instead of guessing.
+ * app only when the marker was written on this boot AND the process
+ * wearing that number now is the one that wrote it; on another boot, or
+ * after pid reuse within this one, the number belongs to someone else and
+ * the writer crashed. When either side's boot time, or either side's
+ * process start time, cannot be read, a live pid cannot be attributed at
+ * all, and the reader must say so instead of guessing.
  */
 export function classifyRunMarker(
   marker: RunMarker,
@@ -178,7 +224,13 @@ export function classifyRunMarker(
   if (marker.bootTime === null || probe.bootTime === null) {
     return "boot_unknown";
   }
-  return sameBoot(marker.bootTime, probe.bootTime) ? "running" : "crashed";
+  if (!sameBoot(marker.bootTime, probe.bootTime)) return "crashed";
+  // S35-H1-3: same boot and a live pid is not yet the app. Pids are reused
+  // within one boot, so the process now holding this number must be shown
+  // to be the one that wrote the marker.
+  const current = probe.processStart(marker.pid);
+  if (marker.processStart === null || current === null) return "boot_unknown";
+  return current === marker.processStart ? "running" : "crashed";
 }
 
 async function ensureRoot(stateRoot: string): Promise<void> {
@@ -224,7 +276,14 @@ export function runMarkerPath(stateRoot: string): string {
  */
 export async function writeRunMarker(
   stateRoot: string,
-  input: Readonly<{ pid: number; now: number; bootTime: number | null }>,
+  input: Readonly<{
+    pid: number;
+    now: number;
+    bootTime: number | null;
+    // The writer's own start time as `readProcessStart` reads it. Recorded
+    // at write so the reader can prove the pid still names this process.
+    processStart: string | null;
+  }>,
 ): Promise<RunMarker> {
   const target = runMarkerPath(stateRoot);
   const marker = RunMarkerSchema.parse({
@@ -232,6 +291,7 @@ export async function writeRunMarker(
     pid: input.pid,
     startedAt: new Date(input.now).toISOString(),
     bootTime: input.bootTime,
+    processStart: input.processStart,
   });
   await ensureRoot(stateRoot);
   try {

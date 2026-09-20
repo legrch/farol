@@ -167,6 +167,7 @@ import {
 import {
   currentBootTimeMs,
   removeRunMarker,
+  readProcessStart,
   writeRunMarker,
 } from "./run-marker";
 import {
@@ -6923,6 +6924,7 @@ async function main(): Promise<void> {
     pid: process.pid,
     now: Date.now(),
     bootTime: currentBootTimeMs(),
+    processStart: readProcessStart(process.pid),
   });
   try {
     await cleanupChatGptAttachmentStaging(chatGptAttachmentStagingRoot());
