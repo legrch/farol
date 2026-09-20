@@ -1061,6 +1061,15 @@ html[data-has-tasks="false"] .surface {
   background: var(--unknown);
 }
 
+/* The task column of an Activity row. Its content is the owner's own task
+   label, up to the full 80 characters and with no guarantee of a space to
+   break at; a grid item's automatic minimum is its content, so without
+   these two an unbroken label pushes the row past the panel. */
+.activity-list .activity-task {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .activity-list b {
   color: var(--text);
   font-weight: 560;
@@ -1139,6 +1148,9 @@ html[data-has-tasks="false"] .surface {
 
 .settings-link-copy {
   margin: 16px 0 0;
+  /* Interpolates the computer name, which the owner chooses and which need
+     not contain a space. */
+  overflow-wrap: anywhere;
   color: var(--text-soft);
   font-size: 11px;
   line-height: 1.5;
@@ -2544,6 +2556,11 @@ dialog::backdrop {
 .setup-details li {
   position: relative;
   padding-left: 18px;
+  /* These lines carry values the owner supplies and cannot be shortened
+     here: a workspace root, an executable path, a tunnel id. None of them
+     has a space to break at, so without this one long value widens the
+     dialog instead of wrapping inside it. */
+  overflow-wrap: anywhere;
   color: var(--text-soft);
   font-size: 11px;
   line-height: 1.45;

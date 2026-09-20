@@ -8108,9 +8108,34 @@ ux34SettingsWidthsSegment: {
   const settingsWidths = await launch([], "secondary-visible");
   try {
     await finishSetupByNext(settingsWidths);
+    // The widths below are only as honest as the content behind them. Feed
+    // Settings the worst values the contract actually admits — an 80-char
+    // computer name and a 160-char tunnel id, both with no space or hyphen
+    // to break at — so "no horizontal overflow" is a claim about the owner's
+    // own data and not about a short fixture. Both maxima are the schema's:
+    // product-settings/contract.ts name .max(80), tunnelId .max(160).
+    const unbreakableName = "W".repeat(80);
+    const unbreakableTunnel = `tunnel_${"0".repeat(153)}`;
+    assert.equal(unbreakableName.length, 80);
+    assert.equal(unbreakableTunnel.length, 160);
+    assert.equal(
+      await settingsWidths.window
+        .evaluate(
+          (name) =>
+            window.farolNext.configure({ kind: "computer.rename", name }),
+          unbreakableName,
+        )
+        .then((result) => result.ok),
+      true,
+      "the contract's longest computer name is accepted",
+    );
     await settingsWidths.window.locator('[data-section="settings"]').click();
     await settingsWidths.window.waitForFunction(
       () => document.documentElement.dataset.section === "settings",
+    );
+    await settingsWidths.window.waitForFunction(
+      (name) => document.body.innerText.includes(name),
+      unbreakableName,
     );
     const measureSettingsLayout = () => {
       const panel = document.querySelector(".panel.active");
