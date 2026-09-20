@@ -162,3 +162,11 @@ with `condition never reached`, and one reports an extra `PRODUCT_NOT_OBSERVED`
 reason — and passes all 5 in under four seconds without it. The same applies to
 any Electron or end-to-end run. The failures are an artifact of the sandbox,
 not of the code under test.
+
+## A new case is declared in the same commit that records it
+
+`tooling/evidence-cases.mjs` is the independent declaration of what each lane must run, so a case
+the runner records but the contract does not declare makes the lane's completeness check
+meaningless. Add the declaration beside its siblings in the same commit that adds the
+`cases.push`, and run `tests/integration/evidence-cases-contract.test.mjs` — that test is what
+catches the omission, and it is cheap enough that there is no reason to discover it from a lane.

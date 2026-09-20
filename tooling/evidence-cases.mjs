@@ -137,6 +137,7 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "quit-terminates-exact-owned-processes",
   "ux34-settings-widths-readable",
   "ux34-sidebar-toggle-roundtrip",
+  "ux34-sidebar-setup-continue-double-click",
   "ux34-sign-in-window-owned",
   "ux34-sign-in-blocked-navigation-reported",
   "ux34-sign-in-return-handler",
