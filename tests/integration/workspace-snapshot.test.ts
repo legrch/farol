@@ -433,6 +433,42 @@ describe("workspace snapshot (N02)", () => {
     );
   });
 
+  // `hdiutil detach` can return before the device is actually gone, leaving
+  // a filesystem-less `ram://` device behind under rapid back-to-back runs.
+  // Verify, retry exactly once, and say what happened either way -- a loop
+  // here would turn a stuck device into a stuck suite.
+  function ramDiskAttached(device: string): boolean {
+    try {
+      return execFileSync("hdiutil", ["info"], { encoding: "utf8" }).includes(
+        device,
+      );
+    } catch {
+      // Without a working `hdiutil info` there is nothing to verify against,
+      // and inventing a retry from no evidence is worse than stopping.
+      return false;
+    }
+  }
+
+  function detachRamDisk(device: string, label: string): void {
+    execFileSync("hdiutil", ["detach", device]);
+    if (!ramDiskAttached(device)) return;
+    console.warn(
+      `workspace-snapshot ${label}: ${device} survived its detach; retrying once`,
+    );
+    try {
+      execFileSync("hdiutil", ["detach", device]);
+    } catch (error) {
+      console.warn(
+        `workspace-snapshot ${label}: retry detach failed: ${(error as Error).message}`,
+      );
+    }
+    if (ramDiskAttached(device)) {
+      console.warn(
+        `workspace-snapshot ${label}: ${device} still attached after one retry; left in place`,
+      );
+    }
+  }
+
   async function attachRamDisk(
     label: string,
   ): Promise<Readonly<{ device: string; mountPoint: string }> | null> {
@@ -488,7 +524,7 @@ describe("workspace snapshot (N02)", () => {
       );
       expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_CROSS_VOLUME" });
     } finally {
-      execFileSync("hdiutil", ["detach", disk.device]);
+      detachRamDisk(disk.device, "cross-volume");
     }
   }, 60_000);
 
@@ -525,7 +561,7 @@ describe("workspace snapshot (N02)", () => {
       });
       expect(await fs.readdir(runtime)).toEqual([]);
     } finally {
-      execFileSync("hdiutil", ["detach", disk.device]);
+      detachRamDisk(disk.device, "clone-unsupported");
     }
   }, 60_000);
 
@@ -604,7 +640,7 @@ describe("workspace snapshot (N02)", () => {
       expect(await fs.readdir(runtimeDirectory)).toEqual([]);
       expect(JSON.stringify(result)).not.toContain("SECOND-VOLUME-SENTINEL");
     } finally {
-      execFileSync("hdiutil", ["detach", disk.device]);
+      detachRamDisk(disk.device, "git-status-cross-volume");
     }
     // S35-TA-7: this case attaches a volume, runs `git init`, makes a
     // commit, spawns the attested helper AND builds a snapshot, so it is
