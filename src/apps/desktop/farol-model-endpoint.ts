@@ -110,8 +110,9 @@ export type RouteBModelEndpointTarget = Readonly<{
  * the runtime starts after this endpoint does and can also close before it;
  * `target() === null` — runtime not started yet, or already closed — answers
  * `FAROL_MODEL_ROUTE_UNAVAILABLE`, matching the pre-wiring default exactly.
- * Exactly one fetch is attempted; a network failure or a non-2xx upstream
- * answer is surfaced once, never retried and never queued.
+ * Exactly one fetch is attempted; a network failure, a body that fails
+ * mid-read, or a non-2xx upstream answer is surfaced once, never retried and
+ * never queued.
  */
 export function routeBModelTurnHandler(
   target: () => RouteBModelEndpointTarget | null,
@@ -135,7 +136,17 @@ export function routeBModelTurnHandler(
       // No retry: the caller sees one truthful, content-free refusal.
       return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
     }
-    const text = await response.text().catch(() => "");
+    // S35-H2-2: a body that fails mid-read is not an empty body. Treating
+    // it as one turned a 200 whose stream died into a successful SSE
+    // response carrying no events at all — an answer the provider never
+    // gave, counted as a served request. The read failing is exactly the
+    // unreachable case: one truthful refusal, still no retry.
+    let text: string;
+    try {
+      text = await response.text();
+    } catch {
+      return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
+    }
     if (!response.ok) {
       return { ok: false, reason: routeRefusalCode(response.status, text) };
     }

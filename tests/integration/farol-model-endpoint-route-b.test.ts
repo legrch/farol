@@ -10,6 +10,8 @@
 // proving the endpoint, not just the runtime underneath it. Every request
 // body is the shape an ordinary Codex sends, including the Route B model.
 import fs from "node:fs/promises";
+import http from "node:http";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -533,5 +535,186 @@ describe("Farol Model endpoint dispatches through the real Route B provider (pac
     const text = await missing.text();
     expect(text).not.toMatch(/farol/iu);
     expectNoRouteTokenLeak(route, served, text);
+  });
+});
+
+// S35-H2-2 / S35-H2-3. The relay between this endpoint and the Route B
+// provider is one attempt and one relayed result, whatever the provider
+// does. These point the real handler at an upstream the test controls, so
+// an upstream failure and a torn body can be produced exactly, and count
+// what actually reached it.
+describe("Farol Model endpoint: the upstream relay is exactly one attempt", () => {
+  const upstreams: Array<http.Server> = [];
+  let handlerEndpoint: FarolModelEndpoint | null = null;
+
+  afterEach(async () => {
+    await handlerEndpoint?.stop();
+    handlerEndpoint = null;
+    await Promise.all(
+      upstreams.splice(0).map(
+        (server) =>
+          new Promise<void>((resolve) => {
+            server.closeAllConnections();
+            server.close(() => resolve());
+          }),
+      ),
+    );
+  });
+
+  // One upstream `/responses`, with a per-request behaviour the test picks
+  // and a count of the requests that actually arrived.
+  async function upstream(
+    respond: (
+      request: http.IncomingMessage,
+      response: http.ServerResponse,
+      socket: net.Socket,
+    ) => void,
+  ): Promise<Readonly<{ baseUrl: string; attempts: () => number }>> {
+    let attempts = 0;
+    const server = http.createServer((request, response) => {
+      attempts += 1;
+      respond(request, response, request.socket);
+    });
+    upstreams.push(server);
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("upstream had no port");
+    }
+    return {
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      attempts: () => attempts,
+    };
+  }
+
+  async function endpointFor(
+    target: () => Readonly<{ baseUrl: string; token: string }> | null,
+  ): Promise<Readonly<{ port: number; token: string }>> {
+    const state = new FarolModelRuntimeState(
+      path.join(await tempRoot("farol-model-relay-"), "model-endpoint"),
+    );
+    handlerEndpoint = new FarolModelEndpoint({
+      state,
+      model: ROUTE_B_MODEL,
+      handler: routeBModelTurnHandler(target),
+    });
+    const { port } = await handlerEndpoint.start();
+    const token = await state.currentToken();
+    if (!token) throw new Error("FAROL_MODEL_TOKEN_MISSING_IN_TEST");
+    return { port, token };
+  }
+
+  it("S35-H2-2 refuses a 200 whose body fails mid-read instead of relaying it as an empty, successful answer", async () => {
+    const provider = await upstream((_request, response, socket) => {
+      // Headers only, then the connection dies: `response.text()` rejects.
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write("event: response.created\n");
+      response.flushHeaders();
+      setTimeout(() => socket.destroy(), 10);
+    });
+    const { port, token } = await endpointFor(() => ({
+      baseUrl: provider.baseUrl,
+      token: "upstream-token",
+    }));
+
+    const response = await postToEndpoint(
+      port,
+      token,
+      initialRequest("turn-torn-body", "The body dies mid-read."),
+    );
+
+    expect(response.status).toBe(502);
+    const payload = (await response.json()) as { error: { code: string } };
+    expect(payload.error.code).toBe("FAROL_MODEL_ROUTE_UNREACHABLE");
+    // Never counted as served, and never tried twice.
+    expect(handlerEndpoint!.evidence().requestsAccepted).toBe(0);
+    expect(provider.attempts()).toBe(1);
+  });
+
+  it("S35-H2-3 relays a successful upstream answer once, with exactly one upstream attempt", async () => {
+    const provider = await upstream((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(
+        'event: response.completed\ndata: {"type":"response.completed"}\n\n',
+      );
+    });
+    const { port, token } = await endpointFor(() => ({
+      baseUrl: provider.baseUrl,
+      token: "upstream-token",
+    }));
+
+    const response = await postToEndpoint(
+      port,
+      token,
+      initialRequest("turn-relay-ok", "One attempt."),
+    );
+    const text = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(text).toContain("response.completed");
+    expect(text.match(/event: response\.completed/gu)).toHaveLength(1);
+    expect(provider.attempts()).toBe(1);
+    expect(handlerEndpoint!.evidence().requestsAccepted).toBe(1);
+  });
+
+  it("S35-H2-3 surfaces an upstream refusal once, with exactly one upstream attempt and no retry", async () => {
+    const provider = await upstream((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: { code: "ROUTE_B_THREAD_BUSY" } }));
+    });
+    const { port, token } = await endpointFor(() => ({
+      baseUrl: provider.baseUrl,
+      token: "upstream-token",
+    }));
+
+    const response = await postToEndpoint(
+      port,
+      token,
+      initialRequest("turn-relay-refused", "One attempt."),
+    );
+
+    expect(response.status).toBe(502);
+    const payload = (await response.json()) as { error: { code: string } };
+    expect(payload.error.code).toBe("ROUTE_B_THREAD_BUSY");
+    expect(provider.attempts()).toBe(1);
+    expect(handlerEndpoint!.evidence().requestsAccepted).toBe(0);
+  });
+
+  it("S35-H2-3 answers once when the provider is unreachable, attempting exactly one fetch", async () => {
+    // A port nothing listens on: the upstream server is started and then
+    // closed, so its port is known and refuses connections.
+    const closed = await upstream((_request, response) => response.end());
+    const port0 = Number(new URL(closed.baseUrl).port);
+    await new Promise<void>((resolve) => {
+      const server = upstreams.pop()!;
+      server.close(() => resolve());
+    });
+
+    const originalFetch = globalThis.fetch;
+    let fetches = 0;
+    globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+      if (String(args[0]).includes(`:${port0}/`)) fetches += 1;
+      return originalFetch(...args);
+    }) as typeof fetch;
+    try {
+      const { port, token } = await endpointFor(() => ({
+        baseUrl: `http://127.0.0.1:${port0}`,
+        token: "upstream-token",
+      }));
+      const response = await postToEndpoint(
+        port,
+        token,
+        initialRequest("turn-relay-unreachable", "Nothing listens."),
+      );
+      expect(response.status).toBe(502);
+      const payload = (await response.json()) as { error: { code: string } };
+      expect(payload.error.code).toBe("FAROL_MODEL_ROUTE_UNREACHABLE");
+      expect(fetches).toBe(1);
+      expect(handlerEndpoint!.evidence().requestsAccepted).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
