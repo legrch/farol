@@ -1,3 +1,12 @@
+// The receipt's on-disk contract (schema, serializer, parser) is owned by
+// `quit-receipt.ts` and shared with the promotion reader; the desktop's
+// `recordQuitReceipt` writes exactly `serializeQuitReceipt(receipt, at)`.
+export {
+  serializeQuitReceipt,
+  type QuitReceipt,
+  type QuitReceiptInput,
+} from "./quit-receipt";
+
 export type OwnedCloser = Readonly<{ name: string; close(): Promise<void> }>;
 
 export type QuitDrainReceipt = Readonly<{

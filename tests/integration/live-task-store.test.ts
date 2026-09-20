@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_LIVE_TASK_BYTES } from "../../src/apps/desktop/live-task-record";
 import { PrivateLiveTaskStore } from "../../src/apps/desktop/live-task-store";
 
 const roots: string[] = [];
@@ -76,6 +77,28 @@ describe("private live task store", () => {
       interrupted.save({ revision: 2, tasks: [storedTask(2)] }),
     ).rejects.toThrow("disk full");
     await expect(stable.load()).resolves.toMatchObject({ revision: 1 });
+  });
+
+  it("refuses a file past its decode bound before parsing it, even when the padded content is a valid record", async () => {
+    const root = await temporaryRoot();
+    const store = new PrivateLiveTaskStore({ root }, { now: () => 1_000 });
+    await store.save({ revision: 1, tasks: [storedTask(1)] });
+    const statePath = path.join(root, "live-tasks.json");
+    const record = await fs.readFile(statePath, "utf8");
+    const paddedTo = (bytes: number) =>
+      `${" ".repeat(bytes - Buffer.byteLength(record))}${record}`;
+
+    expect(MAX_LIVE_TASK_BYTES).toBe(128 * 1_024);
+    await fs.writeFile(statePath, paddedTo(130 * 1_024), { mode: 0o600 });
+    await expect(store.load()).rejects.toThrow("LIVE_TASK_STATE_CORRUPT");
+    await fs.writeFile(statePath, paddedTo(MAX_LIVE_TASK_BYTES + 1), {
+      mode: 0o600,
+    });
+    await expect(store.load()).rejects.toThrow("LIVE_TASK_STATE_CORRUPT");
+    await fs.writeFile(statePath, paddedTo(MAX_LIVE_TASK_BYTES), {
+      mode: 0o600,
+    });
+    await expect(store.load()).resolves.toMatchObject({ revision: 1 });
   });
 
   it("rejects symbolic-link state without touching its target", async () => {

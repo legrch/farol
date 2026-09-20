@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
+import { MAX_CHATGPT_TASK_JOURNAL_BYTES } from "../../src/apps/desktop/chatgpt-task-journal-record";
 
 const roots: string[] = [];
 
@@ -125,6 +126,30 @@ describe("private ChatGPT task journal", () => {
     );
     const loaded = await stable.load();
     expect(loaded).toMatchObject({ phase: "prepared", operationId });
+  });
+
+  it("refuses a journal past its decode bound before parsing it, even when the padded content is a valid record", async () => {
+    const root = await temporaryRoot();
+    const operationId = randomUUID();
+    const journal = new PrivateChatGptTaskJournal({ root });
+    await journal.prepare({ operationId, kind: "readonly" });
+    const statePath = path.join(root, "chatgpt-task-journal.json");
+    const record = await fs.readFile(statePath, "utf8");
+    const paddedTo = (bytes: number) =>
+      `${" ".repeat(bytes - Buffer.byteLength(record))}${record}`;
+
+    expect(MAX_CHATGPT_TASK_JOURNAL_BYTES).toBe(64 * 1_024);
+    await fs.writeFile(statePath, paddedTo(65 * 1_024), { mode: 0o600 });
+    await expect(journal.load()).rejects.toThrow(
+      "CHATGPT_TASK_JOURNAL_CORRUPT",
+    );
+    await fs.writeFile(statePath, paddedTo(MAX_CHATGPT_TASK_JOURNAL_BYTES), {
+      mode: 0o600,
+    });
+    await expect(journal.load()).resolves.toMatchObject({
+      operationId,
+      phase: "prepared",
+    });
   });
 
   it("rejects a symbolic-link journal", async () => {

@@ -2,45 +2,74 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
 import { ProductTaskSchema } from "../src/modules/chat/contract/product-task.ts";
 import { ProductSettingsSchema } from "../src/pkg/product-settings/contract.ts";
+import {
+  CHATGPT_TASK_JOURNAL_FILE_NAME,
+  ChatGptTaskJournalRecordSchema,
+  MAX_CHATGPT_TASK_JOURNAL_BYTES,
+} from "../src/apps/desktop/chatgpt-task-journal-record.ts";
+import {
+  LIVE_TASK_FILE_NAME,
+  MAX_LIVE_TASK_BYTES,
+  liveTaskRecordSchemas,
+} from "../src/apps/desktop/live-task-record.ts";
+import {
+  MAX_QUIT_RECEIPT_BYTES,
+  QUIT_RECEIPT_FILE_NAME,
+  QuitReceiptSchema,
+} from "../src/apps/desktop/quit-receipt.ts";
+import {
+  MAX_RUN_MARKER_BYTES,
+  RUN_MARKER_FILE_NAME,
+  RunMarkerSchema,
+  classifyRunMarker,
+  currentBootTimeMs,
+  processAlive,
+} from "../src/apps/desktop/run-marker.ts";
 
 // What a Next generation under one user-data root still owes before another
 // generation may take its place: a task that is running or whose outcome is
 // unknown, a native Agent that is running or whose result the parent has not
 // acknowledged, a ChatGPT turn dispatched but not delivered, a guarded edit
-// recorded before it ran and not yet acknowledged, and a quit whose owned
-// children did not confirm they stopped. Promotion is only a copy into an
-// empty destination, never a switch of the running generation, but it is the
-// one activation step this product has, so it refuses while any of these is
-// open. Only identities and phases are read, never content.
+// recorded before it ran and not yet acknowledged, a quit whose owned
+// children did not confirm they stopped, and — through the run marker — an
+// app that is still running or that stopped without confirming its drain
+// at all. Promotion is only a copy into an empty destination, never a
+// switch of the running generation, but it is the one activation step this
+// product has, so it refuses while any of these is open. Only identities
+// and phases are read, never content.
 //
-// S35-03/1: each present record must have the shape ITS OWNER writes, not a
-// hand-rolled approximation of it. A record the owning store would refuse
-// (missing `revision`, missing `updatedAt`, an extra field, …) must be
-// unreadable here too, never folded into "nothing is running" — a reduced
-// record is exactly what a partial write, a truncated crash, or a forged
-// file looks like. `live-tasks.json` and `product-settings.json` are
-// validated against the same schemas their owners
-// (`live-task-store.ts`, `../../pkg/product-settings/contract.ts`) parse
-// with; `product-settings/contract.ts` is a plain schema module with no
-// class, so it is imported directly. `live-task-store.ts` and
-// `chatgpt-task-journal.ts` cannot be imported the same way: their classes
-// use TypeScript parameter properties, which Node's unflagged type-stripping
-// (the runtime this CLI ships on) refuses to run. Their record schemas are
-// therefore mirrored here field-for-field from the same zod primitives,
-// composed from the one shared, classless, already-exported
-// `ProductTaskSchema` rather than re-describing a task by hand. Anything
-// that drifts from the real store is a bug in this file, not a design
-// choice, and `tests/integration/promotion-obligations.test.mjs`'s decisive
-// negative control (a live-task record missing `revision`/`updatedAt`) locks
-// the failure mode a hand-rolled check let through.
+// Each present record must have the shape ITS OWNER writes, and is read
+// under ITS OWNER's byte bound. A record the owning store would refuse
+// (missing `revision`, missing `updatedAt`, an extra field, a file past the
+// store's decode limit, …) must be unreadable here too, never folded into
+// "nothing is running" — a reduced record is exactly what a partial write,
+// a truncated crash, or a forged file looks like. Nothing is mirrored by
+// hand any more: the schemas and bounds are imported from the plain modules
+// the owners themselves parse and write with —
+// `src/apps/desktop/live-task-record.ts` (built from the same shared
+// `ProductTaskSchema` the store passes in, see that module for why the task
+// schema is a parameter), `src/apps/desktop/chatgpt-task-journal-record.ts`,
+// `src/pkg/product-settings/contract.ts`, `src/apps/desktop/quit-receipt.ts`
+// and `src/apps/desktop/run-marker.ts`. All of them are class-free and
+// enum-free so Node's unflagged type stripping, the runtime this CLI ships
+// on, can load them. `tests/integration/promotion-schema-parity.test.mjs`
+// drives one corpus through the owning stores and through this reader and
+// holds both to the same accept/reject decision.
 
 export const PROMOTION_OBLIGATIONS_SCHEMA =
   "farol.next.promotion-obligations/1";
 
-const MAX_STATE_BYTES = 4 * 1024 * 1024;
+// `product-settings.json`'s decode bound. `ProductSettingsStore`
+// (`src/apps/desktop/product-configuration.ts`) keeps its `MAXIMUM_BYTES`
+// private and that file is not this change's to edit, so the bound is
+// restated here — the one bound in this file that is not imported from its
+// owner. The parity test holds the store and this reader to the same
+// refusal on a padded record, which is how a private constant is kept
+// honest from outside until the store exports it.
+export const PRODUCT_SETTINGS_MAX_BYTES = 256 * 1024;
+
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC = fsConstants.O_CLOEXEC ?? 0;
 
@@ -68,115 +97,36 @@ function classify(parsed, raw) {
   return malformed();
 }
 
-const timestampSchema = z.string().refine((value) => {
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
-});
-
-// Mirrors `StoredLiveTaskSchema` and the private `recordSchema` in
-// `src/apps/desktop/live-task-store.ts` exactly (see the module comment
-// above for why this is a mirror, not an import): schema 1, a revision, at
-// most five tasks each shaped like the one shared `ProductTaskSchema`
-// extended with the two fields the store adds, and the timestamp the store
-// stamps on every save. A record missing `revision` or `updatedAt` is
-// exactly the store's own `recordSchema.safeParse` failing, not an
-// approximation of it.
-const storedLiveTaskSchema = ProductTaskSchema.extend({
-  provider: z.literal("chatgpt"),
-  conversationUrl: z.url().max(2_048).nullable(),
-}).refine((task) => task.lifecycle !== "event_driven");
-
-const liveTasksRecordSchema = z.strictObject({
-  schema: z.literal(1),
-  revision: z.number().int().nonnegative(),
-  tasks: z.array(storedLiveTaskSchema).max(5),
-  updatedAt: timestampSchema,
-});
+// The exact record schema `PrivateLiveTaskStore` parses with, built from the
+// same factory and the same shared task schema the store passes in.
+const liveTasksRecordSchema = liveTaskRecordSchemas(ProductTaskSchema).record;
 
 function liveTasks(value) {
   return classify(liveTasksRecordSchema.safeParse(value), value);
 }
 
-// Mirrors the private `recordSchema` and `resultSchema` in
-// `src/apps/desktop/chatgpt-task-journal.ts` exactly, for the same reason:
-// that file's class uses TypeScript parameter properties, so it cannot be
-// imported into this plain-`.mjs` CLI without a runtime type transform this
-// product does not enable.
-const journalOperationIdSchema = z
-  .string()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-  );
-
-const journalResultSchema = z.strictObject({
-  state: z.enum([
-    "completed",
-    "not_authenticated",
-    "failed_before_submit",
-    "outcome_unknown",
-  ]),
-  code: z
-    .string()
-    .regex(/^[A-Z][A-Z0-9_]*$/u)
-    .max(120)
-    .nullable(),
-  deltaCount: z.number().int().nonnegative(),
-  observedCharacters: z.number().int().nonnegative(),
-  attachmentCount: z.number().int().min(0).max(4),
-  totalBytes: z
-    .number()
-    .int()
-    .nonnegative()
-    .max(20 * 1_024 * 1_024),
-  stagingCleanup: z.enum(["removed", "pending_startup_cleanup"]).nullable(),
-});
-
-const journalRecordSchema = z.strictObject({
-  schema: z.literal(1),
-  operationId: journalOperationIdSchema,
-  kind: z.enum(["readonly", "attachment"]),
-  phase: z.enum([
-    "prepared",
-    "dispatch_intent",
-    "result_retained",
-    "delivery_acknowledged",
-  ]),
-  createdAt: timestampSchema,
-  updatedAt: timestampSchema,
-  result: journalResultSchema.nullable(),
-});
-
 function taskJournal(value) {
-  return classify(journalRecordSchema.safeParse(value), value);
+  return classify(ChatGptTaskJournalRecordSchema.safeParse(value), value);
 }
 
-// product-settings.json is validated against the exact schema
-// `ProductSettingsStore.load()` parses with: `ProductSettingsSchema` from
-// `../../pkg/product-settings/contract.ts`. That module is plain schema and
-// type exports with no class, so — unlike the two stores above — it is
-// imported directly rather than mirrored, closing the gap for this file
-// completely instead of by approximation.
 function productSettings(value) {
   return classify(ProductSettingsSchema.safeParse(value), value);
 }
 
-// last-quit.json has no owning class either (the desktop writes it inline
-// in `main.ts`), so its shape is small enough to state directly.
-const quitReceiptSchema = z.strictObject({
-  schema: z.literal(1),
-  drained: z.boolean(),
-  unconfirmed: z.array(z.string()),
-});
-
 function quitReceipt(value) {
-  return classify(quitReceiptSchema.safeParse(value), value);
+  return classify(QuitReceiptSchema.safeParse(value), value);
+}
+
+function runMarker(value) {
+  return classify(RunMarkerSchema.safeParse(value), value);
 }
 
 // A private regular file only: no symlink (O_NOFOLLOW refuses to open one),
 // no directory or other non-regular node, no extra hard link, owned by this
-// process's own user, and closed to every other user's read or write. Any
-// state that is not exactly that is unsafe, whatever bytes it might hold.
-async function openPrivateStateFile(file) {
+// process's own user, closed to every other user's read or write, and no
+// larger than its owner is willing to decode. Any state that is not exactly
+// that is unsafe, whatever bytes it might hold.
+async function openPrivateStateFile(file, maxBytes) {
   let handle;
   try {
     handle = await fs.open(
@@ -199,7 +149,7 @@ async function openPrivateStateFile(file) {
     await handle.close();
     return { status: "unsafe", reason: "UNSAFE" };
   }
-  if (info.size > MAX_STATE_BYTES) {
+  if (info.size > maxBytes) {
     await handle.close();
     return { status: "unsafe", reason: "OVERSIZED" };
   }
@@ -208,8 +158,8 @@ async function openPrivateStateFile(file) {
 
 // Every read carries the digest of the bytes it saw, so two reads of the same
 // state can be compared without keeping the content.
-async function readState(file, shape) {
-  const opened = await openPrivateStateFile(file);
+async function readState(file, shape, maxBytes) {
+  const opened = await openPrivateStateFile(file, maxBytes);
   if (opened.status === "absent") return { status: "absent", digest: null };
   if (opened.status === "unsafe") {
     return { status: "unreadable", digest: null, reason: opened.reason };
@@ -233,31 +183,52 @@ async function readState(file, shape) {
     : { status: "unreadable", digest, reason: outcome.reason };
 }
 
+// name, path under farol-next-state, owner's shape, owner's decode bound.
 const STATE_FILES = Object.freeze([
-  ["live-tasks", ["live-tasks", "live-tasks.json"], liveTasks],
+  [
+    "live-tasks",
+    ["live-tasks", LIVE_TASK_FILE_NAME],
+    liveTasks,
+    MAX_LIVE_TASK_BYTES,
+  ],
   [
     "chatgpt-task-journal",
-    ["chatgpt-task-journal", "chatgpt-task-journal.json"],
+    ["chatgpt-task-journal", CHATGPT_TASK_JOURNAL_FILE_NAME],
     taskJournal,
+    MAX_CHATGPT_TASK_JOURNAL_BYTES,
   ],
-  ["product-settings", ["product-settings.json"], productSettings],
-  ["last-quit", ["last-quit.json"], quitReceipt],
+  [
+    "product-settings",
+    ["product-settings.json"],
+    productSettings,
+    PRODUCT_SETTINGS_MAX_BYTES,
+  ],
+  ["last-quit", [QUIT_RECEIPT_FILE_NAME], quitReceipt, MAX_QUIT_RECEIPT_BYTES],
+  ["running", [RUN_MARKER_FILE_NAME], runMarker, MAX_RUN_MARKER_BYTES],
 ]);
 
 async function readStateFiles(state) {
   const read = {};
-  for (const [name, segments, shape] of STATE_FILES) {
-    read[name] = await readState(path.join(state, ...segments), shape);
+  for (const [name, segments, shape, maxBytes] of STATE_FILES) {
+    read[name] = await readState(
+      path.join(state, ...segments),
+      shape,
+      maxBytes,
+    );
   }
   return read;
 }
 
-// The four state files are read one after another, so a generation that
-// admits a turn between two of those reads could be classified from a mix of
-// its before and after. The files are therefore read twice and the decision
-// is taken only on a state whose bytes did not change between the two reads;
+// The state files are read one after another, so a generation that admits a
+// turn between two of those reads could be classified from a mix of its
+// before and after. The files are therefore read twice and the decision is
+// taken only on a state whose bytes did not change between the two reads;
 // `options.beforeConfirmation` is the seam between them, used by tests to
 // change the state meanwhile.
+//
+// `options.bootTime` (this machine's boot time as `currentBootTimeMs`
+// reports it, or null when it cannot be read) and `options.isAlive` are the
+// run marker's probes; a caller that leaves them out gets the real machine.
 export async function activationObligations(userData, options = {}) {
   if (!path.isAbsolute(userData)) {
     throw new Error("PROMOTION_USER_DATA_NOT_ABSOLUTE");
@@ -325,6 +296,30 @@ export async function activationObligations(userData, options = {}) {
     obligations.push(
       `QUIT_UNCONFIRMED:${quit.value.unconfirmed.join(",") || "unknown"}`,
     );
+  }
+
+  // The run marker is written at app start and removed only after a
+  // confirmed drain (see `run-marker.ts`). Present, it means the app is
+  // still running (a live pid written on this boot) or it stopped without
+  // confirming its drain (a dead pid, or a pid from another boot). A marker
+  // whose boot cannot be established on either side is not classified at
+  // all: it is reported unreadable rather than guessed at.
+  const marker = confirmed["running"];
+  if (marker.status === "unreadable") {
+    unreadable.push(`running:${marker.reason}`);
+  } else if (marker.status === "read") {
+    const verdict = classifyRunMarker(marker.value, {
+      bootTime:
+        options.bootTime === undefined ? currentBootTimeMs() : options.bootTime,
+      isAlive: options.isAlive ?? processAlive,
+    });
+    if (verdict === "running") {
+      obligations.push(`APP_RUNNING:${marker.value.pid}`);
+    } else if (verdict === "crashed") {
+      obligations.push("QUIT_UNCONFIRMED:crash");
+    } else {
+      unreadable.push("running:BOOT_UNKNOWN");
+    }
   }
 
   return {

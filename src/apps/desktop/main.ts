@@ -156,9 +156,15 @@ import {
 } from "./configuration-admission";
 import {
   createQuitDrain,
+  serializeQuitReceipt,
   type OwnedCloser,
   type QuitDrainReceipt,
 } from "./quit-drain";
+import {
+  currentBootTimeMs,
+  removeRunMarker,
+  writeRunMarker,
+} from "./run-marker";
 import {
   computerConnectorAdmission,
   recoverSummaryExecutionFence,
@@ -1110,12 +1116,15 @@ async function recordSummaryFenceRecovery(
 // this write earns that the same way `live-task-store.ts` does — a private
 // temporary file created next to the target, synced, then renamed over it,
 // never a direct write that a concurrent reader or a symlinked target could
-// observe half-written or redirected.
+// observe half-written or redirected. The bytes themselves come from the
+// shared `quit-receipt.ts` contract (N03/D1): the reader validates against
+// the same schema this serializer refuses to violate, so the two can no
+// longer disagree about a field the way they did about `at`.
 async function recordQuitReceipt(receipt: QuitDrainReceipt): Promise<void> {
   const directory = path.join(app.getPath("userData"), "farol-next-state");
   const file = path.join(directory, "last-quit.json");
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const serialized = `${JSON.stringify({ schema: 1, at: new Date().toISOString(), ...receipt })}\n`;
+  const serialized = serializeQuitReceipt(receipt, new Date().toISOString());
   const temporary = path.join(directory, `.last-quit.json.${randomUUID()}.tmp`);
   let handle;
   try {
@@ -6766,6 +6775,20 @@ async function main(): Promise<void> {
     },
   );
   await app.whenReady();
+  // N03/D2: the run marker is the first thing this generation writes and the
+  // last thing it removes — only after a quit whose drain was confirmed (see
+  // the quit drain's `record` below and `run-marker.ts`). A promotion that
+  // finds it decides between "still running" (a live pid on this boot) and
+  // "stopped without confirming its drain" (a dead pid, or another boot)
+  // instead of trusting the previous quit's clean receipt after a crash. A
+  // marker that cannot be written fails startup like any other state-root
+  // failure would: an unmarked generation is one whose crash would go
+  // unnoticed.
+  await writeRunMarker(path.join(app.getPath("userData"), "farol-next-state"), {
+    pid: process.pid,
+    now: Date.now(),
+    bootTime: currentBootTimeMs(),
+  });
   try {
     await cleanupChatGptAttachmentStaging(chatGptAttachmentStagingRoot());
   } catch {
@@ -6950,7 +6973,19 @@ async function main(): Promise<void> {
   // of being reported as drained.
   const quitDrain = createQuitDrain({
     deadlineMs: QUIT_DRAIN_DEADLINE_MS,
-    record: (receipt) => recordQuitReceipt(receipt),
+    // The receipt first, then — only for a confirmed drain — the run marker
+    // written at start (N03/D2). An undrained quit, or a receipt that could
+    // not be written, leaves the marker in place, and the next promotion
+    // reads that as a stop that never confirmed, never as a clean quit.
+    record: async (receipt) => {
+      await recordQuitReceipt(receipt);
+      if (receipt.drained) {
+        await removeRunMarker(
+          path.join(app.getPath("userData"), "farol-next-state"),
+          process.pid,
+        );
+      }
+    },
     quit: () => app.quit(),
     collect: () => {
       const closers: OwnedCloser[] = [];

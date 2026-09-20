@@ -3,65 +3,28 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
+import {
+  CHATGPT_TASK_JOURNAL_FILE_NAME,
+  ChatGptTaskJournalOperationIdSchema,
+  ChatGptTaskJournalRecordSchema,
+  ChatGptTaskJournalResultSchema,
+  MAX_CHATGPT_TASK_JOURNAL_BYTES,
+  type ChatGptTaskJournalRecord,
+  type ChatGptTaskJournalResult,
+} from "./chatgpt-task-journal-record";
 
-const FILE_NAME = "chatgpt-task-journal.json";
-const MAXIMUM_BYTES = 64 * 1_024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 
-const timestampSchema = z.string().refine((value) => {
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
-});
+// The record shapes live in `chatgpt-task-journal-record.ts` so the
+// promotion reader validates this file against the very objects this
+// journal writes.
+const operationIdSchema = ChatGptTaskJournalOperationIdSchema;
+const resultSchema = ChatGptTaskJournalResultSchema;
+const recordSchema = ChatGptTaskJournalRecordSchema;
 
-const operationIdSchema = z
-  .string()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-  );
-
-const resultSchema = z.strictObject({
-  state: z.enum([
-    "completed",
-    "not_authenticated",
-    "failed_before_submit",
-    "outcome_unknown",
-  ]),
-  code: z
-    .string()
-    .regex(/^[A-Z][A-Z0-9_]*$/u)
-    .max(120)
-    .nullable(),
-  deltaCount: z.number().int().nonnegative(),
-  observedCharacters: z.number().int().nonnegative(),
-  attachmentCount: z.number().int().min(0).max(4),
-  totalBytes: z
-    .number()
-    .int()
-    .nonnegative()
-    .max(20 * 1_024 * 1_024),
-  stagingCleanup: z.enum(["removed", "pending_startup_cleanup"]).nullable(),
-});
-
-const recordSchema = z.strictObject({
-  schema: z.literal(1),
-  operationId: operationIdSchema,
-  kind: z.enum(["readonly", "attachment"]),
-  phase: z.enum([
-    "prepared",
-    "dispatch_intent",
-    "result_retained",
-    "delivery_acknowledged",
-  ]),
-  createdAt: timestampSchema,
-  updatedAt: timestampSchema,
-  result: resultSchema.nullable(),
-});
-
-export type ChatGptTaskJournalResult = z.infer<typeof resultSchema>;
-export type ChatGptTaskJournalRecord = z.infer<typeof recordSchema>;
+export type { ChatGptTaskJournalRecord, ChatGptTaskJournalResult };
 
 type ResultInput = Readonly<{
   state: ChatGptTaskJournalResult["state"];
@@ -101,7 +64,7 @@ export class PrivateChatGptTaskJournal {
     let handle;
     try {
       handle = await fs.open(
-        path.join(this.options.root, FILE_NAME),
+        path.join(this.options.root, CHATGPT_TASK_JOURNAL_FILE_NAME),
         fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
       );
     } catch (error) {
@@ -113,7 +76,7 @@ export class PrivateChatGptTaskJournal {
     try {
       const info = await handle.stat();
       this.assertPrivateFile(info);
-      if (info.size > MAXIMUM_BYTES) {
+      if (info.size > MAX_CHATGPT_TASK_JOURNAL_BYTES) {
         journalError("CHATGPT_TASK_JOURNAL_CORRUPT");
       }
       const parsed = recordSchema.safeParse(
@@ -261,11 +224,11 @@ export class PrivateChatGptTaskJournal {
     const validated = recordSchema.parse(record);
     await this.ensureRoot();
     const serialized = `${JSON.stringify(validated, null, 2)}\n`;
-    const target = path.join(this.options.root, FILE_NAME);
+    const target = path.join(this.options.root, CHATGPT_TASK_JOURNAL_FILE_NAME);
     await this.assertReplaceableTarget(target);
     const temporary = path.join(
       this.options.root,
-      `.${FILE_NAME}.${randomUUID()}.tmp`,
+      `.${CHATGPT_TASK_JOURNAL_FILE_NAME}.${randomUUID()}.tmp`,
     );
     let handle;
     try {

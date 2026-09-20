@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,13 +22,21 @@ import {
 import {
   acquirePromotionLease,
   releasePromotionLease,
+  verifyPromotionLease,
 } from "./promotion-lease.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = path.resolve(root, "..");
 const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
-const { artifactFile, appPath: canonicalAppPath } = candidatePaths(root);
+
+// artifact.json is read like every other file this CLI trusts: a regular
+// file opened without following a symlink, owned by this user, not writable
+// by anyone else, and no larger than a manifest can be. A manifest is a few
+// kilobytes; the cap is a limit, not an allocation.
+const MAX_ARTIFACT_BYTES = 64 * 1024;
+const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const CLOSE_ON_EXEC = fsConstants.O_CLOEXEC ?? 0;
 
 function option(arguments_, name) {
   const indexes = arguments_
@@ -52,8 +61,8 @@ async function exists(target) {
   }
 }
 
-function verify(artifactPath, appPath) {
-  return spawnSync(
+function verifyPackage(artifactPath, appPath) {
+  const result = spawnSync(
     process.execPath,
     [
       path.join(root, "tooling/verify-package.mjs"),
@@ -64,6 +73,10 @@ function verify(artifactPath, appPath) {
     ],
     { cwd: root, encoding: "utf8" },
   );
+  return {
+    status: result.status,
+    output: `${result.stderr}${result.stdout}`.trim(),
+  };
 }
 
 // The mechanism a remaining open review finding uses to block `--apply`
@@ -89,32 +102,133 @@ export function assertNoOpenFindings(apply, findings) {
 // future finding against promotion.
 export const OPEN_PROMOTION_FINDINGS = Object.freeze([]);
 
-async function main() {
-  const arguments_ = process.argv.slice(2);
+// Reads the candidate manifest under the same discipline as the state files
+// promotion trusts, with one closed refusal code per way the read can fail.
+export async function readArtifactManifest(file) {
+  let handle;
+  try {
+    handle = await fs.open(
+      file,
+      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+    );
+  } catch (error) {
+    const reason =
+      error?.code === "ENOENT"
+        ? "ABSENT"
+        : error?.code === "ELOOP"
+          ? "SYMLINK"
+          : "UNSAFE";
+    throw new Error(`PROMOTION_ARTIFACT_UNREADABLE:${reason}`);
+  }
+  let text;
+  try {
+    const info = await handle.stat();
+    const effectiveUser = process.geteuid?.();
+    if (
+      !info.isFile() ||
+      info.nlink !== 1 ||
+      (effectiveUser !== undefined && info.uid !== effectiveUser) ||
+      (info.mode & 0o022) !== 0
+    ) {
+      throw new Error("PROMOTION_ARTIFACT_UNREADABLE:UNSAFE");
+    }
+    if (info.size > MAX_ARTIFACT_BYTES) {
+      throw new Error("PROMOTION_ARTIFACT_UNREADABLE:OVERSIZED");
+    }
+    text = await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+  let artifact;
+  try {
+    artifact = JSON.parse(text);
+  } catch {
+    throw new Error("PROMOTION_ARTIFACT_UNREADABLE:CORRUPT");
+  }
+  if (
+    typeof artifact !== "object" ||
+    artifact === null ||
+    Array.isArray(artifact)
+  ) {
+    throw new Error("PROMOTION_ARTIFACT_UNREADABLE:CORRUPT");
+  }
+  return artifact;
+}
+
+// `--user-data` points the drain check at another profile so a test or a
+// diagnosis can ask what a throwaway profile owes without touching the
+// owner's. It is plan-only by construction: the destination is fixed to the
+// owner's Applications folder, and the generation that home runs lives in
+// the owner's profile, so an `--apply` that checked some other profile
+// would place over a running generation with neither the drain check nor
+// the admission lease (both live in the profile) standing in its way. The
+// owner's own profile is refused as an explicit value too, so a test that
+// seeds the profile it names can never seed the real one.
+export function resolvePromotionUserData(option, ownerProfile, apply) {
+  if (option === null) return ownerProfile;
+  if (!path.isAbsolute(option)) {
+    throw new Error("PROMOTION_USER_DATA_NOT_ABSOLUTE");
+  }
+  const resolved = path.resolve(option);
+  const relative = path.relative(ownerProfile, resolved);
+  const insideOwnerProfile =
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative));
+  if (insideOwnerProfile) {
+    throw new Error("PROMOTION_USER_DATA_IS_OWNER_PROFILE");
+  }
+  if (apply) throw new Error("PROMOTION_USER_DATA_APPLY_REFUSED");
+  return resolved;
+}
+
+// The whole promotion, as one composition: options, the candidate, the
+// source identity, the destination, the lease, verification, the drain
+// check, placement. The script entry point runs it with no `dependencies`;
+// `tests/integration/promote-preview-cli.test.mjs` runs the same
+// composition in a child process with a throwaway candidate, home and
+// source identity, because the real entry's checks (exact clean HEAD bytes,
+// a sealed Electron package) cannot be satisfied from a test. Nothing on
+// the command line or in the environment reaches these seams.
+async function promote(arguments_, dependencies, stdout) {
   const destinationOption = option(arguments_, "--destination");
+  const userDataOption = option(arguments_, "--user-data");
   const apply = arguments_.includes("--apply");
-  const known = new Set(["--destination", "--apply"]);
+  const valued = new Set(["--destination", "--user-data"]);
+  const known = new Set([...valued, "--apply"]);
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
     if (!known.has(argument))
       throw new Error(`PROMOTION_OPTION_INVALID:${argument}`);
-    if (argument === "--destination") index += 1;
+    if (valued.has(argument)) index += 1;
   }
   assertNoOpenFindings(apply, OPEN_PROMOTION_FINDINGS);
 
-  const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
+  const home =
+    dependencies.home ?? trustedOwnerHome(os.userInfo(), process.geteuid?.());
+  const userData = resolvePromotionUserData(
+    userDataOption,
+    promotionUserData(home),
+    apply,
+  );
+
+  const candidateRoot = dependencies.candidateRoot ?? root;
+  const { artifactFile, appPath: source } = candidatePaths(candidateRoot);
+  const artifact = await readArtifactManifest(artifactFile);
   assertCanonicalArtifactPath(
-    root,
+    candidateRoot,
     artifact,
     "PROMOTION_ARTIFACT_PATH_INVALID",
   );
+  const currentSourceIdentity =
+    dependencies.sourceIdentity ??
+    (() => sourceIdentity(repositoryRoot, scope));
   assertExactSourceIdentity(
-    sourceIdentity(repositoryRoot, scope),
+    currentSourceIdentity(),
     artifact,
     "PROMOTION_SOURCE_NOT_EXACT",
   );
-  const source = canonicalAppPath;
-  const home = trustedOwnerHome(os.userInfo(), process.geteuid?.());
   const { destination, receipt } = assertPromotionDestination({
     home,
     source,
@@ -123,7 +237,6 @@ async function main() {
       path.join(home, "Applications/Farol Next Preview.app"),
   });
 
-  const userData = promotionUserData(home);
   // F3-4: a promotion and the app's own work admission share one lease, so
   // nothing can be admitted in the gap between the drain check below and
   // the placement it authorises. Plan-only never places anything, so it
@@ -139,14 +252,13 @@ async function main() {
     : null;
   if (apply && !lease) throw new Error("PROMOTION_LEASE_HELD");
   try {
-    const sourceVerification = verify(artifactFile, source);
+    const verify = dependencies.verify ?? verifyPackage;
+    const sourceVerification = await verify(artifactFile, source);
     if (sourceVerification.status !== 0) {
-      throw new Error(
-        `PROMOTION_SOURCE_INVALID:${`${sourceVerification.stderr}${sourceVerification.stdout}`.trim()}`,
-      );
+      throw new Error(`PROMOTION_SOURCE_INVALID:${sourceVerification.output}`);
     }
     assertExactSourceIdentity(
-      sourceIdentity(repositoryRoot, scope),
+      currentSourceIdentity(),
       artifact,
       "PROMOTION_SOURCE_CHANGED_DURING_VERIFICATION",
     );
@@ -154,9 +266,13 @@ async function main() {
       throw new Error("PROMOTION_DESTINATION_EXISTS");
     if (await exists(receipt)) throw new Error("PROMOTION_RECEIPT_EXISTS");
     // The generation this home runs today must owe nothing before another is
-    // placed: a running or unknown turn, an undelivered result or an
-    // unconfirmed quit refuses the promotion instead of being drained by it.
-    const obligations = await activationObligations(userData);
+    // placed: a running or unknown turn, an undelivered result, an
+    // unconfirmed quit or a still-running app refuses the promotion instead
+    // of being drained by it.
+    const obligations = await activationObligations(
+      userData,
+      dependencies.activation ?? {},
+    );
     assertActivationDrained(obligations);
 
     const plan = {
@@ -180,7 +296,7 @@ async function main() {
       },
     };
     if (!apply) {
-      process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
+      stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
       return;
     }
 
@@ -190,28 +306,44 @@ async function main() {
       verifiedDestinationSha256: artifact.artifactSha256,
     };
     const receiptText = `${JSON.stringify(promotionReceipt, null, 2)}\n`;
+    // Fencing: the lease this run holds must still be the lease on disk at
+    // the moment the durable step begins; a holder that proceeded without
+    // that check would be one of two.
+    if (!(await verifyPromotionLease(lease))) {
+      throw new Error("PROMOTION_LEASE_LOST");
+    }
     await runPromotionApply({
       home,
       source,
       artifactSha256: artifact.artifactSha256,
       receiptText,
     });
-    process.stdout.write(receiptText);
+    stdout.write(receiptText);
   } finally {
     if (lease) await releasePromotionLease(lease);
   }
 }
 
-// Only the script entry point runs `main()`; a test that imports this
+// The command as a process sees it: exit status 0 with the plan or receipt
+// on stdout, or 1 with one refusal line on stderr. Returns the status
+// instead of setting it so a caller can run it in-process.
+export async function runPromotionCli(arguments_, dependencies = {}) {
+  const stdout = dependencies.stdout ?? process.stdout;
+  const stderr = dependencies.stderr ?? process.stderr;
+  try {
+    await promote(arguments_, dependencies, stdout);
+    return 0;
+  } catch (error) {
+    stderr.write(
+      `Farol Next Preview promotion refused: ${error instanceof Error ? error.message : "unknown failure"}\n`,
+    );
+    return 1;
+  }
+}
+
+// Only the script entry point runs the promotion; a test that imports this
 // module for `assertNoOpenFindings` or `OPEN_PROMOTION_FINDINGS` must not
 // trigger a real promotion as a side effect of the import.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  try {
-    await main();
-  } catch (error) {
-    process.stderr.write(
-      `Farol Next Preview promotion refused: ${error instanceof Error ? error.message : "unknown failure"}\n`,
-    );
-    process.exitCode = 1;
-  }
+  process.exitCode = await runPromotionCli(process.argv.slice(2));
 }

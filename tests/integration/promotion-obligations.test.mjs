@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { serializeQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
+import {
+  MAX_RUN_MARKER_BYTES,
+  writeRunMarker,
+} from "../../src/apps/desktop/run-marker.ts";
+import { MAX_LIVE_TASK_BYTES } from "../../src/apps/desktop/live-task-record.ts";
 import {
   activationObligations,
   assertActivationDrained,
@@ -92,6 +98,22 @@ function journal(overrides = {}) {
   };
 }
 
+// The desktop's receipt, byte for byte (`serializeQuitReceipt` is what
+// `main.ts`'s `recordQuitReceipt` writes); a fixture that invents its own
+// shape is how the reader and the writer drifted apart in the first place.
+const RECEIPT_AT = "2026-09-20T10:00:00.000Z";
+async function writeQuitReceipt(root, drained, unconfirmed = []) {
+  await writeFile(
+    path.join(root, "farol-next-state", "last-quit.json"),
+    serializeQuitReceipt({ drained, unconfirmed }, RECEIPT_AT),
+  );
+}
+
+// Any whole-second epoch instant: the marker tests inject the boot probe,
+// so they never depend on the machine's real boot time, which a sandbox
+// may refuse to report.
+const BOOT = 1_758_000_000_000;
+
 async function writeTasks(root, tasks, overrides = {}) {
   await writeFile(
     path.join(root, "farol-next-state", "live-tasks", "live-tasks.json"),
@@ -122,10 +144,7 @@ describe("Q-08 activation obligations", () => {
         lifecycle: "completed",
       }),
     ]);
-    await writeFile(
-      path.join(fresh, "farol-next-state", "last-quit.json"),
-      JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
-    );
+    await writeQuitReceipt(fresh, true);
     const drained = await activationObligations(fresh);
     expect(drained.drained).toBe(true);
     expect(() => assertActivationDrained(drained)).not.toThrow();
@@ -163,10 +182,7 @@ describe("Q-08 activation obligations", () => {
       ),
       JSON.stringify(journal({ phase: "dispatch_intent" })),
     );
-    await writeFile(
-      path.join(root, "farol-next-state", "last-quit.json"),
-      JSON.stringify({ schema: 1, drained: false, unconfirmed: ["route-b"] }),
-    );
+    await writeQuitReceipt(root, false, ["route-b"]);
     const report = await activationObligations(root);
     expect(report).toMatchObject({
       drained: false,
@@ -205,10 +221,7 @@ describe("Q-08 activation obligations", () => {
     ]);
     // The turn settled and the app quit cleanly: nothing is owed any more.
     await writeTasks(root, [task({ lifecycle: "completed" })]);
-    await writeFile(
-      path.join(root, "farol-next-state", "last-quit.json"),
-      JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
-    );
+    await writeQuitReceipt(root, true);
     await expect(activationObligations(root)).resolves.toMatchObject({
       drained: true,
     });
@@ -313,9 +326,13 @@ describe("Q-08 activation obligations", () => {
     await fs.rm(journalFile);
     const quitFile = path.join(root, "farol-next-state", "last-quit.json");
     for (const value of [
-      { schema: 1, drained: "yes", unconfirmed: [] },
-      { schema: 1, drained: true },
-      { schema: 1, drained: true, unconfirmed: [1] },
+      { schema: 1, at: RECEIPT_AT, drained: "yes", unconfirmed: [] },
+      { schema: 1, at: RECEIPT_AT, drained: true },
+      { schema: 1, at: RECEIPT_AT, drained: true, unconfirmed: [1] },
+      // The reader's former shape, with no `at`: the desktop never wrote it.
+      { schema: 1, drained: true, unconfirmed: [] },
+      { schema: 1, at: "2026-09-20T10:00:00Z", drained: true, unconfirmed: [] },
+      { schema: 1, at: RECEIPT_AT, drained: true, unconfirmed: [], extra: 1 },
     ]) {
       await writeFile(quitFile, JSON.stringify(value));
       expect(await activationObligations(root)).toMatchObject({
@@ -323,6 +340,19 @@ describe("Q-08 activation obligations", () => {
         unreadable: ["last-quit:MALFORMED"],
       });
     }
+    await writeFile(
+      quitFile,
+      JSON.stringify({
+        schema: 2,
+        at: RECEIPT_AT,
+        drained: true,
+        unconfirmed: [],
+      }),
+    );
+    expect(await activationObligations(root)).toMatchObject({
+      drained: false,
+      unreadable: ["last-quit:UNKNOWN_VERSION"],
+    });
     await fs.rm(quitFile);
     // Valid, settled records with every classification field admit.
     await writeTasks(root, [
@@ -339,10 +369,7 @@ describe("Q-08 activation obligations", () => {
       journalFile,
       JSON.stringify(journal({ phase: "delivery_acknowledged" })),
     );
-    await writeFile(
-      quitFile,
-      JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
-    );
+    await writeQuitReceipt(root, true);
     await expect(activationObligations(root)).resolves.toMatchObject({
       drained: true,
       obligations: [],
@@ -449,10 +476,7 @@ describe("Q-08 activation obligations", () => {
     };
     // Otherwise idle: settled tasks, a delivered turn, a clean quit.
     await writeTasks(root, [task({ lifecycle: "completed" })]);
-    await writeFile(
-      path.join(root, "farol-next-state", "last-quit.json"),
-      JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
-    );
+    await writeQuitReceipt(root, true);
     await writeFile(settingsFile, JSON.stringify(settings(pending)));
     const report = await activationObligations(root);
     expect(report).toMatchObject({
@@ -571,10 +595,7 @@ describe("Q-08 activation obligations", () => {
   it("refuses a state that changed while it was being read", async () => {
     const root = await userData();
     await writeTasks(root, [task()]);
-    await writeFile(
-      path.join(root, "farol-next-state", "last-quit.json"),
-      JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
-    );
+    await writeQuitReceipt(root, true);
     // Idle when first read; a turn is admitted before the confirming read.
     const report = await activationObligations(root, {
       beforeConfirmation: () =>
@@ -590,5 +611,232 @@ describe("Q-08 activation obligations", () => {
       obligations: ["TASK_RUNNING:1"],
       drained: false,
     });
+  });
+
+  // N03/D1, the decisive case. `main.ts`'s `recordQuitReceipt` has always
+  // written `{ schema: 1, at: <ISO>, ...receipt }`; the reader's strict
+  // schema had no `at`, so every real receipt read as MALFORMED and
+  // `--apply` was refused for good after the first clean quit. These are
+  // the real bytes, spelled with the desktop's former inline expression and
+  // with the shared serializer that replaces it, and both must be identical.
+  it("N03/D1 reads the receipt bytes the desktop actually writes: drained as drained, undrained as QUIT_UNCONFIRMED", async () => {
+    const root = await userData();
+    const quitFile = path.join(root, "farol-next-state", "last-quit.json");
+    const at = new Date().toISOString();
+    const desktopBytes = (receipt) =>
+      `${JSON.stringify({ schema: 1, at, ...receipt })}\n`;
+
+    const drainedReceipt = { drained: true, unconfirmed: [] };
+    expect(serializeQuitReceipt(drainedReceipt, at)).toBe(
+      desktopBytes(drainedReceipt),
+    );
+    await writeFile(quitFile, desktopBytes(drainedReceipt));
+    const drained = await activationObligations(root);
+    expect(drained).toMatchObject({
+      drained: true,
+      obligations: [],
+      unreadable: [],
+    });
+    expect(() => assertActivationDrained(drained)).not.toThrow();
+
+    const undrainedReceipt = {
+      drained: false,
+      unconfirmed: ["route-b", "connector"],
+    };
+    expect(serializeQuitReceipt(undrainedReceipt, at)).toBe(
+      desktopBytes(undrainedReceipt),
+    );
+    await writeFile(quitFile, desktopBytes(undrainedReceipt));
+    const undrained = await activationObligations(root);
+    expect(undrained).toMatchObject({
+      drained: false,
+      unreadable: [],
+      obligations: ["QUIT_UNCONFIRMED:route-b,connector"],
+    });
+    expect(() => assertActivationDrained(undrained)).toThrow(
+      "PROMOTION_DRAIN_REQUIRED:QUIT_UNCONFIRMED:route-b,connector",
+    );
+  });
+
+  // N03/D3: the owner's decode bound applies here too. The store refuses a
+  // file larger than 128 KiB before it parses it; a promotion that parsed
+  // the same bytes would read a valid idle record and call it drained.
+  it("N03/D3 refuses a live-tasks file past the store's decode bound even when its content is a valid idle record, never reading it as drained", async () => {
+    const root = await userData();
+    const tasksFile = path.join(
+      root,
+      "farol-next-state",
+      "live-tasks",
+      "live-tasks.json",
+    );
+    const idle = JSON.stringify({
+      schema: 1,
+      revision: 1,
+      tasks: [task()],
+      updatedAt: "2026-09-18T16:00:00.000Z",
+    });
+    await writeFile(
+      tasksFile,
+      `${" ".repeat(130 * 1_024 - Buffer.byteLength(idle))}${idle}`,
+    );
+    const report = await activationObligations(root);
+    expect(report).toMatchObject({
+      drained: false,
+      obligations: [],
+      unreadable: ["live-tasks:OVERSIZED"],
+    });
+    expect(() => assertActivationDrained(report)).toThrow(
+      "PROMOTION_STATE_UNREADABLE:live-tasks:OVERSIZED",
+    );
+    // Exactly at the bound the same record reads.
+    await writeFile(
+      tasksFile,
+      `${" ".repeat(MAX_LIVE_TASK_BYTES - Buffer.byteLength(idle))}${idle}`,
+    );
+    await expect(activationObligations(root)).resolves.toMatchObject({
+      drained: true,
+      unreadable: [],
+    });
+  });
+
+  // N03/D2: the run marker. Present, it is either the running app (a live
+  // pid written on this boot) or an unconfirmed stop (a dead pid, or a pid
+  // from another boot); absent, it says nothing. The probes are injected
+  // so the verdict never depends on this machine's uptime or on pid reuse.
+  it("N03/D2 classifies the run marker: a live pid on this boot is APP_RUNNING, a dead pid or another boot is QUIT_UNCONFIRMED:crash, absent is nothing", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-next-state");
+    await writeTasks(root, [task({ lifecycle: "completed" })]);
+    await writeQuitReceipt(root, true);
+    await expect(activationObligations(root)).resolves.toMatchObject({
+      drained: true,
+    });
+
+    await writeRunMarker(state, { pid: 4242, now: 1_000, bootTime: BOOT });
+    const running = await activationObligations(root, {
+      bootTime: BOOT,
+      isAlive: (pid) => pid === 4242,
+    });
+    expect(running).toMatchObject({
+      drained: false,
+      unreadable: [],
+      obligations: ["APP_RUNNING:4242"],
+    });
+    expect(() => assertActivationDrained(running)).toThrow(
+      "PROMOTION_DRAIN_REQUIRED:APP_RUNNING:4242",
+    );
+
+    // Same boot, pid gone: a stop that never confirmed its drain, and the
+    // clean receipt beside it is the previous quit's, not this one's.
+    const crashed = await activationObligations(root, {
+      bootTime: BOOT,
+      isAlive: () => false,
+    });
+    expect(crashed).toMatchObject({
+      drained: false,
+      unreadable: [],
+      obligations: ["QUIT_UNCONFIRMED:crash"],
+    });
+
+    // Another boot: the pid is somebody else's now, alive or not.
+    const rebooted = await activationObligations(root, {
+      bootTime: BOOT + 3_600_000,
+      isAlive: () => true,
+    });
+    expect(rebooted).toMatchObject({
+      obligations: ["QUIT_UNCONFIRMED:crash"],
+    });
+
+    // The reader cannot establish its own boot: a live pid is not guessed.
+    const unknown = await activationObligations(root, {
+      bootTime: null,
+      isAlive: () => true,
+    });
+    expect(unknown).toMatchObject({
+      drained: false,
+      obligations: [],
+      unreadable: ["running:BOOT_UNKNOWN"],
+    });
+    // ... but a dead pid is a crash on any boot.
+    await expect(
+      activationObligations(root, { bootTime: null, isAlive: () => false }),
+    ).resolves.toMatchObject({ obligations: ["QUIT_UNCONFIRMED:crash"] });
+
+    // The marker names an undrained receipt's obligation alongside its own.
+    await writeQuitReceipt(root, false, ["route-b"]);
+    await expect(
+      activationObligations(root, { bootTime: BOOT, isAlive: () => false }),
+    ).resolves.toMatchObject({
+      obligations: ["QUIT_UNCONFIRMED:route-b", "QUIT_UNCONFIRMED:crash"],
+    });
+
+    // Removed after a confirmed drain: nothing is owed from it any more.
+    await fs.rm(path.join(state, "running.json"));
+    await writeQuitReceipt(root, true);
+    await expect(
+      activationObligations(root, { bootTime: BOOT, isAlive: () => true }),
+    ).resolves.toMatchObject({ drained: true });
+  });
+
+  it("N03/D2 treats a run marker it cannot read as unreadable, and notices one that appears between its two reads", async () => {
+    const root = await userData();
+    const state = path.join(root, "farol-next-state");
+    const markerFile = path.join(state, "running.json");
+    const valid = {
+      schema: 1,
+      pid: 4242,
+      startedAt: "2026-09-20T10:00:00.000Z",
+      bootTime: BOOT,
+    };
+    const probes = { bootTime: BOOT, isAlive: () => true };
+    const cases = [
+      ["CORRUPT", "{not json", 0o600],
+      ["MALFORMED", JSON.stringify({ schema: 1, pid: 4242 }), 0o600],
+      ["MALFORMED", JSON.stringify({ ...valid, extra: true }), 0o600],
+      ["MALFORMED", JSON.stringify({ ...valid, pid: "4242" }), 0o600],
+      ["UNKNOWN_VERSION", JSON.stringify({ ...valid, schema: 2 }), 0o600],
+      ["UNSAFE", JSON.stringify(valid), 0o644],
+      [
+        "OVERSIZED",
+        `${" ".repeat(MAX_RUN_MARKER_BYTES)}${JSON.stringify(valid)}`,
+        0o600,
+      ],
+    ];
+    for (const [reason, text, mode] of cases) {
+      await fs.rm(markerFile, { force: true });
+      await fs.writeFile(markerFile, text, { mode });
+      const report = await activationObligations(root, probes);
+      expect(report, reason).toMatchObject({
+        drained: false,
+        obligations: [],
+        unreadable: [`running:${reason}`],
+      });
+      expect(() => assertActivationDrained(report), reason).toThrow(
+        `PROMOTION_STATE_UNREADABLE:running:${reason}`,
+      );
+    }
+    await fs.rm(markerFile, { force: true });
+    const outside = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-outside-marker-"),
+    );
+    roots.push(outside);
+    await writeFile(path.join(outside, "running.json"), JSON.stringify(valid));
+    await fs.symlink(path.join(outside, "running.json"), markerFile);
+    await expect(activationObligations(root, probes)).resolves.toMatchObject({
+      drained: false,
+      unreadable: ["running:SYMLINK"],
+    });
+    await fs.rm(markerFile);
+
+    // An app that starts between the two reads is a changed state.
+    const report = await activationObligations(root, {
+      ...probes,
+      beforeConfirmation: () =>
+        writeRunMarker(state, { pid: 4242, now: 1_000, bootTime: BOOT }),
+    });
+    expect(report).toMatchObject({ drained: false, changed: ["running"] });
+    expect(() => assertActivationDrained(report)).toThrow(
+      "PROMOTION_STATE_CHANGED:running",
+    );
   });
 });

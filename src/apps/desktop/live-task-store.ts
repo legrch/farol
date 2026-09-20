@@ -2,31 +2,25 @@ import { randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { z } from "zod";
+import type { z } from "zod";
 import { ProductTaskSchema } from "../../modules/chat/contract/product-task";
+import {
+  LIVE_TASK_FILE_NAME,
+  MAX_LIVE_TASK_BYTES,
+  liveTaskRecordSchemas,
+} from "./live-task-record";
 
-const FILE_NAME = "live-tasks.json";
-const MAXIMUM_BYTES = 128 * 1_024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
 
-const timestampSchema = z.string().refine((value) => {
-  const parsed = new Date(value);
-  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
-});
+// The record shape lives in `live-task-record.ts` so the promotion reader
+// validates this file against the very definition this store writes; the
+// store passes the one shared `ProductTaskSchema` and keeps the result.
+const { storedTask, record: recordSchema } =
+  liveTaskRecordSchemas(ProductTaskSchema);
 
-export const StoredLiveTaskSchema = ProductTaskSchema.extend({
-  provider: z.literal("chatgpt"),
-  conversationUrl: z.url().max(2_048).nullable(),
-}).refine((task) => task.lifecycle !== "event_driven");
-
-const recordSchema = z.strictObject({
-  schema: z.literal(1),
-  revision: z.number().int().nonnegative(),
-  tasks: z.array(StoredLiveTaskSchema).max(5),
-  updatedAt: timestampSchema,
-});
+export const StoredLiveTaskSchema = storedTask;
 
 export type StoredLiveTask = z.infer<typeof StoredLiveTaskSchema>;
 export type LiveTaskStoreRecord = z.infer<typeof recordSchema>;
@@ -59,7 +53,7 @@ export class PrivateLiveTaskStore {
     let handle;
     try {
       handle = await fs.open(
-        path.join(this.options.root, FILE_NAME),
+        path.join(this.options.root, LIVE_TASK_FILE_NAME),
         fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
       );
     } catch (error) {
@@ -71,7 +65,8 @@ export class PrivateLiveTaskStore {
     try {
       const info = await handle.stat();
       this.assertPrivateFile(info);
-      if (info.size > MAXIMUM_BYTES) stateError("LIVE_TASK_STATE_CORRUPT");
+      if (info.size > MAX_LIVE_TASK_BYTES)
+        stateError("LIVE_TASK_STATE_CORRUPT");
       const parsed = recordSchema.safeParse(
         JSON.parse(await handle.readFile("utf8")) as unknown,
       );
@@ -96,11 +91,11 @@ export class PrivateLiveTaskStore {
     });
     await this.ensureRoot();
     const serialized = `${JSON.stringify(validated, null, 2)}\n`;
-    const target = path.join(this.options.root, FILE_NAME);
+    const target = path.join(this.options.root, LIVE_TASK_FILE_NAME);
     await this.assertReplaceableTarget(target);
     const temporary = path.join(
       this.options.root,
-      `.${FILE_NAME}.${randomUUID()}.tmp`,
+      `.${LIVE_TASK_FILE_NAME}.${randomUUID()}.tmp`,
     );
     let handle;
     try {
