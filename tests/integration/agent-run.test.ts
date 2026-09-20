@@ -647,6 +647,110 @@ describe("Agent app service", () => {
     expect(runningHost.waitCalls).toBe(1);
   });
 
+  // The test above proves explicit `admission: "rejoin"` reattaches a
+  // still-running child, but its `InMemoryAssignments` repository and
+  // `RunAgentAssignment` instance are the SAME objects the "before" state
+  // was written through, in the same process — a same-process replay, not
+  // a restart. Table: {same-process replay (above), genuine restart
+  // (below)} x {still-running child, explicit rejoin}. The restart cell,
+  // mirroring LIF-07's own restart proof earlier in this file, was the
+  // empty one: nothing here proved `task.rejoin-agent` reattaches the same
+  // child when the parent process actually died and came back.
+  it("rejoins the exact running child through a fresh service and store after a genuine restart", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-agent-rejoin-restart-"),
+    );
+    try {
+      const store = () => new PrivateAssignmentStore({ root });
+      const running = startAssignment(
+        createAssignment(
+          command.identity,
+          assignmentAuthority,
+          agentAssignmentCommandFingerprint(command, commandDigester),
+        ),
+        exactChild,
+      );
+      if (!running.ok) throw new Error("RUNNING_FIXTURE_INVALID");
+      // A first process admits and starts the child, then "dies": nothing
+      // but what it wrote under `root` crosses into the next process.
+      await store().admit({
+        assignment: createAssignment(
+          command.identity,
+          assignmentAuthority,
+          agentAssignmentCommandFingerprint(command, commandDigester),
+        ),
+        resultRef: null,
+        parentDelivery: "not_applicable",
+      });
+      await store().save({
+        assignment: running.value,
+        resultRef: null,
+        parentDelivery: "not_applicable",
+      });
+
+      // A restarted process has a fresh service module (same technique as
+      // LIF-07 above) and a fresh store instance: the rejoin below reads
+      // the running child's identity from disk, never from a closure this
+      // test still holds.
+      vi.resetModules();
+      const restartedModule =
+        await import("../../src/modules/agent/app/service/run-agent-assignment");
+      const restartedHost = new AgentHostDouble(new Error("must not spawn"), {
+        status: "completed",
+        correlation: exactChild,
+        resultRef: "result-preview-rejoined-restart",
+        workspaceEnforcement: "verified",
+      });
+      await expect(
+        new restartedModule.RunAgentAssignment(
+          restartedHost,
+          store(),
+          new AuthorityDouble(),
+          commandDigester,
+        ).execute({ ...command, admission: "rejoin" }),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          assignment: { phase: "completed", terminal: true },
+          resultRef: "result-preview-rejoined-restart",
+        },
+      });
+      expect(restartedHost.spawnCalls).toBe(0);
+      expect(restartedHost.waitCalls).toBe(1);
+
+      // Negative control: a request whose identity no longer correlates
+      // with the stored record must still be refused after the very same
+      // restart, proving the fresh instance discriminates on identity
+      // rather than rejoining whatever it finds under the same admission
+      // key. (The record IS found by assignment id, which is why this
+      // fails closed one check later, at the authority correlation, not at
+      // "no record" — a different but equally decisive refusal.)
+      const foreignHost = new AgentHostDouble(
+        new Error("must not spawn"),
+        new Error("must not wait"),
+      );
+      await expect(
+        new restartedModule.RunAgentAssignment(
+          foreignHost,
+          store(),
+          new AuthorityDouble(),
+          commandDigester,
+        ).execute({
+          ...command,
+          identity: { ...command.identity, taskId: "task-foreign-restart" },
+          admission: "rejoin",
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "AGENT_AUTHORITY_CORRELATION" },
+      });
+      expect(foreignHost.spawnCalls).toBe(0);
+      expect(foreignHost.waitCalls).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a foreign running correlation", async () => {
     const host = new AgentHostDouble(
       { status: "started", correlation: exactChild },
