@@ -9907,8 +9907,17 @@ n11AgentScopeSegment: {
     await agentScope.window.evaluate(() => {
       const observed = [];
       globalThis.__farolE2EMenuEvents = observed;
-      const record = (name) => () => {
-        observed.push({ name, at: Date.now() });
+      const record = (name) => (value) => {
+        // `publishShellAction` sends `{ action }`; the sender's name is the
+        // whole point of this trace, so it is kept. No other payload is.
+        const action =
+          name === "shellAction" &&
+          value !== null &&
+          typeof value === "object" &&
+          "action" in value
+            ? String(value.action)
+            : undefined;
+        observed.push({ name, at: Date.now(), ...(action ? { action } : {}) });
         if (observed.length > 64) observed.shift();
       };
       window.farolNext.onRuntimeState(record("runtimeState"));
@@ -10121,7 +10130,17 @@ n11AgentScopeSegment: {
           };
         })
         .catch(() => null);
-    const submitAgentAssignment = async (staged) => {
+    const submitAgentAssignment = async (staged, options = {}) => {
+      // A close that follows this case's own action — a refused assignment
+      // closing the menu, which may well be by design — is expected, and
+      // reopening after it is a fair thing for an owner to do. A close with
+      // no action of this case since the last fill is not: it discards a
+      // scope the owner has just typed, and re-filling it would hide
+      // exactly the defect worth reporting. Only the first kind is retried
+      // silently; the second is recorded against the run before the case
+      // goes on to prove the wire shape.
+      const closeExpectedOnFirstAttempt =
+        options.closeExpectedOnFirstAttempt === true;
       let lastFailure = null;
       const attemptLog = [];
       for (let attempt = 1; attempt <= 4; attempt += 1) {
@@ -10154,11 +10173,35 @@ n11AgentScopeSegment: {
           return;
         } catch (error) {
           lastFailure = error;
+          const observed = await menuObservation();
+          const expected = attempt === 1 && closeExpectedOnFirstAttempt;
           attemptLog.push({
             attempt,
+            expected,
             reason: error.message.slice(0, 160),
-            observed: await menuObservation(),
+            observed,
           });
+          if (!expected) {
+            const shellActions = (observed?.lastEvents ?? [])
+              .filter((event) => event.name === "shellAction")
+              .map((event) => event.action ?? "unrecorded");
+            harnessObservations.push({
+              kind: "task-menu-closed-without-own-action",
+              owningCase: cases.at(-1) ?? null,
+              attempt,
+              menuVisible: observed?.menuVisible ?? null,
+              subtreeVisible: observed?.subtreeVisible ?? null,
+              scopeMode: observed?.scope ?? null,
+              lostValues: staged,
+              shellActions,
+              events: observed?.lastEvents ?? [],
+              message: error.message.split("\n", 1)[0].slice(0, 200),
+            });
+            evidenceAttempt.recordFailure(
+              "task-menu",
+              `E2E_TASK_MENU_CLOSED_WITHOUT_OWN_ACTION:${cases.at(-1) ?? "no-case"}:${shellActions.join(",") || "no-shell-action"}`,
+            );
+          }
         }
       }
       throw new Error(
@@ -10189,12 +10232,17 @@ n11AgentScopeSegment: {
     // refused before anything is delivered. This runs first: a refusal that
     // wrote an envelope would be invisible after a successful assignment.
     await openScopeMenu();
-    await submitAgentAssignment({
-      subtree: ".git",
-      exclusions: "",
-      objective:
-        "Read the excluded repository metadata, which must be refused.",
-    });
+    // The menu was opened by this case a moment ago and nothing of its own
+    // has run since, so any close here is unsolicited.
+    await submitAgentAssignment(
+      {
+        subtree: ".git",
+        exclusions: "",
+        objective:
+          "Read the excluded repository metadata, which must be refused.",
+      },
+      { closeExpectedOnFirstAttempt: false },
+    );
     await agentScope.window.waitForFunction(() => {
       const note = document.querySelector("#task-menu-note")?.textContent ?? "";
       return note.length > 0 && note !== "Agent assignment admitted.";
@@ -10221,14 +10269,20 @@ n11AgentScopeSegment: {
     cases.push("n11-agent-denied-subfolder-refused");
 
     // One subfolder, and one exclusion, both typed into their own controls.
-    await submitAgentAssignment({
-      subtree: "notes",
-      // Exclusions resolve against the workspace root, not the chosen
-      // subfolder, so this is written the way the product reads it.
-      exclusions: "notes/scope.md",
-      objective:
-        "Read the approved subfolder and report what its scope allows.",
-    });
+    // This one follows the refusal above, which closes the menu, so a close
+    // on its first attempt is this case's own doing and is reopened
+    // quietly. Every later attempt is not.
+    await submitAgentAssignment(
+      {
+        subtree: "notes",
+        // Exclusions resolve against the workspace root, not the chosen
+        // subfolder, so this is written the way the product reads it.
+        exclusions: "notes/scope.md",
+        objective:
+          "Read the approved subfolder and report what its scope allows.",
+      },
+      { closeExpectedOnFirstAttempt: true },
+    );
     // A refusal here is a real product answer, so the wait reports the
     // sentence the menu gave rather than a bare timeout.
     try {
