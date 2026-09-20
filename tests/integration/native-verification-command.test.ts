@@ -364,6 +364,24 @@ describe("native verification command", () => {
     });
   });
 
+  it("reports a tracked file staged for commit, distinctly from an unstaged change", async () => {
+    await fs.writeFile(path.join(root, "README.md"), "staged change\n", {
+      mode: 0o600,
+    });
+    await executeFile(git, ["-C", root, "add", "README.md"]);
+
+    const result = await workspace().execute(request());
+    expect(result).toMatchObject({
+      ok: true,
+      value: { kind: "workspace.command", command: "git.status" },
+    });
+    if (!result.ok || result.value.kind !== "workspace.command") return;
+    // Staged in the index, clean in the working tree: the index column
+    // carries the change and the worktree column stays blank -- the mirror
+    // of the plain unstaged " M README.md" the next test's sibling checks.
+    expect(result.value.stdout).toContain("M  README.md\n");
+  });
+
   it("reports the exact repository HEAD through a second fixed no-network profile", async () => {
     const expected = (
       await executeFile(git, ["-C", root, "rev-parse", "--verify", "HEAD"])
