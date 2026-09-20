@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentRouteReadiness,
+  connectorChoosePrerequisite,
   connectorStartPrerequisite,
+  connectorStopPrerequisite,
   computerVerificationStale,
   readinessDetail,
   readinessLabel,
+  nativeHostActionPrerequisite,
   routeReadiness,
   setupStepStale,
   waitsForAgentRejoin,
@@ -418,5 +421,30 @@ describe("why the connection cannot start yet", () => {
         false,
       ),
     ).toBeNull();
+  });
+});
+
+describe("why a connection or host control cannot be used yet", () => {
+  it("explains that a running connector is what blocks replacing its client", () => {
+    expect(connectorChoosePrerequisite(true)).toBe(
+      "Stop the connector before replacing its client.",
+    );
+    expect(connectorChoosePrerequisite(false)).toBeNull();
+  });
+
+  it("explains that there is nothing to stop", () => {
+    expect(connectorStopPrerequisite(false)).toBe(
+      "The connector is not running.",
+    );
+    expect(connectorStopPrerequisite(true)).toBeNull();
+  });
+
+  it("names the missing host once, for whichever action asked", () => {
+    for (const action of ["recheck", "remove"]) {
+      expect(nativeHostActionPrerequisite(false, action)).toBe(
+        `Choose a Codex executable before you ${action} it.`,
+      );
+      expect(nativeHostActionPrerequisite(true, action)).toBeNull();
+    }
   });
 });

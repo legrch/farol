@@ -69,3 +69,18 @@ export function agentWorkspaceFixedReason(
     ? "Farol delegates to the one workspace it has verified for this Computer. Verify another in Computer to change this."
     : "No workspace has been verified yet. Approve one in Computer and verify it before delegating.";
 }
+
+/**
+ * Why the task menu's "Review Computer request" cannot be pressed, or null.
+ *
+ * It is disabled whenever the task has no unresolved Computer request, and
+ * the dialog's only standing hint is about something else entirely, so the
+ * control simply sat grey with no account of itself.
+ */
+export function reviewComputerRequestPrerequisite(
+  hasUnresolvedRequest: boolean,
+): string | null {
+  return hasUnresolvedRequest
+    ? null
+    : "This task is not waiting for a Computer request right now.";
+}

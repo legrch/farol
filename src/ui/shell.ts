@@ -48,9 +48,15 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import {
   agentWorkspaceFixedReason,
+  reviewComputerRequestPrerequisite,
+  TASK_MENU_BUSY_NOTE,
   taskMenuNote,
 } from "./task-menu-presentation";
-import { searchMatchDisplay } from "./computer-presentation";
+import {
+  guardedEditApplyPrerequisite,
+  searchMatchDisplay,
+  workspaceSearchPrerequisite,
+} from "./computer-presentation";
 import {
   modelDisconnectedReadiness,
   modelDisconnectedSummary,
@@ -65,9 +71,12 @@ import { ActivityLog, projectActivity } from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
   agentRouteReadiness,
+  connectorChoosePrerequisite,
   connectorStartPrerequisite,
+  connectorStopPrerequisite,
   readinessDetail,
   readinessLabel,
+  nativeHostActionPrerequisite,
   routeReadiness,
   setupStepStale,
   waitsForAgentRejoin,
@@ -856,7 +865,13 @@ function renderDossier(): void {
           ? "Open Settings <span>›</span>"
           : "Open Activity <span>›</span>";
 
-  taskMenuComputer.disabled = !unresolvedComputerRequest(selectedTaskId);
+  const reviewPrerequisite = reviewComputerRequestPrerequisite(
+    unresolvedComputerRequest(selectedTaskId) !== null,
+  );
+  taskMenuComputer.disabled = reviewPrerequisite !== null;
+  taskMenuComputer.title =
+    reviewPrerequisite ??
+    "Review the bounded Computer request this task is waiting on";
 }
 
 // The one place that decides whether the ChatGPT route can start a new task
@@ -1043,9 +1058,16 @@ function renderTaskMenu(): void {
   const context = contextTaskPresentation(task.context);
   const contextLocked = context?.locked ?? false;
   const agentLocked = needsRejoin || contextLocked;
-  name.disabled = taskMenuBusy;
-  rename.disabled = taskMenuBusy;
-  pin.disabled = taskMenuBusy;
+  // The note says this too; the controls carry it as well so a pointer that
+  // rests on one gets the same answer the note is already giving.
+  const busyReason = taskMenuBusy ? TASK_MENU_BUSY_NOTE : null;
+  name.disabled = busyReason !== null;
+  rename.disabled = busyReason !== null;
+  pin.disabled = busyReason !== null;
+  for (const control of [name, rename, pin]) {
+    if (busyReason !== null) control.title = busyReason;
+    else control.removeAttribute("title");
+  }
   cancel.disabled =
     taskMenuBusy ||
     contextLocked ||
@@ -1803,14 +1825,21 @@ function renderComputerConfiguration(): void {
       searchInput.placeholder = "Exact text pattern";
       searchInput.setAttribute("aria-label", `Search ${workspace.label}`);
       searchInput.disabled = !verified;
+      if (!verified) searchInput.title = "Verify this workspace again first.";
       searchLabel.append(searchInput);
       const search = document.createElement("button");
       search.type = "button";
       search.textContent = "Search";
-      search.disabled = true;
-      searchInput.addEventListener("input", () => {
-        search.disabled = !verified || searchInput.value.trim().length === 0;
-      });
+      // One predicate for the state and the reason, as its "Git status"
+      // neighbour already does.
+      const updateSearchState = () => {
+        const reason = workspaceSearchPrerequisite(verified, searchInput.value);
+        search.disabled = reason !== null;
+        search.title =
+          reason ?? "Search this workspace for an exact text pattern";
+      };
+      updateSearchState();
+      searchInput.addEventListener("input", updateSearchState);
       search.addEventListener("click", () => {
         const command = ProductConfigurationCommandSchema.safeParse({
           kind: "computer.search-workspace",
@@ -2016,11 +2045,16 @@ function renderComputerConfiguration(): void {
           apply.type = "button";
           apply.className = "primary-action";
           apply.textContent = "Apply guarded edit";
-          apply.disabled = true;
           const updateApplyState = () => {
-            apply.disabled =
-              oldText.value.length === 0 || oldText.value === newText.value;
+            const reason = guardedEditApplyPrerequisite(
+              oldText.value,
+              newText.value,
+            );
+            apply.disabled = reason !== null;
+            apply.title =
+              reason ?? "Apply this exact replacement once, to this file";
           };
+          updateApplyState();
           oldText.addEventListener("input", updateApplyState);
           newText.addEventListener("input", updateApplyState);
           apply.addEventListener("click", () => {
@@ -3001,6 +3035,8 @@ function renderSettings(): void {
         choose.textContent = connector.tunnelClient
           ? "Replace client…"
           : "Choose client…";
+        const choosePrerequisite = connectorChoosePrerequisite(running);
+        if (choosePrerequisite !== null) choose.title = choosePrerequisite;
         choose.disabled = running;
         choose.addEventListener("click", () => {
           void configureProduct(
@@ -3049,7 +3085,11 @@ function renderSettings(): void {
         const stop = document.createElement("button");
         stop.type = "button";
         stop.textContent = "Stop";
-        stop.disabled = connector.runtime === null;
+        const stopPrerequisite = connectorStopPrerequisite(
+          connector.runtime !== null,
+        );
+        stop.disabled = stopPrerequisite !== null;
+        stop.title = stopPrerequisite ?? "Stop the connector runtime";
         stop.addEventListener("click", () => {
           void configureProduct(
             { kind: "connector.stop" },
@@ -3076,7 +3116,13 @@ function renderSettings(): void {
         const verify = document.createElement("button");
         verify.type = "button";
         verify.textContent = "Recheck host";
-        verify.disabled = selected === null;
+        const verifyPrerequisite = nativeHostActionPrerequisite(
+          selected !== null,
+          "recheck",
+        );
+        verify.disabled = verifyPrerequisite !== null;
+        verify.title =
+          verifyPrerequisite ?? "Recheck this Codex executable's contract";
         verify.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.verify-codex" },
@@ -3146,7 +3192,13 @@ function renderSettings(): void {
         const remove = document.createElement("button");
         remove.type = "button";
         remove.textContent = "Remove";
-        remove.disabled = selected === null;
+        const removePrerequisite = nativeHostActionPrerequisite(
+          selected !== null,
+          "remove",
+        );
+        remove.disabled = removePrerequisite !== null;
+        remove.title =
+          removePrerequisite ?? "Forget this Codex executable and its checks";
         remove.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.remove-codex" },

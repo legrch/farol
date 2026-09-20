@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   agentWorkspaceFixedReason,
+  reviewComputerRequestPrerequisite,
   TASK_MENU_BUSY_NOTE,
   taskMenuNote,
   type TaskMenuNoteState,
@@ -101,5 +102,17 @@ describe("the Agent's approved-workspace field", () => {
     for (const ready of [true, false]) {
       expect(agentWorkspaceFixedReason(ready).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("why Review Computer request cannot be pressed", () => {
+  it("says the task is not waiting for one, rather than sitting grey", () => {
+    expect(reviewComputerRequestPrerequisite(false)).toBe(
+      "This task is not waiting for a Computer request right now.",
+    );
+  });
+
+  it("has nothing to say when a request is actually waiting", () => {
+    expect(reviewComputerRequestPrerequisite(true)).toBeNull();
   });
 });

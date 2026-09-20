@@ -239,3 +239,33 @@ export function workspaceAccessLabel(
   const access = workspace.access === "write" ? "guarded edits" : "read-only";
   return commands === "verification" ? `${access} · fixed Git checks` : access;
 }
+
+/**
+ * Why the connector's client cannot be replaced right now, or null.
+ *
+ * Replacing the client under a running connector is refused, and the button
+ * said so only by being grey.
+ */
+export function connectorChoosePrerequisite(running: boolean): string | null {
+  return running ? "Stop the connector before replacing its client." : null;
+}
+
+/** Why the connector cannot be stopped, or null when it can. */
+export function connectorStopPrerequisite(hasRuntime: boolean): string | null {
+  return hasRuntime ? null : "The connector is not running.";
+}
+
+/**
+ * Why a native-host action needs a host first, or null when one is selected.
+ *
+ * `action` is the verb this control performs, so one function serves the
+ * row's several buttons without any of them re-deriving the condition.
+ */
+export function nativeHostActionPrerequisite(
+  hostSelected: boolean,
+  action: string,
+): string | null {
+  return hostSelected
+    ? null
+    : `Choose a Codex executable before you ${action} it.`;
+}
