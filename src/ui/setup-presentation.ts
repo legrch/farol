@@ -51,6 +51,42 @@ export function routeReadiness(
   return "not-configured";
 }
 
+// Whether the Computer verification on record still describes the workspace
+// and config generation in front of the owner.
+//
+// One definition, because three surfaces must not disagree about it: the
+// Settings row computed it, the Setup step did not, and the Setup progress
+// dot did not either — so a verification the setup had outgrown showed an
+// amber row in Settings and "Verified", with a completed dot, in Setup.
+export function computerVerificationStale(
+  computer: Readiness,
+  workspaces: readonly Workspace[],
+  generation: number,
+): boolean {
+  const workspace = workspaces[0];
+  if (workspace === undefined) return false;
+  return (
+    computer.verified?.workspaceId !== workspace.workspaceId ||
+    computer.verified.configRevision !== generation
+  );
+}
+
+// The staleness that applies to a given setup step. Steps with no staleness
+// concept answer false rather than undefined, so a caller cannot silently
+// forget to ask.
+export function setupStepStale(
+  settings: ProductSettings,
+  stepId: string,
+): boolean {
+  return stepId === "computer"
+    ? computerVerificationStale(
+        settings.setup.computer,
+        settings.computer.workspaces,
+        settings.computer.generation,
+      )
+    : false;
+}
+
 // What the owner reads for a route, in the same order `routeReadiness`
 // decides it.
 //

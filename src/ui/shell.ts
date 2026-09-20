@@ -64,6 +64,7 @@ import {
   readinessDetail,
   readinessLabel,
   routeReadiness,
+  setupStepStale,
   waitsForAgentRejoin,
   windowModeLabel,
   workspaceAccessLabel,
@@ -865,13 +866,9 @@ function chatGptRouteState(): RouteReadinessState {
 function computerRouteState(): RouteReadinessState {
   if (bootstrap.configuration.status !== "ready") return "not-configured";
   const settings = bootstrap.configuration.settings;
-  const workspace = settings.computer.workspaces[0];
-  const stale =
-    workspace !== undefined &&
-    (settings.setup.computer.verified?.workspaceId !== workspace.workspaceId ||
-      settings.setup.computer.verified.configRevision !==
-        settings.computer.generation);
-  return routeReadiness(settings.setup.computer, { stale });
+  return routeReadiness(settings.setup.computer, {
+    stale: setupStepStale(settings, "computer"),
+  });
 }
 
 function connectRouteState(): RouteReadinessState {
@@ -3336,12 +3333,15 @@ function renderSetup(): void {
   required("#setup-title").textContent = step.title;
   required("#setup-copy").textContent = step.copy;
   const status = required<HTMLDivElement>("#setup-status");
+  const stepStale =
+    configured.status === "ready" &&
+    setupStepStale(configured.settings, step.id);
   const stepState = readinessState
-    ? routeReadiness(readinessState)
+    ? routeReadiness(readinessState, { stale: stepStale })
     : "not-configured";
   status.className = `setup-status ${routeStatusClass(stepState)}`;
   required<HTMLElement>("#setup-status strong").textContent = readinessState
-    ? readinessLabel(readinessState)
+    ? readinessLabel(readinessState, { stale: stepStale })
     : "Settings unavailable";
   const details = required<HTMLUListElement>("#setup-details");
   const liveDetails =
@@ -3390,7 +3390,12 @@ function renderSetup(): void {
           : null;
       item.classList.toggle(
         "complete",
-        progressState !== null && routeReadiness(progressState) === "ready",
+        progressState !== null &&
+          configured.status === "ready" &&
+          progressId !== undefined &&
+          routeReadiness(progressState, {
+            stale: setupStepStale(configured.settings, progressId),
+          }) === "ready",
       );
       item.classList.toggle("visited", progressState?.visited === true);
       item.classList.toggle("active", index === setupJourney.step);

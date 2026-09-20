@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   agentRouteReadiness,
+  computerVerificationStale,
   readinessDetail,
   readinessLabel,
   routeReadiness,
+  setupStepStale,
   waitsForAgentRejoin,
   windowModeLabel,
   workspaceAccessLabel,
@@ -298,6 +300,58 @@ describe("what the owner reads beside a route's state", () => {
     for (const [record, options, state, label] of cases) {
       expect(routeReadiness(record, options)).toBe(state);
       expect(readinessLabel(record, options)).toBe(label);
+    }
+  });
+});
+
+// Setup and Settings must answer this from the same place. Settings computed
+// it, Setup did not ask at all, so an outgrown verification showed amber in
+// one surface and "Verified" with a completed progress dot in the other.
+describe("one definition of a stale Computer verification", () => {
+  const workspace = {
+    workspaceId: "workspace-1",
+    label: "Workspace",
+    root: "/tmp/workspace",
+    access: "read" as const,
+    excludedPaths: [] as string[],
+  };
+  const verifiedHere = {
+    ...verifiedRecord,
+    workspaceId: workspace.workspaceId,
+    configRevision: 7,
+  };
+  const computer = { ...readiness, needsAction: null, verified: verifiedHere };
+
+  it("is not stale while the workspace and the generation both still match", () => {
+    expect(computerVerificationStale(computer, [workspace], 7)).toBe(false);
+  });
+
+  it("is stale once the config generation has moved on", () => {
+    expect(computerVerificationStale(computer, [workspace], 8)).toBe(true);
+  });
+
+  it("is stale when the verification names a different workspace", () => {
+    expect(
+      computerVerificationStale(
+        computer,
+        [{ ...workspace, workspaceId: "other" }],
+        7,
+      ),
+    ).toBe(true);
+  });
+
+  it("is not stale when there is no workspace to have outgrown", () => {
+    expect(computerVerificationStale(computer, [], 7)).toBe(false);
+  });
+
+  it("answers false, never undefined, for a step that has no staleness", () => {
+    const settings = {
+      setup: { computer },
+      computer: { workspaces: [workspace], generation: 8 },
+    } as unknown as Parameters<typeof setupStepStale>[0];
+    expect(setupStepStale(settings, "computer")).toBe(true);
+    for (const stepId of ["chatgpt", "connect", "hosts", "verify"]) {
+      expect(setupStepStale(settings, stepId)).toBe(false);
     }
   });
 });
