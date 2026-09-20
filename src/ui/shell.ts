@@ -47,6 +47,7 @@ import {
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
 import {
+  agentActionPrerequisite,
   agentWorkspaceFixedReason,
   reviewComputerRequestPrerequisite,
   TASK_MENU_BUSY_NOTE,
@@ -1087,13 +1088,21 @@ function renderTaskMenu(): void {
   paths.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   exclusions.disabled = taskMenuBusy || agentLocked || !readiness.ready;
   objective.disabled = taskMenuBusy || agentLocked || !readiness.ready;
-  runAgent.disabled =
-    taskMenuBusy ||
-    !readiness.ready ||
-    uncertain ||
-    contextLocked ||
-    (!needsRejoin &&
-      (objective.value.trim().length === 0 || scopeSelection === null));
+  // The flag and the reason from one function. The panel's tone, label and
+  // detail come from the assignment's phase alone, so nothing here used to
+  // say why the action was unavailable for any other reason.
+  const agentPrerequisite = agentActionPrerequisite({
+    busy: taskMenuBusy,
+    workspaceReason: readiness.ready ? null : readiness.reason,
+    uncertain,
+    contextLocked,
+    needsRejoin,
+    objective: objective.value,
+    scopeValid: scopeSelection !== null,
+  });
+  runAgent.disabled = agentPrerequisite !== null;
+  if (agentPrerequisite !== null) runAgent.title = agentPrerequisite;
+  else runAgent.removeAttribute("title");
   runAgent.querySelector("span")!.textContent =
     task.agent?.phase === "running"
       ? "Rejoin Agent"
@@ -1198,6 +1207,10 @@ function renderTaskMenu(): void {
     agentLocked,
     agentRunning,
     uncertain,
+    // Only for a task that actually has an Agent assignment: an ordinary
+    // task must not be told about a workspace its menu never offered.
+    agentUnavailable:
+      task.agent !== null && !readiness.ready ? readiness.reason : null,
     lifecycle: task.lifecycle,
   });
 }

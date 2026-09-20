@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentActionPrerequisite,
   agentWorkspaceFixedReason,
   reviewComputerRequestPrerequisite,
   TASK_MENU_BUSY_NOTE,
@@ -15,6 +16,7 @@ const idle: TaskMenuNoteState = {
   agentLocked: false,
   agentRunning: false,
   uncertain: false,
+  agentUnavailable: null,
   lifecycle: "complete",
 };
 
@@ -114,5 +116,93 @@ describe("why Review Computer request cannot be pressed", () => {
 
   it("has nothing to say when a request is actually waiting", () => {
     expect(reviewComputerRequestPrerequisite(true)).toBeNull();
+  });
+});
+
+describe("why Run or Rejoin Agent cannot be pressed", () => {
+  const runnable = {
+    busy: false,
+    workspaceReason: null,
+    uncertain: false,
+    contextLocked: false,
+    needsRejoin: false,
+    objective: "Review the changed files",
+    scopeValid: true,
+  };
+
+  it("says a rejoin is blocked by its workspace, instead of going quiet", () => {
+    // The reported case: a child is running, the workspace stops being
+    // verified, and the panel goes on saying "Running · Rejoin checks the
+    // same native child" over a dead button.
+    const reason = agentActionPrerequisite({
+      ...runnable,
+      needsRejoin: true,
+      workspaceReason: "The approved workspace is no longer verified.",
+    });
+    expect(reason).toBe("The approved workspace is no longer verified.");
+  });
+
+  it("carries that same reason into the menu's note", () => {
+    expect(
+      taskMenuNote({
+        ...idle,
+        agentUnavailable: "The approved workspace is no longer verified.",
+      }),
+    ).toBe("The approved workspace is no longer verified.");
+  });
+
+  it("leaves an ordinary task's note alone", () => {
+    // shell.ts passes this field only for a task that has an Agent
+    // assignment; the note must behave exactly as before without it.
+    expect(taskMenuNote(idle)).toMatch(/^Close removes this local task/u);
+  });
+
+  it("lets a rejoin past the objective and scope, which it does not need", () => {
+    expect(
+      agentActionPrerequisite({
+        ...runnable,
+        needsRejoin: true,
+        objective: "",
+        scopeValid: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("asks a new assignment for an objective and a usable scope", () => {
+    expect(agentActionPrerequisite({ ...runnable, objective: "   " })).toBe(
+      "Describe what this Agent assignment should do.",
+    );
+    expect(agentActionPrerequisite({ ...runnable, scopeValid: false })).toMatch(
+      /canonical relative paths/u,
+    );
+  });
+
+  it("keeps the order the disabled flag already had", () => {
+    expect(
+      agentActionPrerequisite({
+        ...runnable,
+        busy: true,
+        workspaceReason: "workspace",
+        uncertain: true,
+      }),
+    ).toBe(TASK_MENU_BUSY_NOTE);
+    expect(
+      agentActionPrerequisite({
+        ...runnable,
+        workspaceReason: "workspace",
+        uncertain: true,
+      }),
+    ).toBe("workspace");
+    expect(
+      agentActionPrerequisite({
+        ...runnable,
+        uncertain: true,
+        contextLocked: true,
+      }),
+    ).toMatch(/^Outcome unknown is not Failed\./u);
+  });
+
+  it("has nothing to say when the assignment can run", () => {
+    expect(agentActionPrerequisite(runnable)).toBeNull();
   });
 });
