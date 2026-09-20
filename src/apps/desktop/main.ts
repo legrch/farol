@@ -44,11 +44,7 @@ import {
   type ProductTaskAgent,
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
-import {
-  LiveTaskRegistry,
-  PromotionLeaseLost,
-  type LiveTaskAdmission,
-} from "./live-task-registry";
+import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
 import {
   journalUnderPromotionLease,
   PromotionPendingRefusal,
@@ -806,29 +802,20 @@ function setLiveTaskLifecycle(
 // running, so it takes the same cross-process lease a first turn's admission
 // takes (`admitDurable`); a live promotion refuses the turn before submission
 // instead of racing its placement.
+//
+// S35-TA-1: the leased body itself is `LiveTaskRegistry.markRunningDurable`,
+// beside `admitDurable`, so the fence a stolen-lease test exercises is the
+// one this call site runs. What stays here is what only `main.ts` can do:
+// publish the surface and surface a persistence failure.
 async function markLiveTaskRunningDurable(taskId: string): Promise<boolean> {
-  if (liveTaskRegistry.get(taskId)?.lifecycle === "running") return true;
-  const before = liveTaskRegistry.snapshot();
-  const outcome = await liveTaskRegistry.withPromotionLease(async (fence) => {
-    if (!liveTaskRegistry.setLifecycle(taskId, "running")) return;
-    publishTasksState();
-    try {
-      // S35-H1-1: fenced immediately before the durable write, not only on
-      // entry. A lease lost in between rolls the running mark back and
-      // refuses the turn; an ordinary persist failure keeps its own
-      // surfaced-failure behaviour.
-      await fence();
-      await persistLiveTaskState();
-    } catch (error) {
-      if (error instanceof PromotionLeaseLost) {
-        liveTaskRegistry.rollback(before);
-        publishTasksState();
-        throw error;
-      }
-      surfaceLiveTaskPersistenceFailure(taskId);
-    }
-  });
-  return outcome.ok;
+  return liveTaskRegistry.markRunningDurable(
+    taskId,
+    () => persistLiveTaskState(),
+    {
+      onPublish: () => publishTasksState(),
+      onPersistFailure: () => surfaceLiveTaskPersistenceFailure(taskId),
+    },
+  );
 }
 
 function chatGptTaskAdmissionReady(): boolean {
@@ -2216,51 +2203,32 @@ async function runProductTaskCommand(
         // `AGENT_RUNNING` obligation a promotion's drain check refuses on,
         // so it takes the same cross-process lease `admitDurable` does for
         // a brand new task — not only new admission is guarded.
-        const agentStart = await liveTaskRegistry.withPromotionLease(
-          async (
-            fence,
-          ): Promise<
-            | Readonly<{ ok: true }>
-            | Readonly<{
-                ok: false;
-                code: "TASK_NOT_FOUND" | "TASK_STATE_UNAVAILABLE";
-              }>
-          > => {
-            if (
-              !liveTaskRegistry.setAgent(task.taskId, {
-                assignmentBindingSha256: productAgentAssignmentBinding(input),
-                phase: "running",
-                workspaceId: input.workspaceId,
-                parentDelivery: "not_applicable",
-                workspaceEnforcement: "not_applicable",
-                resultAvailable: false,
-              })
-            ) {
-              return { ok: false, code: "TASK_NOT_FOUND" };
-            }
-            try {
-              // S35-H1-1: fenced immediately before the durable write. A
-              // lease lost since the entry check rolls the agent mark back
-              // and leaves through the same refusal a never-acquired lease
-              // produces (`TASK_ROUTE_UNAVAILABLE` below).
-              await fence();
-              await persistLiveTaskState();
-            } catch (error) {
-              liveTaskRegistry.rollback(before);
-              await productAgentStore!
-                .remove(task.taskId)
-                .catch(() => undefined);
-              if (error instanceof PromotionLeaseLost) throw error;
-              return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
-            }
-            return { ok: true };
+        //
+        // S35-TA-1: the leased body is `startAgentDurable`, so a
+        // stolen-lease test drives the function this call site calls
+        // rather than a copy of it.
+        const agentStart = await liveTaskRegistry.startAgentDurable(
+          task.taskId,
+          {
+            assignmentBindingSha256: productAgentAssignmentBinding(input),
+            phase: "running",
+            workspaceId: input.workspaceId,
+            parentDelivery: "not_applicable",
+            workspaceEnforcement: "not_applicable",
+            resultAvailable: false,
           },
+          () => persistLiveTaskState(),
+          before,
+          () => productAgentStore!.remove(task.taskId).catch(() => undefined),
         );
         if (!agentStart.ok) {
-          await productAgentStore!.remove(task.taskId).catch(() => undefined);
-          return taskFailure("TASK_ROUTE_UNAVAILABLE");
+          // A lease a live promotion holds is the one refusal that leaves
+          // the Agent input saved: the other two have already compensated.
+          if (agentStart.code === "TASK_ROUTE_UNAVAILABLE") {
+            await productAgentStore!.remove(task.taskId).catch(() => undefined);
+          }
+          return taskFailure(agentStart.code);
         }
-        if (!agentStart.value.ok) return taskFailure(agentStart.value.code);
         publishTasksState();
       } else {
         const rejoinable =

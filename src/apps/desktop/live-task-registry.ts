@@ -124,6 +124,110 @@ export class LiveTaskRegistry {
     return outcome.ok ? outcome.value : { status: "promotion_pending" };
   }
 
+  // S35-03: a later turn of an existing task becomes the `TASK_RUNNING`
+  // obligation a promotion's drain check refuses on the moment it is
+  // durably running, so it takes the same cross-process lease a first
+  // turn's admission takes; a live promotion refuses the turn before
+  // submission instead of racing its placement.
+  //
+  // S35-TA-1: this body used to sit inline in `main.ts`, which exports
+  // nothing and which no test loads, so the only thing that could be
+  // tested was a copy of it. It lives here, beside `admitDurable`, for the
+  // same reason `journalUnderPromotionLease` lives in its own module: a
+  // replica in a test proves only that the replica is fenced.
+  //
+  // `true` means the turn may proceed. A task that is already running, or
+  // that `setLifecycle` does not know, proceeds exactly as it did before;
+  // only a lease a live promotion holds — or one lost between the entry
+  // check and the persist — refuses with `false`. An ordinary persist
+  // failure keeps its own surfaced-failure behaviour and does not refuse
+  // the turn.
+  async markRunningDurable(
+    taskId: string,
+    persist: () => Promise<void>,
+    hooks: Readonly<{
+      onPublish: () => void;
+      onPersistFailure: () => void;
+    }>,
+  ): Promise<boolean> {
+    if (this.get(taskId)?.lifecycle === "running") return true;
+    const before = this.snapshot();
+    const outcome = await this.withPromotionLease(async (fence) => {
+      if (!this.setLifecycle(taskId, "running")) return;
+      hooks.onPublish();
+      try {
+        // S35-H1-1: fenced immediately before the durable write, not only
+        // on entry. A lease lost in between rolls the running mark back
+        // and refuses the turn.
+        await fence();
+        await persist();
+      } catch (error) {
+        if (error instanceof PromotionLeaseLost) {
+          this.rollback(before);
+          hooks.onPublish();
+          throw error;
+        }
+        hooks.onPersistFailure();
+      }
+    });
+    return outcome.ok;
+  }
+
+  // S35-03/4: starting a native Agent turns an already-admitted task into
+  // the `AGENT_RUNNING` obligation a promotion's drain check refuses on, so
+  // it takes the same cross-process lease `admitDurable` does for a brand
+  // new task — not only new admission is guarded.
+  //
+  // S35-TA-1: extracted from `main.ts` for the reason above. `rollbackTo`
+  // is the caller's snapshot of the whole command phase, so a failed start
+  // restores exactly what the caller would have restored; `onRollback` is
+  // the caller's own compensation (removing the Agent input it saved
+  // before this call).
+  //
+  // The three refusals are distinct and each is the caller's own readable
+  // code: `TASK_NOT_FOUND` (nothing was mutated), `TASK_STATE_UNAVAILABLE`
+  // (the durable write failed and was rolled back) and
+  // `TASK_ROUTE_UNAVAILABLE` (a live promotion holds the lease, or it was
+  // lost mid-phase — the two are deliberately indistinguishable).
+  async startAgentDurable(
+    taskId: string,
+    agent: ProductTaskAgent,
+    persist: () => Promise<void>,
+    rollbackTo: ProductTasksState,
+    onRollback: () => Promise<void>,
+  ): Promise<
+    | Readonly<{ ok: true }>
+    | Readonly<{
+        ok: false;
+        code:
+          | "TASK_NOT_FOUND"
+          | "TASK_STATE_UNAVAILABLE"
+          | "TASK_ROUTE_UNAVAILABLE";
+      }>
+  > {
+    const outcome = await this.withPromotionLease(async (fence) => {
+      if (!this.setAgent(taskId, agent)) {
+        return { ok: false as const, code: "TASK_NOT_FOUND" as const };
+      }
+      try {
+        // S35-H1-1: fenced immediately before the durable write. A lease
+        // lost since the entry check rolls the agent mark back and leaves
+        // through the same refusal a never-acquired lease produces.
+        await fence();
+        await persist();
+      } catch (error) {
+        this.rollback(rollbackTo);
+        await onRollback();
+        if (error instanceof PromotionLeaseLost) throw error;
+        return { ok: false as const, code: "TASK_STATE_UNAVAILABLE" as const };
+      }
+      return { ok: true as const };
+    });
+    return outcome.ok
+      ? outcome.value
+      : { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
+  }
+
   // S35-03/4: the SAME cross-process exclusion `admitDurable` uses, exposed
   // for every other write that turns this generation's state into a
   // promotion obligation — starting a native Agent on an already-admitted

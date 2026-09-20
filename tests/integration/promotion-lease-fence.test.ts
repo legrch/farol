@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   LiveTaskRegistry,
-  PromotionLeaseLost,
   type PromotionLeaseGuard,
 } from "../../src/apps/desktop/live-task-registry";
 import {
@@ -22,7 +21,10 @@ import {
   PromotionPendingRefusal,
 } from "../../src/apps/desktop/chatgpt-journal-lease";
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
-import type { ProductTask } from "../../src/modules/chat/contract/product-task";
+import type {
+  ProductTask,
+  ProductTaskAgent,
+} from "../../src/modules/chat/contract/product-task";
 
 // S35-H1-1. One entry check is not a fence: `withPromotionLease` used to
 // verify the hold once and then run the whole critical phase, so a lease
@@ -123,6 +125,37 @@ async function stealLease(root: string): Promise<void> {
 }
 
 /**
+ * A real second process holding the lease before the call under test
+ * begins: the ordinary "a promotion is live right now" case, as opposed to
+ * a lease stolen mid-phase.
+ */
+async function holdLeaseInAnotherProcess(root: string): Promise<void> {
+  const holder = spawn(
+    process.execPath,
+    [childScript, root, "hold", "promotion-generation"],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  children.push(holder);
+  await waitForLine(holder, "ACQUIRED");
+}
+
+/**
+ * The agent mark `main.ts` hands `startAgentDurable`, with the same
+ * `not_applicable` delivery and enforcement a fresh native Agent start
+ * carries.
+ */
+function agentMark(): ProductTaskAgent {
+  return {
+    assignmentBindingSha256: "a".repeat(64),
+    phase: "running",
+    workspaceId: "workspace-a",
+    parentDelivery: "not_applicable",
+    workspaceEnforcement: "not_applicable",
+    resultAvailable: false,
+  };
+}
+
+/**
  * A real `admission` lease, plus a one-shot sabotage fired in the gap
  * between the entry check and the next fence. `verify` itself is the real
  * `verifyPromotionLease`; nothing about the check is faked.
@@ -212,38 +245,252 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
   // same `withPromotionLease` call, whose durable write is
   // `persistLiveTaskState()` after `setAgent`. Composed here with the real
   // registry and the real lease; only the persist is the test's own.
-  it("S35-H1-1 a native Agent start under a stolen lease refuses, rolls the agent mark back and never persists", async () => {
+  // S35-TA-1: this used to restate `main.ts`'s native-Agent body inline —
+  // `setAgent`, `await fence()`, the catch and the rollback all written out
+  // in the test — and then assert on the copy, with a comment ("`main.ts`
+  // maps this to TASK_ROUTE_UNAVAILABLE") standing in for the production
+  // mapping. Deleting `await fence()` from `main.ts` left it green. The
+  // body now lives in `LiveTaskRegistry.startAgentDurable`, which is what
+  // `main.ts` calls and what these tests call.
+  it("S35-TA-1 a native Agent start under a stolen lease refuses with TASK_ROUTE_UNAVAILABLE, rolls the agent mark back, never persists and compensates the Agent input", async () => {
     const root = await userData();
     const persisted: number[] = [];
+    const rollbacks: number[] = [];
     const guard = racingLeaseGuard(root, () => stealLease(root));
     const registry = new LiveTaskRegistry(5, guard);
     expect(registry.admit(fixtureTask()).status).toBe("admitted");
     const before = registry.snapshot();
 
-    const outcome = await registry.withPromotionLease(async (fence) => {
-      registry.setAgent("task-a", {
-        assignmentBindingSha256: "a".repeat(64),
-        phase: "running",
-        workspaceId: "workspace-a",
-        parentDelivery: "not_applicable",
-        workspaceEnforcement: "not_applicable",
-        resultAvailable: false,
-      });
-      try {
-        await fence();
+    const outcome = await registry.startAgentDurable(
+      "task-a",
+      agentMark(),
+      async () => {
         persisted.push(registry.snapshot().revision);
-      } catch (error) {
-        registry.rollback(before);
-        if (error instanceof PromotionLeaseLost) throw error;
-        return { ok: false as const, code: "TASK_STATE_UNAVAILABLE" };
-      }
-      return { ok: true as const };
-    });
+      },
+      before,
+      async () => {
+        rollbacks.push(1);
+      },
+    );
 
-    // `main.ts` maps this `{ok:false}` to `TASK_ROUTE_UNAVAILABLE`.
-    expect(outcome.ok).toBe(false);
+    expect(outcome).toEqual({ ok: false, code: "TASK_ROUTE_UNAVAILABLE" });
     expect(persisted).toEqual([]);
     expect(registry.get("task-a")?.agent ?? null).toBeNull();
+    expect(rollbacks).toEqual([1]);
+  });
+
+  it("S35-TA-1 control: the same native Agent start persists and reports ok when nobody steals the lease", async () => {
+    const root = await userData();
+    const persisted: number[] = [];
+    const rollbacks: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+    const before = registry.snapshot();
+
+    const outcome = await registry.startAgentDurable(
+      "task-a",
+      agentMark(),
+      async () => {
+        persisted.push(registry.snapshot().revision);
+      },
+      before,
+      async () => {
+        rollbacks.push(1);
+      },
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(persisted).toHaveLength(1);
+    expect(registry.get("task-a")?.agent?.phase).toBe("running");
+    expect(rollbacks).toEqual([]);
+  });
+
+  it("S35-TA-1 a native Agent start while a live promotion already holds the lease refuses before anything is mutated", async () => {
+    const root = await userData();
+    const persisted: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+    const before = registry.snapshot();
+    await holdLeaseInAnotherProcess(root);
+
+    const outcome = await registry.startAgentDurable(
+      "task-a",
+      agentMark(),
+      async () => {
+        persisted.push(registry.snapshot().revision);
+      },
+      before,
+      async () => undefined,
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "TASK_ROUTE_UNAVAILABLE" });
+    expect(persisted).toEqual([]);
+    expect(registry.get("task-a")?.agent ?? null).toBeNull();
+  });
+
+  it("S35-TA-1 a native Agent start on a task the registry does not know refuses with TASK_NOT_FOUND and compensates nothing", async () => {
+    const root = await userData();
+    const persisted: number[] = [];
+    const rollbacks: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    const before = registry.snapshot();
+
+    const outcome = await registry.startAgentDurable(
+      "task-missing",
+      agentMark(),
+      async () => {
+        persisted.push(1);
+      },
+      before,
+      async () => {
+        rollbacks.push(1);
+      },
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "TASK_NOT_FOUND" });
+    expect(persisted).toEqual([]);
+    expect(rollbacks).toEqual([]);
+  });
+
+  it("S35-TA-1 a native Agent start whose durable write fails for an ordinary reason refuses with TASK_STATE_UNAVAILABLE, rolls back and compensates once", async () => {
+    const root = await userData();
+    const rollbacks: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+    const before = registry.snapshot();
+
+    const outcome = await registry.startAgentDurable(
+      "task-a",
+      agentMark(),
+      async () => {
+        throw new Error("ENOSPC");
+      },
+      before,
+      async () => {
+        rollbacks.push(1);
+      },
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "TASK_STATE_UNAVAILABLE" });
+    expect(registry.get("task-a")?.agent ?? null).toBeNull();
+    expect(rollbacks).toEqual([1]);
+  });
+
+  // The later turn of an existing task. Same reason as the Agent start
+  // above: `markLiveTaskRunningDurable` in `main.ts` was a body no test
+  // could load, and the only coverage was a harness that rebuilt "the
+  // running mark, then the fence, then the persist" itself.
+  it("S35-TA-1 a later turn's running mark under a stolen lease refuses the turn, rolls the lifecycle back and never persists", async () => {
+    const root = await userData();
+    const persisted: number[] = [];
+    const publishes: string[] = [];
+    const failures: number[] = [];
+    const guard = racingLeaseGuard(root, () => stealLease(root));
+    const registry = new LiveTaskRegistry(5, guard);
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+
+    const proceed = await registry.markRunningDurable(
+      "task-a",
+      async () => {
+        persisted.push(registry.snapshot().revision);
+      },
+      {
+        onPublish: () => publishes.push(registry.get("task-a")!.lifecycle),
+        onPersistFailure: () => failures.push(1),
+      },
+    );
+
+    expect(proceed).toBe(false);
+    expect(persisted).toEqual([]);
+    expect(registry.get("task-a")?.lifecycle).toBe("idle");
+    // Published as running, then published again once it was rolled back:
+    // the surface never keeps a running mark the disk does not carry.
+    expect(publishes).toEqual(["running", "idle"]);
+    // A lost lease is not a persistence failure; it is a refusal.
+    expect(failures).toEqual([]);
+  });
+
+  it("S35-TA-1 control: the same running mark persists and lets the turn proceed when nobody steals the lease", async () => {
+    const root = await userData();
+    const persisted: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+
+    const proceed = await registry.markRunningDurable(
+      "task-a",
+      async () => {
+        persisted.push(registry.snapshot().revision);
+      },
+      { onPublish: () => undefined, onPersistFailure: () => undefined },
+    );
+
+    expect(proceed).toBe(true);
+    expect(persisted).toHaveLength(1);
+    expect(registry.get("task-a")?.lifecycle).toBe("running");
+  });
+
+  it("S35-TA-1 a later turn's running mark while a live promotion already holds the lease refuses before anything is mutated", async () => {
+    const root = await userData();
+    const persisted: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+    await holdLeaseInAnotherProcess(root);
+
+    const proceed = await registry.markRunningDurable(
+      "task-a",
+      async () => {
+        persisted.push(1);
+      },
+      { onPublish: () => undefined, onPersistFailure: () => undefined },
+    );
+
+    expect(proceed).toBe(false);
+    expect(persisted).toEqual([]);
+    expect(registry.get("task-a")?.lifecycle).toBe("idle");
+  });
+
+  it("S35-TA-1 a task already running takes no lease at all and proceeds", async () => {
+    const root = await userData();
+    const guard = racingLeaseGuard(root, null);
+    const registry = new LiveTaskRegistry(5, guard);
+    expect(registry.admit(fixtureTask({ lifecycle: "running" })).status).toBe(
+      "admitted",
+    );
+
+    const proceed = await registry.markRunningDurable(
+      "task-a",
+      async () => {
+        throw new Error("must not persist");
+      },
+      { onPublish: () => undefined, onPersistFailure: () => undefined },
+    );
+
+    expect(proceed).toBe(true);
+    expect(guard.verifies()).toBe(0);
+  });
+
+  it("S35-TA-1 a running mark whose durable write fails for an ordinary reason surfaces the failure and still lets the turn proceed", async () => {
+    const root = await userData();
+    const failures: number[] = [];
+    const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
+    expect(registry.admit(fixtureTask()).status).toBe("admitted");
+
+    const proceed = await registry.markRunningDurable(
+      "task-a",
+      async () => {
+        throw new Error("ENOSPC");
+      },
+      {
+        onPublish: () => undefined,
+        onPersistFailure: () => failures.push(1),
+      },
+    );
+
+    // An ordinary persistence failure is surfaced, not turned into a
+    // promotion refusal: the turn proceeds exactly as it did before.
+    expect(proceed).toBe(true);
+    expect(failures).toEqual([1]);
+    expect(registry.get("task-a")?.lifecycle).toBe("running");
   });
 
   // The ChatGPT one-shot journal. `journalUnderPromotionLease` (in
