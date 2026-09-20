@@ -47,6 +47,14 @@ is not evidence about the packaged candidate.
   workspaces and exclusions, verify native read access, select and attest a Codex
   executable, and run the bounded host and Agent checks. Visiting or skipping a step
   never marks it verified.
+- Setup's Connect step configures the tunnel this preview's Computer connector is
+  reached through. Three actions happen outside Farol, in OpenAI's own pages: create
+  the tunnel, create a Restricted runtime key scoped to Tunnels Read and Use, and
+  attach the connector inside ChatGPT. Farol ships the written steps for each and
+  automates none of them; the tunnel ID goes in this step's Tunnel ID field, the key
+  in its Runtime key field, and `Check attachment` then confirms ChatGPT can reach the
+  connector. There is no video and no executable-search step: finding a supported
+  executable on this Mac is the product's own job, not an instruction to the owner.
 - Ordinary launch has no synthetic task tabs. Real read-only or attachment tasks are
   created only after context preview and an explicit submit; provider, delivery, and
   outcome-unknown states remain distinct.
@@ -91,6 +99,28 @@ are published complete through a private temporary file and an exclusive atomic 
 `Command+Q` quits the application and its exact utility process. Explicit demo task
 state is in memory and is not promised across Quit; product configuration is persisted
 and read back separately.
+
+## If something goes wrong
+
+- The app will not start and reports `SETTINGS_CORRUPT`: settings written by a newer
+  build were kept byte for byte rather than silently rewritten by an older one. Go
+  back to the newer build. Do not delete the settings file to make an older one start.
+- A workspace reports `WORKSPACE_ROOT_CHANGED` after an external volume was
+  reconnected: macOS gave it a new device number, so the folder no longer matches the
+  identity recorded when it was verified. Remove it in Computer and add it again;
+  `Verify` alone does not resolve this.
+- A guarded edit reports that its outcome is unknown: the change may already be in the
+  file. Farol neither repeats it nor deletes anything, and the version it could not
+  confirm stays in a hidden `.farol-stage-*` folder beside the file to compare and
+  remove by hand.
+- A task asks to return to the previous conversation: nothing is lost. Go back to that
+  task's own conversation or start a new one; the switch completes on the next request
+  either way.
+- The sign-in window was left open, or a closed task still reports
+  `TASK_CONTEXT_RESIDUE`: quitting and reopening this preview sweeps both.
+- Every case above touches only this preview's own state under the app-data root named
+  `Farol Next Preview`. Legacy `Farol.app`, `~/.farol`, and any installed
+  `codex-chatgpt-web` profile are never read or written by it.
 
 ## Product boundary
 
