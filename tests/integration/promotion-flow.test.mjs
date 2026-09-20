@@ -281,6 +281,15 @@ describe("promotion flow: lease held from the drain check through placement", ()
   // separate process) then takes the lease; admission resumes and tries to
   // start work; exactly one of the two wins, and placement is never blocked
   // by the loser.
+  //
+  // The interleaving is forced, not hoped for: the promotion process is
+  // spawned only after admission has reported "sees no lease" and reached
+  // its pause. Spawning both at once let promotion acquire before admission's
+  // own check on a loaded machine, so admission truthfully printed HELD:true
+  // and the wait for HELD:false ran out (first seen in the 2026-09-20 root
+  // gate on 891faada, 5015 ms). The budget below matches the 10 s handshake
+  // polls this test already uses for two cold Node processes; a genuine hang
+  // still fails on those polls.
   it("S35-03/2 two real processes: admission paused before its attempt loses to a promotion already holding the lease, and placement proceeds", async () => {
     const homeRoot = await home();
     await ensureUserData(homeRoot);
@@ -302,16 +311,8 @@ describe("promotion flow: lease held from the drain check through placement", ()
       admissionGo,
     );
     const admissionOutput = collectOutput(admission);
-    const promotion = spawnRoleChild(
-      userData,
-      "promotion",
-      "gen-promo",
-      "",
-      "",
-      promotionReady,
-      promotionRelease,
-    );
-    const promotionOutput = collectOutput(promotion);
+    let promotion = null;
+    let promotionOutput = () => "";
 
     try {
       // Admission has checked ("sees no lease") and is now paused, before it
@@ -330,9 +331,19 @@ describe("promotion flow: lease held from the drain check through placement", ()
         )
         .toBe(true);
 
-      // Promotion — a real, separate process — takes the lease for real
-      // (this is its drain-check-through-placement window) while admission
-      // is still paused.
+      // Only now does promotion — a real, separate process — take the lease
+      // for real (this is its drain-check-through-placement window) while
+      // admission is still paused.
+      promotion = spawnRoleChild(
+        userData,
+        "promotion",
+        "gen-promo",
+        "",
+        "",
+        promotionReady,
+        promotionRelease,
+      );
+      promotionOutput = collectOutput(promotion);
       await waitForLine(promotion, "ACQUIRED");
       await expect
         .poll(
@@ -372,13 +383,13 @@ describe("promotion flow: lease held from the drain check through placement", ()
       expect(stillPromotion).toEqual(heldByPromotion);
       await fs.writeFile(promotionRelease, "release");
       const promotionCode = await waitForClose(promotion);
-      expect(promotionOutput()).toMatch(
-        /^HELD:(false|true)\nACQUIRED\nRELEASED\n$/u,
-      );
+      // Promotion started after admission's check and before admission's
+      // attempt, so it can only ever have seen a free lease.
+      expect(promotionOutput()).toBe("HELD:false\nACQUIRED\nRELEASED\n");
       expect(promotionCode).toBe(0);
     } finally {
       admission.kill("SIGKILL");
-      promotion.kill("SIGKILL");
+      promotion?.kill("SIGKILL");
     }
-  });
+  }, 30_000);
 });
