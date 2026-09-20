@@ -337,6 +337,23 @@ const evidenceRoot = evidenceAttempt.directory;
 const cases = [];
 const skippedCases = [];
 const blockedCases = [];
+// An application that is already gone cannot answer for its window.  That is
+// a different failure from a window in the wrong place and must not be
+// reported as one, nor be allowed to replace the real first failure by
+// throwing out of a `finally`.  Each one is recorded with the case that owned
+// the instance, so "the product exited early" stays distinguishable from "the
+// harness raced its own close".
+const harnessObservations = [];
+// The runner accumulates its case list as it goes and only serialises it at
+// the very end.  A late exception therefore used to produce a terminal
+// receipt with no cases at all, losing every journey the run had actually
+// driven.  The attempt reads the live lists instead, so an interrupted run
+// still reports what it executed.
+evidenceAttempt.trackRecords(() => ({
+  cases,
+  blockedCases,
+  skippedCases,
+}));
 let nativeFocusProofCompleted = false;
 let quitProofs = 0;
 
@@ -2016,27 +2033,83 @@ async function closeLegacyAppFixture(fixture) {
   await fs.rm(real, { recursive: true, force: true });
 }
 
+// Playwright reports a vanished Electron target by message alone.  Only these
+// shapes mean "the application is already gone"; anything else is a real
+// harness or product error and still throws.
+const APPLICATION_ALREADY_GONE =
+  /has been closed|Target (page|browser|crashed)|Connection closed/u;
+
+function recordClosedBeforeInspection(instance, stage, error) {
+  const message = String(error?.message ?? error).split("\n", 1)[0];
+  const owningCase = cases.at(-1) ?? null;
+  harnessObservations.push({
+    kind: "closed-before-inspection",
+    stage,
+    windowMode: instance.windowMode ?? null,
+    mode: instance.mode ?? null,
+    owningCase,
+    caseCount: cases.length,
+    message: message.slice(0, 200),
+  });
+  // The classification stays FAIL: an instance that died before its own close
+  // could inspect it has not proved anything about quitting.
+  evidenceAttempt.recordFailure(
+    "close",
+    `E2E_CLOSED_BEFORE_INSPECTION:${stage}:${owningCase ?? "no-case"}`,
+  );
+}
+
+// Returns the value, or null once the application is gone — never a silent
+// success.
+async function ifApplicationLive(instance, stage, read) {
+  try {
+    return { value: await read() };
+  } catch (error) {
+    if (!APPLICATION_ALREADY_GONE.test(String(error?.message ?? error))) {
+      throw error;
+    }
+    recordClosedBeforeInspection(instance, stage, error);
+    return null;
+  }
+}
+
 async function close(instance, options = {}) {
   const removeHome = options.removeHome ?? true;
+  let provedQuit = true;
   if (instance.windowMode) {
-    const presentation = await inspectWindowPresentation(instance.application);
-    assert.equal(presentation.mode, instance.windowMode);
-    assert.equal(
-      presentation.visible,
-      instance.windowMode === "secondary-visible",
+    const inspected = await ifApplicationLive(
+      instance,
+      "window-presentation",
+      () => inspectWindowPresentation(instance.application),
     );
+    if (inspected === null) {
+      provedQuit = false;
+    } else {
+      // Unchanged for a live application.
+      assert.equal(inspected.value.mode, instance.windowMode);
+      assert.equal(
+        inspected.value.visible,
+        instance.windowMode === "secondary-visible",
+      );
+    }
   }
   const mainPid = instance.application.process().pid;
-  const utilityPids = await instance.application.evaluate(({ app }) =>
-    app
-      .getAppMetrics()
-      .filter(
-        (metric) =>
-          metric.type === "Utility" && metric.name === "Farol Next Runtime",
-      )
-      .map((metric) => metric.pid),
+  const metrics = await ifApplicationLive(instance, "utility-metrics", () =>
+    instance.application.evaluate(({ app }) =>
+      app
+        .getAppMetrics()
+        .filter(
+          (metric) =>
+            metric.type === "Utility" && metric.name === "Farol Next Runtime",
+        )
+        .map((metric) => metric.pid),
+    ),
   );
-  await instance.application.close();
+  if (metrics === null) provedQuit = false;
+  const utilityPids = metrics?.value ?? [];
+  await ifApplicationLive(instance, "application-close", () =>
+    instance.application.close(),
+  );
   const exactPids = [mainPid, ...utilityPids].filter(
     (pid) => Number.isSafeInteger(pid) && pid > 0,
   );
@@ -2056,7 +2129,9 @@ async function close(instance, options = {}) {
     }
     assert.equal(alive, false, `E2E_OWNED_PROCESS_SURVIVED_QUIT:${pid}`);
   }
-  quitProofs += 1;
+  // An application that had already exited leaves no processes behind either,
+  // so its dead pids are not proof that quitting terminated them.
+  if (provedQuit) quitProofs += 1;
   if (removeHome) {
     await stopChatGptFixture(instance.chatGptFixture);
     instance.chatGptFixture = null;
@@ -8847,12 +8922,13 @@ const report = {
   schema: 1,
   status: selectionActive
     ? "SELECTED"
-    : missingRequiredCases.length > 0
+    : missingRequiredCases.length > 0 || harnessObservations.length > 0
       ? "FAIL"
       : blockedCases.length > 0
         ? "BLOCKED"
         : "PASS",
   selection,
+  harnessObservations,
   lane: development ? "development-build" : "sealed-package",
   artifactSha256: artifact.artifactSha256,
   sourceCommit: artifact.sourceCommit,
@@ -8956,6 +9032,12 @@ if (missingRequiredCases.length > 0) {
 if (blockedCases.length > 0) {
   process.stderr.write(
     `E2E_REQUIRED_CASES_BLOCKED:${JSON.stringify(blockedCases)}\n`,
+  );
+  process.exitCode = 1;
+}
+if (harnessObservations.length > 0) {
+  process.stderr.write(
+    `E2E_CLOSED_BEFORE_INSPECTION:${JSON.stringify(harnessObservations)}\n`,
   );
   process.exitCode = 1;
 }

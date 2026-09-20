@@ -102,6 +102,63 @@ describe("EV-04 immutable evidence attempts", () => {
     });
   });
 
+  // A lane that drove forty cases and then hit a late harness exception used
+  // to write a terminal receipt with `cases: []`, which reads as "nothing
+  // ran" and loses every journey the attempt actually executed.
+  it("keeps the cases an interrupted run had already executed", async () => {
+    const lane = await laneRoot();
+    const thrown = runnerInChild(
+      lane,
+      `const cases = [];
+       attempt.trackRecords(() => ({ cases }));
+       cases.push("first-journey");
+       cases.push("second-journey");
+       await Promise.resolve();
+       throw new Error("E2E_LATE_HARNESS_FAILURE");`,
+    );
+    expect(thrown.status).toBe(1);
+
+    const [interrupted] = await listEvidenceAttempts(lane);
+    expect(interrupted.status).toBe("FAIL");
+    expect(interrupted.terminal.cases.raw).toEqual([
+      "first-journey",
+      "second-journey",
+    ]);
+    expect(interrupted.terminal.firstFailure).toEqual({
+      case: "uncaught",
+      message: "Error: E2E_LATE_HARNESS_FAILURE",
+    });
+  });
+
+  it("prefers the cases a finishing run states over the ones it tracked", async () => {
+    const lane = await laneRoot();
+    const attempt = await openEvidenceAttempt(lane, {
+      lane: "development-build",
+      input,
+    });
+    attempt.trackRecords(() => ({ cases: ["tracked"], blockedCases: ["b"] }));
+    await attempt.finish("PASS", { cases: ["stated"] });
+    const [recorded] = await listEvidenceAttempts(lane);
+    expect(recorded.terminal.cases.raw).toEqual(["stated"]);
+    // An unstated list still falls back to what the run tracked.
+    expect(recorded.terminal.blockedCases).toEqual(["b"]);
+  });
+
+  it("still writes a terminal receipt when reading the tracked records throws", async () => {
+    const lane = await laneRoot();
+    const attempt = await openEvidenceAttempt(lane, {
+      lane: "development-build",
+      input,
+    });
+    attempt.trackRecords(() => {
+      throw new Error("RECORD_READER_BROKEN");
+    });
+    await attempt.finish("FAIL");
+    const [recorded] = await listEvidenceAttempts(lane);
+    expect(recorded.status).toBe("FAIL");
+    expect(recorded.terminal.cases.raw).toEqual([]);
+  });
+
   it("keeps a failed attempt addressable after a later attempt starts and crashes", async () => {
     const lane = await laneRoot();
     const first = await openEvidenceAttempt(lane, {

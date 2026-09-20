@@ -303,6 +303,25 @@ class EvidenceAttempt {
     this.started = started;
     this.firstFailure = null;
     this.terminal = null;
+    this.records = null;
+  }
+
+  // A runner accumulates its case list as it goes.  Handing the attempt a live
+  // reader lets an interrupted run still report the cases it executed, instead
+  // of a terminal receipt with an empty list that reads as "nothing ran".
+  trackRecords(reader) {
+    this.records = reader;
+  }
+
+  // Never let reading the runner's own state stop the receipt from being
+  // written: a missing list is recoverable, a missing terminal is not.
+  readRecords() {
+    if (!this.records) return {};
+    try {
+      return this.records() ?? {};
+    } catch {
+      return {};
+    }
   }
 
   path(name) {
@@ -329,7 +348,8 @@ class EvidenceAttempt {
       this.recordFailure("evidence", `EVIDENCE_EMPTY_BYPRODUCT:${empty.path}`);
       outcome = "FAIL";
     }
-    const raw = [...(details.cases ?? [])].map(String);
+    const tracked = this.readRecords();
+    const raw = [...(details.cases ?? tracked.cases ?? [])].map(String);
     const terminal = {
       schema: EVIDENCE_ATTEMPT_SCHEMA,
       attemptId: this.attemptId,
@@ -340,8 +360,8 @@ class EvidenceAttempt {
       exitCode: details.exitCode ?? null,
       firstFailure: this.firstFailure,
       cases: { raw, normalized: [...new Set(raw)].sort() },
-      blockedCases: details.blockedCases ?? [],
-      skippedCases: details.skippedCases ?? [],
+      blockedCases: details.blockedCases ?? tracked.blockedCases ?? [],
+      skippedCases: details.skippedCases ?? tracked.skippedCases ?? [],
       byproducts,
     };
     fsSync.writeFileSync(

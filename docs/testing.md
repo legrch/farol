@@ -114,3 +114,51 @@ Primary references:
 - <https://www.electronjs.org/docs/latest/api/screen>
 - <https://www.electronjs.org/docs/latest/api/structures/display>
 - <https://playwright.dev/docs/api/class-electron>
+
+## Running one journey instead of the whole lane
+
+The ordinary lane launches every instance it declares and drives every case it
+owns. `--only=<selector>[,<selector>…]` runs just the segments a selector
+names, so a single journey can be re-driven against the real application while
+a defect is being fixed. A selector is a segment name or a case-id prefix a
+segment owns, and `tooling/e2e-selection.mjs` holds the map; a selector that
+matches nothing fails the run before anything launches.
+
+A selected run is reported as `SELECTED`. That status is terminal, so the
+attempt still closes honestly, but it is never `PASS`: `evidence-eligibility`
+rejects every non-PASS outcome, so a selected attempt can never be bound, and
+the lane's required cases are not evaluated against it. It cannot be combined
+with `--lifecycle-soak`, `--persistence-fault` or `--two-generation-state`,
+each of which names one whole declared workload. Selection is for
+reproduction; a qualifying run is always the full lane.
+
+The gate sits at each segment's `try`, so a skipped segment still launches and
+closes its instance before breaking out. Skipping everything therefore costs
+the launch/close cycles, not zero.
+
+## When a late harness failure is not a product failure
+
+The runner accumulates its case list as it runs. It hands the live lists to the
+evidence attempt with `trackRecords`, so a run interrupted by a late exception
+records the journeys it actually executed instead of a terminal receipt reading
+`cases: []`.
+
+`close()` reads the application three times — window presentation, utility
+metrics, and the close itself. An application that has already exited cannot
+answer any of them, and Playwright reports that by message alone. Those reads
+go through a guard that recognises exactly the "target is gone" shapes and
+rethrows everything else. When it fires, the run records a
+`closed-before-inspection` observation naming the case that owned the instance,
+keeps the run classified as a failure, and does not count a quit it could not
+prove. That keeps "the product exited early" distinguishable from "the harness
+raced its own close", instead of one opaque exception thrown out of a `finally`
+that replaces the real first failure.
+
+## Tests that need the Bash sandbox disabled
+
+`tests/integration/evidence-observe.test.mjs` observes real operating-system
+processes. Under the Bash sandbox it fails 3 of 5 — two time out after 30 s
+with `condition never reached`, and one reports an extra `PRODUCT_NOT_OBSERVED`
+reason — and passes all 5 in under four seconds without it. The same applies to
+any Electron or end-to-end run. The failures are an artifact of the sandbox,
+not of the code under test.
