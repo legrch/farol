@@ -519,6 +519,16 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     currentStep: SetupStepIdSchema,
     dismissed: z.boolean(),
   }),
+  z.strictObject({ kind: z.literal("model.status") }),
+  z.strictObject({
+    kind: z.literal("model.preview"),
+    selectAsDefault: z.boolean(),
+  }),
+  z.strictObject({
+    kind: z.literal("model.apply"),
+    selectAsDefault: z.boolean(),
+  }),
+  z.strictObject({ kind: z.literal("model.rollback") }),
 ]);
 
 const DiscoveryCandidateSchema = z.strictObject({
@@ -882,6 +892,48 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     bytes: z.number().int().positive(),
     sha256: z.string().regex(/^[a-f0-9]{64}$/u),
   }),
+  z.strictObject({
+    kind: z.literal("model.status"),
+    // Never "not running": Farol reports that as a plain command failure
+    // (MODEL_ENDPOINT_UNAVAILABLE) so a caller cannot mistake a stale
+    // evidence value for the current state.
+    state: z.enum(["port_conflict", "listening", "connected"]),
+    port: z.number().int().positive().nullable(),
+    requestsServed: z.number().int().nonnegative(),
+  }),
+  z.strictObject({
+    kind: z.literal("model.config-preview"),
+    configPath: CanonicalAbsolutePathSchema,
+    providerBlockStatus: z.enum([
+      "noop",
+      "install",
+      "update",
+      "conflict",
+      "insecure_permissions",
+    ]),
+    providerBlockDiff: z.string().optional(),
+    providerBlockConflicts: z
+      .array(z.strictObject({ table: z.string(), line: z.string() }))
+      .optional(),
+    providerBlockInsecureMode: z.number().int().nonnegative().optional(),
+    providerSelectionRequested: z.boolean(),
+    providerSelectionStatus: z.enum(["noop", "install", "conflict"]).optional(),
+    providerSelectionDiff: z.string().optional(),
+    providerSelectionConflicts: z
+      .array(z.strictObject({ table: z.string(), line: z.string() }))
+      .optional(),
+  }),
+  z.strictObject({
+    kind: z.literal("model.config-applied"),
+    providerBlockApplied: z.boolean(),
+    providerSelectionApplied: z.boolean(),
+    restartStep: z.literal("restart_codex_to_apply"),
+  }),
+  z.strictObject({
+    kind: z.literal("model.config-rollback"),
+    providerBlockRestored: z.boolean(),
+    providerSelectionRestored: z.boolean(),
+  }),
 ]);
 
 export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
@@ -998,6 +1050,11 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CONNECTOR_CHALLENGE_UNAVAILABLE",
       "CONNECTOR_ATTACHMENT_NOT_FOUND",
       "CONNECTOR_ATTACHMENT_INVALID",
+      "MODEL_ENDPOINT_UNAVAILABLE",
+      "MODEL_CONFIG_CONFLICT",
+      "MODEL_CONFIG_INSECURE_PERMISSIONS",
+      "MODEL_CONFIG_APPLY_FAILED",
+      "MODEL_CONFIG_ROLLBACK_FAILED",
     ]),
     snapshot: ProductConfigurationSnapshotSchema,
   }),

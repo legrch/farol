@@ -8586,6 +8586,154 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     await close(signIn);
   }
 }
+
+// N04b — the Farol Model Setup/Settings control (Decisions.md N04 and its
+// addendum): preview -> decline (nothing written) -> apply (writes only the
+// managed provider block, never a [profiles.<name>] table or the separate
+// model_provider selection unless consented) -> the connected indicator
+// only after a real request was served. The synthetic reply is wired
+// through the exact FAROL_MODEL_E2E_SYNTHETIC_REPLY seam `main.ts` reserves
+// for this — never the owner's Codex, never a live ChatGPT account, and the
+// request that flips the indicator is a plain loopback HTTP call this test
+// makes itself, exactly as an ordinary Codex host would.
+{
+  const syntheticReply = "farol model e2e reply";
+  const modelControl = await launch([], "secondary-visible", "demo", {
+    environment: { FAROL_MODEL_E2E_SYNTHETIC_REPLY: syntheticReply },
+  });
+  try {
+    await finishSetupByNext(modelControl);
+    await modelControl.window.locator('[data-section="settings"]').click();
+    await modelControl.window.waitForFunction(
+      () => document.documentElement.dataset.section === "settings",
+    );
+    const configPath = path.join(
+      modelControl.isolatedHome,
+      ".codex",
+      "config.toml",
+    );
+    const stateRoot = path.join(
+      modelControl.userData,
+      "farol-next-private",
+      "model-endpoint",
+    );
+
+    // Not connected before anything is done.
+    await modelControl.window
+      .locator("#model-readiness")
+      .waitFor({ state: "visible" });
+    assert.equal(
+      await modelControl.window.locator("#model-readiness").innerText(),
+      "Not connected",
+    );
+    assert.equal(
+      await fs.stat(configPath).then(
+        () => true,
+        () => false,
+      ),
+      false,
+      "config.toml does not exist before any Farol Model action",
+    );
+    cases.push("n04b-model-not-connected-before-preview");
+
+    // Preview shows the exact diff, and only declining (never previewing)
+    // is guaranteed by construction: nothing is written yet.
+    await modelControl.window.locator("#model-preview-btn").click();
+    await modelControl.window
+      .locator("#model-config-diff")
+      .waitFor({ state: "visible" });
+    const diffText = await modelControl.window
+      .locator("#model-config-diff")
+      .innerText();
+    assert.match(diffText, /\[model_providers\.farol\]/u);
+    assert.match(diffText, /experimental_bearer_token/u);
+    assert.doesNotMatch(diffText, /\[profiles\./u);
+    assert.equal(
+      await fs.stat(configPath).then(
+        () => true,
+        () => false,
+      ),
+      false,
+      "previewing (declining to apply) leaves config.toml untouched",
+    );
+    cases.push("n04b-model-preview-shows-diff");
+    cases.push("n04b-model-decline-changes-nothing");
+
+    // Accepting applies: the managed block lands, and — since the "set as
+    // default" checkbox was left unchecked — the separate, separately
+    // consented model_provider selection does not.
+    await modelControl.window.locator("#model-apply-btn").click();
+    await modelControl.window
+      .locator("#model-restart-note")
+      .waitFor({ state: "visible" });
+    const appliedConfig = await fs.readFile(configPath, "utf8");
+    assert.match(appliedConfig, /\[model_providers\.farol\]/u);
+    assert.match(appliedConfig, /experimental_bearer_token/u);
+    assert.doesNotMatch(appliedConfig, /\[profiles\./u);
+    assert.doesNotMatch(appliedConfig, /model_provider\s*=/u);
+    cases.push("n04b-model-apply-writes-managed-block");
+
+    // The indicator turns connected only once the endpoint has actually
+    // served a request — a written config file is not evidence, so it must
+    // still read "Listening" right after apply, before any request.
+    await modelControl.window.locator("#model-check-status-btn").click();
+    await modelControl.window.waitForFunction(
+      () =>
+        document.querySelector("#model-readiness")?.textContent ===
+        "Listening",
+    );
+
+    const token = (
+      await fs.readFile(path.join(stateRoot, "model-endpoint-token"), "utf8")
+    ).trim();
+    const port = (
+      await fs.readFile(path.join(stateRoot, "model-endpoint-port"), "utf8")
+    ).trim();
+    // The exact same loopback call an ordinary Codex host would make —
+    // this test process plays that role, with no Codex binary involved.
+    const served = await fetch(`http://127.0.0.1:${port}/responses`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: "farol-model", input: "say hi" }),
+    });
+    assert.equal(served.status, 200);
+    const servedBody = await served.text();
+    assert.match(servedBody, new RegExp(syntheticReply.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+
+    await modelControl.window.locator("#model-check-status-btn").click();
+    await modelControl.window.waitForFunction(
+      () =>
+        document.querySelector("#model-readiness")?.textContent ===
+        "Connected",
+    );
+    assert.match(
+      await modelControl.window.locator("#model-status-summary").innerText(),
+      /1 request served/u,
+    );
+    cases.push("n04b-model-connected-after-served-request");
+
+    // Rollback is reachable from the same place and restores the exact
+    // bytes config.toml had before Farol's own change.
+    await modelControl.window.locator("#model-rollback-btn").click();
+    await modelControl.window.waitForFunction(
+      () => document.querySelector("#model-apply-btn")?.hidden !== false,
+    );
+    assert.equal(
+      await fs.stat(configPath).then(
+        () => true,
+        () => false,
+      ),
+      false,
+      "rollback restores config.toml to not existing, exactly as it was before Farol's change",
+    );
+    cases.push("n04b-model-rollback-restores-config");
+  } finally {
+    await close(modelControl);
+  }
+}
 const repeatedCaseIds = cases.filter(
   (caseId, index) => cases.indexOf(caseId) !== index,
 );

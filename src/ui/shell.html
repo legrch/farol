@@ -415,6 +415,47 @@
           </div>
         </section>
 
+        <section
+          class="settings-group"
+          aria-labelledby="settings-model-title"
+        >
+          <header>
+            <div>
+              <p>Codex connection</p>
+              <h2 id="settings-model-title">Farol Model</h2>
+            </div>
+            <span class="readiness-badge" id="model-readiness"></span>
+          </header>
+          <p class="settings-link-copy" id="model-status-summary"></p>
+          <p class="settings-link-copy" id="model-config-message" hidden></p>
+          <pre
+            class="model-config-diff"
+            id="model-config-diff"
+            hidden
+          ></pre>
+          <label class="model-select-default-label">
+            <input type="checkbox" id="model-select-default" />
+            Also set Farol as the default model provider
+          </label>
+          <p class="settings-link-copy" id="model-restart-note" hidden></p>
+          <div class="settings-group-actions">
+            <span
+              >Writes only a Farol-managed block to your Codex
+              config.toml, never anything else in the file.</span
+            >
+            <button id="model-check-status-btn" type="button">
+              Check status
+            </button>
+            <button id="model-preview-btn" type="button">
+              Preview connection
+            </button>
+            <button id="model-apply-btn" type="button" hidden>Apply</button>
+            <button id="model-rollback-btn" type="button" hidden>
+              Roll back
+            </button>
+          </div>
+        </section>
+
         <details
           class="settings-group diagnostics-group"
           id="diagnostics-group"

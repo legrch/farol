@@ -317,6 +317,21 @@ let discoveryAdvancedOpen: Record<"connect" | "hosts", boolean> = {
   hosts: false,
 };
 let contextPreviewBusy = false;
+// Farol Model (Decisions.md N04/N04b): live endpoint status and the last
+// config preview, both ephemeral evidence — never part of persisted
+// settings. `modelConfigApplied` marks that the last preview's apply
+// already ran (so the diff stays visible with a restart note instead of
+// silently disappearing), and clears back to false on the next preview.
+let modelStatusEvidence: Extract<
+  ProductConfigurationEvidence,
+  { kind: "model.status" }
+> | null = null;
+let modelConfigPreviewEvidence: Extract<
+  ProductConfigurationEvidence,
+  { kind: "model.config-preview" }
+> | null = null;
+let modelSelectAsDefault = false;
+let modelConfigApplied = false;
 let renderedGeneralSettingsRevision = -1;
 let setupConnectorError: string | null = null;
 let renderedComputerSettingsRevision = -1;
@@ -2206,6 +2221,9 @@ async function configureProduct(
       pendingChatGptPreview = null;
       if (shellOverlay === "context-preview") shellOverlay = "none";
     }
+    if (parsed.error === "MODEL_ENDPOINT_UNAVAILABLE") {
+      modelStatusEvidence = null;
+    }
     const cancellation = [
       "WORKSPACE_PICKER_CANCELLED",
       "WORKSPACE_FILE_PICKER_CANCELLED",
@@ -2257,7 +2275,21 @@ async function configureProduct(
                                           : parsed.error ===
                                               "WORKSPACE_ROOT_CHANGED"
                                             ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
-                                            : (transitionRefusalMessage(
+                                            : parsed.error ===
+                                                "MODEL_ENDPOINT_UNAVAILABLE"
+                                              ? "Farol Model is not running. Nothing was read or changed."
+                                              : parsed.error ===
+                                                  "MODEL_CONFIG_INSECURE_PERMISSIONS"
+                                                ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
+                                                : parsed.error ===
+                                                    "MODEL_CONFIG_CONFLICT"
+                                                  ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
+                                                  : parsed.error ===
+                                                        "MODEL_CONFIG_APPLY_FAILED" ||
+                                                      parsed.error ===
+                                                        "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                    ? "config.toml could not be changed. Nothing was left half-written."
+                                                    : (transitionRefusalMessage(
                                                 parsed.error,
                                               ) ??
                                               workspaceEditRefusalMessage(
@@ -2319,6 +2351,37 @@ async function configureProduct(
             : "ChatGPT loaded, but its composer could not be verified.";
   } else if (evidence?.kind === "support.exported") {
     settingsFeedback = `Saved ${evidence.fileName} · ${evidence.bytes} bytes · ${evidence.sha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "model.status") {
+    modelStatusEvidence = evidence;
+    settingsFeedback =
+      evidence.state === "connected"
+        ? `Farol Model connected on port ${evidence.port} · ${evidence.requestsServed} request${evidence.requestsServed === 1 ? "" : "s"} served.`
+        : evidence.state === "listening"
+          ? `Farol Model is listening on port ${evidence.port}, waiting for a request.`
+          : `Farol Model wants port ${evidence.port}, but something else is already using it.`;
+  } else if (evidence?.kind === "model.config-preview") {
+    modelConfigPreviewEvidence = evidence;
+    modelConfigApplied = false;
+    settingsFeedback =
+      evidence.providerBlockStatus === "insecure_permissions"
+        ? `Refusing to write the connection: ${evidence.configPath} is readable by group or other (mode ${evidence.providerBlockInsecureMode?.toString(8)}). Fix its permissions first.`
+        : evidence.providerBlockStatus === "conflict"
+          ? `${evidence.configPath} already has a hand-written entry with the same name — nothing will be overwritten.`
+          : evidence.providerBlockStatus === "noop"
+            ? "The connection is already configured exactly this way."
+            : `Review the exact change to ${evidence.configPath} before applying it.`;
+  } else if (evidence?.kind === "model.config-applied") {
+    modelConfigApplied = true;
+    settingsFeedback = evidence.providerSelectionApplied
+      ? "Applied the Farol connection and set it as the default provider. Close and reopen your Codex host to pick this up."
+      : "Applied the Farol connection. Close and reopen your Codex host to pick this up.";
+  } else if (evidence?.kind === "model.config-rollback") {
+    modelConfigPreviewEvidence = null;
+    modelConfigApplied = false;
+    settingsFeedback =
+      evidence.providerBlockRestored || evidence.providerSelectionRestored
+        ? "Restored config.toml to what it was before Farol's change."
+        : "There was nothing to roll back.";
   } else if (evidence?.kind === "host.codex-probe") {
     settingsFeedback = `Codex ${evidence.version} contract verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.route-b") {
@@ -3027,6 +3090,99 @@ function renderSettings(): void {
       return row;
     }),
   );
+  renderModelSection();
+}
+
+// Farol Model's own status/preview/apply/rollback card. It reads only the
+// ephemeral evidence this session has already fetched or applied — it
+// never polls on its own, and connected is only ever reported once
+// `model.status`/`model.config-*` evidence says the endpoint served a
+// request. See Decisions.md N04/N04b.
+function renderModelSection(): void {
+  const readiness = required<HTMLSpanElement>("#model-readiness");
+  const summary = required<HTMLParagraphElement>("#model-status-summary");
+  const message = required<HTMLParagraphElement>("#model-config-message");
+  const diff = required<HTMLPreElement>("#model-config-diff");
+  const selectDefault = required<HTMLInputElement>("#model-select-default");
+  const restartNote = required<HTMLParagraphElement>("#model-restart-note");
+  const previewBtn = required<HTMLButtonElement>("#model-preview-btn");
+  const applyBtn = required<HTMLButtonElement>("#model-apply-btn");
+  const rollbackBtn = required<HTMLButtonElement>("#model-rollback-btn");
+
+  const status = modelStatusEvidence;
+  readiness.textContent =
+    status?.state === "connected"
+      ? "Connected"
+      : status?.state === "listening"
+        ? "Listening"
+        : status?.state === "port_conflict"
+          ? "Port conflict"
+          : "Not connected";
+  readiness.classList.toggle("verified", status?.state === "connected");
+  summary.textContent =
+    status?.state === "connected"
+      ? `Connected on port ${status.port} · ${status.requestsServed} request${status.requestsServed === 1 ? "" : "s"} served.`
+      : status?.state === "listening"
+        ? `Listening on port ${status.port}, waiting for a request from your Codex host.`
+        : status?.state === "port_conflict"
+          ? `Port ${status.port} is already in use by something else.`
+          : "Not connected. Preview the connection to see what Farol would change in your Codex config.toml.";
+
+  if (!document.activeElement || document.activeElement !== selectDefault) {
+    selectDefault.checked = modelSelectAsDefault;
+  }
+
+  const preview = modelConfigPreviewEvidence;
+  if (!preview) {
+    message.hidden = true;
+    diff.hidden = true;
+    diff.textContent = "";
+    applyBtn.hidden = true;
+    rollbackBtn.hidden = modelConfigApplied ? false : true;
+    restartNote.hidden = true;
+  } else if (preview.providerBlockStatus === "insecure_permissions") {
+    message.hidden = false;
+    message.textContent = `Refusing to write ${preview.configPath}: it is readable by group or other (mode ${preview.providerBlockInsecureMode?.toString(8)}). Fix its permissions, then preview again.`;
+    diff.hidden = true;
+    diff.textContent = "";
+    applyBtn.hidden = true;
+    rollbackBtn.hidden = true;
+    restartNote.hidden = true;
+  } else if (preview.providerBlockStatus === "conflict") {
+    message.hidden = false;
+    const conflictLines = (preview.providerBlockConflicts ?? [])
+      .map((conflict) => conflict.line)
+      .join("\n");
+    message.textContent = `${preview.configPath} already has a hand-written entry with the same name — nothing will be overwritten:\n${conflictLines}`;
+    diff.hidden = true;
+    diff.textContent = "";
+    applyBtn.hidden = true;
+    rollbackBtn.hidden = true;
+    restartNote.hidden = true;
+  } else {
+    message.hidden = true;
+    const diffText = [
+      preview.providerBlockDiff,
+      preview.providerSelectionStatus === "install"
+        ? preview.providerSelectionDiff
+        : preview.providerSelectionStatus === "conflict"
+          ? `(default-provider selection skipped: a hand-written model_provider line already exists)`
+          : undefined,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n");
+    diff.hidden = diffText.length === 0;
+    diff.textContent = diffText;
+    applyBtn.hidden = modelConfigApplied;
+    applyBtn.disabled = false;
+    rollbackBtn.hidden = !modelConfigApplied;
+    restartNote.hidden = !modelConfigApplied;
+    if (modelConfigApplied) {
+      restartNote.textContent =
+        "Close and reopen your Codex host to pick up this change.";
+    }
+  }
+  previewBtn.disabled = false;
 }
 
 function renderSetup(): void {
@@ -4458,6 +4614,48 @@ async function start(): Promise<void> {
     setupJourney = reopenSetup(setupJourney);
     render();
   });
+  required<HTMLInputElement>("#model-select-default").addEventListener(
+    "change",
+    (event) => {
+      modelSelectAsDefault = (event.currentTarget as HTMLInputElement).checked;
+    },
+  );
+  required<HTMLButtonElement>("#model-check-status-btn").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "model.status" },
+        "Farol Model status checked.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#model-preview-btn").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "model.preview", selectAsDefault: modelSelectAsDefault },
+        "Farol Model connection previewed.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#model-apply-btn").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "model.apply", selectAsDefault: modelSelectAsDefault },
+        "Farol Model connection applied.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#model-rollback-btn").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "model.rollback" },
+        "Farol Model connection rolled back.",
+      );
+    },
+  );
   required<HTMLDialogElement>("#setup-dialog").addEventListener(
     "cancel",
     (event) => {

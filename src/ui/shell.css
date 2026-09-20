@@ -1144,6 +1144,30 @@ html[data-has-tasks="false"] .surface {
   line-height: 1.5;
 }
 
+.model-config-diff {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.04));
+  color: var(--text-soft);
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.model-select-default-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
 .settings-group > header,
 .settings-group-actions,
 .computer-name-field > span,

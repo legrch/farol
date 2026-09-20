@@ -229,6 +229,19 @@ import {
   resolveProductAgentScope,
 } from "./product-agent-scope";
 import { PrivateConnectorKeyStore } from "./connector-key-store";
+import {
+  FarolModelLifecycle,
+  type FarolModelLifecycleStatus,
+} from "./farol-model-lifecycle";
+import {
+  applyFarolModelConfigBlock,
+  applyFarolModelProviderSelection,
+  previewFarolModelConfigBlock,
+  previewFarolModelProviderSelection,
+  rollbackFarolModelConfigBlock,
+  rollbackFarolModelProviderSelection,
+  type FarolModelProviderSpec,
+} from "./farol-model-config-block";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
@@ -358,6 +371,7 @@ let shellOverlay: ShellOverlay = "none";
 let configuration: ProductConfigurationService | null = null;
 let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
+let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
 // F3-1b: one authority transition at a time. A command that changes Computer
 // authority holds it through its commit; a connector start and an Agent
@@ -2399,6 +2413,115 @@ function secureMcpConnectorRoot(): string {
     "farol-next-state",
     "secure-mcp-connector",
   );
+}
+
+function modelEndpointStateRoot(): string {
+  return path.join(
+    app.getPath("userData"),
+    "farol-next-private",
+    "model-endpoint",
+  );
+}
+
+// The ordinary Codex config.toml this control manages — the owner's own,
+// normally `~/.codex/config.toml`. Only the dev/E2E lane may point this at
+// a disposable directory instead (Decisions.md N04: never the owner's real
+// `~/.codex` from an automated run); production always resolves the real
+// path.
+function farolModelCodexConfigPath(): string {
+  const override =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_MODEL_E2E_CODEX_CONFIG_PATH
+      : undefined;
+  if (override && path.isAbsolute(override) && !override.includes("\0")) {
+    return override;
+  }
+  return path.join(os.homedir(), ".codex", "config.toml");
+}
+
+function modelStatusEvidencePayload(
+  status: FarolModelLifecycleStatus,
+):
+  | Readonly<{
+      kind: "model.status";
+      state: "port_conflict" | "listening" | "connected";
+      port: number | null;
+      requestsServed: number;
+    }>
+  | null {
+  if (status.state === "not_running") return null;
+  if (status.state === "port_conflict") {
+    return {
+      kind: "model.status",
+      state: "port_conflict",
+      port: status.port,
+      requestsServed: 0,
+    };
+  }
+  return {
+    kind: "model.status",
+    state: status.state,
+    port: status.port,
+    requestsServed: status.requestsServed,
+  };
+}
+
+// E2E-only: a minimal, valid OpenAI Responses-shaped completed turn, used
+// solely behind the FAROL_NEXT_E2E + FAROL_MODEL_E2E_SYNTHETIC_REPLY double
+// gate above. It never runs in a normal launch.
+function syntheticModelTurnHandler(
+  text: string,
+): NonNullable<
+  ConstructorParameters<typeof FarolModelLifecycle>[0]["handler"]
+> {
+  return async () => ({
+    ok: true,
+    events: [
+      {
+        event: "response.completed",
+        data: {
+          type: "response.completed",
+          response: {
+            id: "resp_e2e",
+            object: "response",
+            status: "completed",
+            output: [
+              {
+                id: "msg_e2e",
+                type: "message",
+                status: "completed",
+                role: "assistant",
+                content: [{ type: "output_text", text, annotations: [] }],
+              },
+            ],
+            usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+          },
+        },
+      },
+    ],
+  });
+}
+
+// This control only ever targets a host the owner starts themselves (their
+// own ordinary Codex reading its own config.toml), so the literal-token
+// delivery from the N04 addendum is the only one it ever builds — the
+// env-key delivery stays reserved for a host Farol launches itself.
+async function farolModelProviderSpec(): Promise<FarolModelProviderSpec | null> {
+  if (!modelLifecycle) return null;
+  const status = modelLifecycle.status();
+  if (status.state === "not_running" || status.state === "port_conflict") {
+    return null;
+  }
+  const token = await modelLifecycle.runtimeState.currentToken();
+  if (!token) return null;
+  return {
+    providerName: "farol",
+    displayName: "Farol Model",
+    baseUrl: `http://127.0.0.1:${status.port}`,
+    model: "farol-model",
+    wireApi: "responses",
+    delivery: { mode: "bearer-token", token },
+  };
 }
 
 function secureMcpCredentialRoot(): string {
@@ -5286,6 +5409,131 @@ async function configureAdmittedProduct(
           dismissed: command.dismissed,
         }),
       );
+    case "model.status": {
+      if (!modelLifecycle) {
+        return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
+      }
+      const payload = modelStatusEvidencePayload(modelLifecycle.status());
+      if (!payload) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: payload,
+      });
+    }
+    case "model.preview": {
+      const spec = await farolModelProviderSpec();
+      if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
+      const configPath = farolModelCodexConfigPath();
+      const blockPreview = await previewFarolModelConfigBlock(
+        configPath,
+        spec,
+      );
+      const selectionPreview =
+        command.selectAsDefault && blockPreview.status !== "insecure_permissions"
+          ? await previewFarolModelProviderSelection(
+              configPath,
+              spec.providerName,
+            )
+          : null;
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: {
+          kind: "model.config-preview",
+          configPath,
+          providerBlockStatus: blockPreview.status,
+          ...(blockPreview.status === "install" ||
+          blockPreview.status === "update"
+            ? { providerBlockDiff: blockPreview.diff }
+            : {}),
+          ...(blockPreview.status === "conflict"
+            ? { providerBlockConflicts: blockPreview.conflicts }
+            : {}),
+          ...(blockPreview.status === "insecure_permissions"
+            ? { providerBlockInsecureMode: blockPreview.mode }
+            : {}),
+          providerSelectionRequested: command.selectAsDefault,
+          ...(selectionPreview
+            ? {
+                providerSelectionStatus: selectionPreview.status,
+                ...(selectionPreview.status === "install"
+                  ? { providerSelectionDiff: selectionPreview.diff }
+                  : {}),
+                ...(selectionPreview.status === "conflict"
+                  ? { providerSelectionConflicts: selectionPreview.conflicts }
+                  : {}),
+              }
+            : {}),
+        },
+      });
+    }
+    case "model.apply": {
+      const spec = await farolModelProviderSpec();
+      if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
+      const configPath = farolModelCodexConfigPath();
+      try {
+        const blockResult = await applyFarolModelConfigBlock(
+          configPath,
+          spec,
+        );
+        if (blockResult.status === "insecure_permissions") {
+          return configurationFailure("MODEL_CONFIG_INSECURE_PERMISSIONS");
+        }
+        if (blockResult.status === "conflict") {
+          return configurationFailure("MODEL_CONFIG_CONFLICT");
+        }
+        let selectionApplied = false;
+        if (command.selectAsDefault) {
+          const selectionResult = await applyFarolModelProviderSelection(
+            configPath,
+            spec.providerName,
+          );
+          if (selectionResult.status === "conflict") {
+            return configurationFailure("MODEL_CONFIG_CONFLICT");
+          }
+          selectionApplied = selectionResult.status === "applied";
+        }
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "model.config-applied",
+            providerBlockApplied: blockResult.status === "applied",
+            providerSelectionApplied: selectionApplied,
+            restartStep: "restart_codex_to_apply",
+          },
+        });
+      } catch {
+        return configurationFailure("MODEL_CONFIG_APPLY_FAILED");
+      }
+    }
+    case "model.rollback": {
+      const configPath = farolModelCodexConfigPath();
+      try {
+        // The selection (if any) was always applied after the provider
+        // block, and its own backup snapshot is the file as it stood right
+        // then — including that block. Undoing it first, then undoing the
+        // block, unwinds both operations back to the true pre-Farol bytes;
+        // the reverse order would restore the block backup (pre-Farol)
+        // and then overwrite it with the selection backup (post-block),
+        // silently reintroducing the block rollback had just removed.
+        const selectionRollback =
+          await rollbackFarolModelProviderSelection(configPath);
+        const blockRollback = await rollbackFarolModelConfigBlock(configPath);
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+          evidence: {
+            kind: "model.config-rollback",
+            providerBlockRestored: blockRollback.status === "restored",
+            providerSelectionRestored: selectionRollback.status === "restored",
+          },
+        });
+      } catch {
+        return configurationFailure("MODEL_CONFIG_ROLLBACK_FAILED");
+      }
+    }
   }
 }
 
@@ -6418,6 +6666,33 @@ async function main(): Promise<void> {
     homePath: app.getPath("home"),
     tempPath: app.getPath("temp"),
   });
+  // Starts with the app, on the persisted port, and never autospawns a
+  // host: see Decisions.md N04, item 1. The real chat-turn route is not
+  // wired yet (packet N04b escalation) — every request is refused with
+  // FAROL_MODEL_ROUTE_UNAVAILABLE, never silently dropped or fabricated.
+  // The one exception is this exact E2E seam: with FAROL_NEXT_E2E=1 *and*
+  // FAROL_MODEL_E2E_SYNTHETIC_REPLY set, requests get a synthetic
+  // completed reply instead — proof that the "connected" indicator only
+  // lights up once a request is actually served, with no real Codex or
+  // ChatGPT account involved. It never activates outside that double gate.
+  const modelSyntheticReply =
+    process.env.FAROL_NEXT_E2E === "1"
+      ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
+      : undefined;
+  modelLifecycle = new FarolModelLifecycle({
+    stateRoot: modelEndpointStateRoot(),
+    ...(modelSyntheticReply
+      ? { handler: syntheticModelTurnHandler(modelSyntheticReply) }
+      : {}),
+  });
+  try {
+    await modelLifecycle.start();
+  } catch {
+    // An unexpected failure here (anything besides a reported port
+    // conflict, which `start()` already turns into a status) must not
+    // abort the rest of Farol's own startup. `status()` still correctly
+    // reports not_running.
+  }
   try {
     const credential = await connectorCredentialStore.status();
     const snapshot = configuration.snapshot();
@@ -6569,6 +6844,11 @@ async function main(): Promise<void> {
       const connector = secureMcpConnectorRuntime;
       if (connector) {
         closers.push({ name: "connector", close: () => connector.stop() });
+      }
+      const model = modelLifecycle;
+      modelLifecycle = null;
+      if (model) {
+        closers.push({ name: "model-endpoint", close: () => model.stop() });
       }
       const routeB = routeBRuntime;
       routeBRuntime = null;

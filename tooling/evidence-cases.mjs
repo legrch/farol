@@ -144,6 +144,12 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "ux34-sign-in-return-keyboard",
   "ux34-sign-in-return-pointer-after-blocked-navigation",
   "ux34-covered-return-fails-input-proof",
+  "n04b-model-not-connected-before-preview",
+  "n04b-model-preview-shows-diff",
+  "n04b-model-decline-changes-nothing",
+  "n04b-model-apply-writes-managed-block",
+  "n04b-model-connected-after-served-request",
+  "n04b-model-rollback-restores-config",
 ]);
 
 const SEALED_PACKAGE_CASES = Object.freeze([
