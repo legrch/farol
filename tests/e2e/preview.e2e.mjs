@@ -16,6 +16,7 @@ import {
   createSelection,
   isSegmentSelected,
 } from "../../tooling/e2e-selection.mjs";
+import { retentionDiagnostics } from "../../tooling/soak-retention.mjs";
 import {
   assertBuildIdentity,
   createBuildIdentity,
@@ -3928,6 +3929,15 @@ async function runLifecycleSoak() {
             afterRestart.activeResourceCount - baseline.activeResourceCount,
         },
       },
+      // Additional reading of the same samples, judged by nothing.  The
+      // budget above and every verdict it has ever produced are unchanged;
+      // this only reads those samples in ways that do not span the two
+      // restarts inside the measured window.
+      retentionDiagnostics: retentionDiagnostics({
+        baseline,
+        samples,
+        recoveryEvents,
+      }),
       cases: [
         "fifty-task-create-close-cycles",
         "five-concurrent-task-surfaces",
