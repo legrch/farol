@@ -5,6 +5,10 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.{ts,mjs}"],
     sequence: { concurrent: false },
+    // 23 integration files spawn real processes, helpers or volumes, and none
+    // of that fits vitest's 5 s default on a loaded machine. A budget, not an
+    // assertion; 30 s still catches a hang.
+    testTimeout: 30_000,
     coverage: {
       provider: "v8",
       include: ["src/modules/**/*.ts", "src/pkg/**/*.ts"],
