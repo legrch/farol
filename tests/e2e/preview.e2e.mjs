@@ -1857,17 +1857,48 @@ async function proveSecondLaunchRejectsFailedStartup() {
   }
 }
 
-function repeatLaunch(instance) {
-  const repeated = spawnSync(executable, instance.launchArgs, {
+// A second launch of the same build: the primary reopens its window and
+// acknowledges the launch, which then exits.
+//
+// Asynchronously on purpose. `spawnSync` blocks this process's event loop,
+// and this process is the Playwright client the primary needs in order to
+// finish creating a window. Blocked, the primary cannot publish its
+// acknowledgement until the block ends, so the second launch waits out its
+// whole ten-second deadline and exits 0 having been *refused*. The exit
+// status alone cannot tell the two apart, so the result line is read too.
+const SECOND_LAUNCH_DEADLINE_MS = 10_000;
+async function repeatLaunch(instance) {
+  const secondary = spawn(executable, instance.launchArgs, {
     cwd: root,
     env: instance.launchEnvironment,
-    encoding: "utf8",
-    timeout: 10_000,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  let stdout = "";
+  let stderr = "";
+  secondary.stdout.on("data", (chunk) => (stdout += String(chunk)));
+  secondary.stderr.on("data", (chunk) => (stderr += String(chunk)));
+  const started = performance.now();
+  const deadline = setTimeout(() => {
+    secondary.kill("SIGKILL");
+  }, SECOND_LAUNCH_DEADLINE_MS);
+  let exit;
+  try {
+    exit = await once(secondary, "exit");
+  } finally {
+    clearTimeout(deadline);
+  }
+  const elapsed = performance.now() - started;
+  const [status, signal] = exit;
   assert.equal(
-    repeated.status,
+    status,
     0,
-    `E2E_SECOND_LAUNCH_FAILED:${repeated.stdout}${repeated.stderr}`,
+    `E2E_SECOND_LAUNCH_FAILED:${signal ?? ""}:${stdout}${stderr}`,
+  );
+  const result = /FAROL_NEXT_SECOND_INSTANCE_RESULT:(\S+)/u.exec(stderr)?.[1];
+  assert.equal(result, "reopened", `E2E_SECOND_LAUNCH_NOT_REOPENED:${stderr}`);
+  assert.ok(
+    elapsed < 2_000,
+    `E2E_SECOND_LAUNCH_SLOW:${Math.round(elapsed)}ms:${stderr}`,
   );
 }
 
@@ -7463,7 +7494,7 @@ demoMainSegment: try {
   const reopenedWindow = normal.application.waitForEvent("window", {
     timeout: 15_000,
   });
-  repeatLaunch(normal);
+  await repeatLaunch(normal);
   normal.window = await reopenedWindow;
   await normal.window.locator("#sidebar").waitFor({ state: "visible" });
   await normal.window.locator('[data-panel="settings"].active').waitFor();
