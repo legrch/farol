@@ -125,6 +125,14 @@ describe("the runner's selection gates", () => {
     }
   });
 
+  it("records the selection where a crash cannot lose it", () => {
+    // report.json is written at the very end; a run that throws first would
+    // leave receipts that read exactly like a failed full lane.
+    expect(e2eSource).toMatch(
+      /input: \{[\s\S]*?\.\.\.\(selection \? \{ selection \} : \{\}\),/u,
+    );
+  });
+
   it("never reports a selected run as PASS", () => {
     expect(e2eSource).toMatch(/status: selectionActive\s*\?\s*"SELECTED"\s*:/u);
   });

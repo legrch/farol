@@ -56,14 +56,14 @@ process.kill(process.pid, "SIGKILL");
   );
 }
 
-function runnerInChild(lane, body) {
+function runnerInChild(lane, body, input = {}) {
   const program = `
 import { openEvidenceAttempt } from ${JSON.stringify(
     path.join(nextRoot, "tooling/evidence-attempt.mjs"),
   )};
 const attempt = await openEvidenceAttempt(process.argv[1], {
   lane: "sealed-package",
-  input: {},
+  input: ${JSON.stringify(input)},
 });
 attempt.installProcessHandlers();
 ${body}
@@ -127,6 +127,26 @@ describe("EV-04 immutable evidence attempts", () => {
     expect(interrupted.terminal.firstFailure).toEqual({
       case: "uncaught",
       message: "Error: E2E_LATE_HARNESS_FAILURE",
+    });
+  });
+
+  // A partial run that crashes before writing its own report must still be
+  // recognisable as partial: otherwise its receipts read as a failed full
+  // lane, which is the misreading the SELECTED status exists to prevent.
+  it("keeps a crashed run's selection, which only its input can carry", async () => {
+    const lane = await laneRoot();
+    const thrown = runnerInChild(
+      lane,
+      'await Promise.resolve(); throw new Error("E2E_SELECTED_RUN_CRASHED");',
+      { selection: { requested: ["n04b-model"], segments: ["n04b-model"] } },
+    );
+    expect(thrown.status).toBe(1);
+
+    const [crashed] = await listEvidenceAttempts(lane);
+    expect(crashed.status).toBe("FAIL");
+    expect(crashed.started.input.selection).toEqual({
+      requested: ["n04b-model"],
+      segments: ["n04b-model"],
     });
   });
 

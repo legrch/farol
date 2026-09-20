@@ -319,6 +319,14 @@ const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
     buildId: artifact.buildId,
     builtAt: artifact.builtAt,
     skipNativeFocus,
+    // A selected run is only partial, and `report.json` — where the
+    // selection is recorded in full — is written at the very end.  A run
+    // that crashes first would leave receipts indistinguishable from a
+    // failed full lane, which is the one reading the SELECTED status exists
+    // to prevent.  The attempt's input is written when it opens, so putting
+    // the selection here makes it survive any later failure.  Extra input
+    // keys are inert to the rebind, which matches only on the subject's own.
+    ...(selection ? { selection } : {}),
     ...(predecessor
       ? {
           predecessor: {
