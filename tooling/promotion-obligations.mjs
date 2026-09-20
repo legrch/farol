@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { z } from "zod";
+import { ProductTaskSchema } from "../src/modules/chat/contract/product-task.ts";
+import { ProductSettingsSchema } from "../src/pkg/product-settings/contract.ts";
 
 // What a Next generation under one user-data root still owes before another
 // generation may take its place: a task that is running or whose outcome is
@@ -13,10 +16,26 @@ import path from "node:path";
 // one activation step this product has, so it refuses while any of these is
 // open. Only identities and phases are read, never content.
 //
-// Each present record must have the shape its owner writes: the supported
-// schema, the collection it names and a closed phase for every entry. A
-// record that parses but does not have that shape is unreadable, never an
-// empty obligation; only an absent record owes nothing.
+// S35-03/1: each present record must have the shape ITS OWNER writes, not a
+// hand-rolled approximation of it. A record the owning store would refuse
+// (missing `revision`, missing `updatedAt`, an extra field, …) must be
+// unreadable here too, never folded into "nothing is running" — a reduced
+// record is exactly what a partial write, a truncated crash, or a forged
+// file looks like. `live-tasks.json` and `product-settings.json` are
+// validated against the same schemas their owners
+// (`live-task-store.ts`, `../../pkg/product-settings/contract.ts`) parse
+// with; `product-settings/contract.ts` is a plain schema module with no
+// class, so it is imported directly. `live-task-store.ts` and
+// `chatgpt-task-journal.ts` cannot be imported the same way: their classes
+// use TypeScript parameter properties, which Node's unflagged type-stripping
+// (the runtime this CLI ships on) refuses to run. Their record schemas are
+// therefore mirrored here field-for-field from the same zod primitives,
+// composed from the one shared, classless, already-exported
+// `ProductTaskSchema` rather than re-describing a task by hand. Anything
+// that drifts from the real store is a bug in this file, not a design
+// choice, and `tests/integration/promotion-obligations.test.mjs`'s decisive
+// negative control (a live-task record missing `revision`/`updatedAt`) locks
+// the failure mode a hand-rolled check let through.
 
 export const PROMOTION_OBLIGATIONS_SCHEMA =
   "farol.next.promotion-obligations/1";
@@ -24,33 +43,6 @@ export const PROMOTION_OBLIGATIONS_SCHEMA =
 const MAX_STATE_BYTES = 4 * 1024 * 1024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC = fsConstants.O_CLOEXEC ?? 0;
-const TASK_LIFECYCLES = new Set([
-  "event_driven",
-  "idle",
-  "running",
-  "cancelled",
-  "completed",
-  "failed",
-  "outcome_unknown",
-]);
-const AGENT_PHASES = new Set([
-  "running",
-  "completed",
-  "cancelled",
-  "failed",
-  "outcome_unknown",
-]);
-const PARENT_DELIVERIES = new Set([
-  "not_applicable",
-  "pending",
-  "acknowledged",
-]);
-const JOURNAL_PHASES = new Set([
-  "prepared",
-  "dispatch_intent",
-  "result_retained",
-  "delivery_acknowledged",
-]);
 
 function record(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -62,101 +54,122 @@ const ok = (value) => ({ ok: true, value });
 const malformed = () => ({ ok: false, reason: "MALFORMED" });
 const unknownVersion = () => ({ ok: false, reason: "UNKNOWN_VERSION" });
 
-// Every shape validator below checks the exact schema literal its owning
-// store writes (live-task-store.ts, chatgpt-task-journal.ts, the desktop's
-// quit receipt, product-configuration.ts) before it looks at any other
-// field, so a future or older record is refused as a version mismatch
-// rather than folded into the same bucket as a merely malformed one. A
-// present record that parses as JSON but is not the shape its owner writes
-// is always malformed, never an empty obligation — only an absent record
-// owes nothing.
+// A schema-literal mismatch on an otherwise plain-object record is always a
+// future or older version, never merely malformed; everything else zod
+// refuses (missing field, wrong type, unknown key on a strict object, wrong
+// array length, …) is malformed. This is the one rule every shape below
+// shares, so it lives once instead of being re-decided per store.
+function classify(parsed, raw) {
+  if (parsed.success) return ok(parsed.data);
+  const top = record(raw);
+  if (top && top.schema !== undefined && top.schema !== 1) {
+    return unknownVersion();
+  }
+  return malformed();
+}
 
-// live-tasks.json as live-task-store writes it: schema 1 and at most five
-// stored tasks, each with a lifecycle from the product's closed set and, when
-// it has one, an Agent with a closed phase and delivery state.
+const timestampSchema = z.string().refine((value) => {
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
+});
+
+// Mirrors `StoredLiveTaskSchema` and the private `recordSchema` in
+// `src/apps/desktop/live-task-store.ts` exactly (see the module comment
+// above for why this is a mirror, not an import): schema 1, a revision, at
+// most five tasks each shaped like the one shared `ProductTaskSchema`
+// extended with the two fields the store adds, and the timestamp the store
+// stamps on every save. A record missing `revision` or `updatedAt` is
+// exactly the store's own `recordSchema.safeParse` failing, not an
+// approximation of it.
+const storedLiveTaskSchema = ProductTaskSchema.extend({
+  provider: z.literal("chatgpt"),
+  conversationUrl: z.url().max(2_048).nullable(),
+}).refine((task) => task.lifecycle !== "event_driven");
+
+const liveTasksRecordSchema = z.strictObject({
+  schema: z.literal(1),
+  revision: z.number().int().nonnegative(),
+  tasks: z.array(storedLiveTaskSchema).max(5),
+  updatedAt: timestampSchema,
+});
+
 function liveTasks(value) {
-  const stored = record(value);
-  if (!stored) return malformed();
-  if (stored.schema !== 1) return unknownVersion();
-  if (!Array.isArray(stored.tasks) || stored.tasks.length > 5) {
-    return malformed();
-  }
-  const tasks = [];
-  for (const entry of stored.tasks) {
-    const task = record(entry);
-    if (
-      !task ||
-      typeof task.taskId !== "string" ||
-      !TASK_LIFECYCLES.has(task.lifecycle)
-    ) {
-      return malformed();
-    }
-    let agent = null;
-    if (task.agent !== undefined && task.agent !== null) {
-      const candidate = record(task.agent);
-      if (
-        !candidate ||
-        !AGENT_PHASES.has(candidate.phase) ||
-        !PARENT_DELIVERIES.has(candidate.parentDelivery)
-      ) {
-        return malformed();
-      }
-      agent = {
-        phase: candidate.phase,
-        parentDelivery: candidate.parentDelivery,
-      };
-    }
-    tasks.push({ lifecycle: task.lifecycle, agent });
-  }
-  return ok({ tasks });
+  return classify(liveTasksRecordSchema.safeParse(value), value);
 }
 
-// chatgpt-task-journal.json as chatgpt-task-journal writes it: schema 1 and
-// one closed phase.
+// Mirrors the private `recordSchema` and `resultSchema` in
+// `src/apps/desktop/chatgpt-task-journal.ts` exactly, for the same reason:
+// that file's class uses TypeScript parameter properties, so it cannot be
+// imported into this plain-`.mjs` CLI without a runtime type transform this
+// product does not enable.
+const journalOperationIdSchema = z
+  .string()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+  );
+
+const journalResultSchema = z.strictObject({
+  state: z.enum([
+    "completed",
+    "not_authenticated",
+    "failed_before_submit",
+    "outcome_unknown",
+  ]),
+  code: z
+    .string()
+    .regex(/^[A-Z][A-Z0-9_]*$/u)
+    .max(120)
+    .nullable(),
+  deltaCount: z.number().int().nonnegative(),
+  observedCharacters: z.number().int().nonnegative(),
+  attachmentCount: z.number().int().min(0).max(4),
+  totalBytes: z
+    .number()
+    .int()
+    .nonnegative()
+    .max(20 * 1_024 * 1_024),
+  stagingCleanup: z.enum(["removed", "pending_startup_cleanup"]).nullable(),
+});
+
+const journalRecordSchema = z.strictObject({
+  schema: z.literal(1),
+  operationId: journalOperationIdSchema,
+  kind: z.enum(["readonly", "attachment"]),
+  phase: z.enum([
+    "prepared",
+    "dispatch_intent",
+    "result_retained",
+    "delivery_acknowledged",
+  ]),
+  createdAt: timestampSchema,
+  updatedAt: timestampSchema,
+  result: journalResultSchema.nullable(),
+});
+
 function taskJournal(value) {
-  const stored = record(value);
-  if (!stored) return malformed();
-  if (stored.schema !== 1) return unknownVersion();
-  if (!JOURNAL_PHASES.has(stored.phase)) return malformed();
-  return ok({ phase: stored.phase });
+  return classify(journalRecordSchema.safeParse(value), value);
 }
 
-// last-quit.json as the desktop's quit receipt writes it.
-function quitReceipt(value) {
-  const stored = record(value);
-  if (!stored) return malformed();
-  if (stored.schema !== 1) return unknownVersion();
-  if (
-    typeof stored.drained !== "boolean" ||
-    !Array.isArray(stored.unconfirmed) ||
-    !stored.unconfirmed.every((name) => typeof name === "string")
-  ) {
-    return malformed();
-  }
-  return ok({ drained: stored.drained, unconfirmed: stored.unconfirmed });
-}
-
-// product-settings.json as the configuration service writes it: schema 1,
-// and under computer the guarded edit recorded before it ran, cleared only by
-// the acknowledgment of that exact operation. Only its identity is read.
+// product-settings.json is validated against the exact schema
+// `ProductSettingsStore.load()` parses with: `ProductSettingsSchema` from
+// `../../pkg/product-settings/contract.ts`. That module is plain schema and
+// type exports with no class, so — unlike the two stores above — it is
+// imported directly rather than mirrored, closing the gap for this file
+// completely instead of by approximation.
 function productSettings(value) {
-  const stored = record(value);
-  if (!stored) return malformed();
-  if (stored.schema !== 1) return unknownVersion();
-  const computer = record(stored.computer);
-  if (!computer) return malformed();
-  if (computer.pendingEdit === undefined || computer.pendingEdit === null) {
-    return ok({ pendingEdit: null });
-  }
-  const pending = record(computer.pendingEdit);
-  if (
-    !pending ||
-    typeof pending.operationId !== "string" ||
-    !pending.operationId
-  ) {
-    return malformed();
-  }
-  return ok({ pendingEdit: { operationId: pending.operationId } });
+  return classify(ProductSettingsSchema.safeParse(value), value);
+}
+
+// last-quit.json has no owning class either (the desktop writes it inline
+// in `main.ts`), so its shape is small enough to state directly.
+const quitReceiptSchema = z.strictObject({
+  schema: z.literal(1),
+  drained: z.boolean(),
+  unconfirmed: z.array(z.string()),
+});
+
+function quitReceipt(value) {
+  return classify(quitReceiptSchema.safeParse(value), value);
 }
 
 // A private regular file only: no symlink (O_NOFOLLOW refuses to open one),
@@ -297,9 +310,9 @@ export async function activationObligations(userData, options = {}) {
 
   const settings = confirmed["product-settings"];
   if (settings.status === "unreadable") unreadable.push(`product-settings:${settings.reason}`);
-  else if (settings.status === "read" && settings.value.pendingEdit) {
+  else if (settings.status === "read" && settings.value.computer.pendingEdit) {
     obligations.push(
-      `EDIT_DELIVERY_PENDING:${settings.value.pendingEdit.operationId}`,
+      `EDIT_DELIVERY_PENDING:${settings.value.computer.pendingEdit.operationId}`,
     );
   }
 

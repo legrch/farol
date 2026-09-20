@@ -38,6 +38,11 @@ async function writeFile(file, content) {
   await fs.writeFile(file, content, { mode: 0o600 });
 }
 
+// S35-03/1: the real store (live-task-store.ts) requires every one of these
+// fields — `ProductTaskSchema` is a strict object — so a fixture that skips
+// one is not "a smaller idle task", it is exactly the malformed record the
+// owning store would refuse. Keep this in sync with `fixtureTask()` in
+// promotion-flow.test.mjs; both stand in for the one real schema.
 function task(overrides = {}) {
   return {
     taskId: "task-a",
@@ -45,15 +50,58 @@ function task(overrides = {}) {
     turnId: "turn-a",
     label: "Task",
     provider: "chatgpt",
+    requestedModel: null,
+    observedModel: null,
+    requestedMode: null,
+    observedMode: null,
+    hasComputer: false,
+    pinned: false,
     lifecycle: "idle",
+    conversationUrl: null,
     ...overrides,
   };
 }
 
-async function writeTasks(root, tasks) {
+// A complete `ProductTaskAgentSchema`, since the real schema requires
+// `workspaceId`, `workspaceEnforcement` and `resultAvailable` alongside the
+// two fields this module's obligations logic actually reads.
+function agent(overrides = {}) {
+  return {
+    phase: "running",
+    workspaceId: "workspace-a",
+    parentDelivery: "not_applicable",
+    workspaceEnforcement: "not_applicable",
+    resultAvailable: false,
+    ...overrides,
+  };
+}
+
+// A complete journal record (chatgpt-task-journal.ts's `recordSchema`):
+// `operationId` must be UUID-shaped and `result` is a required (nullable)
+// key, not an optional one.
+function journal(overrides = {}) {
+  return {
+    schema: 1,
+    operationId: "00000000-0000-4000-8000-000000000abc",
+    kind: "readonly",
+    phase: "prepared",
+    createdAt: "2026-09-18T16:00:00.000Z",
+    updatedAt: "2026-09-18T16:00:00.000Z",
+    result: null,
+    ...overrides,
+  };
+}
+
+async function writeTasks(root, tasks, overrides = {}) {
   await writeFile(
     path.join(root, "farol-next-state", "live-tasks", "live-tasks.json"),
-    JSON.stringify({ schema: 1, revision: 1, tasks }),
+    JSON.stringify({
+      schema: 1,
+      revision: 1,
+      tasks,
+      updatedAt: "2026-09-18T16:00:00.000Z",
+      ...overrides,
+    }),
   );
 }
 
@@ -97,13 +145,13 @@ describe("Q-08 activation obligations", () => {
         taskId: "task-c",
         sessionId: "task-c",
         turnId: "turn-c",
-        agent: { phase: "running", parentDelivery: "not_applicable" },
+        agent: agent({ phase: "running", parentDelivery: "not_applicable" }),
       }),
       task({
         taskId: "task-d",
         sessionId: "task-d",
         turnId: "turn-d",
-        agent: { phase: "completed", parentDelivery: "pending" },
+        agent: agent({ phase: "completed", parentDelivery: "pending" }),
       }),
     ]);
     await writeFile(
@@ -113,7 +161,7 @@ describe("Q-08 activation obligations", () => {
         "chatgpt-task-journal",
         "chatgpt-task-journal.json",
       ),
-      JSON.stringify({ schema: 1, phase: "dispatch_intent" }),
+      JSON.stringify(journal({ phase: "dispatch_intent" })),
     );
     await writeFile(
       path.join(root, "farol-next-state", "last-quit.json"),
@@ -280,17 +328,61 @@ describe("Q-08 activation obligations", () => {
         sessionId: "task-b",
         turnId: "turn-b",
         lifecycle: "idle",
-        agent: { phase: "completed", parentDelivery: "acknowledged" },
+        agent: agent({ phase: "completed", parentDelivery: "acknowledged" }),
       }),
     ]);
     await writeFile(
       journalFile,
-      JSON.stringify({ schema: 1, phase: "delivery_acknowledged" }),
+      JSON.stringify(journal({ phase: "delivery_acknowledged" })),
     );
     await writeFile(
       quitFile,
       JSON.stringify({ schema: 1, drained: true, unconfirmed: [] }),
     );
+    await expect(activationObligations(root)).resolves.toMatchObject({
+      drained: true,
+      obligations: [],
+      unreadable: [],
+    });
+  });
+
+  it("S35-03/1 refuses a live-task record the owning store itself would refuse, never reads it as nothing running", async () => {
+    const root = await userData();
+    const tasksFile = path.join(
+      root,
+      "farol-next-state",
+      "live-tasks",
+      "live-tasks.json",
+    );
+    // The decisive negative control: a record with no `revision` and no
+    // `updatedAt`. `live-task-store.ts`'s own `recordSchema` is a strict
+    // object that requires both, so its `PrivateLiveTaskStore.load()` would
+    // refuse this exact record with `LIVE_TASK_STATE_CORRUPT`. A promotion
+    // that instead read `tasks: []` and called it "nothing is running" would
+    // be weaker than the store whose data it is trusting.
+    await writeFile(tasksFile, JSON.stringify({ schema: 1, tasks: [] }));
+    const report = await activationObligations(root);
+    expect(report).toMatchObject({
+      drained: false,
+      obligations: [],
+      unreadable: ["live-tasks:MALFORMED"],
+    });
+    expect(() => assertActivationDrained(report)).toThrow(
+      "PROMOTION_STATE_UNREADABLE:live-tasks:MALFORMED",
+    );
+    // Missing only `updatedAt` (a real, if incomplete, revision) is refused
+    // the same way, not treated as a smaller-but-valid record.
+    await writeFile(
+      tasksFile,
+      JSON.stringify({ schema: 1, revision: 1, tasks: [] }),
+    );
+    expect(await activationObligations(root)).toMatchObject({
+      drained: false,
+      unreadable: ["live-tasks:MALFORMED"],
+    });
+    // The complete record — the one the real store actually writes — is the
+    // one that reads as nothing running.
+    await writeTasks(root, []);
     await expect(activationObligations(root)).resolves.toMatchObject({
       drained: true,
       obligations: [],
@@ -305,17 +397,43 @@ describe("Q-08 activation obligations", () => {
       "farol-next-state",
       "product-settings.json",
     );
+    // A complete `ProductSettingsSchema` record. `nativeHosts`, `connectors`
+    // and `setup.journey` are omitted deliberately: the real schema defaults
+    // them when the key is absent, exactly like a settings file saved before
+    // that feature existed — `general` and every `setup.<step>` readiness
+    // block are not defaulted and must be present in full.
+    const readiness = () => ({
+      visited: false,
+      skipped: false,
+      configured: false,
+      reachable: "unknown",
+      verified: null,
+      needsAction: null,
+      unavailable: null,
+      outcomeUnknown: false,
+    });
     const settings = (pendingEdit) => ({
       schema: 1,
       revision: 7,
-      general: { openAtLaunch: "browser" },
+      general: {
+        openAtLaunch: "browser",
+        sidebarDefault: "full",
+        activityDetail: "summary",
+      },
       computer: {
-        computerId: "computer-1",
+        computerId: "00000000-0000-4000-8000-000000000c01",
         generation: 3,
         name: "Test",
         commands: "none",
         workspaces: [],
         pendingEdit,
+      },
+      setup: {
+        chatgpt: readiness(),
+        computer: readiness(),
+        connect: readiness(),
+        hosts: readiness(),
+        verify: readiness(),
       },
     });
     const pending = {
