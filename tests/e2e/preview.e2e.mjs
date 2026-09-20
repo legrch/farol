@@ -7937,7 +7937,19 @@ try {
           }
         }
       }
-      const panelRight = panel.getBoundingClientRect().right;
+      // The panel's own scroll overflow starts at its padding edge, not its
+      // border edge: an element that ends inside the panel's right padding
+      // already widens `scrollWidth` without ever crossing the border box,
+      // so the offenders are measured against the padding edge and blocks
+      // whose own text overflows them are named too. Otherwise a failure
+      // reads "protruding: " with nobody to blame (sealed attempt
+      // 20260920T103813165Z-df14c36d).
+      const panelBox = panel.getBoundingClientRect();
+      const panelRight = panelBox.left + panel.clientLeft + panel.clientWidth;
+      const describe = (element) =>
+        element.id ||
+        (typeof element.className === "string" && element.className) ||
+        element.tagName.toLowerCase();
       const protruding = [...panel.querySelectorAll("*")]
         .filter(
           (element) => element.getBoundingClientRect().right > panelRight + 1,
@@ -7945,10 +7957,23 @@ try {
         .slice(0, 6)
         .map(
           (element) =>
-            `${element.id || element.className || element.tagName.toLowerCase()}:${Math.round(element.getBoundingClientRect().right - panelRight)}px`,
+            `${describe(element)}:${Math.round(element.getBoundingClientRect().right - panelRight)}px`,
+        );
+      const textOverflow = [...panel.querySelectorAll("*")]
+        .filter(
+          (element) =>
+            element.clientWidth > 0 &&
+            element.scrollWidth > element.clientWidth + 1 &&
+            getComputedStyle(element).overflowX === "visible",
+        )
+        .slice(0, 6)
+        .map(
+          (element) =>
+            `${describe(element)}:+${element.scrollWidth - element.clientWidth}px`,
         );
       return {
         protruding,
+        textOverflow,
         panelHorizontalOverflow: panel.scrollWidth > panel.clientWidth + 1,
         documentHorizontalOverflow:
           document.documentElement.scrollWidth > window.innerWidth + 1,
@@ -7972,7 +7997,7 @@ try {
       assert.equal(
         measured.panelHorizontalOverflow,
         false,
-        `Settings panel has no horizontal scroll at ${width}px (protruding: ${measured.protruding.join(", ")})`,
+        `Settings panel has no horizontal scroll at ${width}px (past the padding edge: ${measured.protruding.join(", ") || "none"}; text overflow: ${measured.textOverflow.join(", ") || "none"})`,
       );
       assert.equal(
         measured.documentHorizontalOverflow,
