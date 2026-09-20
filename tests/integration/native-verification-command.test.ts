@@ -14,6 +14,8 @@ import {
 import {
   discoverLinkedGitMetadata,
   executeNativeVerificationCommand,
+  isUnderAnyPrefix,
+  statusArguments,
   type SnapshotFactory,
 } from "../../src/modules/computer/infra/native/native-verification-command";
 import { createWorkspaceSnapshot } from "../../src/modules/computer/infra/native/workspace-snapshot";
@@ -154,6 +156,7 @@ function verdictFixtureSource(
 ): string {
   return `#include <fcntl.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -1475,6 +1478,66 @@ int main(void) {
       expect(result.value.outputBytes).toBe(Buffer.byteLength(stdout));
     });
 
+    // S35-H1-4b. The exclusion holds in three independent places, and the
+    // route test below only shows the three together. These two prove the
+    // two that are pure functions, on their own, so a layer cannot quietly
+    // stop working behind the others.
+    it("S35-H1-4b statusArguments emits exactly one `:(exclude,top,literal)` pathspec per denied prefix, after a `--` separator", () => {
+      expect(statusArguments([])).toEqual([
+        "status",
+        "--porcelain",
+        "--branch",
+        "-z",
+        "--untracked-files=no",
+        "--ignore-submodules=all",
+      ]);
+
+      const withPrefixes = statusArguments(["private", "vendor/secret"]);
+      expect(withPrefixes).toEqual([
+        "status",
+        "--porcelain",
+        "--branch",
+        "-z",
+        "--untracked-files=no",
+        "--ignore-submodules=all",
+        "--",
+        ":(exclude,top,literal)private",
+        ":(exclude,top,literal)vendor/secret",
+      ]);
+      // One pathspec per prefix, never a merged or globbed one: `literal`
+      // is what keeps a prefix containing `*` or `?` from matching more,
+      // and `top` is what anchors it at the snapshot root.
+      expect(
+        withPrefixes.filter((argument) =>
+          argument.startsWith(":(exclude,top,literal)"),
+        ),
+      ).toHaveLength(2);
+      expect(statusArguments(["a", "b", "c"])).toHaveLength(10);
+    });
+
+    it("S35-H1-4b the folded filter drops a path that is a case or NFC variant of a denied prefix, and keeps an unrelated neighbour", () => {
+      const denied = ["private", "caf\u00e9"];
+
+      // Exact, and the prefix itself.
+      expect(isUnderAnyPrefix("private/x.txt", denied)).toBe(true);
+      expect(isUnderAnyPrefix("private", denied)).toBe(true);
+      // Case variants, including one the volume itself folds together.
+      expect(isUnderAnyPrefix("Private/x.txt", denied)).toBe(true);
+      expect(isUnderAnyPrefix("PRIVATE/x.txt", denied)).toBe(true);
+      expect(isUnderAnyPrefix("PrIvAtE/deep/x.txt", denied)).toBe(true);
+      // Decomposed (NFD) `café`: the same name on an APFS volume.
+      expect(isUnderAnyPrefix("cafe\u0301/x.txt", denied)).toBe(true);
+      expect(isUnderAnyPrefix("CAFE\u0301/x.txt", denied)).toBe(true);
+
+      // A neighbour whose name merely starts with the prefix's characters
+      // is a different directory and stays.
+      expect(isUnderAnyPrefix("privateer/x.txt", denied)).toBe(false);
+      expect(isUnderAnyPrefix("public/private.txt", denied)).toBe(false);
+      expect(isUnderAnyPrefix("x/private/y.txt", denied)).toBe(false);
+      expect(isUnderAnyPrefix("cafes/x.txt", denied)).toBe(false);
+      expect(isUnderAnyPrefix("anything.txt", [])).toBe(false);
+    });
+
     it("excludes a case variant of a denied prefix on this side, so the helper is never asked for it", async () => {
       // On the default case-insensitive volume `Private` and `private` are
       // one directory; on a case-sensitive one they are siblings. Either
@@ -1961,6 +2024,95 @@ int main(void) {
         value: {
           kind: "workspace.command",
           stdout: "## index-lock-write:allowed\n",
+        },
+      });
+    });
+
+    // S35-H1-4a. The write grant inside the snapshot is meant to be exactly
+    // one thing -- what an index refresh needs -- and nothing else under
+    // `.git`. Each of these is a real compiled binary run as the command,
+    // under the real Seatbelt profile, inside a real snapshot.
+    it("S35-H1-4a denies a write into `.git/refs/heads/main` inside the snapshot", async () => {
+      const refWriteAttempt = await compileCommandFixture(
+        "ref-write-attempt",
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(".git/refs/heads/main", O_WRONLY | O_CREAT, 0600); if (descriptor >= 0) { allowed = 1; close(descriptor); } }`,
+          allowed: "ref-write:allowed",
+          denied: "ref-write:denied",
+        }),
+      );
+
+      await expect(
+        workspace(async () => refWriteAttempt).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", stdout: "## ref-write:denied\n" },
+      });
+    });
+
+    it("S35-H1-4a denies a write into `.git/config` inside the snapshot", async () => {
+      const configWriteAttempt = await compileCommandFixture(
+        "config-write-attempt",
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(".git/config", O_WRONLY | O_CREAT, 0600); if (descriptor >= 0) { allowed = 1; close(descriptor); } }`,
+          allowed: "config-write:allowed",
+          denied: "config-write:denied",
+        }),
+      );
+
+      await expect(
+        workspace(async () => configWriteAttempt).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          stdout: "## config-write:denied\n",
+        },
+      });
+    });
+
+    it("S35-H1-4a denies a write into `.git/packed-refs` inside the snapshot", async () => {
+      const packedRefsWriteAttempt = await compileCommandFixture(
+        "packed-refs-write-attempt",
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(".git/packed-refs", O_WRONLY | O_CREAT, 0600); if (descriptor >= 0) { allowed = 1; close(descriptor); } }`,
+          allowed: "packed-refs-write:allowed",
+          denied: "packed-refs-write:denied",
+        }),
+      );
+
+      await expect(
+        workspace(async () => packedRefsWriteAttempt).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          stdout: "## packed-refs-write:denied\n",
+        },
+      });
+    });
+
+    it("S35-H1-4a still allows the whole index-refresh sequence: create `.git/index.lock`, write it, rename it over `.git/index`", async () => {
+      const indexRefreshAttempt = await compileCommandFixture(
+        "index-refresh-attempt",
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(".git/index.lock", O_WRONLY | O_CREAT | O_EXCL, 0600); if (descriptor >= 0) { allowed = write(descriptor, "lock\\n", 5) == 5; close(descriptor); allowed = allowed && rename(".git/index.lock", ".git/index") == 0; } }`,
+          allowed: "index-refresh:allowed",
+          denied: "index-refresh:denied",
+        }),
+      );
+
+      await expect(
+        workspace(async () => indexRefreshAttempt).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          stdout: "## index-refresh:allowed\n",
         },
       });
     });

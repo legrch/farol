@@ -605,7 +605,13 @@ const HEAD_ARGUMENTS = [
 // at the snapshot root whatever the working directory. The rendered result
 // is filtered against the same prefixes again (`isUnderAnyPrefix`, folded
 // the way the helper folds), so nothing rests on Git's own matching alone.
-function statusArguments(deniedPrefixes: readonly string[]): readonly string[] {
+// Exported for the per-layer tests: the denied prefixes are enforced in
+// three independent places (the snapshot never carries them, Git is never
+// asked for them, and the rendered result is filtered again), and each
+// layer is proven on its own rather than only through the whole route.
+export function statusArguments(
+  deniedPrefixes: readonly string[],
+): readonly string[] {
   return [
     "status",
     "--porcelain",
@@ -1079,7 +1085,7 @@ function comparableSegment(segment: string): string {
   return segment.normalize("NFC").toUpperCase().toLowerCase();
 }
 
-function isUnderAnyPrefix(
+export function isUnderAnyPrefix(
   relativePath: string,
   prefixes: readonly string[],
 ): boolean {
