@@ -1136,4 +1136,209 @@ int main(void) {
       await expect(fs.stat(snapshotPath)).rejects.toThrow();
     }
   });
+
+  // N02d: the Seatbelt write grant used to cover the whole snapshot, which a
+  // linked working-tree file inside it makes dangerous -- that file is a hard
+  // link to the owner's own inode (workspace-snapshot.ts / safe_open.py), so
+  // a wide write grant lets the fixed Git command rewrite the owner's real
+  // file. These tests substitute a stand-in for the Git binary (the same
+  // pattern `native-verification-command-failures.test.ts`'s mocked spawn and
+  // this file's other `compileCommandFixture` fixtures already use) that
+  // attempts a write itself, so the sandbox's own refusal or grant is what
+  // decides the outcome, not application logic.
+  describe("N02d write grant", () => {
+    it("denies a write into a linked working-tree file inside the snapshot, leaving the owner's file untouched", async () => {
+      const worktreeWriteAttempt = await compileCommandFixture(
+        "worktree-write-attempt",
+        `#include <fcntl.h>
+#include <stddef.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+  for (int index = 1; index < argc; index += 1) {
+    if (strcmp(argv[index], "ls-files") == 0) {
+      const char entry[] = "README.md";
+      const ssize_t entry_written = write(STDOUT_FILENO, entry, sizeof(entry) - 1);
+      const ssize_t nul_written = write(STDOUT_FILENO, "", 1);
+      return entry_written == (ssize_t)(sizeof(entry) - 1) && nul_written == 1 ? 0 : 1;
+    }
+  }
+  const int descriptor = open("README.md", O_WRONLY);
+  const char payload[] = "TAMPERED\\n";
+  ssize_t written = -1;
+  if (descriptor >= 0) {
+    written = write(descriptor, payload, sizeof(payload) - 1);
+    close(descriptor);
+  }
+  const int allowed = descriptor >= 0 && written == (ssize_t)(sizeof(payload) - 1);
+  const char allowed_message[] = "workdir-write:allowed\\n";
+  const char denied_message[] = "workdir-write:denied\\n";
+  const char *output = allowed ? allowed_message : denied_message;
+  const size_t length = allowed ? sizeof(allowed_message) - 1 : sizeof(denied_message) - 1;
+  const ssize_t out_written = write(STDOUT_FILENO, output, length);
+  return out_written == (ssize_t)length ? 0 : 1;
+}
+`,
+      );
+
+      const result = await workspace(async () => worktreeWriteAttempt).execute(
+        request(),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", stdout: "workdir-write:denied\n" },
+      });
+      // The owner's real file -- not a snapshot copy, which is already
+      // removed by the time this runs -- is byte-identical afterwards.
+      await expect(fs.readFile(path.join(root, "README.md"), "utf8")).resolves.toBe(
+        "before\n",
+      );
+    });
+
+    it("allows a write into `.git` metadata inside the snapshot", async () => {
+      const gitdirWriteAttempt = await compileCommandFixture(
+        "gitdir-write-attempt",
+        `#include <fcntl.h>
+#include <stddef.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(int argc, char **argv) {
+  for (int index = 1; index < argc; index += 1) {
+    if (strcmp(argv[index], "ls-files") == 0) {
+      return 0;
+    }
+  }
+  const int descriptor = open(".git/farol-write-canary", O_WRONLY | O_CREAT, 0600);
+  const char payload[] = "canary\\n";
+  ssize_t written = -1;
+  if (descriptor >= 0) {
+    written = write(descriptor, payload, sizeof(payload) - 1);
+    close(descriptor);
+  }
+  const int allowed = descriptor >= 0 && written == (ssize_t)(sizeof(payload) - 1);
+  const char allowed_message[] = "gitdir-write:allowed\\n";
+  const char denied_message[] = "gitdir-write:denied\\n";
+  const char *output = allowed ? allowed_message : denied_message;
+  const size_t length = allowed ? sizeof(allowed_message) - 1 : sizeof(denied_message) - 1;
+  const ssize_t out_written = write(STDOUT_FILENO, output, length);
+  return out_written == (ssize_t)length ? 0 : 1;
+}
+`,
+      );
+
+      const result = await workspace(async () => gitdirWriteAttempt).execute(
+        request(),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", stdout: "gitdir-write:allowed\n" },
+      });
+    });
+
+    async function indexRefreshHappened(
+      input: ReadonlyWorkspaceRequest,
+    ): Promise<boolean> {
+      if (input.operation.kind !== "verification.run") {
+        throw new Error("verification operation expected");
+      }
+      const factory = snapshotFactory();
+      const indexChanges: boolean[] = [];
+      const observedFactory: SnapshotFactory = async (snapshotRequest) => {
+        const outcome = await factory(snapshotRequest);
+        if (!outcome.ok) return outcome;
+        // Only the bounded, tracked-paths snapshot ever carries the actual
+        // working file this stale mtime lives on; the metadata-only snapshot
+        // (paths: []) never sees it and its index is never rewritten. Both
+        // are observed the same way so the assertion below reflects whatever
+        // the real, unmodified command flow actually does.
+        const gitMetadataDirectory =
+          snapshotRequest.externalGitDir !== undefined
+            ? path.join(outcome.path, ".gitmeta", "worktree")
+            : path.join(outcome.path, ".git");
+        const indexPath =
+          (snapshotRequest.paths?.length ?? 0) > 0
+            ? path.join(gitMetadataDirectory, "index")
+            : null;
+        const before =
+          indexPath === null
+            ? null
+            : (await fs.stat(indexPath, { bigint: true })).mtimeNs;
+        return {
+          ...outcome,
+          remove: async () => {
+            if (indexPath !== null && before !== null) {
+              const after = await fs
+                .stat(indexPath, { bigint: true })
+                .then((stat) => stat.mtimeNs)
+                .catch(() => before);
+              indexChanges.push(after !== before);
+            }
+            await outcome.remove();
+          },
+        };
+      };
+
+      const result = await executeNativeVerificationCommand(
+        input,
+        input.operation,
+        { attestGit: async () => git, createSnapshot: observedFactory },
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+      return indexChanges.some(Boolean);
+    }
+
+    it("still writes a refreshed index under the narrowed grant, on a primary checkout", async () => {
+      // A future mtime with unchanged content is exactly what makes Git's own
+      // "racily clean" handling reread the file, find it unmodified, and
+      // rewrite the index's cached stat data -- the one on-disk write a plain
+      // `git status` actually performs.
+      const future = new Date(Date.now() + 60_000);
+      await fs.utimes(path.join(root, "README.md"), future, future);
+
+      expect(await indexRefreshHappened(request())).toBe(true);
+    });
+
+    it("still writes a refreshed index under the narrowed grant, on a linked worktree", async () => {
+      const mainRoot = root;
+      const worktreeParent = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-next-command-worktree-refresh-"),
+      );
+      const linkedRoot = path.join(worktreeParent, "checkout");
+      try {
+        await executeFile(git, [
+          "-C",
+          mainRoot,
+          "worktree",
+          "add",
+          "--quiet",
+          "--detach",
+          linkedRoot,
+        ]);
+        root = await fs.realpath(linkedRoot);
+        const grant = await discoverLinkedGitMetadata(root);
+        const future = new Date(Date.now() + 60_000);
+        await fs.utimes(path.join(root, "README.md"), future, future);
+
+        expect(await indexRefreshHappened(request(grant ?? undefined))).toBe(
+          true,
+        );
+      } finally {
+        root = mainRoot;
+        await executeFile(git, [
+          "-C",
+          mainRoot,
+          "worktree",
+          "remove",
+          "--force",
+          linkedRoot,
+        ]).catch(() => undefined);
+        await fs.rm(worktreeParent, { recursive: true, force: true });
+      }
+    });
+  });
 });

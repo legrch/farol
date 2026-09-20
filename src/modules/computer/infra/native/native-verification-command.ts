@@ -38,11 +38,12 @@ const REVIEWED_DEVELOPER_ROOTS = Object.freeze([
 
 // N02 -- Git never reads the owner's folder. It reads only the private
 // snapshot `createSnapshot` (workspace-snapshot.ts) assembles from
-// descriptors Farol already holds, and the sandbox grants read and write
-// access to that snapshot directory alone -- never to the owner's workspace
-// pathname. The snapshot mirrors both a primary checkout and a linked
-// worktree (its own gitdir and the repository's common gitdir rebuilt inside
-// the same destination), so Git needs no path outside it.
+// descriptors Farol already holds, and the sandbox grants read access to
+// that snapshot directory alone -- never to the owner's workspace pathname.
+// (N02d narrows the matching write grant further still; see below.) The
+// snapshot mirrors both a primary checkout and a linked worktree (its own
+// gitdir and the repository's common gitdir rebuilt inside the same
+// destination), so Git needs no path outside it.
 //
 // N02c -- one command may run over more than one such snapshot. `git.status`
 // first snapshots `.git` alone, asks Git itself (inside that snapshot) which
@@ -51,6 +52,22 @@ const REVIEWED_DEVELOPER_ROOTS = Object.freeze([
 // before running the fixed status command over it. `git.head` never needs a
 // second snapshot: `rev-parse` reads refs and objects, never a worktree
 // file.
+//
+// N02d -- reads stay granted across the whole snapshot subtree, but writes do
+// not: a working-tree file inside the snapshot is a hard link to the owner's
+// own inode (workspace-snapshot.ts / safe_open.py), so a write grant wide
+// enough to cover it would let the fixed Git command rewrite the owner's real
+// file. `git status`/`git rev-parse` only ever need to write repository
+// metadata Git itself may rewrite in place -- the index and its lock during
+// an index refresh -- and that metadata is always a private copy inside the
+// snapshot (`_snapshot_copy_handler`), never a link to the owner's tree. The
+// write grant is therefore narrowed to exactly the two metadata subtrees a
+// snapshot can contain: `.git` (a plain directory holding that metadata for a
+// primary checkout) and `.gitmeta` (the `worktree`/`common` pair
+// `_snapshot_linked_worktree` rebuilds for a linked worktree, whose top-level
+// `.git` is instead a small fixed pointer file Git never rewrites). Whichever
+// layout is in play, the other subtree simply does not exist in that
+// snapshot, so granting both unconditionally costs nothing.
 const COMMAND_PROFILE = `(version 1)
 (import "dyld-support.sb")
 (deny default)
@@ -70,7 +87,8 @@ const COMMAND_PROFILE = `(version 1)
   (subpath (param "FAROL_EXECUTABLE_DIR"))
   (subpath (param "FAROL_SNAPSHOT")))
 (allow file-write*
-  (subpath (param "FAROL_SNAPSHOT"))
+  (subpath (param "FAROL_GIT_DIR"))
+  (subpath (param "FAROL_GIT_META_DIR"))
   (literal "/dev/stdout")
   (literal "/dev/stderr")
   (literal "/dev/null")
@@ -604,16 +622,19 @@ type SandboxedGitOutcome =
     }>;
 
 // Runs one fixed, no-network Git invocation entirely inside `snapshotPath`
-// (the private snapshot N02 built): the Seatbelt profile grants read and
-// write only under that one directory, plus the reviewed Git binary and the
-// system libraries it needs. Git sees no pathname belonging to the owner's
-// real workspace at all -- primary and linked-worktree layouts alike are
-// self-contained inside the snapshot (workspace-snapshot.ts / safe_open.py
-// `_snapshot_linked_worktree`), so no extra grant is needed for either. This
-// is the one place a sandboxed Git process is spawned; `runGitOverSnapshot`
-// (status/head) and `runGitLsFiles` (tracked-path discovery) are both thin
-// callers, so a sandbox failure, a timeout or a cancellation is classified
-// identically whichever one is running.
+// (the private snapshot N02 built): the Seatbelt profile grants read across
+// that whole directory, plus the reviewed Git binary and the system
+// libraries it needs, but write only under its `.git` and `.gitmeta`
+// metadata subtrees (N02d) -- never under a working-tree path a snapshot may
+// have hard-linked to the owner's own inode. Git sees no pathname belonging
+// to the owner's real workspace at all -- primary and linked-worktree
+// layouts alike are self-contained inside the snapshot
+// (workspace-snapshot.ts / safe_open.py `_snapshot_linked_worktree`), so no
+// extra grant is needed for either. This is the one place a sandboxed Git
+// process is spawned; `runGitOverSnapshot` (status/head) and `runGitLsFiles`
+// (tracked-path discovery) are both thin callers, so a sandbox failure, a
+// timeout or a cancellation is classified identically whichever one is
+// running.
 function runSandboxedGit(
   git: string,
   snapshotPath: string,
@@ -657,6 +678,17 @@ function runSandboxedGit(
     `FAROL_EXECUTABLE_DIR=${path.dirname(git)}`,
     "-D",
     `FAROL_SNAPSHOT=${snapshotPath}`,
+    // N02d -- the two metadata subtrees Git may actually rewrite: `.git`
+    // (a primary checkout's own directory, or a linked worktree's small
+    // fixed pointer file, which is never rewritten but costs nothing to
+    // name) and `.gitmeta` (the worktree/common pair a linked worktree's
+    // snapshot rebuilds). Both are plain joins of an already-validated
+    // `snapshotPath` with a fixed literal segment, so no extra path check is
+    // needed here.
+    "-D",
+    `FAROL_GIT_DIR=${path.join(snapshotPath, ".git")}`,
+    "-D",
+    `FAROL_GIT_META_DIR=${path.join(snapshotPath, ".gitmeta")}`,
   ];
   ancestors.forEach((directory, index) => {
     parameters.push("-D", `FAROL_SNAPSHOT_PARENT_${index}=${directory}`);
