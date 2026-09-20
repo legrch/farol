@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   NativeReadonlyWorkspace,
@@ -418,6 +418,21 @@ describe("workspace snapshot (N02)", () => {
   // sandbox cannot create one, the test reports that instead of silently
   // passing. HFS+ on purpose: it is also a volume without clone support,
   // which the second test below needs.
+  // How many volume-dependent cases could not run. A runner that cannot
+  // attach a second device has not proven any of the three refusals below,
+  // and must say so: reported once at the end, because a case that quietly
+  // returns is indistinguishable from one that passed.
+  let unattachableVolumeCases = 0;
+
+  afterAll(() => {
+    if (unattachableVolumeCases === 0) return;
+    console.warn(
+      `workspace-snapshot: ${unattachableVolumeCases} of 3 volume-dependent ` +
+        "case(s) skipped -- no second device could be attached, so the " +
+        "cross-volume and clone-support refusals are NOT proven by this run",
+    );
+  });
+
   async function attachRamDisk(
     label: string,
   ): Promise<Readonly<{ device: string; mountPoint: string }> | null> {
@@ -439,6 +454,7 @@ describe("workspace snapshot (N02)", () => {
       // missing hdiutil/diskutil, or no permission). The mechanism this test
       // targets is still exercised by the entry/byte bound tests above; this
       // one specific volume case is reported skipped rather than faked.
+      unattachableVolumeCases += 1;
       console.warn(
         `workspace-snapshot ${label} test skipped: ${(error as Error).message}`,
       );
@@ -455,9 +471,15 @@ describe("workspace snapshot (N02)", () => {
   // second idle. The budget is the only thing widened; the assertions are
   // untouched. A test that passes alone and fails in the suite is a red
   // that gets explained away rather than read.
-  it("refuses when the destination volume cannot hold a clone of the source", async () => {
+  it("refuses when the destination volume cannot hold a clone of the source", async (ctx) => {
     const disk = await attachRamDisk("cross-volume");
-    if (disk === null) return;
+    // Skipped, not passed: the reporter must show this case as unproven.
+    // `ctx.skip()` throws, so the `return` never runs -- it is there because
+    // its type is not `never` and TypeScript cannot otherwise narrow `disk`.
+    if (disk === null) {
+      ctx.skip();
+      return;
+    }
     try {
       await fs.writeFile(path.join(root, "f.txt"), "x\n", { mode: 0o600 });
       const outcome = await createWorkspaceSnapshot(
@@ -473,9 +495,15 @@ describe("workspace snapshot (N02)", () => {
   // Source and destination on one volume that cannot clone at all (HFS+):
   // the refusal is distinct from the cross-volume one, and nothing falls
   // back to copying the tree.
-  it("refuses distinctly when the shared volume has no clone support", async () => {
+  it("refuses distinctly when the shared volume has no clone support", async (ctx) => {
     const disk = await attachRamDisk("clone-unsupported");
-    if (disk === null) return;
+    // Skipped, not passed: the reporter must show this case as unproven.
+    // `ctx.skip()` throws, so the `return` never runs -- it is there because
+    // its type is not `never` and TypeScript cannot otherwise narrow `disk`.
+    if (disk === null) {
+      ctx.skip();
+      return;
+    }
     try {
       const sourceRoot = await fs.realpath(
         await fs.mkdtemp(path.join(disk.mountPoint, "src-")),
@@ -514,9 +542,15 @@ describe("workspace snapshot (N02)", () => {
   // devices -- the same real boundary the mechanism test above exercises,
   // just with the source and destination swapped and a real repository in
   // place of a plain directory.
-  it("refuses git.status through the production route when the approved repository root sits on another volume", async () => {
+  it("refuses git.status through the production route when the approved repository root sits on another volume", async (ctx) => {
     const disk = await attachRamDisk("git-status-cross-volume");
-    if (disk === null) return;
+    // Skipped, not passed: the reporter must show this case as unproven.
+    // `ctx.skip()` throws, so the `return` never runs -- it is there because
+    // its type is not `never` and TypeScript cannot otherwise narrow `disk`.
+    if (disk === null) {
+      ctx.skip();
+      return;
+    }
     try {
       const repoRoot = await fs.realpath(
         await fs.mkdtemp(path.join(disk.mountPoint, "repo-")),
