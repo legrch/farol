@@ -148,15 +148,40 @@ const upstream = {
   failNext: false,
   authorizations: [],
   models: [],
+  /** The tool inventory the host advertised on each request. */
+  toolNames: [],
+  /** The full tool inventory of the most recent request. */
+  lastTools: [],
+  /** Set by the tool-roundtrip phase; see `app-tool-roundtrip`. */
+  toolCall: null,
 };
 
 const turnHandler = async (request) => {
   upstream.calls += 1;
   upstream.authorizations.push(request.headers.authorization ?? null);
   upstream.models.push(request.body?.model ?? null);
+  upstream.toolNames.push(
+    (request.body?.tools ?? []).map((tool) => tool?.name ?? tool?.type ?? null),
+  );
+  upstream.lastTools = request.body?.tools ?? [];
   if (upstream.failNext) {
     upstream.failNext = false;
     return { ok: false, reason: "FAROL_MODEL_E2E_SYNTHETIC_FAILURE" };
+  }
+  // S35-TA-3: the correlated tool roundtrip. The first turn answers with a
+  // function call instead of text; the host runs it and opens a SECOND
+  // turn whose input carries the result. `toolCall` records both halves so
+  // the phase can assert they are the same call, by id.
+  if (upstream.toolCall && !upstream.toolCall.answered) {
+    if (upstream.toolCall.requested === null) {
+      upstream.toolCall.requested = toolCallItem(upstream.toolCall);
+      return {
+        ok: true,
+        events: functionCallEvents(upstream.toolCall.requested),
+      };
+    }
+    upstream.toolCall.answered = true;
+    upstream.toolCall.secondTurnInput = request.body?.input ?? [];
   }
   const itemId = "msg_e2e";
   const message = {
@@ -223,6 +248,70 @@ const turnHandler = async (request) => {
     ],
   };
 };
+
+/** The `shell` function call this run asks the host to execute. */
+function toolCallItem(plan) {
+  return {
+    id: "fc_e2e_1",
+    call_id: plan.callId,
+    type: "function_call",
+    name: plan.toolName,
+    arguments: JSON.stringify(plan.arguments),
+    status: "completed",
+  };
+}
+
+/** One completed turn whose only output item is that function call. */
+function functionCallEvents(item) {
+  return [
+    {
+      event: "response.created",
+      data: {
+        type: "response.created",
+        response: {
+          id: "resp_e2e_tool",
+          object: "response",
+          status: "in_progress",
+          output: [],
+        },
+      },
+    },
+    {
+      event: "response.output_item.added",
+      data: {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { ...item, status: "in_progress", arguments: "" },
+      },
+    },
+    {
+      event: "response.function_call_arguments.delta",
+      data: {
+        type: "response.function_call_arguments.delta",
+        item_id: item.id,
+        output_index: 0,
+        delta: item.arguments,
+      },
+    },
+    {
+      event: "response.output_item.done",
+      data: { type: "response.output_item.done", output_index: 0, item },
+    },
+    {
+      event: "response.completed",
+      data: {
+        type: "response.completed",
+        response: {
+          id: "resp_e2e_tool",
+          object: "response",
+          status: "completed",
+          output: [item],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      },
+    },
+  ];
+}
 
 async function runCodexExec(codexBin, environment, extraArgs) {
   return new Promise((resolve, reject) => {
@@ -799,6 +888,92 @@ async function main() {
         accepted: observed.accepted,
         configMode: "600",
       };
+    });
+
+    await phase("app-tool-roundtrip", async () => {
+      // One correlated tool roundtrip on the real host: Farol answers the
+      // first turn with a function call, the host runs it and opens a
+      // SECOND turn carrying the result. What is asserted is the
+      // correlation — the same call_id comes back with its output —
+      // because that is what makes a roundtrip a roundtrip rather than
+      // two unrelated requests.
+      const advertised = upstream.toolNames.at(-1) ?? [];
+      console.log(`host advertises tools: ${JSON.stringify(advertised)}`);
+      const shellTool = advertised.find(
+        (name) =>
+          typeof name === "string" &&
+          (name === "exec_command" || name === "shell"),
+      );
+      assert.ok(
+        shellTool,
+        `the host must advertise a command tool, saw ${JSON.stringify(advertised)}`,
+      );
+      const schema = upstream.lastTools.find(
+        (tool) => (tool?.name ?? tool?.type) === shellTool,
+      );
+      console.log(`tool schema: ${JSON.stringify(schema)}`);
+
+      upstream.toolCall = {
+        toolName: shellTool,
+        callId: "call_farol_e2e_roundtrip",
+        // Measured from the host's own advertised schema (logged above):
+        // `exec_command` takes one required string `cmd`.
+        arguments:
+          shellTool === "exec_command"
+            ? { cmd: "/bin/echo farol-roundtrip-ok" }
+            : { command: ["/bin/echo", "farol-roundtrip-ok"] },
+        requested: null,
+        answered: false,
+        secondTurnInput: null,
+      };
+
+      const observed = await observedAppRun(
+        "application journey, one tool roundtrip",
+        appLifecycle,
+        hostEnvironment(appHome),
+        [],
+      );
+      assert.equal(observed.run.code, 0, "the roundtrip turn must complete");
+      // Two served requests, not one: the call and the turn carrying its
+      // result. A host that never ran the tool would show only one.
+      assert.equal(
+        observed.accepted,
+        2,
+        `the roundtrip is exactly two served requests, saw ${observed.accepted}`,
+      );
+      assert.equal(observed.rejected, 0);
+      assert.ok(upstream.toolCall.answered, "the host must open a second turn");
+
+      const followUp = upstream.toolCall.secondTurnInput ?? [];
+      const outputs = followUp.filter(
+        (item) => item?.type === "function_call_output",
+      );
+      assert.equal(
+        outputs.length,
+        1,
+        `exactly one tool result must come back, saw ${outputs.length}`,
+      );
+      assert.equal(
+        outputs[0].call_id,
+        upstream.toolCall.callId,
+        "the result must carry the call_id Farol issued",
+      );
+      const rendered = JSON.stringify(outputs[0].output ?? "");
+      assert.ok(
+        rendered.includes("farol-roundtrip-ok"),
+        `the tool's real output must come back, saw ${rendered.slice(0, 200)}`,
+      );
+      // And the second turn still went to the same model on the same
+      // authenticated endpoint.
+      assert.deepEqual(observed.models, [ROUTE_B_MODEL, ROUTE_B_MODEL]);
+      const result = {
+        toolName: shellTool,
+        servedRequests: observed.accepted,
+        callId: outputs[0].call_id,
+        correlated: true,
+      };
+      upstream.toolCall = null;
+      return result;
     });
 
     await phase("app-rotation-then-host", async () => {
