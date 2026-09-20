@@ -28,12 +28,6 @@ import unicodedata
 
 
 MAGIC = b"FAROLR1\0"
-# Written to stdout immediately before the helper replaces itself with the
-# reviewed verification command, so the caller can tell a helper refusal (no
-# marker, helper exit status) from the command's own output and exit status.
-EXEC_MAGIC = b"FAROLX1\0"
-MAX_EXEC_ARGUMENTS = 512
-SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_MUTATION_BYTES = 8 * 1024 * 1024
@@ -80,14 +74,23 @@ MAX_WINDOW_OFFSET = 2 ** 53 - 1
 
 # workspace-snapshot bounds.  A caller may ask for a smaller ceiling (clamped
 # the same way _source_ceiling clamps maxBytes for a read); it can never ask
-# for more than these.  Bytes only count entries this verb copies (the index
-# and a rewritten config) -- a hard link costs no bytes, matching the design's
-# "thousands of linkat calls and no data copy".
+# for more than these.  A `linkat` costs no *disk* bytes -- it is still one
+# name for the source inode, not a copy -- but the byte bound is a budget for
+# the work this snapshot commits Git to doing, not for bytes this verb itself
+# writes.  A hard-linked regular file's size is charged against it exactly as
+# a copied one is (`_snapshot_charge_bytes`), so a single huge tracked blob
+# cannot make the bound meaningless.  A cross-volume root cannot be
+# hard-linked at all (`EXIT_SNAPSHOT_CROSS_VOLUME`); that refusal proves this
+# verb refuses cross-volume roots, not that it would otherwise copy them.
 MAX_SNAPSHOT_ENTRIES = 200_000
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
 MAX_SNAPSHOT_CONFIG_BYTES = 256 * 1024
 MAX_SNAPSHOT_GITLINK_BYTES = 4096
 MAX_SNAPSHOT_DEPTH = 64
+# A caller-named relative path list (the "bounded path mode"): every regular
+# file `git ls-files` reports, instead of the whole approved tree.  Bounded by
+# the same entry ceiling, since each named path becomes at most one entry.
+MAX_SNAPSHOT_PATHS = MAX_SNAPSHOT_ENTRIES
 
 EXIT_INVALID = 20
 EXIT_NOT_FOUND = 21
@@ -2595,10 +2598,23 @@ def _snapshot_read_all(descriptor, ceiling, *, on_too_large):
     return b"".join(chunks)
 
 
-def _snapshot_create_file(dest_fd, name, payload, state):
-    state["bytes"] += len(payload)
+def _snapshot_charge_bytes(state, size):
+    """Charge `size` against the snapshot's byte budget and refuse over it.
+
+    Used both for bytes this verb actually writes (a copied index or a
+    rewritten config) and for a hard-linked regular file's own size: a
+    `linkat` costs this process no bytes, but Git will still read every one
+    of the source file's bytes once the snapshot is handed to it, and a bound
+    that only counted copies could be defeated by linking one huge tracked
+    blob.
+    """
+    state["bytes"] += max(size, 0)
     if state["bytes"] > state["max_bytes"]:
         refuse(EXIT_SNAPSHOT_TOO_LARGE)
+
+
+def _snapshot_create_file(dest_fd, name, payload, state):
+    _snapshot_charge_bytes(state, len(payload))
     descriptor = os.open(
         name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -2685,7 +2701,7 @@ def _snapshot_link(source_fd, dest_fd, name, listed):
         refuse(EXIT_ROOT_CHANGED)
 
 
-def _snapshot_entry(source_fd, dest_fd, name, state, depth):
+def _snapshot_entry(source_fd, dest_fd, name, state, depth, denied=(), prefix=()):
     # `name` came from a listing already taken; between that listing and this
     # stat, a concurrent change to the source (not only a hostile one -- a
     # build tool deleting its own output is enough) can make it vanish or
@@ -2698,7 +2714,7 @@ def _snapshot_entry(source_fd, dest_fd, name, state, depth):
         try:
             child_dest = os.open(name, DIRECTORY_FLAGS, dir_fd=dest_fd)
             try:
-                _snapshot_walk(child_source, child_dest, state, depth + 1, {})
+                _snapshot_walk(child_source, child_dest, state, depth + 1, {}, denied, prefix)
             finally:
                 os.close(child_dest)
         finally:
@@ -2713,10 +2729,18 @@ def _snapshot_entry(source_fd, dest_fd, name, state, depth):
         return
     if listed.st_nlink < 1:
         refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    # A hard link resolves to `listed`'s inode, not to `name`: it exposes
+    # whatever bytes Git reads through that inode at the moment it reads
+    # them, including a write made afterwards through a descriptor opened
+    # before this snapshot -- it is not a point-in-time copy of the file's
+    # content.  Renaming, replacing or deleting the source afterwards cannot
+    # change what the link resolves to, because none of those touch the
+    # inode this link already names.
+    _snapshot_charge_bytes(state, listed.st_size)
     _snapshot_link(source_fd, dest_fd, name, listed)
 
 
-def _snapshot_walk(source_fd, dest_fd, state, depth, special):
+def _snapshot_walk(source_fd, dest_fd, state, depth, special, denied=(), prefix=()):
     """Recreate every entry of one already-open source directory inside one
     already-open, already-empty destination directory.
 
@@ -2724,6 +2748,14 @@ def _snapshot_walk(source_fd, dest_fd, state, depth, special):
     call* only (`.git`, then `config`/`index` one level inside it); every
     recursive call this makes starts a fresh, empty `special`, so nothing
     below the first two levels is ever treated specially.
+
+    `denied` (root-relative prefix tuples) and `prefix` (this call's own
+    root-relative location) apply only to whole-tree walks: an entry under a
+    denied prefix is excluded the same way a recursive search walk already
+    excludes one (`_walk_regular_files`) -- skipped before it is charged
+    against any bound, never linked, never refused.  A `special`-handled name
+    (`.git`) is never subject to this check: the caller who sets `special`
+    already carries its own authorization for that entry.
     """
 
     if depth > MAX_SNAPSHOT_DEPTH:
@@ -2738,15 +2770,17 @@ def _snapshot_walk(source_fd, dest_fd, state, depth, special):
     for index, name in enumerate(names):
         if not isinstance(name, str) or name in ("", ".", "..") or "/" in name:
             continue
+        handler = special.get(name)
+        if handler is None and denied and _under(prefix + (name,), denied):
+            continue
         state["entries"] += 1
         if state["entries"] > state["max_entries"]:
             refuse(EXIT_SNAPSHOT_TOO_LARGE)
         _test_hook(state["request"], "snapshot-walk-entry", index)
-        handler = special.get(name)
         if handler is not None:
             handler(source_fd, dest_fd, name, state, depth)
         else:
-            _snapshot_entry(source_fd, dest_fd, name, state, depth)
+            _snapshot_entry(source_fd, dest_fd, name, state, depth, denied, prefix + (name,))
     after = os.fstat(source_fd)
     if _stable_identity(before) != _stable_identity(after):
         refuse(EXIT_ROOT_CHANGED)
@@ -2892,16 +2926,121 @@ def _snapshot_git_handler(request):
     return handle
 
 
+def _snapshot_git_only(root_fd, destination_fd, state, request):
+    """Recreate only the top-level `.git` entry: the bounded-path mode's
+    metadata step.  Identical to what the whole-tree walk does for `.git`
+    (`_snapshot_git_handler`); everything else under the root is left alone.
+    """
+
+    handler = _snapshot_git_handler(request)
+    handler(root_fd, destination_fd, ".git", state, 0)
+
+
+def _snapshot_link_path(root_fd, destination_fd, parts, state, denied, index):
+    """Link exactly one caller-named, root-relative regular file (or
+    symlink) into the destination, creating whatever destination
+    directories its parents need.
+
+    Every component is opened by descriptor, `O_NOFOLLOW`, exactly like the
+    whole-tree walk; a denied path -- or a path under a denied prefix -- is
+    refused outright rather than silently dropped, because unlike a walk
+    that simply never reaches a denied subtree, a caller naming one directly
+    is either a policy bug or an attempt to route around the exclusion, and
+    neither should be answered by pretending the path was never asked for.
+    """
+
+    if _under(parts, denied):
+        refuse(EXIT_PATH_REFUSED)
+    source_fd = os.dup(root_fd)
+    target_fd = os.dup(destination_fd)
+    try:
+        for depth, part in enumerate(parts[:-1]):
+            if _under(parts[: depth + 1], denied):
+                refuse(EXIT_PATH_REFUSED)
+            child_source = _open_directory(source_fd, part)
+            os.close(source_fd)
+            source_fd = child_source
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=target_fd)
+            except OSError as error:
+                if error.errno != errno.EEXIST:
+                    refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+            child_target = _open_directory(target_fd, part)
+            os.close(target_fd)
+            target_fd = child_target
+        name = parts[-1]
+        # Explicitly named: missing, wrong kind or changed identity is a
+        # refusal, never a silent skip -- the caller (Git's own tracked-file
+        # listing) said this path exists, and if it no longer does, the
+        # request is answered honestly rather than served a partial result.
+        listed = _listed_child(source_fd, name, missing_status=EXIT_NOT_FOUND)
+        # Test seam only: lets a test replace or rename away the object this
+        # walk already listed, in the exact gap between the listing above and
+        # the `linkat` below, so `_snapshot_link`'s own post-link identity
+        # check (`EXIT_ROOT_CHANGED`) can be proven against a real race
+        # instead of only argued about.
+        _test_hook(state["request"], "snapshot-link-path-entry", index)
+        if stat.S_ISLNK(listed.st_mode):
+            _snapshot_symlink(source_fd, target_fd, name)
+            state["entries"] += 1
+            if state["entries"] > state["max_entries"]:
+                refuse(EXIT_SNAPSHOT_TOO_LARGE)
+            return
+        if not stat.S_ISREG(listed.st_mode):
+            refuse(EXIT_PATH_REFUSED)
+        if listed.st_nlink < 1:
+            refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+        state["entries"] += 1
+        if state["entries"] > state["max_entries"]:
+            refuse(EXIT_SNAPSHOT_TOO_LARGE)
+        _snapshot_charge_bytes(state, listed.st_size)
+        _snapshot_link(source_fd, target_fd, name, listed)
+    finally:
+        os.close(source_fd)
+        os.close(target_fd)
+
+
+def _parsed_snapshot_paths(request):
+    """`None` for the whole-tree mode; otherwise the caller's deduplicated,
+    validated, root-relative path list -- possibly empty, meaning "no path
+    beyond `.git` itself" (the metadata-only step of the bounded mode).
+    """
+
+    if "paths" not in request:
+        return None
+    paths = request["paths"]
+    if not isinstance(paths, list) or len(paths) > MAX_SNAPSHOT_PATHS:
+        refuse(EXIT_INVALID)
+    parsed = []
+    seen = set()
+    for value in paths:
+        parts = tuple(_components(value, absolute=False))
+        if parts not in seen:
+            seen.add(parts)
+            parsed.append(parts)
+    return parsed
+
+
 def _workspace_snapshot(request):
     """Build the private snapshot N02 describes and return its size.
 
-    Every regular file below the approved root is hard-linked in by
-    descriptor (`linkat`), never opened by name, so a rename, replacement or
-    deletion of the source afterwards cannot change what was captured.
-    `.git/config` (and a linked worktree's common config) is replaced by its
-    minimal, execution-free equivalent; `.git/index` (and a linked worktree's
-    own index) is copied, because Git may rewrite it in place.  This verb only
-    builds the snapshot; it never runs Git.
+    Two modes.  Whole-tree (no `paths` key): every regular file below the
+    approved root is hard-linked in by descriptor (`linkat`), never opened by
+    name.  Bounded (`paths` present, possibly empty): only `.git` and the
+    caller's own explicit relative paths are linked -- the shape
+    `native-verification-command.ts` uses once it already knows, from Git
+    itself, which paths a command actually needs.  In both modes a hard link
+    resolves to the source *inode*: renaming, replacing or deleting the
+    source afterwards cannot change what the link resolves to, but a write
+    made in place through a descriptor opened before this call -- not a
+    rename -- is still visible through it, because it is the very same
+    inode, not a point-in-time copy of its bytes.  `.git/config` (and a
+    linked worktree's common config) is replaced by its minimal,
+    execution-free equivalent; `.git/index` (and a linked worktree's own
+    index) is copied, because Git may rewrite it in place.  `denied`
+    (root-relative prefixes) excludes matching entries from the whole-tree
+    walk and refuses a bounded path that names or sits under one.  This verb
+    only builds the snapshot; it never runs Git.
     """
 
     if set(request) - {
@@ -2915,10 +3054,14 @@ def _workspace_snapshot(request):
         "externalGitDir",
         "externalCommonDir",
         "testHook",
+        "paths",
+        "denied",
     }:
         refuse(EXIT_INVALID)
     max_entries = _bounded_snapshot_limit(request.get("maxEntries"), MAX_SNAPSHOT_ENTRIES)
     max_bytes = _bounded_snapshot_limit(request.get("maxBytes"), MAX_SNAPSHOT_BYTES)
+    denied = _parse_prefixes(request.get("denied"))
+    parsed_paths = _parsed_snapshot_paths(request)
     root_fd = _open_root(request)
     try:
         destination_fd = _open_snapshot_destination(request)
@@ -2935,8 +3078,15 @@ def _workspace_snapshot(request):
                 "request": request,
             }
             _test_hook(request, "before-snapshot-walk", None)
-            special = {".git": _snapshot_git_handler(request)}
-            _snapshot_walk(root_fd, destination_fd, state, 0, special)
+            if parsed_paths is None:
+                special = {".git": _snapshot_git_handler(request)}
+                _snapshot_walk(root_fd, destination_fd, state, 0, special, denied, ())
+            else:
+                _snapshot_git_only(root_fd, destination_fd, state, request)
+                for index, parts in enumerate(parsed_paths):
+                    _snapshot_link_path(
+                        root_fd, destination_fd, parts, state, denied, index
+                    )
             return json.dumps(
                 {"bytes": state["bytes"], "entries": state["entries"]},
                 ensure_ascii=True,
@@ -2950,63 +3100,10 @@ def _workspace_snapshot(request):
         os.close(root_fd)
 
 
-def _exec_verification(request):
-    """Run the reviewed verification command inside the approved root object.
-
-    The root is opened component by component without following links and
-    checked against the identity the owner approved, exactly as every read and
-    write is. The helper then makes that descriptor its working directory and
-    replaces itself with the sandboxed command, whose Git paths are relative:
-    the directory Git works in is the approved object, not whatever holds its
-    pathname by the time Git starts. A folder moved into its place afterwards
-    is never where Git runs.
-    """
-
-    if set(request) - {"operation", "root", "approvedRoot", "launch"}:
-        refuse(EXIT_INVALID)
-    if request.get("approvedRoot") is None:
-        refuse(EXIT_INVALID)
-    launch = request.get("launch")
-    if not isinstance(launch, dict) or set(launch) != {"arguments", "environment"}:
-        refuse(EXIT_INVALID)
-    arguments = launch.get("arguments")
-    environment = launch.get("environment")
-    if (
-        not isinstance(arguments, list)
-        or not 1 <= len(arguments) <= MAX_EXEC_ARGUMENTS
-        or not all(isinstance(value, str) and "\x00" not in value for value in arguments)
-        or not isinstance(environment, dict)
-        or len(environment) > 64
-        or not all(
-            isinstance(key, str)
-            and isinstance(value, str)
-            and key
-            and "=" not in key
-            and "\x00" not in key + value
-            for key, value in environment.items()
-        )
-    ):
-        refuse(EXIT_INVALID)
-    descriptor = _open_root(request)
-    try:
-        os.fchdir(descriptor)
-    finally:
-        os.close(descriptor)
-    os.write(1, EXEC_MAGIC)
-    try:
-        os.close(3)
-    except OSError:
-        pass
-    os.execve(SANDBOX_EXEC, [SANDBOX_EXEC, *arguments], environment)
-
-
 def main():
     try:
         request = _read_request()
         operation = request.get("operation")
-        if operation == "exec-verification":
-            _exec_verification(request)
-            return EXIT_INTERNAL
         if operation == "workspace-snapshot":
             payload = _workspace_snapshot(request)
         elif operation == "grep":

@@ -43,6 +43,14 @@ const REVIEWED_DEVELOPER_ROOTS = Object.freeze([
 // pathname. The snapshot mirrors both a primary checkout and a linked
 // worktree (its own gitdir and the repository's common gitdir rebuilt inside
 // the same destination), so Git needs no path outside it.
+//
+// N02c -- one command may run over more than one such snapshot. `git.status`
+// first snapshots `.git` alone, asks Git itself (inside that snapshot) which
+// paths are tracked, and only then builds a second, bounded snapshot that
+// links exactly those paths (minus any the workspace's own exclusions cover)
+// before running the fixed status command over it. `git.head` never needs a
+// second snapshot: `rev-parse` reads refs and objects, never a worktree
+// file.
 const COMMAND_PROFILE = `(version 1)
 (import "dyld-support.sb")
 (deny default)
@@ -78,10 +86,11 @@ type VerificationOperation = Extract<
   { kind: "verification.run" }
 >;
 
-// Builds the private snapshot for one Git verification and removes it once
-// the caller is done with it -- production wires this to
-// `createWorkspaceSnapshot` (workspace-snapshot.ts); a test may supply a
-// fixed handle directly.
+// Builds one private snapshot and removes it once the caller is done with
+// it. One Git verification may call this more than once (N02c: a
+// metadata-only snapshot, then a bounded one carrying exactly the tracked
+// paths it found) -- production wires this to `createWorkspaceSnapshot`
+// (workspace-snapshot.ts); a test may supply a fixed handle directly.
 export type SnapshotFactory = (
   request: WorkspaceSnapshotRequest,
 ) => Promise<WorkspaceSnapshotOutcome>;
@@ -565,24 +574,57 @@ function validGitOutput(
   );
 }
 
-// Runs the fixed, no-network Git command entirely inside `snapshotPath` (the
-// private snapshot N02 built): the Seatbelt profile grants read and write
-// only under that one directory, plus the reviewed Git binary and the system
-// libraries it needs. Git sees no pathname belonging to the owner's real
-// workspace at all -- primary and linked-worktree layouts alike are self-
-// contained inside the snapshot (workspace-snapshot.ts / safe_open.py
-// `_snapshot_linked_worktree`), so no extra grant is needed for either.
-function runGitOverSnapshot(
+// The `-c` flags every fixed Git invocation over a snapshot uses, whatever
+// command it runs: no config-driven execution path from the owner's
+// repository survives the minimal `.git/config` this snapshot already
+// carries, but these still remove anything a caller-supplied override on the
+// command line could otherwise reintroduce.
+const FIXED_GIT_CONFIG_ARGUMENTS = [
+  "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
+  "core.fsmonitor=false",
+  "-c",
+  "core.excludesFile=/dev/null",
+  "-c",
+  "core.untrackedCache=false",
+  "-c",
+  "core.quotepath=true",
+  "-c",
+  "submodule.recurse=false",
+] as const;
+
+type SandboxedGitOutcome =
+  | Readonly<{ failure: CommandFailureCode }>
+  | Readonly<{
+      code: number | null;
+      exitSignal: NodeJS.Signals | null;
+      stdout: Buffer;
+      stderr: string;
+    }>;
+
+// Runs one fixed, no-network Git invocation entirely inside `snapshotPath`
+// (the private snapshot N02 built): the Seatbelt profile grants read and
+// write only under that one directory, plus the reviewed Git binary and the
+// system libraries it needs. Git sees no pathname belonging to the owner's
+// real workspace at all -- primary and linked-worktree layouts alike are
+// self-contained inside the snapshot (workspace-snapshot.ts / safe_open.py
+// `_snapshot_linked_worktree`), so no extra grant is needed for either. This
+// is the one place a sandboxed Git process is spawned; `runGitOverSnapshot`
+// (status/head) and `runGitLsFiles` (tracked-path discovery) are both thin
+// callers, so a sandbox failure, a timeout or a cancellation is classified
+// identically whichever one is running.
+function runSandboxedGit(
   git: string,
   snapshotPath: string,
-  command: VerificationOperation["command"],
+  trailingArguments: readonly string[],
   signal?: AbortSignal,
-): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
+): Promise<SandboxedGitOutcome> {
   if (signal?.aborted) {
-    return Promise.resolve(failure("WORKSPACE_COMMAND_CANCELLED"));
+    return Promise.resolve({ failure: "WORKSPACE_COMMAND_CANCELLED" });
   }
   if (!plainPath(snapshotPath)) {
-    return Promise.resolve(failure("WORKSPACE_COMMAND_UNSUPPORTED"));
+    return Promise.resolve({ failure: "WORKSPACE_COMMAND_UNSUPPORTED" });
   }
   let ancestors: readonly string[];
   try {
@@ -591,7 +633,7 @@ function runGitOverSnapshot(
       throw new Error("snapshot path is too deep");
     }
   } catch {
-    return Promise.resolve(failure("WORKSPACE_COMMAND_UNSUPPORTED"));
+    return Promise.resolve({ failure: "WORKSPACE_COMMAND_UNSUPPORTED" });
   }
   const ancestorRules = ancestors
     .map(
@@ -624,19 +666,8 @@ function runGitOverSnapshot(
     "-p",
     profile,
     git,
-    "-c",
-    "core.attributesFile=/dev/null",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.excludesFile=/dev/null",
-    "-c",
-    "core.untrackedCache=false",
-    "-c",
-    "core.quotepath=true",
-    "-c",
-    "submodule.recurse=false",
-    ...gitArguments(command),
+    ...FIXED_GIT_CONFIG_ARGUMENTS,
+    ...trailingArguments,
   ];
   const environment = {
     GIT_CEILING_DIRECTORIES: path.dirname(snapshotPath),
@@ -660,7 +691,7 @@ function runGitOverSnapshot(
     });
     if (child.stdout === null || child.stderr === null) {
       killProcessGroup(child);
-      resolve(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
+      resolve({ failure: "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE" });
       return;
     }
     const stdout: Buffer[] = [];
@@ -675,9 +706,7 @@ function runGitOverSnapshot(
       timedOut = true;
       killProcessGroup(child);
     }, COMMAND_TIMEOUT_MS);
-    const finish = (
-      result: ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED,
-    ): void => {
+    const finish = (result: SandboxedGitOutcome): void => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
@@ -710,73 +739,211 @@ function runGitOverSnapshot(
       }
     });
     child.once("error", () =>
-      finish(
-        failure(
-          cancelled
-            ? "WORKSPACE_COMMAND_CANCELLED"
-            : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
-        ),
-      ),
+      finish({
+        failure: cancelled
+          ? "WORKSPACE_COMMAND_CANCELLED"
+          : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+      }),
     );
     child.once("close", (code, exitSignal) => {
       if (cancelled) {
-        finish(failure("WORKSPACE_COMMAND_CANCELLED"));
+        finish({ failure: "WORKSPACE_COMMAND_CANCELLED" });
         return;
       }
       if (timedOut) {
-        finish(failure("WORKSPACE_COMMAND_TIMEOUT"));
+        finish({ failure: "WORKSPACE_COMMAND_TIMEOUT" });
         return;
       }
       if (outputTooLarge) {
-        finish(failure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE"));
+        finish({ failure: "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE" });
         return;
       }
-      const body = Buffer.concat(stdout);
-      const errorText = Buffer.concat(stderr).toString("utf8");
-      if (/^sandbox-exec: sandbox_apply:/mu.test(errorText)) {
-        finish(failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"));
-        return;
-      }
-      if (
-        command === "git.head" &&
-        code === 1 &&
-        exitSignal === null &&
-        errorText === "" &&
-        body.length === 0
-      ) {
-        finish(HEAD_UNRESOLVED);
-        return;
-      }
-      if (code !== 0 || exitSignal !== null || errorText !== "") {
-        finish(failure("WORKSPACE_COMMAND_FAILED"));
-        return;
-      }
-      try {
-        const output = new TextDecoder("utf-8", { fatal: true }).decode(body);
-        if (!validGitOutput(command, output)) {
-          finish(failure("WORKSPACE_COMMAND_FAILED"));
-          return;
-        }
-        finish({
-          ok: true,
-          value: {
-            kind: "workspace.command",
-            command,
-            relativePath: ".",
-            exitCode: 0,
-            stdout: output,
-            stderr: "",
-            outputBytes: body.length,
-            network: "none",
-            coverage: commandCoverage(command),
-            layout: "primary",
-          },
-        });
-      } catch {
-        finish(failure("WORKSPACE_COMMAND_FAILED"));
-      }
+      finish({
+        code,
+        exitSignal,
+        stdout: Buffer.concat(stdout),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      });
     });
   });
+}
+
+async function runGitOverSnapshot(
+  git: string,
+  snapshotPath: string,
+  command: VerificationOperation["command"],
+  signal?: AbortSignal,
+): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
+  const outcome = await runSandboxedGit(
+    git,
+    snapshotPath,
+    gitArguments(command),
+    signal,
+  );
+  if ("failure" in outcome) return failure(outcome.failure);
+  const { code, exitSignal, stdout, stderr } = outcome;
+  if (/^sandbox-exec: sandbox_apply:/mu.test(stderr)) {
+    return failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE");
+  }
+  if (
+    command === "git.head" &&
+    code === 1 &&
+    exitSignal === null &&
+    stderr === "" &&
+    stdout.length === 0
+  ) {
+    return HEAD_UNRESOLVED;
+  }
+  if (code !== 0 || exitSignal !== null || stderr !== "") {
+    return failure("WORKSPACE_COMMAND_FAILED");
+  }
+  try {
+    const output = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
+    if (!validGitOutput(command, output)) {
+      return failure("WORKSPACE_COMMAND_FAILED");
+    }
+    return {
+      ok: true,
+      value: {
+        kind: "workspace.command",
+        command,
+        relativePath: ".",
+        exitCode: 0,
+        stdout: output,
+        stderr: "",
+        outputBytes: stdout.length,
+        network: "none",
+        coverage: commandCoverage(command),
+        layout: "primary",
+      },
+    };
+  } catch {
+    return failure("WORKSPACE_COMMAND_FAILED");
+  }
+}
+
+// Splits `git ls-files -z` output into validated, repository-relative
+// tracked paths.  `-z` NUL-terminates every entry including the last, so a
+// well-formed payload's final split segment is always empty; anything else
+// (a stray NUL-free line, an absolute or traversal-shaped entry) is treated
+// as output this helper will not trust rather than guessed at.
+function validTrackedPath(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 4_096 &&
+    !value.startsWith("/") &&
+    !/[\0\r\n\\]/u.test(value) &&
+    path.normalize(value) === value &&
+    value
+      .split("/")
+      .every((segment) => segment !== "" && segment !== "." && segment !== "..")
+  );
+}
+
+function parseTrackedPaths(stdout: Buffer): readonly string[] | null {
+  if (stdout.length === 0) return [];
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
+  } catch {
+    return null;
+  }
+  const parts = text.split("\0");
+  if (parts.length === 0 || parts[parts.length - 1] !== "") return null;
+  const entries = parts.slice(0, -1);
+  return entries.every(validTrackedPath) ? entries : null;
+}
+
+type TrackedPathsResult =
+  | Readonly<{ ok: true; paths: readonly string[] }>
+  | Readonly<{ ok: false; result: ReadonlyWorkspaceResult }>;
+
+// Asks Git which paths are tracked, inside the metadata-only snapshot: `git
+// ls-files` reads only the index that snapshot already copied, so it never
+// needs a single working-tree file to be present. Its output decides the
+// bounded set of paths the *next* snapshot links -- this function never
+// touches the owner's workspace itself.
+async function runGitLsFiles(
+  git: string,
+  snapshotPath: string,
+  signal?: AbortSignal,
+): Promise<TrackedPathsResult> {
+  const outcome = await runSandboxedGit(
+    git,
+    snapshotPath,
+    ["ls-files", "-z"],
+    signal,
+  );
+  if ("failure" in outcome) return { ok: false, result: failure(outcome.failure) };
+  const { code, exitSignal, stdout, stderr } = outcome;
+  if (/^sandbox-exec: sandbox_apply:/mu.test(stderr)) {
+    return { ok: false, result: failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE") };
+  }
+  if (code !== 0 || exitSignal !== null || stderr !== "") {
+    return { ok: false, result: failure("WORKSPACE_COMMAND_FAILED") };
+  }
+  // A clean exit with output that is not a well-formed `-z` listing is
+  // treated as "nothing tracked" rather than a hard failure: this can only
+  // shrink the set of paths the next snapshot links, never widen it, so it
+  // never grants more than the empty-list case already would. Real `git
+  // ls-files` never produces such output; this exists for whatever else may
+  // be attested as "git" in a degraded or hostile configuration.
+  return { ok: true, paths: parseTrackedPaths(stdout) ?? [] };
+}
+
+function isUnderAnyPrefix(
+  relativePath: string,
+  prefixes: readonly string[],
+): boolean {
+  const segments = relativePath.split("/");
+  return prefixes.some((prefix) => {
+    const prefixSegments = prefix.split("/");
+    return (
+      prefixSegments.length <= segments.length &&
+      prefixSegments.every((segment, index) => segments[index] === segment)
+    );
+  });
+}
+
+// Best-effort unquote of one `git status --short` path field. With
+// `core.quotepath=true` Git C-quotes a path that carries a special
+// character; a plain ASCII path (the overwhelming case) is never quoted and
+// round-trips through this unchanged.
+function unquoteStatusPath(value: string): string {
+  if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) {
+    return value;
+  }
+  try {
+    return JSON.parse(value) as string;
+  } catch {
+    return value;
+  }
+}
+
+// Removes any `git status --short` line naming a tracked-but-denied path, so
+// a path the workspace's own exclusions cover is absent from the reported
+// result exactly as it is absent from the snapshot -- not merely shown as a
+// deletion. The branch header line (`## ...`) is never a path line and is
+// always kept.
+function stripDeniedStatusLines(
+  output: string,
+  deniedTracked: ReadonlySet<string>,
+): string {
+  if (deniedTracked.size === 0) return output;
+  const lines = output.split("\n");
+  const kept = lines.filter((line, index) => {
+    if (line === "" && index === lines.length - 1) return true;
+    if (line.startsWith("##")) return true;
+    if (line.length < 3) return true;
+    const rest = line.slice(3);
+    const arrow = rest.indexOf(" -> ");
+    const candidates =
+      arrow >= 0 ? [rest.slice(0, arrow), rest.slice(arrow + 4)] : [rest];
+    return !candidates.some((candidate) =>
+      deniedTracked.has(unquoteStatusPath(candidate)),
+    );
+  });
+  return kept.join("\n");
 }
 
 // An early, cheap refusal. The binding itself happens again inside the
@@ -909,38 +1076,115 @@ export async function executeNativeVerificationCommand(
     return failure("WORKSPACE_ROOT_CHANGED");
   }
   await options.beforeSnapshot?.();
-  const snapshot = await options.createSnapshot({
+  const deniedPaths = request.workspace.deniedPaths;
+  const baseSnapshotRequest = {
     root: request.workspace.root,
     approvedRoot: request.workspace.approvedRoot,
     ...(externalGitDir ? { externalGitDir } : {}),
     ...(externalCommonDir ? { externalCommonDir } : {}),
+    ...(deniedPaths.length > 0 ? { denied: deniedPaths } : {}),
+  };
+  const withLayout = (result: ReadonlyWorkspaceResult): ReadonlyWorkspaceResult =>
+    result.ok && result.value.kind === "workspace.command"
+      ? {
+          ok: true,
+          value: {
+            ...result.value,
+            layout: linkedWorktree ? "linked-worktree" : "primary",
+          },
+        }
+      : result;
+
+  // Phase 1: `.git` alone, no working-tree paths at all. `git.head` needs
+  // nothing else -- `rev-parse` reads refs and objects, never a worktree
+  // file. `git.status` uses this same snapshot to ask Git itself which
+  // paths are tracked (`runGitLsFiles`), before a second, bounded snapshot
+  // links exactly those paths: the snapshot only ever carries what the
+  // command in front of it actually needs.
+  const metadataSnapshot = await options.createSnapshot({
+    ...baseSnapshotRequest,
+    paths: [],
   });
-  if (!snapshot.ok) {
-    return failure(snapshotFailureCode(snapshot.code));
+  if (!metadataSnapshot.ok) {
+    return failure(snapshotFailureCode(metadataSnapshot.code));
   }
   try {
-    const result = await runGitOverSnapshot(
-      git,
-      snapshot.path,
-      operation.command,
-      options.signal,
+    if (operation.command === "git.head") {
+      const result = await runGitOverSnapshot(
+        git,
+        metadataSnapshot.path,
+        "git.head",
+        options.signal,
+      );
+      if (result === HEAD_UNRESOLVED) {
+        return (await headIsUnbornBranch(metadata))
+          ? failure("WORKSPACE_GIT_HEAD_UNBORN")
+          : failure("WORKSPACE_COMMAND_FAILED");
+      }
+      return withLayout(result);
+    }
+
+    const listed = await runGitLsFiles(git, metadataSnapshot.path, options.signal);
+    if (!listed.ok) return listed.result;
+    // A tracked path under one of the workspace's own exclusions is never
+    // linked -- absent from the snapshot exactly as an untracked path in the
+    // same subtree already is -- and any status line naming it is stripped
+    // from the reported result below, so it is absent from the Git result
+    // too, not merely reported as missing.
+    const deniedTracked = new Set(
+      listed.paths.filter((trackedPath) => isUnderAnyPrefix(trackedPath, deniedPaths)),
     );
-    if (result === HEAD_UNRESOLVED) {
-      return (await headIsUnbornBranch(metadata))
-        ? failure("WORKSPACE_GIT_HEAD_UNBORN")
-        : failure("WORKSPACE_COMMAND_FAILED");
+    const allowedPaths = listed.paths.filter(
+      (trackedPath) => !deniedTracked.has(trackedPath),
+    );
+
+    const runStatus = async (
+      snapshotPath: string,
+    ): Promise<ReadonlyWorkspaceResult> => {
+      const result = await runGitOverSnapshot(
+        git,
+        snapshotPath,
+        "git.status",
+        options.signal,
+      );
+      if (result === HEAD_UNRESOLVED) return failure("WORKSPACE_COMMAND_FAILED");
+      if (
+        result.ok &&
+        result.value.kind === "workspace.command" &&
+        deniedTracked.size > 0
+      ) {
+        const stdout = stripDeniedStatusLines(result.value.stdout, deniedTracked);
+        return withLayout({
+          ok: true,
+          value: {
+            ...result.value,
+            stdout,
+            outputBytes: Buffer.byteLength(stdout),
+          },
+        });
+      }
+      return withLayout(result);
+    };
+
+    if (allowedPaths.length === 0) {
+      // Nothing beyond `.git` needs linking: either the repository tracks
+      // nothing yet, or everything tracked falls under an exclusion. The
+      // metadata-only snapshot already built is the whole answer.
+      return await runStatus(metadataSnapshot.path);
     }
-    if (result.ok && result.value.kind === "workspace.command") {
-      return {
-        ok: true,
-        value: {
-          ...result.value,
-          layout: linkedWorktree ? "linked-worktree" : "primary",
-        },
-      };
+    const trackedSnapshot = await options.createSnapshot({
+      ...baseSnapshotRequest,
+      paths: allowedPaths,
+    });
+    if (!trackedSnapshot.ok) {
+      return failure(snapshotFailureCode(trackedSnapshot.code));
     }
-    return result;
+    try {
+      return await runStatus(trackedSnapshot.path);
+    } finally {
+      await trackedSnapshot.remove();
+    }
   } finally {
-    await snapshot.remove();
+    await metadataSnapshot.remove();
   }
 }

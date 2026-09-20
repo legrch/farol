@@ -337,6 +337,11 @@ int main(void) {
       );
       // The sandboxed process runs bound to the snapshot alone: the parent
       // directory the worktree's own gitdir lives under is never granted.
+      // N02c runs this same substitute "git" twice (tracked-path discovery,
+      // then the fixed command); its first invocation's output does not
+      // parse as a tracked-path listing, which N02c treats as "nothing
+      // tracked" rather than a hard failure, so the second invocation still
+      // runs and its denial is still what is reported.
       await expect(
         workspace(async () => parentReader).execute(request(grant ?? undefined)),
       ).resolves.toMatchObject({
@@ -1004,6 +1009,51 @@ int main(void) {
     });
   });
 
+  // S35-02 (3): the workspace's own exclusions (`deniedPaths`) must reach
+  // the snapshot, not stop at syntax validation. A tracked file and an
+  // untracked file inside an excluded subtree are proven absent both from
+  // the snapshot's own linked paths and from the reported `git.status`
+  // result -- not merely flagged as a deletion.
+  it("N02c keeps a tracked and an untracked file inside an excluded subtree out of the snapshot and out of the status result", async () => {
+    // request() already denies "private" (see the top of this file).
+    await fs.mkdir(path.join(root, "private"), { mode: 0o700 });
+    await fs.writeFile(path.join(root, "private", "tracked-secret.txt"), "s\n", {
+      mode: 0o600,
+    });
+    await executeFile(git, ["-C", root, "add", "private/tracked-secret.txt"]);
+    await executeFile(
+      git,
+      [
+        "-C",
+        root,
+        "-c",
+        "user.name=Farol Test",
+        "-c",
+        "user.email=farol-test@invalid.example",
+        "commit",
+        "--quiet",
+        "-m",
+        "tracked secret",
+      ],
+      { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
+    );
+    await fs.writeFile(path.join(root, "private", "untracked-secret.txt"), "u\n", {
+      mode: 0o600,
+    });
+    // Also change the tracked one after the commit, so an unfiltered status
+    // would otherwise show it as modified.
+    await fs.writeFile(path.join(root, "private", "tracked-secret.txt"), "changed\n", {
+      mode: 0o600,
+    });
+
+    const result = await workspace().execute(request());
+    expect(result).toMatchObject({ ok: true, value: { kind: "workspace.command" } });
+    if (!result.ok || result.value.kind !== "workspace.command") return;
+    expect(result.value.stdout).not.toContain("private");
+    expect(result.value.stdout).not.toContain("tracked-secret.txt");
+    expect(result.value.stdout).not.toContain("untracked-secret.txt");
+  });
+
   it("F1-8 never runs Git in a folder that took the approved root's place after the last check, and cleans up its snapshot either way", async () => {
     await fs.writeFile(path.join(root, "APPROVED.txt"), "approved\n", {
       mode: 0o600,
@@ -1074,7 +1124,14 @@ int main(void) {
       createSnapshot: observedFactory,
     });
 
-    expect(snapshotPaths.length).toBe(2);
+    // N02c: a `git.status` run over a real, tracked repository builds two
+    // snapshots (metadata-only, then the bounded one carrying the tracked
+    // paths `git ls-files` found) -- the first execute() call above
+    // accounts for two. The second call's fake "git" fails `ls-files`
+    // itself, so it never reaches the second snapshot -- one more. Every
+    // snapshot actually created must still be removed, whichever count that
+    // turns out to be.
+    expect(snapshotPaths.length).toBe(3);
     for (const snapshotPath of snapshotPaths) {
       await expect(fs.stat(snapshotPath)).rejects.toThrow();
     }

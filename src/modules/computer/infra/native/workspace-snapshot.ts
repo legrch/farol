@@ -33,6 +33,14 @@ export type WorkspaceSnapshotRequest = Readonly<{
   // module re-checks the identity; it does not rediscover the relationship.
   externalGitDir?: WorkspaceSnapshotGrant;
   externalCommonDir?: WorkspaceSnapshotGrant;
+  // Bounded path mode: link only `.git` plus these caller-named,
+  // repository-relative paths, instead of the whole approved tree.
+  // Undefined means the whole-tree mode; an empty array is valid and means
+  // "only `.git`" -- the metadata-only step a caller takes before it knows
+  // which paths it needs. A path under `denied` (or naming one) is refused,
+  // never silently dropped.
+  paths?: readonly string[];
+  denied?: readonly string[];
   // Clamped by the helper to its own fixed ceiling; a caller may only ask for
   // less, never more.
   maxEntries?: number;
@@ -125,6 +133,21 @@ function plainAbsolutePath(value: unknown): value is string {
     value.length <= 4_096 &&
     !/[\0\n\r]/u.test(value)
   );
+}
+
+function validRelativePath(value: unknown): value is string {
+  if (typeof value !== "string" || value === "" || value.length > 4_096) {
+    return false;
+  }
+  if (path.isAbsolute(value) || /[\0\\]/u.test(value)) return false;
+  const segments = value.split("/");
+  return segments.every(
+    (segment) => segment !== "" && segment !== "." && segment !== "..",
+  );
+}
+
+function isPathList(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every(validRelativePath);
 }
 
 function isGrant(value: unknown): value is WorkspaceSnapshotGrant {
@@ -376,13 +399,18 @@ function parseResponse(raw: Buffer): Readonly<{
 
 /**
  * Builds the private snapshot N02 describes: a fresh, owner-only directory
- * under `options.runtimeDirectory` that hard-links every regular file of
- * `request.root` by descriptor, recreates directories and symlinks, replaces
- * `.git/config` with its minimal safe equivalent, copies (never links) the
- * files Git may rewrite in place, and -- for a linked worktree -- rebuilds
- * its gitdir/commondir pair inside the destination from caller-approved
- * identities. This function only builds and removes that snapshot; it never
- * runs Git against it.
+ * under `options.runtimeDirectory` that recreates directories and symlinks,
+ * replaces `.git/config` with its minimal safe equivalent, copies (never
+ * links) the files Git may rewrite in place, and -- for a linked worktree --
+ * rebuilds its gitdir/commondir pair inside the destination from
+ * caller-approved identities. Every regular file it attaches -- whole-tree,
+ * or the caller's own bounded `paths` list -- is hard-linked by descriptor,
+ * resolving to the source's inode: a rename, replacement or deletion of the
+ * source afterwards cannot change what the link resolves to, but an in-place
+ * write through a descriptor opened before this call is still visible
+ * through it, because it is the same inode, not a point-in-time copy of its
+ * bytes. This function only builds and removes that snapshot; it never runs
+ * Git against it.
  */
 export async function createWorkspaceSnapshot(
   request: WorkspaceSnapshotRequest,
@@ -395,6 +423,8 @@ export async function createWorkspaceSnapshot(
     (request.externalGitDir !== undefined && !isGrant(request.externalGitDir)) ||
     (request.externalCommonDir !== undefined &&
       !isGrant(request.externalCommonDir)) ||
+    (request.paths !== undefined && !isPathList(request.paths)) ||
+    (request.denied !== undefined && !isPathList(request.denied)) ||
     (request.maxEntries !== undefined &&
       (!Number.isInteger(request.maxEntries) || request.maxEntries < 1)) ||
     (request.maxBytes !== undefined &&
@@ -452,6 +482,10 @@ export async function createWorkspaceSnapshot(
     }
     if (request.externalCommonDir) {
       requestBody.externalCommonDir = { ...request.externalCommonDir };
+    }
+    if (request.paths !== undefined) requestBody.paths = [...request.paths];
+    if (request.denied !== undefined && request.denied.length > 0) {
+      requestBody.denied = [...request.denied];
     }
     if (request.maxEntries !== undefined) requestBody.maxEntries = request.maxEntries;
     if (request.maxBytes !== undefined) requestBody.maxBytes = request.maxBytes;

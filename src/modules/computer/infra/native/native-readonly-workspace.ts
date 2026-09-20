@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
@@ -32,24 +32,6 @@ import { credentialStorePolicy } from "./home-secret-stores";
 import { executeNativeVerificationCommand } from "./native-verification-command";
 import { createWorkspaceSnapshot } from "./workspace-snapshot";
 
-// The general-purpose descriptor-bound launcher `_exec_verification`
-// (safe_open.py) still implements: opens the approved root by descriptor,
-// checks its identity, makes it the launched command's working directory and
-// replaces itself with it. N02 moved Git verification off this mechanism (it
-// binds only the *first* working directory, not the absolute paths Git
-// reopens while it runs -- see native-verification-command.ts); nothing in
-// the product currently calls `approvedRootLauncher`, but it stays exported
-// as working, tested infrastructure rather than being deleted as part of a
-// Git-specific change.
-export type ApprovedRootLauncher = (
-  input: Readonly<{
-    root: string;
-    approvedRoot: Readonly<{ path: string; device: string; inode: string }>;
-    arguments: readonly string[];
-    environment: Readonly<Record<string, string>>;
-  }>,
-) => Promise<ChildProcess | "WORKSPACE_HELPER_UNTRUSTED">;
-
 export type SafeOpenHelperRecord = Readonly<{
   sha256: string;
   size: number;
@@ -57,8 +39,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "0fb67b6b7ef9c0ecb261bdd49ffa3e7472f34ab510e0cc8afc3528c0499d6f60",
-  size: 110_781,
+  sha256: "d4b392a875acfb616946b89320f15a9e92cd81b8f33494203bb799b08ac7dfef",
+  size: 116_261,
   mode: 0o644,
 });
 
@@ -982,54 +964,6 @@ async function defaultAttestInterpreter(): Promise<string> {
     reviewedPython = undefined;
     throw error;
   }
-}
-
-// Starts a reviewed verification command bound to the approved root object:
-// the attested helper opens the root by descriptor, checks the approved
-// identity, makes it its working directory and replaces itself with the
-// command (see safe_open.py `_exec_verification`).
-export function approvedRootLauncher(
-  dependencies: Readonly<{
-    helperSource: () => Promise<Buffer>;
-    attestInterpreter: () => Promise<string>;
-  }>,
-): ApprovedRootLauncher {
-  return async (input) => {
-    let source: Buffer;
-    let interpreter: string;
-    try {
-      source = await dependencies.helperSource();
-      interpreter = await dependencies.attestInterpreter();
-      if (!canonicalAbsolutePath(interpreter)) {
-        return "WORKSPACE_HELPER_UNTRUSTED";
-      }
-    } catch {
-      return "WORKSPACE_HELPER_UNTRUSTED";
-    }
-    const request = Buffer.from(
-      canonical({
-        operation: "exec-verification",
-        root: input.root,
-        approvedRoot: { ...input.approvedRoot },
-        launch: {
-          arguments: [...input.arguments],
-          environment: { ...input.environment },
-        },
-      } as unknown as JsonValue),
-      "utf8",
-    );
-    const child = spawn(interpreter, ["-I", "-S", "-B", "-"], {
-      env: { LANG: "C", LC_ALL: "C" },
-      detached: true,
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
-    });
-    const pipes = child.stdio as unknown as readonly (Writable | null)[];
-    child.stdin?.on("error", () => undefined);
-    pipes[3]?.on("error", () => undefined);
-    child.stdin?.end(source);
-    pipes[3]?.end(request);
-    return child;
-  };
 }
 
 function mapExitCode(code: number | null): NativeWorkspaceErrorCode {
