@@ -134,6 +134,16 @@ EXIT_SNAPSHOT_INDEX_CHANGED = 39
 # construction, so Git could never read it there; refused up front, before
 # the file is read, instead of letting the fixed command fail obscurely.
 EXIT_SNAPSHOT_ALTERNATES_UNSUPPORTED = 40
+# S35-H1-2.  A tracked path is listed and cloned one at a time, so a process
+# writing inside the approved root between two clones could leave a snapshot
+# holding file `a` as it was before that write and file `b` as it was after:
+# a tree that never existed at any single instant, whose `git status` the
+# caller would then report as the truth about the owner's workspace.  The
+# index pin (`expectedIndexSha256`) cannot see it -- a working-tree write
+# does not touch `.git/index`.  Every tracked source's stable identity is
+# therefore kept as it was cloned and re-checked once the whole list is
+# attached; any difference refuses here rather than reporting a mixed tree.
+EXIT_SNAPSHOT_TREE_CHANGED = 41
 
 CONTEXT_NAMES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 CONTEXT_NAME_SET = frozenset(CONTEXT_NAMES)
@@ -2900,7 +2910,8 @@ def _snapshot_clone(source_fd, dest_fd, name, listed):
                 refuse(EXIT_ROOT_CHANGED)
             refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
         after = os.fstat(descriptor)
-        if _stable_identity(after) != _stable_identity(opened):
+        captured = _stable_identity(after)
+        if captured != _stable_identity(opened):
             refuse(EXIT_ROOT_CHANGED)
     finally:
         os.close(descriptor)
@@ -2912,6 +2923,9 @@ def _snapshot_clone(source_fd, dest_fd, name, listed):
         or (clone.st_dev, clone.st_ino) == (listed.st_dev, listed.st_ino)
     ):
         refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+    # The identity the snapshot's bytes actually came from, for the
+    # whole-list re-check in `_snapshot_verify_sources`.
+    return captured
 
 
 def _snapshot_entry(source_fd, dest_fd, name, state, depth, denied=(), prefix=()):
@@ -3211,6 +3225,7 @@ def _snapshot_clone_path(root_fd, destination_fd, parts, state, denied, index):
         name = parts[-1]
         listed = _snapshot_listed_component(source_fd, name)
         if listed is None:
+            _snapshot_record_source(state, source_fd, parts, None)
             return False
         # Test seam only: lets a test replace or rename away the object this
         # walk already listed, in the exact gap between the listing above and
@@ -3223,8 +3238,10 @@ def _snapshot_clone_path(root_fd, destination_fd, parts, state, denied, index):
             state["entries"] += 1
             if state["entries"] > state["max_entries"]:
                 refuse(EXIT_SNAPSHOT_TOO_LARGE)
+            _snapshot_record_source(state, source_fd, parts, _stable_identity(listed))
             return True
         if not stat.S_ISREG(listed.st_mode):
+            _snapshot_record_source(state, source_fd, parts, _stable_identity(listed))
             return False
         if listed.st_nlink < 1:
             refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
@@ -3232,11 +3249,79 @@ def _snapshot_clone_path(root_fd, destination_fd, parts, state, denied, index):
         if state["entries"] > state["max_entries"]:
             refuse(EXIT_SNAPSHOT_TOO_LARGE)
         _snapshot_charge_cloned_bytes(state, listed.st_size)
-        _snapshot_clone(source_fd, target_fd, name, listed)
+        captured = _snapshot_clone(source_fd, target_fd, name, listed)
+        _snapshot_record_source(state, source_fd, parts, captured)
         return True
     finally:
         os.close(source_fd)
         os.close(target_fd)
+
+
+def _snapshot_record_source(state, parent_fd, parts, identity):
+    """Remember what one caller-named tracked path was at the instant this
+    snapshot took it: the identity of the directory it was taken from, the
+    leaf's name, and the leaf's own stable identity -- or `None` when the
+    leaf was not there, which is itself the statement the snapshot makes
+    about it (Git reports it deleted).
+
+    The parent is remembered by identity rather than by an open descriptor
+    because a tracked-path list may name thousands of files, and one held
+    descriptor per file would exhaust the table.  The re-check walks back to
+    the parent by descriptor, `O_NOFOLLOW` at every component exactly as the
+    clone did, and requires that walk to land on this very directory inode
+    before it stats the leaf inside it -- so a directory swapped in the
+    meantime is refused rather than followed.
+    """
+
+    parent = os.fstat(parent_fd)
+    state["sources"].append(
+        (parts[:-1], (parent.st_dev, parent.st_ino), parts[-1], identity)
+    )
+
+
+def _snapshot_verify_sources(root_fd, state):
+    """Refuse unless every tracked source is still exactly what it was when
+    this snapshot took it.
+
+    Capture is necessarily sequential, so without this the snapshot could
+    hold one file from before a concurrent write and another from after it,
+    and the command's report would describe a tree that never existed.  The
+    check is a pure re-stat: it reads no contents, and it never repairs the
+    snapshot -- the caller deletes the whole destination on any refusal.
+    """
+
+    groups = {}
+    for parent_parts, parent_identity, name, identity in state["sources"]:
+        groups.setdefault((parent_parts, parent_identity), []).append((name, identity))
+    for (parent_parts, parent_identity), leaves in groups.items():
+        parent_fd = os.dup(root_fd)
+        try:
+            for part in parent_parts:
+                try:
+                    child = _open_directory(parent_fd, part)
+                except (Refusal, OSError):
+                    # A directory this capture walked through moments ago is
+                    # gone or is no longer a directory: the tree moved under
+                    # the snapshot, which is this refusal and no other.
+                    refuse(EXIT_SNAPSHOT_TREE_CHANGED)
+                os.close(parent_fd)
+                parent_fd = child
+            current = os.fstat(parent_fd)
+            if (current.st_dev, current.st_ino) != parent_identity:
+                refuse(EXIT_SNAPSHOT_TREE_CHANGED)
+            for name, identity in leaves:
+                try:
+                    now = _snapshot_listed_component(parent_fd, name)
+                except Refusal:
+                    refuse(EXIT_SNAPSHOT_TREE_CHANGED)
+                if identity is None:
+                    if now is not None:
+                        refuse(EXIT_SNAPSHOT_TREE_CHANGED)
+                    continue
+                if now is None or _stable_identity(now) != identity:
+                    refuse(EXIT_SNAPSHOT_TREE_CHANGED)
+        finally:
+            os.close(parent_fd)
 
 
 _EXPECTED_INDEX_ABSENT = object()
@@ -3344,6 +3429,12 @@ def _workspace_snapshot(request):
                 "cloned_bytes": 0,
                 "skipped": 0,
                 "index_sha256": None,
+                # S35-H1-2: one entry per caller-named tracked path, as it
+                # was when this capture took it.  Whole-tree mode leaves it
+                # empty: that walk holds each directory open while it
+                # recreates every entry inside it, so it has no per-file gap
+                # of this shape to close.
+                "sources": [],
                 "max_entries": max_entries,
                 "max_bytes": max_bytes,
                 "max_cloned_bytes": max_cloned_bytes,
@@ -3365,6 +3456,11 @@ def _workspace_snapshot(request):
                         root_fd, destination_fd, parts, state, denied, index
                     ):
                         state["skipped"] += 1
+                _test_hook(request, "before-snapshot-verify", None)
+                # Every tracked path is attached; refuse unless the tree they
+                # came from still says exactly what it said while they were
+                # taken, so the status the caller reports is one instant.
+                _snapshot_verify_sources(root_fd, state)
             return json.dumps(
                 {
                     "bytes": state["bytes"],

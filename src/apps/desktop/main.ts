@@ -3586,6 +3586,7 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
     // N02: the snapshot route's own closed refusals, surfaced one for one.
     case "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED":
     case "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT":
+    case "WORKSPACE_CHANGED_DURING_SNAPSHOT":
     case "WORKSPACE_TRACKED_LIST_TOO_LARGE":
     case "WORKSPACE_TRACKED_PATH_UNSUPPORTED":
     case "WORKSPACE_SNAPSHOT_TOO_LARGE":

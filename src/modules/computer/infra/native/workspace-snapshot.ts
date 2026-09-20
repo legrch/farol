@@ -49,6 +49,12 @@ export type WorkspaceSnapshotRequest = Readonly<{
   // no index. The helper refuses (`SNAPSHOT_INDEX_CHANGED`) unless the index
   // it copies now is byte-identical, so a tracked-path list derived from the
   // earlier copy and the snapshot carrying those paths describe one instant.
+  // The index pin alone is not that guarantee: a write into the working
+  // tree does not touch `.git/index`. Bounded mode therefore also re-stats
+  // every named source once the whole list is attached and refuses
+  // (`SNAPSHOT_TREE_CHANGED`) unless each is still exactly what it was when
+  // taken, so the snapshot is one instant of the tracked tree and not a
+  // mixture of two.
   expectedIndexSha256?: string | null;
   // Clamped by the helper to its own fixed ceiling; a caller may only ask for
   // less, never more. `maxBytes` bounds what the helper copies (index,
@@ -71,6 +77,10 @@ export type WorkspaceSnapshotErrorCode =
   | "SNAPSHOT_DESTINATION_INVALID"
   | "SNAPSHOT_CLONE_UNSUPPORTED"
   | "SNAPSHOT_INDEX_CHANGED"
+  // S35-H1-2: a tracked source changed while the bounded capture was
+  // attaching the list, so the snapshot would hold some files from
+  // before that change and some from after it.
+  | "SNAPSHOT_TREE_CHANGED"
   | "SNAPSHOT_ALTERNATES_UNSUPPORTED"
   | "SNAPSHOT_HELPER_FAILED"
   | "SNAPSHOT_HELPER_UNTRUSTED";
@@ -150,6 +160,7 @@ const EXIT_TO_CODE = new Map<number, WorkspaceSnapshotErrorCode>([
   [38, "SNAPSHOT_CLONE_UNSUPPORTED"],
   [39, "SNAPSHOT_INDEX_CHANGED"],
   [40, "SNAPSHOT_ALTERNATES_UNSUPPORTED"],
+  [41, "SNAPSHOT_TREE_CHANGED"],
 ]);
 
 const SHA256_HEX = /^[0-9a-f]{64}$/u;

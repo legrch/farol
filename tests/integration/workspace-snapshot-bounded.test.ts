@@ -209,6 +209,131 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
     expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_ROOT_CHANGED" });
   });
 
+  // S35-H1-2. The capture is sequential, so an adversary writing between two
+  // clones could leave the snapshot holding `a` from before its write and
+  // `b` from after it: a tree that existed at no instant at all. The index
+  // pin cannot see it -- a working-tree write never touches `.git/index`.
+  it("S35-H1-2 refuses when a tracked file already cloned is written before the rest of the list is attached", async () => {
+    await initRepo(root);
+    await fs.writeFile(path.join(root, "a.txt"), "original a\n", {
+      mode: 0o600,
+    });
+    await fs.writeFile(path.join(root, "b.txt"), "original b\n", {
+      mode: 0o600,
+    });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root), paths: ["a.txt", "b.txt"] },
+      options(),
+      {
+        // Paused after `a.txt` was cloned and before `b.txt` is: the exact
+        // gap between two clones.
+        testHookRequest: { phase: "snapshot-clone-path-entry", index: 1 },
+        testHook: async () => {
+          await fs.writeFile(
+            path.join(root, "a.txt"),
+            "a written between the two clones\n",
+            { mode: 0o600 },
+          );
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_TREE_CHANGED" });
+  });
+
+  it("S35-H1-2 removes the whole destination on that refusal, tracked-file entries included", async () => {
+    await initRepo(root);
+    await fs.writeFile(path.join(root, "a.txt"), "original a\n", {
+      mode: 0o600,
+    });
+    await fs.writeFile(path.join(root, "b.txt"), "original b\n", {
+      mode: 0o600,
+    });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+
+    const before = await fs.readdir(runtimeDirectory);
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root), paths: ["a.txt", "b.txt"] },
+      options(),
+      {
+        testHookRequest: { phase: "snapshot-clone-path-entry", index: 1 },
+        testHook: async () => {
+          await fs.writeFile(path.join(root, "a.txt"), "rewritten\n", {
+            mode: 0o600,
+          });
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_TREE_CHANGED" });
+    // Not merely the changed entry: nothing of the snapshot survives.
+    expect(await fs.readdir(runtimeDirectory)).toEqual(before);
+  });
+
+  it("S35-H1-2 control: the same two-file capture succeeds, and every named path is attached, when nothing changes", async () => {
+    await initRepo(root);
+    await fs.writeFile(path.join(root, "a.txt"), "original a\n", {
+      mode: 0o600,
+    });
+    await fs.writeFile(path.join(root, "b.txt"), "original b\n", {
+      mode: 0o600,
+    });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root), paths: ["a.txt", "b.txt"] },
+      options(),
+    );
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.skipped).toBe(0);
+    await expect(
+      fs.readFile(path.join(outcome.path, "a.txt"), "utf8"),
+    ).resolves.toBe("original a\n");
+    await expect(
+      fs.readFile(path.join(outcome.path, "b.txt"), "utf8"),
+    ).resolves.toBe("original b\n");
+    await outcome.remove();
+  });
+
+  it("S35-H1-2 refuses when a tracked path that was absent at capture reappears before the list is complete", async () => {
+    await initRepo(root);
+    await fs.writeFile(path.join(root, "a.txt"), "original a\n", {
+      mode: 0o600,
+    });
+    await fs.writeFile(path.join(root, "gone.txt"), "gone\n", { mode: 0o600 });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    // Tracked, but deleted from the working tree: the snapshot's truthful
+    // statement about it is "absent", which Git renders as deleted.
+    await fs.rm(path.join(root, "gone.txt"));
+
+    const outcome = await createWorkspaceSnapshot(
+      {
+        root,
+        approvedRoot: approvedRootOf(root),
+        paths: ["gone.txt", "a.txt"],
+      },
+      options(),
+      {
+        testHookRequest: { phase: "snapshot-clone-path-entry", index: 1 },
+        testHook: async () => {
+          await fs.writeFile(path.join(root, "gone.txt"), "back\n", {
+            mode: 0o600,
+          });
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_TREE_CHANGED" });
+  });
+
   it("charges a cloned file's size against its own clone budget, never against the copied-byte budget", async () => {
     await initRepo(root);
     const large = Buffer.alloc(64 * 1024, "x");

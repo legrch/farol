@@ -39,8 +39,8 @@ export type SafeOpenHelperRecord = Readonly<{
 }>;
 
 export const NEXT_SAFE_OPEN_HELPER: SafeOpenHelperRecord = Object.freeze({
-  sha256: "021e5b50dda7bde6bd90a616ec1266139cc2c7cb0fe41e3c1d218f61db46b11d",
-  size: 128060,
+  sha256: "81847a97fedbb3a8308e66fd64e865e84dc765c98b18ca38b0853c8d9d2271a9",
+  size: 133097,
   mode: 0o644,
 });
 
@@ -1444,6 +1444,7 @@ function mutationErrorCode(
     case "WORKSPACE_TRACKED_LIST_TOO_LARGE":
     case "WORKSPACE_TRACKED_PATH_UNSUPPORTED":
     case "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT":
+    case "WORKSPACE_CHANGED_DURING_SNAPSHOT":
     case "WORKSPACE_SNAPSHOT_TOO_LARGE":
     case "WORKSPACE_SNAPSHOT_CROSS_VOLUME":
     case "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED":

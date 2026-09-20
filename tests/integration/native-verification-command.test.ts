@@ -1235,6 +1235,130 @@ int main(void) {
     await fs.rename(moved, root);
   });
 
+  // S35-H1-2: the tracked-path capture attaches one file at a time, so a
+  // write landing between two clones could leave the snapshot holding one
+  // file from before it and another from after it. The index pin cannot see
+  // that -- a working-tree write does not touch `.git/index` -- so the route
+  // must refuse rather than report a status of a tree that never existed.
+  it("S35-H1-2 refuses the status with WORKSPACE_CHANGED_DURING_SNAPSHOT when a tracked file is written between two clones, and reports no mixed status", async () => {
+    await fs.writeFile(path.join(root, "second.txt"), "second before\n", {
+      mode: 0o600,
+    });
+    await executeFile(git, ["-C", root, "add", "second.txt"]);
+    await executeFile(
+      git,
+      [
+        "-C",
+        root,
+        "-c",
+        "user.name=Farol Test",
+        "-c",
+        "user.email=farol-test@invalid.example",
+        "commit",
+        "--quiet",
+        "-m",
+        "second",
+      ],
+      { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
+    );
+
+    const input = request();
+    if (input.operation.kind !== "verification.run") {
+      throw new Error("verification operation expected");
+    }
+    const snapshotPaths: string[] = [];
+    let raced = false;
+    // Only the bounded snapshot carries `paths`; the metadata-only one that
+    // precedes it is left exactly as production takes it.
+    const racingFactory: SnapshotFactory = async (snapshotRequest) => {
+      const outcome = await createWorkspaceSnapshot(
+        snapshotRequest,
+        {
+          helperPath: sourceHelper,
+          helper: NEXT_SAFE_OPEN_HELPER,
+          attestInterpreter: async () => "/usr/bin/python3",
+          runtimeDirectory,
+        },
+        snapshotRequest.paths === undefined ||
+          snapshotRequest.paths.length === 0
+          ? {}
+          : {
+              // `README.md` is cloned; `second.txt` is listed but not yet.
+              testHookRequest: {
+                phase: "snapshot-clone-path-entry",
+                index: 1,
+              },
+              testHook: async () => {
+                await fs.writeFile(
+                  path.join(root, "README.md"),
+                  "written between the two clones\n",
+                  { mode: 0o600 },
+                );
+                raced = true;
+              },
+            },
+      );
+      if (outcome.ok) snapshotPaths.push(outcome.path);
+      return outcome;
+    };
+
+    const result = await executeNativeVerificationCommand(
+      input,
+      input.operation,
+      { attestGit: async () => git, createSnapshot: racingFactory },
+    );
+
+    expect(raced).toBe(true);
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_CHANGED_DURING_SNAPSHOT", retry: "never" },
+    });
+    // Not a status at all: no mixed tree is reported anywhere in the result.
+    expect(JSON.stringify(result)).not.toContain("README.md");
+    for (const snapshotPath of snapshotPaths) {
+      await expect(fs.stat(snapshotPath)).rejects.toThrow();
+    }
+  });
+
+  it("S35-H1-2 control: the same two-file repository reports its ordinary status when nothing changes during the capture", async () => {
+    await fs.writeFile(path.join(root, "second.txt"), "second before\n", {
+      mode: 0o600,
+    });
+    await executeFile(git, ["-C", root, "add", "second.txt"]);
+    await executeFile(
+      git,
+      [
+        "-C",
+        root,
+        "-c",
+        "user.name=Farol Test",
+        "-c",
+        "user.email=farol-test@invalid.example",
+        "commit",
+        "--quiet",
+        "-m",
+        "second",
+      ],
+      { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
+    );
+    await fs.writeFile(path.join(root, "README.md"), "modified\n", {
+      mode: 0o600,
+    });
+
+    const input = request();
+    if (input.operation.kind !== "verification.run") {
+      throw new Error("verification operation expected");
+    }
+    const result = await executeNativeVerificationCommand(
+      input,
+      input.operation,
+      { attestGit: async () => git, createSnapshot: snapshotFactory() },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(JSON.stringify(result)).toContain("README.md");
+  });
+
   it("N02 removes the snapshot after a successful command and after a failed one", async () => {
     const factory = snapshotFactory();
     const snapshotPaths: string[] = [];

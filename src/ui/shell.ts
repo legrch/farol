@@ -2268,71 +2268,74 @@ async function configureProduct(
                                     "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT"
                                   ? "The repository index changed while the check was being prepared, so no single instant could be reported. Run the check again."
                                   : parsed.error ===
-                                      "WORKSPACE_TRACKED_LIST_TOO_LARGE"
-                                    ? "This repository tracks more files than one check can list. Nothing was read."
+                                      "WORKSPACE_CHANGED_DURING_SNAPSHOT"
+                                    ? "A tracked file changed while the check was being prepared, so no single instant could be reported. Run the check again."
                                     : parsed.error ===
-                                        "WORKSPACE_TRACKED_PATH_UNSUPPORTED"
-                                      ? "A tracked path in this repository contains a character the fixed Git checks will not carry (a backslash or a line break). Nothing was reported."
+                                        "WORKSPACE_TRACKED_LIST_TOO_LARGE"
+                                      ? "This repository tracks more files than one check can list. Nothing was read."
                                       : parsed.error ===
-                                          "WORKSPACE_SNAPSHOT_TOO_LARGE"
-                                        ? "The tracked files are too large to snapshot for one check. Nothing was read."
+                                          "WORKSPACE_TRACKED_PATH_UNSUPPORTED"
+                                        ? "A tracked path in this repository contains a character the fixed Git checks will not carry (a backslash or a line break). Nothing was reported."
                                         : parsed.error ===
-                                            "WORKSPACE_SNAPSHOT_CROSS_VOLUME"
-                                          ? "The workspace and Farol Next's runtime directory are on different volumes, so the private snapshot cannot be made. Nothing was read."
+                                            "WORKSPACE_SNAPSHOT_TOO_LARGE"
+                                          ? "The tracked files are too large to snapshot for one check. Nothing was read."
                                           : parsed.error ===
-                                              "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED"
-                                            ? "This volume cannot make file clones (it is not APFS), so the private snapshot cannot be made. Nothing was read."
+                                              "WORKSPACE_SNAPSHOT_CROSS_VOLUME"
+                                            ? "The workspace and Farol Next's runtime directory are on different volumes, so the private snapshot cannot be made. Nothing was read."
                                             : parsed.error ===
-                                                "WORKSPACE_SELECTION_PROTECTED"
-                                              ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
+                                                "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED"
+                                              ? "This volume cannot make file clones (it is not APFS), so the private snapshot cannot be made. Nothing was read."
                                               : parsed.error ===
-                                                  "ROUTE_B_OUTCOME_UNKNOWN"
-                                                ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
+                                                  "WORKSPACE_SELECTION_PROTECTED"
+                                                ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
                                                 : parsed.error ===
-                                                    "ROUTE_B_HOST_START_FAILED"
-                                                  ? "The isolated Codex host for Route B did not start. Nothing was sent."
+                                                    "ROUTE_B_OUTCOME_UNKNOWN"
+                                                  ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
                                                   : parsed.error ===
-                                                      "ROUTE_B_UNAVAILABLE"
-                                                    ? "Route B is not running in this app. Restart Farol Next and check again."
+                                                      "ROUTE_B_HOST_START_FAILED"
+                                                    ? "The isolated Codex host for Route B did not start. Nothing was sent."
                                                     : parsed.error ===
-                                                        "WORKSPACE_GIT_METADATA_NOT_APPROVED"
-                                                      ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
+                                                        "ROUTE_B_UNAVAILABLE"
+                                                      ? "Route B is not running in this app. Restart Farol Next and check again."
                                                       : parsed.error ===
-                                                          "CODEX_HOST_TASK_IN_PROGRESS"
-                                                        ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
+                                                          "WORKSPACE_GIT_METADATA_NOT_APPROVED"
+                                                        ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
                                                         : parsed.error ===
-                                                            "WORKSPACE_ROOT_CHANGED"
-                                                          ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                                            "CODEX_HOST_TASK_IN_PROGRESS"
+                                                          ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
                                                           : parsed.error ===
-                                                              "MODEL_ENDPOINT_UNAVAILABLE"
-                                                            ? "Farol Model is not running. Nothing was read or changed."
+                                                              "WORKSPACE_ROOT_CHANGED"
+                                                            ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
                                                             : parsed.error ===
-                                                                "MODEL_CONFIG_INSECURE_PERMISSIONS"
-                                                              ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
+                                                                "MODEL_ENDPOINT_UNAVAILABLE"
+                                                              ? "Farol Model is not running. Nothing was read or changed."
                                                               : parsed.error ===
-                                                                  "MODEL_CONFIG_CONFLICT"
-                                                                ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
+                                                                  "MODEL_CONFIG_INSECURE_PERMISSIONS"
+                                                                ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
                                                                 : parsed.error ===
-                                                                    "MODEL_CONFIG_SYMLINK"
-                                                                  ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
+                                                                    "MODEL_CONFIG_CONFLICT"
+                                                                  ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
                                                                   : parsed.error ===
-                                                                      "MODEL_CONFIG_MALFORMED"
-                                                                    ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
+                                                                      "MODEL_CONFIG_SYMLINK"
+                                                                    ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
                                                                     : parsed.error ===
-                                                                        "MODEL_TOKEN_ROTATE_FAILED"
-                                                                      ? "Token rotation did not complete. Check status and preview the connection before trying again."
+                                                                        "MODEL_CONFIG_MALFORMED"
+                                                                      ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
                                                                       : parsed.error ===
-                                                                            "MODEL_CONFIG_APPLY_FAILED" ||
-                                                                          parsed.error ===
-                                                                            "MODEL_CONFIG_ROLLBACK_FAILED"
-                                                                        ? "config.toml could not be changed. Nothing was left half-written."
-                                                                        : (transitionRefusalMessage(
-                                                                            parsed.error,
-                                                                          ) ??
-                                                                          workspaceEditRefusalMessage(
-                                                                            parsed.error,
-                                                                          ) ??
-                                                                          `Not applied · ${parsed.error}`);
+                                                                          "MODEL_TOKEN_ROTATE_FAILED"
+                                                                        ? "Token rotation did not complete. Check status and preview the connection before trying again."
+                                                                        : parsed.error ===
+                                                                              "MODEL_CONFIG_APPLY_FAILED" ||
+                                                                            parsed.error ===
+                                                                              "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                                          ? "config.toml could not be changed. Nothing was left half-written."
+                                                                          : (transitionRefusalMessage(
+                                                                              parsed.error,
+                                                                            ) ??
+                                                                            workspaceEditRefusalMessage(
+                                                                              parsed.error,
+                                                                            ) ??
+                                                                            `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

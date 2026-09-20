@@ -53,7 +53,13 @@ What the two results mean, exactly:
   takes two snapshots -- metadata only, to ask Git which paths are tracked, then
   metadata plus exactly those paths -- and the second is refused with
   `WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT` unless its index is byte-identical to the
-  first's, so the pair is one instant or no answer.
+  first's, so the pair is one instant or no answer. The index pin does not cover the
+  working tree, which a write changes without touching `.git/index`: the tracked files
+  are necessarily attached one at a time, so every one of them is re-checked once the
+  list is complete and the command is refused with `WORKSPACE_CHANGED_DURING_SNAPSHOT`
+  if any changed while it was being taken. The reported status is therefore the state
+  at one instant because any change to a tracked file during the capture refuses the
+  command; a mixed tree is never reported.
 - `git.status` covers **tracked files only**: untracked files are never examined and
   submodules are ignored (`--ignore-submodules=all`; gitlink index entries are never
   carried). A tracked file missing from the working tree, or present as a directory or
