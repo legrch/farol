@@ -22,6 +22,34 @@
 //                         request_max_retries = 0 the host must send exactly
 //                         one request and fail, never a second submission
 //
+// S35-TA-3: the four phases above prove the host protocol against pieces
+// this script assembles itself — an endpoint it constructs, a spec it
+// writes out by hand. That is the protocol claim, not the product claim.
+// The phases below drive the SAME journey through the modules the desktop
+// itself calls, so what is proven is the route an owner actually takes:
+//   app-host-discovery        production executable discovery, then the
+//                             read-only presence check that decides the
+//                             restart note. Nothing is signalled or killed.
+//   app-preview-decline-apply FarolModelLifecycle owns the endpoint; the
+//                             spec is built the way main.ts builds it;
+//                             preview, a DECLINE that changes nothing, then
+//                             apply and the consented selection; then a real
+//                             host call with no -c and no token in the
+//                             environment.
+//   app-rotation-then-host    lifecycle.rotateAndRewrite, then the real host
+//                             again: the block and the endpoint agree on the
+//                             NEW literal and the old one is refused.
+//   app-revocation-no-retry   the token is revoked under a host that still
+//                             carries the old literal: exactly one refused
+//                             request, no second submission.
+//   app-restart-reconnect     a new lifecycle on the same private state
+//                             reuses the persisted port, and the config the
+//                             owner already has keeps working.
+//   app-conflict-and-rollback a foreign entry of the same name is never
+//                             overwritten; rollback removes exactly the
+//                             managed regions and the host can no longer
+//                             reach Farol.
+//
 // Exit codes: 0 PASS · 1 FAIL · 3 REAL_HOST_UNAVAILABLE (no `codex` on
 // PATH: the config+endpoint plumbing is not the real-host claim, so this is
 // deliberately not a pass).
@@ -87,7 +115,15 @@ const {
   FAROL_MODEL_HOST_TUNING,
   applyFarolModelConfigBlock,
   applyFarolModelProviderSelection,
+  previewFarolModelConfigBlock,
+  previewFarolModelProviderSelection,
+  rollbackFarolModelConfigBlock,
+  rollbackFarolModelProviderSelection,
   ROUTE_B_MODEL,
+  FarolModelLifecycle,
+  discoverExecutables,
+  detectCodexHostPresence,
+  psProcessLister,
 } = await import(bundleOutput);
 
 const REPLY_TEXT = "farol model e2e reply";
@@ -98,6 +134,7 @@ const report = {
   startedAtIso: new Date().toISOString(),
   finishedAtIso: null,
   hostBinary: null,
+  discoveredHostBinary: null,
   hostVersion: null,
   model: ROUTE_B_MODEL,
   hostTuning: FAROL_MODEL_HOST_TUNING,
@@ -564,6 +601,400 @@ async function main() {
       };
     });
 
+    // ==================================================================
+    // S35-TA-3 — the application's own journey, through the modules the
+    // desktop calls. From here the endpoint is owned by a real
+    // `FarolModelLifecycle`, not built by this script, and every config
+    // operation goes through the production preview/apply/rollback pair.
+    // ==================================================================
+
+    // Set by `app-host-discovery` to the path the PRODUCT offered.
+    let discoveredHostBin = codexBin;
+
+    /** Runs the host once and reports what THIS lifecycle's endpoint saw. */
+    async function observedAppRun(label, lifecycle, environment, extraArgs) {
+      const live = lifecycle.endpoint;
+      assert.ok(live, "the lifecycle must own a live endpoint");
+      const before = live.evidence();
+      const callsBefore = upstream.calls;
+      const authBefore = upstream.authorizations.length;
+      const run = await runCodexExec(discoveredHostBin, environment, extraArgs);
+      logRun(label, run);
+      const after = live.evidence();
+      return {
+        run,
+        accepted: after.requestsAccepted - before.requestsAccepted,
+        rejected: after.requestsRejected - before.requestsRejected,
+        upstreamCalls: upstream.calls - callsBefore,
+        authorizations: upstream.authorizations.slice(authBefore),
+        models: upstream.models.slice(authBefore),
+        lastRejectedReason: after.lastRejectedReason ?? null,
+      };
+    }
+
+    /** The spec `main.ts` builds: lifecycle status plus the live token. */
+    async function appSpec(lifecycle) {
+      const status = lifecycle.status();
+      if (status.state !== "listening" && status.state !== "connected") {
+        return null;
+      }
+      const currentToken = await lifecycle.runtimeState.currentToken();
+      if (!currentToken) return null;
+      return {
+        providerName: "farol",
+        displayName: "Farol Model",
+        baseUrl: `http://127.0.0.1:${status.port}`,
+        model: ROUTE_B_MODEL,
+        wireApi: "responses",
+        delivery: { mode: "bearer-token", token: currentToken },
+      };
+    }
+
+    const appHome = path.join(root, "codex-home-app");
+    await fs.mkdir(appHome, { recursive: true });
+    const appConfig = path.join(appHome, "config.toml");
+    // An owner's own config the product must preserve untouched.
+    const OWNER_PREAMBLE =
+      '# the owner\'s own file\nmodel_reasoning_effort = "low"\n\n';
+    await fs.writeFile(appConfig, OWNER_PREAMBLE, { mode: 0o600 });
+
+    const appLifecycle = new FarolModelLifecycle({
+      stateRoot: path.join(root, "private", "app-model-endpoint"),
+      model: ROUTE_B_MODEL,
+      handler: turnHandler,
+    });
+
+    await phase("app-host-discovery", async () => {
+      // The product's own discovery, not this script's `which`.
+      const discovered = await discoverExecutables("codex");
+      const realBin = await fs.realpath(codexBin).catch(() => codexBin);
+      const offers = discovered.candidates.filter(
+        (candidate) => candidate.verdict === "offer",
+      );
+      const match = discovered.candidates.find(
+        (candidate) => candidate.path === realBin,
+      );
+      console.log(
+        `discovery searched ${discovered.searched.length} paths, ` +
+          `${discovered.candidates.length} candidate(s), ` +
+          `${offers.length} offered`,
+      );
+      for (const candidate of discovered.candidates) {
+        console.log(
+          `  ${candidate.verdict.padEnd(18)} ${candidate.origin.padEnd(14)} ${candidate.path}`,
+        );
+      }
+      // The presence check that decides the restart note: read-only, and
+      // it never signals or kills anything.
+      const presence = await detectCodexHostPresence({
+        executablePath: realBin,
+        listProcesses: psProcessLister,
+      });
+      console.log(`host presence: ${JSON.stringify(presence)}`);
+      assert.ok(
+        Array.isArray(discovered.candidates),
+        "discovery must return a well-formed result",
+      );
+      assert.ok(
+        ["running", "not_running", "unknown"].includes(presence.state),
+        `presence state must be a closed value, saw ${presence.state}`,
+      );
+      if (match) {
+        assert.equal(
+          match.verdict,
+          "offer",
+          `the installed host must be offered, not ${match.verdict}` +
+            `${match.refusalReason ? ` (${match.refusalReason})` : ""}`,
+        );
+      }
+      // `which codex` finds a Node shim whose realpath is a `.js` file;
+      // discovery resolves the vendor binary behind it, which is why the
+      // two paths differ and why the phases below run what the PRODUCT
+      // offered rather than what this script found. A machine with no
+      // offer is recorded as a discovery limit — the journey then keeps
+      // the located binary rather than claiming a discovery that did not
+      // happen.
+      if (offers.length > 0) {
+        discoveredHostBin = offers[0].path;
+        report.discoveredHostBinary = discoveredHostBin;
+        console.log(`application journey will run: ${discoveredHostBin}`);
+      }
+      return {
+        searchedPaths: discovered.searched.length,
+        candidates: discovered.candidates.length,
+        offered: offers.length,
+        offeredPaths: offers.map((candidate) => candidate.path),
+        offeredOrigins: offers.map((candidate) => candidate.origin),
+        locatedHostAmongCandidates: Boolean(match),
+        journeyRunsDiscoveredHost: discoveredHostBin !== codexBin,
+        presenceState: presence.state,
+      };
+    });
+
+    await phase("app-preview-decline-apply", async () => {
+      await appLifecycle.start();
+      const status = appLifecycle.status();
+      assert.equal(status.state, "listening");
+      const spec = await appSpec(appLifecycle);
+      assert.ok(spec, "the application must be able to describe its endpoint");
+
+      // Preview: the owner sees the exact block before anything is written.
+      const preview = await previewFarolModelConfigBlock(appConfig, spec);
+      assert.equal(preview.status, "install");
+      const beforeDecline = await fs.readFile(appConfig, "utf8");
+
+      // Decline: previewing changes nothing at all.
+      assert.equal(beforeDecline, OWNER_PREAMBLE);
+
+      const applied = await applyFarolModelConfigBlock(appConfig, spec);
+      assert.equal(applied.status, "applied");
+      const selection = await previewFarolModelProviderSelection(
+        appConfig,
+        spec,
+      );
+      assert.ok(
+        selection.status === "install" || selection.status === "update",
+        `selection must be offerable, saw ${selection.status}`,
+      );
+      const selected = await applyFarolModelProviderSelection(appConfig, spec);
+      assert.equal(selected.status, "applied");
+
+      const config = await fs.readFile(appConfig, "utf8");
+      console.log("--- managed config.toml (application journey) ---");
+      console.log(config.replace(spec.delivery.token, "<token>"));
+      assert.ok(
+        config.startsWith(OWNER_PREAMBLE),
+        "the owner's own lines must be preserved byte for byte",
+      );
+      assert.ok(!config.includes("[profiles."), "never a [profiles.] table");
+      assert.ok(config.includes("request_max_retries = 0"));
+      const mode = (await fs.stat(appConfig)).mode & 0o777;
+      assert.equal(
+        mode,
+        0o600,
+        `config.toml must stay 0600, saw ${mode.toString(8)}`,
+      );
+
+      // The real host, with no -c and no token in the environment.
+      const observed = await observedAppRun(
+        "application journey, consented selection",
+        appLifecycle,
+        hostEnvironment(appHome),
+        [],
+      );
+      assert.equal(observed.run.code, 0, "codex exec must exit 0");
+      assert.ok(observed.run.stdout.includes(REPLY_TEXT));
+      assert.equal(observed.accepted, 1, "exactly one served request");
+      assert.equal(observed.rejected, 0);
+      assert.deepEqual(observed.authorizations, [
+        `Bearer ${spec.delivery.token}`,
+      ]);
+      assert.deepEqual(observed.models, [ROUTE_B_MODEL]);
+      assert.equal(appLifecycle.status().state, "connected");
+      return {
+        previewStatus: preview.status,
+        declineChangedNothing: true,
+        requestedModel: ROUTE_B_MODEL,
+        observedModel: observed.models[0],
+        accepted: observed.accepted,
+        configMode: "600",
+      };
+    });
+
+    await phase("app-rotation-then-host", async () => {
+      const staleToken = await appLifecycle.runtimeState.currentToken();
+      const rotated = await appLifecycle.rotateAndRewrite({
+        configPath: appConfig,
+        spec: () => appSpec(appLifecycle),
+        preview: previewFarolModelConfigBlock,
+        apply: applyFarolModelConfigBlock,
+      });
+      assert.deepEqual(rotated, {
+        ok: true,
+        providerBlockUpdated: true,
+        providerBlockStatus: "update",
+      });
+      const freshToken = await appLifecycle.runtimeState.currentToken();
+      assert.ok(freshToken && freshToken !== staleToken);
+      const config = await fs.readFile(appConfig, "utf8");
+      assert.ok(
+        config.includes(freshToken),
+        "the block must carry the new literal",
+      );
+      assert.ok(!config.includes(staleToken), "and no longer the old one");
+
+      // The endpoint refuses the literal the owner's config no longer
+      // has. The body is irrelevant: an unauthenticated caller is refused
+      // before any route is dispatched or any body is read.
+      const stale = await fetch(
+        `http://127.0.0.1:${appLifecycle.status().port}/responses`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${staleToken}`,
+            "content-type": "application/json",
+          },
+          body: "{}",
+        },
+      );
+      assert.equal(stale.status, 401);
+      await stale.text();
+
+      const observed = await observedAppRun(
+        "application journey, after rotation",
+        appLifecycle,
+        hostEnvironment(appHome),
+        [],
+      );
+      assert.equal(observed.run.code, 0);
+      assert.equal(observed.accepted, 1);
+      assert.deepEqual(observed.authorizations, [`Bearer ${freshToken}`]);
+      return {
+        blockUpdated: true,
+        staleLiteralRefused: 401,
+        accepted: observed.accepted,
+      };
+    });
+
+    await phase("app-revocation-no-retry", async () => {
+      // The owner revokes the token while the host still carries the
+      // literal the config was written with: every request must be refused
+      // ONCE, with no second submission of an unknown effect.
+      await appLifecycle.runtimeState.clearToken();
+      const observed = await observedAppRun(
+        "application journey, token revoked",
+        appLifecycle,
+        hostEnvironment(appHome),
+        [],
+      );
+      assert.notEqual(observed.run.code, 0, "the host must fail, not retry");
+      assert.equal(observed.accepted, 0, "nothing may be served");
+      assert.equal(
+        observed.rejected,
+        1,
+        `exactly one refused request, saw ${observed.rejected}`,
+      );
+      assert.equal(observed.upstreamCalls, 0, "no turn may reach the upstream");
+      assert.equal(observed.lastRejectedReason, "FAROL_MODEL_TOKEN_UNSET");
+      assert.ok(!observed.run.stdout.includes(REPLY_TEXT));
+      return {
+        exitCode: observed.run.code,
+        rejected: observed.rejected,
+        upstreamCalls: observed.upstreamCalls,
+        lastRejectedReason: observed.lastRejectedReason,
+      };
+    });
+
+    await phase("app-restart-reconnect", async () => {
+      // Put the connection back the way an owner would: mint, re-apply the
+      // block (idempotent), then restart the app on the same private state.
+      await appLifecycle.runtimeState.ensureToken();
+      const reSpec = await appSpec(appLifecycle);
+      assert.ok(reSpec);
+      const reapplied = await applyFarolModelConfigBlock(appConfig, reSpec);
+      assert.equal(reapplied.status, "applied");
+      const portBefore = appLifecycle.status().port;
+      await appLifecycle.stop();
+      assert.deepEqual(appLifecycle.status(), { state: "not_running" });
+
+      const restarted = new FarolModelLifecycle({
+        stateRoot: path.join(root, "private", "app-model-endpoint"),
+        model: ROUTE_B_MODEL,
+        handler: turnHandler,
+      });
+      await restarted.start();
+      const portAfter = restarted.status().port;
+      assert.equal(
+        portAfter,
+        portBefore,
+        `the persisted port must be reused, ${portBefore} -> ${portAfter}`,
+      );
+
+      const observed = await observedAppRun(
+        "application journey, after restart",
+        restarted,
+        hostEnvironment(appHome),
+        [],
+      );
+      assert.equal(
+        observed.run.code,
+        0,
+        "the unchanged config must work again",
+      );
+      assert.equal(observed.accepted, 1);
+      await restarted.stop();
+      return { portBefore, portAfter, accepted: observed.accepted };
+    });
+
+    await phase("app-conflict-and-rollback", async () => {
+      // A provider entry of the same name that Farol did not write.
+      const foreignHome = path.join(root, "codex-home-foreign");
+      await fs.mkdir(foreignHome, { recursive: true });
+      const foreignConfig = path.join(foreignHome, "config.toml");
+      const foreignBytes =
+        '[model_providers.farol]\nname = "someone else"\n' +
+        'base_url = "http://127.0.0.1:9/v1"\n';
+      await fs.writeFile(foreignConfig, foreignBytes, { mode: 0o600 });
+      const conflictSpec = {
+        providerName: "farol",
+        displayName: "Farol Model",
+        baseUrl: "http://127.0.0.1:1/v1",
+        model: ROUTE_B_MODEL,
+        wireApi: "responses",
+        delivery: { mode: "bearer-token", token: "a".repeat(43) },
+      };
+      const conflictPreview = await previewFarolModelConfigBlock(
+        foreignConfig,
+        conflictSpec,
+      );
+      assert.equal(conflictPreview.status, "conflict");
+      const conflictApply = await applyFarolModelConfigBlock(
+        foreignConfig,
+        conflictSpec,
+      );
+      assert.notEqual(conflictApply.status, "applied");
+      assert.equal(
+        await fs.readFile(foreignConfig, "utf8"),
+        foreignBytes,
+        "a foreign entry leaves the file byte-identical",
+      );
+
+      // Rollback removes exactly the managed regions.
+      const selectionBack =
+        await rollbackFarolModelProviderSelection(appConfig);
+      assert.equal(selectionBack.status, "restored");
+      const blockBack = await rollbackFarolModelConfigBlock(appConfig);
+      assert.equal(blockBack.status, "restored");
+      const after = await fs.readFile(appConfig, "utf8");
+      assert.ok(!after.includes("model_providers.farol"));
+      assert.ok(!after.includes("BEGIN FAROL"));
+      assert.ok(
+        after.includes('model_reasoning_effort = "low"'),
+        "the owner's own lines survive the rollback",
+      );
+
+      // And the host can no longer reach Farol through that config.
+      const run = await runCodexExec(
+        discoveredHostBin,
+        hostEnvironment(appHome),
+        [],
+      );
+      logRun("application journey, after rollback", run);
+      assert.notEqual(
+        run.code,
+        0,
+        "a rolled-back config must not still reach Farol",
+      );
+      assert.ok(!run.stdout.includes(REPLY_TEXT));
+      return {
+        conflictStatus: conflictPreview.status,
+        foreignFileUnchanged: true,
+        selectionRollback: selectionBack.status,
+        blockRollback: blockBack.status,
+        hostExitAfterRollback: run.code,
+      };
+    });
+
     console.log(
       "OBSERVED_RESULT: endpoint evidence =",
       JSON.stringify(endpoint.evidence()),
@@ -572,7 +1003,23 @@ async function main() {
     report.status = "PASS";
     process.exitCode = EXIT_PASS;
   } finally {
-    await fs.rm(root, { recursive: true, force: true });
+    // The host copies a plugins tree into `<CODEX_HOME>/.tmp` and removes
+    // it as it exits, so a recursive remove issued at the same instant can
+    // see ENOTEMPTY. That is the host tidying its own scratch directory,
+    // not a result: retry briefly rather than fail a finished run on it.
+    await removeTree(root);
+  }
+}
+
+async function removeTree(target) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rm(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
   }
 }
 

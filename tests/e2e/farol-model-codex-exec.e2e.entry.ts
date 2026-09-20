@@ -9,5 +9,17 @@ export {
   FAROL_MODEL_HOST_TUNING,
   applyFarolModelConfigBlock,
   applyFarolModelProviderSelection,
+  previewFarolModelConfigBlock,
+  previewFarolModelProviderSelection,
+  rollbackFarolModelConfigBlock,
+  rollbackFarolModelProviderSelection,
 } from "../../src/apps/desktop/farol-model-config-block";
 export { ROUTE_B_MODEL } from "../../src/apps/desktop/route-b-runtime";
+// The application's own orchestration, so the journey phases below drive
+// what the desktop drives rather than the pieces underneath it.
+export { FarolModelLifecycle } from "../../src/apps/desktop/farol-model-lifecycle";
+export { discoverExecutables } from "../../src/apps/desktop/executable-discovery";
+export {
+  detectCodexHostPresence,
+  psProcessLister,
+} from "../../src/apps/desktop/farol-model-host-presence";
