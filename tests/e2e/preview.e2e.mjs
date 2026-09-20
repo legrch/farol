@@ -9872,6 +9872,368 @@ n09ConnectorAttachmentSegment: {
   }
 }
 
+// N11 — the Agent's scope controls, and what the native host was actually
+// handed. The suite proves an `exact` assignment and the untouched default,
+// whose wire form is `{mode: "subtree", root: workspaceRoot}` — the default,
+// not a selection. Nothing had ever selected "One subfolder", typed a
+// relative path, or typed an exclusion.
+//
+// This segment reaches an Agent-ready state through the Settings "Native
+// hosts" row rather than Setup's verify step, deliberately: extending the
+// existing agent journey would change an assertion it already owns
+// (`productAgentInputFiles.length === 2`), and taking Setup's verify step
+// would push the five lineage cases that journey already proves. Nothing
+// here re-proves lineage; it asserts only what the scope controls deliver.
+n11AgentScopeSegment: {
+  if (!segmentSelected("n11-agent-scope")) break n11AgentScopeSegment;
+  const agentScope = await launch([], "hidden", "ordinary");
+  try {
+    // A real subfolder with its own file, and an excludable sibling, so the
+    // narrowing below is a claim about real paths rather than strings.
+    const subfolder = path.join(agentScope.workspaceRoot, "notes");
+    await fs.mkdir(subfolder, { mode: 0o700 });
+    await fs.writeFile(
+      path.join(subfolder, "keep.md"),
+      "Farol Next agent subfolder fixture\n",
+      { mode: 0o600 },
+    );
+    // A second file in the same subfolder, so excluding one does not empty
+    // the scope and turn this into a test of the empty case instead.
+    await fs.writeFile(
+      path.join(subfolder, "scope.md"),
+      "Farol Next agent exclusion fixture\n",
+      { mode: 0o600 },
+    );
+
+    await completeSetup(agentScope, false, true, true, false);
+    await agentScope.window.locator('[data-section="settings"]').click();
+    await agentScope.window.waitForFunction(
+      () => document.documentElement.dataset.section === "settings",
+    );
+    const hostRow = agentScope.window
+      .locator("#connection-readiness .connection-row")
+      .filter({ hasText: "Native hosts · " });
+    // A wait that times out names what Settings actually said and which
+    // controls the host row was offering, so the next run is a fix rather
+    // than a guess.
+    const hostRowState = () =>
+      agentScope.window.evaluate(() => {
+        const rows = [
+          ...document.querySelectorAll("#connection-readiness .connection-row"),
+        ].map((row) => ({
+          title: row.querySelector("strong")?.textContent ?? null,
+          buttons: [...row.querySelectorAll("button")].map((button) => ({
+            label: button.textContent,
+            disabled: button.disabled,
+          })),
+        }));
+        return {
+          section: document.documentElement.dataset.section ?? null,
+          feedback: document.querySelector("#settings-feedback")?.textContent,
+          rows,
+        };
+      });
+    const settingsFeedback = async (pattern) => {
+      try {
+        await agentScope.window.waitForFunction(
+          (source) =>
+            new RegExp(source, "u").test(
+              document.querySelector("#settings-feedback")?.textContent ?? "",
+            ),
+          pattern.source,
+        );
+      } catch (error) {
+        throw new Error(
+          `${error.message} · expected ${pattern.source} · ${JSON.stringify(await hostRowState().catch(() => null))}`,
+          { cause: error },
+        );
+      }
+    };
+    const clickHostButton = async (label) => {
+      const before = await hostRowState();
+      const row = before.rows.find((candidate) =>
+        candidate.title?.startsWith("Native hosts"),
+      );
+      assert.ok(
+        row?.buttons.some((button) => button.label === label),
+        `the Native hosts row must offer ${label} · ${JSON.stringify(before)}`,
+      );
+      await hostRow
+        .getByRole("button", { name: label, exact: true })
+        .click({ timeout: 20_000 });
+    };
+    await clickHostButton("Choose…");
+    await settingsFeedback(/^Codex \S+ contract verified/u);
+    await clickHostButton("Run live check");
+    // The live check reports the turn it ran, not the command's name.
+    await settingsFeedback(
+      /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,
+    );
+    await clickHostButton("Verify Agent");
+    await agentScope.window.waitForFunction(() => {
+      const button = [
+        ...document.querySelectorAll("#connection-readiness button"),
+      ].find((candidate) => candidate.textContent === "Agent verified");
+      return button instanceof HTMLButtonElement;
+    });
+
+    // New task lives on the browser section; Settings does not show it.
+    await agentScope.window
+      .locator('.nav-item[data-section="browser"]')
+      .click({ timeout: 20_000 });
+    await agentScope.window.waitForFunction(
+      () => document.documentElement.dataset.section === "browser",
+    );
+    const scopeTask = agentScope.window.locator("#new-task");
+    await scopeTask.waitFor({ state: "visible", timeout: 20_000 });
+    await scopeTask.click();
+    await agentScope.window.waitForFunction(
+      () => document.querySelectorAll("#task-tabs .task-tab").length === 1,
+    );
+    const openScopeMenu = async () => {
+      await agentScope.window
+        .locator("#task-menu-button")
+        .click({ timeout: 20_000 });
+      await agentScope.window
+        .locator("#task-menu")
+        .waitFor({ state: "visible", timeout: 20_000 });
+    };
+    // The Run Agent button is disabled until the menu has re-rendered with
+    // a valid objective and scope; its title names whichever prerequisite
+    // is still missing, so a wait that fails says which one.
+    const runAgentWhenReady = async () => {
+      try {
+        await agentScope.window.waitForFunction(() => {
+          const button = document.querySelector("#task-menu-agent");
+          return button instanceof HTMLButtonElement && !button.disabled;
+        });
+      } catch (error) {
+        const shown = await agentScope.window
+          .evaluate(() => ({
+            title: document
+              .querySelector("#task-menu-agent")
+              ?.getAttribute("title"),
+            note: document.querySelector("#task-menu-note")?.textContent,
+            scope: document.querySelector("#task-agent-scope")?.value,
+            subtree: document.querySelector("#task-agent-subtree")?.value,
+            exclusions: document.querySelector("#task-agent-exclusions")?.value,
+            objective: document.querySelector("#task-agent-objective")?.value,
+          }))
+          .catch(() => null);
+        throw new Error(
+          `${error.message} · Run Agent stayed disabled · ${JSON.stringify(shown)}`,
+          { cause: error },
+        );
+      }
+      await agentScope.window
+        .locator("#task-menu-agent")
+        .click({ timeout: 20_000 });
+    };
+    // The menu closes on a refusal, and the relative-root field is hidden
+    // until the menu has re-rendered for the chosen mode. Reopen what is
+    // closed and wait for the control the owner would type into, rather
+    // than racing either.
+    const selectSubtreeScope = async () => {
+      if (!(await agentScope.window.locator("#task-menu").isVisible())) {
+        await openScopeMenu();
+      }
+      await agentScope.window
+        .locator("#task-agent-scope")
+        .selectOption("subtree");
+      await agentScope.window.waitForFunction(() => {
+        const field = document.querySelector("#task-agent-subtree");
+        const exclusions = document.querySelector("#task-agent-exclusions");
+        return (
+          document.querySelector("#task-agent-scope")?.value === "subtree" &&
+          field instanceof HTMLElement &&
+          field.offsetParent !== null &&
+          exclusions instanceof HTMLElement &&
+          exclusions.offsetParent !== null
+        );
+      });
+    };
+    // `renderTaskMenu()` rebuilds its controls on every task and runtime
+    // event, so a value typed into one field can be gone by the time the
+    // next is typed — the surface this suite already tracks as an open
+    // intermittent. Stage all three values, re-read them, and only then
+    // press Run Agent; a rebuild that lost one is retried rather than
+    // asserted around. This retries the INTERACTION only: every assertion
+    // about what was delivered stays exactly as strict.
+    //
+    // OPEN QUESTION, deliberately not answered here. Some of the rebuilds
+    // measured while writing this case were caused by the test's own
+    // preceding action — a refused assignment closes the menu, which may
+    // well be by design — but not all of them: on two runs a control went
+    // invisible with nothing but a `fill` before it. Whether that second
+    // kind is an unsolicited runtime event arriving under a typing owner
+    // was NOT measured, because these dumps record the menu only on the
+    // path that timed out, never the event that moved it. Settling it needs
+    // the renderer's event source recorded at each retry, and it matters:
+    // a menu that rebuilds under a typing owner and drops their subfolder
+    // path is an owner-visible defect, not a harness problem. Until that
+    // instrument exists this retry is an accommodation of a surface whose
+    // behaviour is only partly explained, and it should not be read as
+    // evidence that the surface is sound.
+    const submitAgentAssignment = async (staged) => {
+      let lastFailure = null;
+      for (let attempt = 1; attempt <= 4; attempt += 1) {
+        try {
+          await selectSubtreeScope();
+          await agentScope.window
+            .locator("#task-agent-subtree")
+            .fill(staged.subtree, { timeout: 10_000 });
+          await agentScope.window
+            .locator("#task-agent-exclusions")
+            .fill(staged.exclusions, { timeout: 10_000 });
+          await agentScope.window
+            .locator("#task-agent-objective")
+            .fill(staged.objective, { timeout: 10_000 });
+          const observed = await agentScope.window.evaluate(() => ({
+            scope: document.querySelector("#task-agent-scope")?.value,
+            subtree: document.querySelector("#task-agent-subtree")?.value,
+            exclusions: document.querySelector("#task-agent-exclusions")?.value,
+            objective: document.querySelector("#task-agent-objective")?.value,
+          }));
+          assert.deepEqual(
+            observed,
+            { scope: "subtree", ...staged },
+            "the task menu kept the owner's typed scope up to the click",
+          );
+          await runAgentWhenReady();
+          return;
+        } catch (error) {
+          lastFailure = error;
+        }
+      }
+      throw new Error(
+        `E2E_TASK_MENU_REBUILD_LOST_INPUT after 4 attempts · ${lastFailure?.message ?? "unknown"}`,
+        { cause: lastFailure },
+      );
+    };
+    const agentInputRoot = path.join(
+      agentScope.userData,
+      "farol-next-state",
+      "product-agent-inputs",
+    );
+    const deliveredAgentInput = async () => {
+      const entries = (await fs.readdir(agentInputRoot)).filter((entry) =>
+        entry.endsWith(".json"),
+      );
+      assert.equal(
+        entries.length,
+        1,
+        "one assignment was delivered, so one envelope exists",
+      );
+      return JSON.parse(
+        await fs.readFile(path.join(agentInputRoot, entries[0]), "utf8"),
+      );
+    };
+
+    // `.git` is a denied path, so naming it as the subfolder must be
+    // refused before anything is delivered. This runs first: a refusal that
+    // wrote an envelope would be invisible after a successful assignment.
+    await openScopeMenu();
+    await submitAgentAssignment({
+      subtree: ".git",
+      exclusions: "",
+      objective:
+        "Read the excluded repository metadata, which must be refused.",
+    });
+    await agentScope.window.waitForFunction(() => {
+      const note = document.querySelector("#task-menu-note")?.textContent ?? "";
+      return note.length > 0 && note !== "Agent assignment admitted.";
+    });
+    const refusedNote = await agentScope.window
+      .locator("#task-menu-note")
+      .innerText();
+    assert.notEqual(
+      refusedNote,
+      "Agent assignment admitted.",
+      "a denied subfolder is refused rather than admitted",
+    );
+    const envelopesAfterRefusal = await fs
+      .readdir(agentInputRoot)
+      .then(
+        (entries) => entries.filter((entry) => entry.endsWith(".json")).length,
+      )
+      .catch(() => 0);
+    assert.equal(
+      envelopesAfterRefusal,
+      0,
+      `a refused assignment delivers no envelope · note ${JSON.stringify(refusedNote)}`,
+    );
+    cases.push("n11-agent-denied-subfolder-refused");
+
+    // One subfolder, and one exclusion, both typed into their own controls.
+    await submitAgentAssignment({
+      subtree: "notes",
+      // Exclusions resolve against the workspace root, not the chosen
+      // subfolder, so this is written the way the product reads it.
+      exclusions: "notes/scope.md",
+      objective:
+        "Read the approved subfolder and report what its scope allows.",
+    });
+    // A refusal here is a real product answer, so the wait reports the
+    // sentence the menu gave rather than a bare timeout.
+    try {
+      await agentScope.window.waitForFunction(
+        () =>
+          document.querySelector("#task-menu-note")?.textContent ===
+          "Agent assignment admitted.",
+      );
+    } catch (error) {
+      const shown = await agentScope.window
+        .evaluate(() => ({
+          note: document.querySelector("#task-menu-note")?.textContent,
+          agentTitle: document
+            .querySelector("#task-menu-agent")
+            ?.getAttribute("title"),
+          scope: document.querySelector("#task-agent-scope")?.value,
+          subtree: document.querySelector("#task-agent-subtree")?.value,
+          exclusions: document.querySelector("#task-agent-exclusions")?.value,
+        }))
+        .catch(() => null);
+      throw new Error(
+        `${error.message} · task menu showed ${JSON.stringify(shown)}`,
+        { cause: error },
+      );
+    }
+    const delivered = await deliveredAgentInput();
+    assert.equal(delivered.schema, 2);
+    assert.equal(delivered.kind, "product_agent_input");
+    // The resolved scope carries an absolute root, never the relative text
+    // the owner typed: there is no `relativeRoot` on the wire, and a root
+    // equal to the workspace root would mean the narrowing did not happen.
+    assert.deepEqual(delivered.input.scope, {
+      mode: "subtree",
+      root: subfolder,
+    });
+    assert.notEqual(
+      delivered.input.scope.root,
+      agentScope.workspaceRoot,
+      "selecting one subfolder narrows the root the Agent is given",
+    );
+    cases.push("n11-agent-subfolder-narrows-delivered-root");
+
+    // `excludedPaths` is a sibling of `scope`, not a member of it, and the
+    // control splits on newlines only.
+    assert.deepEqual(delivered.input.excludedPaths, [
+      path.join(subfolder, "scope.md"),
+    ]);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(
+        delivered.input.scope,
+        "excludedPaths",
+      ),
+      false,
+      "exclusions travel beside the scope, never inside it",
+    );
+    cases.push("n11-agent-exclusion-reaches-the-delivered-assignment");
+  } finally {
+    await close(agentScope);
+  }
+}
+
 // N10 — the Computer panel's own controls. Every approved folder the suite
 // has ever added arrived through Setup's `#setup-live-primary`, so the
 // panel's own `Add folder…`, a workspace `Remove`, and the guarded edit's
@@ -10029,20 +10391,135 @@ n10ComputerPanelSegment: {
     );
     cases.push("n10-computer-guarded-edit-cancelled-file-unchanged");
 
-    // NOT COVERED HERE: a guarded edit whose result never reaches the
-    // window. main.ts makes the operation id durable before anything
-    // executes — "so a lost response or a restart leaves this exact
-    // operation to observe" — and the renderer acknowledges nothing it
-    // could not confirm, so the product is built for this; the suite still
-    // does not exercise it, and the acceptance pack says so rather than
-    // letting the green above imply otherwise. Two routes were measured and
-    // both are recorded so neither is tried again blind: wrapping the
-    // renderer's own transport for one call is impossible because the
-    // contextBridge object refuses assignment, and restoring the
-    // pre-acknowledgement record into `product-settings.json` and
-    // restarting did not complete inside the lane's budget. The second is
-    // the right shape and needs its own bounded debugging session, not a
-    // place in a freeze candidate.
+    // A guarded edit whose result never reached the window, and the
+    // product's recovery from it.
+    //
+    // What is simulated and what is not. The product has no seam that drops
+    // a reply, and the renderer's own bridge cannot be wrapped: the
+    // contextBridge object refuses assignment, measured rather than assumed.
+    // So the loss is simulated by taking the product's OWN durable
+    // undelivered-result record — the one main.ts writes before anything
+    // executes, precisely "so a lost response or a restart leaves this exact
+    // operation to observe" — and restoring those exact bytes after this
+    // window's acknowledgement has cleared them. The transport drop itself
+    // is therefore NOT exercised. What is exercised is everything after it:
+    // the real edit, its real durable receipt, the restart, the pending
+    // notice, "Edit file…" refusing a second edit while the outcome is
+    // unknown, `computer.observe-workspace-edit` redelivering the real
+    // receipt, the record clearing exactly once, and the file never being
+    // written a second time.
+    await firstCard
+      .getByRole("button", { name: "Edit file…", exact: true })
+      .click();
+    const lostReview = firstCard.locator(".workspace-mutation-evidence");
+    await lostReview.getByText(/README\.md · \d+ bytes · source/u).waitFor();
+    await lostReview
+      .getByLabel("Find exact text in approved-workspace", { exact: true })
+      .fill("workspace verification");
+    await lostReview
+      .getByLabel("Replacement text for approved-workspace", { exact: true })
+      .fill("workspace lost-reply mutation");
+    const settingsPath = path.join(
+      panel.userData,
+      "farol-next-state",
+      "product-settings.json",
+    );
+    await lostReview
+      .getByRole("button", { name: "Apply guarded edit", exact: true })
+      .click();
+    // The record exists before the edit runs and is cleared by this
+    // window's acknowledgement afterwards. Watch the product's own file for
+    // both transitions rather than composing a record: what is captured
+    // here is exactly what a lost reply would have left behind.
+    let productPendingEdit = null;
+    let acknowledged = false;
+    for (let attempt = 0; attempt < 120 && !acknowledged; attempt += 1) {
+      const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+      const pending = settings.computer.pendingEdit;
+      if (pending !== null) productPendingEdit = pending;
+      acknowledged = productPendingEdit !== null && pending === null;
+      if (!acknowledged) await panel.window.waitForTimeout(50);
+    }
+    assert.ok(
+      productPendingEdit,
+      "the product records an undelivered result before the edit executes",
+    );
+    assert.equal(
+      acknowledged,
+      true,
+      "a delivered result is acknowledged, which clears that record",
+    );
+    assert.equal(productPendingEdit.relativePath, "README.md");
+    const editedBytes = await fs.readFile(panel.workspaceFile, "utf8");
+    assert.equal(
+      editedBytes,
+      "Farol Next workspace lost-reply mutation fixture\n",
+    );
+    const editedStat = await fs.stat(panel.workspaceFile);
+
+    // Restore exactly what the product wrote, and nothing else.
+    const storedSettings = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    storedSettings.computer.pendingEdit = productPendingEdit;
+    await fs.writeFile(
+      settingsPath,
+      `${JSON.stringify(storedSettings, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    cases.push("n10-computer-lost-edit-record-is-the-products-own");
+
+    await restart(panel);
+    await panel.window.locator('[data-section="computer"]').click();
+    await panel.window.locator('[data-panel="computer"].active').waitFor();
+    const restartedCard = panel.window
+      .locator("#computer-workspaces .workspace-card")
+      .filter({ hasText: "approved-workspace" });
+    const pendingNotice = restartedCard.locator(".workspace-pending-edit");
+    await pendingNotice
+      .getByText("The last guarded edit of README.md has no delivered result.")
+      .waitFor();
+    assert.equal(
+      await restartedCard
+        .getByRole("button", { name: "Edit file…", exact: true })
+        .isDisabled(),
+      true,
+      "an unknown outcome refuses a second edit until it is known",
+    );
+    await pendingNotice
+      .getByRole("button", { name: "Check result", exact: true })
+      .click();
+    // The observed outcome, not the optimistic sentence the click sent: the
+    // real receipt, reported as redelivered rather than produced again.
+    await panel.window
+      .locator("#computer-feedback")
+      .getByText("Edited README.md once · durable · result redelivered.", {
+        exact: true,
+      })
+      .waitFor();
+    await restartedCard
+      .locator(".workspace-mutation-evidence")
+      .getByText(/Edited README\.md · \d+ bytes/u)
+      .waitFor();
+    await panel.window.waitForFunction(
+      () => document.querySelectorAll(".workspace-pending-edit").length === 0,
+    );
+    const observed = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    assert.equal(
+      observed.computer.pendingEdit,
+      null,
+      "an observed outcome clears the undelivered-result record exactly once",
+    );
+    const finalStat = await fs.stat(panel.workspaceFile);
+    assert.equal(
+      await fs.readFile(panel.workspaceFile, "utf8"),
+      editedBytes,
+      "redelivering an outcome reads the durable record, never repeating the edit",
+    );
+    assert.equal(
+      finalStat.mtimeMs,
+      editedStat.mtimeMs,
+      "the file is not written a second time, by bytes and by modification time",
+    );
+    cases.push("n10-computer-lost-edit-reply-redelivered-after-restart");
   } finally {
     await close(panel);
   }

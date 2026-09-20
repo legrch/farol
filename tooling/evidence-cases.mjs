@@ -163,9 +163,14 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "n09-attach-challenge-answered-by-local-peer",
   "n09-attach-challenge-answered-exactly-once",
   "n09-attach-verified-from-its-own-receipt",
+  "n11-agent-denied-subfolder-refused",
+  "n11-agent-subfolder-narrows-delivered-root",
+  "n11-agent-exclusion-reaches-the-delivered-assignment",
   "n10-computer-second-workspace-added-from-panel",
   "n10-computer-workspace-removed-from-panel-and-settings",
   "n10-computer-guarded-edit-cancelled-file-unchanged",
+  "n10-computer-lost-edit-record-is-the-products-own",
+  "n10-computer-lost-edit-reply-redelivered-after-restart",
 ]);
 
 const SEALED_PACKAGE_CASES = Object.freeze([
