@@ -263,6 +263,36 @@ describe("Agent -> Computer delegated-authority peer", () => {
     });
   });
 
+  it("carries an unverified-provenance refusal through the Agent port instead of collapsing it into a store failure", async () => {
+    const peer = new ComputerExecutionAuthorityPeer({
+      delegate: async () => ({
+        ok: false,
+        error: {
+          code: "AUTHORITY_PATH_DENIED",
+          source: "unverified-provenance",
+          retry: "never",
+        },
+      }),
+    });
+
+    await expect(
+      peer.delegate({
+        identity,
+        parentParticipantId: "main-a",
+        participantId: "agent-a",
+        role: "agent",
+        mutationOwnership: "none",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "AGENT_AUTHORITY_DENIED",
+        source: "unverified-provenance",
+        retry: "never",
+      },
+    });
+  });
+
   it("rejects malformed contract input before authority lookup", async () => {
     const { contract } = createPeer();
     await expect(

@@ -21,9 +21,11 @@ vi.mock("../../src/apps/desktop/chatgpt-attachment-upload", () => ({
 
 import {
   ChatGptRoute,
+  ChatGptSignInBlockLedger,
   classifyChatGptProviderError,
   resolveChatGptWindowPresentation,
   type ChatGptRouteSurfaceFactory,
+  type ChatGptSignInBlockedDiagnostic,
 } from "../../src/apps/desktop/chatgpt-route";
 
 const prepared = {
@@ -459,6 +461,94 @@ describe("ChatGPT route submission boundary", () => {
     // navigated-to page never ran.
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
   });
+
+  // The main process cannot check anything between dispatching a script and
+  // the script running in the page, so the scripts carry the validated page
+  // identity and compare it against `location.href` themselves, before
+  // typing or clicking. The executor here stands in for the page: it answers
+  // the closed `{ navigated: true }` shape the script returns when that
+  // comparison fails.
+  it("F2-3 refuses when the page itself reports it moved before the prompt was typed", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce({ navigated: true });
+    const candidate = taskRoute(executeJavaScript);
+
+    await expect(
+      candidate.runReadonlyTask("do not type into another conversation"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    // Only the composer script was dispatched, and it carried the validated
+    // identity for the page to compare against its own location; no send
+    // click followed.
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(executeJavaScript.mock.calls[0]?.[0]).toContain(
+      JSON.stringify("https://chatgpt.com/"),
+    );
+  });
+
+  it("F2-3 refuses when the page itself reports it moved before the send click, and never retries the click", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ navigated: true });
+    const candidate = taskRoute(executeJavaScript);
+
+    await expect(
+      candidate.runReadonlyTask("read the selected file"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    // The composer was typed once and the click script ran once, carrying
+    // the validated identity; the page declined to click, which is a
+    // positive statement that nothing was submitted, so no retry followed.
+    expect(executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(executeJavaScript.mock.calls[1]?.[0]).toContain(
+      JSON.stringify("https://chatgpt.com/"),
+    );
+  });
+
+  it("F2-3 re-checks the page identity after the dispatch-intent record is written, before the click script is dispatched", async () => {
+    let currentUrl = "https://chatgpt.com/";
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    const candidate = route();
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      webContents: {
+        executeJavaScript: routedExecutor(executeJavaScript, {
+          running: false,
+        }),
+        getURL: () => currentUrl,
+      },
+    });
+
+    await expect(
+      candidate.runReadonlyTask("read the selected file", [], {
+        // The dispatch-intent record is a disk write; the page moved while
+        // it landed.
+        onDispatchIntent: async () => {
+          currentUrl = "https://chatgpt.com/c/another-conversation";
+        },
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    // Only the composer script ran: the identity was re-read after the
+    // intent write resolved, and the click script was never dispatched.
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("ChatGPT route streaming observation", () => {
@@ -760,6 +850,69 @@ describe("ChatGPT route streaming observation", () => {
       turnAssistantId: "assistant-current",
     });
     expect(deltas).toHaveLength(1);
+  });
+
+  it("F2-3 ends the poll as page-lost once the page moves to another conversation than the one this submission created, however similar its messages look", async () => {
+    let probeCalls = 0;
+    const answer = correlatedProbe("Done.", {
+      busy: false,
+      sendVisible: true,
+      turnUserId: "user-current",
+      turnAssistantId: "assistant-current",
+    });
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockImplementation(async () => {
+        probeCalls += 1;
+        return answer;
+      });
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      taskPollMs: 1,
+      taskTimeoutMs: 1_000,
+    });
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      webContents: {
+        executeJavaScript: routedExecutor(executeJavaScript, {
+          running: false,
+        }),
+        // Submitted from the home page; the conversation the submission
+        // created appears after the second probe (the one allowed
+        // transition), and the page then moves to another conversation
+        // that happens to show the same prompt and reply.
+        getURL: () =>
+          probeCalls < 2
+            ? "https://chatgpt.com/"
+            : probeCalls === 2
+              ? "https://chatgpt.com/c/first-conversation-0001"
+              : "https://chatgpt.com/c/other-conversation-0002",
+      },
+    });
+
+    await expect(
+      candidate.runReadonlyTask("read the selected file"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_PAGE_LOST",
+      turnUserId: "user-current",
+      turnAssistantId: "assistant-current",
+    });
+    // Three probes read the pinned conversation (home, home, then the
+    // created conversation); the fourth iteration saw another conversation
+    // and ended without reading it, so its matching messages were never
+    // adopted as this submission's result.
+    expect(probeCalls).toBe(3);
   });
 
   it("waits through an interim missing stop control before cancelling", async () => {
@@ -1089,7 +1242,7 @@ describe("ChatGPT sign-in return", () => {
     });
   }
 
-  it("closes once and reports exactly one outcome for two Return clicks in a row", async () => {
+  it("closes once and reports exactly one outcome for two Return clicks in a row, from the bound when the page read never settles", async () => {
     vi.useFakeTimers();
     try {
       const { surface, contents, close } = signInSurface();
@@ -1108,13 +1261,12 @@ describe("ChatGPT sign-in return", () => {
       emitReturn(contents);
       emitReturn(contents);
       // The second click, arriving while the first click's bounded read is
-      // still in flight, is the one that actually closes the window: it
-      // falls through to the same `close()` the first click deferred.
-      expect(close).toHaveBeenCalledTimes(1);
+      // still in flight, joins that read rather than closing the window
+      // under it: nothing closes until the read answers or its bound ends.
+      expect(close).not.toHaveBeenCalled();
 
-      // Once the first click's own bounded read eventually settles, its
-      // deferred close must see the window already gone and not call
-      // native close a second time.
+      // The bound expires: both joined clicks resolve to the same close,
+      // which happens exactly once, and the one outcome is the bound's.
       await vi.advanceTimersByTimeAsync(2_000);
       expect(close).toHaveBeenCalledTimes(1);
       expect(outcomes).toEqual(["unknown"]);
@@ -1123,6 +1275,184 @@ describe("ChatGPT sign-in return", () => {
     }
   });
 
+  it.each([
+    [
+      "authenticated",
+      { composerVisible: true, signInVisible: false },
+      "authenticated",
+    ],
+    [
+      "signed out",
+      { composerVisible: false, signInVisible: true },
+      "not_authenticated",
+    ],
+  ] as const)(
+    "reports the page's own answer (%s) for two Return clicks in a row once the read the first click started settles",
+    async (_label, page, expected) => {
+      vi.useFakeTimers();
+      try {
+        let resolveRead!: (value: unknown) => void;
+        const { surface, contents, close } = signInSurface();
+        Object.assign(contents, {
+          executeJavaScript: vi.fn(
+            () =>
+              new Promise((resolve) => {
+                resolveRead = resolve;
+              }),
+          ),
+        });
+        const outcomes: string[] = [];
+        const candidate = new ChatGptRoute({
+          homeUrl: "https://chatgpt.com/",
+          initialUrl: "https://chatgpt.com/",
+          e2eOrigin: null,
+          parent: () => null,
+          surfaceFactory: (() =>
+            surface) as unknown as ChatGptRouteSurfaceFactory,
+          onSignInOutcome: (status) => outcomes.push(status),
+        });
+        await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+        emitReturn(contents);
+        emitReturn(contents);
+        expect(close).not.toHaveBeenCalled();
+
+        // The page answers the read the first click started, well inside
+        // the bound. The second click did not tear the page down under it,
+        // so the answer is the page's own, not a degraded "unknown".
+        resolveRead(page);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(outcomes).toEqual([expected]);
+
+        // The bound that raced the read expires later and changes nothing.
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(close).toHaveBeenCalledTimes(1);
+        expect(outcomes).toEqual([expected]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  // Where the return signal may come from. The sentinel is a console
+  // message, which any script on any page could print; only ChatGPT's own
+  // top-level page, while the sign-in surface is open, may end it -- and
+  // what it says about the outcome is never trusted over the page read.
+  it("ignores the return signal from an identity provider's page, even from its top-level frame", async () => {
+    const base = embeddedSurface();
+    const mainFrame = {
+      processId: 1,
+      routingId: 7,
+      url: "https://accounts.google.com/",
+    };
+    Object.assign(base.webContents, {
+      mainFrame,
+      executeJavaScript: vi.fn(async () => ({})),
+    });
+    const close = vi.fn(() => base.destroy());
+    const surface = { ...base, kind: "window" as const, close };
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+    base.webContents.emit("console-message", {
+      message: "farol-sign-in-return-to-farol",
+      frame: mainFrame,
+    });
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([]);
+  });
+
+  it("ignores the return signal outside sign-in mode", async () => {
+    const base = embeddedSurface();
+    const mainFrame = {
+      processId: 1,
+      routingId: 7,
+      url: "https://chatgpt.com/",
+    };
+    Object.assign(base.webContents, {
+      mainFrame,
+      executeJavaScript: vi.fn(async () => ({})),
+    });
+    const close = vi.fn(() => base.destroy());
+    const surface = { ...base, kind: "window" as const, close };
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+    // The same route, opened as an ordinary surface rather than through
+    // `openForSignIn`: there is no sign-in attempt for the signal to end.
+    await candidate.open();
+
+    base.webContents.emit("console-message", {
+      message: "farol-sign-in-return-to-farol",
+      frame: mainFrame,
+    });
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([]);
+  });
+
+  it("takes the outcome from the page read, never from what the return signal claims", async () => {
+    const base = embeddedSurface();
+    const mainFrame = {
+      processId: 1,
+      routingId: 7,
+      url: "https://chatgpt.com/",
+    };
+    // The page reads as signed out, whatever any console text claims.
+    Object.assign(base.webContents, {
+      mainFrame,
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: false,
+        signInVisible: true,
+      })),
+    });
+    const close = vi.fn(() => base.destroy());
+    const surface = { ...base, kind: "window" as const, close };
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+    // A signal that carries a claim is not the sentinel at all.
+    base.webContents.emit("console-message", {
+      message: "farol-sign-in-return-to-farol authenticated",
+      frame: mainFrame,
+    });
+    await Promise.resolve();
+    expect(close).not.toHaveBeenCalled();
+    expect(outcomes).toEqual([]);
+
+    // The exact sentinel ends the surface; the outcome is what the page
+    // read said, not "authenticated".
+    base.webContents.emit("console-message", {
+      message: "farol-sign-in-return-to-farol",
+      frame: mainFrame,
+    });
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(outcomes).toEqual(["not_authenticated"]));
+  });
   it("still reports exactly one outcome when a native close arrives while the bounded read is in flight", async () => {
     vi.useFakeTimers();
     try {
@@ -1199,5 +1529,124 @@ describe("ChatGPT sign-in return", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// UX34-07: the sign-in surface's diagnostics carry no page content, and the
+// one the product shows as current belongs to the current attempt only.
+describe("ChatGPT sign-in blocked diagnostics (UX34-07)", () => {
+  function signInRoute() {
+    const base = embeddedSurface();
+    const mainFrame = {
+      processId: 1,
+      routingId: 7,
+      url: "https://chatgpt.com/",
+    };
+    Object.assign(base.webContents, {
+      mainFrame,
+      executeJavaScript: vi.fn(async () => ({})),
+    });
+    const close = vi.fn(() => base.destroy());
+    const surface = { ...base, kind: "window" as const, close };
+    const blocked: ChatGptSignInBlockedDiagnostic[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInBlocked: (diagnostic) => blocked.push(diagnostic),
+    });
+    return { base, candidate, blocked };
+  }
+
+  it("reports a blocked popup by host only, never its path, query or fragment", async () => {
+    const { base, candidate, blocked } = signInRoute();
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+    const openHandler = base.webContents.setWindowOpenHandler.mock
+      .calls[0]?.[0] as (details: { url: string }) => { action: string };
+
+    expect(
+      openHandler({
+        url: "https://evil.example.com/oauth/callback?code=SECRET-CODE&state=abc#token=SECRET-TOKEN",
+      }),
+    ).toEqual({ action: "deny" });
+    expect(blocked).toEqual([
+      { kind: "popup-blocked", host: "evil.example.com" },
+    ]);
+  });
+
+  it("reports a denied permission by its name only, and only while a sign-in attempt is open", async () => {
+    const routeSession = electronMock.fromPartition() as EventEmitter & {
+      setPermissionRequestHandler: ReturnType<typeof vi.fn>;
+    };
+    const { candidate, blocked } = signInRoute();
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+    const permissionHandler = routeSession.setPermissionRequestHandler.mock
+      .calls[0]?.[0] as (
+      webContents: unknown,
+      permission: string,
+      callback: (granted: boolean) => void,
+    ) => void;
+    const callback = vi.fn();
+
+    permissionHandler(
+      { url: "https://chatgpt.com/c/secret" },
+      "media",
+      callback,
+    );
+    expect(callback).toHaveBeenCalledExactlyOnceWith(false);
+    expect(blocked).toEqual([
+      { kind: "permission-denied", permission: "media" },
+    ]);
+  });
+
+  it("reports a failed load by its numeric code only, and reports nothing once the attempt is over", async () => {
+    const { base, candidate, blocked } = signInRoute();
+    await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+    base.webContents.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://chatgpt.com/auth/login?next=%2Fc%2Fsecret-conversation",
+      true,
+    );
+    expect(blocked).toEqual([{ kind: "load-failed", code: -105 }]);
+
+    // The owner closed the surface: the attempt is over, and a later block
+    // on the same contents is nobody's current diagnostic.
+    base.destroy();
+    base.webContents.emit(
+      "did-fail-load",
+      {},
+      -106,
+      "ERR_INTERNET_DISCONNECTED",
+      "https://chatgpt.com/",
+      true,
+    );
+    expect(blocked).toEqual([{ kind: "load-failed", code: -105 }]);
+  });
+
+  it("shows a block as current only for the attempt it happened in", () => {
+    const ledger = new ChatGptSignInBlockLedger();
+    expect(ledger.current()).toBeNull();
+
+    ledger.beginAttempt();
+    ledger.record({ kind: "popup-blocked", host: "evil.example.com" });
+    ledger.record({ kind: "load-failed", code: -105 });
+    // The latest block within an attempt is the current one.
+    expect(ledger.current()).toEqual({ kind: "load-failed", code: -105 });
+
+    // The next attempt starts clean: a stale block is never shown as
+    // current, until this attempt reports one of its own.
+    ledger.beginAttempt();
+    expect(ledger.current()).toBeNull();
+    ledger.record({ kind: "permission-denied", permission: "media" });
+    expect(ledger.current()).toEqual({
+      kind: "permission-denied",
+      permission: "media",
+    });
   });
 });

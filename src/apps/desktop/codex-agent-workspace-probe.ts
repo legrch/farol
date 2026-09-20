@@ -37,6 +37,31 @@ function computerFailure(
   return { status: "failed", code, source, retry: "never" };
 }
 
+// The probe asks whether a request was refused as a path denial before any
+// native access, not which restriction refused it: an ungranted workspace
+// is denied by the task grant, an excluded path by whichever restriction
+// carried the exclusion (the Computer approval, the task grant, an owner
+// narrowing, or a record whose provenance could not be verified). Every
+// one of those is the boundary holding.
+const PATH_DENIAL_SOURCES: ReadonlySet<
+  Extract<AgentComputerReceipt, { status: "failed" }>["source"]
+> = new Set([
+  "computer-approval",
+  "task-grant",
+  "owner-restriction",
+  "unverified-provenance",
+]);
+
+function deniedBeforeNativeAccess(
+  result: Awaited<ReturnType<RunReadonlyComputerAction["execute"]>>,
+): boolean {
+  return (
+    !result.ok &&
+    result.error.code === "AUTHORITY_PATH_DENIED" &&
+    PATH_DENIAL_SOURCES.has(result.error.source)
+  );
+}
+
 function inside(root: string, candidate: string): boolean {
   return candidate === root || candidate.startsWith(`${root}/`);
 }
@@ -258,11 +283,7 @@ export class CodexAgentWorkspaceProbe
       workspaceId: "farol-next-ungranted-workspace",
       operation: { kind: "workspace.list", relativePath: "." },
     });
-    if (
-      outside.ok ||
-      outside.error.code !== "AUTHORITY_PATH_DENIED" ||
-      outside.error.source !== "task-grant"
-    ) {
+    if (!deniedBeforeNativeAccess(outside)) {
       return probeFailure("AGENT_WORKSPACE_OUTSIDE_GRANT_ALLOWED");
     }
 
@@ -283,11 +304,7 @@ export class CodexAgentWorkspaceProbe
           relativePath: excludedRelative,
         },
       });
-      if (
-        denied.ok ||
-        denied.error.code !== "AUTHORITY_PATH_DENIED" ||
-        denied.error.source !== "task-grant"
-      ) {
+      if (!deniedBeforeNativeAccess(denied)) {
         return probeFailure("AGENT_WORKSPACE_EXCLUSION_ALLOWED");
       }
     }

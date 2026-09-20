@@ -93,6 +93,24 @@ type PendingObservation = Readonly<{
   turnAssistantId: string | null;
 }>;
 
+// What identifies one summary operation to this driver: its binding, its
+// operation id and the exact source it summarizes. A summary request carries
+// all three; so does a retirement, which is why recovery of an unpublished
+// result can run from either.
+type OperationScope = Readonly<{
+  binding: ContextBinding;
+  operationId: string;
+  source: StoredContextSource;
+}>;
+
+function scopeOf(input: CodexContextSummaryInput): OperationScope {
+  return {
+    binding: input.request.binding,
+    operationId: input.request.operationId,
+    source: input.source,
+  };
+}
+
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -120,7 +138,7 @@ function conversationSourceCursor(conversationUrl: string): string {
 }
 
 function summaryAttempt(
-  input: CodexContextSummaryInput,
+  scope: OperationScope,
   phase: StoredContextSummaryAttempt["phase"],
   route: ChatGptContextSummaryRoute,
   correlation: Readonly<{
@@ -130,10 +148,10 @@ function summaryAttempt(
 ): StoredContextSummaryAttempt {
   return {
     schemaVersion: 1,
-    operationId: input.request.operationId,
-    binding: { ...input.request.binding },
-    source: input.source.source,
-    sourceBoundary: input.source.sourceBoundary,
+    operationId: scope.operationId,
+    binding: { ...scope.binding },
+    source: scope.source.source,
+    sourceBoundary: scope.source.sourceBoundary,
     phase,
     conversationUrl: routeConversationUrl(route),
     turnUserId: correlation.turnUserId ?? null,
@@ -287,8 +305,9 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     if (!validInput(input)) {
       return { status: "blocked", code: "SUMMARY_CAPABILITY_INVALID" };
     }
+    const scope = scopeOf(input);
     if (this.dispatched.has(input.request.operationId)) {
-      return this.observe(input);
+      return this.observeOperation(scope);
     }
     try {
       if (
@@ -301,7 +320,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
           input.request.operationId,
         ))
       ) {
-        return this.observe(input);
+        return this.observeOperation(scope);
       }
     } catch {
       return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
@@ -332,7 +351,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       }
     }
 
-    let attempt = summaryAttempt(input, "prepared", lease.route);
+    let attempt = summaryAttempt(scope, "prepared", lease.route);
     try {
       await this.options.store.putSummaryAttempt(attempt);
     } catch {
@@ -363,7 +382,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     };
     // The fence is up before anything can reach the conversation. If it
     // cannot be raised, nothing is submitted.
-    if (!(await this.raiseFence(input))) {
+    if (!(await this.raiseFence(scope))) {
       try {
         await this.options.store.deleteSummaryAttempt(
           input.request.binding,
@@ -385,7 +404,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     // would land there and the summary would bind that conversation's
     // cursor, so nothing is sent.
     if (routeConversationUrl(lease.route) !== attempt.conversationUrl) {
-      await this.lowerFence(input);
+      await this.lowerFence(scope);
       try {
         await this.options.store.deleteSummaryAttempt(
           input.request.binding,
@@ -414,7 +433,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     if (result.state === "failed_before_submit") {
-      await this.lowerFence(input);
+      await this.lowerFence(scope);
       try {
         await this.options.store.deleteSummaryAttempt(
           input.request.binding,
@@ -436,7 +455,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     if (result.state === "not_authenticated") {
-      await this.lowerFence(input);
+      await this.lowerFence(scope);
       try {
         await this.options.store.deleteSummaryAttempt(
           input.request.binding,
@@ -487,9 +506,9 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
             : "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
-    const accepted = await this.acceptCompletedResult(input, lease, result);
+    const accepted = await this.acceptCompletedResult(scope, lease, result);
     // The turn is over whatever its output was worth.
-    await this.lowerFence(input);
+    await this.lowerFence(scope);
     return accepted;
   }
 
@@ -499,7 +518,18 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     if (!validInput(input)) {
       return { status: "blocked", code: "SUMMARY_CAPABILITY_INVALID" };
     }
-    const key = operationKey(input.request.binding, input.request.operationId);
+    return this.observeOperation(scopeOf(input));
+  }
+
+  // Resolves one operation's outcome without ever submitting: a result this
+  // instance already received, a durable summary, or an observation of the
+  // correlated turn the attempt record names. Shared by `observe` and by
+  // `retire`, so a completed result whose publication failed before a
+  // restart is recovered through exactly one path.
+  private async observeOperation(
+    scope: OperationScope,
+  ): Promise<ContextSummaryReceipt> {
+    const key = operationKey(scope.binding, scope.operationId);
     const received = this.received.get(key);
     if (received) {
       try {
@@ -513,8 +543,8 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     let summary: StoredContextSummary | null;
     try {
       summary = await this.options.store.getSummary(
-        input.request.binding,
-        input.request.operationId,
+        scope.binding,
+        scope.operationId,
       );
     } catch {
       return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
@@ -522,13 +552,13 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     if (summary) return completedReceipt(summary);
 
     let pending = this.pending.get(key);
-    let lease = this.routes.get(input.request.operationId);
+    let lease = this.routes.get(scope.operationId);
     let attempt: StoredContextSummaryAttempt | null = null;
     if (!pending || !lease) {
       try {
         attempt = await this.options.store.getSummaryAttempt(
-          input.request.binding,
-          input.request.operationId,
+          scope.binding,
+          scope.operationId,
         );
       } catch {
         return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
@@ -536,15 +566,15 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       if (attempt?.phase === "prepared") {
         try {
           await this.options.store.deleteSummaryAttempt(
-            input.request.binding,
-            input.request.operationId,
+            scope.binding,
+            scope.operationId,
           );
         } catch {
           return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
         }
         return { status: "not_submitted", code: "SUMMARY_NOT_SUBMITTED" };
       }
-      const prepared = summaryPrompt(input.source);
+      const prepared = summaryPrompt(scope.source);
       if (!prepared.ok) return { status: "blocked", code: prepared.code };
       if (
         attempt?.turnUserId &&
@@ -553,11 +583,11 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         let route: ChatGptContextSummaryRoute | null = null;
         try {
           route =
-            input.source.source === "retained_agent"
-              ? this.options.routes.retained(input.request.binding)
+            scope.source.source === "retained_agent"
+              ? this.options.routes.retained(scope.binding)
               : attempt.conversationUrl
                 ? (this.options.routes.recoverFallback?.(
-                    input.request.binding,
+                    scope.binding,
                     attempt.conversationUrl,
                   ) ?? null)
                 : null;
@@ -573,16 +603,16 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         ) {
           lease = {
             route,
-            owned: input.source.source === "canonical_history",
+            owned: scope.source.source === "canonical_history",
           };
           pending = {
             prompt: prepared.prompt,
             turnUserId: attempt.turnUserId,
             turnAssistantId: attempt.turnAssistantId,
           };
-          this.routes.set(input.request.operationId, lease);
+          this.routes.set(scope.operationId, lease);
           this.pending.set(key, pending);
-          this.dispatched.add(input.request.operationId);
+          this.dispatched.add(scope.operationId);
         }
       }
     }
@@ -593,7 +623,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       };
     }
     // A summary that may still be running on the page keeps its fence.
-    if (!(await this.raiseFence(input))) {
+    if (!(await this.raiseFence(scope))) {
       return { status: "blocked", code: "SUMMARY_FENCE_UNAVAILABLE" };
     }
     let observed: ChatGptReadonlyTaskResult;
@@ -624,8 +654,8 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         code: "SUMMARY_SUBMISSION_UNRESOLVED",
       };
     }
-    const accepted = await this.acceptCompletedResult(input, lease, observed);
-    await this.lowerFence(input);
+    const accepted = await this.acceptCompletedResult(scope, lease, observed);
+    await this.lowerFence(scope);
     return accepted;
   }
 
@@ -638,11 +668,20 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     ) {
       return { status: "blocked", code: "SUMMARY_SOURCE_MISMATCH" };
     }
-    const lease = this.routes.get(input.operationId);
     const retainedSource = input.source.source === "retained_agent";
-    const route =
-      lease?.route ??
-      (retainedSource ? this.options.routes.retained(input.binding) : null);
+    const resolveRoute = (): Readonly<{
+      lease: RouteLease | undefined;
+      route: ChatGptContextSummaryRoute | null;
+    }> => {
+      const lease = this.routes.get(input.operationId);
+      return {
+        lease,
+        route:
+          lease?.route ??
+          (retainedSource ? this.options.routes.retained(input.binding) : null),
+      };
+    };
+    let { lease, route } = resolveRoute();
     // A retained source is proven only through its route. With no route at
     // all -- for instance a launch whose live tasks did not load -- nothing
     // shows the conversation was left, and a later launch could restore it.
@@ -668,9 +707,8 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         // to detaching exactly this source.
         sourceCursor = committed.sourceCursor;
       } else {
-        let summary = this.received.get(
-          operationKey(input.binding, input.operationId),
-        );
+        const key = operationKey(input.binding, input.operationId);
+        let summary = this.received.get(key);
         if (!summary) {
           try {
             summary =
@@ -683,6 +721,46 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
               status: "blocked",
               code: "CONTEXT_RETIREMENT_STORE_FAILED",
             };
+          }
+        }
+        if (!summary) {
+          // The turn completed, but its result was never published: a
+          // failed publication left only the correlated attempt record, and
+          // a restart since then emptied this instance's memory. That record
+          // is enough to observe the exact turn again -- the same
+          // observation any unresolved operation gets, never a second
+          // submission -- and the undelivered result stays where it is
+          // until the retirement below is proven.
+          const recovered = await this.observeOperation({
+            binding: input.binding,
+            operationId: input.operationId,
+            source: input.source,
+          });
+          if (recovered.status === "completed") {
+            summary = this.received.get(key);
+            if (!summary) {
+              try {
+                summary =
+                  (await this.options.store.getSummary(
+                    input.binding,
+                    input.operationId,
+                  )) ?? undefined;
+              } catch {
+                return {
+                  status: "blocked",
+                  code: "CONTEXT_RETIREMENT_STORE_FAILED",
+                };
+              }
+            }
+            // The recovery may have bound the route this operation now
+            // owns; the retirement detaches through that binding.
+            ({ lease, route } = resolveRoute());
+            if (!route) {
+              return {
+                status: "outcome_unknown",
+                code: "SOURCE_RETIREMENT_UNKNOWN",
+              };
+            }
           }
         }
         // Without that commitment only the exact source proves itself: a
@@ -766,12 +844,12 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     return { status: "retired" };
   }
 
-  private async raiseFence(input: CodexContextSummaryInput): Promise<boolean> {
+  private async raiseFence(scope: OperationScope): Promise<boolean> {
     if (!this.options.fence) return true;
     try {
       await this.options.fence.raise({
-        operationId: input.request.operationId,
-        binding: input.request.binding,
+        operationId: scope.operationId,
+        binding: scope.binding,
       });
       return true;
     } catch {
@@ -780,18 +858,18 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   }
 
   // A fence that cannot be lowered stays up: fail closed, never open.
-  private async lowerFence(input: CodexContextSummaryInput): Promise<void> {
+  private async lowerFence(scope: OperationScope): Promise<void> {
     if (!this.options.fence) return;
     await this.options.fence
       .lower({
-        operationId: input.request.operationId,
-        binding: input.request.binding,
+        operationId: scope.operationId,
+        binding: scope.binding,
       })
       .catch(() => undefined);
   }
 
   private async acceptCompletedResult(
-    input: CodexContextSummaryInput,
+    scope: OperationScope,
     lease: RouteLease,
     result: ChatGptReadonlyTaskResult,
   ): Promise<ContextSummaryReceipt> {
@@ -799,7 +877,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     try {
       candidate = JSON.parse(result.outputText ?? "");
     } catch {
-      if (!this.releaseOwnedLease(input.request.operationId)) {
+      if (!this.releaseOwnedLease(scope.operationId)) {
         return {
           status: "blocked",
           code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
@@ -812,7 +890,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
     if (!content.ok) {
-      if (!this.releaseOwnedLease(input.request.operationId)) {
+      if (!this.releaseOwnedLease(scope.operationId)) {
         return {
           status: "blocked",
           code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
@@ -825,13 +903,13 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     const reconciled = reconcileCheckpointContent(
       withoutUnverifiedAttachmentAvailability(content.value),
       authoritativeHistoryFacts(
-        input.source.history,
+        scope.source.history,
         MAXIMUM_CHECKPOINT_CONTENT_BYTES,
       ),
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
     if (!reconciled.ok) {
-      if (!this.releaseOwnedLease(input.request.operationId)) {
+      if (!this.releaseOwnedLease(scope.operationId)) {
         return {
           status: "blocked",
           code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
@@ -842,7 +920,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     const boundedContent = reconciled.value;
     const conversationUrl = lease.route.currentConversationUrl();
     if (!conversationUrl) {
-      if (!this.releaseOwnedLease(input.request.operationId)) {
+      if (!this.releaseOwnedLease(scope.operationId)) {
         return {
           status: "blocked",
           code: "CONTEXT_SUMMARY_CLEANUP_FAILED",
@@ -852,19 +930,19 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }
     const summary: StoredContextSummary = {
       schemaVersion: 1,
-      operationId: input.request.operationId,
-      binding: input.request.binding,
+      operationId: scope.operationId,
+      binding: scope.binding,
       providerOperationId: `summary-${digest(
         JSON.stringify([
-          input.request.operationId,
-          input.source.sourceBoundary,
+          scope.operationId,
+          scope.source.sourceBoundary,
           conversationUrl,
         ]),
       ).slice(0, 40)}`,
       sourceCursor: conversationSourceCursor(conversationUrl),
       content: boundedContent,
     };
-    const key = operationKey(input.request.binding, input.request.operationId);
+    const key = operationKey(scope.binding, scope.operationId);
     this.pending.delete(key);
     this.received.set(key, summary);
     try {
@@ -873,7 +951,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       return completedReceipt(summary);
     }
     await this.options.store
-      .deleteSummaryAttempt(input.request.binding, input.request.operationId)
+      .deleteSummaryAttempt(scope.binding, scope.operationId)
       .catch(() => undefined);
     return completedReceipt(summary);
   }

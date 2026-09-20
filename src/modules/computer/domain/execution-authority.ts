@@ -199,11 +199,16 @@ export type AuthorityErrorCode =
   | "AUTHORITY_COMMAND_DENIED"
   | "AUTHORITY_MUTATION_OWNERSHIP_DENIED";
 
+// "unverified-provenance" is reported when the restriction that denied an
+// action carries "unknown" provenance (see `WorkspaceRestrictionSource`):
+// such a denial is real, but nobody can say whether it came from the task's
+// own grant or from an owner narrowing, and it is never dressed up as either.
 export type AuthorityFailureSource =
   | "computer-approval"
   | "task-admission"
   | "task-grant"
   | "owner-restriction"
+  | "unverified-provenance"
   | "role"
   | "computer-policy"
   | "native-host";
@@ -429,6 +434,19 @@ function deniedBy<Exclusion extends WorkspaceExclusion>(
     ) ?? null
   );
 }
+
+// How a denial by a restriction is reported, by where that restriction came
+// from. A lookup rather than a chain of conditions: every provenance value
+// maps to exactly one closed failure source, and "unknown" is its own
+// answer, never a fallback onto "task-grant".
+const RESTRICTION_FAILURE_SOURCE: Readonly<
+  Record<ExclusionRestrictionSource, AuthorityFailureSource>
+> = {
+  "computer-approval": "computer-approval",
+  "task-grant": "task-grant",
+  "owner-restriction": "owner-restriction",
+  unknown: "unverified-provenance",
+};
 
 function cloneScope(
   scope: WorkspaceScope,
@@ -706,11 +724,7 @@ export function authorizeTaskAction(
   if (exclusion) {
     return failure(
       "AUTHORITY_PATH_DENIED",
-      exclusion.restrictionSource === "owner-restriction"
-        ? "owner-restriction"
-        : exclusion.restrictionSource === "computer-approval"
-          ? "computer-approval"
-          : "task-grant",
+      RESTRICTION_FAILURE_SOURCE[exclusion.restrictionSource],
     );
   }
 
@@ -730,14 +744,21 @@ export function authorizeTaskAction(
   if (
     !result.ok &&
     result.error.code === "AUTHORITY_PATH_DENIED" &&
-    operation.kind !== "network.use" &&
-    grant.workspaces.some(
-      (scope) =>
-        scope.workspaceId === operation.workspaceId &&
-        scope.restrictionSource === "owner-restriction",
-    )
+    operation.kind !== "network.use"
   ) {
-    return failure("AUTHORITY_PATH_DENIED", "owner-restriction");
+    // A path outside the granted scope is denied by that scope, so the
+    // denial carries the scope's own provenance: an owner narrowing says
+    // so, and a scope whose provenance nobody verified says that instead
+    // of passing as an ordinary task grant.
+    const scope = grant.workspaces.find(
+      (candidate) => candidate.workspaceId === operation.workspaceId,
+    );
+    if (scope && scope.restrictionSource !== "task-grant") {
+      return failure(
+        "AUTHORITY_PATH_DENIED",
+        RESTRICTION_FAILURE_SOURCE[scope.restrictionSource],
+      );
+    }
   }
   return result;
 }

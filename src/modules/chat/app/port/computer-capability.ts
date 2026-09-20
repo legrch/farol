@@ -78,6 +78,7 @@ export type ChatComputerFailureSource =
   | "task-admission"
   | "task-grant"
   | "owner-restriction"
+  | "unverified-provenance"
   | "role"
   | "computer-policy"
   | "native-host"

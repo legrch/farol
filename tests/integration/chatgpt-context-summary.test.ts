@@ -119,12 +119,16 @@ describe("ChatGPT summary-only context driver", () => {
     );
   });
 
-  async function store(): Promise<PrivateContextStore> {
+  async function storeRoot(): Promise<string> {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-summary-driver-"),
     );
     roots.push(root);
-    return new PrivateContextStore({ root });
+    return root;
+  }
+
+  async function store(): Promise<PrivateContextStore> {
+    return new PrivateContextStore({ root: await storeRoot() });
   }
 
   it("uses the retained route with no tools and observes its durable result after restart", async () => {
@@ -1005,7 +1009,8 @@ describe("ChatGPT summary-only context driver", () => {
   });
 
   it("F2-2 recovers a completed retained result across a real restart after a publication failure, without a second submission", async () => {
-    const state = await store();
+    const root = await storeRoot();
+    const state = new PrivateContextStore({ root });
     const putSummary = vi
       .spyOn(state, "putSummary")
       .mockRejectedValueOnce(new Error("synthetic summary store failure"));
@@ -1057,8 +1062,12 @@ describe("ChatGPT summary-only context driver", () => {
     });
 
     // A real restart: a fresh driver instance, a fresh route instance (the
-    // app reconnected to the same retained conversation), over the same
-    // on-disk store. Nothing here is the same in-memory object as `first`.
+    // app reconnected to the same retained conversation) and a fresh store
+    // instance over the same on-disk root. Nothing here is the same
+    // in-memory object as `first`, so the recovery below can only come from
+    // what the first instance left on disk.
+    const restartedState = new PrivateContextStore({ root });
+    const restartedPutSummary = vi.spyOn(restartedState, "putSummary");
     const recovered = Object.assign(
       route({
         state: "outcome_unknown",
@@ -1080,7 +1089,7 @@ describe("ChatGPT summary-only context driver", () => {
       },
     );
     const restarted = new ChatGptContextSummaryDriver({
-      store: state,
+      store: restartedState,
       routes: {
         retained: vi.fn().mockReturnValue(recovered),
         createFallback: vi.fn(),
@@ -1092,19 +1101,24 @@ describe("ChatGPT summary-only context driver", () => {
     ).resolves.toMatchObject({ status: "completed", content });
     expect(recovered.runReadonlyTask).not.toHaveBeenCalled();
     expect(recovered.observeReadonlyTask).toHaveBeenCalledTimes(1);
-    expect(putSummary).toHaveBeenCalledTimes(2);
+    // The first instance never published again; the restarted one
+    // published exactly once, from what it observed.
+    expect(putSummary).toHaveBeenCalledTimes(1);
+    expect(restartedPutSummary).toHaveBeenCalledTimes(1);
     await expect(
-      state.getSummary(binding, request.operationId),
+      restartedState.getSummary(binding, request.operationId),
     ).resolves.toMatchObject({ content });
     await expect(
-      state.getSummaryAttempt(binding, request.operationId),
+      restartedState.getSummaryAttempt(binding, request.operationId),
     ).resolves.toBeNull();
 
     // A second restart is idempotent: the durable summary answers directly,
     // with no route work and no further publication at all.
+    const secondState = new PrivateContextStore({ root });
+    const secondPutSummary = vi.spyOn(secondState, "putSummary");
     const secondRestartRetained = vi.fn();
     const secondRestart = new ChatGptContextSummaryDriver({
-      store: state,
+      store: secondState,
       routes: {
         retained: secondRestartRetained,
         createFallback: vi.fn(),
@@ -1114,7 +1128,9 @@ describe("ChatGPT summary-only context driver", () => {
       secondRestart.observe({ request, source: source() }),
     ).resolves.toMatchObject({ status: "completed", content });
     expect(secondRestartRetained).not.toHaveBeenCalled();
-    expect(putSummary).toHaveBeenCalledTimes(2);
+    expect(secondPutSummary).not.toHaveBeenCalled();
+    expect(putSummary).toHaveBeenCalledTimes(1);
+    expect(restartedPutSummary).toHaveBeenCalledTimes(1);
   });
 
   it("releases a definitely unsubmitted fallback before a clean later attempt", async () => {

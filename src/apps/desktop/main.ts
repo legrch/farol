@@ -124,11 +124,11 @@ import {
 } from "./chatgpt-readonly-task";
 import {
   ChatGptRoute,
+  ChatGptSignInBlockLedger,
   type ChatGptRouteOptions,
   type ChatGptWindowPresentation,
   type ChatGptRouteSurface,
   type ChatGptRouteSurfaceFactory,
-  type ChatGptSignInBlockedDiagnostic,
   type ChatGptSignInStatus,
 } from "./chatgpt-route";
 import {
@@ -218,7 +218,12 @@ import {
   discoverExecutables,
   type DiscoveryCandidate,
 } from "./executable-discovery";
-import { reverifyDiscoveredCandidate as reverifyDiscoveredCandidateImpl } from "./reverify-discovered-candidate";
+import {
+  UNTRUSTED_CANDIDATE_DIALOG,
+  reverifyDiscoveredCandidate as reverifyDiscoveredCandidateImpl,
+  untrustedCandidateDialogDecision,
+  type ConfirmUntrustedCandidate,
+} from "./reverify-discovered-candidate";
 import { launchCodexAppServer } from "./codex-app-server-process";
 import { runCodexHostSmoke } from "./codex-host-smoke";
 import { runCodexNativeAgentCheck } from "./codex-native-agent-check";
@@ -404,10 +409,10 @@ function transitionRefusal(): ProductConfigurationResult {
 let chatGptRoute: ChatGptRoute | null = null;
 // The most recent content-free block the sign-in surface reported (host,
 // permission name, or load-failure code only — see
-// `ChatGptSignInBlockedDiagnostic`). Cleared at the start of every sign-in
-// attempt so a stale block from a previous attempt is never shown as
-// current (UX34-07).
-let chatGptSignInBlocked: ChatGptSignInBlockedDiagnostic | null = null;
+// `ChatGptSignInBlockedDiagnostic`). The ledger starts every sign-in attempt
+// clean, so a stale block from a previous attempt is never shown as current
+// (UX34-07); the rule itself is unit-tested with the ledger.
+const chatGptSignInBlocked = new ChatGptSignInBlockLedger();
 let codexContextController: CodexContextController | null = null;
 // The connector's execution fence for summary-only phases, shared with the
 // MCP process through the launch root; it exists once the controller does.
@@ -730,7 +735,7 @@ function bootstrap() {
     nativeAgent: productAgentCapabilityAvailable(),
     liveProvider: false,
     windowState: currentWindowState(),
-    chatgptSignInBlocked: chatGptSignInBlocked,
+    chatgptSignInBlocked: chatGptSignInBlocked.current(),
   };
 }
 
@@ -2909,22 +2914,28 @@ async function reverifyDiscoveredCandidate(
 ): Promise<DiscoveryCandidate | "stale" | "declined"> {
   return reverifyDiscoveredCandidateImpl(kind, requestedPath, {
     discover: (discoverKind) => discoverExecutables(discoverKind),
-    confirm: window
-      ? async ({ kind: dialogKind, path }) => {
-          const { response } = await dialog.showMessageBox(window!, {
-            type: "warning",
-            buttons: ["Cancel", "Use this file"],
-            defaultId: 0,
-            cancelId: 0,
-            message:
-              dialogKind === "codex"
-                ? "Use a Codex that is not confirmed as signed by OpenAI?"
-                : "Use a tunnel-client that does not match the reviewed build?",
-            detail: `${path}\n\nFarol could not confirm where this file came from. Continue only if you placed it there yourself.`,
-          });
-          return response === 1 ? "confirmed" : "cancelled";
-        }
-      : null,
+    // Resolved lazily: the helper reads this only after discovery has
+    // finished, so it asks about the window that exists at that moment. A
+    // window destroyed while discovery ran yields null here, and a missing
+    // window can never confirm an untrusted candidate.
+    get confirm(): ConfirmUntrustedCandidate | null {
+      const owner = window;
+      if (!owner || owner.isDestroyed()) return null;
+      return async ({ kind: dialogKind, path }) => {
+        const { response } = await dialog.showMessageBox(owner, {
+          type: "warning",
+          buttons: [...UNTRUSTED_CANDIDATE_DIALOG.buttons],
+          defaultId: UNTRUSTED_CANDIDATE_DIALOG.defaultId,
+          cancelId: UNTRUSTED_CANDIDATE_DIALOG.cancelId,
+          message:
+            dialogKind === "codex"
+              ? "Use a Codex that is not confirmed as signed by OpenAI?"
+              : "Use a tunnel-client that does not match the reviewed build?",
+          detail: `${path}\n\nFarol could not confirm where this file came from. Continue only if you placed it there yourself.`,
+        });
+        return untrustedCandidateDialogDecision(response);
+      };
+    },
   });
 }
 
@@ -4306,7 +4317,7 @@ async function configureAdmittedProduct(
       if (!chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      chatGptSignInBlocked = null;
+      chatGptSignInBlocked.beginAttempt();
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         opened = await chatGptRoute.openForSignIn(SIGN_IN_WINDOW_TITLE);
@@ -6944,7 +6955,7 @@ async function main(): Promise<void> {
       void recordChatGptSignInOutcome(status);
     },
     onSignInBlocked: (diagnostic) => {
-      chatGptSignInBlocked = diagnostic;
+      chatGptSignInBlocked.record(diagnostic);
     },
   });
   await initializeLiveTaskState();

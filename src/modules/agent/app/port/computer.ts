@@ -75,11 +75,14 @@ export type AgentComputerReceipt =
   | Readonly<{
       status: "failed";
       code: string;
+      // "unverified-provenance": denied by a restriction whose provenance
+      // could not be verified — see `AgentAuthorityFailureSource`.
       source:
         | "computer-approval"
         | "task-admission"
         | "task-grant"
         | "owner-restriction"
+        | "unverified-provenance"
         | "role"
         | "computer-policy"
         | "native-host"

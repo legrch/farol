@@ -15,6 +15,7 @@ function mapSource(source: string): AgentAuthorityFailureSource {
     case "task-admission":
     case "task-grant":
     case "owner-restriction":
+    case "unverified-provenance":
     case "role":
     case "computer-policy":
     case "native-host":

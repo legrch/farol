@@ -98,11 +98,15 @@ export type DelegatedAgentAuthority = Readonly<{
   authorityShapeVersion?: 1 | undefined;
 }>;
 
+// "unverified-provenance": the denying restriction came from a record whose
+// provenance could not be verified (no shape version, or no declared
+// source) — reported as exactly that, never as "task-grant".
 export type AgentAuthorityFailureSource =
   | "computer-approval"
   | "task-admission"
   | "task-grant"
   | "owner-restriction"
+  | "unverified-provenance"
   | "role"
   | "computer-policy"
   | "native-host"

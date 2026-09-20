@@ -1127,7 +1127,9 @@ const summaryContent: CheckpointContent = {
 class FaultyContinuityStore extends PrivateContextStore {
   private readonly faults = new Map<string, number>();
 
-  failOnce(name: "deleteSummary" | "saveRetired" | "putRetirement"): void {
+  failOnce(
+    name: "deleteSummary" | "saveRetired" | "putRetirement" | "putSummary",
+  ): void {
     this.faults.set(name, (this.faults.get(name) ?? 0) + 1);
   }
 
@@ -1153,6 +1155,13 @@ class FaultyContinuityStore extends PrivateContextStore {
     return super.putRetirement(candidate);
   }
 
+  override async putSummary(
+    candidate: Parameters<PrivateContextStore["putSummary"]>[0],
+  ): Promise<void> {
+    if (this.take("putSummary")) throw new Error("SYNTHETIC_PUBLISH_FAILURE");
+    return super.putSummary(candidate);
+  }
+
   override async save(
     session: ContextSession,
     lease?: ContextAdmissionLease,
@@ -1164,21 +1173,60 @@ class FaultyContinuityStore extends PrivateContextStore {
   }
 }
 
+// With `correlation`, the page behaves like production's: the submission
+// reports the user and assistant message identities through the observer,
+// and the same turn can later be observed again by those identities
+// (`observeReadonlyTask`) without anything being submitted.
 function summaryPage(
   conversationUrl: string | null = "https://chatgpt.com/c/summary-context-1",
+  options: Readonly<{
+    correlation?: Readonly<{ turnUserId: string; turnAssistantId: string }>;
+  }> = {},
 ) {
-  const page = { url: conversationUrl, resets: 0, submissions: 0 };
+  const page = {
+    url: conversationUrl,
+    resets: 0,
+    submissions: 0,
+    observations: 0,
+  };
+  const completed = (): ChatGptReadonlyTaskResult => ({
+    state: "completed",
+    code: null,
+    deltaCount: 1,
+    observedCharacters: JSON.stringify(summaryContent).length,
+    outputText: JSON.stringify(summaryContent),
+    ...(options.correlation ?? {}),
+  });
   const route: ChatGptContextSummaryRoute = {
-    runReadonlyTask: async (): Promise<ChatGptReadonlyTaskResult> => {
+    runReadonlyTask: async (
+      _prompt,
+      _attachments,
+      observer,
+    ): Promise<ChatGptReadonlyTaskResult> => {
       page.submissions += 1;
-      return {
-        state: "completed",
-        code: null,
-        deltaCount: 1,
-        observedCharacters: JSON.stringify(summaryContent).length,
-        outputText: JSON.stringify(summaryContent),
-      };
+      if (options.correlation) {
+        await observer?.onDispatchIntent?.();
+        await observer?.onCorrelation?.(options.correlation);
+      }
+      return completed();
     },
+    ...(options.correlation
+      ? {
+          observeReadonlyTask: async (
+            input: Readonly<{ turnUserId: string }>,
+          ): Promise<ChatGptReadonlyTaskResult> => {
+            page.observations += 1;
+            return input.turnUserId === options.correlation?.turnUserId
+              ? completed()
+              : {
+                  state: "outcome_unknown",
+                  code: "CHATGPT_TASK_OUTPUT_CHANGED",
+                  deltaCount: 0,
+                  observedCharacters: 0,
+                };
+          },
+        }
+      : {}),
     currentConversationUrl: () => page.url,
     retainedConversationUrl: () => page.url,
     resetConversation: () => {
@@ -1302,4 +1350,141 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
       expect(page.resets + restarted.page.resets).toBe(1);
     });
   }
+
+  // F2-2 at the controller: the summary turn completed, but publishing its
+  // result failed, so the result lived only in the first process's memory
+  // while the correlated attempt record stayed on disk. The host confirmed
+  // the handoff, and the process died before the retirement was recorded.
+  // The restarted controller resumes at the retirement boundary, where the
+  // controller never calls observe(): the driver itself must recover the
+  // exact result from the attempt record -- one observation, no second
+  // submission -- and the operation must still end in one epoch transition.
+  it("HR-014/F2-2 recovers a completed summary whose publication failed, across a restart at the retirement boundary, with one submission and one epoch transition", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-context-retire-"),
+    );
+    roots.push(root);
+    const correlation = {
+      turnUserId: "summary-user-hr014-f22",
+      turnAssistantId: "summary-assistant-hr014-f22",
+    };
+    const store = new FaultyContinuityStore({ root });
+    const putSummaryFirst = vi.spyOn(store, "putSummary");
+    store.failOnce("putSummary");
+    const { route, page } = summaryPage(undefined, { correlation });
+    const first = continuityFor(store, route);
+    const handoff = await first.compact({
+      endpoint: "responses",
+      body: {
+        model: "farol-next/mind",
+        stream: true,
+        input: [...history(), { type: "compaction_trigger" }],
+      },
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok || handoff.value.variant !== "streamed_compaction_item") {
+      throw new Error("EXPECTED_STREAMED_HANDOFF");
+    }
+    const replayed = replayHostCheckpoint([handoff.value.item], 262_144);
+    if (!replayed.ok) throw new Error(replayed.error.code);
+    const { checkpoint } = replayed.value;
+    expect(page.submissions).toBe(1);
+    expect(putSummaryFirst).toHaveBeenCalledTimes(1);
+    // The publication failed: durably there is the correlated attempt and
+    // no summary. The checkpoint itself was still validated and stored.
+    await expect(
+      store.getSummary(checkpoint.binding, checkpoint.operationId),
+    ).resolves.toBeNull();
+    await expect(
+      store.getSummaryAttempt(checkpoint.binding, checkpoint.operationId),
+    ).resolves.toMatchObject({
+      phase: "possible_send",
+      turnUserId: correlation.turnUserId,
+      turnAssistantId: correlation.turnAssistantId,
+    });
+
+    // The host confirms. The retirement record cannot be written this once:
+    // the process is gone after host confirmation and before any reset.
+    store.failOnce("putRetirement");
+    await expect(first.confirmHostCompaction(receipt)).resolves.toMatchObject({
+      ok: false,
+    });
+    expect(page).toMatchObject({
+      url: "https://chatgpt.com/c/summary-context-1",
+      resets: 0,
+      submissions: 1,
+    });
+    await expect(store.load(checkpoint.binding)).resolves.toMatchObject({
+      epoch: 1,
+    });
+
+    // Restart: a new store, driver and controller over the same state, and
+    // the route restored to the conversation that was never reset. The local
+    // cleanup is made to fail once so the recovered, published summary is
+    // observable before the retirement removes it.
+    const restartedStore = new FaultyContinuityStore({ root });
+    const putSummaryRestarted = vi.spyOn(restartedStore, "putSummary");
+    restartedStore.failOnce("deleteSummary");
+    const restarted = summaryPage(undefined, { correlation });
+    await expect(
+      continuityFor(restartedStore, restarted.route).confirmHostCompaction(
+        receipt,
+      ),
+    ).resolves.toMatchObject({ ok: false });
+    // The exact turn was observed once by its correlation, nothing was
+    // submitted, and the summary was published before the retirement was
+    // recorded and the source reset.
+    expect(restarted.page).toMatchObject({
+      submissions: 0,
+      observations: 1,
+      resets: 1,
+      url: null,
+    });
+    expect(putSummaryRestarted).toHaveBeenCalledTimes(1);
+    await expect(
+      restartedStore.getSummary(checkpoint.binding, checkpoint.operationId),
+    ).resolves.toMatchObject({
+      operationId: checkpoint.operationId,
+      content: summaryContent,
+    });
+    await expect(
+      restartedStore.getRetirement(checkpoint.binding),
+    ).resolves.toMatchObject({
+      operationId: checkpoint.operationId,
+      epoch: 1,
+    });
+    await expect(
+      restartedStore.load(checkpoint.binding),
+    ).resolves.toMatchObject({ epoch: 1 });
+
+    // The remaining local cleanup finishes on the next resume, onto the
+    // empty route the reset published: exactly one epoch transition, the
+    // same checkpoint, and still one submission and one reset in total.
+    const finalStore = new PrivateContextStore({ root });
+    const final = summaryPage(null, { correlation });
+    await expect(
+      continuityFor(finalStore, final.route).confirmHostCompaction(receipt),
+    ).resolves.toMatchObject({
+      ok: true,
+      value: {
+        phase: "active",
+        epoch: 2,
+        lastCheckpointId: checkpoint.checkpointId,
+      },
+    });
+    await expect(
+      finalStore.get(checkpoint.binding, checkpoint.checkpointId),
+    ).resolves.toMatchObject({ checkpointId: checkpoint.checkpointId });
+    await expect(
+      finalStore.getSummary(checkpoint.binding, checkpoint.operationId),
+    ).resolves.toBeNull();
+    await expect(
+      finalStore.getSummaryAttempt(checkpoint.binding, checkpoint.operationId),
+    ).resolves.toBeNull();
+    expect(
+      page.submissions + restarted.page.submissions + final.page.submissions,
+    ).toBe(1);
+    expect(page.resets + restarted.page.resets + final.page.resets).toBe(1);
+    expect(final.page.observations).toBe(0);
+  });
 });

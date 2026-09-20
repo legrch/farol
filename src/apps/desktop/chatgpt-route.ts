@@ -21,18 +21,33 @@ const probeSchema = z.strictObject({
   signInVisible: z.boolean(),
 });
 
-const preparedTaskSchema = z.strictObject({
-  ready: z.boolean(),
-  baselineAssistantCount: z.number().int().nonnegative(),
-  baselineUserCount: z.number().int().nonnegative(),
-  baselineMessageIds: z
-    .array(z.string().min(1).max(256))
-    .max(512)
-    .optional()
-    .default([]),
-});
+// What an in-page submission script returns when it finds the page on
+// another URL than the identity the caller validated: it has then touched
+// nothing — not the composer, not the send control — and says only that.
+const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
 
-const activatedTaskSchema = z.strictObject({ activated: z.boolean() });
+const preparedTaskSchema = z.union([
+  navigatedTaskSchema,
+  z.strictObject({
+    ready: z.boolean(),
+    baselineAssistantCount: z.number().int().nonnegative(),
+    baselineUserCount: z.number().int().nonnegative(),
+    baselineMessageIds: z
+      .array(z.string().min(1).max(256))
+      .max(512)
+      .optional()
+      .default([]),
+  }),
+]);
+
+// A control click's acknowledgement (the stop control on cancel).
+const activatedControlSchema = z.strictObject({ activated: z.boolean() });
+
+// The send click's acknowledgement: the same, or the in-page refusal above.
+const activatedTaskSchema = z.union([
+  navigatedTaskSchema,
+  activatedControlSchema,
+]);
 
 const taskProbeSchema = z.strictObject({
   assistantCount: z.number().int().nonnegative(),
@@ -85,6 +100,26 @@ export type ChatGptSignInBlockedDiagnostic =
   | Readonly<{ kind: "popup-blocked"; host: string }>
   | Readonly<{ kind: "permission-denied"; permission: string }>
   | Readonly<{ kind: "load-failed"; code: number }>;
+
+// UX34-07: the block the product shows as current for the sign-in surface.
+// A block belongs to the attempt it happened in: the next attempt starts
+// with none, so a stale block from an earlier attempt is never shown as
+// current, and a later block within an attempt replaces the earlier one.
+export class ChatGptSignInBlockLedger {
+  private latest: ChatGptSignInBlockedDiagnostic | null = null;
+
+  beginAttempt(): void {
+    this.latest = null;
+  }
+
+  record(diagnostic: ChatGptSignInBlockedDiagnostic): void {
+    this.latest = diagnostic;
+  }
+
+  current(): ChatGptSignInBlockedDiagnostic | null {
+    return this.latest;
+  }
+}
 
 function hostOf(url: string): string {
   try {
@@ -224,8 +259,14 @@ const readinessProbe = `(() => {
   return { composerVisible: composer, signInVisible: explicitSignIn || labelledSignIn };
 })()`;
 
-function prepareTaskScript(prompt: string): string {
+// Both submission scripts take the page identity the caller validated and
+// compare it against the page's own location as their first act: the main
+// process cannot check anything between dispatching a script and the script
+// running, so the last check before typing or clicking happens in-page.
+function prepareTaskScript(prompt: string, expectedHref: string): string {
   return `(() => {
+    const expectedHref = ${JSON.stringify(expectedHref)};
+    if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
@@ -265,22 +306,26 @@ function prepareTaskScript(prompt: string): string {
   })()`;
 }
 
-const activateTaskScript = `(() => {
-  const visible = (element) => {
-    if (!(element instanceof HTMLElement)) return false;
-    const style = getComputedStyle(element);
-    const box = element.getBoundingClientRect();
-    return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
-  };
-  const send = [
-    document.querySelector('[data-testid="send-button"]'),
-    document.querySelector('button[aria-label="Send prompt"]'),
-    document.querySelector('button[aria-label="Send message"]')
-  ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
-  if (!(send instanceof HTMLButtonElement)) return { activated: false };
-  send.click();
-  return { activated: true };
-})()`;
+function activateTaskScript(expectedHref: string): string {
+  return `(() => {
+    const expectedHref = ${JSON.stringify(expectedHref)};
+    if (location.href !== expectedHref) return { navigated: true };
+    const visible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+    };
+    const send = [
+      document.querySelector('[data-testid="send-button"]'),
+      document.querySelector('button[aria-label="Send prompt"]'),
+      document.querySelector('button[aria-label="Send message"]')
+    ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
+    if (!(send instanceof HTMLButtonElement)) return { activated: false };
+    send.click();
+    return { activated: true };
+  })()`;
+}
 
 function taskProbeScript(
   prompt: string,
@@ -636,16 +681,21 @@ export class ChatGptRoute {
       if (candidate.close) candidate.close();
       else candidate.destroy();
     };
+    if (!this.signInMode) {
+      close();
+      return;
+    }
     // Return is Farol's own control, so the page is read while it is still
     // open and the window closes afterwards. A read begun inside the close
     // itself races the teardown and usually ends as "unknown".
-    if (this.signInMode && this.pendingSignInObservation === null) {
-      const observation = boundedSignInObservation(this.observe());
-      this.pendingSignInObservation = observation;
-      void observation.then(close, close);
-      return;
+    if (this.pendingSignInObservation === null) {
+      this.pendingSignInObservation = boundedSignInObservation(this.observe());
     }
-    close();
+    // A repeated Return joins the read the first one started instead of
+    // closing at once: closing now would tear the page down under that read
+    // and turn an answer the page was about to give into "unknown". The
+    // close is idempotent, so however many clicks join, it happens once.
+    void this.pendingSignInObservation.then(close, close);
   }
 
   private async openRouteWindow(): Promise<ChatGptOpenResult> {
@@ -980,11 +1030,32 @@ export class ChatGptRoute {
       }
       const prepared = preparedTaskSchema.safeParse(
         await candidate.webContents.executeJavaScript(
-          prepareTaskScript(prompt),
+          prepareTaskScript(prompt, dispatchIdentityUrl),
           true,
         ),
       );
-      if (!prepared.success || !prepared.data.ready) {
+      if (!prepared.success) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_COMPOSER_UNAVAILABLE",
+          deltaCount,
+          observedCharacters,
+        };
+      }
+      // The page compared its own location against the validated identity
+      // before touching the composer, and found another page: nothing was
+      // typed anywhere.
+      if ("navigated" in prepared.data) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
+      const preparedTask = prepared.data;
+      if (!preparedTask.ready) {
         return {
           state: "failed_before_submit",
           code: "CHATGPT_COMPOSER_UNAVAILABLE",
@@ -1018,6 +1089,13 @@ export class ChatGptRoute {
       }
       const submitDeadline = Date.now() + 5_000;
       while (Date.now() < submitDeadline) {
+        // The dispatch-intent record is written first (it is a disk write,
+        // and anything may happen to the page while it lands), so that the
+        // identity check is the last thing before the click script leaves
+        // this process: nothing awaits between the check and the dispatch.
+        // The script then compares the page's own location once more,
+        // in-page, before it clicks.
+        await observer.onDispatchIntent?.();
         if (dispatchIdentityLost()) {
           return {
             state: "failed_before_submit",
@@ -1027,11 +1105,10 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        await observer.onDispatchIntent?.();
         submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
           await candidate.webContents.executeJavaScript(
-            activateTaskScript,
+            activateTaskScript(dispatchIdentityUrl),
             true,
           ),
         );
@@ -1039,6 +1116,18 @@ export class ChatGptRoute {
           return {
             state: "outcome_unknown",
             code: "CHATGPT_TASK_ERROR",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        // The page refused to click: it was no longer showing the validated
+        // identity. That is a positive statement that nothing was submitted.
+        if ("navigated" in activated.data) {
+          submissionPhase = "not_attempted";
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -1063,6 +1152,15 @@ export class ChatGptRoute {
 
       let accepted = false;
       let stablePolls = 0;
+      // The conversation this submission belongs to, once the page shows
+      // one. A submission made from the home page is allowed exactly one
+      // transition, to the conversation it creates; after that, another
+      // conversation -- or the home page again -- is a page this submission
+      // does not own, however much its messages resemble the prompt.
+      let pinnedConversationUrl = canonicalChatGptConversationUrl(
+        dispatchIdentityUrl,
+        this.options.e2eOrigin,
+      );
       const pollMs = this.options.taskPollMs ?? 250;
       const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       while (Date.now() < deadline) {
@@ -1088,9 +1186,25 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
+        const conversationUrl = canonicalChatGptConversationUrl(
+          currentUrl,
+          this.options.e2eOrigin,
+        );
+        if (pinnedConversationUrl === null) {
+          pinnedConversationUrl = conversationUrl;
+        } else if (conversationUrl !== pinnedConversationUrl) {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_PAGE_LOST",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            ...correlation(),
+          };
+        }
         const probe = taskProbeSchema.safeParse(
           await active.webContents.executeJavaScript(
-            taskProbeScript(prompt, prepared.data.baselineMessageIds),
+            taskProbeScript(prompt, preparedTask.baselineMessageIds),
             true,
           ),
         );
@@ -1435,7 +1549,7 @@ export class ChatGptRoute {
       const activationAttempts = wasObservedRunning ? 5 : 1;
       let stopActivated = false;
       for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
-        const activated = activatedTaskSchema.safeParse(
+        const activated = activatedControlSchema.safeParse(
           await candidate.webContents.executeJavaScript(cancelTaskScript, true),
         );
         if (!activated.success) return "outcome_unknown";

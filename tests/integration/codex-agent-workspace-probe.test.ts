@@ -226,8 +226,12 @@ describe("Codex child workspace enforcement probe", () => {
   });
 });
 
+// The hand-built records below exercise the probe's own provenance
+// handling in isolation. The real chain — Computer delegation, the contract
+// handler, a JSON round trip, the contract schema and then this probe — is
+// covered end to end in `agent-authority-provenance-chain.test.ts`.
 describe("Codex child workspace authority provenance", () => {
-  it("reports an owner-restriction denial through the public contract and the Agent port, not as an ordinary task grant", async () => {
+  it("reports an owner-restriction denial from a hand-built authority that declares shape version 1 and owner-restriction provenance, not as an ordinary task grant", async () => {
     const execute = vi.fn<ReadonlyWorkspace["execute"]>();
     const probe = new CodexAgentWorkspaceProbe(
       settings,
@@ -280,5 +284,33 @@ describe("Codex child workspace authority provenance", () => {
     for (const exclusion of reconstructed.grant.excludedPaths) {
       expect(exclusion.restrictionSource).toBe("unknown");
     }
+  });
+
+  it("reports a denial by a record with no verifiable provenance as unverified-provenance on the Agent port", async () => {
+    const execute = vi.fn<ReadonlyWorkspace["execute"]>();
+    const probe = new CodexAgentWorkspaceProbe(
+      settings,
+      { execute },
+      () => 1_000,
+    );
+    const legacy = request();
+
+    await expect(
+      probe.execute({
+        identity: legacy.identity,
+        authority: legacy.authority,
+        workspaceId,
+        operation: { kind: "workspace.read", relativePath: "private" },
+        threadId: legacy.threadId,
+        turnId: legacy.turnId,
+        callId: legacy.callId,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      code: "AUTHORITY_PATH_DENIED",
+      source: "unverified-provenance",
+      retry: "never",
+    });
+    expect(execute).not.toHaveBeenCalled();
   });
 });
