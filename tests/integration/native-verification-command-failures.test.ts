@@ -218,8 +218,8 @@ describe("native verification command process failures", () => {
       },
     });
     expect(processMock.spawn).toHaveBeenCalledTimes(1);
-    const [executable, launchArguments, spawnOptions] =
-      processMock.spawn.mock.calls[0] as [string, string[], Record<string, unknown>];
+    const [executable, launchArguments, spawnOptions] = processMock.spawn.mock
+      .calls[0] as [string, string[], Record<string, unknown>];
     expect(executable).toBe("/usr/bin/sandbox-exec");
     expect(launchArguments.slice(-4)).toEqual([
       "rev-parse",

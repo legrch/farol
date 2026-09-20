@@ -50,7 +50,9 @@ afterEach(async () => {
   await relayHandle?.close();
   relayHandle = null;
   await Promise.all(
-    roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -168,8 +170,12 @@ async function extractEvents(
   const events: { event: string; data: unknown }[] = [];
   for (const block of text.split("\n\n")) {
     if (block.trim().length === 0) continue;
-    const eventLine = block.split("\n").find((line) => line.startsWith("event: "));
-    const dataLine = block.split("\n").find((line) => line.startsWith("data: "));
+    const eventLine = block
+      .split("\n")
+      .find((line) => line.startsWith("event: "));
+    const dataLine = block
+      .split("\n")
+      .find((line) => line.startsWith("data: "));
     if (!eventLine || !dataLine) continue;
     events.push({
       event: eventLine.slice("event: ".length),

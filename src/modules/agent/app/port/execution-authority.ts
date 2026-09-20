@@ -50,10 +50,7 @@ export type GrantedAgentWorkspaceExclusion = Readonly<{
   workspaceId: string;
   path: string;
   restrictionSource?:
-    | "computer-approval"
-    | "task-grant"
-    | "owner-restriction"
-    | undefined;
+    "computer-approval" | "task-grant" | "owner-restriction" | undefined;
 }>;
 
 export type AgentAuthorityNarrowing = Readonly<{

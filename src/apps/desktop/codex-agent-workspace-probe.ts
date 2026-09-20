@@ -54,7 +54,9 @@ function relativePath(root: string, candidate: string): string | null {
 // caused by an owner narrowing must be able to say so, and a legacy record
 // must never be coerced into looking like an ordinary task grant it never
 // claimed to be.
-export function participant(request: AuthorityBoundRequest): ParticipantAuthority {
+export function participant(
+  request: AuthorityBoundRequest,
+): ParticipantAuthority {
   const authority = request.authority;
   const provenanceTrusted = authority.authorityShapeVersion === 1;
   const workspaceSource = (
@@ -63,10 +65,7 @@ export function participant(request: AuthorityBoundRequest): ParticipantAuthorit
     provenanceTrusted && declared ? declared : "unknown";
   const exclusionSource = (
     declared:
-      | "computer-approval"
-      | "task-grant"
-      | "owner-restriction"
-      | undefined,
+      "computer-approval" | "task-grant" | "owner-restriction" | undefined,
   ): "computer-approval" | "task-grant" | "owner-restriction" | "unknown" =>
     provenanceTrusted && declared ? declared : "unknown";
   return {
@@ -183,8 +182,7 @@ function authorityMatchesCurrentPolicy(
       computerId: authority.computerId,
       computerGeneration: authority.computerGeneration,
       workspaces: authority.workspaces.map(
-        ({ restrictionSource: _restrictionSource, ...workspace }) =>
-          workspace,
+        ({ restrictionSource: _restrictionSource, ...workspace }) => workspace,
       ),
       excludedPaths: authority.excludedPaths.map(
         ({ restrictionSource: _restrictionSource, ...entry }) => entry,

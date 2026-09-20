@@ -578,7 +578,10 @@ export class ProductConfigurationService {
   // but that one release; a process restart drops this map along with every
   // other in-memory admission, and the on-disk lease file is then recovered
   // the same way every other crashed holder is (see `promotion-lease.ts`).
-  private readonly pendingEditLeases = new Map<string, WorkspaceEditLeaseHold>();
+  private readonly pendingEditLeases = new Map<
+    string,
+    WorkspaceEditLeaseHold
+  >();
 
   constructor(
     private readonly store: ProductSettingsStore,

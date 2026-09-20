@@ -191,7 +191,10 @@ describe("Farol Model managed provider block", () => {
     }
 
     const before = await fs.readFile(configPath, "utf8");
-    const result = await applyFarolModelConfigBlock(configPath, bearerTokenSpec);
+    const result = await applyFarolModelConfigBlock(
+      configPath,
+      bearerTokenSpec,
+    );
     expect(result.status).toBe("insecure_permissions");
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
   });
@@ -199,7 +202,10 @@ describe("Farol Model managed provider block", () => {
   it("refuses a literal-token write against a world-readable config.toml", async () => {
     const configPath = await disposableConfig("[unrelated]\nfoo = 1\n");
     await fs.chmod(configPath, 0o644);
-    const result = await applyFarolModelConfigBlock(configPath, bearerTokenSpec);
+    const result = await applyFarolModelConfigBlock(
+      configPath,
+      bearerTokenSpec,
+    );
     expect(result.status).toBe("insecure_permissions");
   });
 
@@ -216,7 +222,10 @@ describe("Farol Model managed provider block", () => {
     );
     roots.push(root);
     const configPath = path.join(root, "config.toml");
-    const result = await applyFarolModelConfigBlock(configPath, bearerTokenSpec);
+    const result = await applyFarolModelConfigBlock(
+      configPath,
+      bearerTokenSpec,
+    );
     expect(result.status).toBe("applied");
     expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
   });
@@ -303,9 +312,13 @@ describe("Farol Model provider selection (separate consent)", () => {
   });
 
   it("reports a conflict for a foreign top-level model_provider line and never overwrites it", async () => {
-    const foreign = ['model_provider = "openai"', "", "[unrelated]", "foo = 1", ""].join(
-      "\n",
-    );
+    const foreign = [
+      'model_provider = "openai"',
+      "",
+      "[unrelated]",
+      "foo = 1",
+      "",
+    ].join("\n");
     const configPath = await disposableConfig(foreign);
 
     const preview = await previewFarolModelProviderSelection(

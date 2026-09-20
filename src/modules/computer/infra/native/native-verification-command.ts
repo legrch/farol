@@ -161,7 +161,9 @@ function failure(code: CommandFailureCode): ReadonlyWorkspaceResult {
 // `SNAPSHOT_HELPER_UNTRUSTED` (the attested interpreter or helper bytes
 // failed their own check) as the existing executable-untrusted code, which
 // already covers a failed attestation for the command itself.
-function snapshotFailureCode(code: WorkspaceSnapshotErrorCode): CommandFailureCode {
+function snapshotFailureCode(
+  code: WorkspaceSnapshotErrorCode,
+): CommandFailureCode {
   switch (code) {
     case "SNAPSHOT_ROOT_CHANGED":
       return "WORKSPACE_ROOT_CHANGED";
@@ -906,10 +908,14 @@ async function runGitLsFiles(
     ["ls-files", "-z"],
     signal,
   );
-  if ("failure" in outcome) return { ok: false, result: failure(outcome.failure) };
+  if ("failure" in outcome)
+    return { ok: false, result: failure(outcome.failure) };
   const { code, exitSignal, stdout, stderr } = outcome;
   if (/^sandbox-exec: sandbox_apply:/mu.test(stderr)) {
-    return { ok: false, result: failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE") };
+    return {
+      ok: false,
+      result: failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"),
+    };
   }
   if (code !== 0 || exitSignal !== null || stderr !== "") {
     return { ok: false, result: failure("WORKSPACE_COMMAND_FAILED") };
@@ -1090,11 +1096,9 @@ export async function executeNativeVerificationCommand(
   const primaryMetadata = path.join(request.workspace.root, ".git");
   const linkedWorktree = metadata.gitDirectory !== primaryMetadata;
   let externalGitDir:
-    | Readonly<{ path: string; device: string; inode: string }>
-    | undefined;
+    Readonly<{ path: string; device: string; inode: string }> | undefined;
   let externalCommonDir:
-    | Readonly<{ path: string; device: string; inode: string }>
-    | undefined;
+    Readonly<{ path: string; device: string; inode: string }> | undefined;
   if (linkedWorktree) {
     const gitDirGrant = await directoryGrant(metadata.gitDirectory);
     const commonDirGrant = await directoryGrant(metadata.commonDirectory);
@@ -1116,7 +1120,9 @@ export async function executeNativeVerificationCommand(
     ...(externalCommonDir ? { externalCommonDir } : {}),
     ...(deniedPaths.length > 0 ? { denied: deniedPaths } : {}),
   };
-  const withLayout = (result: ReadonlyWorkspaceResult): ReadonlyWorkspaceResult =>
+  const withLayout = (
+    result: ReadonlyWorkspaceResult,
+  ): ReadonlyWorkspaceResult =>
     result.ok && result.value.kind === "workspace.command"
       ? {
           ok: true,
@@ -1156,7 +1162,11 @@ export async function executeNativeVerificationCommand(
       return withLayout(result);
     }
 
-    const listed = await runGitLsFiles(git, metadataSnapshot.path, options.signal);
+    const listed = await runGitLsFiles(
+      git,
+      metadataSnapshot.path,
+      options.signal,
+    );
     if (!listed.ok) return listed.result;
     // A tracked path under one of the workspace's own exclusions is never
     // linked -- absent from the snapshot exactly as an untracked path in the
@@ -1164,7 +1174,9 @@ export async function executeNativeVerificationCommand(
     // from the reported result below, so it is absent from the Git result
     // too, not merely reported as missing.
     const deniedTracked = new Set(
-      listed.paths.filter((trackedPath) => isUnderAnyPrefix(trackedPath, deniedPaths)),
+      listed.paths.filter((trackedPath) =>
+        isUnderAnyPrefix(trackedPath, deniedPaths),
+      ),
     );
     const allowedPaths = listed.paths.filter(
       (trackedPath) => !deniedTracked.has(trackedPath),
@@ -1179,13 +1191,17 @@ export async function executeNativeVerificationCommand(
         "git.status",
         options.signal,
       );
-      if (result === HEAD_UNRESOLVED) return failure("WORKSPACE_COMMAND_FAILED");
+      if (result === HEAD_UNRESOLVED)
+        return failure("WORKSPACE_COMMAND_FAILED");
       if (
         result.ok &&
         result.value.kind === "workspace.command" &&
         deniedTracked.size > 0
       ) {
-        const stdout = stripDeniedStatusLines(result.value.stdout, deniedTracked);
+        const stdout = stripDeniedStatusLines(
+          result.value.stdout,
+          deniedTracked,
+        );
         return withLayout({
           ok: true,
           value: {

@@ -17,7 +17,9 @@ const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
 let root = "";
 let runtimeDirectory = "";
 
-function options(overrides: Partial<WorkspaceSnapshotOptions> = {}): WorkspaceSnapshotOptions {
+function options(
+  overrides: Partial<WorkspaceSnapshotOptions> = {},
+): WorkspaceSnapshotOptions {
   return {
     helperPath: sourceHelper,
     helper: NEXT_SAFE_OPEN_HELPER,
@@ -27,9 +29,16 @@ function options(overrides: Partial<WorkspaceSnapshotOptions> = {}): WorkspaceSn
   };
 }
 
-function git(cwd: string, ...args: string[]): Readonly<{ status: number | null; stdout: string; stderr: string }> {
+function git(
+  cwd: string,
+  ...args: string[]
+): Readonly<{ status: number | null; stdout: string; stderr: string }> {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 function gitStatus(cwd: string) {
@@ -80,12 +89,20 @@ async function grepTree(dir: string, needle: string): Promise<boolean> {
 describe("workspace snapshot (N02)", () => {
   it("reports the same status and HEAD as the owner's Git for a healthy repository", async () => {
     await initRepo(root);
-    await fs.writeFile(path.join(root, "README.md"), "first\n", { mode: 0o600 });
-    await fs.mkdir(path.join(root, "src"), { mode: 0o700 });
-    await fs.writeFile(path.join(root, "src", "kept.ts"), "export const kept = 1;\n", {
+    await fs.writeFile(path.join(root, "README.md"), "first\n", {
       mode: 0o600,
     });
-    await fs.writeFile(path.join(root, "removed.txt"), "gone\n", { mode: 0o600 });
+    await fs.mkdir(path.join(root, "src"), { mode: 0o700 });
+    await fs.writeFile(
+      path.join(root, "src", "kept.ts"),
+      "export const kept = 1;\n",
+      {
+        mode: 0o600,
+      },
+    );
+    await fs.writeFile(path.join(root, "removed.txt"), "gone\n", {
+      mode: 0o600,
+    });
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "init");
     // A legitimate tracked change of every kind: modified, staged, deleted.
@@ -131,7 +148,10 @@ describe("workspace snapshot (N02)", () => {
         testHook: async () => {
           await fs.rm(root, { recursive: true, force: true });
           await fs.mkdir(root, { mode: 0o700 });
-          await fs.writeFile(path.join(root, "sentinel.txt"), "ATTACKER-CONTROLLED\n");
+          await fs.writeFile(
+            path.join(root, "sentinel.txt"),
+            "ATTACKER-CONTROLLED\n",
+          );
         },
       },
     );
@@ -204,7 +224,9 @@ describe("workspace snapshot (N02)", () => {
   });
 
   it("stays independent once the source is replaced after the snapshot exists", async () => {
-    await fs.writeFile(path.join(root, "kept.txt"), "stable\n", { mode: 0o600 });
+    await fs.writeFile(path.join(root, "kept.txt"), "stable\n", {
+      mode: 0o600,
+    });
     const outcome = await createWorkspaceSnapshot(
       { root, approvedRoot: approvedRootOf(root) },
       options(),
@@ -214,11 +236,14 @@ describe("workspace snapshot (N02)", () => {
     try {
       await fs.rm(root, { recursive: true, force: true });
       await fs.mkdir(root, { mode: 0o700 });
-      await fs.writeFile(path.join(root, "sentinel.txt"), "ATTACKER-CONTROLLED\n");
-
-      expect(await fs.readFile(path.join(outcome.path, "kept.txt"), "utf8")).toBe(
-        "stable\n",
+      await fs.writeFile(
+        path.join(root, "sentinel.txt"),
+        "ATTACKER-CONTROLLED\n",
       );
+
+      expect(
+        await fs.readFile(path.join(outcome.path, "kept.txt"), "utf8"),
+      ).toBe("stable\n");
       expect(await grepTree(outcome.path, "ATTACKER-CONTROLLED")).toBe(false);
     } finally {
       await outcome.remove();
@@ -238,7 +263,10 @@ describe("workspace snapshot (N02)", () => {
         { root, approvedRoot: approvedRootOf(root) },
         options(),
       );
-      expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_METADATA_UNAPPROVED" });
+      expect(outcome).toEqual({
+        ok: false,
+        code: "SNAPSHOT_METADATA_UNAPPROVED",
+      });
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
     }
@@ -250,8 +278,18 @@ describe("workspace snapshot (N02)", () => {
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "init");
     git(root, "config", "core.fsmonitor", "/bin/false");
-    git(root, "config", "include.path", "/tmp/n02a-malicious-include.gitconfig");
-    git(root, "config", "filter.n02a-secrets.clean", "/tmp/n02a-malicious-clean.sh");
+    git(
+      root,
+      "config",
+      "include.path",
+      "/tmp/n02a-malicious-include.gitconfig",
+    );
+    git(
+      root,
+      "config",
+      "filter.n02a-secrets.clean",
+      "/tmp/n02a-malicious-clean.sh",
+    );
     git(root, "config", "core.ignorecase", "true");
     git(root, "config", "core.precomposeunicode", "true");
 
@@ -262,7 +300,10 @@ describe("workspace snapshot (N02)", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     try {
-      const config = await fs.readFile(path.join(outcome.path, ".git", "config"), "utf8");
+      const config = await fs.readFile(
+        path.join(outcome.path, ".git", "config"),
+        "utf8",
+      );
       expect(config).toBe(
         "[core]\n" +
           "\trepositoryformatversion = 0\n" +
@@ -283,7 +324,9 @@ describe("workspace snapshot (N02)", () => {
 
   it("recreates a symlink without ever following it, and never discloses what it points to", async () => {
     const outside = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-linktarget-")),
+      await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-next-snapshot-linktarget-"),
+      ),
     );
     try {
       await fs.writeFile(
@@ -305,8 +348,12 @@ describe("workspace snapshot (N02)", () => {
         const linkPath = path.join(outcome.path, "link.txt");
         const stat = await fs.lstat(linkPath);
         expect(stat.isSymbolicLink()).toBe(true);
-        expect(await fs.readlink(linkPath)).toBe(path.join(outside, "secret.txt"));
-        expect(await grepTree(outcome.path, "OUTSIDE-SENTINEL-CONTENT")).toBe(false);
+        expect(await fs.readlink(linkPath)).toBe(
+          path.join(outside, "secret.txt"),
+        );
+        expect(await grepTree(outcome.path, "OUTSIDE-SENTINEL-CONTENT")).toBe(
+          false,
+        );
       } finally {
         await outcome.remove();
       }
@@ -330,9 +377,9 @@ describe("workspace snapshot (N02)", () => {
       await fs.writeFile(replacement, "replaced\n", { mode: 0o600 });
       await fs.rename(replacement, path.join(root, "value.txt"));
 
-      expect(await fs.readFile(path.join(outcome.path, "value.txt"), "utf8")).toBe(
-        "captured\n",
-      );
+      expect(
+        await fs.readFile(path.join(outcome.path, "value.txt"), "utf8"),
+      ).toBe("captured\n");
     } finally {
       await outcome.remove();
     }
@@ -373,11 +420,12 @@ describe("workspace snapshot (N02)", () => {
     let device: string | null = null;
     let mountPoint: string | null = null;
     try {
-      device = execFileSync("hdiutil", ["attach", "-nomount", "ram://16384"], {
-        encoding: "utf8",
-      })
-        .trim()
-        .split(/\s+/)[0] ?? null;
+      device =
+        execFileSync("hdiutil", ["attach", "-nomount", "ram://16384"], {
+          encoding: "utf8",
+        })
+          .trim()
+          .split(/\s+/)[0] ?? null;
       if (!device) throw new Error("no ram disk device returned");
       const volumeName = `N02ARAM${process.pid}`;
       execFileSync("diskutil", ["eraseVolume", "HFS+", volumeName, device]);
@@ -416,18 +464,24 @@ describe("workspace snapshot (N02)", () => {
     await fs.rm(worktree, { recursive: true, force: true });
     try {
       await initRepo(primary);
-      await fs.writeFile(path.join(primary, "main.txt"), "main\n", { mode: 0o600 });
+      await fs.writeFile(path.join(primary, "main.txt"), "main\n", {
+        mode: 0o600,
+      });
       git(primary, "add", "-A");
       git(primary, "commit", "-q", "-m", "init");
       git(primary, "worktree", "add", "-q", worktree, "-b", "n02a-wt-branch");
-      await fs.writeFile(path.join(worktree, "wt.txt"), "wt\n", { mode: 0o600 });
+      await fs.writeFile(path.join(worktree, "wt.txt"), "wt\n", {
+        mode: 0o600,
+      });
 
       const gitFile = await fs.readFile(path.join(worktree, ".git"), "utf8");
       const gitdirValue = gitFile.slice("gitdir: ".length).trim();
       const commondirValue = (
         await fs.readFile(path.join(gitdirValue, "commondir"), "utf8")
       ).trim();
-      const commonDirectory = path.normalize(path.join(gitdirValue, commondirValue));
+      const commonDirectory = path.normalize(
+        path.join(gitdirValue, commondirValue),
+      );
 
       const outcome = await createWorkspaceSnapshot(
         {
@@ -441,7 +495,9 @@ describe("workspace snapshot (N02)", () => {
       expect(outcome.ok).toBe(true);
       if (!outcome.ok) return;
       try {
-        expect(gitStatus(outcome.path).stdout).toEqual(gitStatus(worktree).stdout);
+        expect(gitStatus(outcome.path).stdout).toEqual(
+          gitStatus(worktree).stdout,
+        );
         expect(gitHead(outcome.path).stdout).toEqual(gitHead(worktree).stdout);
       } finally {
         await outcome.remove();

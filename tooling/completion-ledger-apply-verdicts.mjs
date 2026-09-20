@@ -38,7 +38,8 @@ import { evaluateBindings } from "./evidence-bindings.mjs";
 //     hand-added "COMMAND_ONLY") is not guessed at or preserved; it is
 //     reported in `unresolved` and dropped.
 
-export const APPLY_VERDICTS_SCHEMA = "farol.next.completion-ledger-apply-verdicts/v1";
+export const APPLY_VERDICTS_SCHEMA =
+  "farol.next.completion-ledger-apply-verdicts/v1";
 
 // The only verdict values evaluateBindings() can produce today (see
 // evidence-bindings.mjs's evaluateRequirement). currentProofSummary must only
@@ -78,7 +79,13 @@ export function applyVerdicts({ ledger, bindingsResult }) {
         `rebind ${candidate ? candidate.slice(0, 8) : "unknown"}: no current ` +
         `proof (${named}); downgraded from DONE`;
       row.next = row.next ? `${note}\n${row.next}` : note;
-      downgraded.push({ id: row.id, from: "DONE", to: "NOT_RUN", verdict, reasons });
+      downgraded.push({
+        id: row.id,
+        from: "DONE",
+        to: "NOT_RUN",
+        verdict,
+        reasons,
+      });
     }
   }
 
@@ -127,7 +134,9 @@ export function applyVerdicts({ ledger, bindingsResult }) {
   // job is not doing that. It is recomputed from the merged rows instead,
   // and by this tool's own invariant is always empty.
   const doneUnproven = (ledger.requirements ?? [])
-    .filter((row) => row.u2 === "DONE" && row.currentProof?.verdict !== "PROVEN")
+    .filter(
+      (row) => row.u2 === "DONE" && row.currentProof?.verdict !== "PROVEN",
+    )
     .map((row) => row.id);
   const blocking =
     bindingsResult.header.reasons.length > 0 ||
@@ -214,7 +223,11 @@ async function main(arguments_) {
     observers,
     developmentCandidate,
   });
-  const { ledger: merged, downgraded, unresolved } = applyVerdicts({
+  const {
+    ledger: merged,
+    downgraded,
+    unresolved,
+  } = applyVerdicts({
     ledger,
     bindingsResult,
   });

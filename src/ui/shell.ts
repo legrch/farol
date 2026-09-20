@@ -2290,12 +2290,12 @@ async function configureProduct(
                                                         "MODEL_CONFIG_ROLLBACK_FAILED"
                                                     ? "config.toml could not be changed. Nothing was left half-written."
                                                     : (transitionRefusalMessage(
-                                                parsed.error,
-                                              ) ??
-                                              workspaceEditRefusalMessage(
-                                                parsed.error,
-                                              ) ??
-                                              `Not applied · ${parsed.error}`);
+                                                        parsed.error,
+                                                      ) ??
+                                                      workspaceEditRefusalMessage(
+                                                        parsed.error,
+                                                      ) ??
+                                                      `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();

@@ -64,14 +64,9 @@ export type WorkspaceScope = SubtreeWorkspaceScope | ExactWorkspaceScope;
 // (see `codex-agent-workspace-probe.ts`'s `participant()`) can say so
 // honestly instead of being coerced into looking like an ordinary grant.
 export type WorkspaceRestrictionSource =
-  | "task-grant"
-  | "owner-restriction"
-  | "unknown";
+  "task-grant" | "owner-restriction" | "unknown";
 export type ExclusionRestrictionSource =
-  | "computer-approval"
-  | "task-grant"
-  | "owner-restriction"
-  | "unknown";
+  "computer-approval" | "task-grant" | "owner-restriction" | "unknown";
 
 type GrantedWorkspaceScope = WorkspaceScope &
   Readonly<{ restrictionSource: WorkspaceRestrictionSource }>;

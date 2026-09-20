@@ -9,9 +9,9 @@ describe("promotion while review findings are open", () => {
     expect(() => assertNoOpenFindings(true, ["F9-9"])).toThrow(
       "PROMOTION_APPLY_BLOCKED_BY_OPEN_FINDINGS:F9-9",
     );
-    expect(() =>
-      assertNoOpenFindings(true, ["F9-9", "F9-10"]),
-    ).toThrow("PROMOTION_APPLY_BLOCKED_BY_OPEN_FINDINGS:F9-9,F9-10");
+    expect(() => assertNoOpenFindings(true, ["F9-9", "F9-10"])).toThrow(
+      "PROMOTION_APPLY_BLOCKED_BY_OPEN_FINDINGS:F9-9,F9-10",
+    );
   });
 
   it("an empty finding list never blocks --apply", () => {

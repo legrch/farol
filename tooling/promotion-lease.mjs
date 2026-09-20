@@ -57,7 +57,10 @@ function validRecord(value) {
 async function readLease(file) {
   let handle;
   try {
-    handle = await fs.open(file, fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC);
+    handle = await fs.open(
+      file,
+      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+    );
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     if (error?.code === "ELOOP") throw new Error("PROMOTION_LEASE_UNSAFE");
@@ -166,7 +169,9 @@ async function removeConfirmedStaleLease(
     // trusted to compare or to restore faithfully; treat it the same as a
     // mismatch (put it back, or drop it if something else already took its
     // place) and let the next real read apply the full safety checks.
-    matches = info.isFile() && (await fs.readFile(claim, "utf8")) === expectedSerialized;
+    matches =
+      info.isFile() &&
+      (await fs.readFile(claim, "utf8")) === expectedSerialized;
   } catch {
     matches = false;
   }

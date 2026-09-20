@@ -83,7 +83,10 @@ type ReadOutcome = Readonly<{
 async function readLease(file: string): Promise<ReadOutcome | null> {
   let handle;
   try {
-    handle = await fs.open(file, fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC);
+    handle = await fs.open(
+      file,
+      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
+    );
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return null;
@@ -199,7 +202,8 @@ async function removeConfirmedStaleLease(
     // mismatch (put it back, or drop it if something else already took its
     // place) and let the next real read apply the full safety checks.
     matches =
-      info.isFile() && (await fs.readFile(claim, "utf8")) === expectedSerialized;
+      info.isFile() &&
+      (await fs.readFile(claim, "utf8")) === expectedSerialized;
   } catch {
     matches = false;
   }

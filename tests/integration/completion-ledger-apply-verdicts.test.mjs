@@ -14,8 +14,17 @@ function baseLedger(overrides = {}) {
   return {
     candidate: { sourceCommit: CANDIDATE },
     requirements: [
-      { id: "R1", u2: "DONE", bindings: [{ lane: "hunt", attemptId: "x", cases: [] }] },
-      { id: "R2", u2: "LIVE_OPEN", bindings: [], next: "G-LIVE: scenario 1 pending" },
+      {
+        id: "R1",
+        u2: "DONE",
+        bindings: [{ lane: "hunt", attemptId: "x", cases: [] }],
+      },
+      {
+        id: "R2",
+        u2: "LIVE_OPEN",
+        bindings: [],
+        next: "G-LIVE: scenario 1 pending",
+      },
     ],
     ...overrides,
   };
@@ -45,7 +54,11 @@ describe("applyVerdicts: currentProof always reflects the fresh evaluation", () 
       { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
     ]);
 
-    const { ledger: merged, downgraded, unresolved } = applyVerdicts({
+    const {
+      ledger: merged,
+      downgraded,
+      unresolved,
+    } = applyVerdicts({
       ledger,
       bindingsResult,
     });
@@ -73,7 +86,10 @@ describe("applyVerdicts: currentProof always reflects the fresh evaluation", () 
       { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
     ]);
 
-    const { ledger: merged, downgraded } = applyVerdicts({ ledger, bindingsResult });
+    const { ledger: merged, downgraded } = applyVerdicts({
+      ledger,
+      bindingsResult,
+    });
 
     const r1 = merged.requirements.find((row) => row.id === "R1");
     expect(r1.u2).toBe("NOT_RUN");
@@ -110,7 +126,12 @@ describe("applyVerdicts: currentProof always reflects the fresh evaluation", () 
     const ledger = baseLedger();
     ledger.requirements[0].next = "existing owner note";
     const bindingsResult = bindingsResultFor([
-      { id: "R1", u2: "DONE", verdict: "UNPROVEN", bindings: [{ reasons: [] }] },
+      {
+        id: "R1",
+        u2: "DONE",
+        verdict: "UNPROVEN",
+        bindings: [{ reasons: [] }],
+      },
       { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
     ]);
 
@@ -124,7 +145,12 @@ describe("applyVerdicts: currentProof always reflects the fresh evaluation", () 
     const ledger = baseLedger();
     const bindingsResult = bindingsResultFor([
       { id: "R1", u2: "DONE", verdict: "PROVEN", bindings: [{ reasons: [] }] },
-      { id: "R2", u2: "LIVE_OPEN", verdict: "PROVEN", bindings: [{ reasons: [] }] },
+      {
+        id: "R2",
+        u2: "LIVE_OPEN",
+        verdict: "PROVEN",
+        bindings: [{ reasons: [] }],
+      },
     ]);
 
     const { ledger: merged } = applyVerdicts({ ledger, bindingsResult });
@@ -145,7 +171,12 @@ describe("applyVerdicts: summary is a mechanical tally of u2, never hand-typed",
       summary: { DONE: 99, LIVE_OPEN: 1 }, // deliberately wrong before the merge
     });
     const bindingsResult = bindingsResultFor([
-      { id: "R1", u2: "DONE", verdict: "UNPROVEN", bindings: [{ reasons: [] }] },
+      {
+        id: "R1",
+        u2: "DONE",
+        verdict: "UNPROVEN",
+        bindings: [{ reasons: [] }],
+      },
       { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
     ]);
 
@@ -164,10 +195,18 @@ describe("applyVerdicts: currentProofSummary is rebuilt from this same run", () 
     });
     const bindingsResult = bindingsResultFor([
       { id: "R1", u2: "DONE", verdict: "PROVEN", bindings: [{ reasons: [] }] },
-      { id: "R2", u2: "LIVE_OPEN", verdict: "UNPROVEN", bindings: [{ reasons: [] }] },
+      {
+        id: "R2",
+        u2: "LIVE_OPEN",
+        verdict: "UNPROVEN",
+        bindings: [{ reasons: [] }],
+      },
     ]);
 
-    const { ledger: merged, unresolved } = applyVerdicts({ ledger, bindingsResult });
+    const { ledger: merged, unresolved } = applyVerdicts({
+      ledger,
+      bindingsResult,
+    });
 
     expect(merged.currentProofSummary.candidate).toBe(CANDIDATE);
     expect(merged.currentProofSummary.byVerdict).toEqual({
@@ -178,16 +217,21 @@ describe("applyVerdicts: currentProofSummary is rebuilt from this same run", () 
       PROVEN: 1,
     });
     expect(merged.currentProofSummary.validator.exit).toBe(0);
-    expect(
-      unresolved.some((entry) => entry.includes("COMMAND_ONLY")),
-    ).toBe(true);
+    expect(unresolved.some((entry) => entry.includes("COMMAND_ONLY"))).toBe(
+      true,
+    );
   });
 
   it("recomputes doneUnproven from the merged rows, not the pre-downgrade evaluation: it is always empty by this tool's own invariant", () => {
     const ledger = baseLedger();
     const bindingsResult = {
       ...bindingsResultFor([
-        { id: "R1", u2: "DONE", verdict: "UNPROVEN", bindings: [{ reasons: [] }] },
+        {
+          id: "R1",
+          u2: "DONE",
+          verdict: "UNPROVEN",
+          bindings: [{ reasons: [] }],
+        },
         { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
       ]),
     };
@@ -199,7 +243,9 @@ describe("applyVerdicts: currentProofSummary is rebuilt from this same run", () 
     bindingsResult.summary.doneUnproven = ["R1"];
 
     const { ledger: merged } = applyVerdicts({ ledger, bindingsResult });
-    expect(merged.requirements.find((row) => row.id === "R1").u2).toBe("NOT_RUN");
+    expect(merged.requirements.find((row) => row.id === "R1").u2).toBe(
+      "NOT_RUN",
+    );
     expect(merged.currentProofSummary.validator.doneUnproven).toEqual([]);
     expect(merged.currentProofSummary.validator.exit).toBe(0);
   });

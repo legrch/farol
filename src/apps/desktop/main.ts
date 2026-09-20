@@ -973,7 +973,10 @@ async function admitRouteBTask(
     // drain check validated nothing running and before its placement.
     let admitted: LiveTaskAdmission;
     try {
-      admitted = await liveTaskRegistry.admitDurable(task, persistLiveTaskState);
+      admitted = await liveTaskRegistry.admitDurable(
+        task,
+        persistLiveTaskState,
+      );
     } catch {
       return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
     }
@@ -2147,7 +2150,10 @@ async function runProductTaskCommand(
         const agentStart = await liveTaskRegistry.withPromotionLease(
           async (): Promise<
             | Readonly<{ ok: true }>
-            | Readonly<{ ok: false; code: "TASK_NOT_FOUND" | "TASK_STATE_UNAVAILABLE" }>
+            | Readonly<{
+                ok: false;
+                code: "TASK_NOT_FOUND" | "TASK_STATE_UNAVAILABLE";
+              }>
           > => {
             if (
               !liveTaskRegistry.setAgent(task.taskId, {
@@ -2165,7 +2171,9 @@ async function runProductTaskCommand(
               await persistLiveTaskState();
             } catch {
               liveTaskRegistry.rollback(before);
-              await productAgentStore!.remove(task.taskId).catch(() => undefined);
+              await productAgentStore!
+                .remove(task.taskId)
+                .catch(() => undefined);
               return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
             }
             return { ok: true };
@@ -2326,7 +2334,10 @@ async function runProductTaskCommand(
     // same cross-process lease a promotion holds through placement.
     let admitted: LiveTaskAdmission;
     try {
-      admitted = await liveTaskRegistry.admitDurable(task, persistLiveTaskState);
+      admitted = await liveTaskRegistry.admitDurable(
+        task,
+        persistLiveTaskState,
+      );
     } catch {
       return taskFailure("TASK_STATE_UNAVAILABLE");
     }
@@ -2479,14 +2490,12 @@ function farolModelCodexConfigPath(): string {
 
 function modelStatusEvidencePayload(
   status: FarolModelLifecycleStatus,
-):
-  | Readonly<{
-      kind: "model.status";
-      state: "port_conflict" | "listening" | "connected";
-      port: number | null;
-      requestsServed: number;
-    }>
-  | null {
+): Readonly<{
+  kind: "model.status";
+  state: "port_conflict" | "listening" | "connected";
+  port: number | null;
+  requestsServed: number;
+}> | null {
   if (status.state === "not_running") return null;
   if (status.state === "port_conflict") {
     return {
@@ -5468,12 +5477,10 @@ async function configureAdmittedProduct(
       const spec = await farolModelProviderSpec();
       if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
       const configPath = farolModelCodexConfigPath();
-      const blockPreview = await previewFarolModelConfigBlock(
-        configPath,
-        spec,
-      );
+      const blockPreview = await previewFarolModelConfigBlock(configPath, spec);
       const selectionPreview =
-        command.selectAsDefault && blockPreview.status !== "insecure_permissions"
+        command.selectAsDefault &&
+        blockPreview.status !== "insecure_permissions"
           ? await previewFarolModelProviderSelection(
               configPath,
               spec.providerName,
@@ -5516,10 +5523,7 @@ async function configureAdmittedProduct(
       if (!spec) return configurationFailure("MODEL_ENDPOINT_UNAVAILABLE");
       const configPath = farolModelCodexConfigPath();
       try {
-        const blockResult = await applyFarolModelConfigBlock(
-          configPath,
-          spec,
-        );
+        const blockResult = await applyFarolModelConfigBlock(configPath, spec);
         if (blockResult.status === "insecure_permissions") {
           return configurationFailure("MODEL_CONFIG_INSECURE_PERMISSIONS");
         }

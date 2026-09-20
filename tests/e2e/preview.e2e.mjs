@@ -349,7 +349,8 @@ function visibleWindowTopologyBlock(presentation) {
     if (!allowPrimaryDisplay) {
       return {
         code: "SECONDARY_DISPLAY_UNAVAILABLE",
-        reason: "no non-primary display is available for visible native evidence",
+        reason:
+          "no non-primary display is available for visible native evidence",
         ownerAction:
           "Provide one non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
         requested,
@@ -8706,8 +8707,7 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     await modelControl.window.locator("#model-check-status-btn").click();
     await modelControl.window.waitForFunction(
       () =>
-        document.querySelector("#model-readiness")?.textContent ===
-        "Listening",
+        document.querySelector("#model-readiness")?.textContent === "Listening",
     );
 
     const token = (
@@ -8728,13 +8728,15 @@ async function assertSignInReturnByKeyboard(instance, chatGptPage) {
     });
     assert.equal(served.status, 200);
     const servedBody = await served.text();
-    assert.match(servedBody, new RegExp(syntheticReply.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+    assert.match(
+      servedBody,
+      new RegExp(syntheticReply.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
+    );
 
     await modelControl.window.locator("#model-check-status-btn").click();
     await modelControl.window.waitForFunction(
       () =>
-        document.querySelector("#model-readiness")?.textContent ===
-        "Connected",
+        document.querySelector("#model-readiness")?.textContent === "Connected",
     );
     assert.match(
       await modelControl.window.locator("#model-status-summary").innerText(),

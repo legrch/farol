@@ -144,7 +144,10 @@ function findMarkedRegion(
   return { start: beginIndex, end: endMarkerIndex + end.length };
 }
 
-function withoutRegion(contents: string, region: MarkedRegion | undefined): string {
+function withoutRegion(
+  contents: string,
+  region: MarkedRegion | undefined,
+): string {
   if (!region) return contents;
   return contents.slice(0, region.start) + contents.slice(region.end);
 }
@@ -161,7 +164,8 @@ function findForeignProviderConflicts(
   for (const line of contentsWithoutManagedBlock.split("\n")) {
     const match = TABLE_HEADER.exec(line);
     if (!match) continue;
-    if ((match[1] ?? "").trim() === watched) conflicts.push({ table: watched, line });
+    if ((match[1] ?? "").trim() === watched)
+      conflicts.push({ table: watched, line });
   }
   return conflicts;
 }
@@ -269,9 +273,16 @@ export async function previewFarolModelConfigBlock(
   const insecure = insecurePermissionsRefusal(spec.delivery, mode);
   if (insecure) return insecure;
 
-  const region = findMarkedRegion(contents, BLOCK_BEGIN_MARKER, BLOCK_END_MARKER);
+  const region = findMarkedRegion(
+    contents,
+    BLOCK_BEGIN_MARKER,
+    BLOCK_END_MARKER,
+  );
   const withoutBlock = withoutRegion(contents, region);
-  const conflicts = findForeignProviderConflicts(withoutBlock, spec.providerName);
+  const conflicts = findForeignProviderConflicts(
+    withoutBlock,
+    spec.providerName,
+  );
   if (conflicts.length > 0) return { status: "conflict", conflicts };
 
   const desired = appendBlock(withoutBlock, buildProviderBlockBody(spec));
@@ -334,9 +345,16 @@ export async function applyFarolModelConfigBlock(
   const insecure = insecurePermissionsRefusal(spec.delivery, mode);
   if (insecure) return insecure;
 
-  const region = findMarkedRegion(contents, BLOCK_BEGIN_MARKER, BLOCK_END_MARKER);
+  const region = findMarkedRegion(
+    contents,
+    BLOCK_BEGIN_MARKER,
+    BLOCK_END_MARKER,
+  );
   const withoutBlock = withoutRegion(contents, region);
-  const conflicts = findForeignProviderConflicts(withoutBlock, spec.providerName);
+  const conflicts = findForeignProviderConflicts(
+    withoutBlock,
+    spec.providerName,
+  );
   if (conflicts.length > 0) return { status: "conflict", conflicts };
 
   const desired = appendBlock(withoutBlock, buildProviderBlockBody(spec));

@@ -35,7 +35,9 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -78,7 +80,8 @@ async function verifiedWriteWorkspace(
     label: "Project",
   });
   if (added.snapshot.status !== "ready") throw new Error("settings missing");
-  const workspaceId = added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+  const workspaceId =
+    added.snapshot.settings.computer.workspaces[0]?.workspaceId;
   if (!workspaceId) throw new Error("workspace missing");
   await service.updateWorkspaceAccess(workspaceId, "write");
   const verified = await service.recordComputerVerification(
@@ -279,7 +282,11 @@ describe("guarded workspace edit takes the promotion lease", () => {
     );
 
     await service.recordPendingWorkspaceEdit(delivery);
-    const midflight = await acquirePromotionLease(root, generation, "promotion");
+    const midflight = await acquirePromotionLease(
+      root,
+      generation,
+      "promotion",
+    );
     expect(midflight).toBeNull();
 
     // Acknowledged (e.g. after `recordComputerMutationOutcomeUnknown`) with

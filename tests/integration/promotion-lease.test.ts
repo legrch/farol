@@ -18,7 +18,9 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -63,7 +65,10 @@ function waitForLine(
     };
     child.stdout?.on("data", onData);
     child.once("error", reject);
-    setTimeout(() => reject(new Error(`timed out waiting for ${needle}`)), 10_000).unref();
+    setTimeout(
+      () => reject(new Error(`timed out waiting for ${needle}`)),
+      10_000,
+    ).unref();
   });
 }
 
@@ -122,9 +127,9 @@ describe("promotion lease", () => {
     await fs.writeFile(decoy, "{}", { mode: 0o600 });
     await fs.mkdir(path.join(root, "farol-next-state"), { recursive: true });
     await fs.symlink(decoy, promotionLeasePath(root));
-    await expect(acquirePromotionLease(root, "gen-a", "promotion")).rejects.toThrow(
-      /PROMOTION_LEASE/u,
-    );
+    await expect(
+      acquirePromotionLease(root, "gen-a", "promotion"),
+    ).rejects.toThrow(/PROMOTION_LEASE/u);
     expect(isPromotionLeaseHeldSync(root)).toBe(true);
   });
 
@@ -151,18 +156,26 @@ describe("promotion lease", () => {
 
   it("a crash that leaves the lease behind is recovered by liveness, never a wedge", async () => {
     const root = await userData();
-    const holder = spawn(process.execPath, [childScript, root, "hold", "gen-a"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const holder = spawn(
+      process.execPath,
+      [childScript, root, "hold", "gen-a"],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     try {
       await waitForLine(holder, "ACQUIRED");
       expect(isPromotionLeaseHeldSync(root)).toBe(true);
       // A live competing attempt in this process is refused while the child
       // really holds the lease.
-      await expect(acquirePromotionLease(root, "gen-b", "promotion")).resolves.toBeNull();
+      await expect(
+        acquirePromotionLease(root, "gen-b", "promotion"),
+      ).resolves.toBeNull();
 
       holder.kill("SIGKILL");
-      await new Promise<void>((resolve) => holder.once("close", () => resolve()));
+      await new Promise<void>((resolve) =>
+        holder.once("close", () => resolve()),
+      );
 
       // The dead holder's lease is stale; recovery must not wedge the next
       // acquire, and the sync check must not keep reporting it held.
@@ -195,7 +208,9 @@ describe("promotion lease", () => {
     );
     await waitForLine(deadHolder, "ACQUIRED");
     deadHolder.kill("SIGKILL");
-    await new Promise<void>((resolve) => deadHolder.once("close", () => resolve()));
+    await new Promise<void>((resolve) =>
+      deadHolder.once("close", () => resolve()),
+    );
 
     const handshake = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-lease-handshake-"),
@@ -217,15 +232,24 @@ describe("promotion lease", () => {
       // Wait for A to have exclusively claimed the stale bytes and to be
       // paused (the ready marker is written only from inside that pause).
       await expect
-        .poll(() => fs.access(readyFile).then(() => true, () => false), {
-          timeout: 10_000,
-        })
+        .poll(
+          () =>
+            fs.access(readyFile).then(
+              () => true,
+              () => false,
+            ),
+          {
+            timeout: 10_000,
+          },
+        )
         .toBe(true);
 
       // While A is paused, the lease file is genuinely absent (A holds only
       // its private claim). Process B — a real, separate process — now
       // legitimately acquires a fresh lease at that same path.
-      expect(await fs.lstat(promotionLeasePath(root)).catch(() => null)).toBeNull();
+      expect(
+        await fs.lstat(promotionLeasePath(root)).catch(() => null),
+      ).toBeNull();
       const freshHolder = spawn(
         process.execPath,
         [childScript, root, "hold", "gen-b"],

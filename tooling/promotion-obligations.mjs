@@ -274,7 +274,8 @@ export async function activationObligations(userData, options = {}) {
   );
 
   const tasks = confirmed["live-tasks"];
-  if (tasks.status === "unreadable") unreadable.push(`live-tasks:${tasks.reason}`);
+  if (tasks.status === "unreadable")
+    unreadable.push(`live-tasks:${tasks.reason}`);
   else if (tasks.status === "read") {
     const list = tasks.value.tasks;
     const running = list.filter((task) => task.lifecycle === "running").length;
@@ -298,7 +299,8 @@ export async function activationObligations(userData, options = {}) {
   }
 
   const journal = confirmed["chatgpt-task-journal"];
-  if (journal.status === "unreadable") unreadable.push(`chatgpt-task-journal:${journal.reason}`);
+  if (journal.status === "unreadable")
+    unreadable.push(`chatgpt-task-journal:${journal.reason}`);
   else if (journal.status === "read") {
     const phase = journal.value.phase;
     if (phase === "dispatch_intent" || phase === "result_retained") {
@@ -309,7 +311,8 @@ export async function activationObligations(userData, options = {}) {
   }
 
   const settings = confirmed["product-settings"];
-  if (settings.status === "unreadable") unreadable.push(`product-settings:${settings.reason}`);
+  if (settings.status === "unreadable")
+    unreadable.push(`product-settings:${settings.reason}`);
   else if (settings.status === "read" && settings.value.computer.pendingEdit) {
     obligations.push(
       `EDIT_DELIVERY_PENDING:${settings.value.computer.pendingEdit.operationId}`,

@@ -277,7 +277,10 @@ try {
   assert.equal(status.structuredContent?.output?.command, "git.status");
   assert.equal(status.structuredContent?.output?.exitCode, 0);
   assert.equal(status.structuredContent?.output?.network, "none");
-  assert.equal(status.structuredContent?.output?.coverage, "tracked-files-only");
+  assert.equal(
+    status.structuredContent?.output?.coverage,
+    "tracked-files-only",
+  );
   assert.equal(status.structuredContent?.output?.layout, "primary");
 
   const exactHead = await client.callTool({

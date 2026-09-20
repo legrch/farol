@@ -40,7 +40,9 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -62,9 +64,11 @@ function desktopPromotionLeaseGuard(
 ): WorkspaceEditLeaseGuard {
   return {
     acquireForAdmission: async () => {
-      const handle = await acquirePromotionLease(root, buildId, "admission").catch(
-        () => null,
-      );
+      const handle = await acquirePromotionLease(
+        root,
+        buildId,
+        "admission",
+      ).catch(() => null);
       if (!handle) return null;
       return { release: () => releasePromotionLease(handle) };
     },
@@ -79,7 +83,8 @@ async function verifiedWriteWorkspace(
     label: "Project",
   });
   if (added.snapshot.status !== "ready") throw new Error("settings missing");
-  const workspaceId = added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+  const workspaceId =
+    added.snapshot.settings.computer.workspaces[0]?.workspaceId;
   if (!workspaceId) throw new Error("workspace missing");
   await service.updateWorkspaceAccess(workspaceId, "write");
   const verified = await service.recordComputerVerification(
@@ -238,10 +243,15 @@ describe("desktop wiring: main.ts's own construction path shares the promotion l
     // Once the promotion releases, the same edit can proceed and its own
     // lease releases the same way.
     await releasePromotionLease(promotionAfterOutcome!);
-    const recordedAfter = await service.recordPendingWorkspaceEdit(secondDelivery);
+    const recordedAfter =
+      await service.recordPendingWorkspaceEdit(secondDelivery);
     expect(recordedAfter).toMatchObject({ ok: true });
     await service.releaseWorkspaceEditLease(secondDelivery.operationId);
-    const promotionFinal = await acquirePromotionLease(root, buildId, "promotion");
+    const promotionFinal = await acquirePromotionLease(
+      root,
+      buildId,
+      "promotion",
+    );
     expect(promotionFinal).not.toBeNull();
     await releasePromotionLease(promotionFinal!);
   });

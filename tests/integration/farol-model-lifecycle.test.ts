@@ -61,7 +61,10 @@ describe("Farol Model endpoint lifecycle", () => {
     await lifecycle.start();
     const listening = lifecycle.status();
     expect(listening.state).toBe("listening");
-    if (listening.state !== "not_running" && listening.state !== "port_conflict") {
+    if (
+      listening.state !== "not_running" &&
+      listening.state !== "port_conflict"
+    ) {
       expect(listening.port).toBeGreaterThan(0);
     }
 

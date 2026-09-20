@@ -30,7 +30,9 @@ const roots = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -92,7 +94,12 @@ async function promote(homeRoot, source, generation) {
       generation,
       artifactSha256,
     })}\n`;
-    await runPromotionApply({ home: homeRoot, source, artifactSha256, receiptText });
+    await runPromotionApply({
+      home: homeRoot,
+      source,
+      artifactSha256,
+      receiptText,
+    });
     return { destination, receipt, artifactSha256 };
   } finally {
     await releasePromotionLease(lease);
@@ -180,7 +187,11 @@ describe("promotion flow: lease held from the drain check through placement", ()
     const userData = userDataOf(homeRoot);
     const registry = new LiveTaskRegistry(5, {
       acquireForAdmission: async () => {
-        const handle = await acquirePromotionLease(userData, "app-gen", "admission");
+        const handle = await acquirePromotionLease(
+          userData,
+          "app-gen",
+          "admission",
+        );
         if (!handle) return null;
         return { release: () => releasePromotionLease(handle) };
       },
@@ -200,7 +211,11 @@ describe("promotion flow: lease held from the drain check through placement", ()
     try {
       await expect(
         registry.admitDurable(
-          fixtureTask({ taskId: "task-b", sessionId: "task-b", turnId: "turn-b" }),
+          fixtureTask({
+            taskId: "task-b",
+            sessionId: "task-b",
+            turnId: "turn-b",
+          }),
           async () => {},
         ),
       ).resolves.toMatchObject({ status: "promotion_pending" });
@@ -210,16 +225,24 @@ describe("promotion flow: lease held from the drain check through placement", ()
 
     await expect(
       registry.admitDurable(
-        fixtureTask({ taskId: "task-c", sessionId: "task-c", turnId: "turn-c" }),
+        fixtureTask({
+          taskId: "task-c",
+          sessionId: "task-c",
+          turnId: "turn-c",
+        }),
         async () => {},
       ),
     ).resolves.toMatchObject({ status: "admitted" });
   });
 
   function spawnRoleChild(userData, role, generation, ...files) {
-    return spawn(process.execPath, [roleChildScript, userData, role, generation, ...files], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    return spawn(
+      process.execPath,
+      [roleChildScript, userData, role, generation, ...files],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
   }
 
   function collectOutput(child) {
@@ -240,12 +263,17 @@ describe("promotion flow: lease held from the drain check through placement", ()
       };
       child.stdout.on("data", onData);
       child.once("error", reject);
-      setTimeout(() => reject(new Error(`timed out waiting for ${needle}`)), 10_000).unref();
+      setTimeout(
+        () => reject(new Error(`timed out waiting for ${needle}`)),
+        10_000,
+      ).unref();
     });
   }
 
   function waitForClose(child) {
-    return new Promise((resolve) => child.once("close", (code) => resolve(code)));
+    return new Promise((resolve) =>
+      child.once("close", (code) => resolve(code)),
+    );
   }
 
   // S35-03/2, real-process form of the packet's required scenario: admission
@@ -290,9 +318,16 @@ describe("promotion flow: lease held from the drain check through placement", ()
       // ever attempts to acquire.
       await waitForLine(admission, "HELD:false");
       await expect
-        .poll(() => fs.access(admissionReady).then(() => true, () => false), {
-          timeout: 10_000,
-        })
+        .poll(
+          () =>
+            fs.access(admissionReady).then(
+              () => true,
+              () => false,
+            ),
+          {
+            timeout: 10_000,
+          },
+        )
         .toBe(true);
 
       // Promotion — a real, separate process — takes the lease for real
@@ -300,12 +335,22 @@ describe("promotion flow: lease held from the drain check through placement", ()
       // is still paused.
       await waitForLine(promotion, "ACQUIRED");
       await expect
-        .poll(() => fs.access(promotionReady).then(() => true, () => false), {
-          timeout: 10_000,
-        })
+        .poll(
+          () =>
+            fs.access(promotionReady).then(
+              () => true,
+              () => false,
+            ),
+          {
+            timeout: 10_000,
+          },
+        )
         .toBe(true);
       const heldByPromotion = JSON.parse(
-        await fs.readFile(path.join(userData, "farol-next-state", "promotion.lease"), "utf8"),
+        await fs.readFile(
+          path.join(userData, "farol-next-state", "promotion.lease"),
+          "utf8",
+        ),
       );
       expect(heldByPromotion.generation).toBe("gen-promo");
 
@@ -319,12 +364,17 @@ describe("promotion flow: lease held from the drain check through placement", ()
       // The loser never blocked placement: promotion proceeds and releases
       // on its own schedule, holding the exact same record throughout.
       const stillPromotion = JSON.parse(
-        await fs.readFile(path.join(userData, "farol-next-state", "promotion.lease"), "utf8"),
+        await fs.readFile(
+          path.join(userData, "farol-next-state", "promotion.lease"),
+          "utf8",
+        ),
       );
       expect(stillPromotion).toEqual(heldByPromotion);
       await fs.writeFile(promotionRelease, "release");
       const promotionCode = await waitForClose(promotion);
-      expect(promotionOutput()).toMatch(/^HELD:(false|true)\nACQUIRED\nRELEASED\n$/u);
+      expect(promotionOutput()).toMatch(
+        /^HELD:(false|true)\nACQUIRED\nRELEASED\n$/u,
+      );
       expect(promotionCode).toBe(0);
     } finally {
       admission.kill("SIGKILL");

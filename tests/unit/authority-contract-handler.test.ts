@@ -40,7 +40,12 @@ const admission: TaskAdmission = {
   computerId: "computer-preview",
   computerGeneration: 7,
   workspaces: [
-    { workspaceId: "farol", mode: "subtree", root: "/workspace/farol", access: "write" },
+    {
+      workspaceId: "farol",
+      mode: "subtree",
+      root: "/workspace/farol",
+      access: "write",
+    },
   ],
   capabilities: approval.capabilities,
   network: "none",

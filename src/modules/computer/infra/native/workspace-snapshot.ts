@@ -76,8 +76,7 @@ export type WorkspaceSnapshotHandle = Readonly<{
 }>;
 
 export type WorkspaceSnapshotOutcome =
-  | WorkspaceSnapshotHandle
-  | WorkspaceSnapshotFailure;
+  WorkspaceSnapshotHandle | WorkspaceSnapshotFailure;
 
 export type WorkspaceSnapshotOptions = Readonly<{
   helperPath: string;
@@ -185,7 +184,10 @@ async function measuredHelperSource(
   let handle;
   try {
     const listed = await lstat(helperPath, { bigint: true });
-    handle = await open(helperPath, fsConstants.O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    handle = await open(
+      helperPath,
+      fsConstants.O_RDONLY | O_CLOEXEC | O_NOFOLLOW,
+    );
     const before = await handle.stat({ bigint: true });
     const payload = await handle.readFile();
     const after = await handle.stat({ bigint: true });
@@ -248,7 +250,9 @@ function spawnSnapshotHelper(
     const responsePipe = child.stdout;
     const errorPipe = child.stderr;
     const requestPipe = pipes[3] as Writable | null | undefined;
-    const hookSignal = withHook ? (pipes[4] as Readable | null | undefined) : null;
+    const hookSignal = withHook
+      ? (pipes[4] as Readable | null | undefined)
+      : null;
     const hookContinue = withHook
       ? (pipes[5] as Writable | null | undefined)
       : null;
@@ -420,7 +424,8 @@ export async function createWorkspaceSnapshot(
   if (
     !plainAbsolutePath(request.root) ||
     !isGrant(request.approvedRoot) ||
-    (request.externalGitDir !== undefined && !isGrant(request.externalGitDir)) ||
+    (request.externalGitDir !== undefined &&
+      !isGrant(request.externalGitDir)) ||
     (request.externalCommonDir !== undefined &&
       !isGrant(request.externalCommonDir)) ||
     (request.paths !== undefined && !isPathList(request.paths)) ||
@@ -448,7 +453,9 @@ export async function createWorkspaceSnapshot(
   const remove = async (): Promise<void> => {
     if (removed) return;
     removed = true;
-    await rm(destination, { recursive: true, force: true }).catch(() => undefined);
+    await rm(destination, { recursive: true, force: true }).catch(
+      () => undefined,
+    );
   };
 
   try {
@@ -463,7 +470,8 @@ export async function createWorkspaceSnapshot(
     let source: Buffer;
     try {
       interpreter = await options.attestInterpreter();
-      if (!plainAbsolutePath(interpreter)) throw new Error("invalid interpreter");
+      if (!plainAbsolutePath(interpreter))
+        throw new Error("invalid interpreter");
       source = await measuredHelperSource(options.helperPath, options.helper);
     } catch {
       await remove();
@@ -487,7 +495,8 @@ export async function createWorkspaceSnapshot(
     if (request.denied !== undefined && request.denied.length > 0) {
       requestBody.denied = [...request.denied];
     }
-    if (request.maxEntries !== undefined) requestBody.maxEntries = request.maxEntries;
+    if (request.maxEntries !== undefined)
+      requestBody.maxEntries = request.maxEntries;
     if (request.maxBytes !== undefined) requestBody.maxBytes = request.maxBytes;
     if (testOptions.testHookRequest) {
       requestBody.testHook = testOptions.testHookRequest;
@@ -496,11 +505,18 @@ export async function createWorkspaceSnapshot(
 
     let raw: Buffer;
     try {
-      raw = await spawnSnapshotHelper(interpreter, source, requestBytes, testOptions);
+      raw = await spawnSnapshotHelper(
+        interpreter,
+        source,
+        requestBytes,
+        testOptions,
+      );
     } catch (error) {
       await remove();
       if (error instanceof SnapshotHelperExit) {
-        return failure(EXIT_TO_CODE.get(error.code ?? -1) ?? "SNAPSHOT_HELPER_FAILED");
+        return failure(
+          EXIT_TO_CODE.get(error.code ?? -1) ?? "SNAPSHOT_HELPER_FAILED",
+        );
       }
       return failure("SNAPSHOT_HELPER_FAILED");
     }

@@ -343,7 +343,9 @@ int main(void) {
       // tracked" rather than a hard failure, so the second invocation still
       // runs and its denial is still what is reported.
       await expect(
-        workspace(async () => parentReader).execute(request(grant ?? undefined)),
+        workspace(async () => parentReader).execute(
+          request(grant ?? undefined),
+        ),
       ).resolves.toMatchObject({
         ok: true,
         value: { stdout: "parent denied\n" },
@@ -1017,9 +1019,13 @@ int main(void) {
   it("N02c keeps a tracked and an untracked file inside an excluded subtree out of the snapshot and out of the status result", async () => {
     // request() already denies "private" (see the top of this file).
     await fs.mkdir(path.join(root, "private"), { mode: 0o700 });
-    await fs.writeFile(path.join(root, "private", "tracked-secret.txt"), "s\n", {
-      mode: 0o600,
-    });
+    await fs.writeFile(
+      path.join(root, "private", "tracked-secret.txt"),
+      "s\n",
+      {
+        mode: 0o600,
+      },
+    );
     await executeFile(git, ["-C", root, "add", "private/tracked-secret.txt"]);
     await executeFile(
       git,
@@ -1037,17 +1043,28 @@ int main(void) {
       ],
       { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
     );
-    await fs.writeFile(path.join(root, "private", "untracked-secret.txt"), "u\n", {
-      mode: 0o600,
-    });
+    await fs.writeFile(
+      path.join(root, "private", "untracked-secret.txt"),
+      "u\n",
+      {
+        mode: 0o600,
+      },
+    );
     // Also change the tracked one after the commit, so an unfiltered status
     // would otherwise show it as modified.
-    await fs.writeFile(path.join(root, "private", "tracked-secret.txt"), "changed\n", {
-      mode: 0o600,
-    });
+    await fs.writeFile(
+      path.join(root, "private", "tracked-secret.txt"),
+      "changed\n",
+      {
+        mode: 0o600,
+      },
+    );
 
     const result = await workspace().execute(request());
-    expect(result).toMatchObject({ ok: true, value: { kind: "workspace.command" } });
+    expect(result).toMatchObject({
+      ok: true,
+      value: { kind: "workspace.command" },
+    });
     if (!result.ok || result.value.kind !== "workspace.command") return;
     expect(result.value.stdout).not.toContain("private");
     expect(result.value.stdout).not.toContain("tracked-secret.txt");
@@ -1066,28 +1083,32 @@ int main(void) {
     let replaced = false;
     const factory = snapshotFactory();
     const snapshotPaths: string[] = [];
-    const result = await executeNativeVerificationCommand(input, input.operation, {
-      attestGit: async () => git,
-      createSnapshot: async (snapshotRequest) => {
-        const outcome = await factory(snapshotRequest);
-        if (outcome.ok) snapshotPaths.push(outcome.path);
-        return outcome;
+    const result = await executeNativeVerificationCommand(
+      input,
+      input.operation,
+      {
+        attestGit: async () => git,
+        createSnapshot: async (snapshotRequest) => {
+          const outcome = await factory(snapshotRequest);
+          if (outcome.ok) snapshotPaths.push(outcome.path);
+          return outcome;
+        },
+        // After every pathname check has passed: move the approved folder away
+        // and put another repository at its path. The snapshot's own
+        // descriptor-bound identity check (workspace-snapshot.ts / safe_open.py)
+        // is what must catch this, not just the outer cheap check that already
+        // ran before this hook.
+        beforeSnapshot: async () => {
+          await fs.rename(root, moved);
+          await fs.mkdir(root, { mode: 0o700 });
+          await executeFile(git, ["init", "--quiet", root]);
+          await fs.writeFile(path.join(root, "REPLACEMENT.txt"), "x\n", {
+            mode: 0o600,
+          });
+          replaced = true;
+        },
       },
-      // After every pathname check has passed: move the approved folder away
-      // and put another repository at its path. The snapshot's own
-      // descriptor-bound identity check (workspace-snapshot.ts / safe_open.py)
-      // is what must catch this, not just the outer cheap check that already
-      // ran before this hook.
-      beforeSnapshot: async () => {
-        await fs.rename(root, moved);
-        await fs.mkdir(root, { mode: 0o700 });
-        await executeFile(git, ["init", "--quiet", root]);
-        await fs.writeFile(path.join(root, "REPLACEMENT.txt"), "x\n", {
-          mode: 0o600,
-        });
-        replaced = true;
-      },
-    });
+    );
     expect(replaced).toBe(true);
     expect(result).toMatchObject({
       ok: false,
@@ -1191,9 +1212,9 @@ int main(int argc, char **argv) {
       });
       // The owner's real file -- not a snapshot copy, which is already
       // removed by the time this runs -- is byte-identical afterwards.
-      await expect(fs.readFile(path.join(root, "README.md"), "utf8")).resolves.toBe(
-        "before\n",
-      );
+      await expect(
+        fs.readFile(path.join(root, "README.md"), "utf8"),
+      ).resolves.toBe("before\n");
     });
 
     it("allows a write into `.git` metadata inside the snapshot", async () => {

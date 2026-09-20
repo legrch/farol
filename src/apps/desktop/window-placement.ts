@@ -19,9 +19,7 @@ export interface PreviewWindowPlacement {
   readonly internal: boolean;
   readonly primary: boolean;
   readonly selection:
-    | "non-primary-internal"
-    | "non-primary"
-    | "owner-allowed-primary";
+    "non-primary-internal" | "non-primary" | "owner-allowed-primary";
   readonly bounds: PreviewRectangle;
 }
 

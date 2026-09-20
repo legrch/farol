@@ -28,12 +28,17 @@ if (mode === "recover-pause") {
   // parent uses this handshake to force a deterministic, real cross-process
   // interleaving with a competing acquire that runs while this one is
   // paused, instead of relying on OS scheduling luck.
-  const handle = await acquirePromotionLease(userData, generation, "admission", {
-    beforeExchange: async () => {
-      await fs.writeFile(readyFile, "ready", { mode: 0o600 });
-      await waitForFile(goFile);
+  const handle = await acquirePromotionLease(
+    userData,
+    generation,
+    "admission",
+    {
+      beforeExchange: async () => {
+        await fs.writeFile(readyFile, "ready", { mode: 0o600 });
+        await waitForFile(goFile);
+      },
     },
-  });
+  );
   if (!handle) {
     process.stdout.write("REFUSED\n");
     process.exit(1);

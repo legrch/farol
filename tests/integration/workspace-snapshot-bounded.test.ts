@@ -25,7 +25,9 @@ const sourceHelper = path.join(nextRoot, "resources/native/safe_open.py");
 let root = "";
 let runtimeDirectory = "";
 
-function options(overrides: Partial<WorkspaceSnapshotOptions> = {}): WorkspaceSnapshotOptions {
+function options(
+  overrides: Partial<WorkspaceSnapshotOptions> = {},
+): WorkspaceSnapshotOptions {
   return {
     helperPath: sourceHelper,
     helper: NEXT_SAFE_OPEN_HELPER,
@@ -35,9 +37,16 @@ function options(overrides: Partial<WorkspaceSnapshotOptions> = {}): WorkspaceSn
   };
 }
 
-function git(cwd: string, ...args: string[]): Readonly<{ status: number | null; stdout: string; stderr: string }> {
+function git(
+  cwd: string,
+  ...args: string[]
+): Readonly<{ status: number | null; stdout: string; stderr: string }> {
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
 }
 
 async function initRepo(dir: string): Promise<void> {
@@ -71,10 +80,16 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
     });
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "init");
-    await fs.writeFile(path.join(root, "b.txt"), "untracked\n", { mode: 0o600 });
-    await fs.writeFile(path.join(root, "secret", "other.txt"), "also-hidden\n", {
+    await fs.writeFile(path.join(root, "b.txt"), "untracked\n", {
       mode: 0o600,
     });
+    await fs.writeFile(
+      path.join(root, "secret", "other.txt"),
+      "also-hidden\n",
+      {
+        mode: 0o600,
+      },
+    );
 
     const outcome = await createWorkspaceSnapshot(
       {
@@ -99,9 +114,9 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
       ).rejects.toMatchObject({ code: "ENOENT" });
       // `.git` is always present -- Git needs its own metadata regardless of
       // which working-tree paths were requested.
-      expect((await fs.stat(path.join(outcome.path, ".git"))).isDirectory()).toBe(
-        true,
-      );
+      expect(
+        (await fs.stat(path.join(outcome.path, ".git"))).isDirectory(),
+      ).toBe(true);
     } finally {
       await outcome.remove();
     }
@@ -120,9 +135,9 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     try {
-      expect((await fs.stat(path.join(outcome.path, ".git"))).isDirectory()).toBe(
-        true,
-      );
+      expect(
+        (await fs.stat(path.join(outcome.path, ".git"))).isDirectory(),
+      ).toBe(true);
       await expect(
         fs.stat(path.join(outcome.path, "a.txt")),
       ).rejects.toMatchObject({ code: "ENOENT" });
@@ -225,7 +240,9 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
   // than assumed.
   it("exposes a write made in place, through a descriptor opened before the snapshot, through the link", async () => {
     await initRepo(root);
-    await fs.writeFile(path.join(root, "a.txt"), "AAAAA-----\n", { mode: 0o600 });
+    await fs.writeFile(path.join(root, "a.txt"), "AAAAA-----\n", {
+      mode: 0o600,
+    });
     const handle = await fs.open(path.join(root, "a.txt"), "r+");
     try {
       const outcome = await createWorkspaceSnapshot(
@@ -238,9 +255,9 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
         // Not a rename, not a new open by name: the same descriptor opened
         // before the snapshot writes into the file already linked in.
         await handle.write(Buffer.from("BBBBB"), 0, 5, 0);
-        expect(await fs.readFile(path.join(outcome.path, "a.txt"), "utf8")).toBe(
-          "BBBBB-----\n",
-        );
+        expect(
+          await fs.readFile(path.join(outcome.path, "a.txt"), "utf8"),
+        ).toBe("BBBBB-----\n");
       } finally {
         await outcome.remove();
       }
@@ -269,9 +286,13 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     try {
-      await fs.writeFile(path.join(outcome.path, "a.txt"), "SENTINEL-MUTATION\n", {
-        mode: 0o600,
-      });
+      await fs.writeFile(
+        path.join(outcome.path, "a.txt"),
+        "SENTINEL-MUTATION\n",
+        {
+          mode: 0o600,
+        },
+      );
       expect(await fs.readFile(path.join(root, "a.txt"), "utf8")).toBe(
         "SENTINEL-MUTATION\n",
       );
@@ -328,16 +349,24 @@ describe("workspace snapshot bounded path mode (N02c)", () => {
   it("still reports a tracked file inside an otherwise-ignored directory, and keeps an untracked file invisible", async () => {
     await initRepo(root);
     await fs.mkdir(path.join(root, "build"), { mode: 0o700 });
-    await fs.writeFile(path.join(root, "build", "kept.txt"), "tracked-anyway\n", {
+    await fs.writeFile(
+      path.join(root, "build", "kept.txt"),
+      "tracked-anyway\n",
+      {
+        mode: 0o600,
+      },
+    );
+    await fs.writeFile(path.join(root, ".gitignore"), "build/\n", {
       mode: 0o600,
     });
-    await fs.writeFile(path.join(root, ".gitignore"), "build/\n", { mode: 0o600 });
     git(root, "add", "-A", "-f", "build/kept.txt", ".gitignore");
     git(root, "commit", "-q", "-m", "init");
     await fs.writeFile(path.join(root, "build", "kept.txt"), "changed\n", {
       mode: 0o600,
     });
-    await fs.writeFile(path.join(root, "untracked.txt"), "new\n", { mode: 0o600 });
+    await fs.writeFile(path.join(root, "untracked.txt"), "new\n", {
+      mode: 0o600,
+    });
 
     const listing = spawnSync("git", ["-C", root, "ls-files"], {
       encoding: "utf8",

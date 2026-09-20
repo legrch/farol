@@ -231,7 +231,11 @@ describe("Q-08 activation obligations", () => {
     const invalidTasks = {
       "missing task list": [{ schema: 1, revision: 1 }, "MALFORMED"],
       "task list that is an object": [
-        { schema: 1, revision: 1, tasks: { a: task({ lifecycle: "running" }) } },
+        {
+          schema: 1,
+          revision: 1,
+          tasks: { a: task({ lifecycle: "running" }) },
+        },
         "MALFORMED",
       ],
       "top-level array": [[task({ lifecycle: "running" })], "MALFORMED"],
