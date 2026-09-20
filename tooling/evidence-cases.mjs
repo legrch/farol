@@ -136,6 +136,7 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "fault-scenarios-remain-hidden",
   "quit-terminates-exact-owned-processes",
   "ux34-settings-widths-readable",
+  "ux34-settings-setup-details-bounded",
   "ux34-sidebar-toggle-roundtrip",
   "ux34-sidebar-setup-continue-double-click",
   "ux34-sign-in-window-owned",
