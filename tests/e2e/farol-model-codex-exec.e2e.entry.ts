@@ -3,4 +3,7 @@
 // module is exactly the three production files under test, nothing else.
 export { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runtime-state";
 export { FarolModelEndpoint } from "../../src/apps/desktop/farol-model-endpoint";
-export { applyFarolModelConfigBlock } from "../../src/apps/desktop/farol-model-config-block";
+export {
+  applyFarolModelConfigBlock,
+  applyFarolModelProviderSelection,
+} from "../../src/apps/desktop/farol-model-config-block";

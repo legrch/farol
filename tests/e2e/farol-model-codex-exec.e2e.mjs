@@ -47,16 +47,16 @@ const {
   FarolModelRuntimeState,
   FarolModelEndpoint,
   applyFarolModelConfigBlock,
+  applyFarolModelProviderSelection,
 } = await import(bundleOutput);
 
 const spec = {
   providerName: "farol",
-  profileName: "farol",
   displayName: "Farol Model",
   baseUrl: "",
-  envKeyName: "FAROL_MODEL_TOKEN",
   model: "farol-model",
   wireApi: "responses",
+  delivery: { mode: "env-key", envKeyName: "FAROL_MODEL_TOKEN" },
 };
 
 const turnHandler = async (request) => {
@@ -233,7 +233,7 @@ async function main() {
     const environment = {
       ...process.env,
       CODEX_HOME: codexHome,
-      [appliedSpec.envKeyName]: token,
+      [appliedSpec.delivery.envKeyName]: token,
     };
 
     const beforeEvidence = endpoint.evidence();
@@ -272,23 +272,44 @@ async function main() {
       JSON.stringify(afterEvidence),
     );
 
-    // Documented schema gap: the design's "one profile that selects it"
-    // means a `[profiles.<name>]` table inside the managed config.toml
-    // block, selected with `--profile`. codex-cli 0.153.4 rejects exactly
-    // that combination. This assertion pins the exact host-reported reason
-    // rather than leaving it as an unexplained failure.
-    const profileAttempt = await runCodexExec(codexBin, environment, [
-      "--profile",
-      appliedSpec.profileName,
-    ]);
-    assert.notEqual(profileAttempt.code, 0);
-    assert.match(
-      profileAttempt.stderr,
-      /cannot be used while .* contains legacy .*\[profiles\./u,
+    // N04 addendum: the managed block never writes a `[profiles.<name>]`
+    // table (codex-cli 0.153.4 treats one as legacy and refuses --profile
+    // against it). Selecting the provider is instead a second, separately
+    // consented top-level `model_provider = …` line. Applying it here lets
+    // `codex exec` pick Farol as the default with no per-call `-c`
+    // overrides at all.
+    const configAfterBlock = await fs.readFile(configPath, "utf8");
+    assert.ok(
+      !configAfterBlock.includes("[profiles."),
+      "the managed block must never write a [profiles.<name>] table",
+    );
+    const selectionResult = await applyFarolModelProviderSelection(
+      configPath,
+      appliedSpec.providerName,
+    );
+    assert.equal(selectionResult.status, "applied");
+    const configAfterSelection = await fs.readFile(configPath, "utf8");
+    console.log("--- config.toml with provider selection ---");
+    console.log(configAfterSelection);
+
+    const defaultRun = await runCodexExec(codexBin, environment, []);
+    console.log("--- codex exec (default provider) stdout ---");
+    console.log(defaultRun.stdout);
+    if (defaultRun.stderr) {
+      console.log("--- codex exec (default provider) stderr ---");
+      console.log(defaultRun.stderr);
+    }
+    assert.equal(
+      defaultRun.code,
+      0,
+      `codex exec with the consented default provider must exit 0, exit=${defaultRun.code}`,
+    );
+    assert.ok(
+      defaultRun.stdout.includes("farol model e2e reply"),
+      "codex must print the model's reply using the consented default provider alone",
     );
     console.log(
-      "CONFIRMED_SCHEMA_GAP: --profile with an in-file [profiles.<name>] table is rejected:",
-      profileAttempt.stderr.trim(),
+      "CONFIRMED_SELECTION: a separately consented top-level model_provider line is enough, no per-call -c override needed",
     );
 
     await endpoint.stop();
