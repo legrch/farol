@@ -263,6 +263,64 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     expect(prepared).toEqual([]);
   });
 
+  // S35-H1R: the journal has TWO durable writes under the same wrapper —
+  // `prepare` (`CHATGPT_DISPATCH_PREPARED`) and `markDispatchIntent`
+  // (`CHATGPT_DELIVERY_PENDING`). Both are obligations a promotion's drain
+  // check refuses on, so both must be fenced; only the first one was
+  // covered here. The second write happens later in the same task, with
+  // the window between its entry check and its write just as open.
+  it("S35-H1R a dispatch-intent write under a stolen lease refuses with CHATGPT_TASK_PROMOTION_PENDING and never calls markDispatchIntent", async () => {
+    const root = await userData();
+    const dispatched: string[] = [];
+    const journal = {
+      markDispatchIntent: async (operationId: string) => {
+        dispatched.push(operationId);
+      },
+    };
+    const guard = racingLeaseGuard(root, () => stealLease(root));
+    const registry = new LiveTaskRegistry(5, guard);
+
+    // `journalUnderPromotionLease`, verbatim, exactly as the `prepare` case
+    // above replicates it.
+    const journalUnderPromotionLease = async (
+      work: () => Promise<void>,
+    ): Promise<void> => {
+      const outcome = await registry.withPromotionLease(async (fence) => {
+        await fence();
+        return work();
+      });
+      if (!outcome.ok) throw new Error("CHATGPT_TASK_PROMOTION_PENDING");
+      return outcome.value;
+    };
+
+    await expect(
+      journalUnderPromotionLease(() =>
+        journal.markDispatchIntent("operation-b"),
+      ),
+    ).rejects.toThrow("CHATGPT_TASK_PROMOTION_PENDING");
+    expect(dispatched).toEqual([]);
+  });
+
+  it("S35-H1R control: the same dispatch-intent write lands when nobody steals the lease", async () => {
+    const root = await userData();
+    const dispatched: string[] = [];
+    const journal = {
+      markDispatchIntent: async (operationId: string) => {
+        dispatched.push(operationId);
+      },
+    };
+    const guard = racingLeaseGuard(root, null);
+    const registry = new LiveTaskRegistry(5, guard);
+
+    const outcome = await registry.withPromotionLease(async (fence) => {
+      await fence();
+      return journal.markDispatchIntent("operation-b");
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(dispatched).toEqual(["operation-b"]);
+  });
+
   it("S35-H1-1 control: the same journal write lands when nobody steals the lease", async () => {
     const root = await userData();
     const prepared: string[] = [];
