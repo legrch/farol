@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertReportIdentity,
   buildReportIdentity,
+  identityFromRunRecords,
   SUPPORTED_NODE_VERSIONS,
 } from "../e2e/farol-model-report-identity.mjs";
 
@@ -277,5 +278,85 @@ describe("real-host report identity", () => {
         assertReportIdentity(reportOf({ nodeVersion })),
       ).not.toThrow();
     }
+  });
+});
+
+// S35-TA-14. The journey's OWN construction, not the validator called
+// directly. `writeReport` built the identity inline and filtered the
+// host-less list against the runs while grouping, so a phase recorded
+// host-less that also ran a binary was normalised into a plain binary claim
+// — `PHASE_HOST_AMBIGUOUS` could not fire from the real journey however
+// contradictory its records were. A test that calls `assertReportIdentity`
+// with a hand-built identity never sees that, because the normalisation
+// happened before the validator was reached.
+describe("identity built from the journey's own run records", () => {
+  const LOADER = Object.freeze({
+    kind: "source-level",
+    bundlePath: "/tmp/bundle/bundle.mjs",
+  });
+  const SHIM = "/Users/ac/.nvm/versions/node/v22.19.0/bin/codex";
+  const DISCOVERED = "/Applications/ChatGPT.app/Contents/Resources/codex";
+
+  function records(overrides = {}) {
+    return {
+      repositoryRoot: path.resolve(import.meta.dirname, "../.."),
+      loader: LOADER,
+      nodeVersion: SUPPORTED_NODE_VERSIONS[0],
+      hostVersions: new Map([
+        [SHIM, "codex-cli 0.153.4"],
+        [DISCOVERED, "codex-cli 0.155.0-alpha.9.2"],
+      ]),
+      hostRuns: [
+        { phase: "env-key-overrides", binary: SHIM },
+        { phase: "app-tool-roundtrip", binary: DISCOVERED },
+      ],
+      hostlessPhases: ["app-host-discovery"],
+      phaseIds: [
+        "env-key-overrides",
+        "app-host-discovery",
+        "app-tool-roundtrip",
+      ],
+      ...overrides,
+    };
+  }
+
+  it("S35-TA-14 the real 0f850a7f record shape builds and validates", () => {
+    const identity = identityFromRunRecords(records());
+    expect(identity.hosts.map((h) => h.binary)).toEqual([SHIM, DISCOVERED]);
+    expect(identity.hosts.map((h) => h.version)).toEqual([
+      "codex-cli 0.153.4",
+      "codex-cli 0.155.0-alpha.9.2",
+    ]);
+    expect(identity.hostlessPhases).toEqual(["app-host-discovery"]);
+  });
+
+  it("S35-TA-14 refuses a phase recorded host-less that also ran a binary, instead of normalising it away", () => {
+    // The records contradict themselves. The old inline filter silently
+    // dropped the host-less entry and reported a clean binary claim.
+    expect(() =>
+      identityFromRunRecords(
+        records({
+          hostRuns: [
+            { phase: "env-key-overrides", binary: SHIM },
+            { phase: "app-host-discovery", binary: DISCOVERED },
+          ],
+        }),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS");
+  });
+
+  it("S35-TA-14 refuses a phase that ran nothing and was never recorded host-less", () => {
+    expect(() =>
+      identityFromRunRecords(records({ hostlessPhases: [] })),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
+  });
+
+  it("S35-TA-14 a binary with no recorded version is refused rather than given the wrong one", () => {
+    // Before per-binary versions existed this fell back to the located
+    // binary's string, which is how an alpha's phases were reported under a
+    // stable release's version.
+    expect(() =>
+      identityFromRunRecords(records({ hostVersions: new Map() })),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING");
   });
 });

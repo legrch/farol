@@ -73,7 +73,7 @@ import { promisify } from "node:util";
 import esbuild from "esbuild";
 import {
   assertReportIdentity,
-  buildReportIdentity,
+  identityFromRunRecords,
   SUPPORTED_NODE_VERSIONS,
 } from "./farol-model-report-identity.mjs";
 
@@ -476,25 +476,19 @@ async function writeReport() {
   // and the full phase list known — discovery runs inside a phase. `hosts`
   // is grouped from what actually executed, so attribution is recorded
   // rather than assumed.
-  const byBinary = new Map();
-  for (const run of hostRuns) {
-    const phases = byBinary.get(run.binary) ?? [];
-    if (!phases.includes(run.phase)) phases.push(run.phase);
-    byBinary.set(run.binary, phases);
-  }
-  if (byBinary.size > 0) {
-    report.identity = buildReportIdentity({
+  // S35-TA-14: the construction lives in `identityFromRunRecords`, so the
+  // journey's own records are validated by the same rule a report is. It
+  // used to be inline here, and it FILTERED the host-less list against the
+  // runs — normalising a self-contradictory record set into a clean one, so
+  // the ambiguity check could never fire from a real run.
+  if (hostRuns.length > 0) {
+    report.identity = identityFromRunRecords({
       repositoryRoot: path.resolve(here, "../.."),
       loader: { kind: "source-level", bundlePath: bundleOutput },
-      hostlessPhases: hostlessPhases.filter(
-        (phase) =>
-          !byBinary.has(phase) && !hostRuns.some((r) => r.phase === phase),
-      ),
-      hosts: [...byBinary].map(([binary, phases]) => ({
-        binary,
-        version: hostVersions.get(binary) ?? report.hostVersion,
-        phases,
-      })),
+      hostRuns,
+      hostlessPhases,
+      hostVersions,
+      phaseIds: report.phases.map((phase) => phase.id),
       nodeVersion: process.versions.node,
     });
     console.log(

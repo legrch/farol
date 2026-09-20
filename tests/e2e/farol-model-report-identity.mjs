@@ -37,12 +37,56 @@ export const SUPPORTED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
  * `hosts` is a LIST, because one journey runs more than one binary. Measured
  * on this machine: `which codex` finds a Node shim, while the product's own
  * discovery offers the signed ChatGPT.app binary, and the phases that test
- * discovery deliberately run the latter. Both report `codex-cli 0.153.4`, so
- * the version does not tell them apart. Each entry carries the phase ids it
+ * discovery deliberately run the latter. They are not even the same release
+ * — measured on 0f850a7f, the shim reported `codex-cli 0.153.4` and the
+ * discovered binary `codex-cli 0.155.0-alpha.9.2` — and before each was
+ * asked for its own version the report attributed the alpha's phases to the
+ * stable release's string. Each entry carries the phase ids it
  * answered, and `assertReportIdentity` refuses a report containing a phase
  * no entry claims — otherwise a reader can see which binaries were involved
  * without being able to attribute a single result to one.
  */
+/**
+ * The construction the journey itself performs: raw records in, a validated
+ * identity out.
+ *
+ * S35-TA-14: `writeReport` used to do this inline and, while grouping, it
+ * FILTERED the host-less list against the runs — so a phase recorded
+ * host-less that later ran a binary was quietly normalised into an ordinary
+ * binary claim, and `PHASE_HOST_AMBIGUOUS` could never fire from the real
+ * journey however wrong the records were. (The filter also compared a phase
+ * id against a map keyed by binary path, which matches nothing and was dead
+ * on its own terms.) The contradiction is exactly what the validator exists
+ * to catch, so nothing normalises it any more: the records are grouped as
+ * they are and the validator is told the truth about them.
+ */
+export function identityFromRunRecords(input) {
+  const { hostRuns, hostlessPhases, hostVersions, phaseIds, ...rest } = input;
+  const byBinary = new Map();
+  for (const run of hostRuns) {
+    const phases = byBinary.get(run.binary) ?? [];
+    if (!phases.includes(run.phase)) phases.push(run.phase);
+    byBinary.set(run.binary, phases);
+  }
+  const identity = buildReportIdentity({
+    ...rest,
+    hosts: [...byBinary].map(([binary, phases]) => {
+      // The journey asked each binary for its own `--version`; a binary it
+      // ran without recording one is a gap in the records, not a reason to
+      // borrow another binary's string. Borrowing is exactly how an alpha
+      // host's phases came to be reported under a stable release.
+      const version = hostVersions.get(binary);
+      if (typeof version !== "string" || version.length === 0) {
+        throw new Error("FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING");
+      }
+      return { binary, version, phases };
+    }),
+    hostlessPhases: [...hostlessPhases],
+  });
+  assertPhaseAttribution(identity, phaseIds);
+  return identity;
+}
+
 export function buildReportIdentity(options) {
   const { repositoryRoot, loader, hosts, hostlessPhases, nodeVersion } =
     options;
@@ -134,8 +178,20 @@ export function assertReportIdentity(report) {
     throw new Error("FAROL_MODEL_E2E_REPORT_NODE_UNSUPPORTED");
   }
   // Every phase the report contains must be attributable to exactly one
-  // recorded binary. A phase no entry claims is the failure this exists for:
-  // the report would name binaries without saying which produced a result.
+  // recorded binary, or recorded as having run none.
+  assertPhaseAttribution(
+    identity,
+    (report.phases ?? []).map((phase) => phase.id),
+  );
+  return identity;
+}
+
+/**
+ * Every phase is claimed by exactly one binary, or recorded host-less, and
+ * never both. Shared by the validator and by `identityFromRunRecords`, so
+ * the journey's own construction is held to the same rule a report is.
+ */
+function assertPhaseAttribution(identity, phaseIds) {
   const claimed = new Map();
   for (const host of identity.hosts) {
     for (const phase of host.phases) {
@@ -153,10 +209,9 @@ export function assertReportIdentity(report) {
     }
   }
   const hostless = new Set(identity.hostlessPhases);
-  for (const phase of report.phases ?? []) {
-    if (!claimed.has(phase.id) && !hostless.has(phase.id)) {
+  for (const phase of phaseIds) {
+    if (!claimed.has(phase) && !hostless.has(phase)) {
       throw new Error("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
     }
   }
-  return identity;
 }
