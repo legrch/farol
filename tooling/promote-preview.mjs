@@ -309,6 +309,21 @@ async function promote(arguments_, dependencies, stdout) {
     // Fencing: the lease this run holds must still be the lease on disk at
     // the moment the durable step begins; a holder that proceeded without
     // that check would be one of two.
+    //
+    // S35-H1R: this is the last place the JS side can fence, and that is by
+    // design. `runPromotionApply` drives `promotion-apply.py`, which copies
+    // the bundle, digests it, publishes the receipt and only then prints its
+    // MAGIC success line — one durable helper operation with no observable
+    // point in between, so there is nothing here to check again halfway
+    // through. Adding a mid-placement handshake would mean a second
+    // protocol round trip the helper would have to trust, which is a larger
+    // surface than the residual it closes. A same-UID process replacing the
+    // lease file while the helper runs is outside this product's local
+    // integrity model anyway (see the note in `promotion-lease.ts`): a
+    // process with that reach can rewrite the app's private state directly.
+    // What still protects the placement itself is the helper: a destination
+    // that already exists is refused (EXIT_EXISTS) without being touched, so
+    // a second placement cannot overwrite the first one's bytes or receipt.
     if (!(await verifyPromotionLease(lease))) {
       throw new Error("PROMOTION_LEASE_LOST");
     }

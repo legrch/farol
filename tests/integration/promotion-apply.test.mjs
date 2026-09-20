@@ -137,6 +137,53 @@ describe("descriptor-bound promotion apply", () => {
     ).resolves.toBe("keep");
   });
 
+  // S35-H1R. Placement is one durable helper operation: the copy, the
+  // digest and the receipt all happen inside `promotion-apply.py` before it
+  // prints its success line, so `promote-preview.mjs` cannot fence between
+  // them (see the note at its `verifyPromotionLease` call). What keeps a
+  // second placement from landing on top of the first is the helper itself,
+  // and that is what this proves against real bytes on disk.
+  it("refuses a second placement into the destination a first placement made, leaving its bytes and receipt intact", async () => {
+    const { root, source, home, applications } = await fixture();
+    const destination = path.join(applications, "Farol Next Preview.app");
+    const receipt = `${destination}.receipt.json`;
+    const firstReceipt = '{"operation":"applied","generation":"A"}\n';
+
+    await runPromotionApply({
+      home,
+      source,
+      artifactSha256: await treeDigest(source),
+      receiptText: firstReceipt,
+    });
+    await expect(
+      fs.readFile(path.join(destination, "Contents", "payload"), "utf8"),
+    ).resolves.toBe("exact\n");
+    await expect(fs.readFile(receipt, "utf8")).resolves.toBe(firstReceipt);
+
+    // A second, different generation, correctly digested: still refused,
+    // because the destination is already there.
+    const second = path.join(root, "second", "Farol Next Preview.app");
+    await fs.mkdir(path.join(second, "Contents"), { recursive: true });
+    await fs.writeFile(path.join(second, "Contents", "payload"), "second\n", {
+      mode: 0o600,
+    });
+
+    await expect(
+      runPromotionApply({
+        home,
+        source: second,
+        artifactSha256: await treeDigest(second),
+        receiptText: '{"operation":"applied","generation":"B"}\n',
+      }),
+    ).rejects.toThrow("PROMOTION_APPLY_REFUSED:72");
+
+    // The first placement is exactly as it was: same bytes, same receipt.
+    await expect(
+      fs.readFile(path.join(destination, "Contents", "payload"), "utf8"),
+    ).resolves.toBe("exact\n");
+    await expect(fs.readFile(receipt, "utf8")).resolves.toBe(firstReceipt);
+  });
+
   it("removes its destination after a post-copy digest refusal", async () => {
     const { source, home, applications } = await fixture();
     const destination = path.join(applications, "Farol Next Preview.app");
