@@ -119,6 +119,29 @@ const chatGptSignInBlockedSchema = z
   ])
   .nullable();
 
+// Spelled out here rather than imported for the same reason the block
+// schema above is: the renderer validates what it was handed, by value.
+// Content-free by contract — a fixed reason token, the classified page
+// state, a duration and which trigger started the read.
+const chatGptSignInOutcomeSchema = z
+  .strictObject({
+    reason: z.enum([
+      "answered",
+      "timeout",
+      "no-window",
+      "load-failed",
+      "url-unsupported",
+      "probe-unrecognized",
+      "probe-threw",
+    ]),
+    state: z
+      .enum(["authenticated", "signed_out", "unreachable", "unsupported"])
+      .nullable(),
+    elapsedMs: z.number().int().nonnegative(),
+    readStartedBy: z.enum(["return", "closing"]),
+  })
+  .nullable();
+
 function chatGptSignInBlockedMessage(
   diagnostic: NonNullable<z.infer<typeof chatGptSignInBlockedSchema>>,
 ): string {
@@ -163,6 +186,7 @@ const bootstrapSchema = z.strictObject({
   liveProvider: z.literal(false),
   windowState: WindowStateSchema,
   chatgptSignInBlocked: chatGptSignInBlockedSchema,
+  chatgptSignInOutcome: chatGptSignInOutcomeSchema,
 });
 
 const controlSuccessSchema = z.strictObject({ ok: z.literal(true) });

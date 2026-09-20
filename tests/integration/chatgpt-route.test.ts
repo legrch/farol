@@ -28,6 +28,7 @@ import {
   prepareTaskScript,
   resolveChatGptWindowPresentation,
   type ChatGptRouteSurfaceFactory,
+  type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInBlockedDiagnostic,
 } from "../../src/apps/desktop/chatgpt-route";
 
@@ -1257,6 +1258,7 @@ describe("ChatGPT sign-in return", () => {
     try {
       const { surface, contents, close, executeJavaScript } = signInSurface();
       const outcomes: string[] = [];
+      const diagnostics: ChatGptSignInOutcomeDiagnostic[] = [];
       const candidate = new ChatGptRoute({
         homeUrl: "https://chatgpt.com/",
         initialUrl: "https://chatgpt.com/",
@@ -1264,7 +1266,10 @@ describe("ChatGPT sign-in return", () => {
         parent: () => null,
         surfaceFactory: (() =>
           surface) as unknown as ChatGptRouteSurfaceFactory,
-        onSignInOutcome: (status) => outcomes.push(status),
+        onSignInOutcome: (status, diagnostic) => {
+          outcomes.push(status);
+          diagnostics.push(diagnostic);
+        },
       });
       await candidate.openForSignIn("Sign in to ChatGPT — Farol");
       expect(executeJavaScript).not.toHaveBeenCalled();
@@ -1285,6 +1290,16 @@ describe("ChatGPT sign-in return", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       expect(close).toHaveBeenCalledTimes(1);
       expect(outcomes).toEqual(["unknown"]);
+      // S35-R7: the outcome alone cannot say why it is "unknown", and a
+      // recorded "unknown" writes nothing at all. The diagnostic names the
+      // bound that won and how long the read actually ran.
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        reason: "timeout",
+        state: null,
+        readStartedBy: "return",
+      });
+      expect(diagnostics[0]?.elapsedMs).toBeGreaterThanOrEqual(2_000);
     } finally {
       vi.useRealTimers();
     }
@@ -1295,15 +1310,17 @@ describe("ChatGPT sign-in return", () => {
       "authenticated",
       { composerVisible: true, signInVisible: false },
       "authenticated",
+      "authenticated",
     ],
     [
       "signed out",
       { composerVisible: false, signInVisible: true },
       "not_authenticated",
+      "signed_out",
     ],
   ] as const)(
     "reports the page's own answer (%s) for two Return clicks in a row once the read the first click started settles",
-    async (_label, page, expected) => {
+    async (_label, page, expected, observedState) => {
       vi.useFakeTimers();
       try {
         let resolveRead!: (value: unknown) => void;
@@ -1316,6 +1333,7 @@ describe("ChatGPT sign-in return", () => {
         );
         Object.assign(contents, { executeJavaScript });
         const outcomes: string[] = [];
+        const diagnostics: ChatGptSignInOutcomeDiagnostic[] = [];
         const candidate = new ChatGptRoute({
           homeUrl: "https://chatgpt.com/",
           initialUrl: "https://chatgpt.com/",
@@ -1323,7 +1341,10 @@ describe("ChatGPT sign-in return", () => {
           parent: () => null,
           surfaceFactory: (() =>
             surface) as unknown as ChatGptRouteSurfaceFactory,
-          onSignInOutcome: (status) => outcomes.push(status),
+          onSignInOutcome: (status, diagnostic) => {
+            outcomes.push(status);
+            diagnostics.push(diagnostic);
+          },
         });
         await candidate.openForSignIn("Sign in to ChatGPT — Farol");
         expect(executeJavaScript).not.toHaveBeenCalled();
@@ -1345,15 +1366,69 @@ describe("ChatGPT sign-in return", () => {
         expect(outcomes).toEqual([expected]);
         expect(executeJavaScript).toHaveBeenCalledTimes(1);
 
+        // S35-R7: an answered read says so, and carries the page state it
+        // classified — the evidence that separates this from a timeout.
+        expect(diagnostics).toHaveLength(1);
+        expect(diagnostics[0]).toMatchObject({
+          reason: "answered",
+          state: observedState,
+          readStartedBy: "return",
+        });
+        expect(diagnostics[0]?.elapsedMs).toBeGreaterThanOrEqual(0);
+        expect(diagnostics[0]?.elapsedMs).toBeLessThan(2_000);
+
         // The bound that raced the read expires later and changes nothing.
         await vi.advanceTimersByTimeAsync(2_000);
         expect(close).toHaveBeenCalledTimes(1);
         expect(outcomes).toEqual([expected]);
+        expect(diagnostics).toHaveLength(1);
       } finally {
         vi.useRealTimers();
       }
     },
   );
+
+  // S35-R7: the third way a sign-in attempt ends without a page read — no
+  // route window was ever opened, so the Return control had nothing to
+  // read and nothing to close. That is an explanation of its own, not an
+  // unexplained "unknown".
+  it("S35-R7 reports no-window when the sign-in window never opened, with no page read at all", async () => {
+    const { surface, executeJavaScript } = signInSurface();
+    const unopenable = {
+      ...surface,
+      loadURL: vi.fn(async () => {
+        throw new Error("ERR_CONNECTION_REFUSED");
+      }),
+    };
+    const outcomes: string[] = [];
+    const diagnostics: ChatGptSignInOutcomeDiagnostic[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() =>
+        unopenable) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status, diagnostic) => {
+        outcomes.push(status);
+        diagnostics.push(diagnostic);
+      },
+    });
+
+    const opened = await candidate.openForSignIn("Sign in to ChatGPT — Farol");
+
+    expect(opened).toEqual({ status: "unreachable" });
+    expect(outcomes).toEqual(["unknown"]);
+    expect(diagnostics).toEqual([
+      {
+        reason: "no-window",
+        state: null,
+        elapsedMs: 0,
+        readStartedBy: "return",
+      },
+    ]);
+    expect(executeJavaScript).not.toHaveBeenCalled();
+  });
 
   // Where the return signal may come from. The sentinel is a console
   // message, which any script on any page could print; only ChatGPT's own

@@ -133,6 +133,7 @@ import {
   type ChatGptWindowPresentation,
   type ChatGptRouteSurface,
   type ChatGptRouteSurfaceFactory,
+  type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInStatus,
 } from "./chatgpt-route";
 import {
@@ -419,6 +420,15 @@ let chatGptRoute: ChatGptRoute | null = null;
 // clean, so a stale block from a previous attempt is never shown as current
 // (UX34-07); the rule itself is unit-tested with the ledger.
 const chatGptSignInBlocked = new ChatGptSignInBlockLedger();
+// S35-R7: why the LAST sign-in outcome came out the way it did — the same
+// content-free contract as the block above (a fixed reason token, the page
+// state the read classified, how long it ran, which trigger started it;
+// never a URL, page text or error message). Kept only in memory and
+// cleared when a new sign-in window is opened, so a stale explanation is
+// never read as this attempt's. It explains an outcome; it never changes
+// one, and `recordChatGptSignInOutcome` still writes nothing for
+// "unknown".
+let chatGptSignInOutcome: ChatGptSignInOutcomeDiagnostic | null = null;
 let codexContextController: CodexContextController | null = null;
 // The connector's execution fence for summary-only phases, shared with the
 // MCP process through the launch root; it exists once the controller does.
@@ -742,6 +752,7 @@ function bootstrap() {
     liveProvider: false,
     windowState: currentWindowState(),
     chatgptSignInBlocked: chatGptSignInBlocked.current(),
+    chatgptSignInOutcome: chatGptSignInOutcome,
   };
 }
 
@@ -4380,6 +4391,7 @@ async function configureAdmittedProduct(
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
       chatGptSignInBlocked.beginAttempt();
+      chatGptSignInOutcome = null;
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         opened = await chatGptRoute.openForSignIn(SIGN_IN_WINDOW_TITLE);
@@ -7077,7 +7089,8 @@ async function main(): Promise<void> {
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
-    onSignInOutcome: (status) => {
+    onSignInOutcome: (status, diagnostic) => {
+      chatGptSignInOutcome = diagnostic;
       void recordChatGptSignInOutcome(status);
     },
     onSignInBlocked: (diagnostic) => {

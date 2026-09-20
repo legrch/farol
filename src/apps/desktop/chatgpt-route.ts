@@ -93,6 +93,36 @@ const hardenedRouteSessions = new WeakSet<Session>();
 export type ChatGptSignInStatus =
   "authenticated" | "not_authenticated" | "unknown";
 
+// Why the sign-in outcome came out the way it did, so a "unknown" is not
+// simply unexplained (S35-R7). Content-free by the same rule as
+// `ChatGptSignInBlockedDiagnostic`: a fixed reason token, the page state
+// the read classified (or null when there was no reading), how long the
+// read ran, and which trigger started it — never a URL, never page text,
+// never an error message.
+//
+// - `answered` — the page read returned and was classified.
+// - `timeout` — the read did not return inside
+//   `SIGN_IN_CLOSE_OBSERVATION_MS`; the outcome is "unknown" by the bound.
+// - `no-window` — there was no live route window to read at all.
+// - `load-failed` — the route's own load had already failed.
+// - `url-unsupported` — the page was not on an allowed ChatGPT URL.
+// - `probe-unrecognized` — the probe answered in a shape this build does
+//   not recognise.
+// - `probe-threw` — the probe itself failed to run.
+export type ChatGptSignInOutcomeDiagnostic = Readonly<{
+  reason:
+    | "answered"
+    | "timeout"
+    | "no-window"
+    | "load-failed"
+    | "url-unsupported"
+    | "probe-unrecognized"
+    | "probe-threw";
+  state: ChatGptPageObservation["state"] | null;
+  elapsedMs: number;
+  readStartedBy: "return" | "closing";
+}>;
+
 // Content-free: a host name, a permission name, or a numeric load-failure
 // code — never a URL path, a query string, or anything the page rendered.
 export type ChatGptSignInBlockedDiagnostic =
@@ -133,18 +163,64 @@ function hostOf(url: string): string {
 // outcome is reported as unknown instead of not at all.
 const SIGN_IN_CLOSE_OBSERVATION_MS = 2_000;
 
+// What one sign-in page read produced: the observation when it answered in
+// time, null when the bound won, and — either way — the content-free
+// diagnostic that says which of the two happened and why.
+type SignInRead = Readonly<{
+  observation: ChatGptPageObservation;
+  reason: Exclude<ChatGptSignInOutcomeDiagnostic["reason"], "timeout">;
+}>;
+
+type SignInObservation = Readonly<{
+  observation: ChatGptPageObservation | null;
+  diagnostic: ChatGptSignInOutcomeDiagnostic;
+}>;
+
 // A page read taken around closing the sign-in window, bounded so that
 // neither the close nor the reported outcome can wait on it forever: after
-// the bound it yields null, which is reported as "unknown".
+// the bound it yields null, which is reported as "unknown". The bound is
+// deliberately unchanged; what is new is that the outcome now carries how
+// long the read ran and which side of the race won, so an "unknown" under
+// load can be told from an "unknown" the page itself caused.
 function boundedSignInObservation(
-  read: Promise<ChatGptPageObservation>,
-): Promise<ChatGptPageObservation | null> {
+  read: Promise<SignInRead>,
+  readStartedBy: ChatGptSignInOutcomeDiagnostic["readStartedBy"],
+): Promise<SignInObservation> {
+  const startedAt = Date.now();
   return Promise.race([
-    read,
-    new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), SIGN_IN_CLOSE_OBSERVATION_MS),
+    read.then(({ observation, reason }) => ({
+      observation,
+      diagnostic: {
+        reason,
+        state: observation.state,
+        elapsedMs: Date.now() - startedAt,
+        readStartedBy,
+      },
+    })),
+    new Promise<SignInObservation>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            observation: null,
+            diagnostic: {
+              reason: "timeout",
+              state: null,
+              elapsedMs: Date.now() - startedAt,
+              readStartedBy,
+            },
+          }),
+        SIGN_IN_CLOSE_OBSERVATION_MS,
+      ),
     ),
   ]);
+}
+
+// The outcome reported when no page read was taken at all: the window was
+// never opened, was already gone, or was destroyed without a closing turn.
+function unreadSignInOutcome(
+  readStartedBy: ChatGptSignInOutcomeDiagnostic["readStartedBy"],
+): ChatGptSignInOutcomeDiagnostic {
+  return { reason: "no-window", state: null, elapsedMs: 0, readStartedBy };
 }
 const SIGN_IN_RETURN_SENTINEL = "farol-sign-in-return-to-farol";
 
@@ -438,7 +514,10 @@ export type ChatGptRouteOptions = Readonly<{
   // (native close, the in-page "Return to Farol" control, or programmatic
   // shutdown) — never while it stays open, so a caller cannot race the
   // owner's own manual "Check connection".
-  onSignInOutcome?: (status: ChatGptSignInStatus) => void;
+  onSignInOutcome?: (
+    status: ChatGptSignInStatus,
+    diagnostic: ChatGptSignInOutcomeDiagnostic,
+  ) => void;
   // Content-free diagnostics for the sign-in surface only (see
   // `ChatGptSignInBlockedDiagnostic`): never a body, a query string, or a
   // full URL.
@@ -597,8 +676,7 @@ export class ChatGptRoute {
   private observedTaskRunning: boolean | null = null;
   private signInMode = false;
   private signInReported = false;
-  private pendingSignInObservation: Promise<ChatGptPageObservation | null> | null =
-    null;
+  private pendingSignInObservation: Promise<SignInObservation> | null = null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.entryUrl = options.initialUrl;
@@ -650,7 +728,11 @@ export class ChatGptRoute {
     this.signInReported = false;
     activeSignInRoute = this;
     const result = await this.open();
-    if (result.status !== "opened") this.reportSignInOutcome("unknown");
+    if (result.status !== "opened") {
+      // No window opened, so no page was ever read: the owner's own action
+      // is what produced this outcome, and there is nothing to time.
+      this.reportSignInOutcome("unknown", unreadSignInOutcome("return"));
+    }
     return result;
   }
 
@@ -667,10 +749,13 @@ export class ChatGptRoute {
     }
   }
 
-  private reportSignInOutcome(status: ChatGptSignInStatus): void {
+  private reportSignInOutcome(
+    status: ChatGptSignInStatus,
+    diagnostic: ChatGptSignInOutcomeDiagnostic,
+  ): void {
     if (this.signInReported) return;
     this.signInReported = true;
-    this.options.onSignInOutcome?.(status);
+    this.options.onSignInOutcome?.(status, diagnostic);
   }
 
   private reportSignInBlocked(
@@ -682,6 +767,10 @@ export class ChatGptRoute {
 
   private requestSignInReturn(): void {
     const candidate = this.routeWindow;
+    // Defensive only: the console-message handler that calls this has
+    // already proven the route owns a live window (`ownsRouteContents`).
+    // A sign-in attempt that never got a window reports its own outcome in
+    // `openForSignIn`, with the `no-window` reason.
     if (!candidate || candidate.isDestroyed()) return;
     const close = () => {
       if (candidate.isDestroyed()) return;
@@ -696,7 +785,10 @@ export class ChatGptRoute {
     // open and the window closes afterwards. A read begun inside the close
     // itself races the teardown and usually ends as "unknown".
     if (this.pendingSignInObservation === null) {
-      this.pendingSignInObservation = boundedSignInObservation(this.observe());
+      this.pendingSignInObservation = boundedSignInObservation(
+        this.observeForSignIn(),
+        "return",
+      );
     }
     // A repeated Return joins the read the first one started instead of
     // closing at once: closing now would tear the page down under that read
@@ -744,7 +836,8 @@ export class ChatGptRoute {
       // the only way to report a truthful status rather than "unknown".
       if (this.signInMode && this.pendingSignInObservation === null) {
         this.pendingSignInObservation = boundedSignInObservation(
-          this.observe(),
+          this.observeForSignIn(),
+          "closing",
         );
       }
     });
@@ -758,19 +851,26 @@ export class ChatGptRoute {
         if (activeSignInRoute === this) activeSignInRoute = null;
         void (async () => {
           let status: ChatGptSignInStatus = "unknown";
+          // No read at all (a `destroy()` that skipped the closing turn)
+          // is itself the explanation, and never a claim about the page.
+          let diagnostic = unreadSignInOutcome("closing");
           try {
             // Every read taken around closing is bounded (see
-            // boundedSignInObservation); null means it did not answer.
-            const observation = pending ? await pending : null;
-            if (observation?.state === "authenticated")
-              status = "authenticated";
-            else if (observation?.state === "signed_out")
-              status = "not_authenticated";
+            // boundedSignInObservation); a null observation means it did
+            // not answer, and its diagnostic says which bound won.
+            if (pending) {
+              const read = await pending;
+              diagnostic = read.diagnostic;
+              if (read.observation?.state === "authenticated")
+                status = "authenticated";
+              else if (read.observation?.state === "signed_out")
+                status = "not_authenticated";
+            }
           } catch {
             // Stays "unknown" — a page that could not be read is not the
             // same claim as a page that was read and found signed out.
           }
-          this.reportSignInOutcome(status);
+          this.reportSignInOutcome(status, diagnostic);
         })();
       }
       if (!this.disposing) {
@@ -873,29 +973,53 @@ export class ChatGptRoute {
   }
 
   async observe(): Promise<ChatGptPageObservation> {
+    return (await this.observeForSignIn()).observation;
+  }
+
+  /**
+   * `observe()` plus the reason it reached its answer. The observation is
+   * byte for byte what `observe()` returns — several distinct causes
+   * legitimately classify the same way — so this adds an explanation
+   * without changing a single verdict.
+   */
+  private async observeForSignIn(): Promise<SignInRead> {
+    const unreachable = classifyChatGptPage({
+      load: "failed",
+      composerVisible: false,
+      signInVisible: false,
+    });
+    const unrecognized: ChatGptPageObservation = {
+      state: "unsupported",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    };
     const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load === "failed") {
-      return classifyChatGptPage({
-        load: "failed",
-        composerVisible: false,
-        signInVisible: false,
-      });
+    if (!candidate || candidate.isDestroyed()) {
+      return { observation: unreachable, reason: "no-window" };
+    }
+    if (this.load === "failed") {
+      return { observation: unreachable, reason: "load-failed" };
     }
     const currentUrl = candidate.webContents.getURL();
     if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
-      return { state: "unsupported", code: "CHATGPT_UI_UNRECOGNIZED" };
+      return { observation: unrecognized, reason: "url-unsupported" };
     }
+    let answer: unknown;
     try {
-      const parsed = probeSchema.safeParse(
-        await candidate.webContents.executeJavaScript(readinessProbe, true),
+      answer = await candidate.webContents.executeJavaScript(
+        readinessProbe,
+        true,
       );
-      if (!parsed.success) {
-        return { state: "unsupported", code: "CHATGPT_UI_UNRECOGNIZED" };
-      }
-      return classifyChatGptPage({ load: "loaded", ...parsed.data });
     } catch {
-      return { state: "unsupported", code: "CHATGPT_UI_UNRECOGNIZED" };
+      return { observation: unrecognized, reason: "probe-threw" };
     }
+    const parsed = probeSchema.safeParse(answer);
+    if (!parsed.success) {
+      return { observation: unrecognized, reason: "probe-unrecognized" };
+    }
+    return {
+      observation: classifyChatGptPage({ load: "loaded", ...parsed.data }),
+      reason: "answered",
+    };
   }
 
   async runReadonlyTask(

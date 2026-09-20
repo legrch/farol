@@ -8271,20 +8271,39 @@ async function waitForSignInReturnOutcome(
   { readOnClose = true } = {},
 ) {
   await waitForWindowCount(instance.application, 1);
-  const recorded = await waitForPageState(instance.window, async () => {
+  const observed = await waitForPageState(instance.window, async () => {
     const value = await window.farolNext.bootstrap();
     return value.configuration.status === "ready";
   }).then(() =>
     instance.window.evaluate(async () => {
       const value = await window.farolNext.bootstrap();
-      return value.configuration.settings.setup.chatgpt;
+      return {
+        recorded: value.configuration.settings.setup.chatgpt,
+        outcome: value.chatgptSignInOutcome ?? null,
+      };
     }),
   );
+  const recorded = observed.recorded;
+  // S35-R7: an outcome recorded as "unknown" writes nothing, so the record
+  // alone cannot say whether the page read answered, timed out under load,
+  // or never had a window. The content-free diagnostic and this machine's
+  // load average travel with the receipt so a FAIL explains itself.
+  const outcome = observed.outcome;
+  const loadAverage = os.loadavg();
   process.stdout.write(
-    `UX34_RETURN_RECORDED:${JSON.stringify({ readOnClose, recorded })}\n`,
+    `UX34_RETURN_RECORDED:${JSON.stringify({
+      readOnClose,
+      recorded,
+      outcome,
+      loadAverage,
+    })}\n`,
   );
   if (readOnClose) {
-    assert.equal(recorded.reachable, "reachable", "Return read the page");
+    assert.equal(
+      recorded.reachable,
+      "reachable",
+      `Return read the page (outcome=${JSON.stringify(outcome)} loadavg=${JSON.stringify(loadAverage)})`,
+    );
     assert.equal(recorded.configured, false);
     assert.notEqual(recorded.needsAction, null);
   }
