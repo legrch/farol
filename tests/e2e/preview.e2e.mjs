@@ -8805,7 +8805,7 @@ const report = {
       displayInternal: normal.presentation.display.internal,
       displayPrimary: normal.presentation.display.primary,
       selection: normal.presentation.display.selection,
-      allowedPrimaryDisplay,
+      allowedPrimaryDisplay: allowPrimaryDisplay,
       displayCount: normal.presentation.displays.length,
       bounds: normal.presentation.bounds,
       workArea: normal.presentation.display.workArea,
