@@ -259,13 +259,20 @@ export const ApprovedProductWorkspaceSchema = z
       context.addIssue({ code: "custom", message: "duplicate exclusions" });
     }
     for (const excluded of workspace.excludedPaths) {
-      // S35-TA-4: strictly BELOW the root, and the root itself is not below
-      // itself. An exclusion equal to the root used to be exempt here, but it
-      // matches no `<root>/` prefix, so the descriptor built from it denied
-      // nothing: a workspace saying "exclude everything" would have read as
-      // "exclude nothing". The state is refused at the source rather than
-      // carried into a consumer that cannot express it.
-      if (!excluded.startsWith(prefix)) {
+      // S35-TA-4/TA-10: strictly BELOW the root, and the root itself is not
+      // below itself. An exclusion equal to the root used to be exempt here,
+      // but it matches no `<root>/` prefix, so the descriptor built from it
+      // denied nothing: a workspace saying "exclude everything" would have
+      // read as "exclude nothing". The state is refused at the source rather
+      // than carried into a consumer that cannot express it.
+      //
+      // The equality is tested SEPARATELY, before the prefix, because the
+      // prefix alone does not catch it at the filesystem root: there the
+      // prefix is "/" and `"/".startsWith("/")` is true, so `root: "/"` with
+      // an exclusion of "/" validated and reached `workspaceDeniedPaths` as
+      // the empty relative path. Every other root carries a trailing slash in
+      // its prefix and is caught by the prefix test alone.
+      if (excluded === workspace.root || !excluded.startsWith(prefix)) {
         context.addIssue({ code: "custom", message: "exclusion escapes root" });
       }
     }

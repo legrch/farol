@@ -210,6 +210,61 @@ describe("workspace denied paths", () => {
     ).not.toThrow();
   });
 
+  // S35-TA-10 (R4 P1). The refusal above was incomplete, and the filesystem
+  // root is where it leaked. For any other root the prefix carries a trailing
+  // slash, so `<root>` never starts with `<root>/` and the exclusion is
+  // refused. For `root: "/"` the prefix IS "/", so `"/".startsWith("/")` is
+  // true and the exclusion was accepted — the one case where excluding the
+  // approved root validated.
+  //
+  // What that would have meant downstream, stated so the refusal's purpose is
+  // legible: `workspaceDeniedPaths` slices the prefix off, so `"/"` became the
+  // empty string and the descriptor carried `deniedPaths: [""]` — an exclusion
+  // naming nothing, for a workspace whose settings said to exclude everything.
+  // The schema now refuses it, so that value cannot reach the consumer.
+  it("S35-TA-10 settings that exclude the filesystem root itself are invalid", () => {
+    expect(() =>
+      settingsOf({
+        workspaces: [workspaceOf({ root: "/", excludedPaths: ["/"] })],
+      }),
+    ).toThrow(/exclusion escapes root/u);
+  });
+
+  it("S35-TA-10 settings whose exclusion escapes the root entirely are invalid", () => {
+    // The other half of the same guard. Found by mutation, not by review:
+    // removing the prefix test and keeping only the root-equality test left
+    // every row above green, because nothing here had ever asked the SCHEMA
+    // about a path that simply is not under the root.
+    expect(() =>
+      settingsOf({
+        workspaces: [workspaceOf({ excludedPaths: ["/etc/hosts"] })],
+      }),
+    ).toThrow(/exclusion escapes root/u);
+    // And the sibling that merely shares the root's textual prefix.
+    expect(() =>
+      settingsOf({
+        workspaces: [workspaceOf({ excludedPaths: ["/workspace/primary-x"] })],
+      }),
+    ).toThrow(/exclusion escapes root/u);
+  });
+
+  it("S35-TA-10 the filesystem root is still a supported root that can exclude its children", () => {
+    // The control for the row above: this must keep working, or the fix has
+    // made `/` unusable rather than made one exclusion invalid.
+    expect(() =>
+      settingsOf({
+        workspaces: [
+          workspaceOf({ root: "/", excludedPaths: ["/etc", "/private/var"] }),
+        ],
+      }),
+    ).not.toThrow();
+    expect(
+      workspaceDeniedPaths(
+        workspaceOf({ root: "/", excludedPaths: ["/etc", "/private/var"] }),
+      ),
+    ).toEqual(["etc", "private/var"]);
+  });
+
   // The detector stays exported: it is what a caller uses to recognise the
   // shape if one ever arrives from somewhere the schema does not guard.
   it("S35-TA-4 the root-exclusion detector still names that exact shape and nothing else", () => {
