@@ -48,8 +48,11 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import {
   agentActionPrerequisite,
+  agentFieldPrerequisite,
   agentWorkspaceFixedReason,
   reviewComputerRequestPrerequisite,
+  taskCancelPrerequisite,
+  taskClosePrerequisite,
   taskRenamePrerequisite,
   TASK_MENU_BUSY_NOTE,
   taskMenuNote,
@@ -58,6 +61,7 @@ import {
   approveToolPrerequisite,
   guardedEditApplyPrerequisite,
   searchMatchDisplay,
+  workspaceReadPrerequisite,
   workspaceSearchPrerequisite,
 } from "./computer-presentation";
 import {
@@ -76,6 +80,7 @@ import {
   agentRouteReadiness,
   agentVerifyStepPresentation,
   connectorChoosePrerequisite,
+  connectorRoutePrerequisite,
   connectorStartPrerequisite,
   connectorStopPrerequisite,
   readinessDetail,
@@ -863,6 +868,9 @@ function renderDossier(): void {
   finish.disabled = !canFinish;
   route.hidden = canFinish;
   route.disabled = state.tone === "connecting";
+  route.title = route.disabled
+    ? "This task is still connecting. Its page opens once it is ready."
+    : "";
   route.innerHTML =
     task.provider === "chatgpt"
       ? "Focus page <span>›</span>"
@@ -1083,21 +1091,37 @@ function renderTaskMenu(): void {
     if (busyReason !== null) control.title = busyReason;
     else control.removeAttribute("title");
   }
-  cancel.disabled =
-    taskMenuBusy ||
-    contextLocked ||
-    (!agentRunning && (task.lifecycle !== "running" || agentLocked));
-  close.disabled = taskMenuBusy || agentLocked;
+  const cancelReason = taskCancelPrerequisite({
+    busy: taskMenuBusy,
+    contextLocked,
+    agentRunning,
+    agentLocked,
+    lifecycle: task.lifecycle,
+  });
+  cancel.disabled = cancelReason !== null;
+  cancel.title = cancelReason ?? "Ask the provider to stop this task";
+  const closeReason = taskClosePrerequisite({
+    busy: taskMenuBusy,
+    agentLocked,
+  });
+  close.disabled = closeReason !== null;
+  close.title = closeReason ?? "Remove this local task and its window";
   // Never a chooser: it holds exactly one option in both branches above, so
   // present it as the fixed value it is and say why it is fixed. Its own
   // value is still what the assignment reads.
   workspace.disabled = true;
   workspace.title = agentWorkspaceFixedReason(readiness.ready);
-  scopeMode.disabled = taskMenuBusy || agentLocked || !readiness.ready;
-  subtree.disabled = taskMenuBusy || agentLocked || !readiness.ready;
-  paths.disabled = taskMenuBusy || agentLocked || !readiness.ready;
-  exclusions.disabled = taskMenuBusy || agentLocked || !readiness.ready;
-  objective.disabled = taskMenuBusy || agentLocked || !readiness.ready;
+  // Five fields, one condition, and until now no sentence on any of them.
+  const agentFieldReason = agentFieldPrerequisite({
+    busy: taskMenuBusy,
+    agentLocked,
+    workspaceReason: readiness.ready ? null : readiness.reason,
+  });
+  for (const field of [scopeMode, subtree, paths, exclusions, objective]) {
+    field.disabled = agentFieldReason !== null;
+    if (agentFieldReason !== null) field.title = agentFieldReason;
+    else field.removeAttribute("title");
+  }
   // The flag and the reason from one function. The panel's tone, label and
   // detail come from the assignment's phase alone, so nothing here used to
   // say why the action was unavailable for any other reason.
@@ -1843,10 +1867,10 @@ function renderComputerConfiguration(): void {
       const listRoot = document.createElement("button");
       listRoot.type = "button";
       listRoot.textContent = "List root";
-      listRoot.disabled = !verified;
-      listRoot.title = verified
-        ? "List the visible entries at this workspace root"
-        : "Verify this workspace first";
+      const listRootReason = workspaceReadPrerequisite(verified, false);
+      listRoot.disabled = listRootReason !== null;
+      listRoot.title =
+        listRootReason ?? "List the visible entries at this workspace root";
       listRoot.addEventListener("click", () => {
         void configureProduct(
           {
@@ -1943,13 +1967,14 @@ function renderComputerConfiguration(): void {
         const edit = document.createElement("button");
         edit.type = "button";
         edit.textContent = "Edit file…";
-        edit.disabled = !verified || pendingEdit !== null;
+        const editReason = workspaceReadPrerequisite(
+          verified,
+          pendingEdit !== null,
+        );
+        edit.disabled = editReason !== null;
         edit.title =
-          pendingEdit !== null
-            ? "Check the result of the last guarded edit first"
-            : verified
-              ? "Choose a text file, review an exact replacement, then apply it once"
-              : "Verify guarded edit access first";
+          editReason ??
+          "Choose a text file, review an exact replacement, then apply it once";
         edit.addEventListener("click", () => {
           void configureProduct(
             {
@@ -3033,7 +3058,9 @@ function renderSettings(): void {
         tunnel.spellcheck = false;
         tunnel.placeholder = "tunnel_…";
         tunnel.value = connector.tunnelId ?? "";
-        tunnel.disabled = running;
+        const routeFieldReason = connectorRoutePrerequisite(running, true);
+        tunnel.disabled = routeFieldReason !== null;
+        if (routeFieldReason !== null) tunnel.title = routeFieldReason;
         tunnelLabel.append(tunnel);
         const keyLabel = document.createElement("label");
         keyLabel.textContent = "Runtime key";
@@ -3046,7 +3073,8 @@ function renderSettings(): void {
           connector.credential === "stored"
             ? "Stored privately; leave blank to keep"
             : "Required once";
-        key.disabled = running;
+        key.disabled = routeFieldReason !== null;
+        if (routeFieldReason !== null) key.title = routeFieldReason;
         keyLabel.append(key);
         if (!running) {
           queueMicrotask(() => {
@@ -3057,7 +3085,12 @@ function renderSettings(): void {
         const save = document.createElement("button");
         save.type = "submit";
         save.textContent = "Save route";
-        save.disabled = connector.tunnelClient === null || running;
+        const saveReason = connectorRoutePrerequisite(
+          running,
+          connector.tunnelClient !== null,
+        );
+        save.disabled = saveReason !== null;
+        save.title = saveReason ?? "Save this tunnel route and its runtime key";
         form.append(tunnelLabel, keyLabel, save);
         form.addEventListener("submit", (event) => {
           event.preventDefault();

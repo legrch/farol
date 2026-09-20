@@ -3,6 +3,7 @@ import {
   approveToolPrerequisite,
   guardedEditApplyPrerequisite,
   searchMatchDisplay,
+  workspaceReadPrerequisite,
   workspaceSearchPrerequisite,
 } from "../../src/ui/computer-presentation";
 
@@ -84,5 +85,28 @@ describe("why a bounded approval cannot be released", () => {
 
   it("has nothing to say when the approval can be released", () => {
     expect(approveToolPrerequisite(waiting)).toBeNull();
+  });
+});
+
+describe("why a verified-workspace read cannot run", () => {
+  it("puts a pending guarded edit ahead of the verification", () => {
+    // Both listRoot and Edit wrote this pair of booleans out twice, once for
+    // the flag and once for the title. The order is the one Edit had.
+    expect(workspaceReadPrerequisite(false, true)).toMatch(
+      /Check the result of the last guarded edit/u,
+    );
+    expect(workspaceReadPrerequisite(true, true)).toMatch(
+      /Check the result of the last guarded edit/u,
+    );
+  });
+
+  it("asks for the verification when nothing else is pending", () => {
+    expect(workspaceReadPrerequisite(false, false)).toBe(
+      "Verify this workspace again first.",
+    );
+  });
+
+  it("has nothing to say for a verified workspace with no pending edit", () => {
+    expect(workspaceReadPrerequisite(true, false)).toBeNull();
   });
 });

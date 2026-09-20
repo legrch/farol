@@ -162,3 +162,58 @@ export function taskRenamePrerequisite(
   if (state.label.trim().length === 0) return "Enter a name for this task.";
   return null;
 }
+
+/**
+ * Why a task-menu action other than the Agent's is unavailable, or null.
+ *
+ * These carried a raw boolean and no sentence at all: a control that is grey
+ * for a reason the owner can work out from the panel beside it is still a
+ * control that never says so.
+ */
+export function taskCancelPrerequisite(
+  state: Readonly<{
+    busy: boolean;
+    contextLocked: boolean;
+    agentRunning: boolean;
+    agentLocked: boolean;
+    lifecycle: string;
+  }>,
+): string | null {
+  if (state.busy) return TASK_MENU_BUSY_NOTE;
+  if (state.contextLocked) {
+    return "A context operation is still active. Farol will not cancel this task until it is reconciled.";
+  }
+  if (state.agentRunning) return null;
+  if (state.lifecycle !== "running") {
+    return "This task is not running, so there is nothing to ask the provider to stop.";
+  }
+  if (state.agentLocked) {
+    return "The native Agent assignment has to be reconciled before this task can be cancelled.";
+  }
+  return null;
+}
+
+export function taskClosePrerequisite(
+  state: Readonly<{ busy: boolean; agentLocked: boolean }>,
+): string | null {
+  if (state.busy) return TASK_MENU_BUSY_NOTE;
+  if (state.agentLocked) {
+    return "The native Agent assignment has to be reconciled before this task can be closed.";
+  }
+  return null;
+}
+
+/** Why the Agent assignment's own fields cannot be edited, or null. */
+export function agentFieldPrerequisite(
+  state: Readonly<{
+    busy: boolean;
+    agentLocked: boolean;
+    workspaceReason: string | null;
+  }>,
+): string | null {
+  if (state.busy) return TASK_MENU_BUSY_NOTE;
+  if (state.agentLocked) {
+    return "This assignment is locked until the existing native child is reconciled.";
+  }
+  return state.workspaceReason;
+}

@@ -75,3 +75,19 @@ export function approveToolPrerequisite(
   }
   return null;
 }
+
+/**
+ * Why a verified-workspace read action cannot run, or null when it can.
+ *
+ * `listRoot`, the Git commands and `Edit file…` each set a disabled flag and
+ * a title from the same booleans, written out twice. One function so an edit
+ * to one cannot leave the other behind.
+ */
+export function workspaceReadPrerequisite(
+  verified: boolean,
+  pendingEdit: boolean,
+): string | null {
+  if (pendingEdit) return "Check the result of the last guarded edit first.";
+  if (!verified) return "Verify this workspace again first.";
+  return null;
+}

@@ -434,3 +434,19 @@ export function agentVerifyStepPresentation(
         disabled: true,
       };
 }
+
+/**
+ * Why the connector's route cannot be edited or saved, or null when it can.
+ *
+ * The tunnel field, the key field and Save route are all disabled while the
+ * connector runs, beside a Replace-client button that now says so. These
+ * three said nothing.
+ */
+export function connectorRoutePrerequisite(
+  running: boolean,
+  hasClient: boolean,
+): string | null {
+  if (running) return "Stop the connector before changing its route.";
+  if (!hasClient) return "Choose the tunnel client first.";
+  return null;
+}

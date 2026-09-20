@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   agentActionPrerequisite,
+  agentFieldPrerequisite,
   agentWorkspaceFixedReason,
   reviewComputerRequestPrerequisite,
+  taskCancelPrerequisite,
+  taskClosePrerequisite,
   taskRenamePrerequisite,
   TASK_MENU_BUSY_NOTE,
   taskMenuNote,
@@ -242,5 +245,74 @@ describe("why the selected task cannot be renamed", () => {
 
   it("has nothing to say for a live task with a name", () => {
     expect(taskRenamePrerequisite(renameable)).toBeNull();
+  });
+});
+
+describe("the task-menu controls that carried a boolean and no sentence", () => {
+  it("says why Cancel is unavailable, for each of its reasons", () => {
+    const running = {
+      busy: false,
+      contextLocked: false,
+      agentRunning: false,
+      agentLocked: false,
+      lifecycle: "running",
+    };
+    expect(taskCancelPrerequisite(running)).toBeNull();
+    expect(taskCancelPrerequisite({ ...running, busy: true })).toBe(
+      TASK_MENU_BUSY_NOTE,
+    );
+    expect(taskCancelPrerequisite({ ...running, contextLocked: true })).toMatch(
+      /context operation is still active/u,
+    );
+    expect(
+      taskCancelPrerequisite({ ...running, lifecycle: "complete" }),
+    ).toMatch(/nothing to ask the provider to stop/u);
+    expect(taskCancelPrerequisite({ ...running, agentLocked: true })).toMatch(
+      /has to be reconciled/u,
+    );
+    // A running native child stays cancellable whatever the task's own
+    // lifecycle says — the flag always allowed that and now the sentence
+    // agrees.
+    expect(
+      taskCancelPrerequisite({
+        ...running,
+        agentRunning: true,
+        lifecycle: "complete",
+        agentLocked: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("says why Close is unavailable", () => {
+    expect(
+      taskClosePrerequisite({ busy: false, agentLocked: false }),
+    ).toBeNull();
+    expect(taskClosePrerequisite({ busy: true, agentLocked: false })).toBe(
+      TASK_MENU_BUSY_NOTE,
+    );
+    expect(taskClosePrerequisite({ busy: false, agentLocked: true })).toMatch(
+      /has to be reconciled/u,
+    );
+  });
+
+  it("gives the five Agent fields one reason between them", () => {
+    const editable = {
+      busy: false,
+      agentLocked: false,
+      workspaceReason: null,
+    };
+    expect(agentFieldPrerequisite(editable)).toBeNull();
+    expect(agentFieldPrerequisite({ ...editable, busy: true })).toBe(
+      TASK_MENU_BUSY_NOTE,
+    );
+    expect(agentFieldPrerequisite({ ...editable, agentLocked: true })).toMatch(
+      /locked until the existing native child/u,
+    );
+    expect(
+      agentFieldPrerequisite({
+        ...editable,
+        workspaceReason: "No verified workspace.",
+      }),
+    ).toBe("No verified workspace.");
   });
 });

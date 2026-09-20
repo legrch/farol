@@ -4,6 +4,7 @@ import {
   agentRouteReadiness,
   agentVerifyStepPresentation,
   connectorChoosePrerequisite,
+  connectorRoutePrerequisite,
   connectorStartPrerequisite,
   connectorStopPrerequisite,
   computerVerificationStale,
@@ -666,5 +667,29 @@ describe("Setup's verify step, sentence and button together", () => {
       label: "Verify Agent",
       disabled: true,
     });
+  });
+});
+
+describe("why the connector route cannot be edited", () => {
+  it("names the running connector, as its Replace-client neighbour does", () => {
+    expect(connectorRoutePrerequisite(true, true)).toBe(
+      "Stop the connector before changing its route.",
+    );
+  });
+
+  it("names the missing client for Save route", () => {
+    expect(connectorRoutePrerequisite(false, false)).toBe(
+      "Choose the tunnel client first.",
+    );
+  });
+
+  it("puts the running connector first, as the flag did", () => {
+    expect(connectorRoutePrerequisite(true, false)).toBe(
+      "Stop the connector before changing its route.",
+    );
+  });
+
+  it("has nothing to say for a stopped connector with a client", () => {
+    expect(connectorRoutePrerequisite(false, true)).toBeNull();
   });
 });
