@@ -319,6 +319,20 @@ export const EVIDENCE_LANES = Object.freeze({
   }),
 });
 
+// An observation a run records about itself is not always a claim that the
+// run failed. A run that lost the application before its own close could
+// inspect it has proved nothing about quitting and must stay FAIL; a run
+// that merely saw a surface move under the driver while every assertion
+// passed has proved what it claims, and failing the lane for that would
+// downgrade ledger rows for something no case asserted.
+//
+// Severity is explicit and its absence means blocking, so a kind added
+// without thinking about this keeps the stricter behaviour rather than
+// quietly losing it.
+export function blockingObservations(observations) {
+  return observations.filter((entry) => entry.severity !== "informational");
+}
+
 export function laneContract(lane) {
   const contract = EVIDENCE_LANES[lane];
   if (contract === undefined) throw new Error(`EVIDENCE_LANE_UNKNOWN:${lane}`);

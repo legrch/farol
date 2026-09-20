@@ -65,12 +65,27 @@ describe("closing an application that is already gone", () => {
     expect(e2eSource).toMatch(
       /evidenceAttempt\.recordFailure\(\s*"close",\s*`E2E_CLOSED_BEFORE_INSPECTION/u,
     );
+    // Observations now carry a severity, and only the blocking ones decide
+    // the run. The assertion that matters is unchanged: an application that
+    // was already gone at close still forces FAIL and a non-zero exit. It
+    // records no severity, and `blockingObservations` treats an absent
+    // severity as blocking, so this kind cannot become informational by
+    // omission.
     expect(e2eSource).toMatch(
-      /missingRequiredCases\.length > 0 \|\| harnessObservations\.length > 0\s*\?\s*"FAIL"/u,
+      /const blockingObservations = blockingObservationsOf\(harnessObservations\);/u,
     );
     expect(e2eSource).toMatch(
-      /if \(harnessObservations\.length > 0\) \{[\s\S]{0,200}process\.exitCode = 1;/u,
+      /missingRequiredCases\.length > 0 \|\| blockingObservations\.length > 0\s*\?\s*"FAIL"/u,
     );
+    expect(e2eSource).toMatch(
+      /if \(blockingObservations\.length > 0\) \{[\s\S]{0,200}process\.exitCode = 1;/u,
+    );
+    const closedBeforeInspection = e2eSource.slice(
+      e2eSource.indexOf('kind: "closed-before-inspection"'),
+    );
+    expect(
+      closedBeforeInspection.slice(0, closedBeforeInspection.indexOf("});")),
+    ).not.toContain("severity");
   });
 
   it("does not count a quit it could not prove", () => {

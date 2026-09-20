@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { EVIDENCE_LANES, missingCases } from "../../tooling/evidence-cases.mjs";
+import {
+  blockingObservations,
+  EVIDENCE_LANES,
+  missingCases,
+} from "../../tooling/evidence-cases.mjs";
 
 // The expected cases are declared apart from the runner, and this test keeps
 // the two from drifting silently: a case added to the runner without a
@@ -74,6 +78,43 @@ describe("evidence case contract", () => {
         (match) => match[1],
       ),
     ).toEqual([...EVIDENCE_LANES.hunt.cases]);
+  });
+
+  it("keeps an observation blocking unless it says it is informational", () => {
+    // The kind that existed before severity did: an application already
+    // gone at close. It carries no severity, and must still block.
+    expect(
+      blockingObservations([
+        { kind: "closed-before-inspection", stage: "application-close" },
+      ]),
+    ).toEqual([
+      { kind: "closed-before-inspection", stage: "application-close" },
+    ]);
+    // An unknown future kind that forgot to declare one blocks too, rather
+    // than slipping past the classification.
+    expect(blockingObservations([{ kind: "something-new" }])).toHaveLength(1);
+  });
+
+  it("leaves an informational observation out of what decides the run", () => {
+    expect(
+      blockingObservations([
+        {
+          kind: "task-menu-closed-without-own-action",
+          severity: "informational",
+        },
+      ]),
+    ).toEqual([]);
+    // It is excluded from the decision, not from the record: the runner
+    // still reports it, which is asserted where the report is built.
+    expect(
+      blockingObservations([
+        {
+          kind: "task-menu-closed-without-own-action",
+          severity: "informational",
+        },
+        { kind: "closed-before-inspection" },
+      ]),
+    ).toEqual([{ kind: "closed-before-inspection" }]);
   });
 
   it("treats an explicitly blocked case as accounted for, never as missing", () => {
