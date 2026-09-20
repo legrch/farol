@@ -183,7 +183,7 @@ describe("applyVerdicts: currentProofSummary is rebuilt from this same run", () 
     ).toBe(true);
   });
 
-  it("reports the tool's own blocking outcome (doneUnproven) as validator.exit=1", () => {
+  it("recomputes doneUnproven from the merged rows, not the pre-downgrade evaluation: it is always empty by this tool's own invariant", () => {
     const ledger = baseLedger();
     const bindingsResult = {
       ...bindingsResultFor([
@@ -191,15 +191,33 @@ describe("applyVerdicts: currentProofSummary is rebuilt from this same run", () 
         { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
       ]),
     };
-    // R1 was downgraded to NOT_RUN by this same call, so its own report no
-    // longer names R1 as doneUnproven -- but the tally still reflects
-    // whatever evaluateBindings() itself reported for the ledger it was
-    // handed, which is what this schema field is for.
+    // evaluateBindings() reported R1 as doneUnproven against the ledger AS
+    // HANDED IN (still u2="DONE"). This same applyVerdicts() call downgrades
+    // R1 to NOT_RUN, so caching that stale doneUnproven verbatim would leave
+    // a fact in the ledger that this very merge just made false. The merge
+    // recomputes it from its own output instead.
     bindingsResult.summary.doneUnproven = ["R1"];
 
     const { ledger: merged } = applyVerdicts({ ledger, bindingsResult });
+    expect(merged.requirements.find((row) => row.id === "R1").u2).toBe("NOT_RUN");
+    expect(merged.currentProofSummary.validator.doneUnproven).toEqual([]);
+    expect(merged.currentProofSummary.validator.exit).toBe(0);
+  });
+
+  it("still reports validator.exit=1 from a header disagreement, independent of doneUnproven", () => {
+    const ledger = baseLedger();
+    const bindingsResult = bindingsResultFor([
+      { id: "R1", u2: "DONE", verdict: "PROVEN", bindings: [{ reasons: [] }] },
+      { id: "R2", u2: "LIVE_OPEN", verdict: "NO_BINDINGS", bindings: [] },
+    ]);
+    bindingsResult.header = { reasons: ["HEADER_MISMATCH:sourceCommit"] };
+
+    const { ledger: merged } = applyVerdicts({ ledger, bindingsResult });
     expect(merged.currentProofSummary.validator.exit).toBe(1);
-    expect(merged.currentProofSummary.validator.doneUnproven).toEqual(["R1"]);
+    expect(merged.currentProofSummary.validator.header).toEqual([
+      "HEADER_MISMATCH:sourceCommit",
+    ]);
+    expect(merged.currentProofSummary.validator.doneUnproven).toEqual([]);
   });
 });
 

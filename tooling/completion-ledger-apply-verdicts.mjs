@@ -115,10 +115,24 @@ export function applyVerdicts({ ledger, bindingsResult }) {
     .createHash("sha256")
     .update(JSON.stringify(bindingsResult))
     .digest("hex");
+
+  // Header and lane agreement are about candidate/attempt identity, not a
+  // row's u2 -- the downgrade above cannot change either, so bindingsResult
+  // (evaluated on the ledger as handed in) still describes them correctly.
+  // doneUnproven is different: it is defined in terms of u2, and the
+  // downgrade above exists specifically to make it obsolete -- every row
+  // that was DONE and unproven is now NOT_RUN, not DONE. Reusing
+  // bindingsResult's own (pre-downgrade) doneUnproven here would cache a
+  // fact this same merge just made false, in the one field whose entire
+  // job is not doing that. It is recomputed from the merged rows instead,
+  // and by this tool's own invariant is always empty.
+  const doneUnproven = (ledger.requirements ?? [])
+    .filter((row) => row.u2 === "DONE" && row.currentProof?.verdict !== "PROVEN")
+    .map((row) => row.id);
   const blocking =
     bindingsResult.header.reasons.length > 0 ||
     bindingsResult.lanes.some((lane) => lane.reasons.length > 0) ||
-    bindingsResult.summary.doneUnproven.length > 0;
+    doneUnproven.length > 0;
 
   ledger.currentProofSummary = {
     candidate,
@@ -131,7 +145,7 @@ export function applyVerdicts({ ledger, bindingsResult }) {
       laneMismatches: bindingsResult.lanes
         .filter((lane) => lane.reasons.length > 0)
         .map((lane) => lane.lane),
-      doneUnproven: bindingsResult.summary.doneUnproven,
+      doneUnproven,
       outputSha256,
     },
   };
