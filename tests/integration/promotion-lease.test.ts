@@ -174,4 +174,91 @@ describe("promotion lease", () => {
       holder.kill("SIGKILL");
     }
   });
+
+  // S35-03/3: two real processes race to recover the SAME stale lease.
+  // Process A claims the stale bytes, then — deterministically, via a real
+  // file handshake, not a coin flip on OS scheduling — pauses before it
+  // decides what to do with them. While A is paused, a second real process B
+  // sees the lease file genuinely absent (A took it) and legitimately
+  // acquires a fresh lease of its own. A then resumes holding only the OLD,
+  // now-superseded bytes: it must never destroy B's fresh, live lease, and
+  // it must end up refused, not believing it also holds the lease.
+  it("S35-03/3 two real processes racing the same stale lease never let one destroy the other's fresh one", async () => {
+    const root = await userData();
+
+    // Seed a real, genuinely stale lease: a holder that really acquired it,
+    // then really died.
+    const deadHolder = spawn(
+      process.execPath,
+      [childScript, root, "hold", "gen-dead"],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    await waitForLine(deadHolder, "ACQUIRED");
+    deadHolder.kill("SIGKILL");
+    await new Promise<void>((resolve) => deadHolder.once("close", () => resolve()));
+
+    const handshake = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-lease-handshake-"),
+    );
+    roots.push(handshake);
+    const readyFile = path.join(handshake, "a-ready");
+    const goFile = path.join(handshake, "go");
+
+    // Process A: recovers the stale lease, but pauses right after claiming
+    // it (see `promotion-lease-child.mjs`) until this test says "go".
+    const recoverer = spawn(
+      process.execPath,
+      [childScript, root, "recover-pause", "gen-a", readyFile, goFile],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const recovererOutput: Buffer[] = [];
+    recoverer.stdout.on("data", (chunk: Buffer) => recovererOutput.push(chunk));
+    try {
+      // Wait for A to have exclusively claimed the stale bytes and to be
+      // paused (the ready marker is written only from inside that pause).
+      await expect
+        .poll(() => fs.access(readyFile).then(() => true, () => false), {
+          timeout: 10_000,
+        })
+        .toBe(true);
+
+      // While A is paused, the lease file is genuinely absent (A holds only
+      // its private claim). Process B — a real, separate process — now
+      // legitimately acquires a fresh lease at that same path.
+      expect(await fs.lstat(promotionLeasePath(root)).catch(() => null)).toBeNull();
+      const freshHolder = spawn(
+        process.execPath,
+        [childScript, root, "hold", "gen-b"],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      try {
+        await waitForLine(freshHolder, "ACQUIRED");
+        const freshRecordBefore = JSON.parse(
+          await fs.readFile(promotionLeasePath(root), "utf8"),
+        );
+        expect(freshRecordBefore.generation).toBe("gen-b");
+
+        // Let A resume and finish.
+        await fs.writeFile(goFile, "go", { mode: 0o600 });
+        const exitCode = await new Promise<number | null>((resolve) => {
+          recoverer.once("close", (code) => resolve(code));
+        });
+        const output = Buffer.concat(recovererOutput).toString("utf8");
+
+        // A must lose the race deterministically: it must never claim to
+        // hold the lease once a fresh, live holder already exists, and it
+        // must never have removed or replaced that holder's record.
+        expect(output).toBe("REFUSED\n");
+        expect(exitCode).toBe(1);
+        const freshRecordAfter = JSON.parse(
+          await fs.readFile(promotionLeasePath(root), "utf8"),
+        );
+        expect(freshRecordAfter).toEqual(freshRecordBefore);
+      } finally {
+        freshHolder.kill("SIGKILL");
+      }
+    } finally {
+      recoverer.kill("SIGKILL");
+    }
+  });
 });

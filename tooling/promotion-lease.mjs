@@ -120,20 +120,63 @@ async function createLease(file, record) {
   return true;
 }
 
-async function removeConfirmedStaleLease(file, expectedSerialized) {
-  const stale = path.join(
-    path.dirname(file),
-    `.${FILE_NAME}.stale-${randomBytes(8).toString("hex")}`,
-  );
+// S35-03/3: `rename()` is atomic and requires its source to exist, so it
+// doubles as an exclusive claim on whatever currently occupies `file` — at
+// most one caller across every process can ever win it for a given
+// occupant; every later caller sees ENOENT once the winner has moved it.
+// This is the "read, then remove in a separate step" gap this function used
+// to have: a second recoverer could read the same stale bytes, then rename
+// away whatever a third process had *already* written in its place,
+// destroying a lease nobody here ever confirmed was stale.
+async function claimForExchange(file) {
+  const claim = `${file}.claim-${randomBytes(8).toString("hex")}`;
   try {
-    const current = await readLease(file);
-    if (!current || current.serialized !== expectedSerialized) return false;
-    await fs.rename(file, stale);
+    await fs.rename(file, claim);
   } catch (error) {
-    if (error?.code === "ENOENT") return false;
+    if (error?.code === "ENOENT") return null;
     throw error;
   }
-  await fs.unlink(stale).catch(() => undefined);
+  return claim;
+}
+
+// Puts a claimed occupant back, but only if nobody has legitimately
+// recreated `file` since it was claimed: `link()` is atomic and requires its
+// destination to be absent, so a fresh writer that raced in during the
+// claim window always wins over the restore.
+async function restoreClaim(claim, file) {
+  try {
+    await fs.link(claim, file);
+  } finally {
+    await fs.unlink(claim).catch(() => undefined);
+  }
+}
+
+async function removeConfirmedStaleLease(
+  file,
+  expectedSerialized,
+  beforeExchange,
+) {
+  const claim = await claimForExchange(file);
+  if (!claim) return false;
+  await beforeExchange?.();
+  let matches;
+  try {
+    const info = await fs.lstat(claim);
+    // A claimed occupant that is not a private regular file cannot be
+    // trusted to compare or to restore faithfully; treat it the same as a
+    // mismatch (put it back, or drop it if something else already took its
+    // place) and let the next real read apply the full safety checks.
+    matches = info.isFile() && (await fs.readFile(claim, "utf8")) === expectedSerialized;
+  } catch {
+    matches = false;
+  }
+  if (!matches) {
+    await restoreClaim(claim, file).catch((error) => {
+      if (error?.code !== "EEXIST") throw error;
+    });
+    return false;
+  }
+  await fs.unlink(claim).catch(() => undefined);
   return true;
 }
 
@@ -160,7 +203,11 @@ export async function acquirePromotionLease(
     const existing = await readLease(file);
     if (!existing) continue;
     if (isAlive(existing.record.pid)) return null;
-    await removeConfirmedStaleLease(file, existing.serialized);
+    await removeConfirmedStaleLease(
+      file,
+      existing.serialized,
+      dependencies.beforeExchange,
+    );
   }
   throw new Error("PROMOTION_LEASE_CONTENTION");
 }
