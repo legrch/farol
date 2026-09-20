@@ -44,7 +44,11 @@ import {
   type ProductTaskAgent,
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
-import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
+import {
+  LiveTaskRegistry,
+  PromotionLeaseLost,
+  type LiveTaskAdmission,
+} from "./live-task-registry";
 import {
   acquirePromotionLease,
   releasePromotionLease,
@@ -788,12 +792,23 @@ function setLiveTaskLifecycle(
 // instead of racing its placement.
 async function markLiveTaskRunningDurable(taskId: string): Promise<boolean> {
   if (liveTaskRegistry.get(taskId)?.lifecycle === "running") return true;
-  const outcome = await liveTaskRegistry.withPromotionLease(async () => {
+  const before = liveTaskRegistry.snapshot();
+  const outcome = await liveTaskRegistry.withPromotionLease(async (fence) => {
     if (!liveTaskRegistry.setLifecycle(taskId, "running")) return;
     publishTasksState();
     try {
+      // S35-H1-1: fenced immediately before the durable write, not only on
+      // entry. A lease lost in between rolls the running mark back and
+      // refuses the turn; an ordinary persist failure keeps its own
+      // surfaced-failure behaviour.
+      await fence();
       await persistLiveTaskState();
-    } catch {
+    } catch (error) {
+      if (error instanceof PromotionLeaseLost) {
+        liveTaskRegistry.rollback(before);
+        publishTasksState();
+        throw error;
+      }
       surfaceLiveTaskPersistenceFailure(taskId);
     }
   });
@@ -815,7 +830,12 @@ class PromotionPendingRefusal extends Error {
 async function journalUnderPromotionLease<T>(
   work: () => Promise<T>,
 ): Promise<T> {
-  const outcome = await liveTaskRegistry.withPromotionLease(work);
+  const outcome = await liveTaskRegistry.withPromotionLease(async (fence) => {
+    // S35-H1-1: `work` IS the journal write, so the fence immediately
+    // before it is the fence immediately before the durable write.
+    await fence();
+    return work();
+  });
   if (!outcome.ok) throw new PromotionPendingRefusal();
   return outcome.value;
 }
@@ -2206,7 +2226,9 @@ async function runProductTaskCommand(
         // so it takes the same cross-process lease `admitDurable` does for
         // a brand new task — not only new admission is guarded.
         const agentStart = await liveTaskRegistry.withPromotionLease(
-          async (): Promise<
+          async (
+            fence,
+          ): Promise<
             | Readonly<{ ok: true }>
             | Readonly<{
                 ok: false;
@@ -2226,12 +2248,18 @@ async function runProductTaskCommand(
               return { ok: false, code: "TASK_NOT_FOUND" };
             }
             try {
+              // S35-H1-1: fenced immediately before the durable write. A
+              // lease lost since the entry check rolls the agent mark back
+              // and leaves through the same refusal a never-acquired lease
+              // produces (`TASK_ROUTE_UNAVAILABLE` below).
+              await fence();
               await persistLiveTaskState();
-            } catch {
+            } catch (error) {
               liveTaskRegistry.rollback(before);
               await productAgentStore!
                 .remove(task.taskId)
                 .catch(() => undefined);
+              if (error instanceof PromotionLeaseLost) throw error;
               return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
             }
             return { ok: true };

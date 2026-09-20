@@ -29,6 +29,19 @@ import path from "node:path";
 // binary running the previous protocol fails closed against a live lease
 // instead of removing it. `tooling/promotion-lease.mjs` is the twin the
 // promotion CLI runs; the two must stay behaviourally identical.
+//
+// Where the lease file lives, and what the fence is therefore for. The lease
+// is `farol-next-state/promotion.lease` inside the app's own private user
+// data directory (mode 0700, owner-only): it is not inside any approved
+// workspace folder, so the adversary the Git snapshot route defends against
+// -- a process writing inside an approved root -- cannot reach it at all.
+// Deleting it takes a same-UID process with access to the app's private
+// state, which is already outside this product's local integrity model: a
+// process with that reach can rewrite the app's state directly. The fence
+// every durable write takes (`verifyPromotionLease`, and
+// `live-task-registry.ts`'s `PromotionLeaseLost`) is therefore defence in
+// depth, not the boundary: it turns "two holders wrote" into "the second
+// holder refused" even in that case, and costs one `lstat` per write.
 
 export const PROMOTION_LEASE_SCHEMA = "farol.next.promotion-lease/1";
 

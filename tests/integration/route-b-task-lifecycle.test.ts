@@ -1,7 +1,9 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
@@ -9,7 +11,17 @@ import type {
   ChatGptTaskObserver,
 } from "../../src/apps/desktop/chatgpt-route";
 import { createCodexContextController } from "../../src/apps/desktop/codex-context-runtime";
-import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
+import {
+  LiveTaskRegistry,
+  PromotionLeaseLost,
+  type PromotionLeaseGuard,
+} from "../../src/apps/desktop/live-task-registry";
+import {
+  acquirePromotionLease,
+  promotionLeasePath,
+  releasePromotionLease,
+  verifyPromotionLease,
+} from "../../src/apps/desktop/promotion-lease";
 import {
   PrivateProviderTurnJournal,
   type ProviderTurnJournal,
@@ -32,6 +44,10 @@ import {
   createContextSession,
   type ContextBinding,
 } from "../../src/modules/chat/domain/context-continuity";
+
+const leaseChildScript = fileURLToPath(
+  new URL("./fixtures/promotion-lease-child.mjs", import.meta.url),
+);
 
 const threadA = "0199c0de-0000-7000-8000-00000000c001";
 const threadB = "0199c0de-0000-7000-8000-00000000c002";
@@ -142,11 +158,25 @@ function gate() {
 
 describe("Route B task lifecycle composed as the product composes it", () => {
   const roots: string[] = [];
+  const leaseHolders: ReturnType<typeof spawn>[] = [];
   let runtime: RouteBRuntime | null = null;
 
   afterEach(async () => {
     await runtime?.close();
     runtime = null;
+    await Promise.all(
+      leaseHolders.splice(0).map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              resolve();
+              return;
+            }
+            child.once("close", () => resolve());
+            child.kill("SIGKILL");
+          }),
+      ),
+    );
     await Promise.all(
       roots
         .splice(0)
@@ -173,6 +203,12 @@ describe("Route B task lifecycle composed as the product composes it", () => {
       // Refuses `markRunning` for these tasks, as the product does while a
       // live promotion holds the cross-process lease.
       markRunningRefused?: Set<string>;
+      // S35-H1-1: runs `markRunning` through the registry's real
+      // `withPromotionLease` under this guard, in the exact shape
+      // `main.ts`'s `markLiveTaskRunningDurable` uses — the running mark,
+      // then the fence, then the durable persist — so a lease lost between
+      // the entry check and that persist is observable end to end.
+      markRunningLease?: PromotionLeaseGuard;
     }> = {},
   ) {
     const root = await fs.realpath(
@@ -185,7 +221,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
       stateRoot: path.join(root, "context-continuity"),
       summaryRoutes: { retained: () => null, createFallback: vi.fn() },
     });
-    const registry = new LiveTaskRegistry(5);
+    const registry = new LiveTaskRegistry(5, hooks.markRunningLease);
     const routes = new Map<string, TaskSurface>();
     const persist = vi.fn(async () => undefined);
     const agentInputRemovals: string[] = [];
@@ -225,8 +261,24 @@ describe("Route B task lifecycle composed as the product composes it", () => {
         liveTask: (taskId) => registry.get(taskId) !== null,
         markRunning: async (taskId) => {
           if (hooks.markRunningRefused?.has(taskId)) return false;
-          registry.setLifecycle(taskId, "running");
-          return true;
+          if (!hooks.markRunningLease) {
+            registry.setLifecycle(taskId, "running");
+            return true;
+          }
+          const before = registry.snapshot();
+          const outcome = await registry.withPromotionLease(async (fence) => {
+            if (!registry.setLifecycle(taskId, "running")) return;
+            try {
+              await fence();
+              await persist();
+            } catch (error) {
+              if (error instanceof PromotionLeaseLost) {
+                registry.rollback(before);
+                throw error;
+              }
+            }
+          });
+          return outcome.ok;
         },
         mutationInFlight: () => false,
         admissionReady: () => true,
@@ -402,6 +454,107 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     expect(await third.text()).toContain("response.completed");
     expect(surfaceA.prompts).toHaveLength(2);
     expect(admitTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("S35-H1-1 a later turn whose lease is stolen between the entry check and its durable running mark is refused before submission, and the task stays idle", async () => {
+    const leaseRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-lifecycle-lease-"),
+    );
+    roots.push(leaseRoot);
+    let steal: (() => Promise<void>) | null = null;
+    const { registry, routes, route, persist } = await compose({
+      markRunningLease: {
+        acquireForAdmission: async () => {
+          const handle = await acquirePromotionLease(
+            leaseRoot,
+            "app-gen",
+            "admission",
+          );
+          if (!handle) return null;
+          let verifies = 0;
+          return {
+            release: () => releasePromotionLease(handle),
+            verify: async () => {
+              const held = await verifyPromotionLease(handle);
+              verifies += 1;
+              // Exactly the gap the entry-only check left open: the lease
+              // file is removed and a real second process locks its
+              // replacement after the entry check passed.
+              if (verifies === 1 && steal) await steal();
+              return held;
+            },
+          };
+        },
+      },
+    });
+
+    const first = await post(
+      route,
+      initialRequest(threadA, "turn-a-1", "Start A."),
+    );
+    expect(await first.text()).toContain("response.completed");
+    const surfaceA = routes.get(threadA)!;
+    await vi.waitFor(() => expect(route.owns(threadA)).toBe(false));
+    expect(registry.get(threadA)?.lifecycle).toBe("idle");
+    const persistsBefore = persist.mock.calls.length;
+
+    steal = async () => {
+      await fs.unlink(promotionLeasePath(leaseRoot));
+      const holder = spawn(
+        process.execPath,
+        [leaseChildScript, leaseRoot, "hold", "adversary-generation"],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      leaseHolders.push(holder);
+      await new Promise<void>((resolve, reject) => {
+        let buffer = "";
+        const onData = (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          if (buffer.includes("ACQUIRED")) {
+            holder.stdout?.off("data", onData);
+            resolve();
+          }
+        };
+        holder.stdout?.on("data", onData);
+        holder.once("error", reject);
+        setTimeout(
+          () => reject(new Error("timed out waiting for ACQUIRED")),
+          10_000,
+        ).unref();
+      });
+    };
+
+    const second = await post(
+      route,
+      initialRequest(threadA, "turn-a-2", "Continue A."),
+    );
+    const refusedText = await second.text();
+    expect(refusedText).toContain("TASK_ROUTE_UNAVAILABLE");
+    expect(refusedText).not.toContain("response.completed");
+    // Nothing reached the conversation, nothing was persisted, and the
+    // running mark was rolled back.
+    expect(surfaceA.prompts).toHaveLength(1);
+    expect(registry.get(threadA)?.lifecycle).toBe("idle");
+    expect(persist.mock.calls.length).toBe(persistsBefore);
+
+    // Control: with the adversary gone and nobody stealing it again, the
+    // very next turn runs — the refusal above was the fence, not a wedge.
+    steal = null;
+    await Promise.all(
+      leaseHolders.splice(0).map(
+        (child) =>
+          new Promise<void>((resolve) => {
+            child.once("close", () => resolve());
+            child.kill("SIGKILL");
+          }),
+      ),
+    );
+    const third = await post(
+      route,
+      initialRequest(threadA, "turn-a-3", "Continue A again."),
+    );
+    expect(await third.text()).toContain("response.completed");
+    expect(surfaceA.prompts).toHaveLength(2);
   });
 
   it("HR-007 refuses a turn on a task whose close has begun, and disposes that surface only after the refusal", async () => {

@@ -34,6 +34,32 @@ export type PromotionLeaseGuard = Readonly<{
   acquireForAdmission(): Promise<PromotionLeaseHold | null>;
 }>;
 
+// S35-H1-1: one entry check is not a fence. A critical phase may perform
+// several durable writes, and between the entry check and any of them the
+// lease file can be deleted and re-created — at which point a second
+// acquirer locks the new inode and two holders exist. `work` is therefore
+// handed a `fence` it must call immediately before EVERY durable write it
+// makes; the fence re-verifies the hold and throws this error when the hold
+// no longer names the inode everybody else honours. `withPromotionLease`
+// turns that into its ordinary `{ok:false}` refusal, which every caller
+// already maps to its own readable code (`promotion_pending`,
+// `TASK_ROUTE_UNAVAILABLE`, `CHATGPT_TASK_PROMOTION_PENDING`,
+// `WORKSPACE_MUTATION_PROMOTION_PENDING`), so a lost lease is refused
+// rather than written through.
+export class PromotionLeaseLost extends Error {
+  constructor() {
+    super("PROMOTION_LEASE_LOST");
+    this.name = "PromotionLeaseLost";
+  }
+}
+
+export type PromotionLeaseFence = () => Promise<void>;
+
+// Without a lease guard there is no exclusion to lose, so the fence a
+// `work` callback calls is a no-op — exactly the behaviour a registry
+// built without a `promotionLease` has always had.
+const UNFENCED: PromotionLeaseFence = async () => undefined;
+
 export class LiveTaskRegistry {
   private readonly tasks: ProductTask[] = [];
   private revision = 0;
@@ -80,10 +106,14 @@ export class LiveTaskRegistry {
     persist: () => Promise<void>,
   ): Promise<LiveTaskAdmission> {
     const before = this.snapshot();
-    const outcome = await this.withPromotionLease(async () => {
+    const outcome = await this.withPromotionLease(async (fence) => {
       const admitted = this.admit(candidate);
       if (admitted.status !== "admitted") return admitted;
       try {
+        // Immediately before the one durable write this phase makes: a
+        // lease lost since the entry check refuses here instead of
+        // persisting a task a live promotion has already validated away.
+        await fence();
         await persist();
       } catch (error) {
         this.rollback(before);
@@ -103,15 +133,30 @@ export class LiveTaskRegistry {
   // that a live promotion excludes it instead of racing it. Returns
   // `{ok:false}` (never throwing) when a live promotion already holds the
   // lease, so the caller can map that to its own ordinary refusal.
+  //
+  // S35-H1-1: `work` receives the `fence` it must call immediately before
+  // every durable write it performs. The entry check below is kept — it
+  // refuses before any in-memory mutation happens — but it is no longer the
+  // only one: a `PromotionLeaseLost` raised by any fence leaves through the
+  // same `{ok:false}` refusal, so the caller cannot tell a lease lost
+  // mid-phase from a lease never acquired, and neither writes.
   async withPromotionLease<T>(
-    work: () => Promise<T>,
+    work: (fence: PromotionLeaseFence) => Promise<T>,
   ): Promise<Readonly<{ ok: true; value: T }> | Readonly<{ ok: false }>> {
-    if (!this.promotionLease) return { ok: true, value: await work() };
+    if (!this.promotionLease) return { ok: true, value: await work(UNFENCED) };
     const hold = await this.promotionLease.acquireForAdmission();
     if (!hold) return { ok: false };
+    const fence: PromotionLeaseFence = async () => {
+      if (hold.verify && !(await hold.verify())) {
+        throw new PromotionLeaseLost();
+      }
+    };
     try {
-      if (hold.verify && !(await hold.verify())) return { ok: false };
-      return { ok: true, value: await work() };
+      await fence();
+      return { ok: true, value: await work(fence) };
+    } catch (error) {
+      if (error instanceof PromotionLeaseLost) return { ok: false };
+      throw error;
     } finally {
       await hold.release();
     }
