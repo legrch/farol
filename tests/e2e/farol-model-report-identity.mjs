@@ -27,6 +27,13 @@ export const SUPPORTED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
  * first while doing the second; the caller has to say which, because only
  * the caller knows.
  *
+ * `hostlessPhases` is the third field, and it exists because a phase can
+ * legitimately run no binary at all: `app-host-discovery` inspects the
+ * filesystem and the process table and never executes the host. Recording
+ * that is not bookkeeping — an unattributed phase and a phase nobody wrote
+ * down look identical in a report, and only one of them is fine. It is
+ * RECORDED by the journey, to the same standard as the binaries.
+ *
  * `hosts` is a LIST, because one journey runs more than one binary. Measured
  * on this machine: `which codex` finds a Node shim, while the product's own
  * discovery offers the signed ChatGPT.app binary, and the phases that test
@@ -37,9 +44,13 @@ export const SUPPORTED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
  * without being able to attribute a single result to one.
  */
 export function buildReportIdentity(options) {
-  const { repositoryRoot, loader, hosts, nodeVersion } = options;
+  const { repositoryRoot, loader, hosts, hostlessPhases, nodeVersion } =
+    options;
   assertLoader(loader);
   assertHosts(hosts);
+  if (!Array.isArray(hostlessPhases)) {
+    throw new Error("FAROL_MODEL_E2E_REPORT_HOSTLESS_PHASES_MISSING");
+  }
   const source = sourceIdentity(repositoryRoot);
   return {
     sourceCommit: source.commit,
@@ -51,6 +62,7 @@ export function buildReportIdentity(options) {
       version: host.version ?? null,
       phases: [...host.phases],
     })),
+    hostlessPhases: [...hostlessPhases],
     nodeVersion,
   };
 }
@@ -110,6 +122,9 @@ export function assertReportIdentity(report) {
   }
   assertLoader(identity.loader);
   assertHosts(identity.hosts);
+  if (!Array.isArray(identity.hostlessPhases)) {
+    throw new Error("FAROL_MODEL_E2E_REPORT_HOSTLESS_PHASES_MISSING");
+  }
   for (const host of identity.hosts) {
     if (typeof host.version !== "string" || host.version.length === 0) {
       throw new Error("FAROL_MODEL_E2E_REPORT_HOST_VERSION_MISSING");
@@ -130,8 +145,16 @@ export function assertReportIdentity(report) {
       claimed.set(phase, host.binary);
     }
   }
+  // A phase recorded host-less must not ALSO be claimed by a binary: both
+  // would be true of it, so neither would be a fact about the run.
+  for (const phase of identity.hostlessPhases) {
+    if (claimed.has(phase)) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS");
+    }
+  }
+  const hostless = new Set(identity.hostlessPhases);
   for (const phase of report.phases ?? []) {
-    if (!claimed.has(phase.id)) {
+    if (!claimed.has(phase.id) && !hostless.has(phase.id)) {
       throw new Error("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
     }
   }

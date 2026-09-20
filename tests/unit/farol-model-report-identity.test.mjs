@@ -48,7 +48,9 @@ describe("real-host report identity", () => {
       {
         binary: DISCOVERED,
         version: "codex-cli 0.153.4",
-        phases: ["app-host-discovery", "app-tool-roundtrip"],
+        // NOT `app-host-discovery`: that phase runs no binary, which is the
+        // fact the old fixture hid by attributing it to one anyway.
+        phases: ["app-tool-roundtrip", "app-rotation-then-host"],
       },
     ];
   }
@@ -58,8 +60,8 @@ describe("real-host report identity", () => {
       phases: phases ?? [
         { id: "env-key-overrides" },
         { id: "no-retry-on-failure" },
-        { id: "app-host-discovery" },
         { id: "app-tool-roundtrip" },
+        { id: "app-rotation-then-host" },
       ],
       identity: {
         sourceCommit: "a".repeat(40),
@@ -67,6 +69,7 @@ describe("real-host report identity", () => {
         sourceDirty: false,
         loader: LOADER,
         hosts: hostsOf(),
+        hostlessPhases: [],
         nodeVersion: SUPPORTED_NODE_VERSIONS[0],
         ...overrides,
       },
@@ -83,8 +86,10 @@ describe("real-host report identity", () => {
       repositoryRoot: path.resolve(import.meta.dirname, "../.."),
       loader: LOADER,
       hosts: hostsOf(),
+      hostlessPhases: ["app-host-discovery"],
       nodeVersion: SUPPORTED_NODE_VERSIONS[0],
     });
+    expect(built.hostlessPhases).toEqual(["app-host-discovery"]);
     expect(built.sourceCommit).toMatch(/^[0-9a-f]{40}$/u);
     expect(built.sourceTreeDigest).toMatch(/^[0-9a-f]{64}$/u);
     expect(built.loader).toEqual(LOADER);
@@ -92,6 +97,49 @@ describe("real-host report identity", () => {
   });
 
   // THE TWO ROWS THIS PACKET EXISTS FOR.
+  // S35-TA-13. THE FIXTURE I SHOULD HAVE WRITTEN. Every row above gives
+  // every phase a host, so none of them could see that the real journey has
+  // a phase which runs NO binary: `app-host-discovery` calls
+  // `discoverExecutables` and `detectCodexHostPresence` and never executes
+  // the host. The rule "every phase is claimed by exactly one binary" was a
+  // guarantee the journey cannot satisfy, and it killed the run in
+  // writeReport before any report was written.
+  //
+  // A host-less phase is now RECORDED, not inferred from absence — the same
+  // standard the binaries are held to. Silence would leave a reader unable
+  // to tell "ran nothing" from "nobody wrote it down".
+  it("S35-TA-13 accepts a phase that ran no binary when the identity records it as host-less", () => {
+    const report = reportOf({ hostlessPhases: ["app-host-discovery"] }, [
+      { id: "env-key-overrides" },
+      { id: "app-host-discovery" },
+      { id: "app-tool-roundtrip" },
+    ]);
+    expect(assertReportIdentity(report)).toBe(report.identity);
+  });
+
+  it("S35-TA-13 still refuses a phase that is neither claimed by a host nor recorded host-less", () => {
+    expect(() =>
+      assertReportIdentity(
+        reportOf({ hostlessPhases: ["app-host-discovery"] }, [
+          { id: "env-key-overrides" },
+          { id: "app-host-discovery" },
+          { id: "app-revocation-no-retry" },
+        ]),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
+  });
+
+  it("S35-TA-13 refuses a phase recorded host-less that a binary also claims", () => {
+    // Both would be true of it, so neither is a fact about the run.
+    expect(() =>
+      assertReportIdentity(
+        reportOf({ hostlessPhases: ["env-key-overrides"] }, [
+          { id: "env-key-overrides" },
+        ]),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS");
+  });
+
   it("S35-TA-12 refuses a report whose phase no recorded binary claims", () => {
     // `app-rotation-then-host` ran, and nothing says which binary answered
     // it. Before this, the report simply did not mention the problem.
@@ -99,7 +147,7 @@ describe("real-host report identity", () => {
       assertReportIdentity(
         reportOf({}, [
           { id: "env-key-overrides" },
-          { id: "app-rotation-then-host" },
+          { id: "app-host-discovery" },
         ]),
       ),
     ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
@@ -128,8 +176,16 @@ describe("real-host report identity", () => {
     const base = {
       repositoryRoot: path.resolve(import.meta.dirname, "../.."),
       hosts: hostsOf(),
+      hostlessPhases: [],
       nodeVersion: SUPPORTED_NODE_VERSIONS[0],
     };
+    expect(() =>
+      buildReportIdentity({
+        ...base,
+        loader: LOADER,
+        hostlessPhases: undefined,
+      }),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_HOSTLESS_PHASES_MISSING");
     expect(() => buildReportIdentity(base)).toThrow(
       "FAROL_MODEL_E2E_REPORT_LOADER_MISSING",
     );

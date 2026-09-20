@@ -444,6 +444,12 @@ function logRun(label, run) {
 // report the same version, so nothing else distinguishes them.
 let activePhaseId = null;
 const hostRuns = [];
+/**
+ * Phases that run no host binary at all. Recorded by the phase itself, to
+ * the same standard as the binaries: an unattributed phase and a phase
+ * nobody wrote down look identical in a report, and only one is fine.
+ */
+const hostlessPhases = [];
 /** `codex --version` per binary: two binaries can report the same string. */
 const hostVersions = new Map();
 
@@ -480,6 +486,10 @@ async function writeReport() {
     report.identity = buildReportIdentity({
       repositoryRoot: path.resolve(here, "../.."),
       loader: { kind: "source-level", bundlePath: bundleOutput },
+      hostlessPhases: hostlessPhases.filter(
+        (phase) =>
+          !byBinary.has(phase) && !hostRuns.some((r) => r.phase === phase),
+      ),
       hosts: [...byBinary].map(([binary, phases]) => ({
         binary,
         version: hostVersions.get(binary) ?? report.hostVersion,
@@ -868,6 +878,10 @@ async function main() {
     );
 
     await phase("app-host-discovery", async () => {
+      // Declared, not inferred: this phase executes no `codex` binary — it
+      // reads the filesystem through the product's discovery and the process
+      // table through its presence check.
+      hostlessPhases.push("app-host-discovery");
       // The product's own discovery, not this script's `which`.
       const discovered = await discoverExecutables("codex");
       const realBin = await fs.realpath(codexBin).catch(() => codexBin);
