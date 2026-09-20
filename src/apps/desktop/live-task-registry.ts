@@ -22,7 +22,14 @@ export type LiveTaskAdmission =
 // push, and the write that makes it visible on disk all happen while it is
 // held. Whichever side actually holds the lease wins; the other gets its
 // own refusal, deterministically, not from a race.
-export type PromotionLeaseHold = Readonly<{ release(): Promise<void> }>;
+// `verify` is the fencing check taken immediately before the durable write:
+// the lease must still be the one lock everybody else honours (see
+// `verifyPromotionLease` in `promotion-lease.ts`). A hold that no longer
+// verifies is treated exactly like a lease that was never acquired.
+export type PromotionLeaseHold = Readonly<{
+  release(): Promise<void>;
+  verify?(): Promise<boolean>;
+}>;
 export type PromotionLeaseGuard = Readonly<{
   acquireForAdmission(): Promise<PromotionLeaseHold | null>;
 }>;
@@ -103,6 +110,7 @@ export class LiveTaskRegistry {
     const hold = await this.promotionLease.acquireForAdmission();
     if (!hold) return { ok: false };
     try {
+      if (hold.verify && !(await hold.verify())) return { ok: false };
       return { ok: true, value: await work() };
     } finally {
       await hold.release();

@@ -3,30 +3,49 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-// The tooling-side half of the promotion lease protocol. It reads and
-// writes exactly the record shape `src/apps/desktop/promotion-lease.ts`
-// does, so the two sides interoperate as one lock even though they run as
-// separate processes in separate runtimes: the promotion CLI is plain Node,
-// the app's admission check runs inside Electron. See that file for the
-// lease's contract; this file must stay behaviourally identical to it.
+// The tooling-side half of the promotion lease protocol. It behaves exactly
+// like `src/apps/desktop/promotion-lease.ts`, so the two sides interoperate
+// as one lock even though they run as separate processes in separate
+// runtimes: the promotion CLI is plain Node, the app's admission runs inside
+// Electron. See that file for the lease's contract; this file must stay
+// behaviourally identical to it.
+//
+// S35-03 (governing pre-review, 2026-09-20): the previous record-based
+// protocol (O_EXCL create, pid liveness, rename-claim recovery) could still
+// remove a live holder's record during a stale-lease recovery race and leave
+// two holders. The lease is now a kernel advisory lock: `open(2)` with
+// `O_EXLOCK | O_NONBLOCK` on ONE fixed inode that is never unlinked. A live
+// holder keeps that descriptor open for the whole lease; a second opener --
+// in any process, this one included -- gets EAGAIN and is refused; a crash,
+// SIGKILL or power loss releases the lock in the kernel, so there is no pid
+// to trust, no stale record to recover and no claim window. The record in
+// the file is diagnostics for a person reading the state directory, never
+// the exclusion itself. It keeps the schema-1 shape so a binary running the
+// previous protocol fails closed against a live lease (it sees a live pid or
+// a shape it cannot recover) instead of removing it.
 
 export const PROMOTION_LEASE_SCHEMA = "farol.next.promotion-lease/1";
 
 const FILE_NAME = "promotion.lease";
-const MAX_BYTES = 4 * 1024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC = fsConstants.O_CLOEXEC ?? 0;
-const ACQUIRE_ATTEMPTS = 8;
+const NON_BLOCKING = fsConstants.O_NONBLOCK ?? 0;
+// macOS/BSD `open(2)` lock flags. Node does not export them; libuv passes
+// the numeric flags to the kernel unchanged.
+const O_SHLOCK = 0x10;
+const O_EXLOCK = 0x20;
+// A shared-lock probe (`isPromotionLeaseHeld`) holds the inode for a few
+// microseconds and would make a genuine acquire arriving in that instant see
+// EAGAIN; a handful of short retries absorbs that without ever waiting on a
+// real holder for long.
+const ACQUIRE_ATTEMPTS = 4;
+const ACQUIRE_RETRY_MS = 5;
 const ROLES = new Set(["promotion", "admission"]);
 
-function defaultIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error?.code !== "ESRCH";
-  }
-}
+// Private per-handle state: the open descriptor that IS the lease, and the
+// identity of the inode it locks. Kept out of the handle object so a handle
+// serialised into a log or a receipt never carries a descriptor.
+const holds = new WeakMap();
 
 export function promotionLeasePath(userData) {
   if (!path.isAbsolute(userData)) {
@@ -35,212 +54,184 @@ export function promotionLeasePath(userData) {
   return path.join(userData, "farol-next-state", FILE_NAME);
 }
 
-function validRecord(value) {
+function assertPlatform() {
+  if (process.platform !== "darwin") {
+    throw new Error("PROMOTION_LEASE_PLATFORM_UNSUPPORTED");
+  }
+}
+
+function sleep(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function privateAndOwned(info) {
+  const effectiveUser = process.geteuid?.();
   return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    value.schema === 1 &&
-    typeof value.generation === "string" &&
-    value.generation.length > 0 &&
-    value.generation.length <= 200 &&
-    ROLES.has(value.role) &&
-    Number.isSafeInteger(value.pid) &&
-    value.pid > 0 &&
-    /^[a-f0-9]{32}$/u.test(value.nonce ?? "") &&
-    typeof value.acquiredAt === "string" &&
-    value.acquiredAt.length > 0 &&
-    value.acquiredAt.length <= 64
+    (effectiveUser === undefined || Number(info.uid) === effectiveUser) &&
+    (Number(info.mode) & 0o077) === 0
   );
 }
 
-async function readLease(file) {
-  let handle;
-  try {
-    handle = await fs.open(
-      file,
-      fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
-    );
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    if (error?.code === "ELOOP") throw new Error("PROMOTION_LEASE_UNSAFE");
-    throw error;
+// The state directory must be the app's own private directory: a symlink or
+// a shared directory in its place would let the lease file be redirected or
+// observed by another user, so both are refused rather than used.
+async function ensureStateDirectory(file) {
+  const directory = path.dirname(file);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const info = await fs.lstat(directory, { bigint: true });
+  if (!info.isDirectory() || !privateAndOwned(info)) {
+    throw new Error("PROMOTION_LEASE_UNSAFE");
   }
+}
+
+async function openLocked(file, flags, mode) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await fs.open(file, flags, mode);
+    } catch (error) {
+      const code = error?.code;
+      if (code === "EAGAIN" || code === "EWOULDBLOCK") {
+        if (attempt >= ACQUIRE_ATTEMPTS) return null;
+        await sleep(ACQUIRE_RETRY_MS);
+        continue;
+      }
+      if (code === "ELOOP") throw new Error("PROMOTION_LEASE_UNSAFE");
+      throw error;
+    }
+  }
+}
+
+/**
+ * Takes the lease for `generation` in `role`, or returns `null` when a live
+ * holder -- another process or this one -- already has it. There is no
+ * recovery step: a holder that died has already lost the kernel lock.
+ */
+export async function acquirePromotionLease(userData, generation, role) {
+  assertPlatform();
+  if (
+    typeof generation !== "string" ||
+    generation.length < 1 ||
+    generation.length > 200
+  ) {
+    throw new Error("PROMOTION_LEASE_GENERATION_INVALID");
+  }
+  if (!ROLES.has(role)) throw new Error("PROMOTION_LEASE_ROLE_INVALID");
+  const file = promotionLeasePath(userData);
+  await ensureStateDirectory(file);
+  const handle = await openLocked(
+    file,
+    fsConstants.O_RDWR |
+      fsConstants.O_CREAT |
+      NO_FOLLOW |
+      CLOSE_ON_EXEC |
+      O_EXLOCK |
+      NON_BLOCKING,
+    0o600,
+  );
+  if (!handle) return null;
+  let info;
   try {
-    const info = await handle.stat();
-    const effectiveUser = process.geteuid?.();
-    if (
-      !info.isFile() ||
-      info.nlink !== 1 ||
-      (effectiveUser !== undefined && info.uid !== effectiveUser) ||
-      (info.mode & 0o077) !== 0
-    ) {
+    info = await handle.stat({ bigint: true });
+    if (!info.isFile() || info.nlink !== 1n || !privateAndOwned(info)) {
       throw new Error("PROMOTION_LEASE_UNSAFE");
     }
-    if (info.size > MAX_BYTES) throw new Error("PROMOTION_LEASE_CORRUPT");
-    const text = await handle.readFile("utf8");
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new Error("PROMOTION_LEASE_CORRUPT");
-    }
-    if (!validRecord(parsed)) throw new Error("PROMOTION_LEASE_CORRUPT");
-    return { record: parsed, serialized: text };
-  } finally {
-    await handle.close();
-  }
-}
-
-async function ensureStateDirectory(file) {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-}
-
-async function createLease(file, record) {
-  await ensureStateDirectory(file);
-  const serialized = `${JSON.stringify(record)}\n`;
-  let handle;
-  try {
-    handle = await fs.open(
-      file,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        NO_FOLLOW |
-        CLOSE_ON_EXEC,
-      0o600,
-    );
-  } catch (error) {
-    if (error?.code === "EEXIST") return false;
-    throw error;
-  }
-  try {
-    await handle.writeFile(serialized, "utf8");
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  return true;
-}
-
-// S35-03/3: `rename()` is atomic and requires its source to exist, so it
-// doubles as an exclusive claim on whatever currently occupies `file` — at
-// most one caller across every process can ever win it for a given
-// occupant; every later caller sees ENOENT once the winner has moved it.
-// This is the "read, then remove in a separate step" gap this function used
-// to have: a second recoverer could read the same stale bytes, then rename
-// away whatever a third process had *already* written in its place,
-// destroying a lease nobody here ever confirmed was stale.
-async function claimForExchange(file) {
-  const claim = `${file}.claim-${randomBytes(8).toString("hex")}`;
-  try {
-    await fs.rename(file, claim);
-  } catch (error) {
-    if (error?.code === "ENOENT") return null;
-    throw error;
-  }
-  return claim;
-}
-
-// Puts a claimed occupant back, but only if nobody has legitimately
-// recreated `file` since it was claimed: `link()` is atomic and requires its
-// destination to be absent, so a fresh writer that raced in during the
-// claim window always wins over the restore.
-async function restoreClaim(claim, file) {
-  try {
-    await fs.link(claim, file);
-  } finally {
-    await fs.unlink(claim).catch(() => undefined);
-  }
-}
-
-async function removeConfirmedStaleLease(
-  file,
-  expectedSerialized,
-  beforeExchange,
-) {
-  const claim = await claimForExchange(file);
-  if (!claim) return false;
-  await beforeExchange?.();
-  let matches;
-  try {
-    const info = await fs.lstat(claim);
-    // A claimed occupant that is not a private regular file cannot be
-    // trusted to compare or to restore faithfully; treat it the same as a
-    // mismatch (put it back, or drop it if something else already took its
-    // place) and let the next real read apply the full safety checks.
-    matches =
-      info.isFile() &&
-      (await fs.readFile(claim, "utf8")) === expectedSerialized;
-  } catch {
-    matches = false;
-  }
-  if (!matches) {
-    await restoreClaim(claim, file).catch((error) => {
-      if (error?.code !== "EEXIST") throw error;
-    });
-    return false;
-  }
-  await fs.unlink(claim).catch(() => undefined);
-  return true;
-}
-
-export async function acquirePromotionLease(
-  userData,
-  generation,
-  role,
-  dependencies = {},
-) {
-  const file = promotionLeasePath(userData);
-  const pid = dependencies.pid ?? process.pid;
-  const isAlive = dependencies.isAlive ?? defaultIsAlive;
-  for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt += 1) {
     const record = {
       schema: 1,
       generation,
       role,
-      pid,
+      pid: process.pid,
       nonce: randomBytes(16).toString("hex"),
       acquiredAt: new Date().toISOString(),
     };
-    if (await createLease(file, record)) return { file, record };
-
-    const existing = await readLease(file);
-    if (!existing) continue;
-    if (isAlive(existing.record.pid)) return null;
-    await removeConfirmedStaleLease(
-      file,
-      existing.serialized,
-      dependencies.beforeExchange,
-    );
+    await handle.truncate(0);
+    await handle.write(`${JSON.stringify(record)}\n`, 0, "utf8");
+    await handle.sync();
+    const lease = { file, record };
+    holds.set(lease, {
+      handle,
+      device: info.dev,
+      inode: info.ino,
+      released: false,
+    });
+    return lease;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
   }
-  throw new Error("PROMOTION_LEASE_CONTENTION");
 }
 
-export async function releasePromotionLease(handle) {
-  const current = await readLease(handle.file).catch(() => null);
-  if (!current) return;
-  if (
-    current.record.pid !== handle.record.pid ||
-    current.record.nonce !== handle.record.nonce
-  ) {
-    return;
-  }
-  await fs.unlink(handle.file).catch((error) => {
-    if (error?.code !== "ENOENT") throw error;
-  });
-}
-
-export async function isPromotionLeaseHeld(userData, dependencies = {}) {
-  const pid = dependencies.pid ?? process.pid;
-  const isAlive = dependencies.isAlive ?? defaultIsAlive;
-  let existing;
+/**
+ * Releases a lease this process acquired. The file stays in place (the lock
+ * lives on that one inode; unlinking it would let a later acquirer lock a
+ * different inode while an older holder still holds this one); its record
+ * is emptied so nobody reads a stale holder. Idempotent.
+ */
+export async function releasePromotionLease(lease) {
+  const state = holds.get(lease);
+  if (!state || state.released) return;
+  state.released = true;
   try {
-    existing = await readLease(promotionLeasePath(userData));
+    await state.handle.truncate(0);
+    await state.handle.sync();
   } catch {
-    return true; // Unsafe or corrupt: fail closed.
+    // The lock is released by the close below regardless.
+  } finally {
+    await state.handle.close().catch(() => undefined);
   }
-  if (!existing) return false;
-  if (existing.record.pid === pid) return false;
-  return isAlive(existing.record.pid);
+}
+
+/**
+ * Fencing check for the moment before a durable step: the lease path must
+ * still name the very inode this lease locks. Only a deliberate deletion of
+ * the lease file could make it false (a fresh acquirer would then lock a new
+ * inode), and a holder that proceeds regardless would be one of two.
+ */
+export async function verifyPromotionLease(lease) {
+  const state = holds.get(lease);
+  if (!state || state.released) return false;
+  let info;
+  try {
+    info = await fs.lstat(lease.file, { bigint: true });
+  } catch {
+    return false;
+  }
+  return (
+    info.isFile() &&
+    info.nlink === 1n &&
+    info.dev === state.device &&
+    info.ino === state.inode
+  );
+}
+
+/**
+ * Whether some live process (this one included) currently holds the lease.
+ * A shared, non-blocking lock attempt answers without ever taking the lease:
+ * EAGAIN means an exclusive holder exists. Anything unsafe or unreadable
+ * fails closed as held.
+ */
+export async function isPromotionLeaseHeld(userData) {
+  assertPlatform();
+  let handle;
+  try {
+    handle = await fs.open(
+      promotionLeasePath(userData),
+      fsConstants.O_RDONLY |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC |
+        O_SHLOCK |
+        NON_BLOCKING,
+    );
+  } catch (error) {
+    const code = error?.code;
+    if (code === "ENOENT") return false;
+    return true; // EAGAIN (held), ELOOP (symlink) or anything else: closed.
+  }
+  try {
+    const info = await handle.stat({ bigint: true });
+    return !(info.isFile() && info.nlink === 1n && privateAndOwned(info));
+  } catch {
+    return true;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }

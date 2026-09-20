@@ -41,7 +41,12 @@ export type ProductSettingsStoreOptions = Readonly<{ root: string }>;
 // guarded edit has no other reason to depend on the chat task registry
 // module. Whichever side actually holds the lease wins; the loser gets its
 // own refusal.
-export type WorkspaceEditLeaseHold = Readonly<{ release(): Promise<void> }>;
+export type WorkspaceEditLeaseHold = Readonly<{
+  release(): Promise<void>;
+  // Fencing check taken immediately before the durable write; a hold that
+  // no longer verifies is treated like a lease that was never acquired.
+  verify?(): Promise<boolean>;
+}>;
 export type WorkspaceEditLeaseGuard = Readonly<{
   acquireForAdmission(): Promise<WorkspaceEditLeaseHold | null>;
 }>;
@@ -1326,6 +1331,10 @@ export class ProductConfigurationService {
       // A live promotion already holds the lease: refuse with a readable
       // code of our own rather than racing its placement, exactly as a live
       // promotion refuses a Chat turn or a native Agent start today.
+      return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
+    }
+    if (lease?.verify && !(await lease.verify())) {
+      await lease.release();
       return this.failure("WORKSPACE_MUTATION_PROMOTION_PENDING");
     }
     const result = await this.mutate((settings) => ({

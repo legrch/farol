@@ -48,6 +48,7 @@ import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
 import {
   acquirePromotionLease,
   releasePromotionLease,
+  verifyPromotionLease,
 } from "./promotion-lease";
 import {
   reconcileTaskContexts,
@@ -420,9 +421,9 @@ let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
 // S35-03/2: takes the SAME cross-process lease a promotion holds from
 // before its drain check through placement, for the whole durable admission
 // — not merely a synchronous check of it (see `live-task-registry.ts`'s
-// `PromotionLeaseGuard`). A contended acquire (the lease flips holder to
-// holder faster than this admission can retry) refuses admission rather
-// than surfacing `PROMOTION_LEASE_CONTENTION` as an unrelated crash.
+// `PromotionLeaseGuard`). An unsafe or unreadable lease state refuses
+// admission rather than surfacing the lease error as an unrelated crash;
+// `verify` fences the durable write against a lease file replaced by hand.
 const liveTaskRegistry = new LiveTaskRegistry(5, {
   acquireForAdmission: async () => {
     const handle = await acquirePromotionLease(
@@ -431,7 +432,10 @@ const liveTaskRegistry = new LiveTaskRegistry(5, {
       "admission",
     ).catch(() => null);
     if (!handle) return null;
-    return { release: () => releasePromotionLease(handle) };
+    return {
+      release: () => releasePromotionLease(handle),
+      verify: () => verifyPromotionLease(handle),
+    };
   },
 });
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
@@ -765,6 +769,45 @@ function setLiveTaskLifecycle(
   );
 }
 
+// S35-03: a later turn of an existing task becomes the `TASK_RUNNING`
+// obligation a promotion's drain check refuses on the moment it is durably
+// running, so it takes the same cross-process lease a first turn's admission
+// takes (`admitDurable`); a live promotion refuses the turn before submission
+// instead of racing its placement.
+async function markLiveTaskRunningDurable(taskId: string): Promise<boolean> {
+  if (liveTaskRegistry.get(taskId)?.lifecycle === "running") return true;
+  const outcome = await liveTaskRegistry.withPromotionLease(async () => {
+    if (!liveTaskRegistry.setLifecycle(taskId, "running")) return;
+    publishTasksState();
+    try {
+      await persistLiveTaskState();
+    } catch {
+      surfaceLiveTaskPersistenceFailure(taskId);
+    }
+  });
+  return outcome.ok;
+}
+
+class PromotionPendingRefusal extends Error {
+  constructor() {
+    super("CHATGPT_TASK_PROMOTION_PENDING");
+  }
+}
+
+// S35-03: a ChatGPT one-shot task's journal writes (`prepare`,
+// `markDispatchIntent`) are exactly the obligations a promotion's drain check
+// refuses on (`CHATGPT_DISPATCH_PREPARED`, `CHATGPT_DELIVERY_PENDING`), so
+// each takes the same cross-process lease for its durable write. A live
+// promotion refuses the task with its own readable code instead of racing
+// the placement it has already validated.
+async function journalUnderPromotionLease<T>(
+  work: () => Promise<T>,
+): Promise<T> {
+  const outcome = await liveTaskRegistry.withPromotionLease(work);
+  if (!outcome.ok) throw new PromotionPendingRefusal();
+  return outcome.value;
+}
+
 function chatGptTaskAdmissionReady(): boolean {
   const snapshot = configuration?.snapshot();
   if (!snapshot || snapshot.status !== "ready") return false;
@@ -1003,7 +1046,7 @@ const routeBTaskLifecycle = createRouteBTaskLifecycle({
   owns: (taskId) => routeBRuntime?.owns(taskId) ?? false,
   existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
   liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
-  markRunning: (taskId) => setLiveTaskLifecycle(taskId, "running"),
+  markRunning: (taskId) => markLiveTaskRunningDurable(taskId),
   mutationInFlight: () => taskMutationInFlight,
   admissionReady: () => chatGptTaskAdmissionReady(),
   admitTask: admitRouteBTask,
@@ -4390,18 +4433,25 @@ async function configureAdmittedProduct(
         return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
       }
       try {
-        await chatGptTaskJournal.prepare({
-          operationId,
-          kind: "attachment",
-        });
-      } catch {
+        const journal = chatGptTaskJournal;
+        await journalUnderPromotionLease(() =>
+          journal.prepare({
+            operationId,
+            kind: "attachment",
+          }),
+        );
+      } catch (error) {
         await discardChatGptAttachments(
           chatGptAttachmentStagingRoot(),
           operationId,
         ).catch(() => {
           attachmentStagingReady = false;
         });
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        return configurationFailure(
+          error instanceof PromotionPendingRefusal
+            ? "CHATGPT_TASK_PROMOTION_PENDING"
+            : "CHATGPT_TASK_JOURNAL_FAILED",
+        );
       }
       pendingChatGptAttachmentTask = {
         operationId,
@@ -4484,9 +4534,16 @@ async function configureAdmittedProduct(
         return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
       }
       try {
-        await chatGptTaskJournal.markDispatchIntent(pending.operationId);
-      } catch {
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        const journal = chatGptTaskJournal;
+        await journalUnderPromotionLease(() =>
+          journal.markDispatchIntent(pending.operationId),
+        );
+      } catch (error) {
+        return configurationFailure(
+          error instanceof PromotionPendingRefusal
+            ? "CHATGPT_TASK_PROMOTION_PENDING"
+            : "CHATGPT_TASK_JOURNAL_FAILED",
+        );
       }
       pendingChatGptAttachmentTask = null;
       chatGptTaskAdmission = true;
@@ -4733,12 +4790,19 @@ async function configureAdmittedProduct(
           return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
         }
         try {
-          await chatGptTaskJournal.prepare({
-            operationId,
-            kind: "readonly",
-          });
-        } catch {
-          return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+          const journal = chatGptTaskJournal;
+          await journalUnderPromotionLease(() =>
+            journal.prepare({
+              operationId,
+              kind: "readonly",
+            }),
+          );
+        } catch (error) {
+          return configurationFailure(
+            error instanceof PromotionPendingRefusal
+              ? "CHATGPT_TASK_PROMOTION_PENDING"
+              : "CHATGPT_TASK_JOURNAL_FAILED",
+          );
         }
         pendingChatGptReadonlyTask = {
           operationId,
@@ -4824,9 +4888,16 @@ async function configureAdmittedProduct(
         return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
       }
       try {
-        await chatGptTaskJournal.markDispatchIntent(pending.operationId);
-      } catch {
-        return configurationFailure("CHATGPT_TASK_JOURNAL_FAILED");
+        const journal = chatGptTaskJournal;
+        await journalUnderPromotionLease(() =>
+          journal.markDispatchIntent(pending.operationId),
+        );
+      } catch (error) {
+        return configurationFailure(
+          error instanceof PromotionPendingRefusal
+            ? "CHATGPT_TASK_PROMOTION_PENDING"
+            : "CHATGPT_TASK_JOURNAL_FAILED",
+        );
       }
       chatGptTaskAdmission = true;
       pendingChatGptReadonlyTask = null;
@@ -6709,8 +6780,8 @@ async function main(): Promise<void> {
       // admission (same lease file, same "admission" role — see the guard
       // above), so a guarded edit's durable critical phase excludes a live
       // promotion exactly the way a Chat turn or a native Agent start
-      // already does. A contended acquire refuses the edit with its own
-      // readable code rather than surfacing lease contention as a crash.
+      // already does. An unsafe or unreadable lease state refuses the edit
+      // with its own readable code rather than surfacing a crash.
       promotionLease: {
         acquireForAdmission: async () => {
           const handle = await acquirePromotionLease(
@@ -6719,7 +6790,10 @@ async function main(): Promise<void> {
             "admission",
           ).catch(() => null);
           if (!handle) return null;
-          return { release: () => releasePromotionLease(handle) };
+          return {
+            release: () => releasePromotionLease(handle),
+            verify: () => verifyPromotionLease(handle),
+          };
         },
       },
     },

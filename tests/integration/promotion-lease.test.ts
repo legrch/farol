@@ -9,6 +9,7 @@ import {
   isPromotionLeaseHeldSync,
   promotionLeasePath,
   releasePromotionLease,
+  verifyPromotionLease,
 } from "../../src/apps/desktop/promotion-lease";
 
 const childScript = fileURLToPath(
@@ -32,7 +33,7 @@ async function userData(): Promise<string> {
 
 function runChild(
   userDataRoot: string,
-  mode: "probe" | "hold" | "acquire-release",
+  mode: "probe" | "acquire-release",
   generation = "child-generation",
 ): Promise<{ stdout: string; code: number | null }> {
   return new Promise((resolve, reject) => {
@@ -48,6 +49,16 @@ function runChild(
       resolve({ stdout: Buffer.concat(stdout).toString("utf8"), code });
     });
   });
+}
+
+function spawnHolder(userDataRoot: string, generation: string) {
+  return spawn(
+    process.execPath,
+    [childScript, userDataRoot, "hold", generation],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
 }
 
 function waitForLine(
@@ -72,6 +83,22 @@ function waitForLine(
   });
 }
 
+function killAndWait(child: ReturnType<typeof spawn>): Promise<void> {
+  return new Promise((resolve) => {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve();
+      return;
+    }
+    child.once("close", () => resolve());
+    child.kill("SIGKILL");
+  });
+}
+
+async function inodeOf(file: string): Promise<{ dev: bigint; ino: bigint }> {
+  const info = await fs.lstat(file, { bigint: true });
+  return { dev: info.dev, ino: info.ino };
+}
+
 describe("promotion lease", () => {
   it("is exclusive within a process: a second acquire refuses while the first holds it", async () => {
     const root = await userData();
@@ -85,7 +112,7 @@ describe("promotion lease", () => {
     await releasePromotionLease(third!);
   });
 
-  it("writes a private regular file at the documented path, never a symlink or a shared one", async () => {
+  it("locks one private regular file at the documented path and keeps that inode across release and re-acquire", async () => {
     const root = await userData();
     const handle = await acquirePromotionLease(root, "gen-a", "promotion");
     expect(handle).not.toBeNull();
@@ -95,25 +122,48 @@ describe("promotion lease", () => {
     expect(info.isFile()).toBe(true);
     expect(info.isSymbolicLink()).toBe(false);
     expect(info.mode & 0o077).toBe(0);
+    expect(info.nlink).toBe(1);
+    const held = JSON.parse(await fs.readFile(file, "utf8"));
+    // Exactly the schema-1 record a binary on the previous protocol reads,
+    // so it fails closed against a live holder instead of removing it.
+    expect(Object.keys(held).sort()).toEqual([
+      "acquiredAt",
+      "generation",
+      "nonce",
+      "pid",
+      "role",
+      "schema",
+    ]);
+    expect(held).toMatchObject({
+      schema: 1,
+      generation: "gen-a",
+      role: "promotion",
+      pid: process.pid,
+    });
+    const before = await inodeOf(file);
     await releasePromotionLease(handle!);
-    await expect(fs.lstat(file)).rejects.toMatchObject({ code: "ENOENT" });
+    // Released: the file stays (the lock lives on this inode), emptied so no
+    // reader mistakes the old record for a holder.
+    const after = await fs.lstat(file);
+    expect(after.size).toBe(0);
+    expect(await inodeOf(file)).toEqual(before);
+    const again = await acquirePromotionLease(root, "gen-b", "promotion");
+    expect(again).not.toBeNull();
+    expect(await inodeOf(file)).toEqual(before);
+    await releasePromotionLease(again!);
   });
 
-  it("releasing a lease that was already recovered as stale does not remove the replacement", async () => {
+  it("a second release of the same handle is a no-op and never disturbs a later holder", async () => {
     const root = await userData();
-    const first = await acquirePromotionLease(root, "gen-a", "promotion", {
-      pid: 999_999, // A pid that is never our own and never alive.
-      isAlive: () => false,
-    });
-    expect(first).not.toBeNull();
-    // The lease looks abandoned to any caller using the real liveness check;
-    // a second, live acquire recovers it.
-    const second = await acquirePromotionLease(root, "gen-b", "promotion");
-    expect(second).not.toBeNull();
-    expect(second!.record.generation).toBe("gen-b");
-    // The original handle's release must not touch the replacement.
+    const first = await acquirePromotionLease(root, "gen-a", "promotion");
     await releasePromotionLease(first!);
-    await expect(fs.lstat(promotionLeasePath(root))).resolves.toBeDefined();
+    const second = await acquirePromotionLease(root, "gen-b", "admission");
+    expect(second).not.toBeNull();
+    await releasePromotionLease(first!);
+    const probe = await runChild(root, "probe");
+    expect(probe.stdout).toBe("REFUSED\n");
+    expect(probe.code).toBe(1);
+    expect(await verifyPromotionLease(second!)).toBe(true);
     await releasePromotionLease(second!);
   });
 
@@ -125,164 +175,198 @@ describe("promotion lease", () => {
     roots.push(outside);
     const decoy = path.join(outside, "decoy.json");
     await fs.writeFile(decoy, "{}", { mode: 0o600 });
-    await fs.mkdir(path.join(root, "farol-next-state"), { recursive: true });
+    await fs.mkdir(path.join(root, "farol-next-state"), {
+      recursive: true,
+      mode: 0o700,
+    });
     await fs.symlink(decoy, promotionLeasePath(root));
     await expect(
       acquirePromotionLease(root, "gen-a", "promotion"),
-    ).rejects.toThrow(/PROMOTION_LEASE/u);
+    ).rejects.toThrow(/PROMOTION_LEASE_UNSAFE/u);
     expect(isPromotionLeaseHeldSync(root)).toBe(true);
   });
 
-  it("the sync check work admission uses reports nothing held for a fresh root", async () => {
+  it("fails closed when the state directory is a symlink or is not private", async () => {
+    const root = await userData();
+    const elsewhere = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-lease-elsewhere-"),
+    );
+    roots.push(elsewhere);
+    await fs.symlink(elsewhere, path.join(root, "farol-next-state"));
+    await expect(
+      acquirePromotionLease(root, "gen-a", "promotion"),
+    ).rejects.toThrow(/PROMOTION_LEASE_UNSAFE/u);
+
+    const shared = await userData();
+    await fs.mkdir(path.join(shared, "farol-next-state"), { mode: 0o755 });
+    await expect(
+      acquirePromotionLease(shared, "gen-a", "promotion"),
+    ).rejects.toThrow(/PROMOTION_LEASE_UNSAFE/u);
+  });
+
+  it("refuses an unknown role or an invalid generation before touching the file", async () => {
+    const root = await userData();
+    await expect(
+      acquirePromotionLease(root, "gen-a", "owner" as never),
+    ).rejects.toThrow(/PROMOTION_LEASE_ROLE_INVALID/u);
+    await expect(acquirePromotionLease(root, "", "promotion")).rejects.toThrow(
+      /PROMOTION_LEASE_GENERATION_INVALID/u,
+    );
+    await expect(fs.lstat(promotionLeasePath(root))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("the synchronous check reports the lock, including one held by this very process", async () => {
     const root = await userData();
     expect(isPromotionLeaseHeldSync(root)).toBe(false);
+    const handle = await acquirePromotionLease(root, "gen-a", "promotion");
+    expect(isPromotionLeaseHeldSync(root)).toBe(true);
+    await releasePromotionLease(handle!);
+    expect(isPromotionLeaseHeldSync(root)).toBe(false);
+    // The probe never took the lease: an acquire right after it succeeds.
+    const again = await acquirePromotionLease(root, "gen-b", "admission");
+    expect(again).not.toBeNull();
+    await releasePromotionLease(again!);
   });
 
   it("cross-process proof: a lease taken in this process refuses a competing acquire in a separate one", async () => {
     const root = await userData();
     const handle = await acquirePromotionLease(root, "gen-a", "promotion");
     expect(handle).not.toBeNull();
-    expect(isPromotionLeaseHeldSync(root)).toBe(false); // Our own pid: not "held by another".
+    const before = await inodeOf(handle!.file);
 
     const probe = await runChild(root, "probe");
     expect(probe.stdout).toBe("REFUSED\n");
     expect(probe.code).toBe(1);
+    // The refused process never replaced the record or the inode.
+    expect(JSON.parse(await fs.readFile(handle!.file, "utf8"))).toEqual(
+      handle!.record,
+    );
+    expect(await inodeOf(handle!.file)).toEqual(before);
 
     await releasePromotionLease(handle!);
     const afterRelease = await runChild(root, "acquire-release");
     expect(afterRelease.stdout).toBe("ACQUIRED\nRELEASED\n");
     expect(afterRelease.code).toBe(0);
+    expect(await inodeOf(handle!.file)).toEqual(before);
   });
 
-  it("a crash that leaves the lease behind is recovered by liveness, never a wedge", async () => {
+  it("a crashed holder's lock is gone in the kernel: the next acquire succeeds at once, on the same inode", async () => {
     const root = await userData();
-    const holder = spawn(
-      process.execPath,
-      [childScript, root, "hold", "gen-a"],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    const holder = spawnHolder(root, "gen-a");
     try {
       await waitForLine(holder, "ACQUIRED");
+      const before = await inodeOf(promotionLeasePath(root));
       expect(isPromotionLeaseHeldSync(root)).toBe(true);
-      // A live competing attempt in this process is refused while the child
-      // really holds the lease.
       await expect(
         acquirePromotionLease(root, "gen-b", "promotion"),
       ).resolves.toBeNull();
 
-      holder.kill("SIGKILL");
-      await new Promise<void>((resolve) =>
-        holder.once("close", () => resolve()),
-      );
+      await killAndWait(holder);
 
-      // The dead holder's lease is stale; recovery must not wedge the next
-      // acquire, and the sync check must not keep reporting it held.
+      expect(isPromotionLeaseHeldSync(root)).toBe(false);
       const recovered = await acquirePromotionLease(root, "gen-c", "promotion");
       expect(recovered).not.toBeNull();
       expect(recovered!.record.generation).toBe("gen-c");
+      expect(await inodeOf(promotionLeasePath(root))).toEqual(before);
       await releasePromotionLease(recovered!);
     } finally {
-      holder.kill("SIGKILL");
+      await killAndWait(holder);
     }
   });
 
-  // S35-03/3: two real processes race to recover the SAME stale lease.
-  // Process A claims the stale bytes, then — deterministically, via a real
-  // file handshake, not a coin flip on OS scheduling — pauses before it
-  // decides what to do with them. While A is paused, a second real process B
-  // sees the lease file genuinely absent (A took it) and legitimately
-  // acquires a fresh lease of its own. A then resumes holding only the OLD,
-  // now-superseded bytes: it must never destroy B's fresh, live lease, and
-  // it must end up refused, not believing it also holds the lease.
-  it("S35-03/3 two real processes racing the same stale lease never let one destroy the other's fresh one", async () => {
+  // S35-03/3, kernel-lock form: three real processes contend for ONE inode.
+  // While A holds, B and C are both refused; after A dies, exactly one later
+  // acquirer wins; the lease file's identity never changes and it never has
+  // a second link, so there is no window in which a second holder could
+  // lock a different file under the same name.
+  it("S35-03/3 three real processes never produce two holders and never move the lease off its inode", async () => {
     const root = await userData();
-
-    // Seed a real, genuinely stale lease: a holder that really acquired it,
-    // then really died.
-    const deadHolder = spawn(
-      process.execPath,
-      [childScript, root, "hold", "gen-dead"],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    await waitForLine(deadHolder, "ACQUIRED");
-    deadHolder.kill("SIGKILL");
-    await new Promise<void>((resolve) =>
-      deadHolder.once("close", () => resolve()),
-    );
-
-    const handshake = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-lease-handshake-"),
-    );
-    roots.push(handshake);
-    const readyFile = path.join(handshake, "a-ready");
-    const goFile = path.join(handshake, "go");
-
-    // Process A: recovers the stale lease, but pauses right after claiming
-    // it (see `promotion-lease-child.mjs`) until this test says "go".
-    const recoverer = spawn(
-      process.execPath,
-      [childScript, root, "recover-pause", "gen-a", readyFile, goFile],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    const recovererOutput: Buffer[] = [];
-    recoverer.stdout.on("data", (chunk: Buffer) => recovererOutput.push(chunk));
+    const file = promotionLeasePath(root);
+    const holder = spawnHolder(root, "gen-a");
     try {
-      // Wait for A to have exclusively claimed the stale bytes and to be
-      // paused (the ready marker is written only from inside that pause).
-      await expect
-        .poll(
-          () =>
-            fs.access(readyFile).then(
-              () => true,
-              () => false,
-            ),
-          {
-            timeout: 10_000,
-          },
-        )
-        .toBe(true);
+      await waitForLine(holder, "ACQUIRED");
+      const identity = await inodeOf(file);
 
-      // While A is paused, the lease file is genuinely absent (A holds only
-      // its private claim). Process B — a real, separate process — now
-      // legitimately acquires a fresh lease at that same path.
-      expect(
-        await fs.lstat(promotionLeasePath(root)).catch(() => null),
-      ).toBeNull();
-      const freshHolder = spawn(
-        process.execPath,
-        [childScript, root, "hold", "gen-b"],
-        { stdio: ["ignore", "pipe", "pipe"] },
+      const [b, c] = await Promise.all([
+        runChild(root, "probe", "gen-b"),
+        runChild(root, "probe", "gen-c"),
+      ]);
+      expect(b.stdout).toBe("REFUSED\n");
+      expect(c.stdout).toBe("REFUSED\n");
+      expect(await inodeOf(file)).toEqual(identity);
+      expect((await fs.lstat(file)).nlink).toBe(1);
+      expect(JSON.parse(await fs.readFile(file, "utf8")).generation).toBe(
+        "gen-a",
       );
-      try {
-        await waitForLine(freshHolder, "ACQUIRED");
-        const freshRecordBefore = JSON.parse(
-          await fs.readFile(promotionLeasePath(root), "utf8"),
-        );
-        expect(freshRecordBefore.generation).toBe("gen-b");
 
-        // Let A resume and finish.
-        await fs.writeFile(goFile, "go", { mode: 0o600 });
-        const exitCode = await new Promise<number | null>((resolve) => {
-          recoverer.once("close", (code) => resolve(code));
-        });
-        const output = Buffer.concat(recovererOutput).toString("utf8");
+      await killAndWait(holder);
 
-        // A must lose the race deterministically: it must never claim to
-        // hold the lease once a fresh, live holder already exists, and it
-        // must never have removed or replaced that holder's record.
-        expect(output).toBe("REFUSED\n");
-        expect(exitCode).toBe(1);
-        const freshRecordAfter = JSON.parse(
-          await fs.readFile(promotionLeasePath(root), "utf8"),
-        );
-        expect(freshRecordAfter).toEqual(freshRecordBefore);
-      } finally {
-        freshHolder.kill("SIGKILL");
+      const [d, e] = await Promise.all([
+        runChild(root, "acquire-release", "gen-d"),
+        runChild(root, "acquire-release", "gen-e"),
+      ]);
+      // Both may win in turn (each releases), but never at once: a winner
+      // prints ACQUIRED then RELEASED; a loser prints REFUSED.
+      for (const outcome of [d, e]) {
+        expect(["ACQUIRED\nRELEASED\n", "REFUSED\n"]).toContain(outcome.stdout);
       }
+      expect([d, e].some((outcome) => outcome.code === 0)).toBe(true);
+      expect(await inodeOf(file)).toEqual(identity);
+      expect((await fs.lstat(file)).nlink).toBe(1);
     } finally {
-      recoverer.kill("SIGKILL");
+      await killAndWait(holder);
     }
+  });
+
+  it("fencing: a lease whose file was deleted underneath it no longer verifies, because a fresh acquirer locks a new inode", async () => {
+    const root = await userData();
+    const handle = await acquirePromotionLease(root, "gen-a", "promotion");
+    expect(handle).not.toBeNull();
+    expect(await verifyPromotionLease(handle!)).toBe(true);
+
+    // The one thing the kernel lock cannot survive: a person removing the
+    // file by hand. A later acquirer then locks a different inode.
+    await fs.unlink(handle!.file);
+    expect(await verifyPromotionLease(handle!)).toBe(false);
+    const holder = spawnHolder(root, "gen-b");
+    try {
+      await waitForLine(holder, "ACQUIRED");
+      expect(await verifyPromotionLease(handle!)).toBe(false);
+      expect(isPromotionLeaseHeldSync(root)).toBe(true);
+    } finally {
+      await killAndWait(holder);
+    }
+    await releasePromotionLease(handle!);
+    expect(await verifyPromotionLease(handle!)).toBe(false);
+  });
+
+  it("a record left behind by the previous protocol is not a holder: the lock, not the bytes, decides", async () => {
+    const root = await userData();
+    await fs.mkdir(path.join(root, "farol-next-state"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await fs.writeFile(
+      promotionLeasePath(root),
+      `${JSON.stringify({
+        schema: 1,
+        generation: "gen-old",
+        role: "promotion",
+        pid: 999_999,
+        nonce: "0".repeat(32),
+        acquiredAt: "2026-09-19T00:00:00.000Z",
+      })}\n`,
+      { mode: 0o600 },
+    );
+    expect(isPromotionLeaseHeldSync(root)).toBe(false);
+    const handle = await acquirePromotionLease(root, "gen-new", "admission");
+    expect(handle).not.toBeNull();
+    expect(JSON.parse(await fs.readFile(handle!.file, "utf8"))).toMatchObject({
+      generation: "gen-new",
+      pid: process.pid,
+    });
+    await releasePromotionLease(handle!);
   });
 });

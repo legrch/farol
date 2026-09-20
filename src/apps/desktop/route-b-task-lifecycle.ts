@@ -35,7 +35,12 @@ export type RouteBTaskLifecyclePorts<Snapshot> = Readonly<{
   // True while the task is in the live registry, whether or not its route
   // exists yet; a thread that is not a live task starts from nothing.
   liveTask(taskId: string): boolean;
-  markRunning(taskId: string): void;
+  // Marks a later turn of an existing task as running and makes that durable
+  // under the same cross-process promotion lease a first turn's admission
+  // takes: a running turn is a promotion obligation, so it must not land in
+  // the gap after a promotion's drain check. `false` means a live promotion
+  // holds the lease and the turn is refused before submission.
+  markRunning(taskId: string): Promise<boolean>;
   mutationInFlight(): boolean;
   admissionReady(): boolean;
   // Admits the first turn of a thread as a new task: creates its route, saves
@@ -83,7 +88,9 @@ export function createRouteBTaskLifecycle<Snapshot>(
       if (closing.has(threadId)) return { ok: false, code: "TASK_CLOSING" };
       const existing = ports.existingSurface(threadId);
       if (existing) {
-        ports.markRunning(threadId);
+        if (!(await ports.markRunning(threadId))) {
+          return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
+        }
         return { ok: true, surface: existing };
       }
       if (ports.mutationInFlight()) {

@@ -170,6 +170,9 @@ describe("Route B task lifecycle composed as the product composes it", () => {
         taskId: string;
         outcomes: TaskContextDeletion[];
       }>;
+      // Refuses `markRunning` for these tasks, as the product does while a
+      // live promotion holds the cross-process lease.
+      markRunningRefused?: Set<string>;
     }> = {},
   ) {
     const root = await fs.realpath(
@@ -220,8 +223,10 @@ describe("Route B task lifecycle composed as the product composes it", () => {
         owns: (taskId) => route?.owns(taskId) ?? false,
         existingSurface: (taskId) => routes.get(taskId) ?? null,
         liveTask: (taskId) => registry.get(taskId) !== null,
-        markRunning: (taskId) => {
+        markRunning: async (taskId) => {
+          if (hooks.markRunningRefused?.has(taskId)) return false;
           registry.setLifecycle(taskId, "running");
+          return true;
         },
         mutationInFlight: () => false,
         admissionReady: () => true,
@@ -357,6 +362,46 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     expect(routes.has(threadA)).toBe(false);
     expect(surfaceA.disposed).toBe(1);
     expect(lifecycle.closing(threadA)).toBe(false);
+  });
+
+  it("S35-03 a later turn on an existing task is refused before submission while its running mark cannot be made durable, and runs once it can", async () => {
+    const refused = new Set<string>();
+    const { registry, routes, admitTask, route } = await compose({
+      markRunningRefused: refused,
+    });
+    const first = await post(
+      route,
+      initialRequest(threadA, "turn-a-1", "Start A."),
+    );
+    expect(await first.text()).toContain("response.completed");
+    const surfaceA = routes.get(threadA)!;
+    await vi.waitFor(() => expect(route.owns(threadA)).toBe(false));
+    expect(registry.get(threadA)?.lifecycle).toBe("idle");
+
+    // A live promotion holds the lease: the later turn is refused before
+    // anything reaches the conversation, and the task stays idle.
+    refused.add(threadA);
+    const second = await post(
+      route,
+      initialRequest(threadA, "turn-a-2", "Continue A."),
+    );
+    const refusedText = await second.text();
+    expect(refusedText).toContain("TASK_ROUTE_UNAVAILABLE");
+    expect(refusedText).not.toContain("response.completed");
+    expect(surfaceA.prompts).toHaveLength(1);
+    expect(registry.get(threadA)?.lifecycle).toBe("idle");
+    expect(admitTask).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(route.owns(threadA)).toBe(false));
+
+    // Released: the same thread's next turn runs on its own surface.
+    refused.delete(threadA);
+    const third = await post(
+      route,
+      initialRequest(threadA, "turn-a-3", "Continue A again."),
+    );
+    expect(await third.text()).toContain("response.completed");
+    expect(surfaceA.prompts).toHaveLength(2);
+    expect(admitTask).toHaveBeenCalledTimes(1);
   });
 
   it("HR-007 refuses a turn on a task whose close has begun, and disposes that surface only after the refusal", async () => {
