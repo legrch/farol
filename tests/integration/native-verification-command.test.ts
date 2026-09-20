@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -117,6 +118,138 @@ async function compileCommandFixture(
     executablePath,
   ]);
   return executablePath;
+}
+
+// One C string literal for `value`: every byte outside plain printable ASCII
+// (and the quote and backslash) becomes a three-digit octal escape, so a tab,
+// a non-ASCII path or an embedded NUL in a listing survives
+// `-Wall -Wextra -Werror` verbatim.
+function cString(value: string): string {
+  const escaped = [...Buffer.from(value, "utf8")]
+    .map((byte) =>
+      byte >= 0x20 && byte < 0x7f && byte !== 0x22 && byte !== 0x5c
+        ? String.fromCharCode(byte)
+        : `\\${byte.toString(8).padStart(3, "0")}`,
+    )
+    .join("");
+  return `"${escaped}"`;
+}
+
+// A stand-in for Git (the same pattern this file's other fixtures and
+// native-verification-command-failures.test.ts's mocked spawn use). It
+// answers the tracked-path listing (`ls-files -z --stage`) with `listing`
+// -- an empty string means "nothing tracked" -- and answers the fixed status
+// command by running `probe` (C statements that set `allowed` to non-zero
+// when the guarded operation succeeded) and printing one porcelain header
+// record, `## <verdict>`, which the route's structural parser renders as
+// `## <verdict>\n`. The sandbox's own refusal or grant decides the verdict,
+// not application logic.
+function verdictFixtureSource(
+  options: Readonly<{
+    listing: string;
+    probe: string;
+    allowed: string;
+    denied: string;
+  }>,
+): string {
+  return `#include <fcntl.h>
+#include <stddef.h>
+#include <string.h>
+#include <unistd.h>
+
+static int write_all(const char *bytes, size_t length) {
+  return write(STDOUT_FILENO, bytes, length) == (ssize_t)length;
+}
+
+int main(int argc, char **argv) {
+  for (int index = 1; index < argc; index += 1) {
+    if (strcmp(argv[index], "ls-files") == 0) {
+      static const char listing[] = ${cString(options.listing)};
+      return sizeof(listing) == 1 || write_all(listing, sizeof(listing) - 1) ? 0 : 1;
+    }
+  }
+  int allowed = 0;
+  ${options.probe}
+  static const char allowed_message[] = ${cString(`## ${options.allowed}`)};
+  static const char denied_message[] = ${cString(`## ${options.denied}`)};
+  const char *message = allowed ? allowed_message : denied_message;
+  const size_t length = allowed ? sizeof(allowed_message) - 1 : sizeof(denied_message) - 1;
+  return write_all(message, length) && write_all("", 1) ? 0 : 1;
+}
+`;
+}
+
+async function commit(cwd: string, message: string): Promise<void> {
+  await executeFile(
+    git,
+    [
+      "-C",
+      cwd,
+      "-c",
+      "user.name=Farol Test",
+      "-c",
+      "user.email=farol-test@invalid.example",
+      "commit",
+      "--quiet",
+      "-m",
+      message,
+    ],
+    { env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" } },
+  );
+}
+
+type TreeFingerprint = Readonly<{
+  path: string;
+  kind: "directory" | "file" | "symlink";
+  mode: number;
+  mtimeNs: string;
+  size?: number;
+  nlink?: number;
+  sha256?: string;
+  target?: string;
+}>;
+
+// Everything about a tree that a stray write would move: names, kinds,
+// modes, mtimes, sizes, link counts, content digests and symlink targets.
+async function fingerprintTree(
+  directory: string,
+  base = directory,
+): Promise<TreeFingerprint[]> {
+  const rows: TreeFingerprint[] = [];
+  const entries = (await fs.readdir(directory, { withFileTypes: true })).sort(
+    (left, right) => left.name.localeCompare(right.name),
+  );
+  for (const entry of entries) {
+    const full = path.join(directory, entry.name);
+    const stat = await fs.lstat(full, { bigint: true });
+    const relative = path.relative(base, full);
+    const common = {
+      path: relative,
+      mode: Number(stat.mode),
+      mtimeNs: String(stat.mtimeNs),
+    };
+    if (entry.isSymbolicLink()) {
+      rows.push({
+        ...common,
+        kind: "symlink",
+        target: await fs.readlink(full),
+      });
+    } else if (entry.isDirectory()) {
+      rows.push({ ...common, kind: "directory" });
+      rows.push(...(await fingerprintTree(full, base)));
+    } else {
+      rows.push({
+        ...common,
+        kind: "file",
+        size: Number(stat.size),
+        nlink: Number(stat.nlink),
+        sha256: createHash("sha256")
+          .update(await fs.readFile(full))
+          .digest("hex"),
+      });
+    }
+  }
+  return rows;
 }
 
 beforeEach(async () => {
@@ -317,38 +450,26 @@ int main(void) {
 
       const parentReader = await compileCommandFixture(
         "parent-reader",
-        `#include <fcntl.h>
-#include <stddef.h>
-#include <unistd.h>
-
-int main(void) {
-  const int descriptor = open(${JSON.stringify(parentCanary)}, O_RDONLY);
-  const char denied[] = "parent denied\\n";
-  const char readable[] = "parent readable\\n";
-  const char *output = descriptor < 0 ? denied : readable;
-  const size_t length = descriptor < 0 ? sizeof(denied) - 1 : sizeof(readable) - 1;
-  if (descriptor >= 0) {
-    close(descriptor);
-  }
-  const ssize_t written = write(STDOUT_FILENO, output, length);
-  return written == (ssize_t)length ? 0 : 1;
-}
-`,
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(${cString(parentCanary)}, O_RDONLY); if (descriptor >= 0) { close(descriptor); allowed = 1; } }`,
+          allowed: "parent readable",
+          denied: "parent denied",
+        }),
       );
       // The sandboxed process runs bound to the snapshot alone: the parent
       // directory the worktree's own gitdir lives under is never granted.
       // N02c runs this same substitute "git" twice (tracked-path discovery,
-      // then the fixed command); its first invocation's output does not
-      // parse as a tracked-path listing, which N02c treats as "nothing
-      // tracked" rather than a hard failure, so the second invocation still
-      // runs and its denial is still what is reported.
+      // then the fixed command); the fixture answers the first with an empty
+      // listing ("nothing tracked"), so the second runs over the
+      // metadata-only snapshot and its denial is what is reported.
       await expect(
         workspace(async () => parentReader).execute(
           request(grant ?? undefined),
         ),
       ).resolves.toMatchObject({
         ok: true,
-        value: { stdout: "parent denied\n" },
+        value: { stdout: "## parent denied\n" },
       });
     } finally {
       root = mainRoot;
@@ -602,23 +723,12 @@ int main(void) {
     });
     const credentialReader = await compileCommandFixture(
       "credential-reader",
-      `#include <fcntl.h>
-#include <stddef.h>
-#include <unistd.h>
-
-int main(void) {
-  const int descriptor = open(${JSON.stringify(credential)}, O_RDONLY);
-  const char denied[] = "credential denied\\n";
-  const char readable[] = "credential readable\\n";
-  const char *output = descriptor < 0 ? denied : readable;
-  const size_t length = descriptor < 0 ? sizeof(denied) - 1 : sizeof(readable) - 1;
-  if (descriptor >= 0) {
-    close(descriptor);
-  }
-  const ssize_t written = write(STDOUT_FILENO, output, length);
-  return written == (ssize_t)length ? 0 : 1;
-}
-`,
+      verdictFixtureSource({
+        listing: "",
+        probe: `{ const int descriptor = open(${cString(credential)}, O_RDONLY); if (descriptor >= 0) { close(descriptor); allowed = 1; } }`,
+        allowed: "credential readable",
+        denied: "credential denied",
+      }),
     );
 
     await expect(
@@ -627,7 +737,7 @@ int main(void) {
       ok: true,
       value: {
         kind: "workspace.command",
-        stdout: "credential denied\n",
+        stdout: "## credential denied\n",
         network: "none",
       },
     });
@@ -642,30 +752,19 @@ int main(void) {
     try {
       const sentinelReader = await compileCommandFixture(
         "sentinel-reader",
-        `#include <fcntl.h>
-#include <stddef.h>
-#include <unistd.h>
-
-int main(void) {
-  const int descriptor = open(${JSON.stringify(sentinel)}, O_RDONLY);
-  const char denied[] = "sentinel denied\\n";
-  const char readable[] = "sentinel readable\\n";
-  const char *output = descriptor < 0 ? denied : readable;
-  const size_t length = descriptor < 0 ? sizeof(denied) - 1 : sizeof(readable) - 1;
-  if (descriptor >= 0) {
-    close(descriptor);
-  }
-  const ssize_t written = write(STDOUT_FILENO, output, length);
-  return written == (ssize_t)length ? 0 : 1;
-}
-`,
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(${cString(sentinel)}, O_RDONLY); if (descriptor >= 0) { close(descriptor); allowed = 1; } }`,
+          allowed: "sentinel readable",
+          denied: "sentinel denied",
+        }),
       );
 
       await expect(
         workspace(async () => sentinelReader).execute(request()),
       ).resolves.toMatchObject({
         ok: true,
-        value: { stdout: "sentinel denied\n" },
+        value: { stdout: "## sentinel denied\n" },
       });
     } finally {
       await fs.rm(outside, { recursive: true, force: true });
@@ -704,13 +803,26 @@ int main(void) {
     });
   });
 
-  it("terminates a reviewed command before unbounded output escapes", async () => {
+  it("terminates a reviewed command before unbounded output escapes, under the bound that invocation has", async () => {
+    // The fixed HEAD command: the product's 64 KiB result bound.
+    await expect(
+      workspace(async () => "/usr/bin/yes").execute(headRequest()),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+        retry: "never",
+      },
+    });
+    // `git.status` first asks for the tracked-path listing, which has its
+    // own, larger budget (32 MiB) and its own code: an unbounded listing is
+    // still killed, and told apart from an oversized result.
     await expect(
       workspace(async () => "/usr/bin/yes").execute(request()),
     ).resolves.toMatchObject({
       ok: false,
       error: {
-        code: "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+        code: "WORKSPACE_TRACKED_LIST_TOO_LARGE",
         retry: "never",
       },
     });
@@ -1158,49 +1270,517 @@ int main(void) {
     }
   });
 
-  // N02d: the Seatbelt write grant used to cover the whole snapshot, which a
-  // linked working-tree file inside it makes dangerous -- that file is a hard
-  // link to the owner's own inode (workspace-snapshot.ts / safe_open.py), so
-  // a wide write grant lets the fixed Git command rewrite the owner's real
-  // file. These tests substitute a stand-in for the Git binary (the same
-  // pattern `native-verification-command-failures.test.ts`'s mocked spawn and
-  // this file's other `compileCommandFixture` fixtures already use) that
-  // attempts a write itself, so the sandbox's own refusal or grant is what
-  // decides the outcome, not application logic.
+  // N02e: the semantics the product promises for the two fixed commands,
+  // proven through the production route (`NativeReadonlyWorkspace` or
+  // `executeNativeVerificationCommand` with the real snapshot factory), not
+  // at the helper alone.
+  describe("N02e point-in-time clone semantics through the production route", () => {
+    it("keeps a denied prefix out of the status result whatever its paths carry: non-ASCII, spaces, an arrow, and renames across it", async () => {
+      await fs.mkdir(path.join(root, "private"), { mode: 0o700 });
+      await fs.mkdir(path.join(root, "public"), { mode: 0o700 });
+      const tracked: Record<string, string> = {
+        "private/отчёт.md": "report\n",
+        "private/has space.txt": "space\n",
+        "private/a -> b.txt": "arrow\n",
+        "private/out.txt": "out\n",
+        "public/in.txt": "in\n",
+      };
+      for (const [relative, content] of Object.entries(tracked)) {
+        await fs.writeFile(path.join(root, relative), content, {
+          mode: 0o600,
+        });
+      }
+      await executeFile(git, [
+        "-C",
+        root,
+        "add",
+        "--",
+        ...Object.keys(tracked),
+      ]);
+      await commit(root, "denied fixture");
+      for (const relative of [
+        "private/отчёт.md",
+        "private/has space.txt",
+        "private/a -> b.txt",
+      ]) {
+        await fs.appendFile(path.join(root, relative), "changed\n");
+      }
+      await fs.writeFile(path.join(root, "README.md"), "after\n", {
+        mode: 0o600,
+      });
+      await executeFile(git, [
+        "-C",
+        root,
+        "mv",
+        "public/in.txt",
+        "private/moved-in.txt",
+      ]);
+      await executeFile(git, [
+        "-C",
+        root,
+        "mv",
+        "private/out.txt",
+        "public/moved-out.txt",
+      ]);
+
+      const result = await workspace().execute(request());
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+      if (!result.ok || result.value.kind !== "workspace.command") return;
+      const { stdout } = result.value;
+      expect(stdout).toMatch(/^## [^\n]+\n/u);
+      expect(stdout).toContain(" M README.md\n");
+      // The visible halves of the two renames are still reported (as a
+      // staged deletion and a staged addition, or as a rename between the
+      // two visible paths); nothing under the denied prefix is.
+      expect(stdout).toContain("public/in.txt");
+      expect(stdout).toContain("public/moved-out.txt");
+      for (const forbidden of [
+        "private",
+        "\\320",
+        "отчёт",
+        "has space",
+        "a -> b",
+        "moved-in",
+        '"',
+      ]) {
+        expect(stdout).not.toContain(forbidden);
+      }
+      expect(result.value.outputBytes).toBe(Buffer.byteLength(stdout));
+    });
+
+    it("excludes a case variant of a denied prefix on this side, so the helper is never asked for it", async () => {
+      // On the default case-insensitive volume `Private` and `private` are
+      // one directory; on a case-sensitive one they are siblings. Either
+      // way the index records the path as typed, and request() denies
+      // `private`.
+      await fs.mkdir(path.join(root, "Private"), {
+        recursive: true,
+        mode: 0o700,
+      });
+      await fs.writeFile(path.join(root, "Private", "upper.txt"), "u\n", {
+        mode: 0o600,
+      });
+      await executeFile(git, ["-C", root, "add", "--", "Private/upper.txt"]);
+      await commit(root, "case variant");
+      await fs.appendFile(path.join(root, "Private", "upper.txt"), "changed\n");
+      expect(
+        (await executeFile(git, ["-C", root, "ls-files"])).stdout,
+      ).toContain("Private/upper.txt");
+
+      const result = await workspace().execute(request());
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+      if (!result.ok || result.value.kind !== "workspace.command") return;
+      expect(result.value.stdout).not.toContain("upper.txt");
+      expect(result.value.stdout).not.toMatch(/private/iu);
+    });
+
+    it("reports a tracked file deleted from the working tree and one replaced by a directory, and never carries a gitlink", async () => {
+      await fs.writeFile(path.join(root, "gone.txt"), "g\n", { mode: 0o600 });
+      await fs.writeFile(path.join(root, "dir-now.txt"), "d\n", {
+        mode: 0o600,
+      });
+      await executeFile(git, [
+        "-C",
+        root,
+        "add",
+        "--",
+        "gone.txt",
+        "dir-now.txt",
+      ]);
+      await commit(root, "deleted fixture");
+      await fs.rm(path.join(root, "gone.txt"));
+      await fs.rm(path.join(root, "dir-now.txt"));
+      await fs.mkdir(path.join(root, "dir-now.txt"), { mode: 0o700 });
+      await fs.writeFile(path.join(root, "dir-now.txt", "inner.txt"), "i\n", {
+        mode: 0o600,
+      });
+      const head = (
+        await executeFile(git, ["-C", root, "rev-parse", "HEAD"])
+      ).stdout.trim();
+      await executeFile(git, [
+        "-C",
+        root,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `160000,${head},sub`,
+      ]);
+
+      const result = await workspace().execute(request());
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+      if (!result.ok || result.value.kind !== "workspace.command") return;
+      expect(result.value.stdout).toContain(" D gone.txt\n");
+      expect(result.value.stdout).toContain(" D dir-now.txt\n");
+      expect(result.value.stdout).not.toContain("sub");
+      expect(result.value.stdout).not.toContain("inner");
+    });
+
+    it("lists and clones three thousand tracked files without touching the result bound", async () => {
+      await fs.mkdir(path.join(root, "many"), { mode: 0o700 });
+      const names = Array.from(
+        { length: 3_000 },
+        (_, index) =>
+          `many/file-${String(index).padStart(4, "0")}-of-three-thousand.txt`,
+      );
+      for (let start = 0; start < names.length; start += 250) {
+        await Promise.all(
+          names
+            .slice(start, start + 250)
+            .map((name) =>
+              fs.writeFile(path.join(root, name), `${name}\n`, { mode: 0o600 }),
+            ),
+        );
+      }
+      await executeFile(git, ["-C", root, "add", "--", "many"]);
+      await commit(root, "three thousand");
+      const last = names[names.length - 1] ?? "";
+      await fs.appendFile(path.join(root, last), "changed\n");
+
+      const result = await workspace().execute(request());
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+      if (!result.ok || result.value.kind !== "workspace.command") return;
+      expect(result.value.stdout).toMatch(
+        /^## [^\n]+\n M many\/file-2999-of-three-thousand\.txt\n$/u,
+      );
+    }, 60_000);
+
+    it("refuses instead of answering when the index changes between the metadata snapshot and the tracked-path snapshot", async () => {
+      const input = request();
+      if (input.operation.kind !== "verification.run") {
+        throw new Error("verification operation expected");
+      }
+      const factory = snapshotFactory();
+      const phases: number[] = [];
+      const result = await executeNativeVerificationCommand(
+        input,
+        input.operation,
+        {
+          attestGit: async () => git,
+          createSnapshot: async (snapshotRequest) => {
+            const outcome = await factory(snapshotRequest);
+            phases.push(snapshotRequest.paths?.length ?? -1);
+            if (snapshotRequest.paths?.length === 0) {
+              // After the metadata-only snapshot copied the index and before
+              // the tracked-path snapshot is built: the owner stages a file.
+              await fs.writeFile(path.join(root, "newfile.txt"), "n\n", {
+                mode: 0o600,
+              });
+              await executeFile(git, ["-C", root, "add", "--", "newfile.txt"]);
+            }
+            return outcome;
+          },
+        },
+      );
+      expect(phases).toEqual([0, 1]);
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT",
+          retry: "never",
+        },
+      });
+    });
+
+    it("refuses the whole command for a tracked path it will not carry, instead of proceeding with an empty list", async () => {
+      const blob = (
+        await executeFile(git, ["-C", root, "hash-object", "-w", "README.md"])
+      ).stdout.trim();
+      await executeFile(git, [
+        "-C",
+        root,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `100644,${blob},back\\slash.txt`,
+      ]);
+
+      await expect(workspace().execute(request())).resolves.toEqual({
+        ok: false,
+        error: { code: "WORKSPACE_TRACKED_PATH_UNSUPPORTED", retry: "never" },
+      });
+    });
+
+    it("keeps the owner's files readable and searchable while a snapshot of them is held open", async () => {
+      const input = request();
+      if (input.operation.kind !== "verification.run") {
+        throw new Error("verification operation expected");
+      }
+      const factory = snapshotFactory();
+      const reader = workspace();
+      let observedWhileOpen = false;
+      const result = await executeNativeVerificationCommand(
+        input,
+        input.operation,
+        {
+          attestGit: async () => git,
+          createSnapshot: async (snapshotRequest) => {
+            const outcome = await factory(snapshotRequest);
+            if (!outcome.ok || (snapshotRequest.paths?.length ?? 0) === 0) {
+              return outcome;
+            }
+            // The tracked-path snapshot exists now and carries README.md; the
+            // owner's own file is still a single-link regular file, so the
+            // descriptor helper's reads of it are unaffected.
+            expect((await fs.stat(path.join(root, "README.md"))).nlink).toBe(1);
+            await expect(
+              reader.execute({
+                workspace: input.workspace,
+                operation: {
+                  kind: "workspace.read",
+                  relativePath: "README.md",
+                },
+              }),
+            ).resolves.toMatchObject({
+              ok: true,
+              value: { kind: "workspace.text", text: "before\n" },
+            });
+            await expect(
+              reader.execute({
+                workspace: input.workspace,
+                operation: {
+                  kind: "workspace.search",
+                  relativePath: ".",
+                  pattern: "before",
+                },
+              }),
+            ).resolves.toMatchObject({
+              ok: true,
+              value: {
+                kind: "workspace.matches",
+                matches: [expect.objectContaining({ path: "README.md" })],
+              },
+            });
+            observedWhileOpen = true;
+            return outcome;
+          },
+        },
+      );
+      expect(observedWhileOpen).toBe(true);
+      expect(result).toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+    });
+
+    it("leaves the owner's real .git byte-for-byte untouched around a status and a HEAD run, even when the index would be refreshed", async () => {
+      // A future mtime with unchanged content forces Git to reread the file
+      // and rewrite the index's cached stat data -- in the snapshot's copy.
+      const future = new Date(Date.now() + 60_000);
+      await fs.utimes(path.join(root, "README.md"), future, future);
+      const before = await fingerprintTree(path.join(root, ".git"));
+      expect(before.some((row) => row.path === "index")).toBe(true);
+
+      await expect(workspace().execute(request())).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.status" },
+      });
+      await expect(workspace().execute(headRequest())).resolves.toMatchObject({
+        ok: true,
+        value: { kind: "workspace.command", command: "git.head" },
+      });
+
+      expect(await fingerprintTree(path.join(root, ".git"))).toEqual(before);
+    });
+
+    describe("repository format extensions", () => {
+      async function freshRepository(
+        ...initArguments: string[]
+      ): Promise<string> {
+        const directory = await fs.realpath(
+          await fs.mkdtemp(
+            path.join(os.tmpdir(), "farol-next-command-format-"),
+          ),
+        );
+        await fs.chmod(directory, 0o700);
+        await executeFile(git, [
+          "init",
+          "--quiet",
+          ...initArguments,
+          directory,
+        ]);
+        await fs.writeFile(path.join(directory, "README.md"), "before\n", {
+          mode: 0o600,
+        });
+        await executeFile(git, ["-C", directory, "add", "README.md"]);
+        await commit(directory, "fixture");
+        return directory;
+      }
+
+      async function expectBothCommandsOver(
+        directory: string,
+        headPattern: RegExp,
+      ): Promise<void> {
+        const mainRoot = root;
+        root = directory;
+        try {
+          const expected = (
+            await executeFile(git, [
+              "-C",
+              root,
+              "rev-parse",
+              "--verify",
+              "HEAD",
+            ])
+          ).stdout;
+          expect(expected).toMatch(headPattern);
+          await expect(
+            workspace().execute(headRequest()),
+          ).resolves.toMatchObject({
+            ok: true,
+            value: { command: "git.head", stdout: expected },
+          });
+          await fs.writeFile(path.join(root, "README.md"), "after\n", {
+            mode: 0o600,
+          });
+          await expect(workspace().execute(request())).resolves.toMatchObject({
+            ok: true,
+            value: {
+              command: "git.status",
+              stdout: expect.stringContaining(" M README.md\n"),
+            },
+          });
+        } finally {
+          root = mainRoot;
+          await fs.rm(directory, { recursive: true, force: true });
+        }
+      }
+
+      it("runs both commands over a sha256 repository", async () => {
+        await expectBothCommandsOver(
+          await freshRepository("--object-format=sha256"),
+          /^[0-9a-f]{64}\n$/u,
+        );
+      });
+
+      it("runs both commands over a reftable repository when the installed Git supports it", async () => {
+        let directory: string;
+        try {
+          directory = await freshRepository("--ref-format=reftable");
+        } catch (error) {
+          console.warn(
+            `reftable case skipped: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return;
+        }
+        await expectBothCommandsOver(directory, /^[0-9a-f]{40}\n$/u);
+      });
+
+      it("carries extensions.worktreeConfig and reduces config.worktree, so nothing named there can run", async () => {
+        const canary = path.join(root, "worktree-fsmonitor-ran");
+        const monitor = path.join(root, "worktree-monitor.sh");
+        await fs.writeFile(
+          monitor,
+          `#!/bin/sh\ntouch ${JSON.stringify(canary)}\n`,
+          { mode: 0o700 },
+        );
+        for (const setting of [
+          ["core.repositoryformatversion", "1"],
+          ["extensions.worktreeConfig", "true"],
+          ["--worktree", "core.fsmonitor", monitor],
+          ["--worktree", "core.ignorecase", "true"],
+        ]) {
+          await executeFile(git, ["-C", root, "config", ...setting]);
+        }
+        const future = new Date(Date.now() + 60_000);
+        await fs.utimes(path.join(root, "README.md"), future, future);
+        const input = request();
+        if (input.operation.kind !== "verification.run") {
+          throw new Error("verification operation expected");
+        }
+        const factory = snapshotFactory();
+        const worktreeConfigs: string[] = [];
+        const configs: string[] = [];
+
+        const result = await executeNativeVerificationCommand(
+          input,
+          input.operation,
+          {
+            attestGit: async () => git,
+            createSnapshot: async (snapshotRequest) => {
+              const outcome = await factory(snapshotRequest);
+              if (outcome.ok) {
+                worktreeConfigs.push(
+                  await fs.readFile(
+                    path.join(outcome.path, ".git", "config.worktree"),
+                    "utf8",
+                  ),
+                );
+                configs.push(
+                  await fs.readFile(
+                    path.join(outcome.path, ".git", "config"),
+                    "utf8",
+                  ),
+                );
+              }
+              return outcome;
+            },
+          },
+        );
+        expect(result).toMatchObject({
+          ok: true,
+          value: { kind: "workspace.command", command: "git.status" },
+        });
+        await expect(fs.stat(canary)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(worktreeConfigs.length).toBe(2);
+        for (const text of worktreeConfigs) {
+          expect(text).toBe("[core]\n\tignorecase = true\n");
+        }
+        for (const text of configs) {
+          expect(text).toContain("[extensions]\n\tworktreeconfig = true\n");
+          expect(text).not.toContain("fsmonitor");
+        }
+      });
+
+      it("refuses a repository whose object store borrows through objects/info/alternates", async () => {
+        await fs.writeFile(
+          path.join(root, ".git", "objects", "info", "alternates"),
+          "/nonexistent/OUTSIDE-SENTINEL/objects\n",
+          { mode: 0o600 },
+        );
+
+        for (const operation of [request(), headRequest()]) {
+          await expect(workspace().execute(operation)).resolves.toEqual({
+            ok: false,
+            error: {
+              code: "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED",
+              retry: "never",
+            },
+          });
+        }
+      });
+    });
+  });
+
+  // N02d: the Seatbelt write grant names exactly the snapshot's index and
+  // index lock. Every working-tree file inside the snapshot is a clone on an
+  // inode of its own (workspace-snapshot.ts / safe_open.py), so no write
+  // through the snapshot could reach the owner's bytes in any case; the
+  // literal grant additionally keeps the fixed command from altering its own
+  // evidence. These tests substitute a stand-in for the Git binary
+  // (`verdictFixtureSource`) that attempts a write itself, so the sandbox's
+  // own refusal or grant is what decides the outcome, not application logic.
   describe("N02d write grant", () => {
-    it("denies a write into a linked working-tree file inside the snapshot, leaving the owner's file untouched", async () => {
+    it("denies a write into a working-tree file inside the snapshot, leaving the owner's file untouched", async () => {
       const worktreeWriteAttempt = await compileCommandFixture(
         "worktree-write-attempt",
-        `#include <fcntl.h>
-#include <stddef.h>
-#include <string.h>
-#include <unistd.h>
-
-int main(int argc, char **argv) {
-  for (int index = 1; index < argc; index += 1) {
-    if (strcmp(argv[index], "ls-files") == 0) {
-      const char entry[] = "README.md";
-      const ssize_t entry_written = write(STDOUT_FILENO, entry, sizeof(entry) - 1);
-      const ssize_t nul_written = write(STDOUT_FILENO, "", 1);
-      return entry_written == (ssize_t)(sizeof(entry) - 1) && nul_written == 1 ? 0 : 1;
-    }
-  }
-  const int descriptor = open("README.md", O_WRONLY);
-  const char payload[] = "TAMPERED\\n";
-  ssize_t written = -1;
-  if (descriptor >= 0) {
-    written = write(descriptor, payload, sizeof(payload) - 1);
-    close(descriptor);
-  }
-  const int allowed = descriptor >= 0 && written == (ssize_t)(sizeof(payload) - 1);
-  const char allowed_message[] = "workdir-write:allowed\\n";
-  const char denied_message[] = "workdir-write:denied\\n";
-  const char *output = allowed ? allowed_message : denied_message;
-  const size_t length = allowed ? sizeof(allowed_message) - 1 : sizeof(denied_message) - 1;
-  const ssize_t out_written = write(STDOUT_FILENO, output, length);
-  return out_written == (ssize_t)length ? 0 : 1;
-}
-`,
+        verdictFixtureSource({
+          listing: `100644 ${"0".repeat(40)} 0\tREADME.md\0`,
+          probe: `{ const int descriptor = open("README.md", O_WRONLY); if (descriptor >= 0) { allowed = write(descriptor, "TAMPERED\\n", 9) == 9; close(descriptor); } }`,
+          allowed: "workdir-write:allowed",
+          denied: "workdir-write:denied",
+        }),
       );
 
       const result = await workspace(async () => worktreeWriteAttempt).execute(
@@ -1208,53 +1788,56 @@ int main(int argc, char **argv) {
       );
       expect(result).toMatchObject({
         ok: true,
-        value: { kind: "workspace.command", stdout: "workdir-write:denied\n" },
+        value: {
+          kind: "workspace.command",
+          stdout: "## workdir-write:denied\n",
+        },
       });
-      // The owner's real file -- not a snapshot copy, which is already
+      // The owner's real file -- not a snapshot clone, which is already
       // removed by the time this runs -- is byte-identical afterwards.
       await expect(
         fs.readFile(path.join(root, "README.md"), "utf8"),
       ).resolves.toBe("before\n");
     });
 
-    it("allows a write into `.git` metadata inside the snapshot", async () => {
-      const gitdirWriteAttempt = await compileCommandFixture(
-        "gitdir-write-attempt",
-        `#include <fcntl.h>
-#include <stddef.h>
-#include <string.h>
-#include <unistd.h>
-
-int main(int argc, char **argv) {
-  for (int index = 1; index < argc; index += 1) {
-    if (strcmp(argv[index], "ls-files") == 0) {
-      return 0;
-    }
-  }
-  const int descriptor = open(".git/farol-write-canary", O_WRONLY | O_CREAT, 0600);
-  const char payload[] = "canary\\n";
-  ssize_t written = -1;
-  if (descriptor >= 0) {
-    written = write(descriptor, payload, sizeof(payload) - 1);
-    close(descriptor);
-  }
-  const int allowed = descriptor >= 0 && written == (ssize_t)(sizeof(payload) - 1);
-  const char allowed_message[] = "gitdir-write:allowed\\n";
-  const char denied_message[] = "gitdir-write:denied\\n";
-  const char *output = allowed ? allowed_message : denied_message;
-  const size_t length = allowed ? sizeof(allowed_message) - 1 : sizeof(denied_message) - 1;
-  const ssize_t out_written = write(STDOUT_FILENO, output, length);
-  return out_written == (ssize_t)length ? 0 : 1;
-}
-`,
+    it("denies a write into `.git/HEAD` inside the snapshot: the metadata directory is no writable subtree", async () => {
+      const headWriteAttempt = await compileCommandFixture(
+        "head-write-attempt",
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(".git/HEAD", O_WRONLY); if (descriptor >= 0) { allowed = 1; close(descriptor); } }`,
+          allowed: "head-write:allowed",
+          denied: "head-write:denied",
+        }),
       );
 
-      const result = await workspace(async () => gitdirWriteAttempt).execute(
-        request(),
-      );
-      expect(result).toMatchObject({
+      await expect(
+        workspace(async () => headWriteAttempt).execute(request()),
+      ).resolves.toMatchObject({
         ok: true,
-        value: { kind: "workspace.command", stdout: "gitdir-write:allowed\n" },
+        value: { kind: "workspace.command", stdout: "## head-write:denied\n" },
+      });
+    });
+
+    it("allows creating and removing `.git/index.lock` inside the snapshot: exactly what an index refresh needs", async () => {
+      const indexLockAttempt = await compileCommandFixture(
+        "index-lock-attempt",
+        verdictFixtureSource({
+          listing: "",
+          probe: `{ const int descriptor = open(".git/index.lock", O_WRONLY | O_CREAT | O_EXCL, 0600); if (descriptor >= 0) { allowed = write(descriptor, "lock\\n", 5) == 5; close(descriptor); allowed = allowed && unlink(".git/index.lock") == 0; } }`,
+          allowed: "index-lock-write:allowed",
+          denied: "index-lock-write:denied",
+        }),
+      );
+
+      await expect(
+        workspace(async () => indexLockAttempt).execute(request()),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: {
+          kind: "workspace.command",
+          stdout: "## index-lock-write:allowed\n",
+        },
       });
     });
 

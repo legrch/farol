@@ -638,7 +638,7 @@ export function createReadonlyComputerMcpServer(
     {
       title: "Inspect approved workspace Git status",
       description:
-        "Run the fixed no-network Git status verifier at one approved workspace root. It covers tracked files only: untracked files and submodules are not examined, so a short status is not proof of a clean workspace. The result names this coverage and whether the root is a linked worktree. No executable, arguments, path, environment, or network access can be supplied by the caller.",
+        "Run the fixed no-network Git status verifier at one approved workspace root. Git never reads the workspace folder itself: it runs over a private point-in-time clone of the repository metadata and of the tracked files, taken at one instant, so the result describes the workspace as it was at that instant. Coverage is tracked files only: untracked files are not examined and submodules are ignored, so a short status is not proof of a clean workspace; a tracked file that is missing from the working tree is reported as deleted. Paths under the workspace's excluded prefixes are absent from both the clone and the output. Output is rendered as plain `XY path` lines under a `## branch` header, without quoting. The result names this coverage and whether the root is a linked worktree. No executable, arguments, path, environment, or network access can be supplied by the caller.",
       inputSchema: VerificationInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },
@@ -662,7 +662,7 @@ export function createReadonlyComputerMcpServer(
     {
       title: "Read approved workspace Git HEAD",
       description:
-        "Read the exact Git HEAD commit at one approved workspace root through a fixed no-network verifier. A repository without commits is reported as WORKSPACE_GIT_HEAD_UNBORN and a root without Git as WORKSPACE_NOT_GIT_REPOSITORY. No executable, arguments, path, environment, or network access can be supplied by the caller.",
+        "Read the exact Git HEAD commit at one approved workspace root through a fixed no-network verifier. Git never reads the workspace folder itself: it runs over a private point-in-time clone of the repository metadata taken at one instant. A repository without commits is reported as WORKSPACE_GIT_HEAD_UNBORN and a root without Git as WORKSPACE_NOT_GIT_REPOSITORY. No executable, arguments, path, environment, or network access can be supplied by the caller.",
       inputSchema: VerificationInputSchema,
       annotations: READONLY_ANNOTATIONS,
     },

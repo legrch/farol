@@ -3555,6 +3555,17 @@ function workspaceCommandFailure(code: string): ProductConfigurationResult {
       return configurationFailure("WORKSPACE_ROOT_CHANGED");
     case "WORKSPACE_GIT_METADATA_NOT_APPROVED":
       return configurationFailure("WORKSPACE_GIT_METADATA_NOT_APPROVED");
+    // N02: the snapshot route's own closed refusals, surfaced one for one.
+    case "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED":
+    case "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT":
+    case "WORKSPACE_TRACKED_LIST_TOO_LARGE":
+    case "WORKSPACE_TRACKED_PATH_UNSUPPORTED":
+    case "WORKSPACE_SNAPSHOT_TOO_LARGE":
+    case "WORKSPACE_SNAPSHOT_CROSS_VOLUME":
+    case "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED":
+    case "WORKSPACE_PATH_REFUSED":
+    case "WORKSPACE_NOT_FOUND":
+      return configurationFailure(code);
     default:
       return configurationFailure("WORKSPACE_COMMAND_FAILED");
   }

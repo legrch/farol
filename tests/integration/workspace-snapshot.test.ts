@@ -410,48 +410,188 @@ describe("workspace snapshot (N02)", () => {
     expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_TOO_LARGE" });
   });
 
-  // A hard link across two volumes is impossible: this proves the refusal
-  // fires for a real device boundary rather than only when the request says
-  // so. A private user-owned RAM disk is the one portable way to get a
-  // second real device on a developer Mac without special privileges; if
-  // this sandbox cannot create one, the test reports that instead of
-  // silently passing.
-  it("refuses when the destination volume cannot hold a hard link to the source", async () => {
-    let device: string | null = null;
-    let mountPoint: string | null = null;
+  // A private user-owned RAM disk is the one portable way to get a second
+  // real device on a developer Mac without special privileges; if this
+  // sandbox cannot create one, the test reports that instead of silently
+  // passing. HFS+ on purpose: it is also a volume without clone support,
+  // which the second test below needs.
+  async function attachRamDisk(
+    label: string,
+  ): Promise<Readonly<{ device: string; mountPoint: string }> | null> {
     try {
-      device =
+      const device =
         execFileSync("hdiutil", ["attach", "-nomount", "ram://16384"], {
           encoding: "utf8",
         })
           .trim()
           .split(/\s+/)[0] ?? null;
       if (!device) throw new Error("no ram disk device returned");
-      const volumeName = `N02ARAM${process.pid}`;
+      const volumeName = `N02ARAM${process.pid}${label}`;
       execFileSync("diskutil", ["eraseVolume", "HFS+", volumeName, device]);
-      mountPoint = `/Volumes/${volumeName}`;
+      const mountPoint = `/Volumes/${volumeName}`;
       await fs.access(mountPoint);
+      return { device, mountPoint };
     } catch (error) {
       // Environment cannot create a second real device (locked-down CI,
       // missing hdiutil/diskutil, or no permission). The mechanism this test
       // targets is still exercised by the entry/byte bound tests above; this
-      // one specific volume-boundary case is reported skipped rather than
-      // faked.
+      // one specific volume case is reported skipped rather than faked.
       console.warn(
-        `workspace-snapshot cross-volume test skipped: ${(error as Error).message}`,
+        `workspace-snapshot ${label} test skipped: ${(error as Error).message}`,
       );
-      return;
+      return null;
     }
+  }
+
+  // A clone across two volumes is impossible: this proves the refusal fires
+  // for a real device boundary rather than only when the request says so.
+  it("refuses when the destination volume cannot hold a clone of the source", async () => {
+    const disk = await attachRamDisk("cross-volume");
+    if (disk === null) return;
     try {
       await fs.writeFile(path.join(root, "f.txt"), "x\n", { mode: 0o600 });
       const outcome = await createWorkspaceSnapshot(
         { root, approvedRoot: approvedRootOf(root) },
-        options({ runtimeDirectory: mountPoint }),
+        options({ runtimeDirectory: disk.mountPoint }),
       );
       expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_CROSS_VOLUME" });
     } finally {
-      execFileSync("hdiutil", ["detach", device]);
+      execFileSync("hdiutil", ["detach", disk.device]);
     }
+  });
+
+  // Source and destination on one volume that cannot clone at all (HFS+):
+  // the refusal is distinct from the cross-volume one, and nothing falls
+  // back to copying the tree.
+  it("refuses distinctly when the shared volume has no clone support", async () => {
+    const disk = await attachRamDisk("clone-unsupported");
+    if (disk === null) return;
+    try {
+      const sourceRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(disk.mountPoint, "src-")),
+      );
+      const runtime = await fs.realpath(
+        await fs.mkdtemp(path.join(disk.mountPoint, "runtime-")),
+      );
+      await fs.chmod(sourceRoot, 0o700);
+      await fs.writeFile(path.join(sourceRoot, "f.txt"), "x\n", {
+        mode: 0o600,
+      });
+      const outcome = await createWorkspaceSnapshot(
+        { root: sourceRoot, approvedRoot: approvedRootOf(sourceRoot) },
+        options({ runtimeDirectory: runtime }),
+      );
+      expect(outcome).toEqual({
+        ok: false,
+        code: "SNAPSHOT_CLONE_UNSUPPORTED",
+      });
+      expect(await fs.readdir(runtime)).toEqual([]);
+    } finally {
+      execFileSync("hdiutil", ["detach", disk.device]);
+    }
+  });
+
+  it("carries the structural extensions through the reduced config and reduces config.worktree the same way", async () => {
+    await initRepo(root);
+    await fs.writeFile(path.join(root, "f.txt"), "x\n", { mode: 0o600 });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    git(root, "config", "core.repositoryformatversion", "1");
+    git(root, "config", "extensions.worktreeConfig", "true");
+    git(root, "config", "extensions.partialClone", "origin");
+    git(root, "config", "--worktree", "core.fsmonitor", "/bin/false");
+    git(root, "config", "--worktree", "core.hooksPath", "/tmp/n02-hooks");
+    git(root, "config", "--worktree", "core.ignorecase", "true");
+    git(root, "config", "--worktree", "core.precomposeunicode", "true");
+
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root) },
+      options(),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    try {
+      const config = await fs.readFile(
+        path.join(outcome.path, ".git", "config"),
+        "utf8",
+      );
+      expect(config).toBe(
+        "[core]\n" +
+          "\trepositoryformatversion = 1\n" +
+          "\tfilemode = true\n" +
+          "\tbare = false\n" +
+          "\tignorecase = true\n" +
+          "\tprecomposeunicode = true\n" +
+          "\tsymlinks = true\n" +
+          "[extensions]\n" +
+          "\tworktreeconfig = true\n",
+      );
+      // Only keys the file actually set, only the reviewed booleans, and no
+      // default that would override the main config.
+      expect(
+        await fs.readFile(
+          path.join(outcome.path, ".git", "config.worktree"),
+          "utf8",
+        ),
+      ).toBe("[core]\n\tignorecase = true\n\tprecomposeunicode = true\n");
+      expect(gitStatus(outcome.path).stdout).toEqual(gitStatus(root).stdout);
+    } finally {
+      await outcome.remove();
+    }
+  });
+
+  it("carries extensions.objectFormat so a sha256 repository stays readable", async () => {
+    git(root, "init", "-q", "--object-format=sha256");
+    git(root, "config", "user.email", "n02a@example.com");
+    git(root, "config", "user.name", "N02a Fixture");
+    await fs.writeFile(path.join(root, "f.txt"), "x\n", { mode: 0o600 });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    const ownerHead = gitHead(root).stdout;
+    expect(ownerHead).toMatch(/^[0-9a-f]{64}\n$/u);
+
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root) },
+      options(),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    try {
+      expect(
+        await fs.readFile(path.join(outcome.path, ".git", "config"), "utf8"),
+      ).toContain("[extensions]\n\tobjectformat = sha256\n");
+      expect(gitHead(outcome.path).stdout).toBe(ownerHead);
+      expect(gitStatus(outcome.path).stdout).toEqual(gitStatus(root).stdout);
+    } finally {
+      await outcome.remove();
+    }
+  });
+
+  // The refusal rests on the entry's existence alone -- the helper never
+  // opens it -- so the file may name anything; nothing is read from it and
+  // no snapshot is left behind. (That the bytes were not read cannot be
+  // observed from outside; what is asserted is the refusal and the absence
+  // of any destination.)
+  it("refuses a repository with objects/info/alternates before any clone is made", async () => {
+    await initRepo(root);
+    await fs.writeFile(path.join(root, "f.txt"), "x\n", { mode: 0o600 });
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    await fs.writeFile(
+      path.join(root, ".git", "objects", "info", "alternates"),
+      "/nonexistent/OUTSIDE-SENTINEL/objects\n",
+      { mode: 0o600 },
+    );
+
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root) },
+      options(),
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      code: "SNAPSHOT_ALTERNATES_UNSUPPORTED",
+    });
+    expect(await fs.readdir(runtimeDirectory)).toEqual([]);
   });
 
   it("snapshots a linked worktree's own gitdir and the repository's common gitdir", async () => {
@@ -507,5 +647,278 @@ describe("workspace snapshot (N02)", () => {
       await fs.rm(primary, { recursive: true, force: true });
       await fs.rm(worktree, { recursive: true, force: true });
     }
+  });
+});
+
+// The refusals of the Node side of the snapshot boundary: a request this
+// module will not even forward, an attestation that fails, and a helper
+// response it will not trust. None of these needs a misbehaving real helper:
+// whatever executable the attestation names is what runs the helper source,
+// so a script standing in for the interpreter can answer with any bytes and
+// any exit status.
+describe("workspace snapshot refusals (N02)", () => {
+  let fixturesDirectory = "";
+
+  beforeEach(async () => {
+    fixturesDirectory = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-snapshot-fake-")),
+    );
+  });
+
+  afterEach(async () => {
+    await fs.rm(fixturesDirectory, { recursive: true, force: true });
+  });
+
+  function octal(bytes: Buffer): string {
+    return [...bytes]
+      .map((byte) => `\\${byte.toString(8).padStart(3, "0")}`)
+      .join("");
+  }
+
+  // A stand-in interpreter: drains the helper source (stdin) and the request
+  // (fd 3) so neither pipe breaks, optionally writes `stderr`, then answers
+  // with `response` bytes and exits with `code`.
+  async function fakeInterpreter(
+    name: string,
+    response: Buffer,
+    code = 0,
+    stderr = "",
+  ): Promise<string> {
+    const file = path.join(fixturesDirectory, `${name}.sh`);
+    await fs.writeFile(
+      file,
+      [
+        "#!/bin/sh",
+        "cat >/dev/null",
+        "cat <&3 >/dev/null",
+        ...(stderr === "" ? [] : [`printf '%s' '${stderr}' >&2`]),
+        ...(response.length === 0 ? [] : [`printf '${octal(response)}'`]),
+        `exit ${code}`,
+        "",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    return file;
+  }
+
+  function framed(payload: string, claimedLength?: number): Buffer {
+    const header = Buffer.concat([
+      Buffer.from("FAROLR1\0", "ascii"),
+      Buffer.alloc(8),
+    ]);
+    header.writeBigUInt64BE(
+      BigInt(claimedLength ?? Buffer.byteLength(payload)),
+      8,
+    );
+    return Buffer.concat([header, Buffer.from(payload, "utf8")]);
+  }
+
+  const wellFormed =
+    '{"bytes":1,"clonedBytes":2,"entries":3,"indexSha256":null,"skipped":0}';
+
+  it("refuses a malformed request before touching the filesystem", async () => {
+    const approvedRoot = approvedRootOf(root);
+    const cases: ReadonlyArray<
+      readonly [string, Parameters<typeof createWorkspaceSnapshot>[0]]
+    > = [
+      ["relative root", { root: "relative/root", approvedRoot }],
+      [
+        "grant with a non-numeric device",
+        { root, approvedRoot: { ...approvedRoot, device: "x" } },
+      ],
+      ["absolute path in paths", { root, approvedRoot, paths: ["/etc/hosts"] }],
+      ["traversal in paths", { root, approvedRoot, paths: ["../outside"] }],
+      ["backslash in denied", { root, approvedRoot, denied: ["a\\b"] }],
+      ["zero entry ceiling", { root, approvedRoot, maxEntries: 0 }],
+      ["zero byte ceiling", { root, approvedRoot, maxBytes: 0 }],
+      ["zero clone ceiling", { root, approvedRoot, maxClonedBytes: 0 }],
+      [
+        "malformed index pin",
+        { root, approvedRoot, paths: [], expectedIndexSha256: "nope" },
+      ],
+      [
+        "malformed external gitdir grant",
+        {
+          root,
+          approvedRoot,
+          externalGitDir: { path: "relative", device: "1", inode: "2" },
+        },
+      ],
+    ];
+    for (const [label, request] of cases) {
+      expect(await createWorkspaceSnapshot(request, options()), label).toEqual({
+        ok: false,
+        code: "SNAPSHOT_INVALID_REQUEST",
+      });
+    }
+    expect(
+      await createWorkspaceSnapshot(
+        { root, approvedRoot },
+        options({ runtimeDirectory: "relative/runtime" }),
+      ),
+    ).toEqual({ ok: false, code: "SNAPSHOT_INVALID_REQUEST" });
+    expect(await fs.readdir(runtimeDirectory)).toEqual([]);
+  });
+
+  it("refuses when the runtime directory cannot hold a destination", async () => {
+    expect(
+      await createWorkspaceSnapshot(
+        { root, approvedRoot: approvedRootOf(root) },
+        options({ runtimeDirectory: path.join(runtimeDirectory, "missing") }),
+      ),
+    ).toEqual({ ok: false, code: "SNAPSHOT_DESTINATION_INVALID" });
+  });
+
+  it("refuses an interpreter or helper that fails its own attestation, and leaves nothing behind", async () => {
+    const request = { root, approvedRoot: approvedRootOf(root) };
+    const untrusted = { ok: false, code: "SNAPSHOT_HELPER_UNTRUSTED" };
+    expect(
+      await createWorkspaceSnapshot(
+        request,
+        options({
+          attestInterpreter: async () => {
+            throw new Error("no reviewed interpreter");
+          },
+        }),
+      ),
+    ).toEqual(untrusted);
+    expect(
+      await createWorkspaceSnapshot(
+        request,
+        options({ attestInterpreter: async () => "python3" }),
+      ),
+    ).toEqual(untrusted);
+    expect(
+      await createWorkspaceSnapshot(
+        request,
+        options({
+          helper: { ...NEXT_SAFE_OPEN_HELPER, sha256: "0".repeat(64) },
+        }),
+      ),
+    ).toEqual(untrusted);
+    expect(
+      await createWorkspaceSnapshot(
+        request,
+        options({
+          helper: {
+            ...NEXT_SAFE_OPEN_HELPER,
+            size: NEXT_SAFE_OPEN_HELPER.size + 1,
+          },
+        }),
+      ),
+    ).toEqual(untrusted);
+    expect(
+      await createWorkspaceSnapshot(
+        request,
+        options({ helperPath: path.join(fixturesDirectory, "missing.py") }),
+      ),
+    ).toEqual(untrusted);
+    expect(await fs.readdir(runtimeDirectory)).toEqual([]);
+  });
+
+  it("maps a helper refusal exit status onto its code, and an unknown status onto the generic failure", async () => {
+    const request = { root, approvedRoot: approvedRootOf(root) };
+    for (const [status, code] of [
+      [38, "SNAPSHOT_CLONE_UNSUPPORTED"],
+      [39, "SNAPSHOT_INDEX_CHANGED"],
+      [40, "SNAPSHOT_ALTERNATES_UNSUPPORTED"],
+      [21, "SNAPSHOT_NOT_FOUND"],
+      [25, "SNAPSHOT_RACE_DETECTED"],
+      [99, "SNAPSHOT_HELPER_FAILED"],
+    ] as const) {
+      const interpreter = await fakeInterpreter(
+        `exit-${status}`,
+        Buffer.alloc(0),
+        status,
+      );
+      expect(
+        await createWorkspaceSnapshot(
+          request,
+          options({ attestInterpreter: async () => interpreter }),
+        ),
+        String(status),
+      ).toEqual({ ok: false, code });
+    }
+    expect(await fs.readdir(runtimeDirectory)).toEqual([]);
+  });
+
+  it("refuses a helper response it cannot trust: no frame, a wrong length, stderr noise, an oversize payload or a malformed record", async () => {
+    const request = { root, approvedRoot: approvedRootOf(root) };
+    const responses: ReadonlyArray<readonly [string, Buffer, string?]> = [
+      ["no-frame", Buffer.from("hello", "ascii")],
+      ["wrong-length", framed(wellFormed, 100)],
+      ["stderr-noise", framed(wellFormed), "helper-noise"],
+      [
+        "oversize",
+        Buffer.concat([framed("", 5_000), Buffer.alloc(5_000, 0x78)]),
+      ],
+      ["not-json", framed("{not json")],
+      ["not-an-object", framed("[1]")],
+      ["missing-fields", framed('{"bytes":1,"entries":2}')],
+      [
+        "bad-digest",
+        framed(
+          '{"bytes":1,"clonedBytes":2,"entries":3,"indexSha256":"zz","skipped":0}',
+        ),
+      ],
+      [
+        "negative-count",
+        framed(
+          '{"bytes":1,"clonedBytes":2,"entries":-3,"indexSha256":null,"skipped":0}',
+        ),
+      ],
+    ];
+    for (const [name, response, stderr] of responses) {
+      const interpreter = await fakeInterpreter(
+        name,
+        response,
+        0,
+        stderr ?? "",
+      );
+      expect(
+        await createWorkspaceSnapshot(
+          request,
+          options({ attestInterpreter: async () => interpreter }),
+        ),
+        name,
+      ).toEqual({ ok: false, code: "SNAPSHOT_HELPER_FAILED" });
+    }
+    // The same frame with a well-formed record is accepted: the refusals
+    // above are about the shape, not the stand-in.
+    const accepted = await fakeInterpreter("accepted", framed(wellFormed));
+    const outcome = await createWorkspaceSnapshot(
+      request,
+      options({ attestInterpreter: async () => accepted }),
+    );
+    expect(outcome).toMatchObject({
+      ok: true,
+      bytes: 1,
+      clonedBytes: 2,
+      entries: 3,
+      indexSha256: null,
+      skipped: 0,
+    });
+    if (outcome.ok) {
+      await outcome.remove();
+      // Idempotent: a second removal is a no-op, not an error.
+      await outcome.remove();
+    }
+    expect(await fs.readdir(runtimeDirectory)).toEqual([]);
+  });
+
+  it("fails closed when the test-hook seam itself breaks", async () => {
+    await initRepo(root);
+    const outcome = await createWorkspaceSnapshot(
+      { root, approvedRoot: approvedRootOf(root) },
+      options(),
+      {
+        testHookRequest: { phase: "before-snapshot-walk", index: null },
+        testHook: async () => {
+          throw new Error("hook failed");
+        },
+      },
+    );
+    expect(outcome).toEqual({ ok: false, code: "SNAPSHOT_HELPER_FAILED" });
+    expect(await fs.readdir(runtimeDirectory)).toEqual([]);
   });
 });

@@ -266,8 +266,26 @@ try {
     bytes: 46,
   });
 
-  // N02: Git runs for real now, over a private snapshot of the approved
-  // folder -- both fixed, no-network verifications return their result.
+  // N02: Git runs for real now, over a private point-in-time clone of the
+  // approved folder's metadata and tracked files -- both fixed, no-network
+  // verifications return their result. A real tracked change made through
+  // the owner's own path first, so the rendered status carries exactly one
+  // record besides the branch header, in the route's own `--short`-style
+  // rendering.
+  await fs.writeFile(
+    path.join(workspaceRoot, "notes", "review.txt"),
+    "delegated critic reached the native workspace\nand left a note\n",
+    { mode: 0o600 },
+  );
+  const branch = (
+    await executeFile(git, [
+      "-C",
+      workspaceRoot,
+      "symbolic-ref",
+      "--short",
+      "HEAD",
+    ])
+  ).stdout.trim();
   const status = await client.callTool({
     name: "computer_workspace_git_status",
     arguments: { workspaceId: "fixture" },
@@ -277,6 +295,10 @@ try {
   assert.equal(status.structuredContent?.output?.command, "git.status");
   assert.equal(status.structuredContent?.output?.exitCode, 0);
   assert.equal(status.structuredContent?.output?.network, "none");
+  assert.equal(
+    status.structuredContent?.output?.stdout,
+    `## ${branch}\n M notes/review.txt\n`,
+  );
   assert.equal(
     status.structuredContent?.output?.coverage,
     "tracked-files-only",

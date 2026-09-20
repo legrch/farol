@@ -74,16 +74,22 @@ MAX_WINDOW_OFFSET = 2 ** 53 - 1
 
 # workspace-snapshot bounds.  A caller may ask for a smaller ceiling (clamped
 # the same way _source_ceiling clamps maxBytes for a read); it can never ask
-# for more than these.  A `linkat` costs no *disk* bytes -- it is still one
-# name for the source inode, not a copy -- but the byte bound is a budget for
-# the work this snapshot commits Git to doing, not for bytes this verb itself
-# writes.  A hard-linked regular file's size is charged against it exactly as
-# a copied one is (`_snapshot_charge_bytes`), so a single huge tracked blob
-# cannot make the bound meaningless.  A cross-volume root cannot be
-# hard-linked at all (`EXIT_SNAPSHOT_CROSS_VOLUME`); that refusal proves this
-# verb refuses cross-volume roots, not that it would otherwise copy them.
+# for more than these.  Two byte budgets, because the two kinds of file in a
+# snapshot cost different things.  `MAX_SNAPSHOT_BYTES` bounds bytes this verb
+# itself reads and writes: the copied index and the rewritten config.
+# `MAX_SNAPSHOT_CLONED_BYTES` bounds the sizes of the regular files attached as
+# APFS clones (`fclonefileat`): a clone moves no data -- it is a new inode
+# sharing the source's extents copy-on-write -- so its budget is a bound on
+# the work Git is then committed to (every cloned byte may be hashed once),
+# which the command's own ten-second deadline already caps; it is generous so
+# an ordinary large repository is never refused for its size alone, while a
+# single absurd blob still is.  A cross-volume root cannot be cloned at all
+# (`EXIT_SNAPSHOT_CROSS_VOLUME`) and a volume without clone support refuses
+# distinctly (`EXIT_SNAPSHOT_CLONE_UNSUPPORTED`); neither case ever falls back
+# to copying an unbounded tree.
 MAX_SNAPSHOT_ENTRIES = 200_000
 MAX_SNAPSHOT_BYTES = 256 * 1024 * 1024
+MAX_SNAPSHOT_CLONED_BYTES = 4 * 1024 * 1024 * 1024
 MAX_SNAPSHOT_CONFIG_BYTES = 256 * 1024
 MAX_SNAPSHOT_GITLINK_BYTES = 4096
 MAX_SNAPSHOT_DEPTH = 64
@@ -114,6 +120,20 @@ EXIT_SNAPSHOT_CROSS_VOLUME = 34
 EXIT_SNAPSHOT_TOO_LARGE = 35
 EXIT_SNAPSHOT_METADATA_UNAPPROVED = 36
 EXIT_SNAPSHOT_DESTINATION_INVALID = 37
+# The destination volume holds no clone support (`fclonefileat` -> ENOTSUP):
+# a non-APFS volume.  Distinct from EXIT_SNAPSHOT_CROSS_VOLUME so the caller
+# can say which of the two the owner's layout ran into.
+EXIT_SNAPSHOT_CLONE_UNSUPPORTED = 38
+# The caller asked for the snapshot only if the live index still has the
+# exact bytes an earlier snapshot copied (`expectedIndexSha256`), and it no
+# longer does: the tracked-path list the caller derived from that earlier copy
+# would describe a different index than the one this snapshot would carry.
+EXIT_SNAPSHOT_INDEX_CHANGED = 39
+# The repository borrows objects from another object store
+# (`objects/info/alternates`).  That store lives outside the snapshot by
+# construction, so Git could never read it there; refused up front, before
+# the file is read, instead of letting the fixed command fail obscurely.
+EXIT_SNAPSHOT_ALTERNATES_UNSUPPORTED = 40
 
 CONTEXT_NAMES = ("AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD")
 CONTEXT_NAME_SET = frozenset(CONTEXT_NAMES)
@@ -2536,25 +2556,31 @@ _SNAPSHOT_CORE_ORDER = (
     "precomposeunicode",
     "symlinks",
 )
+# Repository-format extensions that only describe how the metadata is laid
+# out -- the object-name algorithm, where refs are stored, whether a
+# per-worktree config file exists.  Each is structural, never executable, and
+# dropping it would make Git misread a repository that uses it (a sha256 or
+# reftable repository is unreadable without its extension).  Kept only with
+# exactly one of the values Git itself writes; `partialClone`, `preciousObjects`
+# and anything unlisted are dropped like every other key.
+_SNAPSHOT_EXTENSION_VALUES = {
+    "objectformat": ("sha1", "sha256"),
+    "refstorage": ("files", "reftable"),
+    "worktreeconfig": ("true", "false"),
+}
+_SNAPSHOT_EXTENSION_ORDER = ("objectformat", "refstorage", "worktreeconfig")
 _SNAPSHOT_SECTION_HEADER = re.compile(r'^\[([A-Za-z0-9.-]+)(?:\s+"(?:.*)")?\]$')
 _SNAPSHOT_KEY_VALUE = re.compile(r'^([A-Za-z][A-Za-z0-9-]*)\s*=\s*(.*?)\s*$')
 _SNAPSHOT_VALID_INT = re.compile(r'^[0-9]{1,9}$')
 _SNAPSHOT_VALID_BOOL = re.compile(r'^(?:true|false)$', re.IGNORECASE)
 
 
-def _minimal_git_config(text):
-    """Reduce an arbitrary `.git/config` to the fixed, safe subset it needs.
-
-    Only `[core]` keys already reviewed as inert for `git status`/`rev-parse`
-    survive, and only when their value is exactly the shape Git itself writes.
-    Every other section and key -- `include.path`, `core.fsmonitor`,
-    `core.hooksPath`, a clean/smudge filter, `core.sshCommand`, an alias, a
-    credential helper -- is dropped by construction: this function never
-    copies a line, it only ever reads five specific keys out of one section
-    and re-emits them in a fixed order.
+def _config_key_values(text):
+    """Yield `(section, key, value)` for every plain key line of a Git config
+    text, sections lower-cased; a subsection name is dropped with its header,
+    and a line this parser does not recognise is skipped, never copied.
     """
 
-    values = dict(_SNAPSHOT_CORE_DEFAULTS)
     section = None
     for line in text.splitlines():
         stripped = line.strip()
@@ -2564,20 +2590,75 @@ def _minimal_git_config(text):
         if header:
             section = header.group(1).strip().lower()
             continue
-        if section != "core":
-            continue
         match = _SNAPSHOT_KEY_VALUE.match(stripped)
-        if not match:
+        if not match or section is None:
             continue
-        key = match.group(1).lower()
-        value = match.group(2)
-        if key == "repositoryformatversion" and _SNAPSHOT_VALID_INT.match(value):
-            values[key] = value
-        elif key in _SNAPSHOT_CORE_BOOL_KEYS and _SNAPSHOT_VALID_BOOL.match(value):
-            values[key] = value.lower()
+        yield section, match.group(1).lower(), match.group(2)
+
+
+def _minimal_git_config(text):
+    """Reduce an arbitrary `.git/config` to the fixed, safe subset it needs.
+
+    Only `[core]` keys already reviewed as inert for `git status`/`rev-parse`
+    survive, plus the three structural `[extensions]` keys listed in
+    `_SNAPSHOT_EXTENSION_VALUES`, and only when their value is exactly the
+    shape Git itself writes.  Every other section and key -- `include.path`,
+    `core.fsmonitor`, `core.hooksPath`, a clean/smudge filter,
+    `core.sshCommand`, an alias, a credential helper -- is dropped by
+    construction: this function never copies a line, it only ever reads
+    specific keys out of two sections and re-emits them in a fixed order.
+    """
+
+    values = dict(_SNAPSHOT_CORE_DEFAULTS)
+    extensions = {}
+    for section, key, value in _config_key_values(text):
+        if section == "core":
+            if key == "repositoryformatversion" and _SNAPSHOT_VALID_INT.match(value):
+                values[key] = value
+            elif key in _SNAPSHOT_CORE_BOOL_KEYS and _SNAPSHOT_VALID_BOOL.match(value):
+                values[key] = value.lower()
+        elif section == "extensions":
+            allowed = _SNAPSHOT_EXTENSION_VALUES.get(key)
+            if allowed is not None and value.lower() in allowed:
+                extensions[key] = value.lower()
     lines = ["[core]"]
     for key in _SNAPSHOT_CORE_ORDER:
         lines.append("\t{} = {}".format(key, values[key]))
+    if extensions:
+        lines.append("[extensions]")
+        for key in _SNAPSHOT_EXTENSION_ORDER:
+            if key in extensions:
+                lines.append("\t{} = {}".format(key, extensions[key]))
+    return ("\n".join(lines) + "\n").encode("ascii")
+
+
+def _minimal_worktree_config(text):
+    """Reduce a `config.worktree` to the same inert `[core]` booleans, keeping
+    only the keys the file actually sets.
+
+    Git reads this file after `config` when `extensions.worktreeConfig` is on,
+    so unlike `_minimal_git_config` it must not emit a default for a key the
+    file did not set: a default `filemode = true` here would override a
+    `filemode = false` in the main config, and a `repositoryformatversion`
+    here would switch every extension off.  The result may be empty.
+    """
+
+    kept = []
+    for section, key, value in _config_key_values(text):
+        if (
+            section == "core"
+            and key in _SNAPSHOT_CORE_BOOL_KEYS
+            and _SNAPSHOT_VALID_BOOL.match(value)
+            and key not in dict(kept)
+        ):
+            kept.append((key, value.lower()))
+    if not kept:
+        return b""
+    lines = ["[core]"]
+    for key in _SNAPSHOT_CORE_ORDER:
+        for kept_key, kept_value in kept:
+            if kept_key == key:
+                lines.append("\t{} = {}".format(key, kept_value))
     return ("\n".join(lines) + "\n").encode("ascii")
 
 
@@ -2599,17 +2680,27 @@ def _snapshot_read_all(descriptor, ceiling, *, on_too_large):
 
 
 def _snapshot_charge_bytes(state, size):
-    """Charge `size` against the snapshot's byte budget and refuse over it.
+    """Charge `size` against the copied-byte budget and refuse over it.
 
-    Used both for bytes this verb actually writes (a copied index or a
-    rewritten config) and for a hard-linked regular file's own size: a
-    `linkat` costs this process no bytes, but Git will still read every one
-    of the source file's bytes once the snapshot is handed to it, and a bound
-    that only counted copies could be defeated by linking one huge tracked
-    blob.
+    Only bytes this verb actually reads and writes are charged here: the
+    copied index and a rewritten config.  A cloned regular file has its own
+    budget (`_snapshot_charge_cloned_bytes`), because a clone moves no data.
     """
     state["bytes"] += max(size, 0)
     if state["bytes"] > state["max_bytes"]:
+        refuse(EXIT_SNAPSHOT_TOO_LARGE)
+
+
+def _snapshot_charge_cloned_bytes(state, size):
+    """Charge a cloned regular file's own size against the clone budget.
+
+    `fclonefileat` costs this process no bytes -- the clone shares the
+    source's extents until either side writes -- but Git may still hash every
+    one of those bytes once the snapshot is handed to it, so the sizes are
+    bounded too, separately and generously (`MAX_SNAPSHOT_CLONED_BYTES`).
+    """
+    state["cloned_bytes"] += max(size, 0)
+    if state["cloned_bytes"] > state["max_cloned_bytes"]:
         refuse(EXIT_SNAPSHOT_TOO_LARGE)
 
 
@@ -2627,39 +2718,96 @@ def _snapshot_create_file(dest_fd, name, payload, state):
         os.close(descriptor)
 
 
-def _snapshot_copy_handler(source_fd, dest_fd, name, state, _depth):
-    """Copy, never link, a file Git may rewrite in place (e.g. the index)."""
+def _snapshot_read_source(source_fd, name, ceiling):
+    """Read one regular file under `source_fd` whole, by descriptor, up to
+    `ceiling` bytes; over it refuses as too large.
+    """
+
     try:
         descriptor = os.open(name, FILE_FLAGS, dir_fd=source_fd)
     except OSError as error:
         _map_open_error(error, source_fd, name)
     try:
-        payload = _snapshot_read_all(
-            descriptor,
-            state["max_bytes"] - state["bytes"],
-            on_too_large=EXIT_SNAPSHOT_TOO_LARGE,
+        return _snapshot_read_all(
+            descriptor, ceiling, on_too_large=EXIT_SNAPSHOT_TOO_LARGE
         )
     finally:
         os.close(descriptor)
+
+
+def _snapshot_copy_handler(source_fd, dest_fd, name, state, _depth):
+    """Copy, never clone, a file Git may rewrite in place."""
+    payload = _snapshot_read_source(
+        source_fd, name, state["max_bytes"] - state["bytes"]
+    )
+    _snapshot_create_file(dest_fd, name, payload, state)
+
+
+def _snapshot_index_handler(source_fd, dest_fd, name, state, _depth):
+    """Copy the index Git will read and rewrite, and record the SHA-256 of
+    the exact bytes copied.
+
+    The digest is what lets a caller take two snapshots as one instant: the
+    first tells it which paths the index tracks, the second carries those
+    paths and is refused (`expectedIndexSha256`) unless its index copy is
+    byte-identical to the first.
+    """
+
+    payload = _snapshot_read_source(
+        source_fd, name, state["max_bytes"] - state["bytes"]
+    )
+    state["index_sha256"] = hashlib.sha256(payload).hexdigest()
     _snapshot_create_file(dest_fd, name, payload, state)
 
 
 def _snapshot_config_handler(source_fd, dest_fd, name, state, _depth):
     """Replace `.git/config` with its minimal, execution-free equivalent."""
-    try:
-        descriptor = os.open(name, FILE_FLAGS, dir_fd=source_fd)
-    except OSError as error:
-        _map_open_error(error, source_fd, name)
-    try:
-        payload = _snapshot_read_all(
-            descriptor,
-            MAX_SNAPSHOT_CONFIG_BYTES,
-            on_too_large=EXIT_SNAPSHOT_TOO_LARGE,
-        )
-    finally:
-        os.close(descriptor)
+    payload = _snapshot_read_source(source_fd, name, MAX_SNAPSHOT_CONFIG_BYTES)
     minimal = _minimal_git_config(payload.decode("utf-8", "replace"))
     _snapshot_create_file(dest_fd, name, minimal, state)
+
+
+def _snapshot_worktree_config_handler(source_fd, dest_fd, name, state, _depth):
+    """Replace a `config.worktree` with its minimal equivalent.
+
+    Git reads this file when `extensions.worktreeConfig` is on, after the
+    main config, so it is exactly as capable of naming a `core.fsmonitor` or
+    a `core.hooksPath` as `config` itself; it gets the same treatment.
+    """
+
+    payload = _snapshot_read_source(source_fd, name, MAX_SNAPSHOT_CONFIG_BYTES)
+    minimal = _minimal_worktree_config(payload.decode("utf-8", "replace"))
+    _snapshot_create_file(dest_fd, name, minimal, state)
+
+
+def _refuse_if_alternates(git_fd):
+    """Refuse a repository whose `objects/info/alternates` exists.
+
+    Only the entry's existence is tested -- it is never opened or read: its
+    content names an object store outside the snapshot, which Git could not
+    reach there, so the honest answer is a refusal before any clone is made.
+    """
+
+    try:
+        objects_fd = os.open("objects", DIRECTORY_FLAGS, dir_fd=git_fd)
+    except OSError:
+        return
+    try:
+        try:
+            info_fd = os.open("info", DIRECTORY_FLAGS, dir_fd=objects_fd)
+        except OSError:
+            return
+        try:
+            try:
+                os.stat("alternates", dir_fd=info_fd, follow_symlinks=False)
+            except OSError as error:
+                if error.errno in (errno.ENOENT, errno.ENOTDIR):
+                    return
+            refuse(EXIT_SNAPSHOT_ALTERNATES_UNSUPPORTED)
+        finally:
+            os.close(info_fd)
+    finally:
+        os.close(objects_fd)
 
 
 def _snapshot_skip_handler(_source_fd, _dest_fd, _name, _state, _depth):
@@ -2679,26 +2827,91 @@ def _snapshot_symlink(source_fd, dest_fd, name):
         refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
 
 
-def _snapshot_link(source_fd, dest_fd, name, listed):
-    """Hard-link one regular file: the link resolves to the inode already
-    identified by `listed`, so a rename or replacement of `name` afterwards
-    cannot change what Git will read.  The identity is checked again after
-    the link exists, because the link call itself names `name`, not the
-    inode: if the directory changed between the earlier `stat` and this call,
-    the fresh link may not be the file this walk meant to attach.
+_FCLONEFILEAT = None
+_ENOTSUP_CODES = frozenset(
+    code
+    for code in (getattr(errno, "ENOTSUP", None), getattr(errno, "EOPNOTSUPP", None))
+    if code is not None
+)
+
+
+def _fclonefileat(source_fd, dest_dir_fd, name):
+    """`fclonefileat(2)`: clone the open regular file `source_fd` to a new
+    entry `name` under `dest_dir_fd`.
+
+    The clone is an independent inode sharing the source's extents
+    copy-on-write.  Taking the source as a descriptor rather than a name is
+    what makes the clone descriptor-bound: the object cloned is exactly the
+    one whose identity was just verified on that descriptor, whatever the
+    directory now says about `name`.
+    """
+
+    global _FCLONEFILEAT
+    if _FCLONEFILEAT is None:
+        function = ctypes.CDLL(None, use_errno=True).fclonefileat
+        function.argtypes = (
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint32,
+        )
+        function.restype = ctypes.c_int
+        _FCLONEFILEAT = function
+    if _FCLONEFILEAT(source_fd, dest_dir_fd, os.fsencode(name), 0) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def _snapshot_clone(source_fd, dest_fd, name, listed):
+    """Attach one regular file as an APFS clone of the object `listed`
+    describes: a new inode with the source's bytes as they are at this
+    instant, sharing extents copy-on-write.
+
+    The source is opened `O_NOFOLLOW` and its identity compared with `listed`
+    before the clone, so a swap of `name` between the listing and this call
+    is refused rather than cloned; it is compared again afterwards so a write
+    made into it during the clone is refused rather than half-captured.  The
+    owner's file is never linked to: its link count stays one, a later write
+    through any descriptor on it is invisible in the snapshot, and no write
+    through the snapshot can reach it.
     """
 
     try:
-        os.link(name, name, src_dir_fd=source_fd, dst_dir_fd=dest_fd)
+        descriptor = os.open(name, FILE_FLAGS, dir_fd=source_fd)
     except OSError as error:
-        if error.errno == errno.EXDEV:
-            refuse(EXIT_SNAPSHOT_CROSS_VOLUME)
         if error.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
             refuse(EXIT_ROOT_CHANGED)
+        refuse(EXIT_PATH_REFUSED)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+            listed.st_dev,
+            listed.st_ino,
+        ):
+            refuse(EXIT_ROOT_CHANGED)
+        try:
+            _fclonefileat(descriptor, dest_fd, name)
+        except OSError as error:
+            if error.errno == errno.EXDEV:
+                refuse(EXIT_SNAPSHOT_CROSS_VOLUME)
+            if error.errno in _ENOTSUP_CODES:
+                refuse(EXIT_SNAPSHOT_CLONE_UNSUPPORTED)
+            if error.errno in (errno.ENOENT, errno.ENOTDIR, errno.ELOOP):
+                refuse(EXIT_ROOT_CHANGED)
+            refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
+        after = os.fstat(descriptor)
+        if _stable_identity(after) != _stable_identity(opened):
+            refuse(EXIT_ROOT_CHANGED)
+    finally:
+        os.close(descriptor)
+    clone = os.stat(name, dir_fd=dest_fd, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(clone.st_mode)
+        or clone.st_nlink != 1
+        or clone.st_size != opened.st_size
+        or (clone.st_dev, clone.st_ino) == (listed.st_dev, listed.st_ino)
+    ):
         refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
-    after = os.stat(name, dir_fd=dest_fd, follow_symlinks=False)
-    if (after.st_dev, after.st_ino) != (listed.st_dev, listed.st_ino):
-        refuse(EXIT_ROOT_CHANGED)
 
 
 def _snapshot_entry(source_fd, dest_fd, name, state, depth, denied=(), prefix=()):
@@ -2729,15 +2942,12 @@ def _snapshot_entry(source_fd, dest_fd, name, state, depth, denied=(), prefix=()
         return
     if listed.st_nlink < 1:
         refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
-    # A hard link resolves to `listed`'s inode, not to `name`: it exposes
-    # whatever bytes Git reads through that inode at the moment it reads
-    # them, including a write made afterwards through a descriptor opened
-    # before this snapshot -- it is not a point-in-time copy of the file's
-    # content.  Renaming, replacing or deleting the source afterwards cannot
-    # change what the link resolves to, because none of those touch the
-    # inode this link already names.
-    _snapshot_charge_bytes(state, listed.st_size)
-    _snapshot_link(source_fd, dest_fd, name, listed)
+    # A clone is a point-in-time copy of the file's bytes on its own inode:
+    # a rename, replacement, deletion or in-place write of the source
+    # afterwards changes nothing Git will read, and no write through the
+    # snapshot reaches the owner's file.
+    _snapshot_charge_cloned_bytes(state, listed.st_size)
+    _snapshot_clone(source_fd, dest_fd, name, listed)
 
 
 def _snapshot_walk(source_fd, dest_fd, state, depth, special, denied=(), prefix=()):
@@ -2753,7 +2963,7 @@ def _snapshot_walk(source_fd, dest_fd, state, depth, special, denied=(), prefix=
     root-relative location) apply only to whole-tree walks: an entry under a
     denied prefix is excluded the same way a recursive search walk already
     excludes one (`_walk_regular_files`) -- skipped before it is charged
-    against any bound, never linked, never refused.  A `special`-handled name
+    against any bound, never attached, never refused.  A `special`-handled name
     (`.git`) is never subject to this check: the caller who sets `special`
     already carries its own authorization for that entry.
     """
@@ -2852,7 +3062,8 @@ def _snapshot_linked_worktree(source_fd, dest_fd, name, state, request):
                         state,
                         1,
                         {
-                            "index": _snapshot_copy_handler,
+                            "index": _snapshot_index_handler,
+                            "config.worktree": _snapshot_worktree_config_handler,
                             "commondir": _snapshot_skip_handler,
                             "gitdir": _snapshot_skip_handler,
                         },
@@ -2869,12 +3080,16 @@ def _snapshot_linked_worktree(source_fd, dest_fd, name, state, request):
                     "common", DIRECTORY_FLAGS, dir_fd=gitmeta_fd
                 )
                 try:
+                    _refuse_if_alternates(commondir_fd)
                     _snapshot_walk(
                         commondir_fd,
                         common_dest_fd,
                         state,
                         1,
-                        {"config": _snapshot_config_handler},
+                        {
+                            "config": _snapshot_config_handler,
+                            "config.worktree": _snapshot_worktree_config_handler,
+                        },
                     )
                 finally:
                     os.close(common_dest_fd)
@@ -2899,6 +3114,7 @@ def _snapshot_git_handler(request):
             os.mkdir(name, mode=0o700, dir_fd=dest_fd)
             child_source = _open_directory(source_fd, name)
             try:
+                _refuse_if_alternates(child_source)
                 child_dest = os.open(name, DIRECTORY_FLAGS, dir_fd=dest_fd)
                 try:
                     _snapshot_walk(
@@ -2908,7 +3124,8 @@ def _snapshot_git_handler(request):
                         depth + 1,
                         {
                             "config": _snapshot_config_handler,
-                            "index": _snapshot_copy_handler,
+                            "config.worktree": _snapshot_worktree_config_handler,
+                            "index": _snapshot_index_handler,
                         },
                     )
                 finally:
@@ -2936,17 +3153,37 @@ def _snapshot_git_only(root_fd, destination_fd, state, request):
     handler(root_fd, destination_fd, ".git", state, 0)
 
 
-def _snapshot_link_path(root_fd, destination_fd, parts, state, denied, index):
-    """Link exactly one caller-named, root-relative regular file (or
-    symlink) into the destination, creating whatever destination
-    directories its parents need.
+def _snapshot_listed_component(parent_fd, name):
+    """`stat` one path component without following it, or `None` when the
+    name (or a directory on the way to it) no longer exists.
+    """
+
+    try:
+        return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ENOTDIR):
+            return None
+        refuse(EXIT_PATH_REFUSED)
+
+
+def _snapshot_clone_path(root_fd, destination_fd, parts, state, denied, index):
+    """Clone exactly one caller-named, root-relative regular file (or
+    recreate a symlink) into the destination, creating whatever destination
+    directories its parents need.  Returns True when the path was attached
+    and False when it was skipped.
 
     Every component is opened by descriptor, `O_NOFOLLOW`, exactly like the
-    whole-tree walk; a denied path -- or a path under a denied prefix -- is
-    refused outright rather than silently dropped, because unlike a walk
-    that simply never reaches a denied subtree, a caller naming one directly
-    is either a policy bug or an attempt to route around the exclusion, and
-    neither should be answered by pretending the path was never asked for.
+    whole-tree walk.  Three outcomes are told apart on purpose.  A denied
+    path -- or a path under a denied prefix -- is refused outright rather
+    than silently dropped: a caller naming one directly is either a policy
+    bug or an attempt to route around the exclusion.  A path that is missing
+    from the working tree, or whose leaf (or a directory on the way to it)
+    is neither a regular file nor a symlink, is skipped: the caller's list
+    came from the index, and a tracked path that no longer exists as a file
+    is exactly what Git reports as deleted (or a type change) when the
+    snapshot omits it, which is the truthful statement about the owner's
+    tree.  Anything else -- an unreadable component, a symlink where a
+    regular file was listed a moment ago -- stays a refusal.
     """
 
     if _under(parts, denied):
@@ -2957,6 +3194,9 @@ def _snapshot_link_path(root_fd, destination_fd, parts, state, denied, index):
         for depth, part in enumerate(parts[:-1]):
             if _under(parts[: depth + 1], denied):
                 refuse(EXIT_PATH_REFUSED)
+            listed_parent = _snapshot_listed_component(source_fd, part)
+            if listed_parent is None or not stat.S_ISDIR(listed_parent.st_mode):
+                return False
             child_source = _open_directory(source_fd, part)
             os.close(source_fd)
             source_fd = child_source
@@ -2969,35 +3209,53 @@ def _snapshot_link_path(root_fd, destination_fd, parts, state, denied, index):
             os.close(target_fd)
             target_fd = child_target
         name = parts[-1]
-        # Explicitly named: missing, wrong kind or changed identity is a
-        # refusal, never a silent skip -- the caller (Git's own tracked-file
-        # listing) said this path exists, and if it no longer does, the
-        # request is answered honestly rather than served a partial result.
-        listed = _listed_child(source_fd, name, missing_status=EXIT_NOT_FOUND)
+        listed = _snapshot_listed_component(source_fd, name)
+        if listed is None:
+            return False
         # Test seam only: lets a test replace or rename away the object this
         # walk already listed, in the exact gap between the listing above and
-        # the `linkat` below, so `_snapshot_link`'s own post-link identity
-        # check (`EXIT_ROOT_CHANGED`) can be proven against a real race
-        # instead of only argued about.
-        _test_hook(state["request"], "snapshot-link-path-entry", index)
+        # the clone below, so `_snapshot_clone`'s own identity check
+        # (`EXIT_ROOT_CHANGED`) can be proven against a real race instead of
+        # only argued about.
+        _test_hook(state["request"], "snapshot-clone-path-entry", index)
         if stat.S_ISLNK(listed.st_mode):
             _snapshot_symlink(source_fd, target_fd, name)
             state["entries"] += 1
             if state["entries"] > state["max_entries"]:
                 refuse(EXIT_SNAPSHOT_TOO_LARGE)
-            return
+            return True
         if not stat.S_ISREG(listed.st_mode):
-            refuse(EXIT_PATH_REFUSED)
+            return False
         if listed.st_nlink < 1:
             refuse(EXIT_SNAPSHOT_DESTINATION_INVALID)
         state["entries"] += 1
         if state["entries"] > state["max_entries"]:
             refuse(EXIT_SNAPSHOT_TOO_LARGE)
-        _snapshot_charge_bytes(state, listed.st_size)
-        _snapshot_link(source_fd, target_fd, name, listed)
+        _snapshot_charge_cloned_bytes(state, listed.st_size)
+        _snapshot_clone(source_fd, target_fd, name, listed)
+        return True
     finally:
         os.close(source_fd)
         os.close(target_fd)
+
+
+_EXPECTED_INDEX_ABSENT = object()
+
+
+def _parsed_expected_index(request):
+    """The index digest the caller requires this snapshot to match, `None`
+    for "the caller saw no index", or `_EXPECTED_INDEX_ABSENT` when the
+    caller made no such demand.
+    """
+
+    if "expectedIndexSha256" not in request:
+        return _EXPECTED_INDEX_ABSENT
+    expected = request["expectedIndexSha256"]
+    if expected is None:
+        return None
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        refuse(EXIT_INVALID)
+    return expected
 
 
 def _parsed_snapshot_paths(request):
@@ -3025,21 +3283,25 @@ def _workspace_snapshot(request):
     """Build the private snapshot N02 describes and return its size.
 
     Two modes.  Whole-tree (no `paths` key): every regular file below the
-    approved root is hard-linked in by descriptor (`linkat`), never opened by
-    name.  Bounded (`paths` present, possibly empty): only `.git` and the
-    caller's own explicit relative paths are linked -- the shape
+    approved root is attached by descriptor, never opened by name.  Bounded
+    (`paths` present, possibly empty): only `.git` and the caller's own
+    explicit relative paths are attached -- the shape
     `native-verification-command.ts` uses once it already knows, from Git
-    itself, which paths a command actually needs.  In both modes a hard link
-    resolves to the source *inode*: renaming, replacing or deleting the
-    source afterwards cannot change what the link resolves to, but a write
-    made in place through a descriptor opened before this call -- not a
-    rename -- is still visible through it, because it is the very same
-    inode, not a point-in-time copy of its bytes.  `.git/config` (and a
+    itself, which paths a command actually needs.  In both modes a regular
+    file is attached as an APFS clone (`fclonefileat`): a point-in-time copy
+    of its bytes on an inode of its own, so renaming, replacing, deleting or
+    writing into the source afterwards -- through any descriptor -- changes
+    nothing in the snapshot, the owner's link count stays one, and no write
+    through the snapshot can reach the owner's file.  `.git/config` (and a
     linked worktree's common config) is replaced by its minimal,
-    execution-free equivalent; `.git/index` (and a linked worktree's own
-    index) is copied, because Git may rewrite it in place.  `denied`
-    (root-relative prefixes) excludes matching entries from the whole-tree
-    walk and refuses a bounded path that names or sits under one.  This verb
+    execution-free equivalent and `config.worktree` by its own; `.git/index`
+    (and a linked worktree's own index) is copied, because Git may rewrite
+    it in place, and the SHA-256 of the copied bytes is reported so a caller
+    can pin a second snapshot to the same index (`expectedIndexSha256`).
+    `denied` (root-relative prefixes) excludes matching entries from the
+    whole-tree walk and refuses a bounded path that names or sits under one;
+    a bounded path missing from the working tree, or present as something
+    other than a regular file or symlink, is skipped and counted.  This verb
     only builds the snapshot; it never runs Git.
     """
 
@@ -3051,6 +3313,8 @@ def _workspace_snapshot(request):
         "destinationRoot",
         "maxEntries",
         "maxBytes",
+        "maxClonedBytes",
+        "expectedIndexSha256",
         "externalGitDir",
         "externalCommonDir",
         "testHook",
@@ -3060,6 +3324,10 @@ def _workspace_snapshot(request):
         refuse(EXIT_INVALID)
     max_entries = _bounded_snapshot_limit(request.get("maxEntries"), MAX_SNAPSHOT_ENTRIES)
     max_bytes = _bounded_snapshot_limit(request.get("maxBytes"), MAX_SNAPSHOT_BYTES)
+    max_cloned_bytes = _bounded_snapshot_limit(
+        request.get("maxClonedBytes"), MAX_SNAPSHOT_CLONED_BYTES
+    )
+    expected_index = _parsed_expected_index(request)
     denied = _parse_prefixes(request.get("denied"))
     parsed_paths = _parsed_snapshot_paths(request)
     root_fd = _open_root(request)
@@ -3073,8 +3341,12 @@ def _workspace_snapshot(request):
             state = {
                 "entries": 0,
                 "bytes": 0,
+                "cloned_bytes": 0,
+                "skipped": 0,
+                "index_sha256": None,
                 "max_entries": max_entries,
                 "max_bytes": max_bytes,
+                "max_cloned_bytes": max_cloned_bytes,
                 "request": request,
             }
             _test_hook(request, "before-snapshot-walk", None)
@@ -3083,12 +3355,24 @@ def _workspace_snapshot(request):
                 _snapshot_walk(root_fd, destination_fd, state, 0, special, denied, ())
             else:
                 _snapshot_git_only(root_fd, destination_fd, state, request)
+                if (
+                    expected_index is not _EXPECTED_INDEX_ABSENT
+                    and state["index_sha256"] != expected_index
+                ):
+                    refuse(EXIT_SNAPSHOT_INDEX_CHANGED)
                 for index, parts in enumerate(parsed_paths):
-                    _snapshot_link_path(
+                    if not _snapshot_clone_path(
                         root_fd, destination_fd, parts, state, denied, index
-                    )
+                    ):
+                        state["skipped"] += 1
             return json.dumps(
-                {"bytes": state["bytes"], "entries": state["entries"]},
+                {
+                    "bytes": state["bytes"],
+                    "clonedBytes": state["cloned_bytes"],
+                    "entries": state["entries"],
+                    "indexSha256": state["index_sha256"],
+                    "skipped": state["skipped"],
+                },
                 ensure_ascii=True,
                 allow_nan=False,
                 separators=(",", ":"),

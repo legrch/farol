@@ -29,24 +29,63 @@ any later Legacy-replacement decision.
 
 Both profiles use the reviewed Apple Git chain and an exact argument vector:
 
-- `git.status`: `status --short --branch --untracked-files=no --ignore-submodules=all`;
-- `git.head`: `rev-parse --verify HEAD`.
+- `git.status`: `status --porcelain --branch -z --untracked-files=no --ignore-submodules=all`,
+  plus one `:(exclude,top,literal)<prefix>` pathspec per excluded prefix; Farol parses the
+  NUL-separated records structurally and renders them itself as `--short`-style lines
+  (`## <branch>`, then `XY <path>` or `XY <original> -> <path>`) with raw UTF-8 paths and
+  no C-quoting;
+- `git.head`: `rev-parse --verify --quiet HEAD`.
 
-Execution is pinned to the approved workspace root with explicit `GIT_DIR`,
-`GIT_COMMON_DIR` and `GIT_WORK_TREE`, optional locks and repository monitors
-disabled, a fixed environment, Apple Seatbelt default-deny policy and `deny
-network*`. The detached process group is killed on the ten-second deadline, output
+Git never reads the approved folder itself (N02). Each command runs, with the snapshot
+as its working directory, over a private snapshot that Farol's descriptor-bound helper
+assembles under its own runtime directory: repository metadata with `.git/config`
+(and any `config.worktree`) reduced to an inert `[core]` subset plus the structural
+`extensions.objectFormat`, `extensions.refStorage` and `extensions.worktreeConfig`
+keys, the index copied, and -- for `git.status` -- the tracked files attached as APFS
+clones made from verified descriptors. A clone is a point-in-time copy on its own
+inode: a later write to the owner's file through any descriptor is invisible in the
+snapshot, the owner's link count stays one, and nothing written through the snapshot
+reaches the owner's bytes. The snapshot is removed after the command.
+
+What the two results mean, exactly:
+
+- Both describe the approved folder **at the instant of the snapshot**. `git.status`
+  takes two snapshots -- metadata only, to ask Git which paths are tracked, then
+  metadata plus exactly those paths -- and the second is refused with
+  `WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT` unless its index is byte-identical to the
+  first's, so the pair is one instant or no answer.
+- `git.status` covers **tracked files only**: untracked files are never examined and
+  submodules are ignored (`--ignore-submodules=all`; gitlink index entries are never
+  carried). A tracked file missing from the working tree, or present as a directory or
+  other non-file, is left out of the snapshot and therefore reported by Git as deleted
+  or type-changed -- a true statement about the owner's tree.
+- Paths under the workspace's excluded prefixes are absent from the snapshot, excluded
+  from Git's own view by pathspec, and filtered out of the rendered result again
+  (matching NFC-normalised and case-folded, as the helper matches), whatever characters
+  they carry. A path Git admits but this route will not carry or render (a backslash,
+  a newline) refuses the whole command with `WORKSPACE_TRACKED_PATH_UNSUPPORTED`.
+
+Seatbelt grants the sandboxed Git read access to the snapshot, the reviewed Git binary
+and system libraries only, write access to exactly the snapshot's `index` and
+`index.lock` (under `.git`, or `.gitmeta/worktree` for a linked worktree), and `deny
+network*`; repository monitors, attribute and exclude files and submodule recursion
+are disabled by fixed `-c` arguments. The tracked-path listing has its own 32 MiB
+budget (`WORKSPACE_TRACKED_LIST_TOO_LARGE`); status and HEAD output stay bounded at
+64 KiB. The detached process group is killed on the ten-second deadline, output
 overflow or MCP cancellation. Cancellation is checked before metadata resolution,
 after each attestation boundary and immediately after spawn; it returns
 `WORKSPACE_COMMAND_CANCELLED`, never a generic failure.
 
-| Workspace shape                                    | Disposition                                                     | Evidence                                                   |
-| -------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------- |
-| Regular repository                                 | Supported                                                       | real native status and HEAD tests                          |
-| Exact linked worktree                              | Supported with only its resolved worktree/common metadata roots | real native linked-worktree test plus parent canary denial |
-| Non-Git workspace                                  | Known refusal                                                   | `WORKSPACE_COMMAND_UNSUPPORTED` regression                 |
-| Arbitrary external, symlinked or writable metadata | Refused                                                         | native metadata refusal regressions                        |
-| Research denied-path metadata experiment           | Not rerouted after the explicit host refusal                    | `NOT_RUN`                                                  |
+| Workspace shape                                      | Disposition                                                     | Evidence                                                                      |
+| ---------------------------------------------------- | --------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Regular repository                                   | Supported                                                       | real native status and HEAD tests                                             |
+| Exact linked worktree                                | Supported with only its resolved worktree/common metadata roots | real native linked-worktree test plus parent canary denial                    |
+| sha256 object format, reftable ref storage           | Supported (structural extensions carried through)               | `native-verification-command.test.ts` extension cases                         |
+| `objects/info/alternates` present                    | Refused before the file is read                                 | `WORKSPACE_GIT_ALTERNATES_UNSUPPORTED` regression                             |
+| Snapshot too large, cross-volume, or non-APFS volume | Refused with a distinct code                                    | `WORKSPACE_SNAPSHOT_TOO_LARGE` / `_CROSS_VOLUME` / `_CLONE_UNSUPPORTED` tests |
+| Non-Git workspace                                    | Known refusal                                                   | `WORKSPACE_NOT_GIT_REPOSITORY` regression                                     |
+| Arbitrary external, symlinked or writable metadata   | Refused                                                         | native metadata refusal regressions                                           |
+| Research denied-path metadata experiment             | Not rerouted after the explicit host refusal                    | `NOT_RUN`                                                                     |
 
 Generic file operations continue to deny `.git`; command metadata access does not
 authorize reading the metadata parent through Computer. Credential-path denies are

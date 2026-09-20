@@ -21,6 +21,12 @@ const XCODE_SELECT = "/usr/bin/xcode-select";
 const XCRUN = "/usr/bin/xcrun";
 const CODESIGN = "/usr/bin/codesign";
 const MAX_OUTPUT_BYTES = 64 * 1_024;
+// The tracked-path listing (`git ls-files -z --stage`) is not a product
+// result: it only decides which paths the bounded snapshot carries, so it has
+// its own budget, sized for a large ordinary repository (about 90 bytes per
+// entry, so well over 300,000 tracked files) rather than the 64 KiB result
+// bound a status or HEAD output must fit.
+const MAX_TRACKED_LIST_BYTES = 32 * 1_024 * 1_024;
 const MAX_STDERR_BYTES = 4 * 1_024;
 const MAX_GIT_METADATA_BYTES = 4 * 1_024;
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -40,34 +46,31 @@ const REVIEWED_DEVELOPER_ROOTS = Object.freeze([
 // snapshot `createSnapshot` (workspace-snapshot.ts) assembles from
 // descriptors Farol already holds, and the sandbox grants read access to
 // that snapshot directory alone -- never to the owner's workspace pathname.
-// (N02d narrows the matching write grant further still; see below.) The
-// snapshot mirrors both a primary checkout and a linked worktree (its own
+// The snapshot mirrors both a primary checkout and a linked worktree (its own
 // gitdir and the repository's common gitdir rebuilt inside the same
 // destination), so Git needs no path outside it.
 //
 // N02c -- one command may run over more than one such snapshot. `git.status`
 // first snapshots `.git` alone, asks Git itself (inside that snapshot) which
 // paths are tracked, and only then builds a second, bounded snapshot that
-// links exactly those paths (minus any the workspace's own exclusions cover)
-// before running the fixed status command over it. `git.head` never needs a
+// carries exactly those paths (minus any the workspace's own exclusions
+// cover) before running the fixed status command over it. The second
+// snapshot is pinned to the first's index (`expectedIndexSha256`): the two
+// describe one instant, or the command refuses. `git.head` never needs a
 // second snapshot: `rev-parse` reads refs and objects, never a worktree
 // file.
 //
-// N02d -- reads stay granted across the whole snapshot subtree, but writes do
-// not: a working-tree file inside the snapshot is a hard link to the owner's
-// own inode (workspace-snapshot.ts / safe_open.py), so a write grant wide
-// enough to cover it would let the fixed Git command rewrite the owner's real
-// file. `git status`/`git rev-parse` only ever need to write repository
-// metadata Git itself may rewrite in place -- the index and its lock during
-// an index refresh -- and that metadata is always a private copy inside the
-// snapshot (`_snapshot_copy_handler`), never a link to the owner's tree. The
-// write grant is therefore narrowed to exactly the two metadata subtrees a
-// snapshot can contain: `.git` (a plain directory holding that metadata for a
-// primary checkout) and `.gitmeta` (the `worktree`/`common` pair
-// `_snapshot_linked_worktree` rebuilds for a linked worktree, whose top-level
-// `.git` is instead a small fixed pointer file Git never rewrites). Whichever
-// layout is in play, the other subtree simply does not exist in that
-// snapshot, so granting both unconditionally costs nothing.
+// N02d -- reads stay granted across the whole snapshot subtree, but writes
+// are granted to exactly the files a plain `git status` may rewrite: the
+// index and its lock, in whichever metadata directory the snapshot's layout
+// puts them (`.git` for a primary checkout, `.gitmeta/worktree` for a linked
+// worktree; the other pair simply does not exist in that snapshot, so naming
+// both unconditionally costs nothing). Every working-tree file inside the
+// snapshot is an APFS clone on an inode of its own (workspace-snapshot.ts /
+// safe_open.py), so no write through the snapshot could reach the owner's
+// bytes in any case; the literal grant additionally keeps the fixed command
+// from altering its own evidence -- HEAD, refs, objects and config inside
+// the snapshot are read-only to it.
 const COMMAND_PROFILE = `(version 1)
 (import "dyld-support.sb")
 (deny default)
@@ -87,8 +90,10 @@ const COMMAND_PROFILE = `(version 1)
   (subpath (param "FAROL_EXECUTABLE_DIR"))
   (subpath (param "FAROL_SNAPSHOT")))
 (allow file-write*
-  (subpath (param "FAROL_GIT_DIR"))
-  (subpath (param "FAROL_GIT_META_DIR"))
+  (literal (param "FAROL_GIT_INDEX"))
+  (literal (param "FAROL_GIT_INDEX_LOCK"))
+  (literal (param "FAROL_GIT_META_INDEX"))
+  (literal (param "FAROL_GIT_META_INDEX_LOCK"))
   (literal "/dev/stdout")
   (literal "/dev/stderr")
   (literal "/dev/null")
@@ -140,7 +145,17 @@ type CommandFailureCode =
   | "WORKSPACE_NOT_GIT_REPOSITORY"
   | "WORKSPACE_GIT_HEAD_UNBORN"
   | "WORKSPACE_GIT_METADATA_NOT_APPROVED"
+  | "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED"
   | "WORKSPACE_ROOT_CHANGED"
+  | "WORKSPACE_NOT_FOUND"
+  | "WORKSPACE_PATH_REFUSED"
+  | "WORKSPACE_RACE_DETECTED"
+  | "WORKSPACE_TRACKED_LIST_TOO_LARGE"
+  | "WORKSPACE_TRACKED_PATH_UNSUPPORTED"
+  | "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT"
+  | "WORKSPACE_SNAPSHOT_TOO_LARGE"
+  | "WORKSPACE_SNAPSHOT_CROSS_VOLUME"
+  | "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED"
   | "WORKSPACE_HELPER_FAILED";
 
 // The HEAD profile exits 1 without output when HEAD does not resolve; the
@@ -152,15 +167,18 @@ function failure(code: CommandFailureCode): ReadonlyWorkspaceResult {
   return { ok: false, error: { code, retry: "never" } };
 }
 
-// Maps a snapshot-layer refusal (cbcf0924, EXIT_TO_CODE in workspace-snapshot.ts)
-// onto this command's own product codes. `SNAPSHOT_ROOT_CHANGED` and
-// `SNAPSHOT_METADATA_UNAPPROVED` already name an existing product refusal
-// exactly, so they are surfaced as that code; every other snapshot failure is
-// an internal-mechanism refusal without a more specific product meaning, so
-// it is surfaced as the existing generic `WORKSPACE_HELPER_FAILED`, and
-// `SNAPSHOT_HELPER_UNTRUSTED` (the attested interpreter or helper bytes
-// failed their own check) as the existing executable-untrusted code, which
-// already covers a failed attestation for the command itself.
+// Maps a snapshot-layer refusal (EXIT_TO_CODE in workspace-snapshot.ts) onto
+// this command's own closed product codes, one for one wherever the refusal
+// has a product meaning: the owner's root or a named path moved or was
+// refused, the snapshot would be too large or cannot be cloned on this
+// volume, the live index moved between the two phases, or the repository's
+// layout (unapproved external metadata, an alternates file) is one this
+// route does not run over. `SNAPSHOT_HELPER_UNTRUSTED` (the attested
+// interpreter or helper bytes failed their own check) is the existing
+// executable-untrusted code, which already covers a failed attestation for
+// the command itself. Only a malformed request of our own, an invalid
+// destination or an internal helper fault -- none of which says anything
+// about the owner's repository -- stay on the generic `WORKSPACE_HELPER_FAILED`.
 function snapshotFailureCode(
   code: WorkspaceSnapshotErrorCode,
 ): CommandFailureCode {
@@ -169,9 +187,27 @@ function snapshotFailureCode(
       return "WORKSPACE_ROOT_CHANGED";
     case "SNAPSHOT_METADATA_UNAPPROVED":
       return "WORKSPACE_GIT_METADATA_NOT_APPROVED";
+    case "SNAPSHOT_ALTERNATES_UNSUPPORTED":
+      return "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED";
     case "SNAPSHOT_HELPER_UNTRUSTED":
       return "WORKSPACE_COMMAND_EXECUTABLE_UNTRUSTED";
-    default:
+    case "SNAPSHOT_NOT_FOUND":
+      return "WORKSPACE_NOT_FOUND";
+    case "SNAPSHOT_PATH_REFUSED":
+      return "WORKSPACE_PATH_REFUSED";
+    case "SNAPSHOT_RACE_DETECTED":
+      return "WORKSPACE_RACE_DETECTED";
+    case "SNAPSHOT_TOO_LARGE":
+      return "WORKSPACE_SNAPSHOT_TOO_LARGE";
+    case "SNAPSHOT_CROSS_VOLUME":
+      return "WORKSPACE_SNAPSHOT_CROSS_VOLUME";
+    case "SNAPSHOT_CLONE_UNSUPPORTED":
+      return "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED";
+    case "SNAPSHOT_INDEX_CHANGED":
+      return "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT";
+    case "SNAPSHOT_INVALID_REQUEST":
+    case "SNAPSHOT_DESTINATION_INVALID":
+    case "SNAPSHOT_HELPER_FAILED":
       return "WORKSPACE_HELPER_FAILED";
   }
 }
@@ -548,18 +584,39 @@ function killProcessGroup(child: ReturnType<typeof spawn>): void {
   child.kill("SIGKILL");
 }
 
-function gitArguments(
-  command: VerificationOperation["command"],
-): readonly string[] {
-  return command === "git.status"
-    ? [
-        "status",
-        "--short",
-        "--branch",
-        "--untracked-files=no",
-        "--ignore-submodules=all",
-      ]
-    : ["rev-parse", "--verify", "--quiet", "HEAD"];
+const HEAD_ARGUMENTS = [
+  "rev-parse",
+  "--verify",
+  "--quiet",
+  "HEAD",
+] as const satisfies readonly string[];
+
+// The fixed status invocation: porcelain v1, NUL-terminated (`-z`), so every
+// path arrives raw -- no C-quoting Git would otherwise apply to a space, a
+// non-ASCII character or an arrow -- and is parsed structurally
+// (`parsePorcelainStatus`) rather than by line. One `:(exclude,top,literal)`
+// pathspec per denied prefix keeps Git from even considering a tracked path
+// the workspace's own exclusions cover (such a path is never in the snapshot
+// either, so without the exclusion Git would report it deleted);
+// `literal` disables glob interpretation of the prefix and `top` anchors it
+// at the snapshot root whatever the working directory. The rendered result
+// is filtered against the same prefixes again (`isUnderAnyPrefix`, folded
+// the way the helper folds), so nothing rests on Git's own matching alone.
+function statusArguments(deniedPrefixes: readonly string[]): readonly string[] {
+  return [
+    "status",
+    "--porcelain",
+    "--branch",
+    "-z",
+    "--untracked-files=no",
+    "--ignore-submodules=all",
+    ...(deniedPrefixes.length > 0
+      ? [
+          "--",
+          ...deniedPrefixes.map((prefix) => `:(exclude,top,literal)${prefix}`),
+        ]
+      : []),
+  ];
 }
 
 // Status excludes untracked files and submodules by construction; HEAD reads
@@ -583,22 +640,13 @@ async function headIsUnbornBranch(
   return head !== null && /^ref: refs\/heads\/[^\0\r\n]+\n?$/u.test(head);
 }
 
-function validGitOutput(
-  command: VerificationOperation["command"],
-  output: string,
-): boolean {
-  return (
-    !output.includes("\0") &&
-    (command === "git.status" ||
-      /^(?:[a-f0-9]{40}|[a-f0-9]{64})\n$/u.test(output))
-  );
-}
-
 // The `-c` flags every fixed Git invocation over a snapshot uses, whatever
 // command it runs: no config-driven execution path from the owner's
 // repository survives the minimal `.git/config` this snapshot already
 // carries, but these still remove anything a caller-supplied override on the
-// command line could otherwise reintroduce.
+// command line could otherwise reintroduce. (`core.quotepath` is moot for the
+// `-z` listings this route reads, and is pinned so no other output shape can
+// ever appear.)
 const FIXED_GIT_CONFIG_ARGUMENTS = [
   "-c",
   "core.attributesFile=/dev/null",
@@ -614,33 +662,52 @@ const FIXED_GIT_CONFIG_ARGUMENTS = [
   "submodule.recurse=false",
 ] as const;
 
+type CompletedGit = Readonly<{
+  code: number | null;
+  exitSignal: NodeJS.Signals | null;
+  stdout: Buffer;
+  stderr: string;
+}>;
+
 type SandboxedGitOutcome =
-  | Readonly<{ failure: CommandFailureCode }>
-  | Readonly<{
-      code: number | null;
-      exitSignal: NodeJS.Signals | null;
-      stdout: Buffer;
-      stderr: string;
-    }>;
+  Readonly<{ failure: CommandFailureCode }> | CompletedGit;
+
+// How much stdout one fixed invocation may produce before it is killed, and
+// the code that kill is reported as. The tracked-path listing has its own,
+// larger budget and its own code, so a large but ordinary repository is told
+// apart from a status or HEAD output that overran the product's result bound.
+type SandboxedGitBudget = Readonly<{
+  maxStdoutBytes: number;
+  overflow: CommandFailureCode;
+}>;
+
+const COMMAND_OUTPUT_BUDGET: SandboxedGitBudget = {
+  maxStdoutBytes: MAX_OUTPUT_BYTES,
+  overflow: "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE",
+};
+
+const TRACKED_LIST_BUDGET: SandboxedGitBudget = {
+  maxStdoutBytes: MAX_TRACKED_LIST_BYTES,
+  overflow: "WORKSPACE_TRACKED_LIST_TOO_LARGE",
+};
 
 // Runs one fixed, no-network Git invocation entirely inside `snapshotPath`
 // (the private snapshot N02 built): the Seatbelt profile grants read across
 // that whole directory, plus the reviewed Git binary and the system
-// libraries it needs, but write only under its `.git` and `.gitmeta`
-// metadata subtrees (N02d) -- never under a working-tree path a snapshot may
-// have hard-linked to the owner's own inode. Git sees no pathname belonging
-// to the owner's real workspace at all -- primary and linked-worktree
-// layouts alike are self-contained inside the snapshot
-// (workspace-snapshot.ts / safe_open.py `_snapshot_linked_worktree`), so no
-// extra grant is needed for either. This is the one place a sandboxed Git
-// process is spawned; `runGitOverSnapshot` (status/head) and `runGitLsFiles`
-// (tracked-path discovery) are both thin callers, so a sandbox failure, a
-// timeout or a cancellation is classified identically whichever one is
-// running.
+// libraries it needs, but write only to the snapshot's own index and index
+// lock (N02d). Git sees no pathname belonging to the owner's real workspace
+// at all -- primary and linked-worktree layouts alike are self-contained
+// inside the snapshot (workspace-snapshot.ts / safe_open.py
+// `_snapshot_linked_worktree`), so no extra grant is needed for either. This
+// is the one place a sandboxed Git process is spawned; `runGitStatus`,
+// `runGitHead` and `runGitLsFiles` (tracked-path discovery) are all thin
+// callers through `completedGit`, so a sandbox failure, a timeout or a
+// cancellation is classified identically whichever one is running.
 function runSandboxedGit(
   git: string,
   snapshotPath: string,
   trailingArguments: readonly string[],
+  budget: SandboxedGitBudget,
   signal?: AbortSignal,
 ): Promise<SandboxedGitOutcome> {
   if (signal?.aborted) {
@@ -680,17 +747,19 @@ function runSandboxedGit(
     `FAROL_EXECUTABLE_DIR=${path.dirname(git)}`,
     "-D",
     `FAROL_SNAPSHOT=${snapshotPath}`,
-    // N02d -- the two metadata subtrees Git may actually rewrite: `.git`
-    // (a primary checkout's own directory, or a linked worktree's small
-    // fixed pointer file, which is never rewritten but costs nothing to
-    // name) and `.gitmeta` (the worktree/common pair a linked worktree's
-    // snapshot rebuilds). Both are plain joins of an already-validated
-    // `snapshotPath` with a fixed literal segment, so no extra path check is
-    // needed here.
+    // N02d -- the four literal files Git may actually rewrite: the index and
+    // its lock, in a primary checkout's `.git` or in the `.gitmeta/worktree`
+    // directory a linked worktree's snapshot rebuilds. Each is a plain join
+    // of an already-validated `snapshotPath` with fixed literal segments, so
+    // no extra path check is needed here.
     "-D",
-    `FAROL_GIT_DIR=${path.join(snapshotPath, ".git")}`,
+    `FAROL_GIT_INDEX=${path.join(snapshotPath, ".git", "index")}`,
     "-D",
-    `FAROL_GIT_META_DIR=${path.join(snapshotPath, ".gitmeta")}`,
+    `FAROL_GIT_INDEX_LOCK=${path.join(snapshotPath, ".git", "index.lock")}`,
+    "-D",
+    `FAROL_GIT_META_INDEX=${path.join(snapshotPath, ".gitmeta", "worktree", "index")}`,
+    "-D",
+    `FAROL_GIT_META_INDEX_LOCK=${path.join(snapshotPath, ".gitmeta", "worktree", "index.lock")}`,
   ];
   ancestors.forEach((directory, index) => {
     parameters.push("-D", `FAROL_SNAPSHOT_PARENT_${index}=${directory}`);
@@ -733,7 +802,8 @@ function runSandboxedGit(
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
-    let outputTooLarge = false;
+    let stdoutTooLarge = false;
+    let stderrTooLarge = false;
     let cancelled = false;
     let finished = false;
     const timer = setTimeout(() => {
@@ -756,8 +826,8 @@ function runSandboxedGit(
     if (signal?.aborted) cancel();
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutBytes += chunk.length;
-      if (stdoutBytes > MAX_OUTPUT_BYTES) {
-        outputTooLarge = true;
+      if (stdoutBytes > budget.maxStdoutBytes) {
+        stdoutTooLarge = true;
         killProcessGroup(child);
       } else {
         stdout.push(chunk);
@@ -766,7 +836,7 @@ function runSandboxedGit(
     child.stderr.on("data", (chunk: Buffer) => {
       stderrBytes += chunk.length;
       if (stderrBytes > MAX_STDERR_BYTES) {
-        outputTooLarge = true;
+        stderrTooLarge = true;
         killProcessGroup(child);
       } else {
         stderr.push(chunk);
@@ -788,7 +858,11 @@ function runSandboxedGit(
         finish({ failure: "WORKSPACE_COMMAND_TIMEOUT" });
         return;
       }
-      if (outputTooLarge) {
+      if (stdoutTooLarge) {
+        finish({ failure: budget.overflow });
+        return;
+      }
+      if (stderrTooLarge) {
         finish({ failure: "WORKSPACE_COMMAND_OUTPUT_TOO_LARGE" });
         return;
       }
@@ -802,25 +876,65 @@ function runSandboxedGit(
   });
 }
 
-async function runGitOverSnapshot(
+// One fixed invocation's outcome, with the sandbox's own refusal to apply
+// its profile classified before anything else is read from it.
+async function completedGit(
   git: string,
   snapshotPath: string,
-  command: VerificationOperation["command"],
+  trailingArguments: readonly string[],
+  budget: SandboxedGitBudget,
   signal?: AbortSignal,
-): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
+): Promise<SandboxedGitOutcome> {
   const outcome = await runSandboxedGit(
     git,
     snapshotPath,
-    gitArguments(command),
+    trailingArguments,
+    budget,
     signal,
   );
-  if ("failure" in outcome) return failure(outcome.failure);
-  const { code, exitSignal, stdout, stderr } = outcome;
-  if (/^sandbox-exec: sandbox_apply:/mu.test(stderr)) {
-    return failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE");
+  if ("failure" in outcome) return outcome;
+  if (/^sandbox-exec: sandbox_apply:/mu.test(outcome.stderr)) {
+    return { failure: "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE" };
   }
+  return outcome;
+}
+
+function commandResult(
+  command: VerificationOperation["command"],
+  stdout: string,
+): ReadonlyWorkspaceResult {
+  return {
+    ok: true,
+    value: {
+      kind: "workspace.command",
+      command,
+      relativePath: ".",
+      exitCode: 0,
+      stdout,
+      stderr: "",
+      outputBytes: Buffer.byteLength(stdout),
+      network: "none",
+      coverage: commandCoverage(command),
+      layout: "primary",
+    },
+  };
+}
+
+async function runGitHead(
+  git: string,
+  snapshotPath: string,
+  signal?: AbortSignal,
+): Promise<ReadonlyWorkspaceResult | typeof HEAD_UNRESOLVED> {
+  const completed = await completedGit(
+    git,
+    snapshotPath,
+    HEAD_ARGUMENTS,
+    COMMAND_OUTPUT_BUDGET,
+    signal,
+  );
+  if ("failure" in completed) return failure(completed.failure);
+  const { code, exitSignal, stdout, stderr } = completed;
   if (
-    command === "git.head" &&
     code === 1 &&
     exitSignal === null &&
     stderr === "" &&
@@ -831,36 +945,23 @@ async function runGitOverSnapshot(
   if (code !== 0 || exitSignal !== null || stderr !== "") {
     return failure("WORKSPACE_COMMAND_FAILED");
   }
+  let output: string;
   try {
-    const output = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
-    if (!validGitOutput(command, output)) {
-      return failure("WORKSPACE_COMMAND_FAILED");
-    }
-    return {
-      ok: true,
-      value: {
-        kind: "workspace.command",
-        command,
-        relativePath: ".",
-        exitCode: 0,
-        stdout: output,
-        stderr: "",
-        outputBytes: stdout.length,
-        network: "none",
-        coverage: commandCoverage(command),
-        layout: "primary",
-      },
-    };
+    output = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
   } catch {
     return failure("WORKSPACE_COMMAND_FAILED");
   }
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})\n$/u.test(output)) {
+    return failure("WORKSPACE_COMMAND_FAILED");
+  }
+  return commandResult("git.head", output);
 }
 
-// Splits `git ls-files -z` output into validated, repository-relative
-// tracked paths.  `-z` NUL-terminates every entry including the last, so a
-// well-formed payload's final split segment is always empty; anything else
-// (a stray NUL-free line, an absolute or traversal-shaped entry) is treated
-// as output this helper will not trust rather than guessed at.
+// A repository-relative path this route is willing to name in a request or
+// render in a result: no NUL, CR, LF or backslash, no absolute or traversal
+// shape. Git itself admits more into an index (a backslash, a newline); such
+// a path is refused as `WORKSPACE_TRACKED_PATH_UNSUPPORTED` rather than
+// smuggled through a snapshot request or a rendered line.
 function validTrackedPath(value: string): boolean {
   return (
     value.length > 0 &&
@@ -874,18 +975,50 @@ function validTrackedPath(value: string): boolean {
   );
 }
 
-function parseTrackedPaths(stdout: Buffer): readonly string[] | null {
-  if (stdout.length === 0) return [];
+// One `git ls-files -z --stage` record: `<mode> <object> <stage>\t<path>`.
+const TRACKED_RECORD =
+  /^([0-7]{6}) (?:[0-9a-f]{40}|[0-9a-f]{64}) [0-3]\t([\s\S]+)$/u;
+const GITLINK_MODE = "160000";
+
+type TrackedListing =
+  | Readonly<{ kind: "ok"; paths: readonly string[] }>
+  | Readonly<{ kind: "malformed" }>
+  | Readonly<{ kind: "unsupported-path" }>;
+
+// Splits `git ls-files -z --stage` output into validated,
+// repository-relative tracked paths. `-z` NUL-terminates every record
+// including the last, so a well-formed payload's final split segment is
+// always empty. A gitlink (mode 160000, a submodule's commit) is dropped: it
+// is not a file in this tree and the fixed status ignores submodules anyway.
+// An unmerged path appears once per stage and is kept once. Output that is
+// not a well-formed listing is `malformed`; a well-formed record naming a
+// path this route will not carry is `unsupported-path`; neither is ever
+// reinterpreted as "nothing tracked".
+function parseTrackedListing(stdout: Buffer): TrackedListing {
+  if (stdout.length === 0) return { kind: "ok", paths: [] };
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
   } catch {
-    return null;
+    return { kind: "malformed" };
   }
-  const parts = text.split("\0");
-  if (parts.length === 0 || parts[parts.length - 1] !== "") return null;
-  const entries = parts.slice(0, -1);
-  return entries.every(validTrackedPath) ? entries : null;
+  const fields = text.split("\0");
+  if (fields.length < 2 || fields[fields.length - 1] !== "") {
+    return { kind: "malformed" };
+  }
+  const paths = new Set<string>();
+  for (const field of fields.slice(0, -1)) {
+    const match = TRACKED_RECORD.exec(field);
+    const mode = match?.[1];
+    const trackedPath = match?.[2];
+    if (mode === undefined || trackedPath === undefined) {
+      return { kind: "malformed" };
+    }
+    if (mode === GITLINK_MODE) continue;
+    if (!validTrackedPath(trackedPath)) return { kind: "unsupported-path" };
+    paths.add(trackedPath);
+  }
+  return { kind: "ok", paths: [...paths] };
 }
 
 type TrackedPathsResult =
@@ -895,47 +1028,61 @@ type TrackedPathsResult =
 // Asks Git which paths are tracked, inside the metadata-only snapshot: `git
 // ls-files` reads only the index that snapshot already copied, so it never
 // needs a single working-tree file to be present. Its output decides the
-// bounded set of paths the *next* snapshot links -- this function never
+// bounded set of paths the *next* snapshot carries -- this function never
 // touches the owner's workspace itself.
 async function runGitLsFiles(
   git: string,
   snapshotPath: string,
   signal?: AbortSignal,
 ): Promise<TrackedPathsResult> {
-  const outcome = await runSandboxedGit(
+  const completed = await completedGit(
     git,
     snapshotPath,
-    ["ls-files", "-z"],
+    ["ls-files", "-z", "--stage"],
+    TRACKED_LIST_BUDGET,
     signal,
   );
-  if ("failure" in outcome)
-    return { ok: false, result: failure(outcome.failure) };
-  const { code, exitSignal, stdout, stderr } = outcome;
-  if (/^sandbox-exec: sandbox_apply:/mu.test(stderr)) {
-    return {
-      ok: false,
-      result: failure("WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE"),
-    };
+  if ("failure" in completed) {
+    return { ok: false, result: failure(completed.failure) };
   }
+  const { code, exitSignal, stdout, stderr } = completed;
   if (code !== 0 || exitSignal !== null || stderr !== "") {
     return { ok: false, result: failure("WORKSPACE_COMMAND_FAILED") };
   }
-  // A clean exit with output that is not a well-formed `-z` listing is
-  // treated as "nothing tracked" rather than a hard failure: this can only
-  // shrink the set of paths the next snapshot links, never widen it, so it
-  // never grants more than the empty-list case already would. Real `git
-  // ls-files` never produces such output; this exists for whatever else may
-  // be attested as "git" in a degraded or hostile configuration.
-  return { ok: true, paths: parseTrackedPaths(stdout) ?? [] };
+  const listing = parseTrackedListing(stdout);
+  if (listing.kind === "malformed") {
+    return { ok: false, result: failure("WORKSPACE_COMMAND_FAILED") };
+  }
+  if (listing.kind === "unsupported-path") {
+    return {
+      ok: false,
+      result: failure("WORKSPACE_TRACKED_PATH_UNSUPPORTED"),
+    };
+  }
+  return { ok: true, paths: listing.paths };
+}
+
+// One path component, folded the way the helper's `_comparable` folds it
+// (NFC, then a case fold): macOS volumes compare names case- and
+// normalisation-insensitively, so `Private/x` and a decomposed `privé/x`
+// name the same objects as `private/x` and `privé/x`. Folding here means a
+// tracked path that is a case or normalisation variant of a denied prefix is
+// excluded on this side before it is ever named to the helper, which would
+// refuse it (`SNAPSHOT_PATH_REFUSED` -> `WORKSPACE_PATH_REFUSED`) -- the
+// same decision, reached first where it is cheapest. `toUpperCase` then
+// `toLowerCase` is the closest full case fold JavaScript offers (it maps `ß`
+// to `ss` and a final sigma to `σ` as Python's `casefold` does).
+function comparableSegment(segment: string): string {
+  return segment.normalize("NFC").toUpperCase().toLowerCase();
 }
 
 function isUnderAnyPrefix(
   relativePath: string,
   prefixes: readonly string[],
 ): boolean {
-  const segments = relativePath.split("/");
+  const segments = relativePath.split("/").map(comparableSegment);
   return prefixes.some((prefix) => {
-    const prefixSegments = prefix.split("/");
+    const prefixSegments = prefix.split("/").map(comparableSegment);
     return (
       prefixSegments.length <= segments.length &&
       prefixSegments.every((segment, index) => segments[index] === segment)
@@ -943,45 +1090,152 @@ function isUnderAnyPrefix(
   });
 }
 
-// Best-effort unquote of one `git status --short` path field. With
-// `core.quotepath=true` Git C-quotes a path that carries a special
-// character; a plain ASCII path (the overwhelming case) is never quoted and
-// round-trips through this unchanged.
-function unquoteStatusPath(value: string): string {
-  if (value.length < 2 || !value.startsWith('"') || !value.endsWith('"')) {
-    return value;
-  }
+// The two-character status field of a porcelain v1 record, per column.
+const STATUS_CODE_CHARACTERS = new Set([
+  " ",
+  "M",
+  "T",
+  "A",
+  "D",
+  "R",
+  "C",
+  "U",
+]);
+
+type StatusRecord = Readonly<{
+  code: string;
+  path: string;
+  // Renames and copies carry the path the content came from as a second
+  // NUL-terminated field.
+  original?: string;
+}>;
+
+type ParsedStatus =
+  | Readonly<{
+      kind: "ok";
+      header: string | null;
+      records: readonly StatusRecord[];
+    }>
+  | Readonly<{ kind: "malformed" }>
+  | Readonly<{ kind: "unsupported-path" }>;
+
+// Parses `git status --porcelain --branch -z` structurally: an optional
+// `## <branch>` header, then `XY <path>` records, each NUL-terminated, a
+// rename or copy followed by one more NUL-terminated field holding the
+// original path. Paths arrive raw (no quoting under `-z`), so a denied
+// prefix can be matched against the exact bytes Git saw, and the rendered
+// result never has to undo an escape. Anything outside this shape is
+// `malformed`; a path this route will not render is `unsupported-path`.
+function parsePorcelainStatus(stdout: Buffer): ParsedStatus {
+  if (stdout.length === 0) return { kind: "ok", header: null, records: [] };
+  let text: string;
   try {
-    return JSON.parse(value) as string;
+    text = new TextDecoder("utf-8", { fatal: true }).decode(stdout);
   } catch {
-    return value;
+    return { kind: "malformed" };
   }
+  const fields = text.split("\0");
+  if (fields.length < 2 || fields[fields.length - 1] !== "") {
+    return { kind: "malformed" };
+  }
+  fields.pop();
+  let header: string | null = null;
+  let position = 0;
+  const first = fields[0];
+  if (first !== undefined && first.startsWith("## ")) {
+    header = first.slice(3);
+    if (header.length === 0 || /[\r\n]/u.test(header)) {
+      return { kind: "malformed" };
+    }
+    position = 1;
+  }
+  const records: StatusRecord[] = [];
+  while (position < fields.length) {
+    const field = fields[position] ?? "";
+    position += 1;
+    const code = field.slice(0, 2);
+    if (
+      field.length < 4 ||
+      field.charAt(2) !== " " ||
+      code === "  " ||
+      !STATUS_CODE_CHARACTERS.has(field.charAt(0)) ||
+      !STATUS_CODE_CHARACTERS.has(field.charAt(1))
+    ) {
+      return { kind: "malformed" };
+    }
+    const target = field.slice(3);
+    if (!validTrackedPath(target)) return { kind: "unsupported-path" };
+    if (code.includes("R") || code.includes("C")) {
+      const original = fields[position];
+      position += 1;
+      if (original === undefined) return { kind: "malformed" };
+      if (!validTrackedPath(original)) return { kind: "unsupported-path" };
+      records.push({ code, path: target, original });
+    } else {
+      records.push({ code, path: target });
+    }
+  }
+  return { kind: "ok", header, records };
 }
 
-// Removes any `git status --short` line naming a tracked-but-denied path, so
-// a path the workspace's own exclusions cover is absent from the reported
-// result exactly as it is absent from the snapshot -- not merely shown as a
-// deletion. The branch header line (`## ...`) is never a path line and is
-// always kept.
-function stripDeniedStatusLines(
-  output: string,
-  deniedTracked: ReadonlySet<string>,
+// Renders the parsed status the way `git status --short --branch` would,
+// minus the C-quoting: `## <branch>`, then `XY <path>` or
+// `XY <original> -> <path>`, one per line, paths as raw UTF-8.
+function renderStatus(
+  header: string | null,
+  records: readonly StatusRecord[],
 ): string {
-  if (deniedTracked.size === 0) return output;
-  const lines = output.split("\n");
-  const kept = lines.filter((line, index) => {
-    if (line === "" && index === lines.length - 1) return true;
-    if (line.startsWith("##")) return true;
-    if (line.length < 3) return true;
-    const rest = line.slice(3);
-    const arrow = rest.indexOf(" -> ");
-    const candidates =
-      arrow >= 0 ? [rest.slice(0, arrow), rest.slice(arrow + 4)] : [rest];
-    return !candidates.some((candidate) =>
-      deniedTracked.has(unquoteStatusPath(candidate)),
+  const lines: string[] = [];
+  if (header !== null) lines.push(`## ${header}`);
+  for (const record of records) {
+    lines.push(
+      record.original === undefined
+        ? `${record.code} ${record.path}`
+        : `${record.code} ${record.original} -> ${record.path}`,
     );
-  });
-  return kept.join("\n");
+  }
+  return lines.map((line) => `${line}\n`).join("");
+}
+
+// Runs the fixed status over one snapshot and renders it. A record naming a
+// path under a denied prefix -- as its own path or as the original of a
+// rename or copy -- is dropped whatever Git's own exclusion pathspec did with
+// it, so a denied path is absent from the result exactly as it is absent
+// from the snapshot, whatever characters it carries.
+async function runGitStatus(
+  git: string,
+  snapshotPath: string,
+  deniedPrefixes: readonly string[],
+  signal?: AbortSignal,
+): Promise<ReadonlyWorkspaceResult> {
+  const completed = await completedGit(
+    git,
+    snapshotPath,
+    statusArguments(deniedPrefixes),
+    COMMAND_OUTPUT_BUDGET,
+    signal,
+  );
+  if ("failure" in completed) return failure(completed.failure);
+  const { code, exitSignal, stdout, stderr } = completed;
+  if (code !== 0 || exitSignal !== null || stderr !== "") {
+    return failure("WORKSPACE_COMMAND_FAILED");
+  }
+  const parsed = parsePorcelainStatus(stdout);
+  if (parsed.kind === "malformed") return failure("WORKSPACE_COMMAND_FAILED");
+  if (parsed.kind === "unsupported-path") {
+    return failure("WORKSPACE_TRACKED_PATH_UNSUPPORTED");
+  }
+  const kept = parsed.records.filter(
+    (record) =>
+      !isUnderAnyPrefix(record.path, deniedPrefixes) &&
+      (record.original === undefined ||
+        !isUnderAnyPrefix(record.original, deniedPrefixes)),
+  );
+  const output = renderStatus(parsed.header, kept);
+  if (Buffer.byteLength(output) > MAX_OUTPUT_BYTES) {
+    return failure("WORKSPACE_COMMAND_OUTPUT_TOO_LARGE");
+  }
+  return commandResult("git.status", output);
 }
 
 // An early, cheap refusal. The binding itself happens again inside the
@@ -1137,7 +1391,7 @@ export async function executeNativeVerificationCommand(
   // nothing else -- `rev-parse` reads refs and objects, never a worktree
   // file. `git.status` uses this same snapshot to ask Git itself which
   // paths are tracked (`runGitLsFiles`), before a second, bounded snapshot
-  // links exactly those paths: the snapshot only ever carries what the
+  // carries exactly those paths: the snapshot only ever carries what the
   // command in front of it actually needs.
   const metadataSnapshot = await options.createSnapshot({
     ...baseSnapshotRequest,
@@ -1148,10 +1402,9 @@ export async function executeNativeVerificationCommand(
   }
   try {
     if (operation.command === "git.head") {
-      const result = await runGitOverSnapshot(
+      const result = await runGitHead(
         git,
         metadataSnapshot.path,
-        "git.head",
         options.signal,
       );
       if (result === HEAD_UNRESOLVED) {
@@ -1169,60 +1422,37 @@ export async function executeNativeVerificationCommand(
     );
     if (!listed.ok) return listed.result;
     // A tracked path under one of the workspace's own exclusions is never
-    // linked -- absent from the snapshot exactly as an untracked path in the
-    // same subtree already is -- and any status line naming it is stripped
-    // from the reported result below, so it is absent from the Git result
-    // too, not merely reported as missing.
-    const deniedTracked = new Set(
-      listed.paths.filter((trackedPath) =>
-        isUnderAnyPrefix(trackedPath, deniedPaths),
-      ),
-    );
+    // carried -- absent from the snapshot exactly as an untracked path in
+    // the same subtree already is -- and `runGitStatus` excludes and filters
+    // it from the reported result, so it is absent from the Git result too,
+    // not merely reported as missing. The match is folded like the helper's,
+    // so a case or normalisation variant is excluded here rather than named
+    // to the helper and refused there.
     const allowedPaths = listed.paths.filter(
-      (trackedPath) => !deniedTracked.has(trackedPath),
+      (trackedPath) => !isUnderAnyPrefix(trackedPath, deniedPaths),
     );
 
     const runStatus = async (
       snapshotPath: string,
-    ): Promise<ReadonlyWorkspaceResult> => {
-      const result = await runGitOverSnapshot(
-        git,
-        snapshotPath,
-        "git.status",
-        options.signal,
+    ): Promise<ReadonlyWorkspaceResult> =>
+      withLayout(
+        await runGitStatus(git, snapshotPath, deniedPaths, options.signal),
       );
-      if (result === HEAD_UNRESOLVED)
-        return failure("WORKSPACE_COMMAND_FAILED");
-      if (
-        result.ok &&
-        result.value.kind === "workspace.command" &&
-        deniedTracked.size > 0
-      ) {
-        const stdout = stripDeniedStatusLines(
-          result.value.stdout,
-          deniedTracked,
-        );
-        return withLayout({
-          ok: true,
-          value: {
-            ...result.value,
-            stdout,
-            outputBytes: Buffer.byteLength(stdout),
-          },
-        });
-      }
-      return withLayout(result);
-    };
 
     if (allowedPaths.length === 0) {
-      // Nothing beyond `.git` needs linking: either the repository tracks
+      // Nothing beyond `.git` needs carrying: either the repository tracks
       // nothing yet, or everything tracked falls under an exclusion. The
       // metadata-only snapshot already built is the whole answer.
       return await runStatus(metadataSnapshot.path);
     }
+    // Phase 2 is pinned to phase 1's index: the tracked list above came from
+    // the index bytes phase 1 copied, and the helper refuses this snapshot
+    // unless the index it copies now is byte-identical, so the list and the
+    // status computed over it describe one instant rather than two.
     const trackedSnapshot = await options.createSnapshot({
       ...baseSnapshotRequest,
       paths: allowedPaths,
+      expectedIndexSha256: metadataSnapshot.indexSha256,
     });
     if (!trackedSnapshot.ok) {
       return failure(snapshotFailureCode(trackedSnapshot.code));

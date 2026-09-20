@@ -8,9 +8,10 @@ import type { Readable, Writable } from "node:stream";
 
 // N02 -- Git never reads the owner's folder; it reads a private snapshot
 // Farol assembles from descriptors it already holds. This module builds and
-// removes that snapshot by calling one new safe_open.py verb
-// ("workspace-snapshot"); it never runs Git and it is not wired into any
-// product code path yet (that is a separate packet).
+// removes that snapshot by calling one safe_open.py verb
+// ("workspace-snapshot"); it never runs Git. `native-verification-command.ts`
+// is its one product consumer: every `git.status`/`git.head` the desktop,
+// the Computer MCP server and the Agent path run goes through it.
 
 export type WorkspaceSnapshotHelperRecord = Readonly<{
   sha256: string;
@@ -33,18 +34,29 @@ export type WorkspaceSnapshotRequest = Readonly<{
   // module re-checks the identity; it does not rediscover the relationship.
   externalGitDir?: WorkspaceSnapshotGrant;
   externalCommonDir?: WorkspaceSnapshotGrant;
-  // Bounded path mode: link only `.git` plus these caller-named,
+  // Bounded path mode: attach only `.git` plus these caller-named,
   // repository-relative paths, instead of the whole approved tree.
   // Undefined means the whole-tree mode; an empty array is valid and means
   // "only `.git`" -- the metadata-only step a caller takes before it knows
   // which paths it needs. A path under `denied` (or naming one) is refused,
-  // never silently dropped.
+  // never silently dropped; a path missing from the working tree, or present
+  // as something other than a regular file or symlink, is skipped and
+  // counted in `skipped` (Git then reports it deleted or type-changed).
   paths?: readonly string[];
   denied?: readonly string[];
+  // Bounded mode only: the SHA-256 the helper reported for the index copied
+  // by an earlier snapshot (`indexSha256`), or null when that snapshot found
+  // no index. The helper refuses (`SNAPSHOT_INDEX_CHANGED`) unless the index
+  // it copies now is byte-identical, so a tracked-path list derived from the
+  // earlier copy and the snapshot carrying those paths describe one instant.
+  expectedIndexSha256?: string | null;
   // Clamped by the helper to its own fixed ceiling; a caller may only ask for
-  // less, never more.
+  // less, never more. `maxBytes` bounds what the helper copies (index,
+  // rewritten config); `maxClonedBytes` bounds the sizes of the regular files
+  // it attaches as clones, for which no data moves.
   maxEntries?: number;
   maxBytes?: number;
+  maxClonedBytes?: number;
 }>;
 
 export type WorkspaceSnapshotErrorCode =
@@ -57,6 +69,9 @@ export type WorkspaceSnapshotErrorCode =
   | "SNAPSHOT_TOO_LARGE"
   | "SNAPSHOT_METADATA_UNAPPROVED"
   | "SNAPSHOT_DESTINATION_INVALID"
+  | "SNAPSHOT_CLONE_UNSUPPORTED"
+  | "SNAPSHOT_INDEX_CHANGED"
+  | "SNAPSHOT_ALTERNATES_UNSUPPORTED"
   | "SNAPSHOT_HELPER_FAILED"
   | "SNAPSHOT_HELPER_UNTRUSTED";
 
@@ -69,7 +84,18 @@ export type WorkspaceSnapshotHandle = Readonly<{
   ok: true;
   path: string;
   entries: number;
+  // Bytes the helper itself read and wrote: the copied index and the
+  // rewritten config, bounded by `maxBytes`.
   bytes: number;
+  // Sizes of the regular files attached as APFS clones, bounded by
+  // `maxClonedBytes`; no data moved for any of them.
+  clonedBytes: number;
+  // Bounded mode only: named paths left out because they were missing from
+  // the working tree or were not a regular file or symlink.
+  skipped: number;
+  // SHA-256 of the index bytes copied into this snapshot, or null when the
+  // repository has no index yet.
+  indexSha256: string | null;
   // Idempotent: safe to call more than once, and safe to call after a
   // partial failure -- the destination is always removed, not left behind.
   remove: () => Promise<void>;
@@ -81,9 +107,9 @@ export type WorkspaceSnapshotOutcome =
 export type WorkspaceSnapshotOptions = Readonly<{
   helperPath: string;
   helper: WorkspaceSnapshotHelperRecord;
-  // No default: this module is not wired into a product path yet, so the
-  // reviewed Apple-signature attestation chain stays the caller's decision
-  // rather than a silently weaker fallback living here.
+  // No default: the reviewed Apple-signature attestation chain is the
+  // caller's decision (`NativeReadonlyWorkspace` supplies it in production),
+  // never a silently weaker fallback living here.
   attestInterpreter: () => Promise<string>;
   // The directory the private destination is created under (mode 0700,
   // `mkdtemp`'s own guarantee). Farol's own runtime directory in production;
@@ -121,7 +147,12 @@ const EXIT_TO_CODE = new Map<number, WorkspaceSnapshotErrorCode>([
   [35, "SNAPSHOT_TOO_LARGE"],
   [36, "SNAPSHOT_METADATA_UNAPPROVED"],
   [37, "SNAPSHOT_DESTINATION_INVALID"],
+  [38, "SNAPSHOT_CLONE_UNSUPPORTED"],
+  [39, "SNAPSHOT_INDEX_CHANGED"],
+  [40, "SNAPSHOT_ALTERNATES_UNSUPPORTED"],
 ]);
+
+const SHA256_HEX = /^[0-9a-f]{64}$/u;
 
 function plainAbsolutePath(value: unknown): value is string {
   return (
@@ -376,9 +407,16 @@ function spawnSnapshotHelper(
   });
 }
 
+function nonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 function parseResponse(raw: Buffer): Readonly<{
   entries: number;
   bytes: number;
+  clonedBytes: number;
+  skipped: number;
+  indexSha256: string | null;
 }> | null {
   let parsed: unknown;
   try {
@@ -387,34 +425,42 @@ function parseResponse(raw: Buffer): Readonly<{
     return null;
   }
   if (typeof parsed !== "object" || parsed === null) return null;
-  const { entries, bytes } = parsed as Record<string, unknown>;
+  const { entries, bytes, clonedBytes, skipped, indexSha256 } =
+    parsed as Record<string, unknown>;
+  const digest =
+    indexSha256 === null
+      ? null
+      : typeof indexSha256 === "string" && SHA256_HEX.test(indexSha256)
+        ? indexSha256
+        : undefined;
   if (
-    typeof entries !== "number" ||
-    !Number.isInteger(entries) ||
-    entries < 0 ||
-    typeof bytes !== "number" ||
-    !Number.isInteger(bytes) ||
-    bytes < 0
+    !nonNegativeInteger(entries) ||
+    !nonNegativeInteger(bytes) ||
+    !nonNegativeInteger(clonedBytes) ||
+    !nonNegativeInteger(skipped) ||
+    digest === undefined
   ) {
     return null;
   }
-  return { entries, bytes };
+  return { entries, bytes, clonedBytes, skipped, indexSha256: digest };
 }
 
 /**
  * Builds the private snapshot N02 describes: a fresh, owner-only directory
  * under `options.runtimeDirectory` that recreates directories and symlinks,
- * replaces `.git/config` with its minimal safe equivalent, copies (never
- * links) the files Git may rewrite in place, and -- for a linked worktree --
- * rebuilds its gitdir/commondir pair inside the destination from
- * caller-approved identities. Every regular file it attaches -- whole-tree,
- * or the caller's own bounded `paths` list -- is hard-linked by descriptor,
- * resolving to the source's inode: a rename, replacement or deletion of the
- * source afterwards cannot change what the link resolves to, but an in-place
- * write through a descriptor opened before this call is still visible
- * through it, because it is the same inode, not a point-in-time copy of its
- * bytes. This function only builds and removes that snapshot; it never runs
- * Git against it.
+ * replaces `.git/config` (and any `config.worktree`) with its minimal safe
+ * equivalent, copies (never clones) the index Git may rewrite in place, and
+ * -- for a linked worktree -- rebuilds its gitdir/commondir pair inside the
+ * destination from caller-approved identities. Every regular file it
+ * attaches -- whole-tree, or the caller's own bounded `paths` list -- is an
+ * APFS clone made from a descriptor whose identity was verified first: a
+ * point-in-time copy of the bytes on an inode of its own, so a rename,
+ * replacement, deletion or in-place write of the source afterwards (through
+ * any descriptor) changes nothing in the snapshot, the owner's link count
+ * stays one, and no write through the snapshot can reach the owner's file.
+ * The helper reports the SHA-256 of the index it copied so a second snapshot
+ * can be pinned to the same instant (`expectedIndexSha256`). This function
+ * only builds and removes that snapshot; it never runs Git against it.
  */
 export async function createWorkspaceSnapshot(
   request: WorkspaceSnapshotRequest,
@@ -434,6 +480,12 @@ export async function createWorkspaceSnapshot(
       (!Number.isInteger(request.maxEntries) || request.maxEntries < 1)) ||
     (request.maxBytes !== undefined &&
       (!Number.isInteger(request.maxBytes) || request.maxBytes < 1)) ||
+    (request.maxClonedBytes !== undefined &&
+      (!Number.isInteger(request.maxClonedBytes) ||
+        request.maxClonedBytes < 1)) ||
+    (request.expectedIndexSha256 !== undefined &&
+      request.expectedIndexSha256 !== null &&
+      !SHA256_HEX.test(request.expectedIndexSha256)) ||
     !plainAbsolutePath(options.runtimeDirectory)
   ) {
     return failure("SNAPSHOT_INVALID_REQUEST");
@@ -498,6 +550,12 @@ export async function createWorkspaceSnapshot(
     if (request.maxEntries !== undefined)
       requestBody.maxEntries = request.maxEntries;
     if (request.maxBytes !== undefined) requestBody.maxBytes = request.maxBytes;
+    if (request.maxClonedBytes !== undefined) {
+      requestBody.maxClonedBytes = request.maxClonedBytes;
+    }
+    if (request.expectedIndexSha256 !== undefined) {
+      requestBody.expectedIndexSha256 = request.expectedIndexSha256;
+    }
     if (testOptions.testHookRequest) {
       requestBody.testHook = testOptions.testHookRequest;
     }
@@ -531,6 +589,9 @@ export async function createWorkspaceSnapshot(
       path: destination,
       entries: parsed.entries,
       bytes: parsed.bytes,
+      clonedBytes: parsed.clonedBytes,
+      skipped: parsed.skipped,
+      indexSha256: parsed.indexSha256,
       remove,
     };
   } catch {

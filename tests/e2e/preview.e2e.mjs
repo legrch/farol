@@ -2804,28 +2804,6 @@ async function finishSetupByNext(instance) {
   await dialog.waitFor({ state: "hidden" });
 }
 
-// F1-8: the product refuses every Git verification before any process
-// starts. Resolves true when the refusal is shown, false when Git ran.
-async function gitVerificationIsOff(page, gitOff) {
-  try {
-    await page.waitForFunction((off) => {
-      const shown =
-        document.querySelector("#computer-feedback")?.textContent ?? "";
-      return shown === off || /^Fixed Git (status|HEAD) completed/u.test(shown);
-    }, gitOff);
-  } catch (error) {
-    const shown = await page
-      .locator("#computer-feedback")
-      .textContent()
-      .catch(() => null);
-    throw new Error(
-      `${error.message} · Computer feedback ${JSON.stringify(shown)}`,
-      { cause: error },
-    );
-  }
-  return (await page.locator("#computer-feedback").textContent()) === gitOff;
-}
-
 // A Setup wait that times out names what the dialog showed instead, so a
 // failure under load is told apart from a refusal without another run.
 async function waitForSetup(instance, predicate, arg) {
@@ -6906,77 +6884,53 @@ try {
   });
   assert.equal(await gitStatus.isEnabled(), true);
   await gitStatus.click();
-  // While F1-8 is open every product Git verification is refused before any
-  // process starts, and the two Git cases are reported blocked. Once Git
-  // verification returns, the same block requires the full proof again.
-  const gitOff =
-    "Git checks are off in this build: Git cannot yet be confined to the approved folder (open review finding F1-8). Listing, searching and reading files are not affected.";
+  // N02: Git runs over a private point-in-time clone of the approved folder,
+  // never the folder itself; both fixed verifications are unconditional
+  // positive cases.
   const gitHead = workspaceCard.getByRole("button", {
     name: "Git HEAD",
     exact: true,
   });
-  if (!(await gitVerificationIsOff(normal.window, gitOff))) {
-    await workspaceCard
-      .locator(".workspace-query-evidence")
-      .getByText(/Git status · exit 0 · \d+ bytes · network none/u)
-      .waitFor();
-    await workspaceCard
-      .locator(".workspace-query-evidence")
-      .getByText(/## main/u)
-      .waitFor();
-    await normal.window
-      .locator("#computer-feedback")
-      .getByText(
-        /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
-      )
-      .waitFor();
-    const expectedHeadResult = spawnSync(
-      "/usr/bin/xcrun",
-      ["git", "-C", normal.workspaceRoot, "rev-parse", "--verify", "HEAD"],
-      { encoding: "utf8" },
-    );
-    assert.equal(expectedHeadResult.status, 0, expectedHeadResult.stderr);
-    assert.equal(await gitHead.isEnabled(), true);
-    await gitHead.click();
-    await workspaceCard
-      .locator(".workspace-query-evidence")
-      .getByText(/Git HEAD · exit 0 · \d+ bytes · network none/u)
-      .waitFor();
-    await workspaceCard
-      .locator(".workspace-query-evidence")
-      .getByText(expectedHeadResult.stdout.trim(), { exact: true })
-      .waitFor();
-    await normal.window
-      .locator("#computer-feedback")
-      .getByText(
-        /^Fixed Git HEAD completed · exit 0 · \d+ bytes · network none\.$/u,
-      )
-      .waitFor();
-    cases.push(
-      "workspace-command-fixed-no-network",
-      "workspace-command-exact-head",
-    );
-  } else {
-    assert.equal(await gitHead.isEnabled(), true);
-    await gitHead.click();
-    await normal.window
-      .locator("#computer-feedback")
-      .getByText(gitOff, { exact: true })
-      .waitFor();
-    assert.equal(
-      await workspaceCard
-        .locator(".workspace-query-evidence")
-        .getByText(/Git (status|HEAD) · exit/u)
-        .count(),
-      0,
-    );
-    const reason =
-      "F1-8 open: Git verification is off in the product (WORKSPACE_COMMAND_UNSUPPORTED)";
-    blockedCases.push(
-      { name: "workspace-command-fixed-no-network", reason },
-      { name: "workspace-command-exact-head", reason },
-    );
-  }
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/Git status · exit 0 · \d+ bytes · network none/u)
+    .waitFor();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/## main/u)
+    .waitFor();
+  await normal.window
+    .locator("#computer-feedback")
+    .getByText(
+      /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
+    )
+    .waitFor();
+  const expectedHeadResult = spawnSync(
+    "/usr/bin/xcrun",
+    ["git", "-C", normal.workspaceRoot, "rev-parse", "--verify", "HEAD"],
+    { encoding: "utf8" },
+  );
+  assert.equal(expectedHeadResult.status, 0, expectedHeadResult.stderr);
+  assert.equal(await gitHead.isEnabled(), true);
+  await gitHead.click();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/Git HEAD · exit 0 · \d+ bytes · network none/u)
+    .waitFor();
+  await workspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(expectedHeadResult.stdout.trim(), { exact: true })
+    .waitFor();
+  await normal.window
+    .locator("#computer-feedback")
+    .getByText(
+      /^Fixed Git HEAD completed · exit 0 · \d+ bytes · network none\.$/u,
+    )
+    .waitFor();
+  cases.push(
+    "workspace-command-fixed-no-network",
+    "workspace-command-exact-head",
+  );
   const commandConfiguration = await normal.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -7089,19 +7043,21 @@ try {
   await workspaceCard
     .getByRole("button", { name: "Git status", exact: true })
     .click();
-  if (await gitVerificationIsOff(normal.window, gitOff)) {
-    blockedCases.push({
-      name: "workspace-command-observes-real-change",
-      reason:
-        "F1-8 open: Git verification is off in the product (WORKSPACE_COMMAND_UNSUPPORTED)",
-    });
-  } else {
-    await workspaceCard
-      .locator(".workspace-query-evidence")
-      .getByText(/README\.md/u)
-      .waitFor();
-    cases.push("workspace-command-observes-real-change");
-  }
+  // N02: the guarded edit above changed README.md through the owner's own
+  // path; the status rendered over the private clone must carry that exact
+  // record -- a raw `--short`-style line, no quoting.
+  const changedStatusEvidence = workspaceCard
+    .locator(".workspace-query-evidence")
+    .filter({ hasText: /Git status · exit 0/u });
+  await changedStatusEvidence.getByText(/README\.md/u).waitFor();
+  const changedStatusOutput =
+    (await changedStatusEvidence.locator("pre").textContent()) ?? "";
+  assert.match(
+    changedStatusOutput,
+    /(?:^|\n) M README\.md(?:\n|$)/u,
+    `Git status output ${JSON.stringify(changedStatusOutput)}`,
+  );
+  cases.push("workspace-command-observes-real-change");
   cases.push(
     "workspace-write-access-explicit",
     "workspace-guarded-edit-atomic",
@@ -7487,24 +7443,13 @@ try {
   });
   assert.equal(await restartedGitStatus.isEnabled(), true);
   await restartedGitStatus.click();
-  const restartedGitOff = await gitVerificationIsOff(normal.window, gitOff);
-  if (!restartedGitOff) {
-    await restartedWorkspaceCard
-      .locator(".workspace-query-evidence")
-      .getByText(/README\.md/u)
-      .waitFor();
-  }
+  await restartedWorkspaceCard
+    .locator(".workspace-query-evidence")
+    .getByText(/README\.md/u)
+    .waitFor();
   await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
-  if (restartedGitOff) {
-    blockedCases.push({
-      name: "workspace-command-persists-and-runs-after-restart",
-      reason:
-        "F1-8 open: Git verification is off in the product (WORKSPACE_COMMAND_UNSUPPORTED)",
-    });
-  } else {
-    cases.push("workspace-command-persists-and-runs-after-restart");
-  }
+  cases.push("workspace-command-persists-and-runs-after-restart");
   await normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Open sign-in…", exact: true })
