@@ -169,6 +169,7 @@ import {
   type QuitDrainReceipt,
 } from "./quit-drain";
 import { writeQuitReceipt } from "./quit-receipt-store";
+import { isTrustedIpcSender } from "./ipc-sender";
 import {
   currentBootTimeMs,
   removeRunMarker,
@@ -6438,27 +6439,27 @@ async function runContextFixtureControl(
 
 function installIpc(): void {
   ipcMain.handle(channels.bootstrap, (event) =>
-    event.sender === window?.webContents
+    isTrustedIpcSender(event, window)
       ? bootstrap()
       : { error: "IPC_SENDER_DENIED" },
   );
   ipcMain.handle(channels.snapshot, (event) =>
-    event.sender === window?.webContents
+    isTrustedIpcSender(event, window)
       ? runtimeJson("/snapshot")
       : { error: "IPC_SENDER_DENIED" },
   );
   ipcMain.handle(channels.configuration, (event, value: unknown) =>
-    event.sender === window?.webContents
+    isTrustedIpcSender(event, window)
       ? configureProduct(value)
       : configurationFailure("SETTINGS_UNAVAILABLE"),
   );
   ipcMain.handle(channels.task, (event, value: unknown) =>
-    event.sender === window?.webContents
+    isTrustedIpcSender(event, window)
       ? runProductTaskCommand(value)
       : taskFailure("TASKS_UNAVAILABLE"),
   );
   ipcMain.handle(channels.control, async (event, value: unknown) => {
-    if (event.sender !== window?.webContents)
+    if (!isTrustedIpcSender(event, window))
       return { error: "IPC_SENDER_DENIED" };
     const parsed = controlSchema.safeParse(value);
     if (
@@ -6503,7 +6504,7 @@ function installIpc(): void {
     );
   });
   ipcMain.on(channels.layout, (event, value: unknown) => {
-    if (event.sender !== window?.webContents) return;
+    if (!isTrustedIpcSender(event, window)) return;
     const parsed = ShellLayoutSchema.safeParse(value);
     if (!parsed.success) return;
     const tasks = productTasksState().tasks;
