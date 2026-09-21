@@ -11720,7 +11720,16 @@ n10ComputerPanelSegment: {
     await panel.window.waitForFunction(
       () => document.querySelectorAll(".workspace-pending-edit").length === 0,
     );
-    const observed = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+    // The panel drops the notice when its reply arrives; the settings write
+    // that clears the record is the product's own and lands on its own
+    // clock. Waiting for the file is not a softer claim than reading it once
+    // — the assertion below is still that the record is gone.
+    let observed = null;
+    for (let attempt = 0; attempt < 200; attempt += 1) {
+      observed = JSON.parse(await fs.readFile(settingsPath, "utf8"));
+      if (observed.computer.pendingEdit === null) break;
+      await panel.window.waitForTimeout(50);
+    }
     assert.equal(
       observed.computer.pendingEdit,
       null,
