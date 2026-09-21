@@ -275,6 +275,17 @@ describe("a run can read the decision that was made", () => {
     );
     expect(handler).toContain("console.debug(");
     expect(handler).toContain('"farol.shell-action"');
+    expect(handler).toContain('"farol.shell-decision"');
+    // Every arrival is logged, not only the two the policy branch takes:
+    // a `close-overlay` reaches closeOverlay(), which both closes the menu
+    // and clears the draft, and used to leave no line at all.
+    const arrival = handler.indexOf('"farol.shell-action"');
+    const firstBranch = handler.indexOf(
+      'parsed.data.action === "toggle-sidebar"',
+    );
+    expect(arrival).toBeGreaterThan(-1);
+    expect(firstBranch).toBeGreaterThan(arrival);
+    expect(handler).toMatch(/branch:/u);
     for (const field of [
       "eventId",
       "action",

@@ -331,6 +331,53 @@ let setupFocusKey = "";
 let sidebarPreference: Exclude<SidebarMode, "overlay"> = "full";
 let sidebarOverlayOpen = false;
 let shellOverlay: ShellOverlay = "none";
+
+/**
+ * Every write to `shellOverlay` goes through here, so a run can say which
+ * code path closed an open overlay.
+ *
+ * The dialog follows this value: it closes the moment the value leaves
+ * "task-menu". A measured run ended with the task menu closed, the section
+ * unchanged, no navigating shell action and no layout push — so something
+ * inside the renderer wrote it and nothing recorded which. Diagnostic only;
+ * the assignment itself is unchanged.
+ *
+ * The frames are reduced to basename:line:column, so the line carries call
+ * sites and never a path from this machine.
+ */
+function diagnosticFrames(): string {
+  return (new Error().stack ?? "")
+    .split("\n")
+    .slice(1, 7)
+    .map((frame) =>
+      frame
+        .trim()
+        .replace(/\(?.*[/\\]/u, "")
+        .replace(/\)$/u, ""),
+    )
+    .join(" < ");
+}
+
+function setShellOverlay(next: ShellOverlay): void {
+  if (shellOverlay !== next && shellOverlay === "task-menu") {
+    const frames = (new Error().stack ?? "")
+      .split("\n")
+      .slice(1, 7)
+      .map((frame) =>
+        frame
+          .trim()
+          .replace(/\(?.*[/\\]/u, "")
+          .replace(/\)$/u, ""),
+      )
+      .join(" < ");
+    console.debug(
+      "farol.overlay",
+      JSON.stringify({ from: shellOverlay, to: next, frames }),
+    );
+  }
+  // eslint-disable-next-line no-restricted-syntax -- the one real write
+  shellOverlay = next;
+}
 let renderedOverlay: ShellOverlay = "none";
 let lastHostLayout = "";
 let windowState: WindowState = {
@@ -2450,7 +2497,7 @@ async function configureProduct(
       command.kind === "chatgpt.cancel-attachment-task"
     ) {
       pendingChatGptPreview = null;
-      if (shellOverlay === "context-preview") shellOverlay = "none";
+      if (shellOverlay === "context-preview") setShellOverlay("none");
     }
     const absence = modelEvidenceAbsenceAfterFailure(
       parsed.error,
@@ -2710,15 +2757,15 @@ async function configureProduct(
     settingsFeedback = `ChatGPT attachment verified · workspace ${evidence.workspaceId.slice(0, 12)} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
-    shellOverlay = "context-preview";
+    setShellOverlay("context-preview");
     settingsFeedback = `Review ${evidence.relativePath} before sending it once.`;
   } else if (evidence?.kind === "chatgpt.attachment-task-preview") {
     pendingChatGptPreview = evidence;
-    shellOverlay = "context-preview";
+    setShellOverlay("context-preview");
     settingsFeedback = `Review ${evidence.attachments.length} staged attachment${evidence.attachments.length === 1 ? "" : "s"} before sending once.`;
   } else if (evidence?.kind === "chatgpt.readonly-task") {
     pendingChatGptPreview = null;
-    if (shellOverlay === "context-preview") shellOverlay = "none";
+    if (shellOverlay === "context-preview") setShellOverlay("none");
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
@@ -2740,7 +2787,7 @@ async function configureProduct(
     };
   } else if (evidence?.kind === "chatgpt.attachment-task") {
     pendingChatGptPreview = null;
-    if (shellOverlay === "context-preview") shellOverlay = "none";
+    if (shellOverlay === "context-preview") setShellOverlay("none");
     evidenceError = evidence.state !== "completed";
     settingsFeedback =
       evidence.state === "completed"
@@ -2789,11 +2836,11 @@ async function configureProduct(
   }
   if (command.kind === "chatgpt.cancel-readonly-task") {
     pendingChatGptPreview = null;
-    if (shellOverlay === "context-preview") shellOverlay = "none";
+    if (shellOverlay === "context-preview") setShellOverlay("none");
   }
   if (command.kind === "chatgpt.cancel-attachment-task") {
     pendingChatGptPreview = null;
-    if (shellOverlay === "context-preview") shellOverlay = "none";
+    if (shellOverlay === "context-preview") setShellOverlay("none");
   }
   if (command.kind === "computer.cancel-workspace-edit") {
     workspaceEvidence = null;
@@ -4180,6 +4227,15 @@ function renderOverlayState(): void {
 }
 
 function render(notify = true): void {
+  if (shellOverlay === "task-menu") {
+    // Every rebuild of an open task menu, with who asked for it. A rebuild
+    // between two keystrokes replaces the element the rest of the word was
+    // addressed to, so "it re-rendered" is not a harmless observation here.
+    console.debug(
+      "farol.render-during-menu",
+      JSON.stringify({ notify, frames: diagnosticFrames() }),
+    );
+  }
   const root = document.documentElement;
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
@@ -4248,7 +4304,7 @@ function closeOverlay(): void {
     taskMenuReturnOffered = false;
   }
   sidebarOverlayOpen = false;
-  shellOverlay = "none";
+  setShellOverlay("none");
   render();
 }
 
@@ -4256,13 +4312,13 @@ async function cancelContextPreview(): Promise<void> {
   if (contextPreviewBusy) return;
   const preview = pendingChatGptPreview;
   if (!preview) {
-    shellOverlay = "none";
+    setShellOverlay("none");
     render();
     return;
   }
   contextPreviewBusy = true;
   pendingChatGptPreview = null;
-  shellOverlay = "none";
+  setShellOverlay("none");
   render();
   try {
     await configureProduct(
@@ -4290,7 +4346,7 @@ async function submitContextPreview(): Promise<void> {
   if (!preview) return;
   contextPreviewBusy = true;
   pendingChatGptPreview = null;
-  shellOverlay = "none";
+  setShellOverlay("none");
   render();
   try {
     await configureProduct(
@@ -4315,10 +4371,10 @@ async function submitContextPreview(): Promise<void> {
 function toggleSidebar(): void {
   if (narrowSidebar.matches) {
     sidebarOverlayOpen = !sidebarOverlayOpen;
-    shellOverlay = sidebarOverlayOpen ? "sidebar" : "none";
+    setShellOverlay(sidebarOverlayOpen ? "sidebar" : "none");
   } else {
     sidebarOverlayOpen = false;
-    shellOverlay = "none";
+    setShellOverlay("none");
     sidebarPreference = sidebarPreference === "full" ? "rail" : "full";
   }
   render();
@@ -4337,7 +4393,7 @@ function openTaskMenu(): void {
     if (!taskAgentDraft.held()) writeAgentDraftFields(EMPTY_AGENT_DRAFT);
   }
   sidebarOverlayOpen = false;
-  shellOverlay = "task-menu";
+  setShellOverlay("task-menu");
   render();
 }
 
@@ -4425,7 +4481,7 @@ async function runTaskMenuCommand(
     selectedTaskId = parsed.data.selectedTaskId ?? "";
     taskMenuFeedback = successMessage;
     if (closeAfterSuccess) {
-      shellOverlay = "none";
+      setShellOverlay("none");
       taskMenuTrace.skipped("menu-closed");
       return;
     }
@@ -4446,12 +4502,12 @@ async function runTaskMenuCommand(
 
 function openCommands(): void {
   sidebarOverlayOpen = false;
-  shellOverlay = "quick-switcher";
+  setShellOverlay("quick-switcher");
   render();
 }
 
 function executeCommand(item: CommandItem): void {
-  shellOverlay = "none";
+  setShellOverlay("none");
   if (item.kind === "section") selectSection(item.value as SurfaceSection);
   else selectTask(item.value);
 }
@@ -4462,7 +4518,7 @@ function selectTask(taskId: string): void {
   selectedTaskId = taskId;
   section = "browser";
   sidebarOverlayOpen = false;
-  shellOverlay = "none";
+  setShellOverlay("none");
   render();
   if (task.provider === "chatgpt") {
     void window.farolNext.task({ kind: "task.activate", taskId });
@@ -4473,7 +4529,7 @@ function selectSection(next: SurfaceSection): void {
   if (!sections.includes(next)) return;
   section = next;
   sidebarOverlayOpen = false;
-  shellOverlay = "none";
+  setShellOverlay("none");
   render();
 }
 
@@ -4515,6 +4571,15 @@ function applyTasksState(state: ProductTasksState): void {
   }
   if (!taskIds.has(selectedTaskId)) {
     selectedTaskId = state.tasks[0]?.taskId ?? "";
+  }
+  if (shellOverlay === "task-menu") {
+    console.debug(
+      "farol.tasks-state-during-menu",
+      JSON.stringify({
+        tasks: state.tasks.length,
+        selectionKept: taskIds.has(selectedTaskId),
+      }),
+    );
   }
   render();
 }
@@ -4572,6 +4637,31 @@ async function start(): Promise<void> {
   window.farolNext.onShellAction((value) => {
     const parsed = ShellActionSchema.safeParse(value);
     if (!parsed.success || !bootstrapReady) return;
+    // Every arrival, whichever branch takes it. `close-overlay` reaches
+    // closeOverlay() — the one path that closes the menu AND clears the
+    // draft with the section unchanged, which is the shape of the dump —
+    // and it used to leave no line at all.
+    console.debug(
+      "farol.shell-action",
+      JSON.stringify({
+        eventId: parsed.data.eventId,
+        action: parsed.data.action,
+        source: parsed.data.source,
+        gen: parsed.data.authWindowGeneration,
+        branch:
+          parsed.data.action === "toggle-sidebar" ||
+          parsed.data.action === "open-quick-switcher"
+            ? parsed.data.action
+            : parsed.data.action === "open-settings" ||
+                parsed.data.action === "sign-in-returned"
+              ? "policy"
+              : "close-overlay",
+        shellOverlay,
+        held: taskAgentDraft.held(),
+        draftTaskMatches: taskAgentDraft.keyedTo() === selectedTaskId,
+        draftHeld: shellOverlay === "task-menu" && taskAgentDraft.held(),
+      }),
+    );
     if (parsed.data.action === "toggle-sidebar") toggleSidebar();
     else if (parsed.data.action === "open-quick-switcher") openCommands();
     else if (
@@ -4599,18 +4689,13 @@ async function start(): Promise<void> {
       // with an editor gone can then say which input produced that, instead
       // of leaving the decision to be inferred from the outcome.
       console.debug(
-        "farol.shell-action",
+        "farol.shell-decision",
         JSON.stringify({
           eventId: provenance.eventId,
-          action: parsed.data.action,
-          source: provenance.source,
-          gen: provenance.authWindowGeneration,
-          shellOverlay,
-          held: taskAgentDraft.held(),
-          draftTaskMatches: taskAgentDraft.keyedTo() === selectedTaskId,
-          draftHeld: shellOverlay === "task-menu" && taskAgentDraft.held(),
           reason: decision.reason,
           navigate: decision.navigate,
+          refreshReadiness: decision.refreshReadiness,
+          offerReturn: decision.offerReturn,
         }),
       );
       if (!decision.refreshReadiness) return;
@@ -4744,7 +4829,7 @@ async function start(): Promise<void> {
       }
       selectedTaskId = parsed.data.selectedTaskId;
       section = "browser";
-      shellOverlay = "none";
+      setShellOverlay("none");
       render();
     },
   );
@@ -4760,7 +4845,7 @@ async function start(): Promise<void> {
       taskMenuReturnOffered = false;
       setupJourney = { ...setupJourney, open: false };
       sidebarOverlayOpen = false;
-      shellOverlay = "none";
+      setShellOverlay("none");
       selectSection("settings");
     },
   );
@@ -4779,7 +4864,7 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#task-menu-setup").addEventListener(
     "click",
     () => {
-      shellOverlay = "none";
+      setShellOverlay("none");
       setupJourney = reopenSetup(setupJourney);
       render();
     },
@@ -4929,6 +5014,22 @@ async function start(): Promise<void> {
       );
     },
   );
+  for (const kind of ["close", "cancel"] as const) {
+    // A <dialog> closes on Escape and on its own `close`; either would end
+    // the editor without any renderer code asking for it, and neither is
+    // visible in the overlay setter because the element closed itself.
+    required<HTMLDialogElement>("#task-menu").addEventListener(kind, () => {
+      console.debug(
+        "farol.task-menu-close",
+        JSON.stringify({
+          kind,
+          shellOverlay,
+          returnValue: required<HTMLDialogElement>("#task-menu").returnValue,
+          frames: diagnosticFrames(),
+        }),
+      );
+    });
+  }
   required<HTMLDialogElement>("#task-menu").addEventListener(
     "cancel",
     (event) => {
@@ -5190,7 +5291,7 @@ async function start(): Promise<void> {
   narrowSidebar.addEventListener("change", () => {
     if (!narrowSidebar.matches) {
       sidebarOverlayOpen = false;
-      if (shellOverlay === "sidebar") shellOverlay = "none";
+      if (shellOverlay === "sidebar") setShellOverlay("none");
     }
     render();
   });
