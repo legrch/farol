@@ -65,3 +65,31 @@ describe("a diagnostic that fires as often as the renderer draws", () => {
     expect(lines).toBe(10);
   });
 });
+
+describe("what the window swallowed", () => {
+  it("can be read before the window is forgotten", () => {
+    // The hole this closes: `suppressed` only ever reached a line when a
+    // LATER occurrence was admitted, so a burst just before a run failed
+    // was invisible. Found while decoding a run that had exactly one line.
+    const throttle = at([0, 1, 2, 3]);
+    throttle.admit();
+    throttle.admit();
+    throttle.admit();
+    expect(throttle.pending()).toBe(2);
+  });
+
+  it("is nothing when every occurrence was reported", () => {
+    const throttle = at([0]);
+    throttle.admit();
+    expect(throttle.pending()).toBe(0);
+  });
+
+  it("is cleared by the reset that ends the episode", () => {
+    const throttle = at([0, 1, 2]);
+    throttle.admit();
+    throttle.admit();
+    expect(throttle.pending()).toBe(1);
+    throttle.reset();
+    expect(throttle.pending()).toBe(0);
+  });
+});

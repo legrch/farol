@@ -352,6 +352,53 @@ let shellOverlay: ShellOverlay = "none";
 const renderDuringMenu = new DiagnosticThrottle(() => Date.now());
 const tasksStateDuringMenu = new DiagnosticThrottle(() => Date.now());
 
+// The dialog node this module is holding, captured once the document is
+// ready, so a later render can say whether the document still has the same
+// one. A replaced node keeps `open` true while showing nothing, emits no
+// close event and changes no overlay value — the one shape that leaves no
+// trace in any of the other lines.
+let taskMenuNode: HTMLDialogElement | null = null;
+
+// A fresh identifier per renderer instance. If a run's lines carry two of
+// these, the page or the window was replaced and nothing inside this module
+// closed anything.
+const rendererInstance = Math.random().toString(36).slice(2, 10);
+
+function watchTaskMenuNode(): void {
+  taskMenuNode = document.querySelector<HTMLDialogElement>("#task-menu");
+  console.debug(
+    "farol.shell-start",
+    JSON.stringify({ rendererInstance, hasDialog: taskMenuNode !== null }),
+  );
+  const parent = taskMenuNode?.parentElement;
+  if (!parent) return;
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const [kind, nodes] of [
+        ["removed", record.removedNodes],
+        ["added", record.addedNodes],
+      ] as const) {
+        for (const node of nodes) {
+          if (!(node instanceof HTMLElement) || node.id !== "task-menu") {
+            continue;
+          }
+          console.debug(
+            "farol.task-menu-node",
+            JSON.stringify({
+              rendererInstance,
+              event: kind,
+              sameNode: node === taskMenuNode,
+              open: (node as HTMLDialogElement).open,
+              connected: node.isConnected,
+              frames: diagnosticFrames(),
+            }),
+          );
+        }
+      }
+    }
+  }).observe(parent, { childList: true });
+}
+
 function diagnosticFrames(): string {
   return (new Error().stack ?? "")
     .split("\n")
@@ -383,6 +430,22 @@ function setShellOverlay(next: ShellOverlay): void {
     );
   }
   if (next !== "task-menu") {
+    // Report what the window swallowed before forgetting it. Without this
+    // the suppressed count only ever surfaces on a LATER admitted line, so
+    // a burst of renders just before a run fails is invisible — which is a
+    // hole this instrument had, found while decoding one.
+    for (const [name, throttle] of [
+      ["render-during-menu", renderDuringMenu],
+      ["tasks-state-during-menu", tasksStateDuringMenu],
+    ] as const) {
+      const pending = throttle.pending();
+      if (pending > 0) {
+        console.debug(
+          `farol.${name}-final`,
+          JSON.stringify({ rendererInstance, suppressed: pending }),
+        );
+      }
+    }
     // A later menu session starts with its own first line rather than being
     // silenced by this one's window.
     renderDuringMenu.reset();
@@ -4248,11 +4311,18 @@ function render(notify = true): void {
     // second load on the thing being measured rather than a measurement.
     const admitted = renderDuringMenu.admit();
     if (admitted) {
+      const dialog = document.querySelector("#task-menu");
       console.debug(
         "farol.render-during-menu",
         JSON.stringify({
           notify,
           suppressed: admitted.suppressed,
+          // If the document's dialog is no longer the node this module
+          // holds, the element was replaced rather than closed — which
+          // emits no close event and writes no overlay value.
+          sameNode: dialog === taskMenuNode,
+          connected: taskMenuNode?.isConnected ?? null,
+          open: taskMenuNode?.open ?? null,
           frames: diagnosticFrames(),
         }),
       );
@@ -4660,6 +4730,7 @@ async function start(): Promise<void> {
     }
     applyHostLayout(parsed.data);
   });
+  watchTaskMenuNode();
   window.farolNext.onShellAction((value) => {
     const parsed = ShellActionSchema.safeParse(value);
     if (!parsed.success || !bootstrapReady) return;

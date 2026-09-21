@@ -408,3 +408,43 @@ describe("an awaited task admission cannot take the editor", () => {
     expect(handler).toContain("waiting in the task tabs");
   });
 });
+
+describe("the recorder can see the element, not only the state", () => {
+  it("watches the dialog's parent for a replaced node", async () => {
+    // A replaced <dialog> keeps `open` true while showing nothing, emits no
+    // close event and changes no overlay value. It is the one shape that
+    // leaves no trace in any of the other lines, so it needs its own.
+    const source = await shell();
+    expect(source).toContain("new MutationObserver(");
+    expect(source).toContain('"farol.task-menu-node"');
+    expect(source).toContain("sameNode: node === taskMenuNode");
+    expect(source).toContain("watchTaskMenuNode();");
+  });
+
+  it("says whether the document's dialog is still the one it holds", async () => {
+    const render = functionBody(
+      await shell(),
+      "function render(notify = true): void {",
+    );
+    expect(render).toContain("sameNode: dialog === taskMenuNode");
+    expect(render).toContain("connected:");
+    expect(render).toContain("open:");
+  });
+
+  it("names the renderer instance, so a replaced page is obvious", async () => {
+    // Two instance ids in one run means the page or the window was
+    // replaced and nothing in this module closed anything.
+    const source = await shell();
+    expect(source).toContain("const rendererInstance =");
+    expect(source).toContain('"farol.shell-start"');
+  });
+
+  it("reports what a throttle swallowed before forgetting it", async () => {
+    const setter = functionBody(
+      await shell(),
+      "function setShellOverlay(next: ShellOverlay): void {",
+    );
+    expect(setter).toContain("throttle.pending()");
+    expect(setter).toContain("-final");
+  });
+});

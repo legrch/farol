@@ -37,6 +37,11 @@ export class DiagnosticThrottle {
     return { suppressed };
   }
 
+  /** How many occurrences are waiting to be reported. */
+  pending(): number {
+    return this.suppressed;
+  }
+
   /**
    * Forget the window. The next occurrence is a first one again — used when
    * the state being watched ends, so a later episode is not silenced by an
