@@ -635,7 +635,7 @@ describe("Farol Model bridge parity with Route B: compaction route", () => {
   // provider accepted every shape above. Establish which host requests that
   // validation actually governs before asserting a parity matrix on it.
   it.todo(
-    "refuses a header and an embedded identity that disagree, once it is established where that validation runs",
+    "refuses a header/embedded identity disagreement through the real production compaction port — TRACED (root, 2026-09-21): the identity refusals HOST_COMPACTION_IDENTITY_{MISSING,INVALID,MISMATCH} are produced by parseHostCompactionRequest, which the PRODUCTION port reaches via route-b-runtime.ts::admittedCompaction(inner) → codex-context-continuity.ts::CodexContextContinuity.compact (parseHostCompactionRequest(endpoint, body, input.metadataHeader)); the summary-only `compaction: { compact }` stub this fixture hands the provider is what bypassed them, not the bridge. The bridge forwards x-codex-turn-metadata so that validator sees the header. A real-path row needs CodexContextContinuity with its disposable state; left for Codex with this trace.",
   );
 
   it("serves the compaction route only for the model this endpoint carries", async () => {

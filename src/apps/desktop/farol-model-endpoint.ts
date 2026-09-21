@@ -163,6 +163,9 @@ export function routeBModelTurnHandler(
     try {
       response = await fetch(`${upstream.baseUrl}/responses`, {
         method: "POST",
+        // One request to the provider and nowhere else: a redirect would be
+        // a second request to a destination this bridge did not choose.
+        redirect: "error",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${upstream.token}`,
@@ -216,6 +219,7 @@ export function routeBModelCompactionHandler(
     try {
       response = await fetch(`${upstream.baseUrl}/responses/compact`, {
         method: "POST",
+        redirect: "error",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${upstream.token}`,
@@ -259,12 +263,23 @@ async function* sseEventStream(
 ): AsyncGenerator<FarolModelSseEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  // SSE line endings are LF, CRLF or a lone CR. Everything is normalised to
+  // LF before blocks are cut, and a CR at the very end of a chunk is held
+  // back until the next chunk shows whether an LF follows it, so a CRLF
+  // split across two reads is still one line ending.
+  let carry = "";
   let buffered = "";
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffered += decoder.decode(value, { stream: true });
+      let raw = carry + decoder.decode(value, { stream: true });
+      carry = "";
+      if (raw.endsWith("\r")) {
+        carry = "\r";
+        raw = raw.slice(0, -1);
+      }
+      buffered += raw.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
       let boundary = buffered.indexOf("\n\n");
       while (boundary !== -1) {
         const event = parseSseBlock(buffered.slice(0, boundary));
@@ -273,9 +288,13 @@ async function* sseEventStream(
         boundary = buffered.indexOf("\n\n");
       }
     }
-    buffered += decoder.decode();
-    const tail = parseSseBlock(buffered);
-    if (tail) yield tail;
+    buffered += (carry + decoder.decode())
+      .replace(/\r\n/gu, "\n")
+      .replace(/\r/gu, "\n");
+    for (const block of buffered.split("\n\n")) {
+      const tail = parseSseBlock(block);
+      if (tail) yield tail;
+    }
   } finally {
     reader.releaseLock();
   }
@@ -294,17 +313,24 @@ function routeRefusalCode(status: number, body: string): string {
 function parseSseBlock(block: string): FarolModelSseEvent | null {
   if (block.trim().length === 0) return null;
   let event: string | undefined;
-  let rawData: string | undefined;
+  const data: string[] = [];
   for (const line of block.split("\n")) {
-    if (line.startsWith("event: ")) event = line.slice("event: ".length);
-    else if (line.startsWith("data: ")) rawData = line.slice("data: ".length);
+    if (line.startsWith("event:")) event = sseFieldValue(line, "event:");
+    else if (line.startsWith("data:")) data.push(sseFieldValue(line, "data:"));
   }
-  if (event === undefined || rawData === undefined) return null;
+  if (event === undefined || data.length === 0) return null;
+  // Repeated `data:` lines are one value joined by LF (the SSE contract).
+  const rawData = data.join("\n");
   try {
     return { event, data: JSON.parse(rawData) };
   } catch {
     return { event, data: rawData };
   }
+}
+
+function sseFieldValue(line: string, field: string): string {
+  const value = line.slice(field.length);
+  return value.startsWith(" ") ? value.slice(1) : value;
 }
 
 export type FarolModelEndpointEvidence = Readonly<{
@@ -723,51 +749,64 @@ export class FarolModelEndpoint {
     stream: AsyncIterable<FarolModelSseEvent>,
   ): Promise<void> {
     const iterator = stream[Symbol.asyncIterator]();
+    // The caller may leave at any point, including while the first inner
+    // frame is still pending: the departure is recorded from here on and
+    // read from the socket itself, so a close that happened before this
+    // line is not missed either. A departed caller receives nothing more;
+    // the upstream turn is still drained to its end.
+    let departed = response.destroyed || response.writableEnded;
+    response.once("close", () => {
+      departed = true;
+    });
+    const gone = () =>
+      departed || response.destroyed || response.socket?.destroyed === true;
     let first: IteratorResult<FarolModelSseEvent>;
     try {
       first = await iterator.next();
     } catch {
-      this.reject(response, 502, "FAROL_MODEL_ROUTE_UNREACHABLE");
+      if (!gone()) this.reject(response, 502, "FAROL_MODEL_ROUTE_UNREACHABLE");
       return;
     }
     if (first.done) {
-      this.reject(response, 502, "FAROL_MODEL_ROUTE_UNREACHABLE");
+      if (!gone()) this.reject(response, 502, "FAROL_MODEL_ROUTE_UNREACHABLE");
       return;
     }
     this.requestsAccepted += 1;
     this.lastAcceptedAtIso = new Date().toISOString();
-    let closed = false;
-    response.once("close", () => {
-      closed = true;
-    });
-    response.writeHead(200, SSE_HEADERS);
-    await writeFrame(response, first.value, () => closed);
+    if (!gone()) response.writeHead(200, SSE_HEADERS);
+    // Once the inner has rendered its own terminal frame, a transport death
+    // afterwards adds nothing: the outcome was already stated.
+    let terminal = isTerminalFrame(first.value);
+    await writeFrame(response, first.value, gone);
     for (;;) {
       let next: IteratorResult<FarolModelSseEvent>;
       try {
         next = await iterator.next();
       } catch {
-        await writeFrame(
-          response,
-          {
-            event: "response.failed",
-            data: {
-              type: "response.failed",
-              response: {
-                model: this.model,
-                status: "failed",
-                error: { code: "FAROL_MODEL_ROUTE_UNREACHABLE" },
+        if (!terminal) {
+          await writeFrame(
+            response,
+            {
+              event: "response.failed",
+              data: {
+                type: "response.failed",
+                response: {
+                  model: this.model,
+                  status: "failed",
+                  error: { code: "FAROL_MODEL_ROUTE_UNREACHABLE" },
+                },
               },
             },
-          },
-          () => closed,
-        );
+            gone,
+          );
+        }
         break;
       }
       if (next.done) break;
-      await writeFrame(response, next.value, () => closed);
+      terminal = terminal || isTerminalFrame(next.value);
+      await writeFrame(response, next.value, gone);
     }
-    response.end();
+    if (!gone()) response.end();
   }
 
   /**
@@ -890,6 +929,16 @@ const SSE_HEADERS = Object.freeze({
   connection: "keep-alive",
 });
 
+const TERMINAL_EVENTS = new Set([
+  "response.completed",
+  "response.failed",
+  "response.incomplete",
+]);
+
+function isTerminalFrame(frame: FarolModelSseEvent): boolean {
+  return TERMINAL_EVENTS.has(frame.event);
+}
+
 function sseFrame(frame: FarolModelSseEvent): string {
   return `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
 }
@@ -910,10 +959,12 @@ function writeFrame(
     const done = () => {
       response.off("drain", done);
       response.off("close", done);
+      response.off("error", done);
       resolve();
     };
     response.once("drain", done);
     response.once("close", done);
+    response.once("error", done);
   });
 }
 

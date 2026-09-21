@@ -345,4 +345,172 @@ describe("S35 transport parity: the outer Farol Model relays Route B truthfully"
     expect(wrongToken.status).toBe(401);
     expect(upstream.requests).toHaveLength(0);
   });
+
+  it("refuses a redirecting inner with one request and never follows it off-provider", async () => {
+    const elsewhere = await inner((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" }).end();
+    });
+    const upstream = await inner((_request, response) => {
+      response.writeHead(307, { location: `${elsewhere.baseUrl}/responses` });
+      response.end();
+    });
+    const { port, token } = await outer(upstream.baseUrl);
+    const answer = await post(
+      port,
+      token,
+      FAROL_MODEL_RESPONSES_PATH,
+      {},
+      {
+        model: MODEL,
+      },
+    );
+    expect(answer.status).toBe(502);
+    expect(JSON.parse(answer.body).error.code).toBe(
+      "FAROL_MODEL_ROUTE_UNREACHABLE",
+    );
+    expect(upstream.requests).toHaveLength(1);
+    expect(elsewhere.requests).toHaveLength(0);
+    const compact = await post(
+      port,
+      token,
+      FAROL_MODEL_RESPONSES_COMPACT_PATH,
+      {},
+      {
+        model: MODEL,
+      },
+    );
+    expect(compact.status).toBe(502);
+    expect(elsewhere.requests).toHaveLength(0);
+  });
+
+  it("parses CRLF framing, a CRLF split across chunks, and repeated data lines", async () => {
+    const upstream = await inner((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      // The CR of the first CRLF blank line ends one chunk; its LF opens the
+      // next. A second frame carries its JSON over two `data:` lines.
+      response.write(
+        'event: response.created\r\ndata: {"type":"response.created"}\r\n\r',
+        () => {
+          response.write(
+            '\nevent: response.output_text.delta\r\ndata: {"type":"response.output_text.delta",\r\ndata: "delta":"hi"}\r\n\r\n',
+            () => {
+              response.end(
+                'event: response.completed\rdata: {"type":"response.completed"}\r\r',
+              );
+            },
+          );
+        },
+      );
+    });
+    const { port, token } = await outer(upstream.baseUrl);
+    const answer = await post(
+      port,
+      token,
+      FAROL_MODEL_RESPONSES_PATH,
+      {},
+      {
+        model: MODEL,
+      },
+    );
+    expect(answer.status).toBe(200);
+    expect(events(answer.body)).toEqual([
+      "response.created",
+      "response.output_text.delta",
+      "response.completed",
+    ]);
+    expect(answer.body).toContain('"delta":"hi"');
+    expect(answer.body).not.toContain("\r");
+  });
+
+  it("does not add a second failure when the inner already rendered its terminal frame", async () => {
+    const upstream = await inner((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        sseFrame("response.created", { type: "response.created" }),
+      );
+      response.write(
+        sseFrame("response.failed", {
+          type: "response.failed",
+          response: {
+            status: "failed",
+            error: { code: "ROUTE_B_THREAD_BUSY" },
+          },
+        }),
+        () => response.socket?.destroy(),
+      );
+    });
+    const { port, token } = await outer(upstream.baseUrl);
+    const answer = await post(
+      port,
+      token,
+      FAROL_MODEL_RESPONSES_PATH,
+      {},
+      {
+        model: MODEL,
+      },
+    );
+    expect(events(answer.body)).toEqual([
+      "response.created",
+      "response.failed",
+    ]);
+    expect(answer.body).not.toContain("FAROL_MODEL_ROUTE_UNREACHABLE");
+  });
+
+  it("drains the inner turn to its end after the caller leaves mid-stream, without a retry", async () => {
+    let release: () => void = () => undefined;
+    const barrier = new Promise<void>((resolve) => (release = resolve));
+    let innerFinished = false;
+    const upstream = await inner((_request, response) => {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.write(
+        sseFrame("response.created", { type: "response.created" }),
+      );
+      void barrier.then(() => {
+        response.end(
+          sseFrame("response.completed", {
+            type: "response.completed",
+            response: { status: "completed" },
+          }),
+          () => {
+            innerFinished = true;
+          },
+        );
+      });
+    });
+    const { port, token } = await outer(upstream.baseUrl);
+    const body = JSON.stringify({ model: MODEL });
+    const firstFrame = await new Promise<http.IncomingMessage>(
+      (resolve, reject) => {
+        const request = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            method: "POST",
+            path: FAROL_MODEL_RESPONSES_PATH,
+            headers: {
+              "content-type": "application/json",
+              "content-length": Buffer.byteLength(body),
+              authorization: `Bearer ${token}`,
+            },
+          },
+          (response) => {
+            response.once("data", () => resolve(response));
+          },
+        );
+        request.on("error", reject);
+        request.end(body);
+      },
+    );
+    // The caller goes away after the first frame while the inner turn is
+    // still held behind the barrier.
+    firstFrame.destroy();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release();
+    const deadline = Date.now() + 5_000;
+    while (!innerFinished && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(innerFinished).toBe(true);
+    expect(upstream.requests).toHaveLength(1);
+  });
 });
