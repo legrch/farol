@@ -11516,23 +11516,21 @@ n10ComputerPanelSegment: {
     );
     cases.push("n10-computer-guarded-edit-cancelled-file-unchanged");
 
-    // A guarded edit whose result never reached the window, and the
-    // product's recovery from it.
+    // Recovery from a restored undelivered-result record.
     //
-    // What is simulated and what is not. The product has no seam that drops
-    // a reply, and the renderer's own bridge cannot be wrapped: the
-    // contextBridge object refuses assignment, measured rather than assumed.
-    // So the loss is simulated by taking the product's OWN durable
-    // undelivered-result record — the one main.ts writes before anything
-    // executes, precisely "so a lost response or a restart leaves this exact
-    // operation to observe" — and restoring those exact bytes after this
-    // window's acknowledgement has cleared them. The transport drop itself
-    // is therefore NOT exercised. What is exercised is everything after it:
-    // the real edit, its real durable receipt, the restart, the pending
-    // notice, "Edit file…" refusing a second edit while the outcome is
-    // unknown, `computer.observe-workspace-edit` redelivering the real
+    // What this row exercises, named for what it is. The loss itself is NOT
+    // here: it belongs to the row below, which drops a real reply through
+    // the reply-fault seam. Here the record is the product's OWN — the one
+    // main.ts writes before anything executes, precisely "so a lost response
+    // or a restart leaves this exact operation to observe" — captured from
+    // the product's own file and restored byte for byte after this window's
+    // acknowledgement cleared it. That makes this the restart-recovery half
+    // on its own: the real edit, its real durable receipt, the restart, the
+    // pending notice, "Edit file…" refusing a second edit while the outcome
+    // is unknown, `computer.observe-workspace-edit` redelivering the real
     // receipt, the record clearing exactly once, and the file never being
-    // written a second time.
+    // written a second time — all of it reached from a record on disk
+    // rather than from a live window's state.
     await firstCard
       .getByRole("button", { name: "Edit file…", exact: true })
       .click();
@@ -11644,7 +11642,350 @@ n10ComputerPanelSegment: {
       editedStat.mtimeMs,
       "the file is not written a second time, by bytes and by modification time",
     );
-    cases.push("n10-computer-lost-edit-reply-redelivered-after-restart");
+    cases.push(
+      "n10-computer-restored-pending-record-redelivered-after-restart",
+    );
+    // The same recovery, with the reply genuinely lost.
+    //
+    // The row above restores a record the product had already written and
+    // cleared, so everything it proves happens AFTER a lost reply; the loss
+    // itself was not exercised, because nothing in the product could lose
+    // one. `configuration-reply-fault.ts` is that seam, and it is the only
+    // thing this instance does differently: a budget of zero delivered
+    // guarded-edit replies, armed at launch exactly as the live-task save
+    // fault is. The production handler is untouched — it records the pending
+    // operation, applies the edit, writes the receipt and releases its
+    // admission — and the reply it returns is dropped on the way to the
+    // renderer, so `ipcRenderer.invoke` never settles. Nothing here writes
+    // `product-settings.json`: every pending-edit byte below is the
+    // product's own.
+    //
+    // NOT exercised, stated rather than implied: a reply that IS delivered
+    // and whose acknowledgement never reaches disk. Clearing the record is a
+    // single settings write inside `clearPendingWorkspaceEdit`, and no
+    // production path fails it on demand, so that variant would need a
+    // second seam. The delivered control is the row above, and the segment's
+    // earlier guarded edits.
+    const droppedReply = await launch([], "hidden", "demo", {
+      environment: { FAROL_NEXT_E2E_WORKSPACE_EDIT_REPLY_DELIVERIES: "0" },
+    });
+    try {
+      // The marker the seam writes, read from the main process's own stderr.
+      // An unavailable stream fails the case rather than reading as zero
+      // drops: the whole proof that the reply was lost rather than merely
+      // slow rests on this line arriving.
+      const markers = [];
+      const watchMainStderr = (instance) => {
+        const stream = instance.application.process().stderr;
+        assert.ok(stream, "E2E_MAIN_STDERR_UNAVAILABLE");
+        let carry = "";
+        stream.on("data", (chunk) => {
+          carry += String(chunk);
+          const lines = carry.split("\n");
+          carry = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line.includes("farol-next-e2e:reply-dropped")) {
+              markers.push(line.trim());
+            }
+          }
+        });
+      };
+      watchMainStderr(droppedReply);
+      await completeSetup(droppedReply, false, true);
+      await droppedReply.window.locator('[data-section="computer"]').click();
+      await droppedReply.window
+        .locator('[data-panel="computer"].active')
+        .waitFor();
+      const droppedCard = droppedReply.window
+        .locator("#computer-workspaces .workspace-card")
+        .filter({ hasText: "approved-workspace" });
+      await droppedCard
+        .getByRole("button", { name: "Enable edits", exact: true })
+        .click();
+      await droppedCard.getByText(/guarded edits · not verified/u).waitFor();
+      await droppedCard
+        .getByRole("button", { name: "Verify folder", exact: true })
+        .click();
+      await droppedCard.getByText(/guarded edits · verified/u).waitFor();
+
+      const droppedSettingsPath = path.join(
+        droppedReply.userData,
+        "farol-next-state",
+        "product-settings.json",
+      );
+      // The product's own operation records, at the root
+      // `observeWorkspaceEdit` reads. Counting them before and after is what
+      // separates "the edit ran once" from "the edit ran and something ran
+      // it again".
+      const mutationRecordRoot = path.join(
+        droppedReply.userData,
+        "farol-next-state",
+        "workspace-mutations",
+        "mutations",
+      );
+      const countMutationRecords = async () => {
+        try {
+          const entries = await fs.readdir(mutationRecordRoot);
+          return entries.filter((entry) => entry.endsWith(".json")).length;
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+          return 0;
+        }
+      };
+      const contentDigest = (text) =>
+        createHash("sha256").update(text).digest("hex");
+      const beforeBytes = await fs.readFile(droppedReply.workspaceFile, "utf8");
+      const beforeRecords = await countMutationRecords();
+
+      // Every settings write re-renders the card, and a render that lands
+      // between the two fills replaces the approval form with an empty one
+      // — measured on this instance, where verification is the most recent
+      // write. Wait for the product's own revision to stop moving, then fill
+      // until the form it is actually showing agrees both values are
+      // complete. The scenario under test begins at the click.
+      let settledRevision = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const revision = (
+          await droppedReply.window.evaluate(() => window.farolNext.bootstrap())
+        ).configuration.settings.revision;
+        if (revision === settledRevision) break;
+        settledRevision = revision;
+        await droppedReply.window.waitForTimeout(100);
+      }
+      await droppedCard
+        .getByRole("button", { name: "Edit file…", exact: true })
+        .click();
+      const droppedApproval = droppedCard.locator(
+        ".workspace-mutation-evidence",
+      );
+      await droppedApproval
+        .getByText(/README\.md · \d+ bytes · source/u)
+        .waitFor();
+      const applyGuardedEdit = droppedApproval.getByRole("button", {
+        name: "Apply guarded edit",
+        exact: true,
+      });
+      let approvalReady = false;
+      for (let attempt = 0; attempt < 10 && !approvalReady; attempt += 1) {
+        await droppedApproval
+          .getByLabel("Find exact text in approved-workspace", { exact: true })
+          .fill("workspace verification");
+        await droppedApproval
+          .getByLabel("Replacement text for approved-workspace", {
+            exact: true,
+          })
+          .fill("workspace dropped-reply mutation");
+        approvalReady = await applyGuardedEdit.isEnabled();
+        if (!approvalReady) await droppedReply.window.waitForTimeout(100);
+      }
+      assert.equal(
+        approvalReady,
+        true,
+        "the approval form kept both values long enough to submit them",
+      );
+      await applyGuardedEdit.click();
+
+      // (1) The real edit at the real boundary: the product's own record
+      // names the operation, the file carries the new bytes, and exactly one
+      // operation record exists that did not before.
+      const droppedBytes =
+        "Farol Next workspace dropped-reply mutation fixture\n";
+      assert.notEqual(droppedBytes, beforeBytes);
+      let submittedEdit = null;
+      for (let attempt = 0; attempt < 200 && submittedEdit === null;) {
+        const settings = JSON.parse(
+          await fs.readFile(droppedSettingsPath, "utf8"),
+        );
+        submittedEdit = settings.computer.pendingEdit;
+        if (submittedEdit === null) {
+          attempt += 1;
+          await droppedReply.window.waitForTimeout(50);
+        }
+      }
+      assert.ok(
+        submittedEdit,
+        "the product records the undelivered result before the edit executes",
+      );
+      assert.equal(submittedEdit.relativePath, "README.md");
+      let editedOnDisk = null;
+      for (let attempt = 0; attempt < 200 && editedOnDisk === null;) {
+        const current = await fs.readFile(droppedReply.workspaceFile, "utf8");
+        if (current === droppedBytes) editedOnDisk = current;
+        else {
+          attempt += 1;
+          await droppedReply.window.waitForTimeout(50);
+        }
+      }
+      assert.equal(
+        editedOnDisk,
+        droppedBytes,
+        "the guarded edit really executed, whatever became of its reply",
+      );
+      const droppedStat = await fs.stat(droppedReply.workspaceFile);
+      assert.equal(
+        await countMutationRecords(),
+        beforeRecords + 1,
+        "the guarded edit left exactly one new operation record",
+      );
+
+      // (2) The reply was dropped, once, and for this operation.
+      for (let attempt = 0; attempt < 200 && markers.length === 0;) {
+        attempt += 1;
+        await droppedReply.window.waitForTimeout(50);
+      }
+      assert.deepEqual(
+        markers,
+        [
+          `farol-next-e2e:reply-dropped computer.apply-workspace-edit ${submittedEdit.operationId}`,
+        ],
+        "exactly one reply was dropped, and it was this operation's",
+      );
+
+      // (3) The record is the product's own, and it survives the loss: the
+      // window received nothing, so nothing acknowledged it.
+      await droppedReply.window.waitForTimeout(500);
+      assert.equal(
+        await droppedReply.window
+          .locator("#computer-feedback")
+          .getByText("Edited README.md once · durable.", { exact: true })
+          .count(),
+        0,
+        "a dropped reply never reaches the window, so nothing reports success",
+      );
+      const survived = JSON.parse(
+        await fs.readFile(droppedSettingsPath, "utf8"),
+      );
+      assert.deepEqual(
+        survived.computer.pendingEdit,
+        submittedEdit,
+        "a lost reply leaves the product's own undelivered-result record intact",
+      );
+      assert.equal(
+        survived.computer.pendingEdit.operationId,
+        submittedEdit.operationId,
+      );
+      cases.push("n10-computer-dropped-reply-leaves-the-products-own-record");
+
+      // (4) A restart on the same disposable profile finds the unknown
+      // outcome and refuses a second edit until it is known.
+      await restart(droppedReply);
+      watchMainStderr(droppedReply);
+      await droppedReply.window.locator('[data-section="computer"]').click();
+      await droppedReply.window
+        .locator('[data-panel="computer"].active')
+        .waitFor();
+      const recoveredCard = droppedReply.window
+        .locator("#computer-workspaces .workspace-card")
+        .filter({ hasText: "approved-workspace" });
+      const recoveredNotice = recoveredCard.locator(".workspace-pending-edit");
+      await recoveredNotice
+        .getByText(
+          "The last guarded edit of README.md has no delivered result.",
+        )
+        .waitFor();
+      assert.equal(
+        await recoveredCard
+          .getByRole("button", { name: "Edit file…", exact: true })
+          .isDisabled(),
+        true,
+        "an unknown outcome refuses a second edit until it is known",
+      );
+
+      // (5) Observation redelivers the SAME operation and the SAME receipt.
+      // The command is the one the notice's own button sends, and reading the
+      // durable record is idempotent, so asking directly first is what lets
+      // this case name the operation and its digests rather than the byte
+      // count the panel renders.
+      const observed = await droppedReply.window.evaluate(
+        (operationId) =>
+          window.farolNext.configure({
+            kind: "computer.observe-workspace-edit",
+            operationId,
+          }),
+        submittedEdit.operationId,
+      );
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+      assert.equal(observed.evidence.kind, "computer.workspace-mutation");
+      assert.equal(observed.evidence.operationId, submittedEdit.operationId);
+      assert.equal(observed.evidence.relativePath, "README.md");
+      assert.equal(observed.evidence.redelivered, true);
+      assert.equal(observed.evidence.resultRetention, "durable");
+      assert.equal(observed.evidence.beforeSha256, contentDigest(beforeBytes));
+      assert.equal(observed.evidence.afterSha256, contentDigest(droppedBytes));
+
+      // (6) The notice's own button reports the redelivery, and the record
+      // clears exactly once — only after the outcome was observed.
+      await recoveredNotice
+        .getByRole("button", { name: "Check result", exact: true })
+        .click();
+      await droppedReply.window
+        .locator("#computer-feedback")
+        .getByText("Edited README.md once · durable · result redelivered.", {
+          exact: true,
+        })
+        .waitFor();
+      await recoveredCard
+        .locator(".workspace-mutation-evidence")
+        .getByText(/Edited README\.md · \d+ bytes/u)
+        .waitFor();
+      await droppedReply.window.waitForFunction(
+        () => document.querySelectorAll(".workspace-pending-edit").length === 0,
+      );
+      // The panel drops the notice when its reply arrives; the settings
+      // write that clears the record is the product's own and lands on its
+      // own clock. Waiting for the file is not a softer claim than reading
+      // it once — the assertion below is still that the record is gone.
+      let acknowledged = null;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        acknowledged = JSON.parse(
+          await fs.readFile(droppedSettingsPath, "utf8"),
+        );
+        if (acknowledged.computer.pendingEdit === null) break;
+        await droppedReply.window.waitForTimeout(50);
+      }
+      assert.equal(
+        acknowledged.computer.pendingEdit,
+        null,
+        "an observed outcome clears the undelivered-result record exactly once",
+      );
+      const afterAcknowledgement = await droppedReply.window.evaluate(
+        (operationId) =>
+          window.farolNext.configure({
+            kind: "computer.observe-workspace-edit",
+            operationId,
+          }),
+        submittedEdit.operationId,
+      );
+      assert.equal(afterAcknowledgement.ok, false);
+      assert.equal(
+        afterAcknowledgement.error,
+        "WORKSPACE_MUTATION_NOT_PENDING",
+        "a cleared record leaves nothing to redeliver a second time",
+      );
+
+      // (7) No second mutation, by bytes, by modification time, and by the
+      // product's own operation records. Redelivering a known result is not
+      // resubmitting an unknown effect.
+      const finalStat = await fs.stat(droppedReply.workspaceFile);
+      assert.equal(
+        await fs.readFile(droppedReply.workspaceFile, "utf8"),
+        droppedBytes,
+      );
+      assert.equal(finalStat.mtimeMs, droppedStat.mtimeMs);
+      assert.equal(
+        await countMutationRecords(),
+        beforeRecords + 1,
+        "recovery read the record it already had and wrote no new one",
+      );
+      // Redelivery and acknowledgement are ordinary replies: the seam counts
+      // and drops apply replies only, so the restarted process dropped none.
+      assert.deepEqual(markers, [
+        `farol-next-e2e:reply-dropped computer.apply-workspace-edit ${submittedEdit.operationId}`,
+      ]);
+      cases.push("n10-computer-dropped-reply-recovered-after-restart");
+    } finally {
+      await close(droppedReply);
+    }
   } finally {
     await close(panel);
     segmentMark("n10-computer-panel", "end");

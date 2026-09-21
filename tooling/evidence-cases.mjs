@@ -173,7 +173,9 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "n10-computer-workspace-removed-from-panel-and-settings",
   "n10-computer-guarded-edit-cancelled-file-unchanged",
   "n10-computer-lost-edit-record-is-the-products-own",
-  "n10-computer-lost-edit-reply-redelivered-after-restart",
+  "n10-computer-restored-pending-record-redelivered-after-restart",
+  "n10-computer-dropped-reply-leaves-the-products-own-record",
+  "n10-computer-dropped-reply-recovered-after-restart",
 ]);
 
 const SEALED_PACKAGE_CASES = Object.freeze([
