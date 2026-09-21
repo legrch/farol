@@ -2003,9 +2003,13 @@ async function sampleWindowFocus(application, untilMs) {
   const samples = [];
   while (Date.now() < untilMs) {
     const sample = await application
-      .evaluate(({ BrowserWindow }) => {
+      .evaluate(({ app, BrowserWindow }) => {
         const focused = BrowserWindow.getFocusedWindow();
         return {
+          // Whether the PRIMARY is the active application is the reading
+          // that separates "was focused all along" from "was handed
+          // activation when the secondary quit".
+          active: app.isActive(),
           any: focused === null ? null : focused.id,
           windows: BrowserWindow.getAllWindows().map((browserWindow) => ({
             id: browserWindow.id,
@@ -3112,8 +3116,70 @@ async function waitForSetup(instance, predicate, arg) {
         .readdir(path.join(instance.userData, "farol-next-state"))
         .catch(() => null);
     }
+    // The failure message is capped, and the readings that matter here are
+    // whole files. Write them beside the attempt instead of truncating them
+    // into a sentence: the host probe's own receipt is what says whether it
+    // exceeded a budget under load or returned something the product could
+    // not classify, and the assignment store is where an Agent outcome
+    // lives when no task carries it.
+    const readJsonTree = async (root) => {
+      const entries = await fs.readdir(root).catch(() => null);
+      if (entries === null) return null;
+      const contents = {};
+      for (const entry of entries.slice(0, 32)) {
+        const target = path.join(root, entry);
+        const info = await fs.stat(target).catch(() => null);
+        if (!info?.isFile()) {
+          contents[entry] = info?.isDirectory() ? "<directory>" : null;
+          continue;
+        }
+        const text = await fs.readFile(target, "utf8").catch(() => null);
+        contents[entry] =
+          text === null
+            ? null
+            : text.length > 8_192
+              ? `${text.slice(0, 8_192)}…`
+              : text;
+      }
+      return contents;
+    };
+    const stateRoot = path.join(instance.userData, "farol-next-state");
+    const settingsText = await fs
+      .readFile(path.join(stateRoot, "product-settings.json"), "utf8")
+      .catch(() => null);
+    let settingsSection = null;
+    try {
+      const parsed = JSON.parse(settingsText ?? "null");
+      settingsSection = {
+        nativeHosts: parsed?.nativeHosts ?? null,
+        setup: parsed?.setup ?? null,
+        computerGeneration: parsed?.computer?.generation ?? null,
+      };
+    } catch {
+      settingsSection = { unparsed: (settingsText ?? "").slice(0, 2_048) };
+    }
+    const byproduct = {
+      schema: 1,
+      capturedAt: new Date().toISOString(),
+      shown,
+      provenance,
+      home,
+      codexHostProbe: await readJsonTree(
+        path.join(stateRoot, "codex-host-probe"),
+      ),
+      nativeAgentAssignments: await readJsonTree(
+        path.join(stateRoot, "native-agent-assignments"),
+      ),
+      productSettings: settingsSection,
+    };
+    const byproductPath = path.join(evidenceRoot, "setup-verify-state.json");
+    await fs
+      .writeFile(byproductPath, `${JSON.stringify(byproduct, null, 2)}\n`, {
+        mode: 0o600,
+      })
+      .catch(() => undefined);
     throw new Error(
-      `${error.message} · setup showed ${JSON.stringify(shown)} · state ${JSON.stringify(provenance)} · home ${JSON.stringify(home)}`,
+      `${error.message} · setup showed ${JSON.stringify(shown)} · state ${JSON.stringify(provenance)} · home ${JSON.stringify(home)} · byproduct ${byproductPath}`,
       {
         cause: error,
       },
@@ -7633,12 +7699,14 @@ demoMainSegment: try {
   const reopenedWindow = normal.application.waitForEvent("window", {
     timeout: 15_000,
   });
+  // Sampling starts BEFORE the second launch is spawned. Beginning after
+  // it exits can only ever show the state afterwards, which cannot tell a
+  // window that was focused all along from one handed activation when the
+  // secondary quit — the difference that decides whether this is a harness
+  // artefact or the deferring second instance entering the activation order.
+  const reopenFocus = sampleWindowFocus(normal.application, Date.now() + 6_000);
   await repeatLaunch(normal);
   normal.window = await reopenedWindow;
-  // Focus is sampled from the moment the window arrives, because a single
-  // read at the end cannot say whether the window was focused all along or
-  // was handed activation by the exiting secondary a moment earlier.
-  const reopenFocus = sampleWindowFocus(normal.application, Date.now() + 2_500);
   await normal.window.locator("#sidebar").waitFor({ state: "visible" });
   await normal.window.locator('[data-panel="settings"].active').waitFor();
   let reopenPresentationError = null;
