@@ -12013,8 +12013,18 @@ n10ComputerPanelSegment: {
         name: "Apply guarded edit",
         exact: true,
       });
-      let approvalReady = false;
-      for (let attempt = 0; attempt < 10 && !approvalReady; attempt += 1) {
+      // Filling and submitting is ONE attempt, retried as a unit. A render
+      // can land between the two fills, and — measured, attempt
+      // 20260921T094622320Z-d0e030e4 — between the button reporting itself
+      // enabled and the click reaching it, which left a 30 s click waiting
+      // on a button the render had just emptied and disabled. Each attempt
+      // here gets its own bounded click and the whole loop is allowed more
+      // time than the single attempt it replaces, so this is a narrower
+      // window, not a shorter wait. The scenario under test starts once the
+      // click lands.
+      let submitted = false;
+      let lastSubmitError = null;
+      for (let attempt = 0; attempt < 8 && !submitted; attempt += 1) {
         await droppedApproval
           .getByLabel("Find exact text in approved-workspace", { exact: true })
           .fill("workspace verification");
@@ -12023,15 +12033,18 @@ n10ComputerPanelSegment: {
             exact: true,
           })
           .fill("workspace dropped-reply mutation");
-        approvalReady = await applyGuardedEdit.isEnabled();
-        if (!approvalReady) await droppedReply.window.waitForTimeout(100);
+        try {
+          await applyGuardedEdit.click({ timeout: 5_000 });
+          submitted = true;
+        } catch (error) {
+          lastSubmitError = error;
+        }
       }
       assert.equal(
-        approvalReady,
+        submitted,
         true,
-        "the approval form kept both values long enough to submit them",
+        `the approval form kept both values long enough to submit them · ${lastSubmitError?.message ?? ""}`,
       );
-      await applyGuardedEdit.click();
 
       // (1) The real edit at the real boundary: the product's own record
       // names the operation, the file carries the new bytes, and exactly one
