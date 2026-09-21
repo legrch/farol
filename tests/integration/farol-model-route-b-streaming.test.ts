@@ -11,7 +11,7 @@ import {
 } from "../../src/apps/desktop/farol-model-endpoint";
 import { FarolModelRuntimeState } from "../../src/apps/desktop/farol-model-runtime-state";
 
-// Where the Farol Model bridge stops being a stream.
+// Where the Farol Model bridge became a stream (it used to buffer the whole inner body).
 //
 // The inner Route B provider writes `response.created` and its output
 // deltas as they are produced. The outer adapter reads the inner answer
@@ -113,6 +113,14 @@ async function twoPhaseUpstream(): Promise<{
   };
 }
 
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("E2E_WAIT_FOR_TIMEOUT");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 /** Prove the event loop has serviced socket I/O in both directions. */
 async function upstreamRoundTrip(baseUrl: string): Promise<void> {
   const response = await fetch(`${baseUrl}/ping`);
@@ -120,7 +128,7 @@ async function upstreamRoundTrip(baseUrl: string): Promise<void> {
 }
 
 describe("Farol Model bridge to Route B", () => {
-  it("opens its own response only once the inner turn has completed", async () => {
+  it("relays the first inner frame before the inner turn has completed", async () => {
     const upstream = await twoPhaseUpstream();
     const state = new FarolModelRuntimeState(await stateRoot());
     const endpoint = new FarolModelEndpoint({
@@ -167,8 +175,13 @@ describe("Farol Model bridge to Route B", () => {
     // is merely waiting to be scheduled.
     await upstream.firstFrameFlushed;
     await upstreamRoundTrip(upstream.baseUrl);
-    expect(outerResponseOpened).toBe(false);
-    expect(outerBody).toBe("");
+    // Progressive delivery (S35 transport parity): the outer response is
+    // open and already carries the inner `response.created` while the
+    // inner turn is still held behind the barrier — and nothing has been
+    // invented past it.
+    await waitFor(() => outerBody.includes("event: response.created"));
+    expect(outerResponseOpened).toBe(true);
+    expect(outerBody).not.toContain("response.completed");
 
     upstream.release();
     expect(await answered).toBe(200);

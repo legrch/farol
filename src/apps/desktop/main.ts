@@ -279,7 +279,10 @@ import {
   FarolModelLifecycle,
   type FarolModelLifecycleStatus,
 } from "./farol-model-lifecycle";
-import { routeBModelTurnHandler } from "./farol-model-endpoint";
+import {
+  routeBModelCompactionHandler,
+  routeBModelTurnHandler,
+} from "./farol-model-endpoint";
 import {
   applyFarolModelConfigBlock,
   applyFarolModelProviderSelection,
@@ -6961,6 +6964,9 @@ async function main(): Promise<void> {
     handler: modelSyntheticReply
       ? syntheticModelTurnHandler(modelSyntheticReply)
       : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
+    compactionHandler: routeBModelCompactionHandler(
+      () => routeBRuntime?.endpoint ?? null,
+    ),
   });
   try {
     await modelLifecycle.start();

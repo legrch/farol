@@ -4,6 +4,7 @@ import {
   FarolModelEndpointPortConflictError,
   isFarolModelIdentity,
   type FarolModelEndpointTimeouts,
+  type FarolModelCompactionHandler,
   type FarolModelTurnHandler,
 } from "./farol-model-endpoint";
 import type {
@@ -64,6 +65,7 @@ export type FarolModelLifecycleOptions = Readonly<{
   /** The one model the endpoint serves (the Route B model). */
   model: string;
   handler?: FarolModelTurnHandler;
+  compactionHandler?: FarolModelCompactionHandler;
   /** Host loopback address to bind; defaults to 127.0.0.1 (IPv4 only). */
   host?: string;
   timeouts?: FarolModelEndpointTimeouts;
@@ -178,6 +180,9 @@ export class FarolModelLifecycle {
       state: this.state,
       model: this.options.model,
       ...(this.options.handler ? { handler: this.options.handler } : {}),
+      ...(this.options.compactionHandler
+        ? { compactionHandler: this.options.compactionHandler }
+        : {}),
       ...(this.options.host ? { host: this.options.host } : {}),
       ...(this.options.timeouts ? { timeouts: this.options.timeouts } : {}),
     });

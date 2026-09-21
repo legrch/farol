@@ -39,7 +39,26 @@ export type FarolModelTurnRequest = Readonly<{
 
 export type FarolModelTurnOutcome =
   | Readonly<{ ok: true; events: readonly FarolModelSseEvent[] }>
+  // Progressive delivery: frames are relayed to the caller as they arrive,
+  // so a `response.created` reaches the Codex host before the upstream turn
+  // has finished. The endpoint pulls the first frame before it commits a
+  // status, so a stream that dies or ends empty before its first frame is
+  // still one truthful refusal, never an empty success.
+  | Readonly<{ ok: true; stream: AsyncIterable<FarolModelSseEvent> }>
   | Readonly<{ ok: false; reason: string }>;
+
+/**
+ * A compaction turn (`POST /responses/compact`) answers with one JSON body,
+ * not a stream; the inner provider's status and body are relayed verbatim so
+ * its identity/mismatch refusals reach the host exactly as it rendered them.
+ */
+export type FarolModelCompactionOutcome =
+  | Readonly<{ ok: true; status: number; body: string }>
+  | Readonly<{ ok: false; reason: string }>;
+
+export type FarolModelCompactionHandler = (
+  request: FarolModelTurnRequest,
+) => Promise<FarolModelCompactionOutcome>;
 
 /**
  * Serves one model turn. Returns `{ ok: false }` — never throws — when the
@@ -55,7 +74,24 @@ const unavailableHandler: FarolModelTurnHandler = async () => ({
   reason: "FAROL_MODEL_ROUTE_UNAVAILABLE",
 });
 
+const unavailableCompactionHandler: FarolModelCompactionHandler = async () => ({
+  ok: false,
+  reason: "FAROL_MODEL_ROUTE_UNAVAILABLE",
+});
+
 export const FAROL_MODEL_RESPONSES_PATH = "/responses";
+export const FAROL_MODEL_RESPONSES_COMPACT_PATH = "/responses/compact";
+/**
+ * The only caller headers the bridge relays to the inner provider. The
+ * compaction identity travels in `x-codex-turn-metadata` (the inner codec
+ * accepts header-only identity and refuses a header that disagrees with the
+ * embedded one), so dropping it would change what the inner validator sees.
+ * The caller's own `authorization`, `origin` and everything else never
+ * cross: the bridge speaks to the provider with its own internal token.
+ */
+export const FAROL_MODEL_FORWARDED_HEADERS: readonly string[] = [
+  "x-codex-turn-metadata",
+];
 /** Authenticated identity probe: answers this endpoint's own instance nonce. */
 export const FAROL_MODEL_IDENTITY_PATH = "/farol-model/identity";
 export const FAROL_MODEL_MAX_BODY_BYTES = 1024 * 1024;
@@ -130,6 +166,7 @@ export function routeBModelTurnHandler(
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${upstream.token}`,
+          ...forwardedHeaders(request.headers),
         },
         body: JSON.stringify(request.body ?? {}),
       });
@@ -137,26 +174,111 @@ export function routeBModelTurnHandler(
       // No retry: the caller sees one truthful, content-free refusal.
       return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
     }
-    // S35-H2-2: a body that fails mid-read is not an empty body. Treating
-    // it as one turned a 200 whose stream died into a successful SSE
-    // response carrying no events at all — an answer the provider never
-    // gave, counted as a served request. The read failing is exactly the
-    // unreachable case: one truthful refusal, still no retry.
-    let text: string;
+    if (!response.ok) {
+      let text = "";
+      try {
+        text = await response.text();
+      } catch {
+        return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
+      }
+      return { ok: false, reason: routeRefusalCode(response.status, text) };
+    }
+    if (!response.body) {
+      return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
+    }
+    // S35-H2-2 still holds under progressive delivery: the endpoint pulls
+    // the first frame before it commits a status, so a 200 whose body dies
+    // or ends before any frame is one truthful refusal, never an empty
+    // success. A 200 body may itself carry a `response.failed` frame (a
+    // refusal or an `outcome_unknown` turn the provider already rendered) —
+    // relayed as-is, never reinterpreted, so nothing here invents a
+    // certainty the route did not report.
+    return { ok: true, stream: sseEventStream(response.body) };
+  };
+}
+
+/**
+ * The production compaction bridge: the same provider instance, the same
+ * internal token, one POST to the inner `/responses/compact`, and the inner
+ * answer relayed verbatim (status and JSON body) — so the inner codec's
+ * identity, mismatch and unavailability refusals reach the host exactly as
+ * it rendered them. There is no second compaction implementation here.
+ */
+export function routeBModelCompactionHandler(
+  target: () => RouteBModelEndpointTarget | null,
+): FarolModelCompactionHandler {
+  return async (request) => {
+    const upstream = target();
+    if (!upstream) {
+      return { ok: false, reason: "FAROL_MODEL_ROUTE_UNAVAILABLE" };
+    }
+    let response: Response;
     try {
-      text = await response.text();
+      response = await fetch(`${upstream.baseUrl}/responses/compact`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${upstream.token}`,
+          ...forwardedHeaders(request.headers),
+        },
+        body: JSON.stringify(request.body ?? {}),
+      });
     } catch {
       return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
     }
-    if (!response.ok) {
-      return { ok: false, reason: routeRefusalCode(response.status, text) };
+    let body: string;
+    try {
+      body = await response.text();
+    } catch {
+      return { ok: false, reason: "FAROL_MODEL_ROUTE_UNREACHABLE" };
     }
-    // A 200 body may itself carry a `response.failed` frame (a refusal or an
-    // `outcome_unknown` turn the provider already rendered) — relayed as-is,
-    // never reinterpreted, so nothing here invents a certainty the route did
-    // not report.
-    return { ok: true, events: parseSseEvents(text) };
+    return { ok: true, status: response.status, body };
   };
+}
+
+function forwardedHeaders(
+  headers: FarolModelTurnRequest["headers"],
+): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  for (const name of FAROL_MODEL_FORWARDED_HEADERS) {
+    const value = headers[name];
+    if (typeof value === "string" && value.length > 0) forwarded[name] = value;
+  }
+  return forwarded;
+}
+
+/**
+ * Frames parsed as the inner body arrives: each complete `event/data` block
+ * is yielded as soon as its terminating blank line is in, so the caller can
+ * relay it before the upstream turn has finished. A read failure propagates
+ * to the consumer, which decides what a death before or after the first
+ * frame means.
+ */
+async function* sseEventStream(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<FarolModelSseEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let boundary = buffered.indexOf("\n\n");
+      while (boundary !== -1) {
+        const event = parseSseBlock(buffered.slice(0, boundary));
+        buffered = buffered.slice(boundary + 2);
+        if (event) yield event;
+        boundary = buffered.indexOf("\n\n");
+      }
+    }
+    buffered += decoder.decode();
+    const tail = parseSseBlock(buffered);
+    if (tail) yield tail;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function routeRefusalCode(status: number, body: string): string {
@@ -169,24 +291,20 @@ function routeRefusalCode(status: number, body: string): string {
   return `FAROL_MODEL_ROUTE_REFUSED_${status}`;
 }
 
-function parseSseEvents(text: string): FarolModelSseEvent[] {
-  const events: FarolModelSseEvent[] = [];
-  for (const block of text.split("\n\n")) {
-    if (block.trim().length === 0) continue;
-    let event: string | undefined;
-    let rawData: string | undefined;
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event: ")) event = line.slice("event: ".length);
-      else if (line.startsWith("data: ")) rawData = line.slice("data: ".length);
-    }
-    if (event === undefined || rawData === undefined) continue;
-    try {
-      events.push({ event, data: JSON.parse(rawData) });
-    } catch {
-      events.push({ event, data: rawData });
-    }
+function parseSseBlock(block: string): FarolModelSseEvent | null {
+  if (block.trim().length === 0) return null;
+  let event: string | undefined;
+  let rawData: string | undefined;
+  for (const line of block.split("\n")) {
+    if (line.startsWith("event: ")) event = line.slice("event: ".length);
+    else if (line.startsWith("data: ")) rawData = line.slice("data: ".length);
   }
-  return events;
+  if (event === undefined || rawData === undefined) return null;
+  try {
+    return { event, data: JSON.parse(rawData) };
+  } catch {
+    return { event, data: rawData };
+  }
 }
 
 export type FarolModelEndpointEvidence = Readonly<{
@@ -214,6 +332,7 @@ export type FarolModelEndpointOptions = Readonly<{
   /** The one model this endpoint serves; any other `model` is refused (422). */
   model: string;
   handler?: FarolModelTurnHandler;
+  compactionHandler?: FarolModelCompactionHandler;
   /** Host loopback address to bind; defaults to 127.0.0.1 (IPv4 only). */
   host?: string;
   timeouts?: FarolModelEndpointTimeouts;
@@ -250,6 +369,7 @@ export class FarolModelEndpoint {
   private readonly state: FarolModelRuntimeState;
   private readonly model: string;
   private readonly handler: FarolModelTurnHandler;
+  private readonly compactionHandler: FarolModelCompactionHandler;
   private readonly host: string;
   private readonly timeouts: Required<FarolModelEndpointTimeouts>;
   private readonly maxBodyBytes: number;
@@ -280,6 +400,8 @@ export class FarolModelEndpoint {
     this.state = options.state;
     this.model = options.model;
     this.handler = options.handler ?? unavailableHandler;
+    this.compactionHandler =
+      options.compactionHandler ?? unavailableCompactionHandler;
     this.host = options.host ?? "127.0.0.1";
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts };
     this.maxBodyBytes = options.maxBodyBytes ?? FAROL_MODEL_MAX_BODY_BYTES;
@@ -507,7 +629,11 @@ export class FarolModelEndpoint {
       response.end(JSON.stringify(identity));
       return;
     }
-    if (request.method !== "POST" || url !== FAROL_MODEL_RESPONSES_PATH) {
+    const compaction = url === FAROL_MODEL_RESPONSES_COMPACT_PATH;
+    if (
+      request.method !== "POST" ||
+      (url !== FAROL_MODEL_RESPONSES_PATH && !compaction)
+    ) {
       this.reject(response, 404, "FAROL_MODEL_ROUTE_NOT_FOUND");
       return;
     }
@@ -543,25 +669,103 @@ export class FarolModelEndpoint {
       return;
     }
 
-    const outcome = await this.handler({
-      body: parsed,
-      headers: flattenHeaders(request.headers),
-    });
+    const turn = { body: parsed, headers: flattenHeaders(request.headers) };
+    if (compaction) {
+      const relayed = await this.compactionHandler(turn);
+      if (!relayed.ok) {
+        this.reject(response, 502, relayed.reason);
+        return;
+      }
+      // The inner provider's own verdict, status and body alike: a 200 with
+      // the replacement history, or its 422 identity/mismatch refusal.
+      this.requestsAccepted += 1;
+      this.lastAcceptedAtIso = new Date().toISOString();
+      response.writeHead(relayed.status, {
+        "content-type": "application/json",
+      });
+      response.end(relayed.body);
+      return;
+    }
+
+    const outcome = await this.handler(turn);
     if (!outcome.ok) {
       this.reject(response, 502, outcome.reason);
+      return;
+    }
+    if ("stream" in outcome) {
+      await this.relayStream(response, outcome.stream);
       return;
     }
 
     this.requestsAccepted += 1;
     this.lastAcceptedAtIso = new Date().toISOString();
-    response.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      connection: "keep-alive",
-    });
+    response.writeHead(200, SSE_HEADERS);
     for (const frame of outcome.events) {
-      response.write(`event: ${frame.event}\n`);
-      response.write(`data: ${JSON.stringify(frame.data)}\n\n`);
+      response.write(sseFrame(frame));
+    }
+    response.end();
+  }
+
+  /**
+   * Progressive relay. The first frame is pulled before any status is
+   * committed: a stream that fails or ends before it is one 502, never an
+   * empty 200. After that each frame is written as it arrives, honouring
+   * the socket's backpressure. If the upstream dies once the stream is open,
+   * the outer stream ends with one `response.failed` frame naming the relay
+   * failure — the host contract's own shape for a turn whose outcome this
+   * process cannot vouch for — and never with a `response.completed` it did
+   * not receive. A caller that has gone away stops receiving frames, but
+   * the upstream turn is still drained to its end: exactly one request was
+   * made and nothing here cancels or repeats it.
+   */
+  private async relayStream(
+    response: ServerResponse,
+    stream: AsyncIterable<FarolModelSseEvent>,
+  ): Promise<void> {
+    const iterator = stream[Symbol.asyncIterator]();
+    let first: IteratorResult<FarolModelSseEvent>;
+    try {
+      first = await iterator.next();
+    } catch {
+      this.reject(response, 502, "FAROL_MODEL_ROUTE_UNREACHABLE");
+      return;
+    }
+    if (first.done) {
+      this.reject(response, 502, "FAROL_MODEL_ROUTE_UNREACHABLE");
+      return;
+    }
+    this.requestsAccepted += 1;
+    this.lastAcceptedAtIso = new Date().toISOString();
+    let closed = false;
+    response.once("close", () => {
+      closed = true;
+    });
+    response.writeHead(200, SSE_HEADERS);
+    await writeFrame(response, first.value, () => closed);
+    for (;;) {
+      let next: IteratorResult<FarolModelSseEvent>;
+      try {
+        next = await iterator.next();
+      } catch {
+        await writeFrame(
+          response,
+          {
+            event: "response.failed",
+            data: {
+              type: "response.failed",
+              response: {
+                model: this.model,
+                status: "failed",
+                error: { code: "FAROL_MODEL_ROUTE_UNREACHABLE" },
+              },
+            },
+          },
+          () => closed,
+        );
+        break;
+      }
+      if (next.done) break;
+      await writeFrame(response, next.value, () => closed);
     }
     response.end();
   }
@@ -678,6 +882,39 @@ export function isLoopbackAddress(address: string | undefined): boolean {
     address === "::1" ||
     address === "::ffff:127.0.0.1"
   );
+}
+
+const SSE_HEADERS = Object.freeze({
+  "content-type": "text/event-stream",
+  "cache-control": "no-cache",
+  connection: "keep-alive",
+});
+
+function sseFrame(frame: FarolModelSseEvent): string {
+  return `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
+}
+
+/**
+ * One frame onto the socket. `write` returning false means the kernel
+ * buffer is full: wait for `drain` (or for the peer to go, in which case
+ * nothing more is written and the caller keeps draining the upstream).
+ */
+function writeFrame(
+  response: ServerResponse,
+  frame: FarolModelSseEvent,
+  isClosed: () => boolean,
+): Promise<void> {
+  if (isClosed()) return Promise.resolve();
+  if (response.write(sseFrame(frame)) || isClosed()) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      response.off("drain", done);
+      response.off("close", done);
+      resolve();
+    };
+    response.once("drain", done);
+    response.once("close", done);
+  });
 }
 
 function flattenHeaders(
