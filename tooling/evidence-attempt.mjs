@@ -304,6 +304,7 @@ class EvidenceAttempt {
     this.firstFailure = null;
     this.terminal = null;
     this.records = null;
+    this.phases = null;
   }
 
   // A runner accumulates its case list as it goes.  Handing the attempt a live
@@ -311,6 +312,24 @@ class EvidenceAttempt {
   // of a terminal receipt with an empty list that reads as "nothing ran".
   trackRecords(reader) {
     this.records = reader;
+  }
+
+  // Where the run was when it stopped. A lane killed by a watchdog, or one
+  // whose await never settles, leaves a terminal receipt naming the last
+  // boundary it crossed and the boundary still open — which is the reading
+  // `interrupted.json` cannot give, because that file is written later, by
+  // the NEXT attempt, and knows only that the owner process is gone.
+  trackPhases(reader) {
+    this.phases = reader;
+  }
+
+  readPhases() {
+    if (!this.phases) return null;
+    try {
+      return this.phases() ?? null;
+    } catch {
+      return null;
+    }
   }
 
   // Never let reading the runner's own state stop the receipt from being
@@ -358,10 +377,12 @@ class EvidenceAttempt {
       startedAt: this.started.startedAt,
       endedAt: new Date().toISOString(),
       exitCode: details.exitCode ?? null,
+      signal: details.signal ?? null,
       firstFailure: this.firstFailure,
       cases: { raw, normalized: [...new Set(raw)].sort() },
       blockedCases: details.blockedCases ?? tracked.blockedCases ?? [],
       skippedCases: details.skippedCases ?? tracked.skippedCases ?? [],
+      phases: this.readPhases(),
       byproducts,
     };
     fsSync.writeFileSync(
@@ -389,6 +410,26 @@ class EvidenceAttempt {
     process.on("uncaughtExceptionMonitor", (error) => {
       this.recordFailure("uncaught", error);
     });
+    // A watchdog's SIGTERM ends the process without running an `exit`
+    // handler, which is why a killed lane used to leave started.json,
+    // screenshots and nothing that said what it had been doing. Closing the
+    // attempt here writes the same terminal receipt an ordinary failure
+    // writes, carrying the phase snapshot; `interrupted.json` stays what it
+    // was — a later attempt's observation about an owner that never got to
+    // say anything at all, which after this is only a SIGKILL or a crash.
+    for (const signal of ["SIGTERM", "SIGINT"]) {
+      process.on(signal, () => {
+        if (!this.terminal) {
+          this.recordFailure("runner", `EVIDENCE_LANE_SIGNALLED:${signal}`);
+          try {
+            this.finishSync("FAIL", { exitCode: null, signal });
+          } catch {
+            // A receipt that cannot be written must not stop the exit.
+          }
+        }
+        process.exit(signal === "SIGINT" ? 130 : 143);
+      });
+    }
     process.on("exit", (code) => {
       if (!this.terminal) {
         this.recordFailure("runner", "EVIDENCE_EXIT_WITHOUT_TERMINAL_RECEIPT");
