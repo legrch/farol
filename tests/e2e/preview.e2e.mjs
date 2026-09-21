@@ -10092,6 +10092,64 @@ n12AgentDraftSegment: {
       ),
     );
 
+    // Every click in this case explains itself when it fails. A control that
+    // is gone is the defect under test, so "timed out" alone is never a
+    // usable answer here.
+    const draftDump = async (label, error) => {
+      const windows = await draft.application
+        .evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((browserWindow) => ({
+            id: browserWindow.id,
+            visible: browserWindow.isVisible(),
+            destroyed: browserWindow.isDestroyed(),
+            url: browserWindow.webContents.getURL(),
+          })),
+        )
+        .catch(() => null);
+      const surface = await draft.window
+        .evaluate(() => ({
+          menuVisible:
+            document.querySelector("#task-menu") instanceof HTMLElement &&
+            document.querySelector("#task-menu").offsetParent !== null,
+          liveHidden:
+            document.querySelector("#task-menu-live")?.hasAttribute("hidden") ??
+            null,
+          selectedTaskId:
+            document
+              .querySelector("#task-tabs .task-tab.active")
+              ?.getAttribute("data-task-id") ?? null,
+          taskTabs: document.querySelectorAll("#task-tabs .task-tab").length,
+          section: document.documentElement.dataset.section ?? null,
+          scope: document.querySelector("#task-agent-scope")?.value ?? null,
+          subtree: document.querySelector("#task-agent-subtree")?.value ?? null,
+          exclusions:
+            document.querySelector("#task-agent-exclusions")?.value ?? null,
+          objective:
+            document.querySelector("#task-agent-objective")?.value ?? null,
+          shellActions: globalThis.__farolE2EMenuEvents ?? [],
+          layouts: globalThis.__farolE2ELayouts ?? [],
+        }))
+        .catch(() => null);
+      return new Error(
+        `${error.message} · at ${label} · surface ${JSON.stringify(surface)} · windows ${JSON.stringify(windows)}`,
+        { cause: error },
+      );
+    };
+    const clickInDraft = async (selector) => {
+      try {
+        await draft.window.locator(selector).click({ timeout: 20_000 });
+      } catch (error) {
+        throw await draftDump(`click ${selector}`, error);
+      }
+    };
+    const waitInDraft = async (label, predicate, arg) => {
+      try {
+        await draft.window.waitForFunction(predicate, arg);
+      } catch (error) {
+        throw await draftDump(label, error);
+      }
+    };
+
     // The three values, typed once, with real keys rather than a value
     // assignment — this case is about what survives an owner's typing.
     const typeAgentDraft = async (values) => {
@@ -10229,21 +10287,82 @@ n12AgentDraftSegment: {
       objective:
         "Read the approved subfolder and report what its scope allows.",
     };
-    await typeAgentDraft(typed);
+    // The proof only the real DOM can give: the same input node, still
+    // holding the whole word, across an outcome that arrived mid-word. A
+    // field that was destroyed and rebuilt with the right text would pass a
+    // value check and fail this one.
+    await draft.window
+      .locator("#task-agent-scope")
+      .selectOption("subtree", { timeout: 20_000 });
+    await draft.window.waitForFunction(() => {
+      const field = document.querySelector("#task-agent-subtree");
+      return field instanceof HTMLElement && field.offsetParent !== null;
+    });
+    const subtreeNode = await draft.window
+      .locator("#task-agent-subtree")
+      .elementHandle();
+    assert.ok(subtreeNode, "the relative-root field exists before typing");
+    const actionsBeforeTyping = (await shellActions()).length;
+    const layoutsBeforeTyping = await draft.window.evaluate(
+      () => (globalThis.__farolE2ELayouts ?? []).length,
+    );
+    await clickInDraft("#task-agent-subtree");
+    await draft.window.keyboard.type("no");
+    // The background event, caused here rather than waited for. Closing the
+    // sign-in window is what makes production record its outcome, so firing
+    // it in the middle of a word puts the event exactly where the owner's
+    // hands are — instead of hoping one arrives while they type, which is
+    // what the previous version of this wait depended on.
+    await signInPage.close();
+    await waitInDraft(
+      "shell action after closing the sign-in window",
+      (seen) => (globalThis.__farolE2EMenuEvents ?? []).length > seen,
+      actionsBeforeTyping,
+    );
+    // The shell action is not what took the editor; the layout push that
+    // follows it is, about 1.8 s later. Typing the rest of the word as soon
+    // as the action is seen would assert before the destructive push has
+    // arrived, and the row would pass on bytes that still lose the draft.
+    // So wait for the push itself — a real event, not a delay.
+    await waitInDraft(
+      "layout push after the shell action",
+      (seen) => (globalThis.__farolE2ELayouts ?? []).length > seen,
+      layoutsBeforeTyping,
+    );
+    const arrivedLayout = await draft.window.evaluate(
+      () => (globalThis.__farolE2ELayouts ?? []).at(-1) ?? null,
+    );
+    await draft.window.keyboard.type("tes");
+    assert.equal(
+      await subtreeNode.evaluate(
+        (element) => element === document.querySelector("#task-agent-subtree"),
+      ),
+      true,
+      `the field the owner is typing in is the same node after the layout push · ${JSON.stringify(arrivedLayout)}`,
+    );
+    assert.equal(
+      await subtreeNode.evaluate((element) => element.value),
+      typed.subtree,
+      `the word survives a layout push that arrived in the middle of it · ${JSON.stringify(arrivedLayout)}`,
+    );
+    process.stdout.write(
+      `E2E_AGENT_DRAFT layout=${JSON.stringify(arrivedLayout)}\n`,
+    );
+    for (const [selector, text] of [
+      ["#task-agent-exclusions", typed.exclusions],
+      ["#task-agent-objective", typed.objective],
+    ]) {
+      await clickInDraft(selector);
+      await draft.window.keyboard.type(text);
+    }
     assert.deepEqual(
       await shownAgentDraft(),
       { scope: "subtree", ...typed },
       "the three values are in the editor before the background event",
     );
-    const actionsBefore = (await shellActions()).length;
 
-    // The background event itself: this window closing is what makes
-    // production publish an `open-settings` shell action.
-    await signInPage.close();
-    await draft.window.waitForFunction(
-      (seen) => (globalThis.__farolE2EMenuEvents ?? []).length > seen,
-      actionsBefore,
-    );
+    // The window was closed mid-word above; this reads the action it
+    // produced rather than closing anything a second time.
     const backgroundReturn = (await shellActions()).at(-1);
     assert.equal(
       backgroundReturn.action,
