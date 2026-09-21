@@ -470,6 +470,16 @@ export class FarolModelEndpoint {
       return;
     }
     const token = await this.state.currentToken();
+    // Read again on the far side of that await. The check above proved the
+    // endpoint was open when this request arrived; the promise is what a
+    // seal lands inside, and `seal()` promises that nothing authenticates
+    // against this endpoint again -- not that nothing starts to. From here
+    // to the token comparison there is no further await, so a request is
+    // admitted only by a token verified against a still-open endpoint.
+    if (this.sealed) {
+      this.refuseAnonymously(response, 401, "FAROL_MODEL_SEALED");
+      return;
+    }
     if (token === undefined) {
       this.refuseAnonymously(response, 401, "FAROL_MODEL_TOKEN_UNSET");
       return;
