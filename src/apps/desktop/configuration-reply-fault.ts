@@ -26,6 +26,34 @@ export const WORKSPACE_EDIT_REPLY_DELIVERIES_ENV =
 export const WORKSPACE_EDIT_REPLY_FAULT_INVALID =
   "WORKSPACE_EDIT_E2E_REPLY_FAULT_INVALID";
 
+export const WORKSPACE_EDIT_ACK_HOLD_ENV =
+  "FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK";
+
+export const WORKSPACE_EDIT_ACK_HOLD_INVALID =
+  "WORKSPACE_EDIT_E2E_ACK_HOLD_INVALID";
+
+/**
+ * Read one E2E budget under the lane's double gate.
+ *
+ * `null` means the lane is not armed — which is every production build, so
+ * every caller's behaviour is the production one. A value that is set but is
+ * not a count throws `invalidCode`, at the moment the budget is first needed
+ * rather than at startup, so a setting for one seam never turns an unrelated
+ * operation into a failure.
+ */
+export function e2eBudget(
+  env: Readonly<Record<string, string | undefined>>,
+  name: string,
+  invalidCode: string,
+): number | null {
+  if (env.FAROL_NEXT_E2E !== "1") return null;
+  const raw = env[name];
+  if (raw === undefined) return null;
+  const budget = Number(raw);
+  if (!Number.isSafeInteger(budget) || budget < 0) throw new Error(invalidCode);
+  return budget;
+}
+
 const DROPPABLE_COMMAND_KIND = "computer.apply-workspace-edit";
 
 /** The reply that carries a guarded edit's own result back to the window. */
@@ -59,14 +87,13 @@ export function createConfigurationReplyFault(
 ) => ConfigurationReplyDecision {
   let droppableReplies = 0;
   return (commandKind, result) => {
-    if (env.FAROL_NEXT_E2E !== "1") return "deliver";
-    const budget = env[WORKSPACE_EDIT_REPLY_DELIVERIES_ENV];
-    if (budget === undefined) return "deliver";
     if (!isDroppableReply(commandKind, result)) return "deliver";
-    const deliveries = Number(budget);
-    if (!Number.isSafeInteger(deliveries) || deliveries < 0) {
-      throw new Error(WORKSPACE_EDIT_REPLY_FAULT_INVALID);
-    }
+    const deliveries = e2eBudget(
+      env,
+      WORKSPACE_EDIT_REPLY_DELIVERIES_ENV,
+      WORKSPACE_EDIT_REPLY_FAULT_INVALID,
+    );
+    if (deliveries === null) return "deliver";
     droppableReplies += 1;
     return droppableReplies > deliveries ? "drop" : "deliver";
   };

@@ -237,6 +237,10 @@ const bootstrapSchema = z.strictObject({
   windowState: WindowStateSchema,
   chatgptSignInBlocked: chatGptSignInBlockedSchema,
   chatgptSignInOutcome: chatGptSignInOutcomeSchema,
+  // Null in every production build: see main.ts's bootstrap() and
+  // configuration-reply-fault.ts. Nullable rather than optional so a build
+  // that forgot to publish it fails the parse instead of reading as unarmed.
+  e2eWorkspaceEditAckHold: z.number().int().nonnegative().nullable(),
 });
 
 const controlSuccessSchema = z.strictObject({ ok: z.literal(true) });
@@ -2443,9 +2447,27 @@ async function acknowledgeChatGptTaskResult(
   };
 }
 
+// How many acknowledgements this window has been asked to send. Only the
+// E2E hold below reads it; production never arms that hold.
+let workspaceEditAcksAttempted = 0;
+
 // Clears the undelivered-result record of one guarded edit after its outcome
 // was shown.  A lost reply leaves the record, and the edit stays observable.
 async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
+  // E2E only: acknowledgement loss, which is a different scenario from a
+  // lost result. The edit ran, its result reached this window and was
+  // rendered; what never happens is this send, so the product's own durable
+  // pending record stays exactly as it wrote it. Returning before the send
+  // is the whole seam — nothing below is reordered, and no state is
+  // fabricated.
+  const ackHold = bootstrap.e2eWorkspaceEditAckHold;
+  if (ackHold !== null) {
+    workspaceEditAcksAttempted += 1;
+    if (workspaceEditAcksAttempted > ackHold) {
+      console.debug("farol-next-e2e:ack-held", operationId);
+      return;
+    }
+  }
   let transport: ConfigurationTransport;
   try {
     transport = {

@@ -165,7 +165,12 @@ import {
   changesComputerAuthority,
   configurationAdmission,
 } from "./configuration-admission";
-import { createConfigurationReplyFault } from "./configuration-reply-fault";
+import {
+  WORKSPACE_EDIT_ACK_HOLD_ENV,
+  WORKSPACE_EDIT_ACK_HOLD_INVALID,
+  createConfigurationReplyFault,
+  e2eBudget,
+} from "./configuration-reply-fault";
 import {
   createQuitDrain,
   type OwnedCloser,
@@ -782,6 +787,18 @@ function bootstrap() {
     windowState: currentWindowState(),
     chatgptSignInBlocked: chatGptSignInBlocked.current(),
     chatgptSignInOutcome: chatGptSignInOutcome,
+    // The renderer cannot read this process's environment, and one E2E
+    // scenario needs it to: the acknowledgement of a guarded edit is sent
+    // from the renderer, so only the renderer can fail to send it. This is
+    // the one number that seam needs, under the same double gate as the
+    // reply fault, and it is null in every production build because the
+    // lane variable is unset. It carries no authority and names nothing
+    // else. See configuration-reply-fault.ts for the family.
+    e2eWorkspaceEditAckHold: e2eBudget(
+      process.env,
+      WORKSPACE_EDIT_ACK_HOLD_ENV,
+      WORKSPACE_EDIT_ACK_HOLD_INVALID,
+    ),
   };
 }
 
