@@ -25,7 +25,17 @@ async function repositoryWithOneFile(body = "export {};\n") {
   await fs.writeFile(path.join(repository, "vnext/nested/deep.ts"), body);
   git(repository, "init", "-q");
   git(repository, "add", "vnext");
-  git(repository, "-c", "user.email=a@b.c", "-c", "user.name=T", "commit", "-q", "-m", "init");
+  git(
+    repository,
+    "-c",
+    "user.email=a@b.c",
+    "-c",
+    "user.name=T",
+    "commit",
+    "-q",
+    "-m",
+    "init",
+  );
   return repository;
 }
 
@@ -37,7 +47,10 @@ describe("source identity distinguishes a difference from a failure", () => {
   it("names the file when one genuinely differs, instead of only saying dirty", async () => {
     const repository = await repositoryWithOneFile();
     try {
-      await fs.writeFile(path.join(repository, "vnext/main.ts"), "export {}; //\n");
+      await fs.writeFile(
+        path.join(repository, "vnext/main.ts"),
+        "export {}; //\n",
+      );
       const identity = sourceIdentity(repository);
       expect(identity.dirty).toBe(true);
       expect(identity.reasons).toContainEqual(
@@ -59,7 +72,10 @@ describe("source identity distinguishes a difference from a failure", () => {
       } catch (error) {
         thrown = error;
       }
-      expect(thrown, "an unreadable tracked file must refuse, not return").not.toBe(null);
+      expect(
+        thrown,
+        "an unreadable tracked file must refuse, not return",
+      ).not.toBe(null);
       expect(thrown.message).toContain("SOURCE_IDENTITY_UNREADABLE");
       expect(thrown.message).toContain("vnext/nested/deep.ts");
     } finally {
