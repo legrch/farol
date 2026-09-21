@@ -6,6 +6,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
+// One budget for every row that shells out to git over this repository.
+// Vitest's default is 30 s per test, which these rows exceed under load
+// through no fault of their own; 180 s is about twice the slowest run
+// measured so far and is still a real ceiling, not a disabled one.
+const REAL_GIT_ROW_TIMEOUT_MS = 180_000;
+
 import {
   assertReportIdentity,
   buildReportIdentity,
@@ -102,20 +108,28 @@ describe("real-host report identity", () => {
     expect(assertReportIdentity(report)).toBe(report.identity);
   });
 
-  it("S35-TA-12 derives the identity through the same helper the ordinary lanes use", () => {
-    const built = buildReportIdentity({
-      repositoryRoot: path.resolve(import.meta.dirname, "../../.."),
-      loader: LOADER,
-      hosts: hostsOf(),
-      hostlessPhases: ["app-host-discovery"],
-      nodeVersion: SUPPORTED_NODE_VERSIONS[0],
-    });
-    expect(built.hostlessPhases).toEqual(["app-host-discovery"]);
-    expect(built.sourceCommit).toMatch(/^[0-9a-f]{40}$/u);
-    expect(built.sourceTreeDigest).toMatch(/^[0-9a-f]{64}$/u);
-    expect(built.loader).toEqual(LOADER);
-    expect(built.hosts.map((h) => h.binary)).toEqual([LOCATED, DISCOVERED]);
-  });
+  // Spawns real git over the whole repository: measured 8.4-9.8 s alone
+  // on this Mac and 32-79 s inside a loaded full suite, against vitest's
+  // 30 s default. The budget is this row's runtime, not its oracle: the
+  // work, the assertions and the repository it reads are unchanged.
+  it(
+    "S35-TA-12 derives the identity through the same helper the ordinary lanes use",
+    () => {
+      const built = buildReportIdentity({
+        repositoryRoot: path.resolve(import.meta.dirname, "../../.."),
+        loader: LOADER,
+        hosts: hostsOf(),
+        hostlessPhases: ["app-host-discovery"],
+        nodeVersion: SUPPORTED_NODE_VERSIONS[0],
+      });
+      expect(built.hostlessPhases).toEqual(["app-host-discovery"]);
+      expect(built.sourceCommit).toMatch(/^[0-9a-f]{40}$/u);
+      expect(built.sourceTreeDigest).toMatch(/^[0-9a-f]{64}$/u);
+      expect(built.loader).toEqual(LOADER);
+      expect(built.hosts.map((h) => h.binary)).toEqual([LOCATED, DISCOVERED]);
+    },
+    REAL_GIT_ROW_TIMEOUT_MS,
+  );
 
   // THE TWO ROWS THIS PACKET EXISTS FOR.
   // S35-TA-13. THE FIXTURE I SHOULD HAVE WRITTEN. Every row above gives
@@ -430,15 +444,23 @@ describe("identity built from the journey's own run records", () => {
     };
   }
 
-  it("S35-TA-14 the real 0f850a7f record shape builds and validates", () => {
-    const identity = identityFromRunRecords(records());
-    expect(identity.hosts.map((h) => h.binary)).toEqual([SHIM, DISCOVERED]);
-    expect(identity.hosts.map((h) => h.version)).toEqual([
-      "codex-cli 0.153.4",
-      "codex-cli 0.155.0-alpha.9.2",
-    ]);
-    expect(identity.hostlessPhases).toEqual(["app-host-discovery"]);
-  });
+  // Spawns real git over the whole repository: measured 8.4-9.8 s alone
+  // on this Mac and 32-79 s inside a loaded full suite, against vitest's
+  // 30 s default. The budget is this row's runtime, not its oracle: the
+  // work, the assertions and the repository it reads are unchanged.
+  it(
+    "S35-TA-14 the real 0f850a7f record shape builds and validates",
+    () => {
+      const identity = identityFromRunRecords(records());
+      expect(identity.hosts.map((h) => h.binary)).toEqual([SHIM, DISCOVERED]);
+      expect(identity.hosts.map((h) => h.version)).toEqual([
+        "codex-cli 0.153.4",
+        "codex-cli 0.155.0-alpha.9.2",
+      ]);
+      expect(identity.hostlessPhases).toEqual(["app-host-discovery"]);
+    },
+    REAL_GIT_ROW_TIMEOUT_MS,
+  );
 
   // S35-TA-15 (U2b). A path is not a binding. The descriptor named a bundle
   // and nothing checked that the bytes at that path were the bytes the run
@@ -472,26 +494,42 @@ describe("identity built from the journey's own run records", () => {
     );
   });
 
-  it("S35-TA-14 refuses a phase recorded host-less that also ran a binary, instead of normalising it away", () => {
-    // The records contradict themselves. The old inline filter silently
-    // dropped the host-less entry and reported a clean binary claim.
-    expect(() =>
-      identityFromRunRecords(
-        records({
-          hostRuns: [
-            { phase: "env-key-overrides", binary: SHIM },
-            { phase: "app-host-discovery", binary: DISCOVERED },
-          ],
-        }),
-      ),
-    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS");
-  });
+  // Spawns real git over the whole repository: measured 8.4-9.8 s alone
+  // on this Mac and 32-79 s inside a loaded full suite, against vitest's
+  // 30 s default. The budget is this row's runtime, not its oracle: the
+  // work, the assertions and the repository it reads are unchanged.
+  it(
+    "S35-TA-14 refuses a phase recorded host-less that also ran a binary, instead of normalising it away",
+    () => {
+      // The records contradict themselves. The old inline filter silently
+      // dropped the host-less entry and reported a clean binary claim.
+      expect(() =>
+        identityFromRunRecords(
+          records({
+            hostRuns: [
+              { phase: "env-key-overrides", binary: SHIM },
+              { phase: "app-host-discovery", binary: DISCOVERED },
+            ],
+          }),
+        ),
+      ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_AMBIGUOUS");
+    },
+    REAL_GIT_ROW_TIMEOUT_MS,
+  );
 
-  it("S35-TA-14 refuses a phase that ran nothing and was never recorded host-less", () => {
-    expect(() =>
-      identityFromRunRecords(records({ hostlessPhases: [] })),
-    ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
-  });
+  // Spawns real git over the whole repository: measured 8.4-9.8 s alone
+  // on this Mac and 32-79 s inside a loaded full suite, against vitest's
+  // 30 s default. The budget is this row's runtime, not its oracle: the
+  // work, the assertions and the repository it reads are unchanged.
+  it(
+    "S35-TA-14 refuses a phase that ran nothing and was never recorded host-less",
+    () => {
+      expect(() =>
+        identityFromRunRecords(records({ hostlessPhases: [] })),
+      ).toThrow("FAROL_MODEL_E2E_REPORT_PHASE_HOST_UNKNOWN");
+    },
+    REAL_GIT_ROW_TIMEOUT_MS,
+  );
 
   it("S35-TA-14 a binary with no recorded version is refused rather than given the wrong one", () => {
     // Before per-binary versions existed this fell back to the located
