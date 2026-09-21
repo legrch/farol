@@ -127,6 +127,7 @@ export const SELECTABLE_SEGMENTS = Object.freeze([
     cases: ["n09-attach"],
   }),
   Object.freeze({ name: "n11-agent-scope", cases: ["n11-agent"] }),
+  Object.freeze({ name: "n12-agent-draft", cases: ["n12-agent"] }),
   Object.freeze({ name: "n10-computer-panel", cases: ["n10-computer"] }),
 ]);
 

@@ -9884,6 +9884,332 @@ function segmentMark(name, phase) {
   );
 }
 
+// N12 — the Agent editor under a background return, an owner's own close,
+// and an authority change. U1's acceptance, and deliberately the opposite
+// shape to N11's: every value here is typed ONCE with real keys, nothing is
+// re-typed, no menu is reopened until something succeeds, and a missed
+// assertion fails the case instead of becoming an observation.
+//
+// The background event is the product's own. `recordChatGptSignInOutcome`
+// publishes an `open-settings` shell action when a managed sign-in window
+// reports its outcome (main.ts), and the renderer's handler navigates the
+// shell for it — which is what used to take the task menu away from under
+// an owner mid-draft. So the case opens a real sign-in window through the
+// real control, goes back and types, and then closes that window: the
+// action that arrives is published by production code on a real window
+// close, not synthesised here and not sent over a test IPC.
+//
+// LIMIT, stated because it is the part this case cannot yet prove: until
+// `ShellActionSchema` carries `source` and `authWindowGeneration`, the run
+// can show that a background return arrived and that the editor survived
+// it, but not which of the publishers emitted it. The recorder below keeps
+// whatever provenance the payload carries, so the assertion tightens the
+// day those fields exist; it does not pretend to have them now.
+n12AgentDraftSegment: {
+  if (!segmentSelected("n12-agent-draft")) break n12AgentDraftSegment;
+  segmentMark("n12-agent-draft", "start");
+  const draft = await launch([], "hidden", "ordinary");
+  try {
+    await draft.window.evaluate(() => {
+      const observed = [];
+      globalThis.__farolE2EMenuEvents = observed;
+      window.farolNext.onShellAction((value) => {
+        observed.push({
+          at: Date.now(),
+          action: value?.action ?? null,
+          // Provenance, if this build's contract carries any. Absent today.
+          source: value?.source ?? null,
+          authWindowGeneration: value?.authWindowGeneration ?? null,
+          eventId: value?.eventId ?? null,
+        });
+      });
+    });
+    const shellActions = () =>
+      draft.window.evaluate(() => globalThis.__farolE2EMenuEvents ?? []);
+
+    const subfolder = path.join(draft.workspaceRoot, "notes");
+    await fs.mkdir(subfolder, { mode: 0o700 });
+    for (const [name, body] of [
+      ["keep.md", "Farol Next agent subfolder fixture\n"],
+      ["scope.md", "Farol Next agent exclusion fixture\n"],
+    ]) {
+      await fs.writeFile(path.join(subfolder, name), body, { mode: 0o600 });
+    }
+
+    await completeSetup(draft, false, true, true, false);
+    const toSettings = async () => {
+      await draft.window.locator('[data-section="settings"]').click();
+      await draft.window.waitForFunction(
+        () => document.documentElement.dataset.section === "settings",
+      );
+    };
+    const toBrowser = async () => {
+      await draft.window
+        .locator('.nav-item[data-section="browser"]')
+        .click({ timeout: 20_000 });
+      await draft.window.waitForFunction(
+        () => document.documentElement.dataset.section === "browser",
+      );
+    };
+    const settingsFeedback = (pattern) =>
+      draft.window.waitForFunction(
+        (source) =>
+          new RegExp(source, "u").test(
+            document.querySelector("#settings-feedback")?.textContent ?? "",
+          ),
+        pattern.source,
+      );
+    const hostRow = draft.window
+      .locator("#connection-readiness .connection-row")
+      .filter({ hasText: "Native hosts · " });
+
+    await toSettings();
+    await hostRow
+      .getByRole("button", { name: "Choose…", exact: true })
+      .click({ timeout: 20_000 });
+    await settingsFeedback(/^Codex \S+ contract verified/u);
+    await hostRow
+      .getByRole("button", { name: "Run live check", exact: true })
+      .click({ timeout: 20_000 });
+    await settingsFeedback(
+      /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,
+    );
+    await hostRow
+      .getByRole("button", { name: "Verify Agent", exact: true })
+      .click({ timeout: 20_000 });
+    await draft.window.waitForFunction(() =>
+      [...document.querySelectorAll("#connection-readiness button")].some(
+        (button) => button.textContent === "Agent verified",
+      ),
+    );
+
+    // The three values, typed once, with real keys rather than a value
+    // assignment — this case is about what survives an owner's typing.
+    const typeAgentDraft = async (values) => {
+      await draft.window
+        .locator("#task-agent-scope")
+        .selectOption("subtree", { timeout: 20_000 });
+      await draft.window.waitForFunction(() => {
+        const field = document.querySelector("#task-agent-subtree");
+        return field instanceof HTMLElement && field.offsetParent !== null;
+      });
+      for (const [selector, text] of [
+        ["#task-agent-subtree", values.subtree],
+        ["#task-agent-exclusions", values.exclusions],
+        ["#task-agent-objective", values.objective],
+      ]) {
+        await draft.window.locator(selector).click({ timeout: 20_000 });
+        await draft.window.keyboard.type(text);
+      }
+    };
+    const shownAgentDraft = () =>
+      draft.window.evaluate(() => ({
+        scope: document.querySelector("#task-agent-scope")?.value ?? null,
+        subtree: document.querySelector("#task-agent-subtree")?.value ?? null,
+        exclusions:
+          document.querySelector("#task-agent-exclusions")?.value ?? null,
+        objective:
+          document.querySelector("#task-agent-objective")?.value ?? null,
+      }));
+    const newDraftTask = async (expected) => {
+      await draft.window.locator("#new-task").click({ timeout: 20_000 });
+      await draft.window.waitForFunction(
+        (count) =>
+          document.querySelectorAll("#task-tabs .task-tab").length === count,
+        expected,
+      );
+      const state = await draft.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      return state.tasks.at(-1).taskId;
+    };
+    const openDraftMenu = async () => {
+      await draft.window
+        .locator("#task-menu-button")
+        .click({ timeout: 20_000 });
+      await draft.window
+        .locator("#task-menu")
+        .waitFor({ state: "visible", timeout: 20_000 });
+    };
+    const agentInputRoot = path.join(
+      draft.userData,
+      "farol-next-state",
+      "product-agent-inputs",
+    );
+    const deliveredEnvelopes = async () =>
+      fs
+        .readdir(agentInputRoot)
+        .then((entries) => entries.filter((entry) => entry.endsWith(".json")))
+        .catch(() => []);
+
+    // --- A background return must not take the editor away -----------------
+    // A real sign-in window, opened through the real control and left open.
+    const signInWindow = draft.application.waitForEvent("window", {
+      timeout: 20_000,
+    });
+    await draft.window
+      .locator("#connection-readiness .connection-row")
+      .filter({ hasText: "ChatGPT · " })
+      .getByRole("button", { name: "Open sign-in…", exact: true })
+      .click({ timeout: 20_000 });
+    const signInPage = await signInWindow;
+    await signInPage.waitForURL(draft.chatGptFixture.url);
+
+    await toBrowser();
+    await newDraftTask(1);
+    await openDraftMenu();
+    const typed = {
+      subtree: "notes",
+      exclusions: "notes/scope.md",
+      objective:
+        "Read the approved subfolder and report what its scope allows.",
+    };
+    await typeAgentDraft(typed);
+    assert.deepEqual(
+      await shownAgentDraft(),
+      { scope: "subtree", ...typed },
+      "the three values are in the editor before the background event",
+    );
+    const actionsBefore = (await shellActions()).length;
+
+    // The background event itself: this window closing is what makes
+    // production publish an `open-settings` shell action.
+    await signInPage.close();
+    await draft.window.waitForFunction(
+      (seen) => (globalThis.__farolE2EMenuEvents ?? []).length > seen,
+      actionsBefore,
+    );
+    const backgroundReturn = (await shellActions()).at(-1);
+    assert.equal(
+      backgroundReturn.action,
+      "open-settings",
+      `the closed sign-in window published a background return · ${JSON.stringify(backgroundReturn)}`,
+    );
+
+    // The editor is still there, still usable, and still the owner's text.
+    assert.equal(
+      await draft.window.locator("#task-menu").isVisible(),
+      true,
+      "a background return does not take the editor away",
+    );
+    assert.deepEqual(
+      await shownAgentDraft(),
+      { scope: "subtree", ...typed },
+      "a background return does not discard what the owner typed",
+    );
+    assert.equal(
+      await draft.window.locator("#task-menu-agent").isDisabled(),
+      false,
+      "the editor is usable, not merely present",
+    );
+    process.stdout.write(
+      `E2E_AGENT_DRAFT background=${JSON.stringify(backgroundReturn)}\n`,
+    );
+    cases.push("n12-agent-draft-survives-background-auth-window-return");
+
+    // Submitted once, and the wire shape is the one N11 pinned.
+    await draft.window.locator("#task-menu-agent").click({ timeout: 20_000 });
+    await draft.window.waitForFunction(
+      () =>
+        document.querySelector("#task-menu-note")?.textContent ===
+        "Agent assignment admitted.",
+    );
+    const delivered = await deliveredEnvelopes();
+    assert.equal(delivered.length, 1, "one submission, one envelope");
+    const envelope = JSON.parse(
+      await fs.readFile(path.join(agentInputRoot, delivered[0]), "utf8"),
+    );
+    assert.equal(envelope.schema, 2);
+    assert.deepEqual(envelope.input.scope, {
+      mode: "subtree",
+      root: subfolder,
+    });
+    assert.deepEqual(envelope.input.excludedPaths, [
+      path.join(subfolder, "scope.md"),
+    ]);
+    cases.push("n12-agent-draft-survives-to-a-single-submission");
+
+    // --- The owner's own close still clears --------------------------------
+    await draft.window.keyboard.press("Escape");
+    await draft.window
+      .locator("#task-menu")
+      .waitFor({ state: "hidden", timeout: 20_000 });
+    await newDraftTask(2);
+    await openDraftMenu();
+    await typeAgentDraft({
+      subtree: "notes",
+      exclusions: "notes/scope.md",
+      objective: "This draft is dismissed by its owner, not by anything else.",
+    });
+    await draft.window.keyboard.press("Escape");
+    await draft.window
+      .locator("#task-menu")
+      .waitFor({ state: "hidden", timeout: 20_000 });
+    await openDraftMenu();
+    assert.deepEqual(
+      await shownAgentDraft(),
+      { scope: "workspace", subtree: "", exclusions: "", objective: "" },
+      "the owner dismissing the menu drops the draft, as documented",
+    );
+    cases.push("n12-agent-draft-cleared-by-owner-close");
+
+    // --- An authority change refuses the submission, visibly ---------------
+    // The approval the Agent runs under is removed through the Computer
+    // panel, by the owner, exactly as an owner would. What this asserts is
+    // the refusal and that nothing is delivered; it does not claim the
+    // revocation arrived while the menu was open.
+    await draft.window.keyboard.press("Escape");
+    await draft.window
+      .locator("#task-menu")
+      .waitFor({ state: "hidden", timeout: 20_000 });
+    await draft.window.locator('[data-section="computer"]').click();
+    await draft.window.locator('[data-panel="computer"].active').waitFor();
+    await draft.window
+      .locator("#computer-workspaces .workspace-card")
+      .filter({ hasText: "approved-workspace" })
+      .getByRole("button", { name: "Remove", exact: true })
+      .click({ timeout: 20_000 });
+    await draft.window
+      .locator("#computer-feedback")
+      .getByText("approved-workspace approval removed.", { exact: true })
+      .waitFor();
+    await toBrowser();
+    await openDraftMenu();
+    const refusedDraft = await draft.window.evaluate(() => ({
+      workspace: document.querySelector("#task-agent-workspace")?.value ?? null,
+      workspaceLabel:
+        document.querySelector("#task-agent-workspace")?.textContent ?? null,
+      disabled:
+        document.querySelector("#task-menu-agent")?.hasAttribute("disabled") ??
+        null,
+      reason: document.querySelector("#task-menu-agent")?.getAttribute("title"),
+    }));
+    assert.equal(
+      refusedDraft.disabled,
+      true,
+      `a removed approval refuses the submission · ${JSON.stringify(refusedDraft)}`,
+    );
+    assert.ok(
+      typeof refusedDraft.reason === "string" && refusedDraft.reason.length > 0,
+      `the refusal names itself rather than being merely grey · ${JSON.stringify(refusedDraft)}`,
+    );
+    assert.equal(
+      refusedDraft.workspaceLabel,
+      "No verified workspace",
+      JSON.stringify(refusedDraft),
+    );
+    assert.deepEqual(
+      await deliveredEnvelopes(),
+      delivered,
+      "a refused submission delivers nothing further",
+    );
+    cases.push("n12-agent-draft-refused-after-authority-change");
+  } finally {
+    await close(draft);
+    segmentMark("n12-agent-draft", "end");
+  }
+}
+
 // N11 — the Agent's scope controls, and what the native host was actually
 // handed. The suite proves an `exact` assignment and the untouched default,
 // whose wire form is `{mode: "subtree", root: workspaceRoot}` — the default,
