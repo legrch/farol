@@ -196,6 +196,7 @@ import {
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
 import { TaskMutationGate, underTaskMutation } from "./task-mutation-gate";
 import { productAgentOpenRefusal } from "./product-agent-open-refusal";
+import { activateAgentCheckSession } from "./codex-agent-check-admission";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
@@ -4032,7 +4033,17 @@ async function configureAdmittedProduct(
       let closeSession = false;
       try {
         let settings = snapshot.settings;
-        if (!session) {
+        // Bound before the closure: the narrowing at the top of this
+        // function does not survive into one.
+        const settingsService = configuration;
+        // The reservation covers reading the authority and binding it to the
+        // session that carries it. It closes as soon as that session is
+        // active, on both paths: the poll below binds nothing and can run
+        // for hundreds of cycles.
+        const activation = await activateAgentCheckSession<
+          ActiveCodexAgentCheck,
+          ProductConfigurationResult
+        >(agentAdmission, session, async () => {
           const probe = await probeCodexHost({
             executablePath: selected.executablePath,
             scratchRoot: codexHostProbeRoot(),
@@ -4042,7 +4053,7 @@ async function configureAdmittedProduct(
             probe.schemaSha256 === selected.schemaSha256 &&
             probe.version === selected.version &&
             probe.protocol === selected.protocol;
-          const recordedContract = await configuration.recordCodexHost({
+          const recordedContract = await settingsService.recordCodexHost({
             executablePath: probe.executablePath,
             executableSha256: probe.executableSha256,
             version: probe.version,
@@ -4051,13 +4062,22 @@ async function configureAdmittedProduct(
             buildId: buildIdentity.buildId,
           });
           if (!recordedContract.ok) {
-            return ProductConfigurationResultSchema.parse(recordedContract);
+            return {
+              active: false,
+              refusal: ProductConfigurationResultSchema.parse(recordedContract),
+            };
           }
           if (!sameContract) {
-            return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
+            return {
+              active: false,
+              refusal: configurationFailure("CODEX_HOST_RECHECK_REQUIRED"),
+            };
           }
           if (recordedContract.snapshot.status !== "ready") {
-            return configurationFailure("SETTINGS_UNAVAILABLE");
+            return {
+              active: false,
+              refusal: configurationFailure("SETTINGS_UNAVAILABLE"),
+            };
           }
           settings = recordedContract.snapshot.settings;
           const runtimeRoot = await codexHostRuntimeRoot();
@@ -4090,15 +4110,17 @@ async function configureAdmittedProduct(
               Date.now(),
             ),
           );
-          session = {
+          const started: ActiveCodexAgentCheck = {
             key: checkKey,
             client,
             host,
             boundedRunningObserved: false,
           };
-          activeCodexAgentCheck = session;
-          agentAdmission.release();
-        }
+          activeCodexAgentCheck = started;
+          return { active: true, session: started };
+        });
+        if (!activation.active) return activation.refusal;
+        session = activation.session;
 
         const check = await runCodexNativeAgentCheck({
           host: session.host,
