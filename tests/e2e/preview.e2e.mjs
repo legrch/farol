@@ -12292,6 +12292,25 @@ n10ComputerPanelSegment: {
         null,
         "an observed outcome clears the undelivered-result record exactly once",
       );
+      // Disk is not yet the service's answer. `product-configuration.ts`
+      // commits by `save(candidate)` then `load()` then assigning the
+      // read-back, so there is a real window in which the FILE already shows
+      // `pendingEdit: null` while the in-memory snapshot still holds the
+      // record. Measured: a packaged app is slow enough that an IPC observe
+      // can land inside it, and the service then redelivers the known
+      // receipt (ok, no second mutation) instead of refusing — which is
+      // correct, and which the refusal below must not race. Disk-before-
+      // memory is the designed read-back, not a lost or double clear, so
+      // this waits for the service's own truth before asking it to refuse.
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const snapshot = await droppedReply.window.evaluate(() =>
+          window.farolNext.bootstrap(),
+        );
+        if (snapshot.configuration.settings.computer.pendingEdit === null) {
+          break;
+        }
+        await droppedReply.window.waitForTimeout(50);
+      }
       const afterAcknowledgement = await droppedReply.window.evaluate(
         (operationId) =>
           window.farolNext.configure({
@@ -12572,6 +12591,25 @@ n10ComputerPanelSegment: {
         null,
         "the acknowledgement that finally landed clears the record exactly once",
       );
+      // Disk is not yet the service's answer. `product-configuration.ts`
+      // commits by `save(candidate)` then `load()` then assigning the
+      // read-back, so there is a real window in which the FILE already shows
+      // `pendingEdit: null` while the in-memory snapshot still holds the
+      // record. Measured: a packaged app is slow enough that an IPC observe
+      // can land inside it, and the service then redelivers the known
+      // receipt (ok, no second mutation) instead of refusing — which is
+      // correct, and which the refusal below must not race. Disk-before-
+      // memory is the designed read-back, not a lost or double clear, so
+      // this waits for the service's own truth before asking it to refuse.
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const snapshot = await heldAck.window.evaluate(() =>
+          window.farolNext.bootstrap(),
+        );
+        if (snapshot.configuration.settings.computer.pendingEdit === null) {
+          break;
+        }
+        await heldAck.window.waitForTimeout(50);
+      }
       const heldAgain = await heldAck.window.evaluate(
         (operationId) =>
           window.farolNext.configure({
