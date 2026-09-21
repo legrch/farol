@@ -6527,6 +6527,13 @@ demoMainSegment: try {
     );
   }
   await completeSetup(normal, true, true, true, true, "demo");
+  // Activation is a property of the asking process, so the two top-level
+  // second-launch probes cannot be sampled after the fact — they run before
+  // this instance exists and each launch is its own process. What can be
+  // bracketed is this instance's own lifetime, and that is what these three
+  // samples do: after Setup, after the workspace stretch, after the support
+  // export, with the mismatched-build reading already in place.
+  await markActivation(normal.application, "after demo Setup completed");
   // Setup's last message is not lost with the dialog: it moves to Settings
   // (finishing Setup opens Browser, so the Settings panel is not shown yet).
   await normal.window
@@ -7456,6 +7463,7 @@ demoMainSegment: try {
     `Git status output ${JSON.stringify(changedStatusOutput)}`,
   );
   cases.push("workspace-command-observes-real-change");
+  await markActivation(normal.application, "after the workspace stretch");
   cases.push(
     "workspace-write-access-explicit",
     "workspace-guarded-edit-atomic",
@@ -7530,6 +7538,7 @@ demoMainSegment: try {
     "support-export-content-free",
     "support-export-native-agent-state-current",
   );
+  await markActivation(normal.application, "after the support export");
   await normal.window.keyboard.press("Meta+3");
   await normal.window.locator('[data-panel="activity"].active').waitFor();
   await normal.window
