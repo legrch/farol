@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -11,6 +12,8 @@ import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { candidatePaths } from "../../tooling/candidate-contract.mjs";
 import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
+import { processTable } from "../../tooling/evidence-observe.mjs";
+import { createPhaseRecorder } from "./await-phases.mjs";
 import {
   blockingObservations as blockingObservationsOf,
   missingCases,
@@ -312,9 +315,33 @@ const predecessor = twoGenerationState
   : null;
 // Every run writes into its own immutable attempt directory under the lane
 // root; a later or crashed run never removes an earlier run's evidence.
+// Who else is watching this lane when it starts. An effect observer is a
+// separate process the contour starts, so the runner cannot be told about
+// it — but it can look, once, and record what it saw. An observer that
+// exits 143 without a receipt is then attributable to a pid that was
+// demonstrably attached at this moment, instead of to an assumption.
+function attachedObservers() {
+  try {
+    return processTable()
+      .split("\n")
+      .filter((line) => /evidence-observe\.mjs/u.test(line))
+      .map((line) => {
+        const match = /^\s*(\d+)\s+(.*)$/u.exec(line);
+        return {
+          pid: match ? Number(match[1]) : null,
+          command: (match ? match[2] : line).slice(0, 240),
+        };
+      });
+  } catch (error) {
+    return [{ pid: null, command: `UNREADABLE:${error?.code ?? "error"}` }];
+  }
+}
+const observersAtStart = attachedObservers();
 const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
   lane: evidenceLane,
   input: {
+    runner: { pid: process.pid, ppid: process.ppid },
+    observers: observersAtStart,
     sourceCommit: artifact.sourceCommit,
     sourceTreeDigest: artifact.sourceTreeDigest,
     sourceDirty: artifact.sourceDirty,
@@ -345,6 +372,34 @@ const evidenceAttempt = await openEvidenceAttempt(evidenceLaneRoot, {
 });
 evidenceAttempt.installProcessHandlers();
 const evidenceRoot = evidenceAttempt.directory;
+
+// One budget THROUGH each awaited boundary of an instance's lifecycle, and
+// one line per boundary in the lane's own stdout and in the attempt's
+// phase.log. See tests/e2e/await-phases.mjs for why a deadline read after
+// the await returns is not the same thing.
+//
+// These budgets are an outer bound, never a replacement: `electron.launch`
+// and `firstWindow` keep their own 15 s timeouts, every Playwright wait
+// keeps its own, and `repeatLaunch` keeps its SIGKILL deadline. Each budget
+// is far above the slowest value measured on a healthy run of this machine
+// (launch and restart boundaries under 2 s, the whole of completeSetup
+// under 4 s), so a budget that fires means an await that was never going to
+// return.
+const LAUNCH_PHASE_BUDGET_MS = 60_000;
+const SETUP_PHASE_BUDGET_MS = 120_000;
+const CLOSE_PHASE_BUDGET_MS = 60_000;
+const phaseLogPath = path.join(evidenceRoot, "phase.log");
+const phases = createPhaseRecorder({
+  sink: (line) => {
+    process.stdout.write(`${line}\n`);
+    fsSync.appendFileSync(phaseLogPath, `${line}\n`, { mode: 0o600 });
+  },
+});
+evidenceAttempt.trackPhases(() => phases.snapshot());
+phases.note(
+  "attempt.observers",
+  JSON.stringify({ attempt: evidenceAttempt.attemptId, observersAtStart }),
+);
 
 const cases = [];
 const skippedCases = [];
@@ -1714,34 +1769,60 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
     TMPDIR: os.tmpdir(),
   };
-  const application = await electron.launch({
-    // Only the two-generation lane names another generation's executable.
-    executablePath: options.executable ?? executable,
-    args: launchArgs,
-    env: launchEnvironment,
-    timeout: 15_000,
-  });
-  await markActivation(
-    application,
-    `${mode}/${windowMode} before first window`,
+  // Each awaited boundary of this instance's start, named with the instance
+  // it belongs to. A stall inside any of them now rejects with its own name
+  // instead of leaving the lane silent.
+  const label = `launch[${mode}/${windowMode}]`;
+  const application = await phases.step(
+    `${label}.electron.launch`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () =>
+      electron.launch({
+        // Only the two-generation lane names another generation's executable.
+        executablePath: options.executable ?? executable,
+        args: launchArgs,
+        env: launchEnvironment,
+        timeout: 15_000,
+      }),
   );
-  const window = await application.firstWindow({ timeout: 15_000 });
-  await markActivation(application, `${mode}/${windowMode} at first window`);
-  await window.locator("#sidebar").waitFor({ state: "visible" });
-  await window
-    .locator('#runtime-pill[data-state="ready"]')
-    .waitFor({ state: "visible" });
+  await phases.step(
+    `${label}.activation.beforeFirstWindow`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () =>
+      markActivation(application, `${mode}/${windowMode} before first window`),
+  );
+  const window = await phases.step(
+    `${label}.firstWindow`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () => application.firstWindow({ timeout: 15_000 }),
+  );
+  await phases.step(
+    `${label}.activation.atFirstWindow`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () => markActivation(application, `${mode}/${windowMode} at first window`),
+  );
+  await phases.step(`${label}.sidebarVisible`, LAUNCH_PHASE_BUDGET_MS, () =>
+    window.locator("#sidebar").waitFor({ state: "visible" }),
+  );
+  await phases.step(`${label}.runtimeReady`, LAUNCH_PHASE_BUDGET_MS, () =>
+    window
+      .locator('#runtime-pill[data-state="ready"]')
+      .waitFor({ state: "visible" }),
+  );
   if (mode === "demo") {
-    await window
-      .locator("#task-tabs .task-tab")
-      .first()
-      .waitFor({ state: "visible" });
+    await phases.step(`${label}.firstTaskTab`, LAUNCH_PHASE_BUDGET_MS, () =>
+      window
+        .locator("#task-tabs .task-tab")
+        .first()
+        .waitFor({ state: "visible" }),
+    );
   }
   const expectedTaskViewCount = mode === "demo" ? 2 : 0;
-  const presentation = await waitForWindowPresentation(
-    application,
-    windowMode,
-    expectedTaskViewCount,
+  const presentation = await phases.step(
+    `${label}.presentation`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () =>
+      waitForWindowPresentation(application, windowMode, expectedTaskViewCount),
   );
   return {
     application,
@@ -1929,7 +2010,13 @@ async function repeatLaunch(instance) {
   }, SECOND_LAUNCH_DEADLINE_MS);
   let exit;
   try {
-    exit = await once(secondary, "exit");
+    // The SIGKILL deadline above is unchanged and still fires first; this
+    // budget only covers the case where the exit event itself never lands.
+    exit = await phases.step(
+      "repeatLaunch.secondaryExit",
+      LAUNCH_PHASE_BUDGET_MS,
+      () => once(secondary, "exit"),
+    );
   } finally {
     clearTimeout(deadline);
   }
@@ -2206,12 +2293,16 @@ async function ifApplicationLive(instance, stage, read) {
 
 async function close(instance, options = {}) {
   const removeHome = options.removeHome ?? true;
+  const label = `close[${instance.windowMode ?? "unknown"}]`;
   let provedQuit = true;
   if (instance.windowMode) {
-    const inspected = await ifApplicationLive(
-      instance,
-      "window-presentation",
-      () => inspectWindowPresentation(instance.application),
+    const inspected = await phases.step(
+      `${label}.windowPresentation`,
+      CLOSE_PHASE_BUDGET_MS,
+      () =>
+        ifApplicationLive(instance, "window-presentation", () =>
+          inspectWindowPresentation(instance.application),
+        ),
     );
     if (inspected === null) {
       provedQuit = false;
@@ -2225,21 +2316,29 @@ async function close(instance, options = {}) {
     }
   }
   const mainPid = instance.application.process().pid;
-  const metrics = await ifApplicationLive(instance, "utility-metrics", () =>
-    instance.application.evaluate(({ app }) =>
-      app
-        .getAppMetrics()
-        .filter(
-          (metric) =>
-            metric.type === "Utility" && metric.name === "Farol Next Runtime",
-        )
-        .map((metric) => metric.pid),
-    ),
+  const metrics = await phases.step(
+    `${label}.utilityMetrics`,
+    CLOSE_PHASE_BUDGET_MS,
+    () =>
+      ifApplicationLive(instance, "utility-metrics", () =>
+        instance.application.evaluate(({ app }) =>
+          app
+            .getAppMetrics()
+            .filter(
+              (metric) =>
+                metric.type === "Utility" &&
+                metric.name === "Farol Next Runtime",
+            )
+            .map((metric) => metric.pid),
+        ),
+      ),
   );
   if (metrics === null) provedQuit = false;
   const utilityPids = metrics?.value ?? [];
-  await ifApplicationLive(instance, "application-close", () =>
-    instance.application.close(),
+  await phases.step(`${label}.applicationClose`, CLOSE_PHASE_BUDGET_MS, () =>
+    ifApplicationLive(instance, "application-close", () =>
+      instance.application.close(),
+    ),
   );
   const exactPids = [mainPid, ...utilityPids].filter(
     (pid) => Number.isSafeInteger(pid) && pid > 0,
@@ -2277,27 +2376,46 @@ async function close(instance, options = {}) {
 }
 
 async function restart(instance) {
+  const label = `restart[${instance.windowMode}]`;
   await close(instance, { removeHome: false });
-  instance.application = await electron.launch({
-    executablePath: executable,
-    args: instance.launchArgs,
-    env: instance.launchEnvironment,
-    timeout: 15_000,
-  });
-  instance.window = await instance.application.firstWindow({ timeout: 15_000 });
-  await instance.window.locator("#sidebar").waitFor({ state: "visible" });
-  const bootstrap = await instance.window.evaluate(() =>
-    window.farolNext.bootstrap(),
+  instance.application = await phases.step(
+    `${label}.electron.launch`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () =>
+      electron.launch({
+        executablePath: executable,
+        args: instance.launchArgs,
+        env: instance.launchEnvironment,
+        timeout: 15_000,
+      }),
+  );
+  instance.window = await phases.step(
+    `${label}.firstWindow`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () => instance.application.firstWindow({ timeout: 15_000 }),
+  );
+  await phases.step(`${label}.sidebarVisible`, LAUNCH_PHASE_BUDGET_MS, () =>
+    instance.window.locator("#sidebar").waitFor({ state: "visible" }),
+  );
+  const bootstrap = await phases.step(
+    `${label}.bootstrap`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () => instance.window.evaluate(() => window.farolNext.bootstrap()),
   );
   const expectedTaskViewCount = bootstrap.demoMode
     ? instance.expectedTaskViewCount
     : bootstrap.tasks.length > 0
       ? 1
       : 0;
-  instance.presentation = await waitForWindowPresentation(
-    instance.application,
-    instance.windowMode,
-    expectedTaskViewCount,
+  instance.presentation = await phases.step(
+    `${label}.presentation`,
+    LAUNCH_PHASE_BUDGET_MS,
+    () =>
+      waitForWindowPresentation(
+        instance.application,
+        instance.windowMode,
+        expectedTaskViewCount,
+      ),
   );
 }
 
@@ -3283,6 +3401,10 @@ async function completeSetup(
     "setup-next",
   );
   for (const [stepId, screenshot] of setupScreens) {
+    // One marker per setup step. The step bodies below drive real windows
+    // and bridge calls; without this, a stall anywhere in the journey looked
+    // identical to a stall in `launch()` from outside the process.
+    phases.note("completeSetup.step", stepId);
     assert.equal(await dialog.getAttribute("data-step-id"), stepId);
     // One sample per step, not only around the sign-in window. The ChatGPT
     // route window is exonerated by A's read of chatgpt-route.ts — it is
@@ -3617,19 +3739,27 @@ async function completeSetup(
         configureHost ? 1 : 0,
       );
     }
-    await instance.window.locator("#setup-next").click();
-    if (stepId !== "verify") {
-      await waitForSetup(
-        instance,
-        (previous) =>
-          document
-            .querySelector("#setup-dialog")
-            ?.getAttribute("data-step-id") !== previous,
-        stepId,
-      );
-    }
+    await phases.step(
+      `completeSetup.advance[${stepId}]`,
+      SETUP_PHASE_BUDGET_MS,
+      async () => {
+        await instance.window.locator("#setup-next").click();
+        if (stepId !== "verify") {
+          await waitForSetup(
+            instance,
+            (previous) =>
+              document
+                .querySelector("#setup-dialog")
+                ?.getAttribute("data-step-id") !== previous,
+            stepId,
+          );
+        }
+      },
+    );
   }
-  await dialog.waitFor({ state: "hidden" });
+  await phases.step("completeSetup.dialogHidden", SETUP_PHASE_BUDGET_MS, () =>
+    dialog.waitFor({ state: "hidden" }),
+  );
 }
 
 async function runLiveTaskPersistenceFaultProof() {
