@@ -1692,7 +1692,12 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     env: launchEnvironment,
     timeout: 15_000,
   });
+  await markActivation(
+    application,
+    `${mode}/${windowMode} before first window`,
+  );
   const window = await application.firstWindow({ timeout: 15_000 });
+  await markActivation(application, `${mode}/${windowMode} at first window`);
   await window.locator("#sidebar").waitFor({ state: "visible" });
   await window
     .locator('#runtime-pill[data-state="ready"]')
@@ -1990,6 +1995,20 @@ async function waitForPageState(page, predicate, arg, options = {}) {
     if (Date.now() >= deadline) throw new Error("E2E_PAGE_STATE_TIMEOUT");
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+// Where this application first becomes the active one on this host. The
+// proof that `showInactive()` does not take focus only means something
+// while the app is not already active without any owner action, so the
+// answer decides whether that row is provable here at all — and it has to
+// be an answer, not an inference from where a failure happened to land.
+const activationSamples = [];
+async function markActivation(application, label) {
+  const active = await application
+    .evaluate(({ app }) => app.isActive())
+    .catch(() => null);
+  activationSamples.push({ at: Date.now(), label, active });
+  return active;
 }
 
 // The last second-launch's own timestamps, read by the reopen row beside
@@ -7693,7 +7712,9 @@ demoMainSegment: try {
     await runtimeProcessId(normal.application),
     runtimeBeforeWindowClose,
   );
+  await markActivation(normal.application, "before mismatched-build refusal");
   await rejectMismatchedBuildLaunch(normal);
+  await markActivation(normal.application, "after mismatched-build refusal");
   await new Promise((resolve) => setTimeout(resolve, 100));
   await waitForWindowCount(normal.application, 0);
   const reopenedWindow = normal.application.waitForEvent("window", {
@@ -7704,8 +7725,13 @@ demoMainSegment: try {
   // window that was focused all along from one handed activation when the
   // secondary quit — the difference that decides whether this is a harness
   // artefact or the deferring second instance entering the activation order.
+  const activeBeforeReopen = await markActivation(
+    normal.application,
+    "immediately before the second launch",
+  );
   const reopenFocus = sampleWindowFocus(normal.application, Date.now() + 6_000);
   await repeatLaunch(normal);
+  await markActivation(normal.application, "after the second launch exited");
   normal.window = await reopenedWindow;
   await normal.window.locator("#sidebar").waitFor({ state: "visible" });
   await normal.window.locator('[data-panel="settings"].active').waitFor();
@@ -7716,6 +7742,8 @@ demoMainSegment: try {
     reopenPresentationError = error;
   }
   const reopenTimeline = {
+    activeBeforeReopen,
+    activation: activationSamples,
     secondary: lastSecondaryLaunch,
     samples: await reopenFocus,
   };
