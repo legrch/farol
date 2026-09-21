@@ -1,4 +1,82 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
+
+// S35-TA-15 (U2a): why a run reported `sourceDirty: true` on a worktree that
+// `git status --porcelain` shows clean immediately afterwards. Seen four
+// times, never explained, and an unexplained dirty flag makes every
+// attribution arguable.
+//
+// The flag itself is NOT touched here: `sourceIdentity` owns it, it lives in
+// shared tooling this packet does not edit, and a flag flipped to false
+// because a digest matched would be exactly the self-deception the amendment
+// forbids. What is added is the observation that was missing — taken in the
+// SAME operation, so it describes the instant the flag was computed rather
+// than the tidy state a later check finds.
+//
+// Content-free by construction: this records repository-relative PATHS and
+// git's own two-letter status codes, never file contents, and it stops after
+// a bound. A path is what distinguishes "the owner edited a tracked source"
+// from "something wrote scratch into the working directory during the run",
+// and that distinction is the entire question.
+const DIRTY_DIAGNOSTIC_LIMIT = 24;
+
+function gitResult(repositoryRoot, args) {
+  try {
+    return {
+      status: 0,
+      stdout: execFileSync("git", ["-C", repositoryRoot, ...args], {
+        encoding: "utf8",
+        maxBuffer: 8 * 1024 * 1024,
+      }),
+    };
+  } catch (error) {
+    return {
+      status: typeof error?.status === "number" ? error.status : null,
+      stdout: typeof error?.stdout === "string" ? error.stdout : "",
+    };
+  }
+}
+
+/**
+ * What the working tree looked like at the instant the identity was built.
+ * `entries` carries git's own porcelain code plus the path; `tracked` is the
+ * subset git does not call untracked, which is the half that would mean a
+ * real source edit rather than scratch.
+ */
+export function captureWorkingTreeObservation(repositoryRoot, scope = "vnext") {
+  const status = gitResult(repositoryRoot, [
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+    "--",
+    scope,
+  ]);
+  const lines = status.stdout.split("\n").filter((line) => line.length > 0);
+  const entries = lines.slice(0, DIRTY_DIAGNOSTIC_LIMIT).map((line) => ({
+    code: line.slice(0, 2),
+    path: line.slice(3),
+  }));
+  return {
+    gitStatusExit: status.status,
+    entryCount: lines.length,
+    truncated: lines.length > entries.length,
+    entries,
+    trackedEntryCount: entries.filter((entry) => !entry.code.startsWith("??"))
+      .length,
+  };
+}
+
+/** The digest of the bundle this run actually imported (U2b). */
+export function bundleDigest(bundlePath) {
+  try {
+    return createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+  } catch {
+    return null;
+  }
+}
 
 // S35-TA-5: what a real-host report must say about the bytes it exercised.
 //
@@ -62,12 +140,32 @@ export const SUPPORTED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
  */
 export function identityFromRunRecords(input) {
   const { hostRuns, hostlessPhases, hostVersions, phaseIds, ...rest } = input;
+  // S35-TA-15 (U2b): a path is not a binding. The descriptor claims a bundle;
+  // this re-digests that file and refuses when the claim does not match the
+  // bytes on disk, so a report cannot name source it did not load.
+  if (rest.loader?.kind === "source-level") {
+    // Shape first, then the binding: a descriptor with no digest at all is
+    // MALFORMED, not a mismatch. Reporting "mismatch" for it would tell a
+    // reader the bytes disagreed when in fact nothing was ever claimed.
+    assertLoader(rest.loader);
+    const actual = bundleDigest(rest.loader.bundlePath);
+    if (actual === null) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_LOADER_UNREADABLE");
+    }
+    if (actual !== rest.loader.bundleSha256) {
+      throw new Error("FAROL_MODEL_E2E_REPORT_LOADER_MISMATCH");
+    }
+  }
   const byBinary = new Map();
   for (const run of hostRuns) {
     const phases = byBinary.get(run.binary) ?? [];
     if (!phases.includes(run.phase)) phases.push(run.phase);
     byBinary.set(run.binary, phases);
   }
+  const workingTree =
+    input.observeWorkingTree === false
+      ? null
+      : captureWorkingTreeObservation(rest.repositoryRoot);
   const identity = buildReportIdentity({
     ...rest,
     hosts: [...byBinary].map(([binary, phases]) => {
@@ -84,7 +182,10 @@ export function identityFromRunRecords(input) {
     hostlessPhases: [...hostlessPhases],
   });
   assertPhaseAttribution(identity, phaseIds);
-  return identity;
+  // Recorded whatever the flag says, so a clean run is evidence too: "dirty
+  // false with zero entries" and "dirty true with zero entries" are
+  // different facts, and only the second is a puzzle.
+  return workingTree ? { ...identity, workingTree } : identity;
 }
 
 export function buildReportIdentity(options) {
@@ -117,6 +218,7 @@ function assertLoader(loader) {
   }
   if (loader.kind === "source-level") {
     if (
+      !/^[0-9a-f]{64}$/u.test(loader.bundleSha256 ?? "") ||
       typeof loader.bundlePath !== "string" ||
       loader.bundlePath.length === 0
     ) {

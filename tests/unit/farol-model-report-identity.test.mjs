@@ -1,9 +1,15 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
   assertReportIdentity,
   buildReportIdentity,
+  captureWorkingTreeObservation,
   identityFromRunRecords,
   SUPPORTED_NODE_VERSIONS,
 } from "../e2e/farol-model-report-identity.mjs";
@@ -31,12 +37,21 @@ function identity(overrides = {}) {
   };
 }
 
+const FIXTURE_BUNDLE = path.resolve(
+  import.meta.dirname,
+  "../e2e/farol-model-report-identity.mjs",
+);
+const FIXTURE_BUNDLE_SHA = createHash("sha256")
+  .update(readFileSync(FIXTURE_BUNDLE))
+  .digest("hex");
+
 describe("real-host report identity", () => {
   const LOCATED = "/Users/ac/.nvm/versions/node/v22.19.0/bin/codex";
   const DISCOVERED = "/Applications/ChatGPT.app/Contents/Resources/codex";
   const LOADER = Object.freeze({
     kind: "source-level",
-    bundlePath: "/tmp/farol-model-e2e-bundle-x/bundle.mjs",
+    bundlePath: FIXTURE_BUNDLE,
+    bundleSha256: FIXTURE_BUNDLE_SHA,
   });
 
   function hostsOf() {
@@ -289,10 +304,85 @@ describe("real-host report identity", () => {
 // contradictory its records were. A test that calls `assertReportIdentity`
 // with a hand-built identity never sees that, because the normalisation
 // happened before the validator was reached.
+// S35-TA-15 (U2a). Four real-host runs reported `sourceDirty: true` on a
+// worktree that `git status --porcelain` showed clean immediately after.
+// The observation below is taken in the SAME operation as the identity, so
+// it describes the instant the flag was computed rather than the tidy state
+// a later check finds — and on the run at this commit it answered:
+// gitStatusExit 0, entryCount 0, trackedEntryCount 0, with sourceDirty
+// still true.
+//
+// That is a narrowing, not a fix, and it is worth stating precisely: the
+// flag does NOT come from working-tree status. `sourceIdentity` sets dirty
+// from `status.length > 0 || !exact`, so with an empty status the cause is
+// `exact` — the per-file byte comparison, the mode check, or the
+// `ls-files -v` flags, all inside shared tooling this packet does not own.
+// The flag is left exactly as it is; nothing here makes it false.
+describe("working tree observation", () => {
+  it("S35-TA-15 reports a clean tree as zero entries with a zero git exit", () => {
+    const observation = captureWorkingTreeObservation(
+      path.resolve(import.meta.dirname, "../.."),
+    );
+    expect(observation.gitStatusExit).toBe(0);
+    expect(observation.entries.every((entry) => entry.path.length > 0)).toBe(
+      true,
+    );
+    // Content-free by construction: codes and paths only, never bytes.
+    for (const entry of observation.entries) {
+      expect(Object.keys(entry).sort()).toEqual(["code", "path"]);
+    }
+  });
+
+  it("S35-TA-15 distinguishes a genuinely dirty tracked file from a clean run", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-wt-"));
+    try {
+      const run = (...args) =>
+        execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
+      run("init", "-q");
+      run("config", "user.email", "t@example.invalid");
+      run("config", "user.name", "T");
+      await fs.mkdir(path.join(root, "vnext"), { recursive: true });
+      await fs.writeFile(path.join(root, "vnext", "tracked.txt"), "one\n");
+      run("add", "-A");
+      run("commit", "-qm", "init");
+
+      // Clean: nothing to report.
+      expect(captureWorkingTreeObservation(root)).toMatchObject({
+        gitStatusExit: 0,
+        entryCount: 0,
+        trackedEntryCount: 0,
+      });
+
+      // A genuinely modified TRACKED file is reported, and counted as
+      // tracked — the half that would mean a real source edit.
+      await fs.writeFile(path.join(root, "vnext", "tracked.txt"), "two\n");
+      const dirty = captureWorkingTreeObservation(root);
+      expect(dirty.entryCount).toBe(1);
+      expect(dirty.trackedEntryCount).toBe(1);
+      expect(dirty.entries[0].path).toBe("vnext/tracked.txt");
+
+      // An untracked file is reported but NOT counted as tracked: scratch
+      // written into the tree during a run is a different fact from an edit.
+      run("checkout", "--", "vnext/tracked.txt");
+      await fs.writeFile(path.join(root, "vnext", "scratch.log"), "x\n");
+      const scratch = captureWorkingTreeObservation(root);
+      expect(scratch.entryCount).toBe(1);
+      expect(scratch.trackedEntryCount).toBe(0);
+      expect(scratch.entries[0].code).toBe("??");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 describe("identity built from the journey's own run records", () => {
+  // A real file on disk, because the construction re-digests what the
+  // descriptor claims: a fixture pointing at a path that does not exist is
+  // now itself a refusal, which is the point of the binding.
   const LOADER = Object.freeze({
     kind: "source-level",
-    bundlePath: "/tmp/bundle/bundle.mjs",
+    bundlePath: FIXTURE_BUNDLE,
+    bundleSha256: FIXTURE_BUNDLE_SHA,
   });
   const SHIM = "/Users/ac/.nvm/versions/node/v22.19.0/bin/codex";
   const DISCOVERED = "/Applications/ChatGPT.app/Contents/Resources/codex";
@@ -328,6 +418,38 @@ describe("identity built from the journey's own run records", () => {
       "codex-cli 0.155.0-alpha.9.2",
     ]);
     expect(identity.hostlessPhases).toEqual(["app-host-discovery"]);
+  });
+
+  // S35-TA-15 (U2b). A path is not a binding. The descriptor named a bundle
+  // and nothing checked that the bytes at that path were the bytes the run
+  // imported, so a report could truthfully name a file and still describe a
+  // different one — the same class as naming a host version without its
+  // binary. The construction now re-digests what the descriptor claims.
+  it("S35-TA-15 refuses a loader whose digest does not match the bundle on disk", () => {
+    expect(() =>
+      identityFromRunRecords(
+        records({
+          loader: { ...LOADER, bundleSha256: "f".repeat(64) },
+        }),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_LOADER_MISMATCH");
+  });
+
+  it("S35-TA-15 refuses a loader whose bundle cannot be read at all", () => {
+    expect(() =>
+      identityFromRunRecords(
+        records({
+          loader: { ...LOADER, bundlePath: "/nonexistent/bundle.mjs" },
+        }),
+      ),
+    ).toThrow("FAROL_MODEL_E2E_REPORT_LOADER_UNREADABLE");
+  });
+
+  it("S35-TA-15 a descriptor with no digest at all is refused, not accepted as unbound", () => {
+    const loader = { kind: "source-level", bundlePath: FIXTURE_BUNDLE };
+    expect(() => identityFromRunRecords(records({ loader }))).toThrow(
+      "FAROL_MODEL_E2E_REPORT_LOADER_INVALID",
+    );
   });
 
   it("S35-TA-14 refuses a phase recorded host-less that also ran a binary, instead of normalising it away", () => {

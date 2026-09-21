@@ -73,6 +73,7 @@ import { promisify } from "node:util";
 import esbuild from "esbuild";
 import {
   assertReportIdentity,
+  bundleDigest,
   identityFromRunRecords,
   SUPPORTED_NODE_VERSIONS,
 } from "./farol-model-report-identity.mjs";
@@ -484,7 +485,14 @@ async function writeReport() {
   if (hostRuns.length > 0) {
     report.identity = identityFromRunRecords({
       repositoryRoot: path.resolve(here, "../.."),
-      loader: { kind: "source-level", bundlePath: bundleOutput },
+      // U2b: the digest of the bundle this run actually imported, taken
+      // from the file on disk, so the descriptor is bound to the bytes
+      // rather than merely naming their path.
+      loader: {
+        kind: "source-level",
+        bundlePath: bundleOutput,
+        bundleSha256: bundleDigest(bundleOutput),
+      },
       hostRuns,
       hostlessPhases,
       hostVersions,
