@@ -190,6 +190,7 @@ import {
 } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
 import { TaskMutationGate, underTaskMutation } from "./task-mutation-gate";
+import { productAgentOpenRefusal } from "./product-agent-open-refusal";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
@@ -1996,23 +1997,18 @@ async function executeProductAgent(
   try {
     session = await openProductAgentSession(input, context);
   } catch (error) {
-    const rejoinOutcomeUnknown = admission === "rejoin";
-    await persistProductAgentSummary(task.taskId, {
-      assignmentBindingSha256: productAgentAssignmentBinding(input),
-      phase: rejoinOutcomeUnknown ? "outcome_unknown" : "failed",
-      workspaceId: input.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    }).catch(() => undefined);
-    if (rejoinOutcomeUnknown) {
-      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+    const refusal = productAgentOpenRefusal(admission, error);
+    if (refusal.record !== "none") {
+      await persistProductAgentSummary(task.taskId, {
+        assignmentBindingSha256: productAgentAssignmentBinding(input),
+        phase: refusal.record,
+        workspaceId: input.workspaceId,
+        parentDelivery: "not_applicable",
+        workspaceEnforcement: "not_applicable",
+        resultAvailable: false,
+      }).catch(() => undefined);
     }
-    return taskFailure(
-      error instanceof Error && error.message === "PRODUCT_AGENT_SESSION_BUSY"
-        ? "AGENT_ALREADY_RUNNING"
-        : "AGENT_NOT_READY",
-    );
+    return taskFailure(refusal.failure);
   }
   const assignments = session.assignments;
   let result;
