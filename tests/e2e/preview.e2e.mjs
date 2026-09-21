@@ -422,6 +422,10 @@ evidenceAttempt.trackRecords(() => ({
   skippedCases,
 }));
 let nativeFocusProofCompleted = false;
+// Every sample the focus-acquisition loop takes, kept whole. The loop's own
+// decision is unchanged; this is what a blocked row can be read from
+// afterwards instead of the one summary line the error carried.
+const nativeFocusSamples = [];
 let quitProofs = 0;
 
 function detectMacHostLockState() {
@@ -2897,33 +2901,94 @@ async function activateForNativeFocusProof(application) {
   let last = null;
   let consecutiveFocusedSamples = 0;
   for (let attempt = 0; attempt < 50; attempt += 1) {
-    last = await application.evaluate(async ({ app, BrowserWindow }) => {
-      const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
-        const url = candidate.webContents.getURL();
-        return (
-          candidate.getTitle() === "Farol · Developer Preview" &&
-          url.startsWith("file:") &&
-          url.endsWith("/shell.html")
-        );
-      });
-      if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
-      if (process.platform === "darwin") {
-        app.setActivationPolicy("regular");
-        await app.dock.show();
-      }
-      targetWindow.setFocusable(true);
-      targetWindow.show();
-      targetWindow.moveTop();
-      app.focus({ steal: true });
-      targetWindow.focus();
-      return {
-        focused: targetWindow.isFocused(),
-        visible: targetWindow.isVisible(),
-        minimized: targetWindow.isMinimized(),
-        fullScreen: targetWindow.isFullScreen(),
-        shellFocused: targetWindow.webContents.isFocused(),
-      };
-    });
+    last = await application.evaluate(
+      async ({ app, BrowserWindow, screen }) => {
+        const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol · Developer Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+        // Installed once, in the main process: whether the window ever
+        // receives a focus or blur event is a different fact from what
+        // `isFocused()` answers a moment later, and only the events can say
+        // the request reached the window manager at all.
+        if (!globalThis.__farolE2EFocusEvents) {
+          const events = { focus: 0, blur: 0, lastAt: null };
+          globalThis.__farolE2EFocusEvents = events;
+          targetWindow.on("focus", () => {
+            events.focus += 1;
+            events.lastAt = Date.now();
+          });
+          targetWindow.on("blur", () => {
+            events.blur += 1;
+            events.lastAt = Date.now();
+          });
+        }
+        if (process.platform === "darwin") {
+          app.setActivationPolicy("regular");
+          await app.dock.show();
+        }
+        targetWindow.setFocusable(true);
+        targetWindow.show();
+        targetWindow.moveTop();
+        const focusStartedAt = Date.now();
+        app.focus({ steal: true });
+        const appFocusMs = Date.now() - focusStartedAt;
+        targetWindow.focus();
+        const bounds = targetWindow.getBounds();
+        const center = {
+          x: Math.round(bounds.x + bounds.width / 2),
+          y: Math.round(bounds.y + bounds.height / 2),
+        };
+        const onDisplay = screen.getDisplayNearestPoint(center);
+        const primary = screen.getPrimaryDisplay();
+        const focusedWindow = BrowserWindow.getFocusedWindow();
+        return {
+          focused: targetWindow.isFocused(),
+          visible: targetWindow.isVisible(),
+          minimized: targetWindow.isMinimized(),
+          fullScreen: targetWindow.isFullScreen(),
+          shellFocused: targetWindow.webContents.isFocused(),
+          // Everything below is measurement, added for the focus-acquisition
+          // diagnosis. It changes no decision: the loop still returns only on
+          // three consecutive `focused` samples of the same window.
+          appActive: app.isActive(),
+          appFocusMs,
+          focusEvents: { ...globalThis.__farolE2EFocusEvents },
+          bounds,
+          display: {
+            id: onDisplay.id,
+            primary: onDisplay.id === primary.id,
+            bounds: onDisplay.bounds,
+          },
+          displays: screen.getAllDisplays().map((candidate) => ({
+            id: candidate.id,
+            primary: candidate.id === primary.id,
+            bounds: candidate.bounds,
+          })),
+          focusedWindow: focusedWindow
+            ? {
+                id: focusedWindow.id,
+                same: focusedWindow.id === targetWindow.id,
+                title: focusedWindow.getTitle(),
+                url: focusedWindow.webContents.getURL().slice(-60),
+              }
+            : null,
+          windows: BrowserWindow.getAllWindows().map((candidate) => ({
+            id: candidate.id,
+            title: candidate.getTitle(),
+            url: candidate.webContents.getURL().slice(-40),
+            visible: candidate.isVisible(),
+            focused: candidate.isFocused(),
+          })),
+        };
+      },
+    );
+    nativeFocusSamples.push({ attempt, at: Date.now(), ...last });
     consecutiveFocusedSamples = last.focused
       ? consecutiveFocusedSamples + 1
       : 0;
@@ -7767,6 +7832,20 @@ demoMainSegment: try {
         throw error;
       }
       nativeFocusBlockReason = error.message;
+    } finally {
+      // Written whether focus was acquired or refused: a blocked row is the
+      // case this file exists for, and one summary line in an error message
+      // could not say which window held focus or which display it was on.
+      await fs
+        .writeFile(
+          path.join(evidenceRoot, "native-focus-samples.json"),
+          `${JSON.stringify(nativeFocusSamples, null, 2)}\n`,
+          { mode: 0o600 },
+        )
+        .catch(() => undefined);
+      process.stdout.write(
+        `E2E_NATIVE_FOCUS samples=${nativeFocusSamples.length} first=${JSON.stringify(nativeFocusSamples[0] ?? null)} last=${JSON.stringify(nativeFocusSamples.at(-1) ?? null)}\n`,
+      );
     }
 
     if (activatedWindow) {
