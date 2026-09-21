@@ -3273,11 +3273,19 @@ async function completeSetup(
         await instance.window.locator("#setup-live-primary").innerText(),
         "Open sign-in…",
       );
+      await markActivation(
+        instance.application,
+        "setup: before the sign-in window is opened",
+      );
       const chatGptWindow = instance.application.waitForEvent("window", {
         timeout: 15_000,
       });
       await instance.window.locator("#setup-live-primary").click();
       const chatGptPage = await chatGptWindow;
+      await markActivation(
+        instance.application,
+        "setup: with the sign-in window open",
+      );
       await chatGptPage.waitForURL(instance.chatGptFixture.url);
       await waitForWindowCount(instance.application, 2);
       const security = await instance.application.evaluate(
@@ -3386,6 +3394,10 @@ async function completeSetup(
           "Verified",
       );
       await chatGptPage.close();
+      await markActivation(
+        instance.application,
+        "setup: after the sign-in window closed",
+      );
       await waitForWindowCount(instance.application, 1);
       await waitForShellVisibility(
         instance.application,
@@ -10299,14 +10311,50 @@ n12AgentDraftSegment: {
             }))
             .catch(() => null)
         : null;
+      // `offsetParent` is null for any position: fixed element, which a
+      // <dialog> normally is, so it cannot say whether this one is visible.
+      // Measure the box and the engine's own visibility answer instead, and
+      // record the dialog stack: a later showModal() makes everything
+      // outside the topmost modal inert, which looks exactly like an open,
+      // connected, same-node menu whose controls refuse every click.
       const visibleMenu = await draft.window
         .evaluate(() => {
-          const element = document.querySelector("#task-menu");
-          if (!element) return null;
+          const read = (selector) => {
+            const element = document.querySelector(selector);
+            if (!element) return null;
+            const rect = element.getBoundingClientRect();
+            return {
+              open: element.open ?? null,
+              isConnected: element.isConnected,
+              rect: {
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+                x: Math.round(rect.x),
+                y: Math.round(rect.y),
+              },
+              checkVisibility:
+                typeof element.checkVisibility === "function"
+                  ? element.checkVisibility()
+                  : null,
+              isModal: element.matches(":modal"),
+            };
+          };
+          const openDialogs = [...document.querySelectorAll("dialog[open]")];
           return {
-            open: element.open ?? null,
-            isConnected: element.isConnected,
-            hasLayoutBox: element.offsetParent !== null,
+            taskMenu: read("#task-menu"),
+            subtree: read("#task-agent-subtree"),
+            exclusions: read("#task-agent-exclusions"),
+            objective: read("#task-agent-objective"),
+            openDialogs: openDialogs.map((dialog) => ({
+              id: dialog.id || null,
+              isModal: dialog.matches(":modal"),
+            })),
+            topmostModal:
+              openDialogs.filter((dialog) => dialog.matches(":modal")).at(-1)
+                ?.id ?? null,
+            setupDialogOpen:
+              document.querySelector("#setup-dialog")?.open ?? null,
+            activeElementId: document.activeElement?.id ?? null,
           };
         })
         .catch(() => null);
