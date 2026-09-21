@@ -263,3 +263,43 @@ describe("a layout that moves nothing does not rebuild the menu", () => {
     expect(body).not.toMatch(/^\s*render\(false\);$/mu);
   });
 });
+
+describe("a run can read the decision that was made", () => {
+  it("reports every shell action's inputs and its decision, content-free", async () => {
+    // A run that ends with the editor gone should say which input produced
+    // that, rather than leave the decision inferred from the outcome.
+    const source = await shell();
+    const handler = source.slice(
+      source.indexOf("window.farolNext.onShellAction("),
+      source.indexOf("window.farolNext.onWindowState("),
+    );
+    expect(handler).toContain("console.debug(");
+    expect(handler).toContain('"farol.shell-action"');
+    for (const field of [
+      "eventId",
+      "action",
+      "source",
+      "shellOverlay",
+      "held",
+      "draftTaskMatches",
+      "draftHeld",
+      "reason",
+      "navigate",
+    ]) {
+      // `shellOverlay` is a shorthand property, so the key may be followed
+      // by a comma rather than a colon.
+      expect(handler, field).toMatch(new RegExp(`\\b${field}\\s*[,:]`, "u"));
+    }
+    // No field text, no labels, no paths: the line carries the shape of the
+    // decision and nothing the owner typed.
+    const start = handler.indexOf("console.debug(");
+    expect(start).toBeGreaterThan(-1);
+    const line = handler.slice(
+      start,
+      handler.indexOf("if (!decision.refreshReadiness)"),
+    );
+    expect(line).not.toContain("readAgentDraftFields");
+    expect(line).not.toContain(".value");
+    expect(line).not.toContain("objective");
+  });
+});

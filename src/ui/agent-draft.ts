@@ -88,4 +88,17 @@ export class AgentDraftStore {
   held(): boolean {
     return this.fields !== null;
   }
+
+  /**
+   * The task this store is keyed to, for a diagnostic only.
+   *
+   * `capture` silently ignores a call for any other task. That is correct —
+   * one task's text must never become another's — but it means a selection
+   * moved by something other than the menu makes every later keystroke a
+   * no-op, and nothing says so. Reporting the key lets a run tell that apart
+   * from a store that was never asked.
+   */
+  keyedTo(): string {
+    return this.taskId;
+  }
 }

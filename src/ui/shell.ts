@@ -4594,6 +4594,25 @@ async function start(): Promise<void> {
       if (provenance.eventId !== null) {
         handledShellActionIds.add(provenance.eventId);
       }
+      // One line per shell action, content-free: what arrived, what the
+      // renderer held when it did, and what was decided. A run that ends
+      // with an editor gone can then say which input produced that, instead
+      // of leaving the decision to be inferred from the outcome.
+      console.debug(
+        "farol.shell-action",
+        JSON.stringify({
+          eventId: provenance.eventId,
+          action: parsed.data.action,
+          source: provenance.source,
+          gen: provenance.authWindowGeneration,
+          shellOverlay,
+          held: taskAgentDraft.held(),
+          draftTaskMatches: taskAgentDraft.keyedTo() === selectedTaskId,
+          draftHeld: shellOverlay === "task-menu" && taskAgentDraft.held(),
+          reason: decision.reason,
+          navigate: decision.navigate,
+        }),
+      );
       if (!decision.refreshReadiness) return;
       chatGptSignInOpened = false;
       if (decision.navigate) {
