@@ -165,6 +165,7 @@ import {
   changesComputerAuthority,
   configurationAdmission,
 } from "./configuration-admission";
+import { createConfigurationReplyFault } from "./configuration-reply-fault";
 import {
   createQuitDrain,
   type OwnedCloser,
@@ -3530,13 +3531,43 @@ async function configureProduct(
   });
   if (admission !== "admitted") return configurationFailure(admission);
   if (!changesComputerAuthority(command.kind)) {
-    return configureAdmittedProduct(command);
+    return deliverConfigurationReply(
+      command.kind,
+      await configureAdmittedProduct(command),
+    );
   }
   const reserved = await authorityTransitions.withReservation(
     "authority-change",
     () => configureAdmittedProduct(command),
   );
-  return reserved.admitted ? reserved.value : transitionRefusal();
+  return deliverConfigurationReply(
+    command.kind,
+    reserved.admitted ? reserved.value : transitionRefusal(),
+  );
+}
+
+// The reply's last step before Electron carries it to the renderer. The
+// command itself has fully completed here — its edit, receipt and durable
+// pending record are already on disk — so a dropped reply is a reply lost in
+// transit and nothing else. Outside the E2E lane the decision is always
+// "deliver" and the production result is returned untouched.
+const configurationReplyFault = createConfigurationReplyFault(process.env);
+
+function deliverConfigurationReply(
+  commandKind: string,
+  result: ProductConfigurationResult,
+): ProductConfigurationResult | Promise<ProductConfigurationResult> {
+  if (configurationReplyFault(commandKind, result) === "deliver") return result;
+  const operationId =
+    result.ok && result.evidence?.kind === "computer.workspace-mutation"
+      ? result.evidence.operationId
+      : "unknown";
+  process.stderr.write(
+    `farol-next-e2e:reply-dropped ${commandKind} ${operationId}\n`,
+  );
+  // Never settles: the renderer's `ipcRenderer.invoke` receives nothing at
+  // all, which is the state the durable pending-edit record exists for.
+  return new Promise<ProductConfigurationResult>(() => {});
 }
 
 async function configureAdmittedProduct(
