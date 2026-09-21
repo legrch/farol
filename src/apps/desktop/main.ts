@@ -189,6 +189,7 @@ import {
   sweepOrphanTaskContexts,
 } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
+import { TaskMutationGate, underTaskMutation } from "./task-mutation-gate";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
@@ -501,7 +502,7 @@ let productAgentStore: PrivateProductAgentStore | null = null;
 // then is a stored context with no live task known to be an orphan.
 let liveTaskRegistryRestored = false;
 let liveTaskPersistence: Promise<void> = Promise.resolve();
-let taskMutationInFlight = false;
+const taskMutations = new TaskMutationGate();
 let chatGptHomeUrl = CHATGPT_HOME;
 let chatGptE2eOrigin: string | null = null;
 let chatGptTaskAdmission = false;
@@ -1033,8 +1034,7 @@ async function recordChatGptSignInOutcome(
 async function admitRouteBTask(
   threadId: string,
 ): Promise<RouteBSurfaceAdmission> {
-  taskMutationInFlight = true;
-  try {
+  return underTaskMutation(taskMutations, async () => {
     const before = liveTaskRegistry.snapshot();
     const labels = new Set(before.tasks.map((candidate) => candidate.label));
     let ordinal = 1;
@@ -1079,9 +1079,7 @@ async function admitRouteBTask(
       return { ok: false, code: "TASK_SURFACE_UNREACHABLE" };
     }
     return { ok: true, surface: route };
-  } finally {
-    taskMutationInFlight = false;
-  }
+  });
 }
 
 const routeBTaskLifecycle = createRouteBTaskLifecycle({
@@ -1089,7 +1087,7 @@ const routeBTaskLifecycle = createRouteBTaskLifecycle({
   existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
   liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
   markRunning: (taskId) => markLiveTaskRunningDurable(taskId),
-  mutationInFlight: () => taskMutationInFlight,
+  mutationInFlight: () => taskMutations.inFlight(),
   admissionReady: () => chatGptTaskAdmissionReady(),
   admitTask: admitRouteBTask,
   removeAgentInput: async (taskId) => {
@@ -1727,7 +1725,7 @@ function armProductAgentExpiry(
       const verdict = productAgentSessionExpiryVerdict({
         sessionIsActive: activeProductAgentSession === session,
         taskPhase: liveTaskRegistry.get(session.taskId)?.agent?.phase,
-        mutationInFlight: taskMutationInFlight,
+        mutationInFlight: taskMutations.inFlight(),
         now,
       });
       if (verdict.action === "noop") return;
@@ -1735,9 +1733,9 @@ function armProductAgentExpiry(
         armProductAgentExpiry(session, verdict.atMs - now);
         return;
       }
-      taskMutationInFlight = true;
+      const mutation = taskMutations.enter();
       void cancelProductAgentSession(session).finally(() => {
-        taskMutationInFlight = false;
+        mutation.release();
       });
     },
     delayOverride ?? Math.max(0, session.input.expiresAt - Date.now()),
@@ -1761,7 +1759,7 @@ function schedulePersistedProductAgentExpiry(
       const now = Date.now();
       const verdict = persistedProductAgentExpiryVerdict({
         taskPhase: task?.agent?.phase,
-        mutationInFlight: taskMutationInFlight,
+        mutationInFlight: taskMutations.inFlight(),
         now,
       });
       if (verdict.action === "noop") return;
@@ -1773,9 +1771,9 @@ function schedulePersistedProductAgentExpiry(
       // `taskPhase === "running"`, which requires `task` to exist. The
       // check narrows `task` for TypeScript rather than adding a new branch.
       if (!task) return;
-      taskMutationInFlight = true;
+      const mutation = taskMutations.enter();
       void cancelProductAgentTask(task).finally(() => {
-        taskMutationInFlight = false;
+        mutation.release();
       });
     },
     delayOverride ?? Math.max(0, input.expiresAt - Date.now()),
@@ -2105,9 +2103,11 @@ async function runProductTaskCommand(
   if (demoMode) {
     return taskFailure("TASKS_UNAVAILABLE");
   }
-  if (taskMutationInFlight) return taskFailure("TASK_OPERATION_IN_PROGRESS");
+  if (taskMutations.inFlight()) {
+    return taskFailure("TASK_OPERATION_IN_PROGRESS");
+  }
   if (command.data.kind === "task.activate") {
-    taskMutationInFlight = true;
+    const mutation = taskMutations.enter();
     try {
       if (!liveTaskRegistry.get(command.data.taskId)) {
         return taskFailure("TASK_NOT_FOUND");
@@ -2121,11 +2121,11 @@ async function runProductTaskCommand(
         ? taskSuccess(command.data.taskId)
         : taskFailure("TASK_SURFACE_UNREACHABLE");
     } finally {
-      taskMutationInFlight = false;
+      mutation.release();
     }
   }
   if (!liveTaskStore) return taskFailure("TASK_STATE_UNAVAILABLE");
-  taskMutationInFlight = true;
+  const mutation = taskMutations.enter();
   const before = liveTaskRegistry.snapshot();
   try {
     if (
@@ -2394,7 +2394,7 @@ async function runProductTaskCommand(
     }
     return taskSuccess(task.taskId);
   } finally {
-    taskMutationInFlight = false;
+    mutation.release();
   }
 }
 
