@@ -2881,6 +2881,8 @@ async function activateForNativeFocusProof(application) {
       targetWindow.setFocusable(true);
       targetWindow.show();
       targetWindow.moveTop();
+      app.focus({ steal: true });
+      targetWindow.focus();
     });
     const applicationPid = application.process().pid;
     assert.ok(applicationPid, "E2E_APPLICATION_PID_MISSING");
@@ -2928,17 +2930,19 @@ async function activateForNativeFocusProof(application) {
             events.lastAt = Date.now();
           });
         }
-        if (process.platform === "darwin") {
-          app.setActivationPolicy("regular");
-          await app.dock.show();
-        }
-        targetWindow.setFocusable(true);
-        targetWindow.show();
-        targetWindow.moveTop();
-        const focusStartedAt = Date.now();
-        app.focus({ steal: true });
-        const appFocusMs = Date.now() - focusStartedAt;
-        targetWindow.focus();
+        // Measured, attempt 20260921T100705342Z-19062918: this loop used to
+        // repeat the whole activation on every sample —
+        // `setActivationPolicy`, `dock.show()`, `show()`, `moveTop()`,
+        // `app.focus({steal:true})`, `focus()` — and the samples show what
+        // that cost. The window was focused on sample 0 and never again,
+        // with the blur count running exactly one ahead of the focus count
+        // for all fifty samples: every iteration took focus and lost it
+        // before the next read, so three consecutive focused samples were
+        // unreachable however long the loop ran. Activating is the
+        // activation's job and happens once, above. This is an observation
+        // loop and now only observes. The assertion and its budget are
+        // unchanged: fifty attempts, 100 ms apart, three consecutive
+        // focused samples of the same window.
         const bounds = targetWindow.getBounds();
         const center = {
           x: Math.round(bounds.x + bounds.width / 2),
@@ -2957,7 +2961,7 @@ async function activateForNativeFocusProof(application) {
           // diagnosis. It changes no decision: the loop still returns only on
           // three consecutive `focused` samples of the same window.
           appActive: app.isActive(),
-          appFocusMs,
+          focusable: targetWindow.isFocusable(),
           focusEvents: { ...globalThis.__farolE2EFocusEvents },
           bounds,
           display: {
