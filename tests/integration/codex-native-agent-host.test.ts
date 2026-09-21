@@ -78,6 +78,9 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
   childSpawnedDescendant = false;
   extraChildTurn = false;
   childPrompt = "";
+  // Lets a test act in the window the host is still inside `thread/read`,
+  // before it has correlated the child's turn.
+  onChildRead: (() => void) | null = null;
   private nonce = "";
 
   constructor(private readonly emitSpawnOnTurnStart = true) {}
@@ -137,7 +140,10 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
     }
     if (method === "thread/read") {
       const threadId = (params as { threadId?: string }).threadId;
-      if (threadId === "child-thread-a") return this.childRead();
+      if (threadId === "child-thread-a") {
+        this.onChildRead?.();
+        return this.childRead();
+      }
       if (threadId === "parent-thread-a") return this.parentRead();
     }
     throw new Error(`UNEXPECTED_REQUEST:${method}`);
@@ -958,6 +964,68 @@ describe("native Codex Agent host", () => {
     expect(probeCalls).toBe(1);
     await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
       status: "outcome_unknown",
+      code: "AGENT_WAIT_ACK_LOST",
+    });
+  });
+  // The child's first tool call can reach the host before the host has
+  // correlated the child's turn: the spawn item only names the child thread,
+  // and the turn id arrives with the `thread/read` that follows a durable
+  // lineage write.  A call landing in that window names a turn the host
+  // cannot yet vouch for, so it is refused rather than answered on trust.
+  // The refusal is fatal to the operation, and the spawn that already
+  // resolved still reports `started` -- the assignment only learns of it at
+  // the next `wait`, which is why this surfaces as a lost wait
+  // acknowledgement and never as a spawn failure.  The service half, which
+  // stamps that code `native-host-transport` and `retry: "never"`, is pinned
+  // by "terminates a lost wait acknowledgement without retry" in
+  // tests/integration/agent-run.test.ts.
+  it("refuses a child tool call that arrives before the child turn is correlated", async () => {
+    const peer = new NativeAgentPeer();
+    let probeCalls = 0;
+    let childReads = 0;
+    let early: Promise<string> | null = null;
+    peer.onChildRead = () => {
+      childReads += 1;
+      if (childReads > 1) return;
+      early = peer.callWorkspace().then(
+        () => "resolved",
+        (cause: unknown) =>
+          cause instanceof Error ? cause.message : "unknown",
+      );
+    };
+    const host = new CodexNativeAgentHost(
+      peer,
+      {
+        model: "gpt-6-astra",
+        runtimeRoot: "/private/tmp/farol-agent-runtime",
+        spawnTimeoutMs: 1_000,
+        waitTimeoutMs: 5,
+        pollIntervalMs: 1,
+        nonce: () => "proof-a",
+        now: () => 1,
+      },
+      {
+        verify: async () => {
+          probeCalls += 1;
+          return { status: "verified" };
+        },
+      },
+    );
+
+    const spawned = await host.spawn(request);
+
+    expect(childReads).toBe(1);
+    await expect(early).resolves.toBe("CODEX_AGENT_WORKSPACE_CORRELATION");
+    // Nothing of the child's work ran: the call was refused at the boundary,
+    // so the workspace probe was never reached.
+    expect(probeCalls).toBe(0);
+    // The spawn had already resolved when the refusal made the operation
+    // fatal, so it still reports a started child.
+    expect(spawned.status).toBe("started");
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    await expect(host.wait(spawned.correlation)).resolves.toEqual({
+      status: "outcome_unknown",
+      correlation: spawned.correlation,
       code: "AGENT_WAIT_ACK_LOST",
     });
   });
