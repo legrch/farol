@@ -70,10 +70,12 @@ beforeAll(async () => {
   );
   await fs.mkdir(at("docs", "drafts"), { recursive: true });
   await fs.mkdir(at("private"), { recursive: true });
+  await fs.mkdir(at("docs", "private"), { recursive: true });
   await fs.writeFile(at("README.md"), "# Approved\n");
   await fs.writeFile(at("docs", "plan.md"), "plan\n");
   await fs.writeFile(at("docs", "drafts", "wip.md"), "wip\n");
   await fs.writeFile(at("private", "secret.txt"), "secret\n");
+  await fs.writeFile(at("docs", "private", "secret.md"), "nested secret\n");
   const stat = await fs.stat(workspaceRoot);
   rootIdentity = { device: String(stat.dev), inode: String(stat.ino) };
 });
@@ -140,7 +142,10 @@ function codexHost() {
 }
 
 /** Settings parsed by the real schema, around the real approved folder. */
-function settingsOf(root: string = workspaceRoot): ProductSettings {
+function settingsOf(
+  root: string = workspaceRoot,
+  excludedRelative: readonly string[] = ["private"],
+): ProductSettings {
   return ProductSettingsSchema.parse({
     schema: 1,
     revision: 1,
@@ -160,7 +165,9 @@ function settingsOf(root: string = workspaceRoot): ProductSettings {
           root,
           label: "Approved",
           access: "read",
-          excludedPaths: [path.join(root, "private")],
+          excludedPaths: excludedRelative.map((relative) =>
+            path.join(root, relative),
+          ),
           rootIdentity,
         },
       ],
@@ -277,9 +284,9 @@ function dependencies() {
 
 async function spawnRequestFor(
   selection: ProductAgentScopeSelection,
+  settings: ProductSettings = settingsOf(),
 ): Promise<AgentSpawnRequest> {
   const fixture = dependencies();
-  const settings = settingsOf();
   const result = await runProductAgentAssignment(
     settings,
     task,
@@ -408,6 +415,77 @@ describe("S35-TA-5 an owner's selection on the wire", () => {
       expect(request.authority.role).toBe("agent");
       expect(request.authority.mutationOwnership).toBe("none");
     }
+  });
+});
+
+// R10a. A configured exclusion nested *inside* the selected subtree is the
+// case the workspace-wide rows above do not reach: with `docs/private`
+// excluded by configuration, a subtree selection rooted at `docs` naming no
+// exclusions of its own does pass the matcher, because `denied()`
+// (`product-agent-scope.ts:95-96`) asks whether the scope root sits *inside*
+// an exclusion, not whether it contains one. The matcher is not where that is
+// enforced: `runProductAgentAssignment` puts every configured exclusion into
+// the task admission (`product-agent-assignment.ts:118-121`), and a narrowing
+// can only subtract from a task grant, so the exclusion reaches the host
+// anyway. These rows pin both halves together, so the accepted matcher result
+// can never again be read as a delivered bypass.
+describe("R10a a configured exclusion nested inside the selection", () => {
+  const nested = () => settingsOf(workspaceRoot, ["docs/private"]);
+
+  it("resolves the subtree without copying the configured exclusion in", async () => {
+    const settings = nested();
+    const workspace = settings.computer.workspaces[0];
+    if (!workspace) throw new Error("TEST_WORKSPACE_FIXTURE_INVALID");
+    expect(workspace.excludedPaths).toEqual([at("docs", "private")]);
+
+    // The resolved `excludedPaths` carry what the owner named for this run,
+    // not the configuration's own set. That is the shape the store holds.
+    expect(
+      resolveProductAgentScope(workspace.root, workspace.excludedPaths, {
+        mode: "subtree",
+        relativeRoot: "docs",
+        excludedPaths: [],
+      }),
+    ).toEqual({
+      scope: { mode: "subtree", root: at("docs") },
+      excludedPaths: [],
+    });
+  });
+
+  it("accepts that stored scope at the context gate", () => {
+    const settings = nested();
+    const stored = inputFor(
+      { mode: "subtree", relativeRoot: "docs", excludedPaths: [] },
+      settings,
+    );
+    expect(
+      productAgentInputMatchesContext(stored, contextOf(settings), BUILD_ID),
+    ).toBe(true);
+  });
+
+  it("still delivers the nested exclusion to the host as a task grant", () => {
+    return spawnRequestFor(
+      { mode: "subtree", relativeRoot: "docs", excludedPaths: [] },
+      nested(),
+    ).then((request) => {
+      expect(request.authority.workspaces).toMatchObject([
+        { workspaceId: WORKSPACE_ID, mode: "subtree", root: at("docs") },
+      ]);
+      // The decisive assertion: the scope the Agent is granted excludes the
+      // configured path, so no list, read or search reaches it.
+      expect(request.authority.excludedPaths).toMatchObject([
+        {
+          workspaceId: WORKSPACE_ID,
+          path: at("docs", "private"),
+          restrictionSource: "task-grant",
+        },
+      ]);
+      expect(request.authority.capabilities).toEqual([
+        "workspace.list",
+        "workspace.read",
+        "workspace.search",
+      ]);
+    });
   });
 });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   productAgentInitialPaths,
+  productAgentScopeMatchesWorkspace,
   resolveProductAgentScope,
 } from "../../src/apps/desktop/product-agent-scope";
 
@@ -248,5 +249,39 @@ describe("S35-TA-5 an accepted exact selection stays exact", () => {
       },
       excludedPaths: [],
     });
+  });
+});
+
+// R10a. `denied()` asks whether a candidate sits *inside* a configured
+// exclusion, never whether it contains one, so a subtree root that merely
+// covers an exclusion is not refused here. That is deliberate and it is not
+// the enforcement point: `runProductAgentAssignment` carries every configured
+// exclusion into the task admission, and a narrowing may only subtract from a
+// task grant, so the exclusion still reaches the host. The integration rows in
+// `tests/integration/product-agent-scope-boundary.test.ts` hold that half.
+// Pinned here so the asymmetry is stated rather than rediscovered as a bypass.
+describe("R10a which way a configured exclusion is compared", () => {
+  const ROOT = "/workspace/approved";
+
+  it("refuses a scope rooted inside a configured exclusion", () => {
+    expect(
+      productAgentScopeMatchesWorkspace(ROOT, ["/workspace/approved/docs"], {
+        scope: { mode: "subtree", root: "/workspace/approved/docs/api" },
+        excludedPaths: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts a scope that merely contains one, which the task grant covers", () => {
+    expect(
+      productAgentScopeMatchesWorkspace(
+        ROOT,
+        ["/workspace/approved/docs/private"],
+        {
+          scope: { mode: "subtree", root: "/workspace/approved/docs" },
+          excludedPaths: [],
+        },
+      ),
+    ).toBe(true);
   });
 });
