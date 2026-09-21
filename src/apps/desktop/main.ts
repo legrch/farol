@@ -197,6 +197,7 @@ import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
 import { TaskMutationGate, underTaskMutation } from "./task-mutation-gate";
 import { productAgentOpenRefusal } from "./product-agent-open-refusal";
 import { activateAgentCheckSession } from "./codex-agent-check-admission";
+import { productAgentSessionKey } from "./product-agent-session-key";
 import { runCodexChatGptHostRoute } from "./codex-chatgpt-host-route";
 import { runRouteBHostCheck } from "./route-b-host-check";
 import {
@@ -1481,25 +1482,12 @@ function productAgentInput(
   };
 }
 
-function productAgentSessionKey(input: ProductAgentInput): string {
-  return JSON.stringify([
-    input.taskId,
-    input.assignmentId,
-    input.executableSha256,
-    input.schemaSha256,
-    input.buildId,
-    input.computerGeneration,
-    input.scope,
-    input.excludedPaths,
-  ]);
-}
-
 async function openProductAgentSession(
   input: ProductAgentInput,
   context: ProductAgentHostContext,
   scheduleExpiry = true,
 ): Promise<ActiveProductAgentSession> {
-  const key = productAgentSessionKey(input);
+  const key = productAgentSessionKey(input, scheduleExpiry);
   if (activeProductAgentSession) {
     if (
       activeProductAgentSession.taskId === input.taskId &&
