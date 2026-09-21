@@ -10163,8 +10163,16 @@ n12AgentDraftSegment: {
     const consoleLines = [];
     draft.window.on("console", (message) => {
       const text = message.text();
-      if (text.includes("farol.shell-action")) {
-        consoleLines.push({ at: Date.now(), text });
+      // Every `farol.` diagnostic, not one of them: filtering to a single
+      // prefix turns "the others did not appear" into a statement about
+      // this filter rather than about the product.
+      if (text.includes("farol.")) {
+        // Bounded. `render` and `applyTasksState` log on every run while the
+        // menu is open, and an unbounded capture of that stream stalled a
+        // run outright — a diagnostic that stops the thing it is watching
+        // measures nothing.
+        consoleLines.push({ at: Date.now(), text: text.slice(0, 600) });
+        if (consoleLines.length > 240) consoleLines.splice(0, 40);
       }
     });
     await draft.window.evaluate(() => {
