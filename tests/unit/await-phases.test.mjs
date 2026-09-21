@@ -84,8 +84,20 @@ describe("awaited-boundary phases", () => {
       expect(error.phase).toBe("launch[demo/hidden].firstWindow");
       expect(error.budgetMs).toBe(60_000);
     });
-    expect(lines.at(-1)).toContain(`${STALL_PREFIX}:`);
+    // The fail line carries the stall; the line after it is the producer
+    // being adopted, which is a different fact about the same boundary.
+    expect(
+      lines.filter(
+        (line) => line.includes(" fail ") && line.includes(`${STALL_PREFIX}:`),
+      ),
+    ).toHaveLength(1);
     expect(recorder.snapshot().inFlight).toEqual([]);
+    expect(recorder.snapshot().abandoned).toMatchObject([
+      {
+        name: "launch[demo/hidden].firstWindow",
+        state: "awaiting-late-result",
+      },
+    ]);
   });
 
   it("passes an application's own death through untouched", async () => {
