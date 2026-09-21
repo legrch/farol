@@ -484,7 +484,7 @@ async function writeReport() {
   // the ambiguity check could never fire from a real run.
   if (hostRuns.length > 0) {
     report.identity = identityFromRunRecords({
-      repositoryRoot: path.resolve(here, "../.."),
+      repositoryRoot: path.resolve(here, "../../.."),
       // U2b: the digest of the bundle this run actually imported, taken
       // from the file on disk, so the descriptor is bound to the bytes
       // rather than merely naming their path.
