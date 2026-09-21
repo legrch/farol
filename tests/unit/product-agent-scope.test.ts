@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveProductAgentScope } from "../../src/apps/desktop/product-agent-scope";
+import {
+  productAgentInitialPaths,
+  resolveProductAgentScope,
+} from "../../src/apps/desktop/product-agent-scope";
 
 describe("Product Agent owner scope", () => {
   it("keeps the whole verified workspace unless the owner narrows it", () => {
@@ -117,5 +120,133 @@ describe("Product Agent owner scope", () => {
         excludedPaths: [],
       }),
     ).toMatchObject({ scope: { root: "/workspace/approved/src/.github" } });
+  });
+});
+
+// S35-TA-5. Exact mode is a designed, narrower scope, not a stage on the way
+// to a subtree: the owner names specific files inside the approved workspace
+// and the Agent gets those files and nothing around them. A review packet
+// claimed every accepted scope collapses to `{mode: "subtree", root}`; the
+// rows below pin the shape the resolver actually delivers so that claim
+// cannot be restated from the type alone.
+//
+// The resolver reports every refusal the same way, as `null`. It carries no
+// error codes of its own: `main.ts` turns that `null` into
+// `AGENT_SCOPE_INVALID`, and `runProductAgentAssignment` refuses a scope that
+// no longer matches its workspace with `AGENT_AUTHORITY_DENIED`.
+describe("S35-TA-5 an accepted exact selection stays exact", () => {
+  const ROOT = "/workspace/approved";
+  const EXCLUSIONS = ["/workspace/approved/private"];
+
+  it("delivers the owner's files, in the owner's order, and nothing else", () => {
+    expect(
+      resolveProductAgentScope(ROOT, EXCLUSIONS, {
+        mode: "exact",
+        relativePaths: ["docs/plan.md", "README.md", "src/main.ts"],
+      }),
+    ).toEqual({
+      scope: {
+        mode: "exact",
+        root: ROOT,
+        paths: [
+          "/workspace/approved/docs/plan.md",
+          "/workspace/approved/README.md",
+          "/workspace/approved/src/main.ts",
+        ],
+      },
+      excludedPaths: [],
+    });
+  });
+
+  it("keeps the root at the workspace, never at the folder holding the files", () => {
+    // Every chosen file sits under one nested folder, which is the shape that
+    // would tempt a reader into calling the result "a subtree of deep/nested".
+    // The root stays the workspace root, because that is what
+    // `productAgentScopeMatchesWorkspace` re-checks on every later turn.
+    expect(
+      resolveProductAgentScope(ROOT, EXCLUSIONS, {
+        mode: "exact",
+        relativePaths: ["deep/nested/a.md", "deep/nested/b.md"],
+      })?.scope,
+    ).toEqual({
+      mode: "exact",
+      root: ROOT,
+      paths: [
+        "/workspace/approved/deep/nested/a.md",
+        "/workspace/approved/deep/nested/b.md",
+      ],
+    });
+  });
+
+  it("gives the Agent the chosen files as its initial paths, never the root", () => {
+    const exact = resolveProductAgentScope(ROOT, EXCLUSIONS, {
+      mode: "exact",
+      relativePaths: ["README.md", "docs/plan.md"],
+    });
+    if (!exact) throw new Error("TEST_EXACT_SCOPE_REFUSED");
+    expect(productAgentInitialPaths(exact.scope)).toEqual([
+      "/workspace/approved/README.md",
+      "/workspace/approved/docs/plan.md",
+    ]);
+
+    const subtree = resolveProductAgentScope(ROOT, EXCLUSIONS, {
+      mode: "subtree",
+      relativeRoot: "docs",
+      excludedPaths: [],
+    });
+    if (!subtree) throw new Error("TEST_SUBTREE_SCOPE_REFUSED");
+    expect(productAgentInitialPaths(subtree.scope)).toEqual([
+      "/workspace/approved/docs",
+    ]);
+  });
+
+  it("confines every exact path to the approved workspace", () => {
+    for (const row of [
+      { why: "escapes the workspace", relativePaths: ["../sibling/secret.md"] },
+      {
+        why: "escapes after descending first",
+        relativePaths: ["docs/../../sibling/secret.md"],
+      },
+      {
+        why: "escapes to the filesystem root",
+        relativePaths: ["../../../../etc/passwd"],
+      },
+      {
+        why: "one accepted file cannot carry one escaping file",
+        relativePaths: ["README.md", "../sibling/secret.md"],
+      },
+      {
+        why: "sits inside a configured exclusion",
+        relativePaths: ["private/secret.txt"],
+      },
+      { why: "is the configured exclusion itself", relativePaths: ["private"] },
+    ]) {
+      expect({
+        why: row.why,
+        scope: resolveProductAgentScope(ROOT, EXCLUSIONS, {
+          mode: "exact",
+          relativePaths: row.relativePaths,
+        }),
+      }).toEqual({ why: row.why, scope: null });
+    }
+  });
+
+  it("joins an absolute-looking selection under the workspace root", () => {
+    // The contract schema refuses a leading slash before this point. The
+    // resolver must confine it anyway, so that a selection reaching it by
+    // another route cannot name an absolute path outside the workspace.
+    expect(
+      resolveProductAgentScope(ROOT, [], {
+        mode: "exact",
+        relativePaths: ["/etc/passwd"],
+      }),
+    ).toEqual({
+      scope: {
+        mode: "exact",
+        root: ROOT,
+        paths: ["/workspace/approved/etc/passwd"],
+      },
+      excludedPaths: [],
+    });
   });
 });
