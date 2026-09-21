@@ -1879,6 +1879,7 @@ async function proveSecondLaunchRejectsFailedStartup() {
 // status alone cannot tell the two apart, so the result line is read too.
 const SECOND_LAUNCH_DEADLINE_MS = 10_000;
 async function repeatLaunch(instance) {
+  const spawnedAt = Date.now();
   const secondary = spawn(executable, instance.launchArgs, {
     cwd: root,
     env: instance.launchEnvironment,
@@ -1899,6 +1900,11 @@ async function repeatLaunch(instance) {
     clearTimeout(deadline);
   }
   const elapsed = performance.now() - started;
+  // The secondary is a regular GUI process for up to two seconds. When it
+  // exits macOS hands activation to the frontmost visible window, which is
+  // the primary's freshly shown one — so when it started and when it went
+  // is half of any later focus reading.
+  lastSecondaryLaunch = { spawnedAt, exitedAt: Date.now(), pid: secondary.pid };
   const [status, signal] = exit;
   assert.equal(
     status,
@@ -1984,6 +1990,36 @@ async function waitForPageState(page, predicate, arg, options = {}) {
     if (Date.now() >= deadline) throw new Error("E2E_PAGE_STATE_TIMEOUT");
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+}
+
+// The last second-launch's own timestamps, read by the reopen row beside
+// its focus timeline rather than inferred from the order of the log.
+let lastSecondaryLaunch = null;
+
+// Focus, sampled rather than asked once. `waitForWindowPresentation` reads a
+// single instant; if activation arrives from the exiting secondary a moment
+// later, one read cannot say whether it was already true or flipped.
+async function sampleWindowFocus(application, untilMs) {
+  const samples = [];
+  while (Date.now() < untilMs) {
+    const sample = await application
+      .evaluate(({ BrowserWindow }) => {
+        const focused = BrowserWindow.getFocusedWindow();
+        return {
+          any: focused === null ? null : focused.id,
+          windows: BrowserWindow.getAllWindows().map((browserWindow) => ({
+            id: browserWindow.id,
+            focused: browserWindow.isFocused(),
+            visible: browserWindow.isVisible(),
+          })),
+        };
+      })
+      .catch(() => null);
+    samples.push({ at: Date.now(), sample });
+    if (sample === null) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return samples;
 }
 
 async function waitForWindowCount(application, count) {
@@ -7599,9 +7635,29 @@ demoMainSegment: try {
   });
   await repeatLaunch(normal);
   normal.window = await reopenedWindow;
+  // Focus is sampled from the moment the window arrives, because a single
+  // read at the end cannot say whether the window was focused all along or
+  // was handed activation by the exiting secondary a moment earlier.
+  const reopenFocus = sampleWindowFocus(normal.application, Date.now() + 2_500);
   await normal.window.locator("#sidebar").waitFor({ state: "visible" });
   await normal.window.locator('[data-panel="settings"].active').waitFor();
-  await waitForWindowPresentation(normal.application, normal.windowMode);
+  let reopenPresentationError = null;
+  try {
+    await waitForWindowPresentation(normal.application, normal.windowMode);
+  } catch (error) {
+    reopenPresentationError = error;
+  }
+  const reopenTimeline = {
+    secondary: lastSecondaryLaunch,
+    samples: await reopenFocus,
+  };
+  process.stdout.write(`E2E_REOPEN_FOCUS ${JSON.stringify(reopenTimeline)}\n`);
+  if (reopenPresentationError) {
+    throw new Error(
+      `${reopenPresentationError.message} · reopen timeline ${JSON.stringify(reopenTimeline)}`,
+      { cause: reopenPresentationError },
+    );
+  }
   const reopenedBootstrap = await normal.window.evaluate(() =>
     window.farolNext.bootstrap(),
   );
@@ -10058,6 +10114,21 @@ n12AgentDraftSegment: {
               menuVisible:
                 document.querySelector("#task-menu") instanceof HTMLElement &&
                 document.querySelector("#task-menu").offsetParent !== null,
+              // A menu that is present but whose live panel is hidden means
+              // the selection moved to a task the Agent editor does not
+              // belong to, which is a different loss from the menu closing.
+              liveHidden:
+                document
+                  .querySelector("#task-menu-live")
+                  ?.hasAttribute("hidden") ?? null,
+              // The selection itself, read off the tab the shell marks
+              // active, since the renderer's own variable is private.
+              selectedTaskId:
+                document
+                  .querySelector("#task-tabs .task-tab.active")
+                  ?.getAttribute("data-task-id") ?? null,
+              taskTabs: document.querySelectorAll("#task-tabs .task-tab")
+                .length,
               section: document.documentElement.dataset.section ?? null,
               scope: document.querySelector("#task-agent-scope")?.value ?? null,
               subtree:
