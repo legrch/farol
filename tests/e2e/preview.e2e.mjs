@@ -10034,8 +10034,46 @@ n12AgentDraftSegment: {
         ["#task-agent-exclusions", values.exclusions],
         ["#task-agent-objective", values.objective],
       ]) {
-        await draft.window.locator(selector).click({ timeout: 20_000 });
-        await draft.window.keyboard.type(text);
+        try {
+          await draft.window.locator(selector).click({ timeout: 20_000 });
+          await draft.window.keyboard.type(text);
+        } catch (error) {
+          // The editor went away between two of the owner's fields. Which
+          // windows are alive at this instant decides what that means: if
+          // the sign-in surface has already completed and closed itself,
+          // this is the background return arriving earlier than the case's
+          // own step, not a wider defect. Read it before saying either.
+          const windows = await draft.application
+            .evaluate(({ BrowserWindow }) =>
+              BrowserWindow.getAllWindows().map((browserWindow) => ({
+                id: browserWindow.id,
+                visible: browserWindow.isVisible(),
+                destroyed: browserWindow.isDestroyed(),
+                url: browserWindow.webContents.getURL(),
+              })),
+            )
+            .catch(() => null);
+          const surface = await draft.window
+            .evaluate(() => ({
+              menuVisible:
+                document.querySelector("#task-menu") instanceof HTMLElement &&
+                document.querySelector("#task-menu").offsetParent !== null,
+              section: document.documentElement.dataset.section ?? null,
+              scope: document.querySelector("#task-agent-scope")?.value ?? null,
+              subtree:
+                document.querySelector("#task-agent-subtree")?.value ?? null,
+              exclusions:
+                document.querySelector("#task-agent-exclusions")?.value ?? null,
+              objective:
+                document.querySelector("#task-agent-objective")?.value ?? null,
+              shellActions: globalThis.__farolE2EMenuEvents ?? [],
+            }))
+            .catch(() => null);
+          throw new Error(
+            `${error.message} · typing ${selector} · surface ${JSON.stringify(surface)} · windows ${JSON.stringify(windows)}`,
+            { cause: error },
+          );
+        }
       }
     };
     const shownAgentDraft = () =>
