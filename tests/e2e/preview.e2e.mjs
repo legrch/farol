@@ -1773,6 +1773,16 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   // it belongs to. A stall inside any of them now rejects with its own name
   // instead of leaving the lane silent.
   const label = `launch[${mode}/${windowMode}]`;
+  // A launch that missed its budget can still hand over a live application
+  // afterwards. Starting the next instance on top of one is how a lane ends
+  // up with two applications against one profile, so this waits for every
+  // late result to be released and refuses to start on a held one.
+  const held = await phases.drainLateResults();
+  assert.deepEqual(
+    held.map((entry) => `${entry.name}:${entry.state}`),
+    [],
+    "E2E_LATE_RESOURCE_STILL_HELD",
+  );
   const application = await phases.step(
     `${label}.electron.launch`,
     LAUNCH_PHASE_BUDGET_MS,
@@ -1784,6 +1794,9 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
         env: launchEnvironment,
         timeout: 15_000,
       }),
+    // Playwright's electron.launch takes no abort signal, so the only way to
+    // release a late application is to close the one this boundary produced.
+    { dispose: (late) => late.close() },
   );
   await phases.step(
     `${label}.activation.beforeFirstWindow`,
@@ -2388,6 +2401,7 @@ async function restart(instance) {
         env: instance.launchEnvironment,
         timeout: 15_000,
       }),
+    { dispose: (late) => late.close() },
   );
   instance.window = await phases.step(
     `${label}.firstWindow`,
