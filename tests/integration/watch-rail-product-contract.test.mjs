@@ -49,7 +49,13 @@ describe("Watch Rail product contract", () => {
 
     expect(html).toContain("Finish demo <span>›</span>");
     expect(shell).toContain('"Review request <span>›</span>"');
-    expect(main).toContain('publishShellAction("open-settings")');
+    // S35-TA-16: the settings publish now carries provenance on the
+    // envelope (`source: "settings-command"`), so the literal moved. The
+    // claim this row makes is unchanged and is asserted more precisely:
+    // exactly ONE publisher opens Settings as an owner command.
+    expect(
+      main.match(/publishShellAction\("open-settings", "settings-command"\)/gu),
+    ).toHaveLength(1);
     expect(main).toContain('accelerator: "CommandOrControl+,"');
   });
 

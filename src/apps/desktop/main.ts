@@ -66,6 +66,7 @@ import {
   type CodexContextController,
 } from "./codex-context-runtime";
 import { channels } from "../../pkg/ipc/channels";
+import type { ShellActionSource } from "../../pkg/ipc/shell-state";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
 import {
@@ -447,6 +448,13 @@ const chatGptSignInBlocked = new ChatGptSignInBlockLedger();
 // one, and `recordChatGptSignInOutcome` still writes nothing for
 // "unknown".
 let chatGptSignInOutcome: ChatGptSignInOutcomeDiagnostic | null = null;
+// S35-TA-16 (U1 seam): each auth window this process opens gets the next
+// number, and the publish its outcome produces carries the number of the
+// window that closed. A delayed close from an older window therefore
+// reports the OLDER generation, which is how a recipient tells a late event
+// from a current one without guessing from timing.
+let chatGptSignInGeneration = 0;
+let chatGptSignInOpenGeneration: number | null = null;
 let codexContextController: CodexContextController | null = null;
 // The connector's execution fence for summary-only phases, shared with the
 // MCP process through the launch root; it exists once the controller does.
@@ -987,6 +995,7 @@ function createContextSummaryFallbackRoute(
 // it. Inside the wizard, its own "chatgpt" step already re-reads
 // configuration state on the owner's next explicit check.
 async function recordChatGptSignInOutcome(
+  generation: number | null,
   status: ChatGptSignInStatus,
 ): Promise<void> {
   if (configuration && status !== "unknown") {
@@ -1010,7 +1019,11 @@ async function recordChatGptSignInOutcome(
   // Outside Setup the owner is brought to Settings; inside Setup the open
   // step is told the window closed, so it shows the recorded outcome and
   // its next action instead of the state from before sign-in.
-  publishShellAction(setupOpen ? "sign-in-returned" : "open-settings");
+  publishShellAction(
+    setupOpen ? "sign-in-returned" : "open-settings",
+    "auth-window-closed",
+    generation,
+  );
 }
 
 // The first turn of a Codex host thread admits its task like a new Browser
@@ -4260,6 +4273,8 @@ async function configureAdmittedProduct(
       }
       chatGptSignInBlocked.beginAttempt();
       chatGptSignInOutcome = null;
+      chatGptSignInGeneration += 1;
+      chatGptSignInOpenGeneration = chatGptSignInGeneration;
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         opened = await chatGptRoute.openForSignIn(SIGN_IN_WINDOW_TITLE);
@@ -5730,8 +5745,17 @@ function publishShellAction(
     | "open-settings"
     | "sign-in-returned"
     | "close-overlay",
+  source: ShellActionSource,
+  authWindowGeneration: number | null = null,
 ): void {
-  window?.webContents.send(channels.shellAction, { action });
+  // S35-TA-16: provenance on the envelope only. Same actions, same
+  // recipient, same ordering — a recipient can now tell who asked.
+  window?.webContents.send(channels.shellAction, {
+    action,
+    eventId: randomUUID(),
+    source,
+    authWindowGeneration,
+  });
 }
 
 function focusForLayout(): void {
@@ -5753,7 +5777,7 @@ function requestQuickSwitcher(): void {
   if (!window || setupOpen) return;
   shellOverlay = "quick-switcher";
   applyLayout();
-  publishShellAction("open-quick-switcher");
+  publishShellAction("open-quick-switcher", "quick-switcher-command");
   window.webContents.focus();
 }
 
@@ -5775,7 +5799,7 @@ function requestSidebarToggle(): void {
 
 function requestSettings(): void {
   if (!window) return;
-  publishShellAction("open-settings");
+  publishShellAction("open-settings", "settings-command");
   window.webContents.focus();
 }
 
@@ -5784,7 +5808,7 @@ function closeShellOverlay(): void {
   if (sidebarMode === "overlay") sidebarMode = "rail";
   shellOverlay = "none";
   applyLayout();
-  publishShellAction("close-overlay");
+  publishShellAction("close-overlay", "overlay-dismissed");
   focusForLayout();
 }
 
@@ -6965,7 +6989,9 @@ async function main(): Promise<void> {
       : {}),
     onSignInOutcome: (status, diagnostic) => {
       chatGptSignInOutcome = diagnostic;
-      void recordChatGptSignInOutcome(status);
+      const closing = chatGptSignInOpenGeneration;
+      chatGptSignInOpenGeneration = null;
+      void recordChatGptSignInOutcome(closing, status);
     },
     onSignInBlocked: (diagnostic) => {
       chatGptSignInBlocked.record(diagnostic);
