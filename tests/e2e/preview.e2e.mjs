@@ -11858,20 +11858,44 @@ n10ComputerPanelSegment: {
       .click();
     const lostReview = firstCard.locator(".workspace-mutation-evidence");
     await lostReview.getByText(/README\.md · \d+ bytes · source/u).waitFor();
-    await lostReview
-      .getByLabel("Find exact text in approved-workspace", { exact: true })
-      .fill("workspace verification");
-    await lostReview
-      .getByLabel("Replacement text for approved-workspace", { exact: true })
-      .fill("workspace lost-reply mutation");
     const settingsPath = path.join(
       panel.userData,
       "farol-next-state",
       "product-settings.json",
     );
-    await lostReview
-      .getByRole("button", { name: "Apply guarded edit", exact: true })
-      .click();
+    // Filling and submitting is ONE attempt, retried as a unit, for the same
+    // reason the two rows below are: a card re-render can land between the
+    // two fills, or between the button reporting itself enabled and the
+    // click reaching it, and it empties the form. Measured on the packaged
+    // app, sealed attempt 20260921T112424595Z-38ae0dff, where a single 30 s
+    // click waited out a button the render had just disabled. Each attempt
+    // has its own bounded click and the loop is allowed more time than the
+    // one attempt it replaces: a narrower window, not a shorter wait.
+    const lostApply = lostReview.getByRole("button", {
+      name: "Apply guarded edit",
+      exact: true,
+    });
+    let lostSubmitted = false;
+    let lostSubmitError = null;
+    for (let attempt = 0; attempt < 8 && !lostSubmitted; attempt += 1) {
+      await lostReview
+        .getByLabel("Find exact text in approved-workspace", { exact: true })
+        .fill("workspace verification");
+      await lostReview
+        .getByLabel("Replacement text for approved-workspace", { exact: true })
+        .fill("workspace lost-reply mutation");
+      try {
+        await lostApply.click({ timeout: 5_000 });
+        lostSubmitted = true;
+      } catch (error) {
+        lostSubmitError = error;
+      }
+    }
+    assert.equal(
+      lostSubmitted,
+      true,
+      `the approval form kept both values long enough to submit them · ${lostSubmitError?.message ?? ""}`,
+    );
     // The record exists before the edit runs and is cleared by this
     // window's acknowledgement afterwards. Watch the product's own file for
     // both transitions rather than composing a record: what is captured
