@@ -10809,10 +10809,28 @@ n12AgentDraftSegment: {
       .filter({ hasText: "approved-workspace" })
       .getByRole("button", { name: "Remove", exact: true })
       .click({ timeout: 20_000 });
-    await draft.window
-      .locator("#computer-feedback")
-      .getByText("approved-workspace approval removed.", { exact: true })
-      .waitFor();
+    // The sentence is the one the panel composes from the workspace's own
+    // label (shell.ts:2072), so it is asserted exactly. If it does not
+    // arrive, what the panel actually said is the finding — a refusal reads
+    // the same as a missing sentence from a bare wait.
+    try {
+      await draft.window
+        .locator("#computer-feedback")
+        .getByText("approved-workspace approval removed.", { exact: true })
+        .waitFor();
+    } catch (error) {
+      const observed = await draft.window.evaluate(() => ({
+        feedback:
+          document.querySelector("#computer-feedback")?.textContent ?? null,
+        cards: [
+          ...document.querySelectorAll("#computer-workspaces .workspace-card"),
+        ].map((card) => card.textContent?.slice(0, 160) ?? null),
+      }));
+      throw new Error(
+        `${error.message} · the Computer panel said ${JSON.stringify(observed)}`,
+        { cause: error },
+      );
+    }
     await toBrowser();
     await openDraftMenu();
     const refusedDraft = await draft.window.evaluate(() => ({
