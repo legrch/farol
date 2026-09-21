@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  WORKSPACE_EDIT_ACK_HOLD_ENV,
+  WORKSPACE_EDIT_ACK_HOLD_INVALID,
   WORKSPACE_EDIT_REPLY_DELIVERIES_ENV,
   WORKSPACE_EDIT_REPLY_FAULT_INVALID,
   createConfigurationReplyFault,
+  e2eBudget,
 } from "../../src/apps/desktop/configuration-reply-fault";
 import type { ProductConfigurationResult } from "../../src/pkg/product-settings/contract";
 
@@ -148,5 +151,68 @@ describe("the guarded-edit reply fault", () => {
         },
       } as unknown as ProductConfigurationResult),
     ).toBe("deliver");
+  });
+});
+
+describe("the shared E2E budget", () => {
+  it("is unarmed unless both gates are set", () => {
+    for (const env of [
+      {},
+      { FAROL_NEXT_E2E: "1" },
+      { [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
+      { FAROL_NEXT_E2E: "0", [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
+      { FAROL_NEXT_E2E: "true", [WORKSPACE_EDIT_ACK_HOLD_ENV]: "0" },
+    ]) {
+      expect(e2eBudget(env, WORKSPACE_EDIT_ACK_HOLD_ENV, "NEVER")).toBeNull();
+    }
+  });
+
+  it("reads a count when both gates are set", () => {
+    for (const [raw, expected] of [
+      ["0", 0],
+      ["", 0],
+      ["3", 3],
+    ] as const) {
+      expect(
+        e2eBudget(
+          { FAROL_NEXT_E2E: "1", [WORKSPACE_EDIT_ACK_HOLD_ENV]: raw },
+          WORKSPACE_EDIT_ACK_HOLD_ENV,
+          "NEVER",
+        ),
+      ).toBe(expected);
+    }
+  });
+
+  it("refuses a value that is not a count, with the caller's own code", () => {
+    for (const raw of ["-1", "1.5", "one", "NaN", "1e400", "1 2"]) {
+      expect(() =>
+        e2eBudget(
+          { FAROL_NEXT_E2E: "1", [WORKSPACE_EDIT_ACK_HOLD_ENV]: raw },
+          WORKSPACE_EDIT_ACK_HOLD_ENV,
+          WORKSPACE_EDIT_ACK_HOLD_INVALID,
+        ),
+      ).toThrow(WORKSPACE_EDIT_ACK_HOLD_INVALID);
+    }
+  });
+
+  it("reads each seam's own variable, never another's", () => {
+    const env = {
+      FAROL_NEXT_E2E: "1",
+      [WORKSPACE_EDIT_REPLY_DELIVERIES_ENV]: "7",
+    };
+    expect(
+      e2eBudget(
+        env,
+        WORKSPACE_EDIT_ACK_HOLD_ENV,
+        WORKSPACE_EDIT_ACK_HOLD_INVALID,
+      ),
+    ).toBeNull();
+    expect(
+      e2eBudget(
+        env,
+        WORKSPACE_EDIT_REPLY_DELIVERIES_ENV,
+        WORKSPACE_EDIT_REPLY_FAULT_INVALID,
+      ),
+    ).toBe(7);
   });
 });

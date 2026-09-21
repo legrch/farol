@@ -12247,6 +12247,276 @@ n10ComputerPanelSegment: {
     } finally {
       await close(droppedReply);
     }
+
+    // The third shape of the same failure: the result ARRIVED, and the
+    // acknowledgement did not.
+    //
+    // M1's row above loses the result itself. This one loses nothing on the
+    // way in: the edit runs, its reply reaches this window, the evidence
+    // card and the success sentence are rendered — and then the
+    // acknowledgement the renderer queues for it never leaves. Only the
+    // renderer can fail to send it, because the renderer is what sends it
+    // (shell.ts `configureProduct` queues `acknowledgeWorkspaceEdit` as a
+    // microtask beside the render, and nothing awaits it), so the seam is a
+    // renderer-side hold gated on the one bootstrap field main publishes for
+    // it. That field joins the FAROL_NEXT_E2E family under the P3 residual:
+    // null in every production build, armed only by this lane, and carrying
+    // no authority of its own.
+    //
+    // The control is the segment's own normal path: the rows above apply a
+    // guarded edit whose reply IS delivered, whose acknowledgement IS sent,
+    // and whose record is therefore cleared with no notice after a restart.
+    const heldAck = await launch([], "hidden", "demo", {
+      environment: { FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK: "0" },
+    });
+    try {
+      const ackDiagnostics = [];
+      const watchAckDiagnostics = (instance) => {
+        instance.window.on("console", (message) => {
+          const text = message.text();
+          if (text.startsWith("farol-next-e2e:ack-held")) {
+            ackDiagnostics.push(text.trim());
+          }
+        });
+      };
+      watchAckDiagnostics(heldAck);
+      await completeSetup(heldAck, false, true);
+      await heldAck.window.locator('[data-section="computer"]').click();
+      await heldAck.window.locator('[data-panel="computer"].active').waitFor();
+      const heldCard = heldAck.window
+        .locator("#computer-workspaces .workspace-card")
+        .filter({ hasText: "approved-workspace" });
+      await heldCard
+        .getByRole("button", { name: "Enable edits", exact: true })
+        .click();
+      await heldCard.getByText(/guarded edits · not verified/u).waitFor();
+      await heldCard
+        .getByRole("button", { name: "Verify folder", exact: true })
+        .click();
+      await heldCard.getByText(/guarded edits · verified/u).waitFor();
+
+      const heldSettingsPath = path.join(
+        heldAck.userData,
+        "farol-next-state",
+        "product-settings.json",
+      );
+      const heldRecordRoot = path.join(
+        heldAck.userData,
+        "farol-next-state",
+        "workspace-mutations",
+        "mutations",
+      );
+      const countHeldRecords = async () => {
+        try {
+          const entries = await fs.readdir(heldRecordRoot);
+          return entries.filter((entry) => entry.endsWith(".json")).length;
+        } catch (error) {
+          if (error?.code !== "ENOENT") throw error;
+          return 0;
+        }
+      };
+      const heldDigest = (text) =>
+        createHash("sha256").update(text).digest("hex");
+      const heldBefore = await fs.readFile(heldAck.workspaceFile, "utf8");
+      const heldRecordsBefore = await countHeldRecords();
+
+      let heldRevision = null;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const revision = (
+          await heldAck.window.evaluate(() => window.farolNext.bootstrap())
+        ).configuration.settings.revision;
+        if (revision === heldRevision) break;
+        heldRevision = revision;
+        await heldAck.window.waitForTimeout(100);
+      }
+      await heldCard
+        .getByRole("button", { name: "Edit file…", exact: true })
+        .click();
+      const heldApproval = heldCard.locator(".workspace-mutation-evidence");
+      await heldApproval
+        .getByText(/README\.md · \d+ bytes · source/u)
+        .waitFor();
+      const heldApply = heldApproval.getByRole("button", {
+        name: "Apply guarded edit",
+        exact: true,
+      });
+      let heldSubmitted = false;
+      let heldSubmitError = null;
+      for (let attempt = 0; attempt < 8 && !heldSubmitted; attempt += 1) {
+        await heldApproval
+          .getByLabel("Find exact text in approved-workspace", { exact: true })
+          .fill("workspace verification");
+        await heldApproval
+          .getByLabel("Replacement text for approved-workspace", {
+            exact: true,
+          })
+          .fill("workspace held-ack mutation");
+        try {
+          await heldApply.click({ timeout: 5_000 });
+          heldSubmitted = true;
+        } catch (error) {
+          heldSubmitError = error;
+        }
+      }
+      assert.equal(
+        heldSubmitted,
+        true,
+        `the approval form kept both values long enough to submit them · ${heldSubmitError?.message ?? ""}`,
+      );
+
+      // (1) The result reached this window and was rendered. This is the
+      // whole difference from a lost reply: the owner saw the outcome.
+      await heldAck.window
+        .locator("#computer-feedback")
+        .getByText("Edited README.md once · durable.", { exact: true })
+        .waitFor();
+      await heldCard
+        .locator(".workspace-mutation-evidence")
+        .getByText(/Edited README\.md · \d+ bytes/u)
+        .waitFor();
+
+      // (2) The edit really happened, once.
+      const heldBytes = "Farol Next workspace held-ack mutation fixture\n";
+      assert.notEqual(heldBytes, heldBefore);
+      let heldOnDisk = null;
+      for (let attempt = 0; attempt < 200 && heldOnDisk === null;) {
+        const current = await fs.readFile(heldAck.workspaceFile, "utf8");
+        if (current === heldBytes) heldOnDisk = current;
+        else {
+          attempt += 1;
+          await heldAck.window.waitForTimeout(50);
+        }
+      }
+      assert.equal(heldOnDisk, heldBytes, "the guarded edit executed");
+      const heldStat = await fs.stat(heldAck.workspaceFile);
+      assert.equal(
+        await countHeldRecords(),
+        heldRecordsBefore + 1,
+        "the guarded edit left exactly one new operation record",
+      );
+
+      // (3) The acknowledgement was held, once, and the product's own
+      // pending record is still there because nothing cleared it. Nothing
+      // here writes product-settings.json.
+      for (let attempt = 0; attempt < 200 && ackDiagnostics.length === 0;) {
+        attempt += 1;
+        await heldAck.window.waitForTimeout(50);
+      }
+      const heldSettings = JSON.parse(
+        await fs.readFile(heldSettingsPath, "utf8"),
+      );
+      const heldEdit = heldSettings.computer.pendingEdit;
+      assert.ok(
+        heldEdit,
+        "the undelivered-result record survives an acknowledgement that was never sent",
+      );
+      assert.equal(heldEdit.relativePath, "README.md");
+      assert.deepEqual(
+        ackDiagnostics,
+        [`farol-next-e2e:ack-held ${heldEdit.operationId}`],
+        "exactly one acknowledgement was held, and it was this operation's",
+      );
+      await heldAck.window.waitForTimeout(500);
+      assert.deepEqual(
+        JSON.parse(await fs.readFile(heldSettingsPath, "utf8")).computer
+          .pendingEdit,
+        heldEdit,
+        "an unsent acknowledgement leaves the record exactly as the product wrote it",
+      );
+      cases.push("n10-computer-held-ack-leaves-the-products-own-record");
+
+      // (4) The restart is an ordinary process: the loss happened once, and
+      // recovery must not depend on the seam that caused it. Disarming the
+      // hold here is what makes the rest of this row the production path.
+      delete heldAck.launchEnvironment.FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK;
+      await restart(heldAck);
+      watchAckDiagnostics(heldAck);
+      await heldAck.window.locator('[data-section="computer"]').click();
+      await heldAck.window.locator('[data-panel="computer"].active').waitFor();
+      const recoveredHeldCard = heldAck.window
+        .locator("#computer-workspaces .workspace-card")
+        .filter({ hasText: "approved-workspace" });
+      const heldNotice = recoveredHeldCard.locator(".workspace-pending-edit");
+      await heldNotice
+        .getByText(
+          "The last guarded edit of README.md has no delivered result.",
+        )
+        .waitFor();
+      assert.equal(
+        await recoveredHeldCard
+          .getByRole("button", { name: "Edit file…", exact: true })
+          .isDisabled(),
+        true,
+        "an unacknowledged outcome refuses a second edit until it is known",
+      );
+
+      // (5) The same operation and the same receipt, redelivered.
+      const heldObserved = await heldAck.window.evaluate(
+        (operationId) =>
+          window.farolNext.configure({
+            kind: "computer.observe-workspace-edit",
+            operationId,
+          }),
+        heldEdit.operationId,
+      );
+      assert.equal(heldObserved.ok, true, JSON.stringify(heldObserved));
+      assert.equal(heldObserved.evidence.operationId, heldEdit.operationId);
+      assert.equal(heldObserved.evidence.redelivered, true);
+      assert.equal(heldObserved.evidence.beforeSha256, heldDigest(heldBefore));
+      assert.equal(heldObserved.evidence.afterSha256, heldDigest(heldBytes));
+
+      // (6) The acknowledgement now lands, and clears the record once.
+      await heldNotice
+        .getByRole("button", { name: "Check result", exact: true })
+        .click();
+      await heldAck.window
+        .locator("#computer-feedback")
+        .getByText("Edited README.md once · durable · result redelivered.", {
+          exact: true,
+        })
+        .waitFor();
+      await heldAck.window.waitForFunction(
+        () => document.querySelectorAll(".workspace-pending-edit").length === 0,
+      );
+      let heldCleared = null;
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        heldCleared = JSON.parse(await fs.readFile(heldSettingsPath, "utf8"));
+        if (heldCleared.computer.pendingEdit === null) break;
+        await heldAck.window.waitForTimeout(50);
+      }
+      assert.equal(
+        heldCleared.computer.pendingEdit,
+        null,
+        "the acknowledgement that finally landed clears the record exactly once",
+      );
+      const heldAgain = await heldAck.window.evaluate(
+        (operationId) =>
+          window.farolNext.configure({
+            kind: "computer.observe-workspace-edit",
+            operationId,
+          }),
+        heldEdit.operationId,
+      );
+      assert.equal(heldAgain.ok, false);
+      assert.equal(heldAgain.error, "WORKSPACE_MUTATION_NOT_PENDING");
+
+      // (7) No second mutation, and no second hold: the restarted process
+      // ran the production path.
+      const heldFinalStat = await fs.stat(heldAck.workspaceFile);
+      assert.equal(await fs.readFile(heldAck.workspaceFile, "utf8"), heldBytes);
+      assert.equal(heldFinalStat.mtimeMs, heldStat.mtimeMs);
+      assert.equal(
+        await countHeldRecords(),
+        heldRecordsBefore + 1,
+        "recovery read the record it already had and wrote no new one",
+      );
+      assert.deepEqual(ackDiagnostics, [
+        `farol-next-e2e:ack-held ${heldEdit.operationId}`,
+      ]);
+      cases.push("n10-computer-held-ack-recovered-after-restart");
+    } finally {
+      await close(heldAck);
+    }
   } finally {
     await close(panel);
     segmentMark("n10-computer-panel", "end");
