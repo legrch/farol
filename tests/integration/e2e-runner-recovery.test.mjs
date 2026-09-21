@@ -27,11 +27,18 @@ describe("closing an application that is already gone", () => {
       e2eSource.indexOf("async function close(instance, options = {}) {"),
     );
     const body = close.slice(0, close.indexOf("\nasync function restart("));
-    expect(body).toContain(
-      'ifApplicationLive(\n      instance,\n      "window-presentation"',
+    // The claim is that the read goes through the guard, not how Prettier
+    // happens to break the call: the three reads below are asserted the same
+    // way so a reformatting cannot look like a removed guard.
+    expect(body).toMatch(
+      /ifApplicationLive\(\s*instance,\s*"window-presentation"/u,
     );
-    expect(body).toContain('ifApplicationLive(instance, "utility-metrics"');
-    expect(body).toContain('ifApplicationLive(instance, "application-close"');
+    expect(body).toMatch(
+      /ifApplicationLive\(\s*instance,\s*"utility-metrics"/u,
+    );
+    expect(body).toMatch(
+      /ifApplicationLive\(\s*instance,\s*"application-close"/u,
+    );
     // No unguarded read is left behind.
     expect(body).not.toMatch(
       /^\s*(const \w+ = )?await inspectWindowPresentation\(/mu,
