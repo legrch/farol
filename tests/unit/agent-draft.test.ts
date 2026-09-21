@@ -18,7 +18,7 @@ describe("the Agent assignment the owner is typing", () => {
     // it. Now the renderer does.
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-1", typed);
+    store.capture("task-1", typed, null);
     expect(store.restore("task-1")).toEqual(typed);
     // Any number of rebuilds; the draft is not consumed by reading it.
     expect(store.restore("task-1")).toEqual(typed);
@@ -27,7 +27,7 @@ describe("the Agent assignment the owner is typing", () => {
   it("is dropped when the menu moves to a different task", () => {
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-1", typed);
+    store.capture("task-1", typed, null);
     store.select("task-2");
     expect(store.restore("task-2")).toBeNull();
     expect(store.held()).toBe(false);
@@ -36,7 +36,7 @@ describe("the Agent assignment the owner is typing", () => {
   it("is dropped when the assignment is submitted", () => {
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-1", typed);
+    store.capture("task-1", typed, null);
     store.clear();
     expect(store.restore("task-1")).toBeNull();
   });
@@ -44,7 +44,7 @@ describe("the Agent assignment the owner is typing", () => {
   it("is dropped when the owner dismisses the menu", () => {
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-1", typed);
+    store.capture("task-1", typed, null);
     store.clear();
     expect(store.held()).toBe(false);
   });
@@ -52,7 +52,7 @@ describe("the Agent assignment the owner is typing", () => {
   it("never hands one task's text to another", () => {
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-1", typed);
+    store.capture("task-1", typed, null);
     expect(store.restore("task-2")).toBeNull();
   });
 
@@ -61,7 +61,7 @@ describe("the Agent assignment the owner is typing", () => {
     // task; it must not become the new task's draft.
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-2", typed);
+    store.capture("task-2", typed, null);
     expect(store.restore("task-1")).toBeNull();
   });
 
@@ -70,7 +70,7 @@ describe("the Agent assignment the owner is typing", () => {
     // redundant select must not be a clear.
     const store = new AgentDraftStore();
     store.select("task-1");
-    store.capture("task-1", typed);
+    store.capture("task-1", typed, null);
     store.select("task-1");
     expect(store.restore("task-1")).toEqual(typed);
   });
@@ -86,7 +86,7 @@ describe("the Agent assignment the owner is typing", () => {
     const store = new AgentDraftStore();
     store.select("task-1");
     const mutable = { ...typed };
-    store.capture("task-1", mutable);
+    store.capture("task-1", mutable, null);
     mutable.subtree = "somewhere/else";
     expect(store.restore("task-1")?.subtree).toBe("packages/app/src");
   });

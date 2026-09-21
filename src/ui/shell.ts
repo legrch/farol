@@ -48,6 +48,12 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import { TaskMenuTrace } from "./task-menu-trace";
 import {
+  AGENT_AUTHORITY_CHANGED,
+  agentAuthorityUnchanged,
+  decideShellAction,
+  type AgentAuthority,
+} from "./shell-action-policy";
+import {
   AgentDraftStore,
   EMPTY_AGENT_DRAFT,
   type AgentDraftFields,
@@ -346,6 +352,16 @@ let taskMenuBusy = false;
 // The owner's Agent assignment text, held here rather than only in the
 // fields, so an unowned shell action that closes the menu cannot take it.
 const taskAgentDraft = new AgentDraftStore();
+// Shell actions already acted on, so a proven duplicate has no second
+// effect. Only ids go in; an envelope without one is never deduplicated.
+const handledShellActionIds = new Set<string>();
+// Whether a background event has updated readiness while the owner was
+// writing an assignment, so the menu offers a way out instead of taking
+// the editor.
+let taskMenuReturnOffered = false;
+// The auth window this renderer last saw opened. A close stamped with an
+// older number is a delayed event from a window that is already gone.
+let currentAuthWindowGeneration: number | null = null;
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
   ProductConfigurationEvidence,
@@ -1044,6 +1060,19 @@ function writeTaskMenuTrace(): void {
   note.dataset.phase = taskMenuTrace.phase();
 }
 
+function currentAgentAuthority(): AgentAuthority | null {
+  const configured = bootstrap.configuration;
+  if (configured.status !== "ready") return null;
+  const settings = configured.settings;
+  const verified = settings.setup.computer.verified;
+  if (!verified?.workspaceId) return null;
+  return {
+    workspaceId: verified.workspaceId,
+    configGeneration: settings.computer.generation,
+    hostExecutablePath: settings.nativeHosts.codex?.executablePath ?? null,
+  };
+}
+
 function readAgentDraftFields(): AgentDraftFields {
   return {
     mode: required<HTMLSelectElement>("#task-agent-scope").value,
@@ -1105,6 +1134,10 @@ function renderTaskMenu(): void {
   // anything below reads the fields, so the assignment is built from it.
   const heldDraft = taskAgentDraft.restore(task.taskId);
   if (heldDraft) writeAgentDraftFields(heldDraft);
+  // A background event updated readiness while this was being written. The
+  // owner gets a way to Settings rather than being sent there.
+  const returnAction = required<HTMLButtonElement>("#task-menu-return");
+  returnAction.hidden = !taskMenuReturnOffered;
   // Whatever rebuilt this menu — a render, a reopen after an unowned shell
   // action, a task state push — the owner's own text goes back before
   // anything below reads the fields, so the assignment is built from it.
@@ -4209,7 +4242,10 @@ function closeOverlay(): void {
   // Agent draft. The menu closing for any other reason — an `open-settings`
   // shell action published when a route window closed, for one — does not
   // come through here, which is the whole point.
-  if (shellOverlay === "task-menu") taskAgentDraft.clear();
+  if (shellOverlay === "task-menu") {
+    taskAgentDraft.clear();
+    taskMenuReturnOffered = false;
+  }
   sidebarOverlayOpen = false;
   shellOverlay = "none";
   render();
@@ -4522,15 +4558,39 @@ async function start(): Promise<void> {
     if (!parsed.success || !bootstrapReady) return;
     if (parsed.data.action === "toggle-sidebar") toggleSidebar();
     else if (parsed.data.action === "open-quick-switcher") openCommands();
-    else if (parsed.data.action === "open-settings") {
+    else if (
+      parsed.data.action === "open-settings" ||
+      parsed.data.action === "sign-in-returned"
+    ) {
+      // The envelope now says who published it. Which publisher it was
+      // decides whether the editor may be taken; it never decides whether
+      // readiness is re-read.
+      const provenance = {
+        eventId: parsed.data.eventId,
+        source: parsed.data.source,
+        authWindowGeneration: parsed.data.authWindowGeneration,
+      };
+      const decision = decideShellAction(provenance, {
+        draftHeld: shellOverlay === "task-menu" && taskAgentDraft.held(),
+        currentAuthWindowGeneration,
+        handledEventIds: handledShellActionIds,
+      });
+      if (provenance.eventId !== null) {
+        handledShellActionIds.add(provenance.eventId);
+      }
+      if (!decision.refreshReadiness) return;
       chatGptSignInOpened = false;
-      setupJourney = { ...setupJourney, open: false };
-      selectSection("settings");
-      void refreshSettingsAfterReturn();
-    } else if (parsed.data.action === "sign-in-returned") {
-      // The sign-in window closed and its outcome is recorded: the step's
-      // next action comes from that outcome, not from "a window is open".
-      chatGptSignInOpened = false;
+      if (decision.navigate) {
+        taskMenuReturnOffered = false;
+        if (parsed.data.action === "open-settings") {
+          setupJourney = { ...setupJourney, open: false };
+          selectSection("settings");
+        }
+      } else if (decision.offerReturn) {
+        // Readiness still changes; the editor does not move.
+        taskMenuReturnOffered = true;
+        renderTaskMenu();
+      }
       void refreshSettingsAfterReturn();
     } else closeOverlay();
   });
@@ -4657,6 +4717,18 @@ async function start(): Promise<void> {
     "click",
     openTaskMenu,
   );
+  required<HTMLButtonElement>("#task-menu-return").addEventListener(
+    "click",
+    () => {
+      // The owner choosing to go: their navigation is honoured, and the
+      // assignment is kept because going to Settings is not dismissing one.
+      taskMenuReturnOffered = false;
+      setupJourney = { ...setupJourney, open: false };
+      sidebarOverlayOpen = false;
+      shellOverlay = "none";
+      selectSection("settings");
+    },
+  );
   required<HTMLButtonElement>("#task-menu-close").addEventListener(
     "click",
     closeOverlay,
@@ -4712,7 +4784,11 @@ async function start(): Promise<void> {
     },
   );
   const captureAgentDraft = (): void => {
-    taskAgentDraft.capture(selectedTaskId, readAgentDraftFields());
+    taskAgentDraft.capture(
+      selectedTaskId,
+      readAgentDraftFields(),
+      currentAgentAuthority(),
+    );
     renderTaskMenu();
   };
   for (const selector of [
@@ -4754,6 +4830,21 @@ async function start(): Promise<void> {
       ).value.trim();
       const scope = productAgentScopeSelection();
       if (!scope) return;
+      // Text survived a background event; permission does not travel with
+      // it. If the grant it was written under has moved, the assignment is
+      // refused out loud and nothing is sent.
+      if (
+        taskAgentDraft.held() &&
+        !agentAuthorityUnchanged(
+          taskAgentDraft.composedUnder(),
+          currentAgentAuthority(),
+        )
+      ) {
+        taskMenuFeedback = AGENT_AUTHORITY_CHANGED;
+        taskMenuFeedbackError = true;
+        render();
+        return;
+      }
       void runTaskMenuCommand(
         {
           kind: "task.start-agent",

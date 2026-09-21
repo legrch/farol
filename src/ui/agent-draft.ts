@@ -15,6 +15,8 @@
  * fields remain what the assignment is read from, so the delivered scope is
  * byte-identical to before.
  */
+import type { AgentAuthority } from "./shell-action-policy";
+
 export type AgentDraftFields = Readonly<{
   mode: string;
   objective: string;
@@ -34,6 +36,9 @@ export const EMPTY_AGENT_DRAFT: AgentDraftFields = Object.freeze({
 export class AgentDraftStore {
   private taskId = "";
   private fields: AgentDraftFields | null = null;
+  // The grant the text was written under. Kept beside the text so restoring
+  // one can never quietly restore the other.
+  private authority: AgentAuthority | null = null;
 
   /**
    * The menu is being shown for `taskId`. A different task is a different
@@ -44,12 +49,23 @@ export class AgentDraftStore {
     if (taskId === this.taskId) return;
     this.taskId = taskId;
     this.fields = null;
+    this.authority = null;
   }
 
   /** The owner typed. */
-  capture(taskId: string, fields: AgentDraftFields): void {
+  capture(
+    taskId: string,
+    fields: AgentDraftFields,
+    authority: AgentAuthority | null,
+  ): void {
     if (taskId !== this.taskId) return;
     this.fields = { ...fields };
+    this.authority = authority === null ? null : { ...authority };
+  }
+
+  /** The grant this text was composed under, for the check at submit. */
+  composedUnder(): AgentAuthority | null {
+    return this.authority;
   }
 
   /**
@@ -65,6 +81,7 @@ export class AgentDraftStore {
   /** The assignment was submitted or the owner dismissed the menu. */
   clear(): void {
     this.fields = null;
+    this.authority = null;
   }
 
   /** Whether any text is being held, for the source the menu renders from. */

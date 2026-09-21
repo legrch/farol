@@ -82,9 +82,9 @@ describe("the Agent draft is held by the renderer, not by the fields", () => {
     expect(functionBody(source, "function openTaskMenu(): void {")).toContain(
       "taskAgentDraft.select(task.taskId)",
     );
-    expect(functionBody(source, "function closeOverlay(): void {")).toContain(
-      'if (shellOverlay === "task-menu") taskAgentDraft.clear()',
-    );
+    const close = functionBody(source, "function closeOverlay(): void {");
+    expect(close).toContain('if (shellOverlay === "task-menu")');
+    expect(close).toContain("taskAgentDraft.clear()");
     const submit = source.indexOf('"Agent assignment admitted."');
     expect(submit).toBeGreaterThan(-1);
     expect(source.slice(submit, submit + 200)).toContain(
@@ -92,18 +92,23 @@ describe("the Agent draft is held by the renderer, not by the fields", () => {
     );
   });
 
-  it("leaves the unowned shell action doing exactly what it did", async () => {
-    // Whether a shell action the owner did not cause should close the menu
-    // at all is a separate decision. This fix does not take it.
+  it("applies every outcome, and makes only the navigation conditional", async () => {
+    // This replaces an earlier assertion that the handler stayed untouched.
+    // That one existed to keep a decision open — whether an action the owner
+    // did not cause may close the menu — and the owner has since taken it:
+    // background navigation must not tear down an editor holding a draft.
+    // What must NOT become conditional is the outcome itself; a readiness
+    // change still applies whoever sent it.
     const source = await shell();
     const handler = source.slice(
-      source.indexOf('parsed.data.action === "open-settings"'),
-      source.indexOf('parsed.data.action === "sign-in-returned"'),
+      source.indexOf("window.farolNext.onShellAction("),
+      source.indexOf("window.farolNext.onWindowState("),
     );
-    expect(handler).toContain("setupJourney");
-    expect(handler).toContain('selectSection("settings")');
     expect(handler).toContain("refreshSettingsAfterReturn()");
-    expect(handler).not.toContain("taskAgentDraft");
+    expect(handler).toContain("chatGptSignInOpened = false");
+    // Exactly one place decides navigation, and it is the policy's answer.
+    expect(handler.match(/selectSection\("settings"\)/gu)?.length).toBe(1);
+    expect(handler).toContain("if (decision.navigate)");
   });
 
   it("keeps the fields as the single source the assignment is built from", async () => {
@@ -116,5 +121,73 @@ describe("the Agent draft is held by the renderer, not by the fields", () => {
     );
     expect(scope).toContain('required<HTMLSelectElement>("#task-agent-scope")');
     expect(scope).not.toContain("taskAgentDraft");
+  });
+});
+
+describe("a background shell action does not take the editor", () => {
+  it("routes open-settings and sign-in-returned through the policy", async () => {
+    // Both used to run `selectSection("settings")` unconditionally, which is
+    // what took the editor and the draft's fields with it.
+    const source = await shell();
+    const handler = source.slice(
+      source.indexOf("window.farolNext.onShellAction("),
+      source.indexOf("window.farolNext.onWindowState("),
+    );
+    expect(handler).toContain("decideShellAction(");
+    expect(handler).toContain("draftHeld:");
+    expect(handler).toContain("source: parsed.data.source");
+    expect(handler).toContain("currentAuthWindowGeneration");
+    // Navigation happens only when the decision says so.
+    const navigate = handler.indexOf("if (decision.navigate)");
+    const select = handler.indexOf('selectSection("settings")');
+    expect(navigate).toBeGreaterThan(-1);
+    expect(select).toBeGreaterThan(navigate);
+  });
+
+  it("re-reads readiness for every outcome it does not prove duplicate", async () => {
+    const source = await shell();
+    const handler = source.slice(
+      source.indexOf("window.farolNext.onShellAction("),
+      source.indexOf("window.farolNext.onWindowState("),
+    );
+    expect(handler).toContain("if (!decision.refreshReadiness) return;");
+    expect(handler).toContain("refreshSettingsAfterReturn()");
+  });
+
+  it("offers the return control instead of navigating", async () => {
+    const source = await shell();
+    expect(source).toContain(
+      'required<HTMLButtonElement>("#task-menu-return")',
+    );
+    const body = functionBody(source, "function renderTaskMenu(): void {");
+    expect(body).toContain("returnAction.hidden = !taskMenuReturnOffered");
+    const html = await fs.readFile(
+      path.join(root, "src/ui/shell.html"),
+      "utf8",
+    );
+    expect(html).toContain('id="task-menu-return"');
+    expect(html).toContain("hidden");
+  });
+
+  it("checks the grant the assignment was written under before sending it", async () => {
+    // Text surviving a background event must not become a way to run
+    // against a grant that has since changed.
+    const source = await shell();
+    const submit = source.indexOf('"Agent assignment admitted."');
+    const guard = source.lastIndexOf("agentAuthorityUnchanged(", submit);
+    expect(guard).toBeGreaterThan(-1);
+    const block = source.slice(guard, submit);
+    expect(block).toContain("AGENT_AUTHORITY_CHANGED");
+    expect(block).toContain("return;");
+  });
+
+  it("only ever deduplicates an event that carried an id", async () => {
+    const source = await shell();
+    const handler = source.slice(
+      source.indexOf("window.farolNext.onShellAction("),
+      source.indexOf("window.farolNext.onWindowState("),
+    );
+    expect(handler).toContain("if (provenance.eventId !== null)");
+    expect(handler).toContain("handledShellActionIds.add(provenance.eventId)");
   });
 });

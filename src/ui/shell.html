@@ -594,6 +594,17 @@
           <span>Close task</span><small>Remove locally</small>
         </button>
         <p id="task-menu-note" role="status" aria-live="polite"></p>
+        <!-- Shown when a background event updated readiness while an Agent
+             assignment was being written: the owner can go to Settings when
+             they choose to, instead of being taken there. -->
+        <button
+          class="task-menu-return"
+          hidden
+          id="task-menu-return"
+          type="button"
+        >
+          <span>Open Settings</span><small>Your assignment is kept</small>
+        </button>
       </section>
       <div class="task-menu-fixture" id="task-menu-fixture">
         <button id="task-menu-computer" type="button">
