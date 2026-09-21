@@ -3141,6 +3141,18 @@ async function waitForSetup(instance, predicate, arg) {
     // exceeded a budget under load or returned something the product could
     // not classify, and the assignment store is where an Agent outcome
     // lives when no task carries it.
+    const readJsonLeaf = async (root) => {
+      const entries = await fs.readdir(root).catch(() => null);
+      if (entries === null) return null;
+      const leaves = {};
+      for (const entry of entries.slice(0, 16)) {
+        const text = await fs
+          .readFile(path.join(root, entry), "utf8")
+          .catch(() => null);
+        leaves[entry] = text === null ? "<not a file>" : text.slice(0, 4_096);
+      }
+      return leaves;
+    };
     const readJsonTree = async (root) => {
       const entries = await fs.readdir(root).catch(() => null);
       if (entries === null) return null;
@@ -3149,7 +3161,12 @@ async function waitForSetup(instance, predicate, arg) {
         const target = path.join(root, entry);
         const info = await fs.stat(target).catch(() => null);
         if (!info?.isFile()) {
-          contents[entry] = info?.isDirectory() ? "<directory>" : null;
+          // One level down, because the record that matters — an
+          // assignment's phase and terminal reason — lives in a
+          // subdirectory, and "<directory>" answers nothing.
+          contents[entry] = info?.isDirectory()
+            ? await readJsonLeaf(target)
+            : null;
           continue;
         }
         const text = await fs.readFile(target, "utf8").catch(() => null);
@@ -3183,6 +3200,7 @@ async function waitForSetup(instance, predicate, arg) {
       shown,
       provenance,
       home,
+      activation: activationSamples,
       codexHostProbe: await readJsonTree(
         path.join(stateRoot, "codex-host-probe"),
       ),
@@ -7715,6 +7733,9 @@ demoMainSegment: try {
   await markActivation(normal.application, "before mismatched-build refusal");
   await rejectMismatchedBuildLaunch(normal);
   await markActivation(normal.application, "after mismatched-build refusal");
+  // Printed here rather than only beside the reopen timeline: a lane that
+  // dies earlier still has to answer where activation arrived.
+  process.stdout.write(`E2E_ACTIVATION ${JSON.stringify(activationSamples)}\n`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   await waitForWindowCount(normal.application, 0);
   const reopenedWindow = normal.application.waitForEvent("window", {
