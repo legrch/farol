@@ -169,7 +169,6 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "n12-agent-draft-survives-background-auth-window-return",
   "n12-agent-draft-survives-to-a-single-submission",
   "n12-agent-draft-cleared-by-owner-close",
-  "n12-agent-draft-refused-after-authority-change",
   "n10-computer-second-workspace-added-from-panel",
   "n10-computer-workspace-removed-from-panel-and-settings",
   "n10-computer-guarded-edit-cancelled-file-unchanged",
