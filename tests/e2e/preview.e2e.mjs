@@ -10005,6 +10005,23 @@ n12AgentDraftSegment: {
     await draft.window.evaluate(() => {
       const observed = [];
       globalThis.__farolE2EMenuEvents = observed;
+      // `applyHostLayout` obeys a main-side `publishLayout()` push, and that
+      // push is invisible to the shell-action list — it is the only writer
+      // that can take the overlay to "none" while leaving the section on
+      // "browser", which is exactly the shape this case keeps failing in.
+      const layouts = [];
+      globalThis.__farolE2ELayouts = layouts;
+      window.farolNext.onLayout((value) => {
+        layouts.push({
+          at: Date.now(),
+          section: value?.section ?? null,
+          taskId: value?.taskId ?? null,
+          overlay: value?.overlay ?? null,
+          setupOpen: value?.setupOpen ?? null,
+          sidebar: value?.sidebar ?? null,
+        });
+        if (layouts.length > 32) layouts.shift();
+      });
       window.farolNext.onShellAction((value) => {
         observed.push({
           at: Date.now(),
@@ -10138,6 +10155,9 @@ n12AgentDraftSegment: {
               objective:
                 document.querySelector("#task-agent-objective")?.value ?? null,
               shellActions: globalThis.__farolE2EMenuEvents ?? [],
+              // Same clock, so the reader can place a layout push between
+              // the outcome and the click that found nothing to click.
+              layouts: globalThis.__farolE2ELayouts ?? [],
             }))
             .catch(() => null);
           throw new Error(
