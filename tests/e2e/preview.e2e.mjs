@@ -10314,6 +10314,56 @@ n12AgentDraftSegment: {
         { cause: error },
       );
     };
+    // Waits over readings the harness holds, not the page: the console
+    // lines live here. Same thirty-second bound as every other wait.
+    const waitInHarness = async (label, predicate) => {
+      const deadline = Date.now() + 30_000;
+      for (;;) {
+        if (await predicate()) return;
+        if (Date.now() >= deadline) {
+          throw await draftDump(label, new Error("E2E_HARNESS_WAIT_TIMEOUT"));
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
+    const decisionSeenSince = (from) =>
+      consoleLines
+        .slice(from)
+        .some((line) => line.text.includes("farol.shell-decision"));
+    const decisionSeenForGenerationAbove = (threshold) => {
+      const ids = new Set();
+      for (const line of consoleLines) {
+        const match = /farol\.shell-action\s+(\{.*\})/u.exec(line.text);
+        if (!match) continue;
+        try {
+          const payload = JSON.parse(match[1]);
+          if (
+            typeof payload.gen === "number" &&
+            payload.gen > threshold &&
+            typeof payload.eventId === "string"
+          ) {
+            ids.add(payload.eventId);
+          }
+        } catch {
+          // A truncated line is not a decision; the bound is deliberate.
+        }
+      }
+      return consoleLines.some(
+        (line) =>
+          line.text.includes("farol.shell-decision") &&
+          [...ids].some((id) => line.text.includes(id)),
+      );
+    };
+    const layoutSeenSince = async (seq) =>
+      draft.window
+        .evaluate(
+          (seen) =>
+            (globalThis.__farolE2ELayouts ?? []).some(
+              (entry) => entry.seq > seen,
+            ),
+          seq,
+        )
+        .catch(() => false);
     const clickInDraft = async (selector) => {
       try {
         await draft.window.locator(selector).click({ timeout: 20_000 });
@@ -10496,34 +10546,31 @@ n12AgentDraftSegment: {
     const sequenceBeforeClose = await draft.window.evaluate(
       () => globalThis.__farolE2ESeq ?? 0,
     );
+    const consoleAtMenuOpen = consoleLines.length;
     await clickInDraft("#task-agent-subtree");
     await draft.window.keyboard.type("no");
+    // Both background events must land while the editor holds text, and
+    // both are real: the layout push the New task completion produces, and
+    // the delayed outcome of Setup's own older window. Waiting for them
+    // before closing this case's window is what puts every one of them
+    // inside the typing, which is the thing under test.
+    await waitInHarness(
+      "a layout and the older window's decision, both since the menu opened",
+      async () =>
+        decisionSeenSince(consoleAtMenuOpen) &&
+        (await layoutSeenSince(sequenceBeforeClose)),
+    );
     // The background event, caused here rather than waited for. Closing the
     // sign-in window is what makes production record its outcome, so firing
     // it in the middle of a word puts the event exactly where the owner's
     // hands are — instead of hoping one arrives while they type, which is
     // what the previous version of this wait depended on.
     await signInPage.close();
-    await waitInDraft(
-      "outcome of this case's own sign-in window",
-      (seen) =>
-        (globalThis.__farolE2EMenuEvents ?? []).some(
-          (entry) =>
-            typeof entry.authWindowGeneration === "number" &&
-            entry.authWindowGeneration > seen,
-        ),
-      generationBeforeClose,
-    );
-    // The shell action is not what took the editor; the layout push that
-    // follows it is, about 1.8 s later. Typing the rest of the word as soon
-    // as the action is seen would assert before the destructive push has
-    // arrived, and the row would pass on bytes that still lose the draft.
-    // So wait for the push itself — a real event, not a delay.
-    await waitInDraft(
-      "layout push after the shell action",
-      (seen) =>
-        (globalThis.__farolE2ELayouts ?? []).some((entry) => entry.seq > seen),
-      sequenceBeforeClose,
+    // This case's own window is the newest, so its decision is the one for
+    // a generation above every earlier window's.
+    await waitInHarness(
+      "the decision for this case's own sign-in window",
+      async () => decisionSeenForGenerationAbove(generationBeforeClose),
     );
     const arrivedLayout = await draft.window.evaluate(
       () => (globalThis.__farolE2ELayouts ?? []).at(-1) ?? null,
