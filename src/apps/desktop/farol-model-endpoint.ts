@@ -264,6 +264,10 @@ export class FarolModelEndpoint {
   // literal nobody can account for. Nothing clears it; a sealed endpoint
   // is finished.
   private sealed = false;
+  // Why the rollback of a failed start did not finish, when it did not.
+  // Set once, never cleared: the endpoint is sealed either way, so this
+  // records an outstanding obligation rather than a reason to retry.
+  private startFailureCleanupError: Error | undefined;
   private requestsAccepted = 0;
   private requestsRejected = 0;
   private lastAcceptedAtIso: string | undefined;
@@ -304,6 +308,15 @@ export class FarolModelEndpoint {
     return this.sealed;
   }
 
+  /**
+   * The cleanup a failed start could not complete, when the rollback's own
+   * close or liveness clear rejected. Undefined whenever startup succeeded
+   * or its rollback finished; the endpoint is sealed in every failed case.
+   */
+  get failedStartCleanupError(): Error | undefined {
+    return this.startFailureCleanupError;
+  }
+
   /** The one model this endpoint serves. */
   get servedModel(): string {
     return this.model;
@@ -328,14 +341,44 @@ export class FarolModelEndpoint {
     await this.state.ensureToken();
     const persisted = await this.state.persistedPort();
     const port = await this.bind(persisted ?? 0);
-    if (persisted === undefined) await this.state.persistPort(port);
+    // Ownership begins with the listener, not with the last durable step.
+    // Everything after `bind` therefore leaves through the rollback below,
+    // because a socket this method opened and then walked away from would
+    // go on serving turns for an endpoint no caller retained, no status
+    // reported as running, and nothing could stop.
     this.boundPort = port;
-    await this.state.markLive({
-      pid: process.pid,
-      port,
-      startedAtIso: new Date().toISOString(),
-    });
+    try {
+      if (persisted === undefined) await this.state.persistPort(port);
+      await this.state.markLive({
+        pid: process.pid,
+        port,
+        startedAtIso: new Date().toISOString(),
+      });
+    } catch (error) {
+      await this.abandonStartedListener();
+      throw error;
+    }
     return { port };
+  }
+
+  /**
+   * Give up a listener whose startup never committed.
+   *
+   * The seal comes first and cannot fail, so from this instant the endpoint
+   * refuses every request whether or not the socket can still be closed.
+   * The close is then attempted; one that fails is recorded on
+   * `failedStartCleanupError` rather than swallowed, and the caller still
+   * receives the startup failure, which is the one it can act on. A sealed
+   * endpoint is finished, so this instance is never started again.
+   */
+  private async abandonStartedListener(): Promise<void> {
+    this.seal();
+    try {
+      await this.stop();
+    } catch (error) {
+      this.startFailureCleanupError =
+        error instanceof Error ? error : new Error(String(error));
+    }
   }
 
   /**
