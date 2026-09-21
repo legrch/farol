@@ -10712,8 +10712,92 @@ n12AgentDraftSegment: {
       "the decision for this case's own sign-in window",
       async () => decisionForGeneration((gen) => gen > generationBeforeClose),
     );
+    // The layout push the owner's keystrokes have to survive, CAUSED here
+    // rather than hoped for.
+    //
+    // Measured on this build, attempt 20260921T072522310Z-bab0da60: closing
+    // the sign-in window publishes a shell action and NO layout at all. The
+    // only layout in the recorder at this point is seq 2, the push the New
+    // task admission made before the field was even captured, so a
+    // requirement for "a layout newer than the capture" would have waited
+    // 30 s and failed for want of an event nobody caused.
+    //
+    // "Show/Hide Sidebar" in the View menu is a production path that does
+    // cause one: it reaches `requestSidebarToggle`, and on a window wider
+    // than 979px that writes section "browser", overlay "none" and a new
+    // sidebar preference. Section unchanged, overlay "none" — the exact
+    // shape the layout recorder above was installed for, and the one shape
+    // that can take the editor away without any shell action in the trace.
+    const toggledSidebar = await draft.application.evaluate(({ Menu }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById(
+        "view.toggle-sidebar",
+      );
+      if (!item) return "missing";
+      item.click();
+      return "clicked";
+    });
+    assert.equal(
+      toggledSidebar,
+      "clicked",
+      "the View menu still offers the sidebar toggle this case causes",
+    );
+    await waitInHarness(
+      "a host layout published after the field was captured",
+      () => layoutSeenSince(sequenceBeforeClose),
+    );
     const arrivedLayout = await draft.window.evaluate(
-      () => (globalThis.__farolE2ELayouts ?? []).at(-1) ?? null,
+      (since) =>
+        (globalThis.__farolE2ELayouts ?? []).findLast(
+          (entry) => entry.seq > since,
+        ) ?? null,
+      sequenceBeforeClose,
+    );
+    assert.ok(
+      arrivedLayout && arrivedLayout.seq > sequenceBeforeClose,
+      `a layout arrived after the capture · ${JSON.stringify(arrivedLayout)}`,
+    );
+    assert.equal(
+      arrivedLayout.section,
+      "browser",
+      `the caused push leaves the section alone · ${JSON.stringify(arrivedLayout)}`,
+    );
+    assert.equal(
+      arrivedLayout.overlay,
+      "none",
+      `the caused push carries main's overlay mirror · ${JSON.stringify(arrivedLayout)}`,
+    );
+    assert.equal(
+      arrivedLayout.sidebar,
+      "rail",
+      `the push is the toggle's own, by the preference only it changed · ${JSON.stringify(arrivedLayout)}`,
+    );
+    // The tested ordering, on the one monotonic sequence both recorders
+    // share: the field was captured first, the background return arrived
+    // after it, and the layout push after that. A run where the push landed
+    // before the return would be a different interleaving from the one this
+    // case claims to test.
+    const backgroundReturnEvent = (await shellActions()).findLast(
+      (event) =>
+        event.action === "open-settings" && event.seq > sequenceBeforeClose,
+    );
+    assert.ok(
+      backgroundReturnEvent,
+      `the background return arrived after the field was captured · ${JSON.stringify(await shellActions())}`,
+    );
+    assert.equal(
+      arrivedLayout.seq > backgroundReturnEvent.seq,
+      true,
+      `the caused layout push lands after the background return · ${JSON.stringify({ arrivedLayout, backgroundReturnEvent })}`,
+    );
+    // Where the owner's hands were, before the rest of the word is typed.
+    assert.deepEqual(
+      await draft.window.evaluate(() => ({
+        active: document.activeElement?.id ?? null,
+        caret:
+          document.querySelector("#task-agent-subtree")?.selectionStart ?? null,
+      })),
+      { active: "task-agent-subtree", caret: 2 },
+      `the push left focus and the caret where the owner's hands were · ${JSON.stringify(arrivedLayout)}`,
     );
     await draft.window.keyboard.type("tes");
     assert.equal(
@@ -10727,6 +10811,17 @@ n12AgentDraftSegment: {
       await subtreeNode.evaluate((element) => element.value),
       typed.subtree,
       `the word survives a layout push that arrived in the middle of it · ${JSON.stringify(arrivedLayout)}`,
+    );
+    // `offsetParent` is null inside this fixed-position dialog, so the
+    // engine's own visibility answer and a real box are what can say the
+    // surviving node is still the one on screen.
+    assert.equal(
+      await subtreeNode.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return element.checkVisibility() && box.width > 0 && box.height > 0;
+      }),
+      true,
+      `the surviving node is still visible and laid out · ${JSON.stringify(arrivedLayout)}`,
     );
     process.stdout.write(
       `E2E_AGENT_DRAFT layoutBeforeClose=${String(layoutBeforeClose)} layout=${JSON.stringify(arrivedLayout)} console=${JSON.stringify(consoleLines)}\n`,
