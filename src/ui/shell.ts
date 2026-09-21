@@ -48,6 +48,7 @@ import {
 import { contextTaskPresentation } from "./context-task-presentation";
 import { TaskMenuTrace } from "./task-menu-trace";
 import { hostLayoutChanged, hostLayoutUpdate } from "./host-layout";
+import { DiagnosticThrottle } from "./diagnostic-throttle";
 import {
   AGENT_AUTHORITY_CHANGED,
   agentAuthorityUnchanged,
@@ -345,6 +346,11 @@ let shellOverlay: ShellOverlay = "none";
  * The frames are reduced to basename:line:column, so the line carries call
  * sites and never a path from this machine.
  */
+// The two lines that can fire as often as the renderer draws. Everything
+// else here is one line per event and is rare by construction.
+const renderDuringMenu = new DiagnosticThrottle(() => Date.now());
+const tasksStateDuringMenu = new DiagnosticThrottle(() => Date.now());
+
 function diagnosticFrames(): string {
   return (new Error().stack ?? "")
     .split("\n")
@@ -374,6 +380,12 @@ function setShellOverlay(next: ShellOverlay): void {
       "farol.overlay",
       JSON.stringify({ from: shellOverlay, to: next, frames }),
     );
+  }
+  if (next !== "task-menu") {
+    // A later menu session starts with its own first line rather than being
+    // silenced by this one's window.
+    renderDuringMenu.reset();
+    tasksStateDuringMenu.reset();
   }
   // eslint-disable-next-line no-restricted-syntax -- the one real write
   shellOverlay = next;
@@ -4231,10 +4243,19 @@ function render(notify = true): void {
     // Every rebuild of an open task menu, with who asked for it. A rebuild
     // between two keystrokes replaces the element the rest of the word was
     // addressed to, so "it re-rendered" is not a harmless observation here.
-    console.debug(
-      "farol.render-during-menu",
-      JSON.stringify({ notify, frames: diagnosticFrames() }),
-    );
+    // Rate limited: this fires on every keystroke, and a line per call is a
+    // second load on the thing being measured rather than a measurement.
+    const admitted = renderDuringMenu.admit();
+    if (admitted) {
+      console.debug(
+        "farol.render-during-menu",
+        JSON.stringify({
+          notify,
+          suppressed: admitted.suppressed,
+          frames: diagnosticFrames(),
+        }),
+      );
+    }
   }
   const root = document.documentElement;
   root.dataset.section = section;
@@ -4573,13 +4594,17 @@ function applyTasksState(state: ProductTasksState): void {
     selectedTaskId = state.tasks[0]?.taskId ?? "";
   }
   if (shellOverlay === "task-menu") {
-    console.debug(
-      "farol.tasks-state-during-menu",
-      JSON.stringify({
-        tasks: state.tasks.length,
-        selectionKept: taskIds.has(selectedTaskId),
-      }),
-    );
+    const admitted = tasksStateDuringMenu.admit();
+    if (admitted) {
+      console.debug(
+        "farol.tasks-state-during-menu",
+        JSON.stringify({
+          tasks: state.tasks.length,
+          selectionKept: taskIds.has(selectedTaskId),
+          suppressed: admitted.suppressed,
+        }),
+      );
+    }
   }
   render();
 }

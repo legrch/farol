@@ -314,3 +314,50 @@ describe("a run can read the decision that was made", () => {
     expect(line).not.toContain("objective");
   });
 });
+
+describe("the instrument cannot flood the thing it measures", () => {
+  it("rate limits only the two lines that fire as often as a render", async () => {
+    // A widened capture of the per-render stream hung a run for six minutes
+    // with the application still alive. That was the instrument, not the
+    // product, and an instrument that changes the subject is not one.
+    const source = await shell();
+    const render = functionBody(
+      source,
+      "function render(notify = true): void {",
+    );
+    expect(render).toContain("renderDuringMenu.admit()");
+    expect(render).toContain("suppressed: admitted.suppressed");
+    const tasks = functionBody(
+      source,
+      "function applyTasksState(state: ProductTasksState): void {",
+    );
+    expect(tasks).toContain("tasksStateDuringMenu.admit()");
+  });
+
+  it("leaves the per-event lines unthrottled, because they are rare", async () => {
+    // One line per shell action, per decision, per overlay change and per
+    // dialog close. Throttling those would lose the event the run is for.
+    const source = await shell();
+    for (const marker of [
+      '"farol.shell-action"',
+      '"farol.shell-decision"',
+      '"farol.overlay"',
+      '"farol.task-menu-close"',
+    ]) {
+      const at = source.indexOf(marker);
+      expect(at, marker).toBeGreaterThan(-1);
+      const before = source.slice(Math.max(0, at - 400), at);
+      expect(before, marker).not.toContain(".admit()");
+    }
+  });
+
+  it("gives a reopened menu its own first line", async () => {
+    const source = await shell();
+    const setter = functionBody(
+      source,
+      "function setShellOverlay(next: ShellOverlay): void {",
+    );
+    expect(setter).toContain("renderDuringMenu.reset()");
+    expect(setter).toContain("tasksStateDuringMenu.reset()");
+  });
+});
