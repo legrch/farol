@@ -15,9 +15,14 @@ async function shell() {
 function functionBody(source, signature) {
   const start = source.indexOf(signature);
   expect(start, `${signature} is present`).toBeGreaterThan(-1);
-  const end = source.indexOf("\nfunction ", start + 1);
-  expect(end).toBeGreaterThan(start);
-  return source.slice(start, end);
+  // The next top-level declaration ends it, and some of them are `async`.
+  // Missing that made every row here fail on the slice rather than on what
+  // it was asserting — a red for the wrong reason, which proves nothing.
+  const ends = ["\nfunction ", "\nasync function ", "\nconst "]
+    .map((marker) => source.indexOf(marker, start + 1))
+    .filter((at) => at > start);
+  expect(ends.length, `${signature} has a terminator`).toBeGreaterThan(0);
+  return source.slice(start, Math.min(...ends));
 }
 
 // `src/ui/shell.ts` is a browser entry that calls `start()` at module scope
@@ -189,5 +194,72 @@ describe("a background shell action does not take the editor", () => {
     );
     expect(handler).toContain("if (provenance.eventId !== null)");
     expect(handler).toContain("handledShellActionIds.add(provenance.eventId)");
+  });
+});
+
+describe("a layout pushed by the host cannot close an open overlay", () => {
+  it("never writes shellOverlay from the pushed layout", async () => {
+    // The dialog follows `shellOverlay` (one line: it closes whenever the
+    // value leaves "task-menu"). Assigning that value from a host push made
+    // main's stale mirror able to close a menu the renderer had just opened,
+    // taking the Agent editor with it — no owner action, no shell action.
+    const body = functionBody(
+      await shell(),
+      "function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {",
+    );
+    expect(body).not.toContain("shellOverlay = layout.overlay");
+    expect(body).not.toMatch(/shellOverlay\s*=/u);
+  });
+
+  it("adopts the layout through the one function that has no overlay in it", async () => {
+    const body = functionBody(
+      await shell(),
+      "function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {",
+    );
+    expect(body).toContain("hostLayoutUpdate(layout)");
+  });
+
+  it("still adopts section, task and sidebar from the push", async () => {
+    // The fix must not stop main coordinating what it genuinely owns: which
+    // section and task its native surfaces are laid out for.
+    const body = functionBody(
+      await shell(),
+      "function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {",
+    );
+    expect(body).toContain("section = ");
+    expect(body).toContain("selectedTaskId = ");
+    expect(body).toContain("sidebarOverlayOpen = ");
+  });
+
+  it("leaves a task change to the draft store's own rule", async () => {
+    // A layout naming a different task still moves the selection, and the
+    // store drops the draft on a task change exactly as before. No new
+    // close path is added for it.
+    const source = await shell();
+    const body = functionBody(
+      source,
+      "function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {",
+    );
+    expect(body).not.toContain("taskAgentDraft");
+    expect(functionBody(source, "function openTaskMenu(): void {")).toContain(
+      "taskAgentDraft.select(task.taskId)",
+    );
+  });
+});
+
+describe("a layout that moves nothing does not rebuild the menu", () => {
+  it("renders only when something the renderer holds actually changed", async () => {
+    // Measured: the push arrived 1.76 s after the sign-in outcome, carrying
+    // the section and task already held, and landed mid-word — "notes" was
+    // cut to "no". A rebuild between two keystrokes replaces the element the
+    // rest of the word was addressed to, and restoring the value into a
+    // fresh node is not the same as never having replaced it.
+    const body = functionBody(
+      await shell(),
+      "function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {",
+    );
+    expect(body).toContain("hostLayoutChanged(");
+    expect(body).toContain("if (changed) render(false)");
+    expect(body).not.toMatch(/^\s*render\(false\);$/mu);
   });
 });

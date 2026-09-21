@@ -47,6 +47,7 @@ import {
 } from "./setup-journey";
 import { contextTaskPresentation } from "./context-task-presentation";
 import { TaskMenuTrace } from "./task-menu-trace";
+import { hostLayoutChanged, hostLayoutUpdate } from "./host-layout";
 import {
   AGENT_AUTHORITY_CHANGED,
   agentAuthorityUnchanged,
@@ -4531,16 +4532,31 @@ function applyHostLayout(layout: z.infer<typeof ShellLayoutSchema>): void {
       : !taskById(layout.taskId)
   )
     return;
-  section = layout.section;
-  selectedTaskId = layout.taskId;
-  setupJourney = { ...setupJourney, open: layout.setupOpen };
-  if (layout.sidebar === "full" || layout.sidebar === "rail") {
-    sidebarPreference = layout.sidebar;
+  // Everything main genuinely coordinates, and nothing about whether an
+  // overlay is open: main's copy of that is a mirror of what this renderer
+  // told it, and sending a mirror back was able to close a menu the owner
+  // was typing in. See host-layout.ts.
+  const update = hostLayoutUpdate(layout);
+  // A push that moves nothing is not a reason to rebuild anything. One
+  // arriving between two keystrokes replaces the element the rest of the
+  // word was going to, and restoring the value into a fresh node is not the
+  // same as never having replaced it.
+  const changed = hostLayoutChanged(update, {
+    section,
+    taskId: selectedTaskId,
+    setupOpen: setupJourney.open,
+    sidebarPreference,
+    sidebarOverlayOpen,
+  });
+  section = update.section;
+  selectedTaskId = update.taskId;
+  setupJourney = { ...setupJourney, open: update.setupOpen };
+  if (update.sidebarPreference !== null) {
+    sidebarPreference = update.sidebarPreference;
   }
-  sidebarOverlayOpen = layout.sidebar === "overlay";
-  shellOverlay = layout.overlay;
+  sidebarOverlayOpen = update.sidebarOverlayOpen;
   lastHostLayout = JSON.stringify(currentLayout());
-  render(false);
+  if (changed) render(false);
 }
 
 async function start(): Promise<void> {
