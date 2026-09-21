@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_AUTHORITY_CHANGED,
   agentAuthorityUnchanged,
+  completionMayNavigate,
   decideShellAction,
   type ShellActionContext,
   type ShellActionProvenance,
@@ -178,5 +179,30 @@ describe("whether a surviving assignment may still be run", () => {
   it("has a sentence that says what changed and what to do", () => {
     expect(AGENT_AUTHORITY_CHANGED).toContain("workspace or host changed");
     expect(AGENT_AUTHORITY_CHANGED).toContain("run it again");
+  });
+});
+
+describe("whether an awaited completion may still navigate", () => {
+  it("finishes what it started when the surface has not moved", () => {
+    expect(completionMayNavigate("none", "none")).toBe(true);
+    expect(completionMayNavigate("task-menu", "task-menu")).toBe(true);
+  });
+
+  it("does not close an overlay opened while it was in flight", () => {
+    // Measured: New task was pressed with nothing open, the route answered
+    // 1.7 s later, and by then the owner had a task menu open with an Agent
+    // assignment being typed. The handler closed it.
+    expect(completionMayNavigate("none", "task-menu")).toBe(false);
+  });
+
+  it("does not navigate away from any surface the owner opened", () => {
+    for (const now of [
+      "task-menu",
+      "quick-switcher",
+      "context-preview",
+      "sidebar",
+    ]) {
+      expect(completionMayNavigate("none", now), now).toBe(false);
+    }
   });
 });

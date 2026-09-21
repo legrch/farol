@@ -170,3 +170,22 @@ export function agentAuthorityUnchanged(
     composedUnder.hostExecutablePath === now.hostExecutablePath
   );
 }
+
+/**
+ * Whether a completion may still take the owner to its result.
+ *
+ * A task admission is awaited: the owner presses New task, and the answer
+ * arrives whenever the route is ready. Measured, that was 1.7 s — long
+ * enough for the owner to have opened a task menu and started typing an
+ * Agent assignment. The handler then closed whatever overlay was open,
+ * because it was written as if the surface could not have changed.
+ *
+ * It may finish what it started. It may not act on a surface the owner
+ * changed while it was in flight.
+ */
+export function completionMayNavigate(
+  overlayAtDispatch: string,
+  overlayNow: string,
+): boolean {
+  return overlayAtDispatch === overlayNow;
+}

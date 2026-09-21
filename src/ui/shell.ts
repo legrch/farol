@@ -52,6 +52,7 @@ import { DiagnosticThrottle } from "./diagnostic-throttle";
 import {
   AGENT_AUTHORITY_CHANGED,
   agentAuthorityUnchanged,
+  completionMayNavigate,
   decideShellAction,
   type AgentAuthority,
 } from "./shell-action-policy";
@@ -4826,6 +4827,9 @@ async function start(): Promise<void> {
       taskAdmissionFeedback = "";
       const button = required<HTMLButtonElement>("#new-task");
       button.disabled = true;
+      // What the surface was when this was asked for. The answer can arrive
+      // seconds later, and by then the owner may be somewhere else.
+      const overlayAtDispatch = shellOverlay;
       const parsed = ProductTaskCommandResultSchema.safeParse(
         await window.farolNext.task({ kind: "task.create-chatgpt" }),
       );
@@ -4852,9 +4856,18 @@ async function start(): Promise<void> {
         render();
         return;
       }
-      selectedTaskId = parsed.data.selectedTaskId;
-      section = "browser";
-      setShellOverlay("none");
+      if (completionMayNavigate(overlayAtDispatch, shellOverlay)) {
+        selectedTaskId = parsed.data.selectedTaskId;
+        section = "browser";
+        setShellOverlay("none");
+      } else {
+        // The owner opened something while this was in flight — a task menu
+        // with an Agent assignment being written, in the case that found
+        // this. The task is admitted and waiting in the tabs; taking the
+        // owner to it would close what they are working in.
+        taskAdmissionFeedback =
+          "The new task is ready and waiting in the task tabs.";
+      }
       render();
     },
   );
