@@ -3040,8 +3040,44 @@ async function waitForSetup(instance, predicate, arg) {
         feedback: document.querySelector("#setup-feedback")?.textContent,
       }))
       .catch(() => null);
+    // What the surface says is half the answer; the other half is where the
+    // state it is reporting came from. A Setup step that reports an outcome
+    // nothing in this run produced would mean the profile is not the fresh
+    // one this harness claims to hand every instance, so the home's own
+    // identity and age are recorded beside the reading.
+    const provenance = await instance.window
+      .evaluate(async () => {
+        const value = await window.farolNext.bootstrap();
+        const settings =
+          value.configuration.status === "ready"
+            ? value.configuration.settings
+            : null;
+        return {
+          agentVerification:
+            settings?.nativeHosts?.codex?.agentVerification ?? null,
+          liveVerification:
+            settings?.nativeHosts?.codex?.liveVerification ?? null,
+          computerGeneration: settings?.computer?.generation ?? null,
+          taskCount: value.tasks.length,
+          agentPhases: value.tasks.map((task) => task.agent?.phase ?? null),
+        };
+      })
+      .catch(() => null);
+    const home = await fs
+      .stat(instance.userData)
+      .then((entry) => ({
+        userData: instance.userData,
+        createdMs: Math.round(Date.now() - entry.birthtimeMs),
+        entries: null,
+      }))
+      .catch(() => null);
+    if (home) {
+      home.entries = await fs
+        .readdir(path.join(instance.userData, "farol-next-state"))
+        .catch(() => null);
+    }
     throw new Error(
-      `${error.message} · setup showed ${JSON.stringify(shown)}`,
+      `${error.message} · setup showed ${JSON.stringify(shown)} · state ${JSON.stringify(provenance)} · home ${JSON.stringify(home)}`,
       {
         cause: error,
       },
