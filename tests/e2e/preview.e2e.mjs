@@ -1400,6 +1400,9 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   let agentWorkspace = null;
   let agentProduct = false;
   let agentWorkspaceComplete = false;
+  // Set while the child's first tool call is waiting for the host to
+  // finish correlating it; cleared when that call goes out.
+  let agentChildReadAnswered = null;
   let agentChildComplete = false;
   let agentComplete = false;
   let agentChildInterrupted = false;
@@ -1511,7 +1514,18 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
             prompt: agentChildPrompt
           } } });
         }, 10);
-        setTimeout(() => {
+        // The child's first tool call waits for something observable
+        // instead of guessing how long correlation takes. Between the spawn
+        // and operation.childTurnId the host saves the lineage and reads
+        // the child thread; a call arriving inside that window is refused
+        // fail-closed with CODEX_AGENT_WORKSPACE_CORRELATION, and the next
+        // wait() reports AGENT_WAIT_ACK_LOST — the recurrence this lane
+        // kept producing. A fixed 50 ms is wider than the host's step on an
+        // idle machine and narrower than it on a loaded one; answering the
+        // child thread/read is the last thing the host needs, so the call
+        // goes out once that answer has been written.
+        agentChildReadAnswered = () => {
+          agentChildReadAnswered = null;
           send({ id: "tool-e2e-agent-workspace", method: "item/tool/call", params: {
             threadId: agentChildThreadId,
             turnId: agentChildTurnId,
@@ -1519,8 +1533,12 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
             tool: agentProduct ? "farol_agent_computer" : "farol_agent_workspace_probe",
             arguments: agentWorkspace
           } });
-        }, 50);
-        setTimeout(() => {
+          scheduleAgentRejoin();
+        };
+        // The rejoin keeps its designed gap, now measured from the call it
+        // is designed to follow rather than from the spawn, so a slow
+        // correlation cannot reorder the two.
+        const scheduleAgentRejoin = () => setTimeout(() => {
           send({ method: "item/completed", params: { threadId: agentParentThreadId, turnId: agentParentTurnId, item: {
             id: "item-e2e-agent-wait",
             type: "collabAgentToolCall",
@@ -1585,6 +1603,9 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
           status: { type: agentChildComplete || agentChildInterrupted ? "idle" : "active" },
           turns: [{ id: agentChildTurnId, status: agentChildInterrupted ? "interrupted" : agentChildComplete ? "completed" : "inProgress", items }]
         } } });
+        // After the answer is written, and after the host has had this
+        // turn of the loop to act on it.
+        if (agentChildReadAnswered) setImmediate(agentChildReadAnswered);
         return;
       }
       if (message.params?.threadId === agentParentThreadId) {
@@ -3263,6 +3284,12 @@ async function completeSetup(
   );
   for (const [stepId, screenshot] of setupScreens) {
     assert.equal(await dialog.getAttribute("data-step-id"), stepId);
+    // One sample per step, not only around the sign-in window. The ChatGPT
+    // route window is exonerated by A's read of chatgpt-route.ts — it is
+    // created hidden and revealed with showInactive() in this mode — so the
+    // activation comes from something else, and the first step that reports
+    // an active app names where to look.
+    await markActivation(instance.application, `setup: at step ${stepId}`);
     assert.match(await dialog.innerText(), /Step [1-5] of 5/u);
     assert.match(
       await dialog.innerText(),
