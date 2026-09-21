@@ -10070,7 +10070,21 @@ n12AgentDraftSegment: {
   segmentMark("n12-agent-draft", "start");
   const draft = await launch([], "hidden", "ordinary");
   try {
+    // B's diagnostic prints one line per shell action; capture it here so
+    // its decision lands in the same report, in arrival order, on the same
+    // clock as the events it explains.
+    const consoleLines = [];
+    draft.window.on("console", (message) => {
+      const text = message.text();
+      if (text.includes("farol.shell-action")) {
+        consoleLines.push({ at: Date.now(), text });
+      }
+    });
     await draft.window.evaluate(() => {
+      // One monotonic counter for both recorders. An array's length can be
+      // reset by a re-render or a reassignment; a sequence that only ever
+      // increases cannot, which is what a wait should be gated on.
+      globalThis.__farolE2ESeq = 0;
       const observed = [];
       globalThis.__farolE2EMenuEvents = observed;
       // `applyHostLayout` obeys a main-side `publishLayout()` push, and that
@@ -10081,6 +10095,7 @@ n12AgentDraftSegment: {
       globalThis.__farolE2ELayouts = layouts;
       window.farolNext.onLayout((value) => {
         layouts.push({
+          seq: ++globalThis.__farolE2ESeq,
           at: Date.now(),
           section: value?.section ?? null,
           taskId: value?.taskId ?? null,
@@ -10092,6 +10107,7 @@ n12AgentDraftSegment: {
       });
       window.farolNext.onShellAction((value) => {
         observed.push({
+          seq: ++globalThis.__farolE2ESeq,
           at: Date.now(),
           action: value?.action ?? null,
           // Provenance, if this build's contract carries any. Absent today.
@@ -10199,7 +10215,7 @@ n12AgentDraftSegment: {
         }))
         .catch(() => null);
       return new Error(
-        `${error.message} · at ${label} · surface ${JSON.stringify(surface)} · windows ${JSON.stringify(windows)}`,
+        `${error.message} · at ${label} · surface ${JSON.stringify(surface)} · windows ${JSON.stringify(windows)} · console ${JSON.stringify(consoleLines)}`,
         { cause: error },
       );
     };
@@ -10370,9 +10386,20 @@ n12AgentDraftSegment: {
       .locator("#task-agent-subtree")
       .elementHandle();
     assert.ok(subtreeNode, "the relative-root field exists before typing");
-    const actionsBeforeTyping = (await shellActions()).length;
-    const layoutsBeforeTyping = await draft.window.evaluate(
-      () => (globalThis.__farolE2ELayouts ?? []).length,
+    // The case's own window is the most recently opened, so its outcome
+    // carries a higher generation than any older window's. A delayed gen-2
+    // outcome from Setup's window can and did arrive first; waiting for
+    // "any new action" would accept it and assert against the wrong event.
+    const generationBeforeClose = (await shellActions()).reduce(
+      (highest, entry) =>
+        typeof entry.authWindowGeneration === "number" &&
+        entry.authWindowGeneration > highest
+          ? entry.authWindowGeneration
+          : highest,
+      -1,
+    );
+    const sequenceBeforeClose = await draft.window.evaluate(
+      () => globalThis.__farolE2ESeq ?? 0,
     );
     await clickInDraft("#task-agent-subtree");
     await draft.window.keyboard.type("no");
@@ -10383,9 +10410,14 @@ n12AgentDraftSegment: {
     // what the previous version of this wait depended on.
     await signInPage.close();
     await waitInDraft(
-      "shell action after closing the sign-in window",
-      (seen) => (globalThis.__farolE2EMenuEvents ?? []).length > seen,
-      actionsBeforeTyping,
+      "outcome of this case's own sign-in window",
+      (seen) =>
+        (globalThis.__farolE2EMenuEvents ?? []).some(
+          (entry) =>
+            typeof entry.authWindowGeneration === "number" &&
+            entry.authWindowGeneration > seen,
+        ),
+      generationBeforeClose,
     );
     // The shell action is not what took the editor; the layout push that
     // follows it is, about 1.8 s later. Typing the rest of the word as soon
@@ -10394,8 +10426,9 @@ n12AgentDraftSegment: {
     // So wait for the push itself — a real event, not a delay.
     await waitInDraft(
       "layout push after the shell action",
-      (seen) => (globalThis.__farolE2ELayouts ?? []).length > seen,
-      layoutsBeforeTyping,
+      (seen) =>
+        (globalThis.__farolE2ELayouts ?? []).some((entry) => entry.seq > seen),
+      sequenceBeforeClose,
     );
     const arrivedLayout = await draft.window.evaluate(
       () => (globalThis.__farolE2ELayouts ?? []).at(-1) ?? null,
@@ -10414,7 +10447,7 @@ n12AgentDraftSegment: {
       `the word survives a layout push that arrived in the middle of it · ${JSON.stringify(arrivedLayout)}`,
     );
     process.stdout.write(
-      `E2E_AGENT_DRAFT layout=${JSON.stringify(arrivedLayout)}\n`,
+      `E2E_AGENT_DRAFT layout=${JSON.stringify(arrivedLayout)} console=${JSON.stringify(consoleLines)}\n`,
     );
     for (const [selector, text] of [
       ["#task-agent-exclusions", typed.exclusions],
