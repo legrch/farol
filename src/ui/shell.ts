@@ -5106,7 +5106,15 @@ async function start(): Promise<void> {
         },
         "Agent assignment admitted.",
       );
+      // The store and the fields are one thing. Clearing only the store
+      // left the text in place with `held()` false, and the authority check
+      // is gated on `held()` — so a second press skipped it and would send
+      // on a grant that may have moved. With the fields cleared too, the
+      // objective is empty, which the prerequisite already refuses by name
+      // and disables the control for.
       taskAgentDraft.clear();
+      writeAgentDraftFields(EMPTY_AGENT_DRAFT);
+      renderTaskMenu();
     },
   );
   required<HTMLButtonElement>("#task-menu-pin").addEventListener(

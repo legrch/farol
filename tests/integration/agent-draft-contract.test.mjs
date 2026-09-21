@@ -92,7 +92,7 @@ describe("the Agent draft is held by the renderer, not by the fields", () => {
     expect(close).toContain("taskAgentDraft.clear()");
     const submit = source.indexOf('"Agent assignment admitted."');
     expect(submit).toBeGreaterThan(-1);
-    expect(source.slice(submit, submit + 200)).toContain(
+    expect(source.slice(submit, submit + 900)).toContain(
       "taskAgentDraft.clear()",
     );
   });
@@ -465,5 +465,32 @@ describe("the dialog stack is recorded", () => {
     // On both the render line and the decision line, so a run can see the
     // stack at the moment a decision was taken and at every rebuild.
     expect(source.match(/\.\.\.topLayerCensus\(\)/gu)?.length).toBe(2);
+  });
+});
+
+describe("a submitted assignment leaves nothing stale to send again", () => {
+  it("clears the fields with the store, not the store alone", async () => {
+    // The store clears on submit and the menu stays open, so the fields
+    // kept the text. A second press then had `held() === false`, which is
+    // the one condition the authority check is gated on — so it skipped the
+    // check and would send on a grant that may have moved since. Clearing
+    // both leaves the objective empty, which the existing prerequisite
+    // already refuses by name and disables the control for.
+    const source = await shell();
+    const submit = source.indexOf('"Agent assignment admitted."');
+    expect(submit).toBeGreaterThan(-1);
+    const after = source.slice(submit, submit + 900);
+    expect(after).toContain("taskAgentDraft.clear()");
+    expect(after).toContain("writeAgentDraftFields(EMPTY_AGENT_DRAFT)");
+  });
+
+  it("keeps the authority check for a draft that is still held", async () => {
+    const source = await shell();
+    const guard = source.lastIndexOf(
+      "agentAuthorityUnchanged(",
+      source.indexOf('"Agent assignment admitted."'),
+    );
+    expect(guard).toBeGreaterThan(-1);
+    expect(source.slice(guard - 200, guard)).toContain("taskAgentDraft.held()");
   });
 });
