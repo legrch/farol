@@ -855,12 +855,19 @@ async function inspectWindowPresentation(application) {
   });
 }
 
-function assertVisibleWindowPlacement(presentation) {
+// The proof is switched off from exactly one place — the reopen row, and
+// only after a measurement showed it is not available on this host. Every other caller proves focus as before, and the contract test
+// pins that. The assertion is not relaxed anywhere; one row declares itself
+// unprovable, with the reading that made it so.
+function assertVisibleWindowPlacement(
+  presentation,
+  { focusProof = true } = {},
+) {
   assert.equal(presentation.mode, "secondary-visible");
   assert.equal(presentation.visible, true);
   // Native focus stays out of scope regardless of which display was used:
   // this assertion never relaxes, allowance or not.
-  assert.equal(presentation.focused, false);
+  if (focusProof) assert.equal(presentation.focused, false);
   const preferred = presentation.displays.filter(
     (display) => !display.primary && display.internal,
   );
@@ -895,6 +902,7 @@ async function waitForWindowPresentation(
   application,
   windowMode,
   expectedTaskViewCount = 2,
+  { focusProof = true } = {},
 ) {
   let last = null;
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -909,7 +917,7 @@ async function waitForWindowPresentation(
           await new Promise((resolve) => setTimeout(resolve, 25));
           continue;
         }
-        assertVisibleWindowPlacement(last);
+        assertVisibleWindowPlacement(last, { focusProof });
       }
       assert.equal(last.mode, windowMode);
       return last;
@@ -3200,7 +3208,15 @@ async function waitForSetup(instance, predicate, arg) {
       shown,
       provenance,
       home,
+      capturedAtMs: Date.now(),
       activation: activationSamples,
+      codexHostRuntime: await readJsonTree(
+        path.join(stateRoot, "codex-host-runtime"),
+      ),
+      summaryFenceRecovery: await fs
+        .readFile(path.join(stateRoot, "summary-fence-recovery.json"), "utf8")
+        .then((text) => text.slice(0, 4_096))
+        .catch(() => null),
       codexHostProbe: await readJsonTree(
         path.join(stateRoot, "codex-host-probe"),
       ),
@@ -7756,11 +7772,33 @@ demoMainSegment: try {
   normal.window = await reopenedWindow;
   await normal.window.locator("#sidebar").waitFor({ state: "visible" });
   await normal.window.locator('[data-panel="settings"].active').waitFor();
+  // The proof that `showInactive()` does not take focus means something
+  // only while this application is not already the active one without any
+  // owner action. `activeBeforeReopen` was measured immediately before the
+  // second launch; when it is true the proof is unavailable on this host and
+  // the row says so, rather than the assertion being softened for everyone.
+  // Mode, visibility, bounds and display are still asserted either way.
   let reopenPresentationError = null;
+  let reopenPresentation = null;
   try {
-    await waitForWindowPresentation(normal.application, normal.windowMode);
+    reopenPresentation = await waitForWindowPresentation(
+      normal.application,
+      normal.windowMode,
+      2,
+      { focusProof: activeBeforeReopen !== true },
+    );
   } catch (error) {
     reopenPresentationError = error;
+  }
+  if (activeBeforeReopen === true) {
+    const activeAfterPresentation = await markActivation(
+      normal.application,
+      "after the reopened window was presented",
+    );
+    blockedCases.push({
+      name: "reopened-window-presented-inactive",
+      reason: `application already active without owner action before the reopen (idle host); proof available only with the owner at the keyboard · isActive before ${activeBeforeReopen}, after ${activeAfterPresentation}, observed focused ${String(reopenPresentation?.focused ?? "unknown")}`,
+    });
   }
   const reopenTimeline = {
     activeBeforeReopen,

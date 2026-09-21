@@ -88,6 +88,53 @@ describe("closing an application that is already gone", () => {
     ).not.toContain("severity");
   });
 
+  it("proves focus by default and skips it only where a measurement allows", () => {
+    // The option exists for one row. Its default is the proof, and the only
+    // call that turns it off is the reopen, gated on a reading taken before
+    // the second launch — not on how the run happened to go.
+    expect(e2eSource).toMatch(
+      /function assertVisibleWindowPlacement\([\s\S]{0,120}\{ focusProof = true \} = \{\},?\s*\) \{/u,
+    );
+    expect(e2eSource).toMatch(
+      /if \(focusProof\) assert\.equal\(presentation\.focused, false\);/u,
+    );
+    const disabling = [...e2eSource.matchAll(/focusProof: ([^,\n}]+)/gu)].map(
+      (match) => match[1].trim(),
+    );
+    // Exactly one place decides it, and it decides it from the reading.
+    expect(disabling).toEqual(["activeBeforeReopen !== true"]);
+  });
+
+  it("records the reopen row as blocked, with the reading that blocked it", () => {
+    expect(e2eSource).toMatch(
+      /if \(activeBeforeReopen === true\) \{[\s\S]{0,600}name: "reopened-window-presented-inactive"/u,
+    );
+    expect(e2eSource).toContain(
+      "application already active without owner action before the reopen",
+    );
+    // The observed focus is evidence in the reason, never the decider: the
+    // branch is chosen by the pre-measurement alone.
+    expect(e2eSource).toMatch(
+      /observed focused \$\{String\(reopenPresentation\?\.focused \?\? "unknown"\)\}/u,
+    );
+  });
+
+  it("keeps everything but the focus check on that row", () => {
+    const placement = e2eSource.slice(
+      e2eSource.indexOf("function assertVisibleWindowPlacement("),
+    );
+    const body = placement.slice(0, placement.indexOf("\nfunction "));
+    // Mode, visibility, size and display containment are asserted for every
+    // caller, with or without the focus proof.
+    expect(body).toContain(
+      'assert.equal(presentation.mode, "secondary-visible")',
+    );
+    expect(body).toContain("assert.equal(presentation.visible, true)");
+    expect(body).toContain("assert.equal(bounds.width, 1180)");
+    expect(body).toContain("assert.equal(bounds.height, 760)");
+    expect(body).toMatch(/bounds\.x >= display\.workArea\.x/u);
+  });
+
   it("does not count a quit it could not prove", () => {
     expect(e2eSource).toMatch(/if \(provedQuit\) quitProofs \+= 1;/u);
     expect(e2eSource).not.toMatch(/^\s*quitProofs \+= 1;\s*$/mu);
