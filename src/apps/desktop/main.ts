@@ -1034,52 +1034,58 @@ async function recordChatGptSignInOutcome(
 async function admitRouteBTask(
   threadId: string,
 ): Promise<RouteBSurfaceAdmission> {
-  return underTaskMutation(taskMutations, async () => {
-    const before = liveTaskRegistry.snapshot();
-    const labels = new Set(before.tasks.map((candidate) => candidate.label));
-    let ordinal = 1;
-    while (labels.has(`Codex task ${ordinal}`)) ordinal += 1;
-    const task: ProductTask = {
-      taskId: threadId,
-      sessionId: threadId,
-      turnId: randomUUID(),
-      label: `Codex task ${ordinal}`,
-      provider: "chatgpt",
-      requestedModel: "Account default",
-      observedModel: null,
-      requestedMode: "Account default",
-      observedMode: null,
-      hasComputer: false,
-      pinned: false,
-      lifecycle: "running",
-    };
-    // S35-03/2: admits and persists under the same cross-process lease a
-    // promotion holds, so this cannot land in the gap after a promotion's
-    // drain check validated nothing running and before its placement.
-    let admitted: LiveTaskAdmission;
-    try {
-      admitted = await liveTaskRegistry.admitDurable(
-        task,
-        persistLiveTaskState,
-      );
-    } catch {
-      return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
-    }
-    if (admitted.status === "capacity") {
-      return { ok: false, code: "TASK_CAPACITY_REACHED" };
-    }
-    if (admitted.status !== "admitted") {
-      return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
-    }
-    const route = createLiveChatGptRoute(task.taskId, task.label);
-    liveTaskConversationUrls.set(task.taskId, null);
-    liveTaskRoutes.set(task.taskId, route);
-    publishTasksState();
-    if (!(await openLiveTaskSurface(task.taskId))) {
-      return { ok: false, code: "TASK_SURFACE_UNREACHABLE" };
-    }
-    return { ok: true, surface: route };
-  });
+  // `surfaceFor` read the gate free before it removed this thread's private
+  // residue; another task mutation may have claimed it in that gap.
+  return underTaskMutation(
+    taskMutations,
+    () => ({ ok: false, code: "TASK_ROUTE_BUSY" }),
+    async () => {
+      const before = liveTaskRegistry.snapshot();
+      const labels = new Set(before.tasks.map((candidate) => candidate.label));
+      let ordinal = 1;
+      while (labels.has(`Codex task ${ordinal}`)) ordinal += 1;
+      const task: ProductTask = {
+        taskId: threadId,
+        sessionId: threadId,
+        turnId: randomUUID(),
+        label: `Codex task ${ordinal}`,
+        provider: "chatgpt",
+        requestedModel: "Account default",
+        observedModel: null,
+        requestedMode: "Account default",
+        observedMode: null,
+        hasComputer: false,
+        pinned: false,
+        lifecycle: "running",
+      };
+      // S35-03/2: admits and persists under the same cross-process lease a
+      // promotion holds, so this cannot land in the gap after a promotion's
+      // drain check validated nothing running and before its placement.
+      let admitted: LiveTaskAdmission;
+      try {
+        admitted = await liveTaskRegistry.admitDurable(
+          task,
+          persistLiveTaskState,
+        );
+      } catch {
+        return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
+      }
+      if (admitted.status === "capacity") {
+        return { ok: false, code: "TASK_CAPACITY_REACHED" };
+      }
+      if (admitted.status !== "admitted") {
+        return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
+      }
+      const route = createLiveChatGptRoute(task.taskId, task.label);
+      liveTaskConversationUrls.set(task.taskId, null);
+      liveTaskRoutes.set(task.taskId, route);
+      publishTasksState();
+      if (!(await openLiveTaskSurface(task.taskId))) {
+        return { ok: false, code: "TASK_SURFACE_UNREACHABLE" };
+      }
+      return { ok: true, surface: route };
+    },
+  );
 }
 
 const routeBTaskLifecycle = createRouteBTaskLifecycle({
@@ -1733,7 +1739,11 @@ function armProductAgentExpiry(
         armProductAgentExpiry(session, verdict.atMs - now);
         return;
       }
-      const mutation = taskMutations.enter();
+      const mutation = taskMutations.tryEnter();
+      if (!mutation) {
+        armProductAgentExpiry(session, 0);
+        return;
+      }
       void cancelProductAgentSession(session).finally(() => {
         mutation.release();
       });
@@ -1771,7 +1781,11 @@ function schedulePersistedProductAgentExpiry(
       // `taskPhase === "running"`, which requires `task` to exist. The
       // check narrows `task` for TypeScript rather than adding a new branch.
       if (!task) return;
-      const mutation = taskMutations.enter();
+      const mutation = taskMutations.tryEnter();
+      if (!mutation) {
+        schedulePersistedProductAgentExpiry(taskId, input, 0);
+        return;
+      }
       void cancelProductAgentTask(task).finally(() => {
         mutation.release();
       });
@@ -2107,7 +2121,8 @@ async function runProductTaskCommand(
     return taskFailure("TASK_OPERATION_IN_PROGRESS");
   }
   if (command.data.kind === "task.activate") {
-    const mutation = taskMutations.enter();
+    const mutation = taskMutations.tryEnter();
+    if (!mutation) return taskFailure("TASK_OPERATION_IN_PROGRESS");
     try {
       if (!liveTaskRegistry.get(command.data.taskId)) {
         return taskFailure("TASK_NOT_FOUND");
@@ -2125,7 +2140,8 @@ async function runProductTaskCommand(
     }
   }
   if (!liveTaskStore) return taskFailure("TASK_STATE_UNAVAILABLE");
-  const mutation = taskMutations.enter();
+  const mutation = taskMutations.tryEnter();
+  if (!mutation) return taskFailure("TASK_OPERATION_IN_PROGRESS");
   const before = liveTaskRegistry.snapshot();
   try {
     if (
