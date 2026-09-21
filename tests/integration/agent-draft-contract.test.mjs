@@ -448,3 +448,22 @@ describe("the recorder can see the element, not only the state", () => {
     expect(setter).toContain("-final");
   });
 });
+
+describe("the dialog stack is recorded", () => {
+  it("reports the dialog stack, so the topmost modal is provable", async () => {
+    const source = await shell();
+    expect(source).toContain("function topLayerCensus(");
+    for (const field of [
+      "openDialogs",
+      "topmostModal",
+      "taskMenuIsModal",
+      "activeElement",
+      "setupOpen",
+    ]) {
+      expect(source, field).toContain(`${field}:`);
+    }
+    // On both the render line and the decision line, so a run can see the
+    // stack at the moment a decision was taken and at every rebuild.
+    expect(source.match(/\.\.\.topLayerCensus\(\)/gu)?.length).toBe(2);
+  });
+});

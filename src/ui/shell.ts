@@ -399,6 +399,26 @@ function watchTaskMenuNode(): void {
   }).observe(parent, { childList: true });
 }
 
+// Which dialogs are open, which one the browser considers topmost, and
+// therefore which one the owner can actually reach.
+//
+// A second showModal() puts its dialog above the first in the top layer and
+// makes everything outside the topmost modal inert: not focusable, not
+// clickable, with no close event and no state change anywhere. An open,
+// connected, same-node dialog whose controls cannot be used is that and
+// nothing else.
+function topLayerCensus(): Readonly<Record<string, unknown>> {
+  const open = [...document.querySelectorAll("dialog[open]")];
+  return {
+    openDialogs: open.map((dialog) => dialog.id || "(anonymous)"),
+    topmostModal: open.find((dialog) => dialog.matches(":modal"))?.id ?? null,
+    taskMenuIsModal:
+      document.querySelector("#task-menu")?.matches(":modal") ?? null,
+    activeElement: (document.activeElement as HTMLElement | null)?.id ?? null,
+    setupOpen: setupJourney.open,
+  };
+}
+
 function diagnosticFrames(): string {
   return (new Error().stack ?? "")
     .split("\n")
@@ -4323,6 +4343,7 @@ function render(notify = true): void {
           sameNode: dialog === taskMenuNode,
           connected: taskMenuNode?.isConnected ?? null,
           open: taskMenuNode?.open ?? null,
+          ...topLayerCensus(),
           frames: diagnosticFrames(),
         }),
       );
@@ -4793,6 +4814,7 @@ async function start(): Promise<void> {
           navigate: decision.navigate,
           refreshReadiness: decision.refreshReadiness,
           offerReturn: decision.offerReturn,
+          ...topLayerCensus(),
         }),
       );
       if (!decision.refreshReadiness) return;
