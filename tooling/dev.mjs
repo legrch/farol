@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
+import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 
 export const DECLARED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export const DECLARED_NPM_VERSION = "11.19.0";
@@ -413,13 +414,44 @@ export async function runOwnerManagedChild({
   return { stopLabel, outcome, protocolError, resultCollector };
 }
 
-async function launchPreview(root) {
+/**
+ * The environment the development preview is launched with.
+ *
+ * Built from a fixed key allowlist, exactly as `ownerLaunchEnvironment`
+ * builds the packaged launcher's, rather than passed through from whoever
+ * ran `task dev`. This entrypoint used to hand Electron `process.env`
+ * whole, and it is the one Farol Next launcher that did: a shell that
+ * happened to export `FAROL_NEXT_E2E=1` and a seam value gave an ordinary
+ * development launch the E2E fault seams — substituted file and directory
+ * pickers, a fabricated model reply, live-task commit faults, and a
+ * ChatGPT egress allowlist widened to a loopback origin. Nothing is
+ * inherited now, so none of them can arrive by accident.
+ *
+ * PATH is this process's own declared Node followed by the same system
+ * directories the packaged launcher pins, because `node_modules/.bin/
+ * electron` is a `#!/usr/bin/env node` shim and must find the toolchain
+ * dev.mjs resolved rather than whatever the caller's PATH held.
+ *
+ * The sealed E2E lanes are unaffected: they launch Electron through
+ * Playwright's `electron.launch({ env })` with their own explicit
+ * environment and never run through this entrypoint.
+ */
+export function devLaunchEnvironment(
+  environment = process.env,
+  nodeBinDirectory = path.dirname(process.execPath),
+) {
+  const owned = ownerLaunchEnvironment(environment);
+  return { ...owned, PATH: `${nodeBinDirectory}:${owned.PATH}` };
+}
+
+export async function launchPreview(root, spawnProcess = spawn) {
   const electronBin = path.join(root, "node_modules/.bin/electron");
   const { stopLabel, outcome, protocolError, resultCollector } =
     await runOwnerManagedChild({
       spawnChild: () =>
-        spawn(electronBin, ["dist/app/main.cjs"], {
+        spawnProcess(electronBin, ["dist/app/main.cjs"], {
           cwd: root,
+          env: devLaunchEnvironment(),
           stdio: ["inherit", "pipe", "pipe"],
         }),
     });
