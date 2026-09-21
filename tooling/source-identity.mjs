@@ -60,33 +60,72 @@ export function sourceSnapshot(repositoryRoot, scope = "vnext") {
   if (tree.length === 0) throw new Error("SOURCE_TREE_EMPTY");
 
   const entries = parseTree(tree);
-  let exact = true;
+  // Six separate conditions used to collapse into one unnamed `exact = false`,
+  // so `dirty: true` with a clean `git status` told the caller nothing about
+  // which file or why. Worse, a read that FAILED was folded into the same
+  // answer as a file that genuinely differed: an unreadable path was reported
+  // as a modification. A failure is not a difference, and it is refused here
+  // with the file named rather than folded into the verdict.
+  const reasons = [];
+  const unreadable = (relative, detail) => {
+    throw new Error(`SOURCE_IDENTITY_UNREADABLE:${relative}:${detail}`);
+  };
   for (const [relative, entry] of entries) {
     if (entry.mode !== "100644" && entry.mode !== "100755") {
-      exact = false;
+      reasons.push({ kind: "mode", path: relative, detail: entry.mode });
       continue;
     }
     const target = path.join(repositoryRoot, relative);
     let stat;
     try {
       stat = fs.lstatSync(target);
-    } catch {
-      exact = false;
-      continue;
+    } catch (error) {
+      unreadable(relative, `lstat ${error?.code ?? "failed"}`);
     }
     if (!stat.isFile() || stat.isSymbolicLink()) {
-      exact = false;
+      reasons.push({ kind: "not-a-regular-file", path: relative });
       continue;
     }
-    const expected = git(repositoryRoot, ["cat-file", "blob", entry.objectId]);
-    const actual = fs.readFileSync(target);
+    let expected;
+    try {
+      expected = git(repositoryRoot, ["cat-file", "blob", entry.objectId]);
+    } catch (error) {
+      // A spawn that fails, is killed, or overflows its buffer throws rather
+      // than returning short bytes. Naming the object is what makes the next
+      // occurrence diagnosable instead of a bare stack trace.
+      unreadable(
+        relative,
+        `git cat-file ${entry.objectId}: ${error?.code ?? error?.message ?? "failed"}`,
+      );
+    }
+    let actual;
+    try {
+      actual = fs.readFileSync(target);
+    } catch (error) {
+      unreadable(relative, `read ${error?.code ?? "failed"}`);
+    }
     entry.bytes = expected;
-    if (!actual.equals(expected)) exact = false;
+    if (!actual.equals(expected)) {
+      reasons.push({
+        kind: "content",
+        path: relative,
+        detail: `expected ${expected.length}B, found ${actual.length}B`,
+      });
+    }
   }
 
+  // `git status` does not report a path marked assume-unchanged (`h`) or
+  // skip-worktree (`S`), but `ls-files -v` does. That pairing is exactly how a
+  // clean status and a dirty verdict can both be true, so the flag is named.
   const indexFlags = git(repositoryRoot, ["ls-files", "-v", "-z", "--", scope]);
   for (const record of indexFlags.toString("utf8").split("\0")) {
-    if (record && !record.startsWith("H ")) exact = false;
+    if (record && !record.startsWith("H ")) {
+      reasons.push({
+        kind: "index-flag",
+        path: record.slice(2),
+        detail: record.slice(0, 1),
+      });
+    }
   }
 
   const status = git(repositoryRoot, [
@@ -97,13 +136,23 @@ export function sourceSnapshot(repositoryRoot, scope = "vnext") {
     "--",
     scope,
   ]);
+  for (const record of status.toString("utf8").split("\0")) {
+    if (!record) continue;
+    reasons.push({
+      kind: "status",
+      path: record.slice(3),
+      detail: record.slice(0, 2),
+    });
+  }
   const identity = {
     commit,
     treeDigest: createHash("sha256")
       .update("git-ls-tree-v1\0")
       .update(tree)
       .digest("hex"),
-    dirty: status.length > 0 || !exact,
+    dirty: reasons.length > 0,
+    // Every dirty verdict now carries why, and a clean one carries nothing.
+    reasons,
   };
   return { ...identity, entries };
 }
