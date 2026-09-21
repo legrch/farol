@@ -541,6 +541,92 @@ describe("Farol Model loopback endpoint", () => {
     await identity.text();
   });
 
+  // S35-TA-17 (U2c). Two different internal reasons — the endpoint is
+  // sealed, and the token file holds nothing — must be ONE fact to a caller
+  // that has not authenticated: it was refused. Asserting a 401 on each
+  // separately does not prove that; a status code is the part hardest to
+  // get wrong. This compares the two responses byte for byte and counts
+  // provider dispatches for both, because the response could be identical
+  // while one of them had already reached the turn handler.
+  it("S35-TA-17 a sealed endpoint and one with no token refuse identically, and neither reaches the provider", async () => {
+    let dispatches = 0;
+    const counting: FarolModelTurnHandler = async (request) => {
+      dispatches += 1;
+      return syntheticHandler(request);
+    };
+
+    // Sealed, with a usable token still in its state file.
+    const sealed = await started(counting);
+    const sealedProbe = await post(sealed.port, codexRequest(), {
+      authorization: `Bearer ${sealed.token}`,
+    });
+    expect(sealedProbe.status).toBe(200);
+    await sealedProbe.text();
+    expect(dispatches).toBe(1);
+    sealed.endpoint.seal();
+
+    const sealedRefusal = await post(sealed.port, codexRequest(), {
+      authorization: `Bearer ${sealed.token}`,
+    });
+    const sealedBody = await sealedRefusal.text();
+
+    // A second endpoint whose token has been cleared: a different internal
+    // reason, the same caller-visible situation.
+    const unset = await started(counting);
+    await unset.state.clearToken();
+    const unsetRefusal = await post(unset.port, codexRequest(), {
+      authorization: `Bearer ${unset.token}`,
+    });
+    const unsetBody = await unsetRefusal.text();
+
+    // Byte for byte: status, the headers a caller can read, and the body.
+    expect(sealedRefusal.status).toBe(unsetRefusal.status);
+    expect(sealedRefusal.status).toBe(401);
+    expect(sealedRefusal.headers.get("www-authenticate")).toBe(
+      unsetRefusal.headers.get("www-authenticate"),
+    );
+    expect(sealedRefusal.headers.get("www-authenticate")).toBe("Bearer");
+    expect(sealedRefusal.headers.get("content-type")).toBe(
+      unsetRefusal.headers.get("content-type"),
+    );
+    expect(sealedBody).toBe(unsetBody);
+    expect(JSON.parse(sealedBody)).toEqual({ error: { code: "unauthorized" } });
+
+    // No FAROL_* reason, no token, no hint of which check refused: the
+    // internal reason stays in evidence() for the owner.
+    for (const body of [sealedBody, unsetBody]) {
+      expect(body).not.toContain("FAROL");
+      expect(body).not.toContain("SEALED");
+      expect(body).not.toContain("TOKEN");
+      expect(body).not.toContain(sealed.token);
+    }
+    expect(sealed.endpoint.evidence().lastRejectedReason).toBe(
+      "FAROL_MODEL_SEALED",
+    );
+    expect(unset.endpoint.evidence().lastRejectedReason).toBe(
+      "FAROL_MODEL_TOKEN_UNSET",
+    );
+
+    // Neither refusal reached the turn handler: still the one dispatch the
+    // pre-seal probe made, and none from the other endpoint at all.
+    //
+    // Honest about what this half proves. It CANNOT be reddened on its own
+    // in today's design: the only way to reach the handler is to not refuse,
+    // and removing the seal check makes the status assertion above fail
+    // first (measured — that mutant dies on "expected 200 to be 401"). So
+    // the counter is not independently decisive today. It is here for the
+    // refactor where refusal and dispatch could diverge — a telemetry hook,
+    // a pre-warm, a handler consulted before the credential — because then
+    // a response could stay byte-identical while the provider had already
+    // been reached, and nothing else in this file would notice.
+    //
+    // (Also measured: dropping just the `return` after the sealed refusal
+    // does NOT produce a dispatch, so that is not the mutant for this row.)
+    expect(dispatches).toBe(1);
+    expect(sealed.endpoint.evidence().requestsAccepted).toBe(1);
+    expect(unset.endpoint.evidence().requestsAccepted).toBe(0);
+  });
+
   it("S35-TA-2 a sealed endpoint cannot be restarted, and seals stay set across a stop", async () => {
     const { endpoint, port, token } = await started();
     endpoint.seal();
