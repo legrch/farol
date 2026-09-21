@@ -10274,7 +10274,33 @@ n12AgentDraftSegment: {
     // Every click in this case explains itself when it fails. A control that
     // is gone is the defect under test, so "timed out" alone is never a
     // usable answer here.
+    let menuNodeAtOpen = null;
     const draftDump = async (label, error) => {
+      // Replaced, closed, or merely hidden are three different defects and
+      // one symptom. The node captured when the menu opened answers which:
+      // a different node in the document means it was replaced, the same
+      // node still open but disconnected means it was detached, and an open
+      // connected node with no layout box means it was hidden.
+      const menuIdentity = menuNodeAtOpen
+        ? await menuNodeAtOpen
+            .evaluate((element) => ({
+              sameNode: element === document.querySelector("#task-menu"),
+              capturedIsConnected: element.isConnected,
+              capturedOpen: element.open ?? null,
+            }))
+            .catch(() => null)
+        : null;
+      const visibleMenu = await draft.window
+        .evaluate(() => {
+          const element = document.querySelector("#task-menu");
+          if (!element) return null;
+          return {
+            open: element.open ?? null,
+            isConnected: element.isConnected,
+            hasLayoutBox: element.offsetParent !== null,
+          };
+        })
+        .catch(() => null);
       const windows = await draft.application
         .evaluate(({ BrowserWindow }) =>
           BrowserWindow.getAllWindows().map((browserWindow) => ({
@@ -10310,7 +10336,7 @@ n12AgentDraftSegment: {
         }))
         .catch(() => null);
       return new Error(
-        `${error.message} · at ${label} · surface ${JSON.stringify(surface)} · windows ${JSON.stringify(windows)} · console ${JSON.stringify(consoleLines)}`,
+        `${error.message} · at ${label} · menu ${JSON.stringify({ menuIdentity, visibleMenu })} · surface ${JSON.stringify(surface)} · windows ${JSON.stringify(windows)} · console ${JSON.stringify(consoleLines)}`,
         { cause: error },
       );
     };
@@ -10482,6 +10508,7 @@ n12AgentDraftSegment: {
       await draft.window
         .locator("#task-menu")
         .waitFor({ state: "visible", timeout: 20_000 });
+      menuNodeAtOpen = await draft.window.locator("#task-menu").elementHandle();
     };
     const agentInputRoot = path.join(
       draft.userData,
@@ -10506,6 +10533,14 @@ n12AgentDraftSegment: {
       .click({ timeout: 20_000 });
     const signInPage = await signInWindow;
     await signInPage.waitForURL(draft.chatGptFixture.url);
+    // Baselines taken here, not at menu open: the delayed outcome of an
+    // older window can land before the menu is open — it did, at +0 ms with
+    // `shellOverlay: "none"` — and a wait keyed to menu open could then
+    // never be satisfied.
+    const consoleAtSignInOpen = consoleLines.length;
+    const sequenceAtSignInOpen = await draft.window.evaluate(
+      () => globalThis.__farolE2ESeq ?? 0,
+    );
 
     await toBrowser();
     await newDraftTask(1);
@@ -10546,7 +10581,6 @@ n12AgentDraftSegment: {
     const sequenceBeforeClose = await draft.window.evaluate(
       () => globalThis.__farolE2ESeq ?? 0,
     );
-    const consoleAtMenuOpen = consoleLines.length;
     await clickInDraft("#task-agent-subtree");
     await draft.window.keyboard.type("no");
     // Both background events must land while the editor holds text, and
@@ -10554,12 +10588,14 @@ n12AgentDraftSegment: {
     // the delayed outcome of Setup's own older window. Waiting for them
     // before closing this case's window is what puts every one of them
     // inside the typing, which is the thing under test.
+    // Only the decision is waited for; a layout is recorded as evidence
+    // rather than required, because whether one is due depends on what the
+    // product does and gating on it would be another assumption of mine.
     await waitInHarness(
-      "a layout and the older window's decision, both since the menu opened",
-      async () =>
-        decisionSeenSince(consoleAtMenuOpen) &&
-        (await layoutSeenSince(sequenceBeforeClose)),
+      "the older window's decision, since this case opened its own window",
+      async () => decisionSeenSince(consoleAtSignInOpen),
     );
+    const layoutBeforeClose = await layoutSeenSince(sequenceAtSignInOpen);
     // The background event, caused here rather than waited for. Closing the
     // sign-in window is what makes production record its outcome, so firing
     // it in the middle of a word puts the event exactly where the owner's
@@ -10589,7 +10625,7 @@ n12AgentDraftSegment: {
       `the word survives a layout push that arrived in the middle of it · ${JSON.stringify(arrivedLayout)}`,
     );
     process.stdout.write(
-      `E2E_AGENT_DRAFT layout=${JSON.stringify(arrivedLayout)} console=${JSON.stringify(consoleLines)}\n`,
+      `E2E_AGENT_DRAFT layoutBeforeClose=${String(layoutBeforeClose)} layout=${JSON.stringify(arrivedLayout)} console=${JSON.stringify(consoleLines)}\n`,
     );
     for (const [selector, text] of [
       ["#task-agent-exclusions", typed.exclusions],
