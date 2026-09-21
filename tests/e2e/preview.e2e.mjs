@@ -10182,6 +10182,22 @@ n12AgentDraftSegment: {
     // its decision lands in the same report, in arrival order, on the same
     // clock as the events it explains.
     const consoleLines = [];
+    // The report buffer above is bounded and re-indexed when it fills, so
+    // neither a stored index into it nor a scan of it can answer "did this
+    // event happen". These two records can: they are parsed from the full
+    // line before it is truncated, never trimmed, and grow by one entry per
+    // shell action — a handful in a run.
+    const shellActionGenerations = new Map();
+    const decisionEventIds = new Set();
+    const record = (text, marker, keep) => {
+      const match = new RegExp(`${marker}\\s+(\\{.*\\})`, "u").exec(text);
+      if (!match) return;
+      try {
+        keep(JSON.parse(match[1]));
+      } catch {
+        // An unparsable payload stays in the report and out of the record.
+      }
+    };
     draft.window.on("console", (message) => {
       const text = message.text();
       // Every `farol.` diagnostic, not one of them: filtering to a single
@@ -10192,6 +10208,19 @@ n12AgentDraftSegment: {
         // menu is open, and an unbounded capture of that stream stalled a
         // run outright — a diagnostic that stops the thing it is watching
         // measures nothing.
+        record(text, "farol\\.shell-action", (payload) => {
+          if (typeof payload.eventId === "string") {
+            shellActionGenerations.set(
+              payload.eventId,
+              typeof payload.gen === "number" ? payload.gen : null,
+            );
+          }
+        });
+        record(text, "farol\\.shell-decision", (payload) => {
+          if (typeof payload.eventId === "string") {
+            decisionEventIds.add(payload.eventId);
+          }
+        });
         consoleLines.push({ at: Date.now(), text: text.slice(0, 600) });
         if (consoleLines.length > 240) consoleLines.splice(0, 40);
       }
@@ -10354,6 +10383,9 @@ n12AgentDraftSegment: {
                 ?.id ?? null,
             setupDialogOpen:
               document.querySelector("#setup-dialog")?.open ?? null,
+            setupDialogModal:
+              document.querySelector("#setup-dialog")?.matches(":modal") ??
+              null,
             activeElementId: document.activeElement?.id ?? null,
           };
         })
@@ -10409,34 +10441,14 @@ n12AgentDraftSegment: {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
     };
-    const decisionSeenSince = (from) =>
-      consoleLines
-        .slice(from)
-        .some((line) => line.text.includes("farol.shell-decision"));
-    const decisionSeenForGenerationAbove = (threshold) => {
-      const ids = new Set();
-      for (const line of consoleLines) {
-        const match = /farol\.shell-action\s+(\{.*\})/u.exec(line.text);
-        if (!match) continue;
-        try {
-          const payload = JSON.parse(match[1]);
-          if (
-            typeof payload.gen === "number" &&
-            payload.gen > threshold &&
-            typeof payload.eventId === "string"
-          ) {
-            ids.add(payload.eventId);
-          }
-        } catch {
-          // A truncated line is not a decision; the bound is deliberate.
-        }
-      }
-      return consoleLines.some(
-        (line) =>
-          line.text.includes("farol.shell-decision") &&
-          [...ids].some((id) => line.text.includes(id)),
-      );
-    };
+    // A window is identified by the generation stamped on its action, so
+    // the two directions of one predicate separate this case's own window
+    // from every older one. Neither depends on when a line arrived.
+    const decisionForGeneration = (accept) =>
+      [...decisionEventIds].some((id) => {
+        const generation = shellActionGenerations.get(id);
+        return typeof generation === "number" && accept(generation);
+      });
     const layoutSeenSince = async (seq) =>
       draft.window
         .evaluate(
@@ -10590,11 +10602,11 @@ n12AgentDraftSegment: {
       .click({ timeout: 20_000 });
     const signInPage = await signInWindow;
     await signInPage.waitForURL(draft.chatGptFixture.url);
-    // Baselines taken here, not at menu open: the delayed outcome of an
-    // older window can land before the menu is open — it did, at +0 ms with
-    // `shellOverlay: "none"` — and a wait keyed to menu open could then
-    // never be satisfied.
-    const consoleAtSignInOpen = consoleLines.length;
+    // A sequence baseline only. There is deliberately no console baseline:
+    // the delayed outcome of an older window can land before this case
+    // starts — measured, it lands before the menu is even open — so any
+    // index taken here could never see it, which is what made the previous
+    // version of this wait unsatisfiable.
     const sequenceAtSignInOpen = await draft.window.evaluate(
       () => globalThis.__farolE2ESeq ?? 0,
     );
@@ -10615,9 +10627,14 @@ n12AgentDraftSegment: {
     await draft.window
       .locator("#task-agent-scope")
       .selectOption("subtree", { timeout: 20_000 });
+    // `offsetParent` is null for anything inside a fixed-position element,
+    // so it cannot see a field inside this dialog at all. The engine's own
+    // visibility answer and a real box can.
     await draft.window.waitForFunction(() => {
       const field = document.querySelector("#task-agent-subtree");
-      return field instanceof HTMLElement && field.offsetParent !== null;
+      if (!(field instanceof HTMLElement)) return false;
+      const box = field.getBoundingClientRect();
+      return field.checkVisibility() && box.width > 0 && box.height > 0;
     });
     const subtreeNode = await draft.window
       .locator("#task-agent-subtree")
@@ -10627,31 +10644,34 @@ n12AgentDraftSegment: {
     // carries a higher generation than any older window's. A delayed gen-2
     // outcome from Setup's window can and did arrive first; waiting for
     // "any new action" would accept it and assert against the wrong event.
-    const generationBeforeClose = (await shellActions()).reduce(
-      (highest, entry) =>
-        typeof entry.authWindowGeneration === "number" &&
-        entry.authWindowGeneration > highest
-          ? entry.authWindowGeneration
+    const generationBeforeClose = [...shellActionGenerations.values()].reduce(
+      (highest, generation) =>
+        typeof generation === "number" && generation > highest
+          ? generation
           : highest,
       -1,
+    );
+    // Asserted, not waited for. Setup opens and closes its own sign-in
+    // window in every run of this case, so its outcome is due in every run
+    // and a run without it exercised less than this case claims. Its
+    // arrival time is not this case's to schedule, which is why the record
+    // is read once here instead of being blocked on. Reading it here also
+    // makes the generation above a sound discriminator: this case's own
+    // window is the newest, so its generation is higher than one already
+    // stamped on the record.
+    assert.equal(
+      decisionForGeneration((generation) => generation >= 0),
+      true,
+      `an older window's outcome was decided before this case closed its own · ${JSON.stringify(consoleLines)}`,
     );
     const sequenceBeforeClose = await draft.window.evaluate(
       () => globalThis.__farolE2ESeq ?? 0,
     );
     await clickInDraft("#task-agent-subtree");
     await draft.window.keyboard.type("no");
-    // Both background events must land while the editor holds text, and
-    // both are real: the layout push the New task completion produces, and
-    // the delayed outcome of Setup's own older window. Waiting for them
-    // before closing this case's window is what puts every one of them
-    // inside the typing, which is the thing under test.
-    // Only the decision is waited for; a layout is recorded as evidence
-    // rather than required, because whether one is due depends on what the
-    // product does and gating on it would be another assumption of mine.
-    await waitInHarness(
-      "the older window's decision, since this case opened its own window",
-      async () => decisionSeenSince(consoleAtSignInOpen),
-    );
+    // A layout is recorded as evidence rather than required: whether one is
+    // due depends on what the product does, and gating on it would be
+    // another assumption of mine.
     const layoutBeforeClose = await layoutSeenSince(sequenceAtSignInOpen);
     // The background event, caused here rather than waited for. Closing the
     // sign-in window is what makes production record its outcome, so firing
@@ -10663,7 +10683,7 @@ n12AgentDraftSegment: {
     // a generation above every earlier window's.
     await waitInHarness(
       "the decision for this case's own sign-in window",
-      async () => decisionSeenForGenerationAbove(generationBeforeClose),
+      async () => decisionForGeneration((gen) => gen > generationBeforeClose),
     );
     const arrivedLayout = await draft.window.evaluate(
       () => (globalThis.__farolE2ELayouts ?? []).at(-1) ?? null,
