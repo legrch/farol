@@ -10035,14 +10035,26 @@ n09ConnectorSegment: {
     // Connector commands rewrite the shared panel feedback from their own
     // evidence, so matching the sentence is also an assertion about which
     // evidence came back.
-    const connectorFeedback = (pattern) =>
-      connector.window.waitForFunction(
-        (source) =>
-          new RegExp(source, "u").test(
-            document.querySelector("#computer-feedback")?.textContent ?? "",
-          ),
-        pattern.source,
-      );
+    const connectorFeedback = async (pattern) => {
+      try {
+        await connector.window.waitForFunction(
+          (source) =>
+            new RegExp(source, "u").test(
+              document.querySelector("#computer-feedback")?.textContent ?? "",
+            ),
+          pattern.source,
+        );
+      } catch (error) {
+        const actual = await connector.window
+          .locator("#computer-feedback")
+          .textContent();
+        assert.match(
+          actual ?? "",
+          pattern,
+          `unexpected connector feedback after UI action: ${error}`,
+        );
+      }
+    };
 
     // Each prerequisite in turn, named by the control that is refusing.
     const noClient = await startState();
