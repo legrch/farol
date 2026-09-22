@@ -10445,7 +10445,9 @@ n09ConnectorAttachmentSegment: {
       .click();
     await feedback(/^ChatGPT attachment verified · workspace /u);
     await attaching.window.waitForFunction(
-      () => document.querySelectorAll(".connector-challenge").length === 0,
+      () =>
+        document.querySelectorAll("#connection-readiness .connector-challenge")
+          .length === 0,
     );
     const attached = await attaching.window.evaluate(() =>
       window.farolNext.bootstrap(),
