@@ -25,6 +25,11 @@ provider/host fixture; `BLOCKED_OWNER` and `NOT_RUN` remain open evidence rows.
 `NOT_SELECTED_U2` is not a compatibility claim. Those rows must remain visible in
 any later Legacy-replacement decision.
 
+Persistent private ChatGPT conversation creation and its native-Handoff relationship are
+tracked in [Persistent handoff parity](persistent-chat-handoff-parity.md). This is a
+planned item for the existing Next writer, not an implemented U2 route or a Legacy
+replacement claim.
+
 ## Fixed command contract
 
 Both profiles use the reviewed Apple Git chain and an exact argument vector:
