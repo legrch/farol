@@ -24,9 +24,12 @@ import {
   ChatGptRoute,
   ChatGptSignInBlockLedger,
   activateTaskScript,
+  bindChatGptAppScript,
+  installManualAppGateScript,
   classifyChatGptProviderError,
   prepareTaskScript,
   resolveChatGptWindowPresentation,
+  verifyChatGptAppScript,
   type ChatGptRouteSurfaceFactory,
   type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInBlockedDiagnostic,
@@ -75,6 +78,32 @@ function taskRoute(
   activity: unknown = { running: false },
 ): ChatGptRoute {
   const candidate = route();
+  vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+  vi.spyOn(candidate, "observe").mockResolvedValue({
+    state: "authenticated",
+    code: null,
+  });
+  Reflect.set(candidate, "routeWindow", {
+    isDestroyed: () => false,
+    webContents: {
+      executeJavaScript: routedExecutor(executeJavaScript, activity),
+      getURL: () => "https://chatgpt.com/",
+    },
+  });
+  return candidate;
+}
+
+function devTaskRoute(
+  executeJavaScript: ReturnType<typeof vi.fn>,
+  activity: unknown = { running: false },
+): ChatGptRoute {
+  const candidate = new ChatGptRoute({
+    homeUrl: "https://chatgpt.com/",
+    initialUrl: "https://chatgpt.com/",
+    e2eOrigin: null,
+    parent: () => null,
+    requiredAppName: "Farol DEV",
+  });
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
   vi.spyOn(candidate, "observe").mockResolvedValue({
     state: "authenticated",
@@ -277,6 +306,701 @@ describe("ChatGPT test-window presentation", () => {
 });
 
 describe("ChatGPT route submission boundary", () => {
+  it("uses the real @ picker and accepts only one observed exact Farol DEV chip", async () => {
+    const expectedHref = "https://chatgpt.com/c/dev-binding";
+    let selected = false;
+    const contacts = { pickerClicks: 0, values: [] as string[] };
+
+    class StubElement {
+      disabled = false;
+      parentElement: StubElement | null = null;
+      textContent = "";
+      getBoundingClientRect(): Readonly<{ width: number; height: number }> {
+        return { width: 240, height: 40 };
+      }
+      getAttribute(): null {
+        return null;
+      }
+      contains(candidate: unknown): boolean {
+        return candidate === this;
+      }
+      click(): void {}
+      focus(): void {}
+      dispatchEvent(): boolean {
+        return true;
+      }
+      querySelectorAll(): readonly StubElement[] {
+        return [];
+      }
+      closest(): StubElement | null {
+        return this.parentElement;
+      }
+    }
+    class HTMLElement extends StubElement {}
+    class HTMLTextAreaElement extends HTMLElement {}
+    class HTMLButtonElement extends HTMLElement {}
+    const form = new HTMLElement();
+    const composer = new HTMLTextAreaElement();
+    composer.parentElement = form;
+    const chip = new HTMLElement();
+    chip.textContent = "Farol DEV";
+    form.querySelectorAll = () => (selected ? [chip] : []);
+    const picker = new HTMLElement();
+    const option = new HTMLButtonElement();
+    option.textContent = "Farol DEV";
+    option.click = () => {
+      contacts.pickerClicks += 1;
+      selected = true;
+    };
+    picker.querySelectorAll = () => [option];
+    let composerValue = "";
+    Object.defineProperty(HTMLTextAreaElement.prototype, "value", {
+      configurable: true,
+      get() {
+        return composerValue;
+      },
+      set(next: string) {
+        composerValue = next;
+        contacts.values.push(next);
+      },
+    });
+    class InputEvent {
+      constructor(..._arguments: unknown[]) {}
+    }
+    const context = vm.createContext({
+      location: { href: expectedHref },
+      document: {
+        querySelector: (selector: string) =>
+          selector.includes("prompt-textarea") ? composer : null,
+        querySelectorAll: (selector: string) =>
+          selector.includes('role="listbox"') ? [picker] : [],
+        createTextNode: (text: string) => ({ text }),
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
+      HTMLElement,
+      HTMLTextAreaElement,
+      HTMLButtonElement,
+      InputEvent,
+      Set,
+      Object,
+      Array,
+    });
+
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol DEV", expectedHref), context),
+    ).resolves.toEqual({ state: "bound" });
+    expect(contacts.values).toEqual(["@"]);
+    expect(contacts.pickerClicks).toBe(1);
+  });
+
+  it("does not accept a matching-name generic Lexical decorator as an app chip", () => {
+    const expectedHref = "https://chatgpt.com/c/dev-binding";
+
+    class Element {
+      textContent = "";
+      getBoundingClientRect(): Readonly<{ width: number; height: number }> {
+        return { width: 240, height: 40 };
+      }
+      getAttribute(): null {
+        return null;
+      }
+      contains(candidate: unknown): boolean {
+        return candidate === this;
+      }
+      closest(): Element | null {
+        return form;
+      }
+      querySelectorAll(selector: string): readonly Element[] {
+        return selector.includes("data-lexical-decorator") ? [decorator] : [];
+      }
+    }
+    class HTMLElement extends Element {}
+    class HTMLTextAreaElement extends HTMLElement {}
+    const form = new HTMLElement();
+    const composer = new HTMLTextAreaElement();
+    const decorator = new HTMLElement();
+    decorator.textContent = "Farol DEV";
+    const context = vm.createContext({
+      location: { href: expectedHref },
+      document: {
+        querySelector: (selector: string) =>
+          selector.includes("prompt-textarea") ? composer : null,
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+      HTMLElement,
+      HTMLTextAreaElement,
+      Set,
+      Object,
+      Array,
+    });
+
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol DEV", expectedHref),
+        context,
+      ),
+    ).toEqual({ state: "blocked", reason: "missing" });
+  });
+
+  it.each([
+    ["missing", "CHATGPT_APP_SELECTION_MISSING"],
+    ["ambiguous", "CHATGPT_APP_SELECTION_AMBIGUOUS"],
+    ["conflict", "CHATGPT_APP_SELECTION_CONFLICT"],
+    ["draft_present", "CHATGPT_COMPOSER_DRAFT_PRESENT"],
+  ] as const)(
+    "blocks a DEV submission before typing or clicking when app selection is %s",
+    async (reason, code) => {
+      const executeJavaScript = vi
+        .fn()
+        .mockResolvedValueOnce({ state: "blocked", reason });
+
+      await expect(
+        devTaskRoute(executeJavaScript).runReadonlyTask("must stay local"),
+      ).resolves.toMatchObject({ state: "failed_before_submit", code });
+
+      expect(executeJavaScript).toHaveBeenCalledTimes(1);
+      expect(executeJavaScript.mock.calls[0]?.[0]).toContain("Farol DEV");
+      expect(executeJavaScript.mock.calls[0]?.[0]).not.toContain(
+        "send.click()",
+      );
+    },
+  );
+
+  it("blocks before the send script when the observed DEV app chip is lost", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ state: "blocked", reason: "missing" });
+
+    await expect(
+      devTaskRoute(executeJavaScript).runReadonlyTask("must stay bound"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_APP_SELECTION_LOST",
+    });
+
+    expect(executeJavaScript).toHaveBeenCalledTimes(3);
+    expect(
+      executeJavaScript.mock.calls.some(([script]) =>
+        String(script).includes("send.click()"),
+      ),
+    ).toBe(false);
+  });
+
+  it("installs a manual gate covering send clicks, form submit and Enter without a forgeable page marker", () => {
+    const script = installManualAppGateScript("Farol DEV");
+    expect(script).toContain('addEventListener("click"');
+    expect(script).toContain('addEventListener("submit"');
+    expect(script).toContain('addEventListener("keydown"');
+    expect(script).toContain("form.contains(button)");
+    expect(script).toContain("HTMLFormElement.prototype.submit");
+    expect(script).toContain("HTMLFormElement.prototype.requestSubmit");
+    expect(script).toContain(
+      'target.closest(\'[role="option"],[role="menuitem"]\')',
+    );
+    expect(script).toContain("stopImmediatePropagation");
+    expect(script).toContain("Farol DEV");
+    expect(script).not.toContain("globalThis[gateId]");
+  });
+
+  it("executes the manual gate for click, Enter, submit APIs and the app-picker repair control", () => {
+    type GateEvent = {
+      target: unknown;
+      key?: string;
+      shiftKey?: boolean;
+      isComposing?: boolean;
+      prevented: boolean;
+      stopped: boolean;
+      preventDefault: () => void;
+      stopImmediatePropagation: () => void;
+    };
+
+    function harness(
+      selectedLabels: readonly string[],
+      options: Readonly<{ exposeKnownComposer?: boolean }> = {},
+    ) {
+      const listeners = new Map<string, (event: GateEvent) => void>();
+      const contacts = { submit: 0, requestSubmit: 0 };
+      let notice: HTMLElement | null = null;
+
+      class Node {
+        contains(candidate: unknown): boolean {
+          return candidate === this;
+        }
+      }
+      class Element extends Node {
+        parentElement: Element | null = null;
+        textContent = "";
+        style = { cssText: "" };
+        readonly attributes = new Map<string, string>();
+        getBoundingClientRect(): Readonly<{ width: number; height: number }> {
+          return { width: 240, height: 40 };
+        }
+        getAttribute(name: string): string | null {
+          return this.attributes.get(name) ?? null;
+        }
+        setAttribute(name: string, value: string): void {
+          this.attributes.set(name, value);
+        }
+        remove(): void {
+          if (notice === this) notice = null;
+        }
+        closest(selector: string): Element | null {
+          if (
+            selector === "form" &&
+            this.parentElement instanceof HTMLFormElement
+          ) {
+            return this.parentElement;
+          }
+          if (selector === "button" && this instanceof HTMLButtonElement) {
+            return this;
+          }
+          if (
+            selector.includes("send-button") &&
+            this instanceof HTMLButtonElement &&
+            this.kind === "send"
+          ) {
+            return this;
+          }
+          if (
+            selector.includes('[role="option"]') &&
+            this instanceof HTMLButtonElement &&
+            this.kind === "picker"
+          ) {
+            return this;
+          }
+          if (
+            selector.includes("stop-button") &&
+            this instanceof HTMLButtonElement &&
+            this.kind === "stop"
+          ) {
+            return this;
+          }
+          if (
+            selector.includes("composer-app-chip") &&
+            this instanceof HTMLButtonElement &&
+            this.kind === "remove"
+          ) {
+            return this;
+          }
+          return null;
+        }
+        querySelectorAll(_selector: string): readonly Element[] {
+          return [];
+        }
+      }
+      class HTMLElement extends Element {}
+      class HTMLTextAreaElement extends HTMLElement {}
+      class HTMLButtonElement extends HTMLElement {
+        constructor(
+          readonly kind: "send" | "picker" | "other" | "stop" | "remove",
+        ) {
+          super();
+        }
+      }
+      class HTMLFormElement extends HTMLElement {
+        readonly children = new Set<Element>();
+        override contains(candidate: unknown): boolean {
+          return candidate === this || this.children.has(candidate as Element);
+        }
+        override querySelectorAll(selector: string): readonly Element[] {
+          if (
+            selector.includes("textarea") ||
+            selector.includes('[contenteditable="true"]') ||
+            selector.includes('[role="textbox"]')
+          ) {
+            return [composer];
+          }
+          return chips;
+        }
+        submit(): void {
+          contacts.submit += 1;
+        }
+        requestSubmit(): void {
+          contacts.requestSubmit += 1;
+        }
+      }
+
+      const form = new HTMLFormElement();
+      const composer = new HTMLTextAreaElement();
+      composer.parentElement = form;
+      const send = new HTMLButtonElement("send");
+      send.parentElement = form;
+      const picker = new HTMLButtonElement("picker");
+      picker.parentElement = form;
+      picker.textContent = "Farol DEV";
+      const stop = new HTMLButtonElement("stop");
+      stop.parentElement = form;
+      const remove = new HTMLButtonElement("remove");
+      remove.parentElement = form;
+      form.children.add(composer);
+      form.children.add(send);
+      form.children.add(picker);
+      form.children.add(stop);
+      form.children.add(remove);
+      const chips = selectedLabels.map((label) => {
+        const chip = new HTMLElement();
+        chip.textContent = label;
+        return chip;
+      });
+
+      const document = {
+        documentElement: {
+          appendChild(element: HTMLElement) {
+            notice = element;
+          },
+        },
+        querySelector: (selector: string): HTMLElement | null =>
+          options.exposeKnownComposer !== false &&
+          selector.includes("prompt-textarea")
+            ? composer
+            : null,
+        getElementById: (): HTMLElement | null => notice,
+        createElement: (): HTMLElement => new HTMLElement(),
+        addEventListener: (
+          type: string,
+          listener: (event: GateEvent) => void,
+        ): void => {
+          listeners.set(type, listener);
+        },
+      };
+      const context = vm.createContext({
+        document,
+        getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        setTimeout: () => 0,
+        Node,
+        Element,
+        HTMLElement,
+        HTMLTextAreaElement,
+        HTMLButtonElement,
+        HTMLFormElement,
+        Reflect,
+        Set,
+        Object,
+        Array,
+      });
+      expect(
+        vm.runInContext(installManualAppGateScript("Farol DEV"), context),
+      ).toBe(true);
+
+      const event = (
+        target: unknown,
+        extra: Partial<GateEvent> = {},
+      ): GateEvent => {
+        const candidate: GateEvent = {
+          target,
+          shiftKey: false,
+          isComposing: false,
+          prevented: false,
+          stopped: false,
+          preventDefault: () => {
+            candidate.prevented = true;
+          },
+          stopImmediatePropagation: () => {
+            candidate.stopped = true;
+          },
+          ...extra,
+        };
+        return candidate;
+      };
+      const genericSubmit = new HTMLButtonElement("other");
+      genericSubmit.parentElement = form;
+      form.children.add(genericSubmit);
+      return {
+        listeners,
+        contacts,
+        form,
+        composer,
+        send,
+        genericSubmit,
+        picker,
+        stop,
+        remove,
+        event,
+      };
+    }
+
+    const blocked = harness([]);
+    for (const [type, candidate] of [
+      ["click", blocked.event(blocked.send)],
+      ["submit", blocked.event(blocked.form)],
+      ["keydown", blocked.event(blocked.composer, { key: "Enter" })],
+    ] as const) {
+      blocked.listeners.get(type)?.(candidate);
+      expect(candidate.prevented, type).toBe(true);
+      expect(candidate.stopped, type).toBe(true);
+    }
+    blocked.form.submit();
+    blocked.form.requestSubmit();
+    expect(blocked.contacts).toEqual({ submit: 0, requestSubmit: 0 });
+
+    for (const [label, control] of [
+      ["stop", blocked.stop],
+      ["remove app chip", blocked.remove],
+    ] as const) {
+      const controlEvent = blocked.event(control);
+      blocked.listeners.get("click")?.(controlEvent);
+      expect(controlEvent.prevented, label).toBe(false);
+      expect(controlEvent.stopped, label).toBe(false);
+    }
+
+    const repair = blocked.event(blocked.picker);
+    blocked.listeners.get("click")?.(repair);
+    expect(repair.prevented).toBe(false);
+    expect(repair.stopped).toBe(false);
+
+    const bound = harness(["Farol DEV"]);
+    for (const [type, candidate] of [
+      ["click", bound.event(bound.send)],
+      ["submit", bound.event(bound.form)],
+      ["keydown", bound.event(bound.composer, { key: "Enter" })],
+    ] as const) {
+      bound.listeners.get(type)?.(candidate);
+      expect(candidate.prevented, type).toBe(false);
+      expect(candidate.stopped, type).toBe(false);
+    }
+    bound.form.submit();
+    bound.form.requestSubmit();
+    expect(bound.contacts).toEqual({ submit: 1, requestSubmit: 1 });
+
+    const drifted = harness([], { exposeKnownComposer: false });
+    for (const [type, candidate] of [
+      ["click", drifted.event(drifted.genericSubmit)],
+      ["submit", drifted.event(drifted.form)],
+      ["keydown", drifted.event(drifted.composer, { key: "Enter" })],
+    ] as const) {
+      drifted.listeners.get(type)?.(candidate);
+      expect(candidate.prevented, `selector drift ${type}`).toBe(true);
+      expect(candidate.stopped, `selector drift ${type}`).toBe(true);
+    }
+    drifted.form.submit();
+    drifted.form.requestSubmit();
+    expect(drifted.contacts).toEqual({ submit: 0, requestSubmit: 0 });
+  });
+
+  it("keeps a DEV ChatGPT popup hidden and destroys it when the mandatory app gate cannot be installed", async () => {
+    const rootContents = Object.assign(new EventEmitter(), {
+      setWindowOpenHandler: vi.fn(),
+    });
+    let destroyed = false;
+    const executeJavaScript = vi.fn<(script: string) => Promise<boolean>>(
+      async () => false,
+    );
+    const popupContents = Object.assign(new EventEmitter(), {
+      getURL: () => "https://chatgpt.com/c/popup",
+      isDestroyed: () => destroyed,
+      executeJavaScript,
+      setWindowOpenHandler: vi.fn(),
+    });
+    const popup = Object.assign(new EventEmitter(), {
+      webContents: popupContents,
+      hide: vi.fn(),
+      show: vi.fn(),
+      showInactive: vi.fn(),
+      setBounds: vi.fn(),
+      isDestroyed: () => destroyed,
+      destroy: vi.fn(),
+    });
+    popup.destroy.mockImplementation(() => {
+      destroyed = true;
+      popup.emit("closed");
+    });
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol DEV",
+    });
+    const hardenContents = Reflect.get(candidate, "hardenContents") as (
+      this: ChatGptRoute,
+      contents: typeof rootContents,
+      tracksRouteReadiness: boolean,
+    ) => void;
+    hardenContents.call(candidate, rootContents, false);
+
+    rootContents.emit("did-create-window", popup);
+    popup.emit("ready-to-show");
+    expect(popup.show).not.toHaveBeenCalled();
+
+    popupContents.emit("did-finish-load");
+    await vi.waitFor(() => expect(popup.destroy).toHaveBeenCalledTimes(1));
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(executeJavaScript.mock.calls[0]?.[0]).toContain("Farol DEV");
+    expect(popup.show).not.toHaveBeenCalled();
+  });
+
+  it("does not apply a popup gate result to a later document", async () => {
+    const rootContents = Object.assign(new EventEmitter(), {
+      setWindowOpenHandler: vi.fn(),
+    });
+    let currentUrl = "https://chatgpt.com/c/popup-first";
+    let resolveFirstGate: ((value: boolean) => void) | undefined;
+    const firstGate = new Promise<boolean>((resolve) => {
+      resolveFirstGate = resolve;
+    });
+    const executeJavaScript = vi
+      .fn<(script: string) => Promise<boolean>>()
+      .mockImplementationOnce(async () => firstGate)
+      .mockResolvedValueOnce(true);
+    const popupContents = Object.assign(new EventEmitter(), {
+      getURL: () => currentUrl,
+      isDestroyed: () => false,
+      executeJavaScript,
+      setWindowOpenHandler: vi.fn(),
+    });
+    const popup = Object.assign(new EventEmitter(), {
+      webContents: popupContents,
+      hide: vi.fn(),
+      show: vi.fn(),
+      showInactive: vi.fn(),
+      setBounds: vi.fn(),
+      isDestroyed: () => false,
+      destroy: vi.fn(),
+    });
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol DEV",
+    });
+    const hardenContents = Reflect.get(candidate, "hardenContents") as (
+      this: ChatGptRoute,
+      contents: typeof rootContents,
+      tracksRouteReadiness: boolean,
+    ) => void;
+    hardenContents.call(candidate, rootContents, false);
+    rootContents.emit("did-create-window", popup);
+    popup.emit("ready-to-show");
+
+    popupContents.emit("did-finish-load");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalledTimes(1));
+    currentUrl = "https://chatgpt.com/c/popup-second";
+    popupContents.emit(
+      "did-start-navigation",
+      undefined,
+      currentUrl,
+      false,
+      true,
+    );
+    resolveFirstGate?.(true);
+    await firstGate;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(
+      Reflect.get(candidate, "submissionGatedPopupWindows") as Set<unknown>,
+    ).not.toContain(popup);
+    expect(popup.show).not.toHaveBeenCalled();
+
+    popupContents.emit("did-finish-load");
+    await vi.waitFor(() => expect(popup.show).toHaveBeenCalledTimes(1));
+    expect(executeJavaScript).toHaveBeenCalledTimes(2);
+  });
+
+  it("never reveals a retained DEV ChatGPT surface before the navigation gate is installed", async () => {
+    const executeJavaScript = vi.fn(async () => false);
+    const surface = {
+      kind: "window" as const,
+      webContents: {
+        getURL: () => "https://chatgpt.com/c/retained",
+        executeJavaScript,
+      },
+      isDestroyed: vi.fn(() => false),
+      loadURL: vi.fn(async () => undefined),
+      hide: vi.fn(),
+      reveal: vi.fn(),
+      focus: vi.fn(),
+      setTitle: vi.fn(),
+      destroy: vi.fn(),
+      onPageTitleUpdated: vi.fn(),
+      onClosing: vi.fn(),
+      onClosed: vi.fn(),
+    };
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol DEV",
+    });
+    Reflect.set(candidate, "routeWindow", surface);
+    Reflect.set(candidate, "load", "failed");
+
+    await expect(candidate.open()).resolves.toEqual({
+      status: "unreachable",
+    });
+    expect(surface.reveal).not.toHaveBeenCalled();
+    expect(executeJavaScript).not.toHaveBeenCalled();
+
+    Reflect.set(candidate, "load", "loaded");
+    await expect(candidate.open()).resolves.toEqual({
+      status: "unreachable",
+    });
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+    expect(surface.destroy).toHaveBeenCalledTimes(1);
+    expect(surface.reveal).not.toHaveBeenCalled();
+  });
+
+  it("discards a stale gate result when a full navigation starts before installation completes", async () => {
+    let currentUrl = "https://chatgpt.com/c/first";
+    let resolveGate: ((value: boolean) => void) | undefined;
+    const gate = new Promise<boolean>((resolve) => {
+      resolveGate = resolve;
+    });
+    const contents = Object.assign(new EventEmitter(), {
+      getURL: () => currentUrl,
+      executeJavaScript: vi.fn(async () => gate),
+      setWindowOpenHandler: vi.fn(),
+      mainFrame: { processId: 1, routingId: 1 },
+    });
+    const surface = {
+      kind: "window" as const,
+      webContents: contents,
+      isDestroyed: vi.fn(() => false),
+      loadURL: vi.fn(async () => undefined),
+      hide: vi.fn(),
+      reveal: vi.fn(),
+      focus: vi.fn(),
+      setTitle: vi.fn(),
+      destroy: vi.fn(),
+      onPageTitleUpdated: vi.fn(),
+      onClosing: vi.fn(),
+      onClosed: vi.fn(),
+    };
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: currentUrl,
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol DEV",
+    });
+    Reflect.set(candidate, "routeWindow", surface);
+    const hardenContents = Reflect.get(candidate, "hardenContents") as (
+      this: ChatGptRoute,
+      routeContents: typeof contents,
+      tracksRouteReadiness: boolean,
+    ) => void;
+    hardenContents.call(candidate, contents, true);
+
+    contents.emit("did-finish-load");
+    await vi.waitFor(() =>
+      expect(contents.executeJavaScript).toHaveBeenCalledTimes(1),
+    );
+    currentUrl = "https://chatgpt.com/c/second";
+    contents.emit("did-start-navigation", undefined, currentUrl, false, true);
+    resolveGate?.(true);
+    await gate;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(Reflect.get(candidate, "load")).toBe("failed");
+    expect(surface.reveal).not.toHaveBeenCalled();
+  });
+
   it("blocks a busy retained page before touching the composer", async () => {
     const executeJavaScript = vi.fn();
 
@@ -1767,7 +2491,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     replaced: number;
   }>;
 
-  function pageContext(href: string): Readonly<{
+  function pageContext(
+    href: string,
+    selectedAppName?: string,
+  ): Readonly<{
     context: vm.Context;
     contacts: Contacts;
   }> {
@@ -1782,6 +2509,8 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     class StubElement {
       value = "";
       disabled = false;
+      parentElement: StubElement | null = null;
+      textContent = "";
       focus(): void {
         contacts.focused += 1;
       }
@@ -1801,8 +2530,14 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       closest(): null {
         return null;
       }
+      contains(candidate: unknown): boolean {
+        return candidate === this;
+      }
       getAttribute(): null {
         return null;
+      }
+      querySelectorAll(): readonly StubElement[] {
+        return [];
       }
     }
 
@@ -1812,6 +2547,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
 
     const composer = new HTMLTextAreaElement();
     const send = new HTMLButtonElement();
+    const appChip = new HTMLElement();
+    appChip.textContent = selectedAppName ?? "";
+    composer.querySelectorAll = () =>
+      selectedAppName === undefined ? [] : [appChip];
 
     // The value setter the prepare script reaches for, instrumented.
     Object.defineProperty(HTMLTextAreaElement.prototype, "value", {
@@ -1879,6 +2618,26 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     const result = vm.runInContext(activateTaskScript(expectedHref), context);
     expect(result).toEqual({ navigated: true });
     expect(contacts.clicked).toBe(0);
+  });
+
+  it("the DEV activation bytes refuse to click when the app chip is absent", () => {
+    const { context, contacts } = pageContext(expectedHref);
+    const result = vm.runInContext(
+      activateTaskScript(expectedHref, "Farol DEV"),
+      context,
+    );
+    expect(result).toEqual({ appSelectionLost: true });
+    expect(contacts.clicked).toBe(0);
+  });
+
+  it("the DEV activation bytes click only with one exact Farol DEV chip", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol DEV");
+    const result = vm.runInContext(
+      activateTaskScript(expectedHref, "Farol DEV"),
+      context,
+    );
+    expect(result).toEqual({ activated: true });
+    expect(contacts.clicked).toBe(1);
   });
 
   it("control: on the expected href both scripts reach the composer and the send button", () => {

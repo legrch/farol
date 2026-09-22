@@ -33,10 +33,15 @@
     </button>
 
     <aside class="rail" id="sidebar" aria-label="Farol sections">
-      <div class="brand" aria-label="Farol, Developer Preview">
+      <div
+        class="brand"
+        id="product-brand"
+        aria-label="Farol, Developer Preview"
+      >
         <span class="brand-mark" aria-hidden="true"><b>F</b></span>
         <span class="brand-copy"
-          ><strong>Farol</strong><small>Developer Preview</small></span
+          ><strong id="brand-name">Farol</strong
+          ><small id="brand-edition">Developer Preview</small></span
         >
       </div>
 
@@ -46,13 +51,13 @@
           data-section="browser"
           type="button"
           aria-current="page"
-          title="Browser (⌘1)"
+          title="ChatGPT (⌘1)"
         >
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <rect x="2.5" y="3" width="15" height="14" rx="2" />
             <path d="M2.5 7h15M7 7v10" />
           </svg>
-          <span class="nav-label">Browser</span><kbd>⌘1</kbd>
+          <span class="nav-label">ChatGPT</span><kbd>⌘1</kbd>
           <span class="nav-signal" id="nav-signal-browser" hidden>
             <i class="state-lamp" aria-hidden="true"></i><b></b><small></small>
           </span>
@@ -61,7 +66,7 @@
           class="nav-item"
           data-section="computer"
           type="button"
-          title="Computer (⌘2)"
+          title="Connections (⌘2)"
         >
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <path
@@ -69,7 +74,7 @@
             />
             <path d="M2.5 14h15M7.5 17h5" />
           </svg>
-          <span class="nav-label">Computer</span><kbd>⌘2</kbd>
+          <span class="nav-label">Connections</span><kbd>⌘2</kbd>
           <span class="nav-signal" id="nav-signal-computer" hidden>
             <i class="state-lamp" aria-hidden="true"></i><b></b><small></small>
           </span>
@@ -128,8 +133,10 @@
     <header class="window-bar shell-region" aria-label="Farol window bar">
       <div class="window-identity">
         <span class="window-mark" aria-hidden="true">F</span>
-        <strong>Farol</strong>
-        <span class="preview-badge">Developer Preview</span>
+        <strong id="window-product-name">Farol</strong>
+        <span class="preview-badge" id="window-product-edition"
+          >Developer Preview</span
+        >
         <span id="window-mode">Local preview</span>
       </div>
       <button
@@ -233,9 +240,11 @@
 
       <section class="panel content-panel" data-panel="computer">
         <div class="panel-heading">
-          <p>Bounded capability</p>
-          <h1>Computer</h1>
-          <span id="computer-summary">No request is waiting.</span>
+          <p>Local readiness</p>
+          <h1>Connections</h1>
+          <span id="computer-summary"
+            >ChatGPT, tools and local hosts stay independently verified.</span
+          >
         </div>
         <p class="settings-feedback" id="computer-feedback" role="status"></p>
         <article class="permission-sheet">
@@ -274,35 +283,40 @@
           </div>
         </dl>
         <section
-          class="settings-group computer-access-group"
-          aria-labelledby="computer-access-title"
+          class="settings-group"
+          aria-labelledby="connections-readiness-title"
         >
           <header>
             <div>
-              <p>This Mac</p>
-              <h2 id="computer-access-title">Workspaces and access</h2>
+              <p>ChatGPT and local routes</p>
+              <h2 id="connections-readiness-title">Current readiness</h2>
             </div>
             <span class="readiness-badge" id="computer-readiness"></span>
           </header>
-          <label class="computer-name-field"
-            >Computer name
-            <span
-              ><input id="computer-name" maxlength="80" /><button
-                id="save-computer-name"
-                type="button"
-              >
-                Save
-              </button></span
-            >
-          </label>
-          <div id="computer-command-policy"></div>
-          <div class="workspace-list" id="computer-workspaces"></div>
+          <div class="connection-readiness" id="connection-readiness"></div>
+          <article class="connector-challenge" id="dev-proof-card" hidden>
+            <strong>Owner-triggered MCP proof</strong>
+            <p id="dev-proof-summary">
+              Prepare an app-owned random fixture, restart the DEV connector,
+              attach @Farol DEV, then run one real ChatGPT read and one
+              outside-grant refusal.
+            </p>
+            <div class="settings-group-actions">
+              <button id="dev-proof-prepare" type="button">
+                Prepare fixture
+              </button>
+              <button id="dev-proof-run" type="button">Run real proof</button>
+            </div>
+          </article>
           <div class="settings-group-actions">
             <span
-              >New folders begin read-only. Secrets stay denied by the native
-              helper.</span
+              >Local checks use no model turns. Live reply and Agent checks are
+              separate owner actions.</span
             >
-            <button id="add-workspace" type="button">Add folder…</button>
+            <button id="review-setup" type="button">Review setup</button>
+            <button id="connections-open-chatgpt" type="button">
+              Return to ChatGPT
+            </button>
           </div>
         </section>
       </section>
@@ -343,7 +357,7 @@
             <label
               >Open at launch
               <select id="setting-open-at-launch">
-                <option value="browser">Browser</option>
+                <option value="browser">ChatGPT</option>
                 <option value="activity">Activity</option>
                 <option value="settings">Settings</option>
               </select>
@@ -384,13 +398,27 @@
             ></span>
           </header>
           <p class="settings-link-copy" id="settings-computer-summary"></p>
+          <label class="computer-name-field"
+            >Computer name
+            <span
+              ><input id="computer-name" maxlength="80" /><button
+                id="save-computer-name"
+                type="button"
+              >
+                Save
+              </button></span
+            >
+          </label>
+          <div id="computer-command-policy"></div>
+          <div class="workspace-list" id="computer-workspaces"></div>
           <div class="settings-group-actions">
             <span
-              >Workspace grants, exclusions and verification are managed by
-              Computer.</span
+              >New folders begin read-only. Secrets stay denied by the native
+              helper.</span
             >
+            <button id="add-workspace" type="button">Add folder…</button>
             <button id="open-computer-settings" type="button">
-              Open Computer
+              Open Connections
             </button>
           </div>
         </section>
@@ -405,13 +433,18 @@
               <h2 id="settings-connections-title">Current readiness</h2>
             </div>
           </header>
-          <div class="connection-readiness" id="connection-readiness"></div>
+          <p class="settings-link-copy" id="settings-connections-summary">
+            Connection controls and independent local/live readiness are
+            available in Connections.
+          </p>
           <div class="settings-group-actions">
             <span
-              >Setup keeps authentication, connector and native-host proof
-              separate.</span
+              >Settings and Connections use the same saved configuration and
+              evidence.</span
             >
-            <button id="review-setup" type="button">Review setup</button>
+            <button id="open-connections" type="button">
+              Open Connections
+            </button>
           </div>
         </section>
 
@@ -432,7 +465,7 @@
           </label>
           <p class="settings-link-copy" id="model-restart-note" hidden></p>
           <div class="settings-group-actions">
-            <span
+            <span id="model-config-scope"
               >Writes only a Farol-managed block to your Codex config.toml,
               never anything else in the file.</span
             >
@@ -697,8 +730,10 @@
       <div class="setup-frame">
         <header class="setup-header">
           <div class="setup-brand">
-            <span>F</span> Farol
-            <span class="preview-badge">Developer Preview</span>
+            <span>F</span> <b id="setup-product-name">Farol</b>
+            <span class="preview-badge" id="setup-product-edition"
+              >Developer Preview</span
+            >
           </div>
           <button
             id="setup-close"

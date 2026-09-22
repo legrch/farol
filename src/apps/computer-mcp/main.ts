@@ -21,6 +21,7 @@ import {
 } from "../../modules/computer/infra/mcp/launch-contract";
 import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
+import { PrivateDevMcpProofRecorder } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
 
 function launchContractArgument(arguments_: readonly string[]): string {
@@ -76,6 +77,12 @@ async function main(): Promise<void> {
   const callerRelay = launch.callerRelay
     ? new CodexCallerRelayClient(launch.callerRelay)
     : undefined;
+  const devMcpProof = launch.devMcpProof
+    ? new PrivateDevMcpProofRecorder(
+        path.dirname(path.dirname(launch.devMcpProof.workspaceRoot)),
+        launch.devMcpProof,
+      )
+    : undefined;
   // The desktop raises a fence in the launch root while a summary-only
   // phase runs; no tool executes until it is lowered.
   const fence = new PrivateExecutionFence({ root: path.dirname(launchFile) });
@@ -88,6 +95,7 @@ async function main(): Promise<void> {
         connectorVerification,
         callerRelay,
         fence,
+        devMcpProof,
       ),
     {
       legacy: "serve",

@@ -536,6 +536,55 @@ describe("executable discovery — ordering and dedupe", () => {
     expect(result.candidates[1]?.requestedPath).toBe(CODEX_HOMEBREW_ARM);
     expect(result.candidates[1]?.verdict).toBe("needs-owner-choice");
   });
+
+  it("dedupes byte-identical trusted copies by reviewed digest", async () => {
+    const first = await realFileFixture("#!/bin/sh\necho same\n");
+    const copy = await realFileFixture("#!/bin/sh\necho same\n");
+    const { fs: fakeFsPort } = buildFakeFs({
+      [CODEX_CHATGPT_APP]: { kind: "real", target: first.target },
+      [CODEX_HOMEBREW_ARM]: { kind: "real", target: copy.target },
+    });
+
+    const result = await discoverExecutables("codex", {
+      fs: fakeFsPort,
+      home: "/fake-home-digest-dedupe",
+      arch: "arm64",
+      codesign: fakeCodesign({
+        [first.target]: { verified: true, trustedOpenAI: true },
+        [copy.target]: { verified: true, trustedOpenAI: true },
+      }),
+    });
+
+    expect(first.target).not.toBe(copy.target);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]?.requestedPath).toBe(CODEX_CHATGPT_APP);
+  });
+
+  it("keeps the strongest validation when byte-identical paths disagree", async () => {
+    const first = await realFileFixture("#!/bin/sh\necho same\n");
+    const copy = await realFileFixture("#!/bin/sh\necho same\n");
+    const { fs: fakeFsPort } = buildFakeFs({
+      [CODEX_CHATGPT_APP]: { kind: "real", target: first.target },
+      [CODEX_HOMEBREW_ARM]: { kind: "real", target: copy.target },
+    });
+
+    const result = await discoverExecutables("codex", {
+      fs: fakeFsPort,
+      home: "/fake-home-digest-strongest",
+      arch: "arm64",
+      codesign: fakeCodesign({
+        [first.target]: { verified: false, trustedOpenAI: false },
+        [copy.target]: { verified: true, trustedOpenAI: true },
+      }),
+    });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      requestedPath: CODEX_HOMEBREW_ARM,
+      verdict: "offer",
+      origin: "signed-by-openai",
+    });
+  });
 });
 
 describe("executable discovery — bounded search surface", () => {

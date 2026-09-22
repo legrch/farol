@@ -3,6 +3,7 @@ import {
   startPreviewRuntime as startChatPreviewRuntime,
   type PreviewMode,
   type PreviewRuntime,
+  type PreviewRuntimeIdentity,
   type PreviewScenario,
 } from "../modules/chat/infra/server/preview-runtime";
 import { createFixtureComputerContract } from "../modules/computer/infra/fixture/create-fixture-contract";
@@ -13,6 +14,7 @@ export type {
   PreviewCloseReceipt,
   PreviewMode,
   PreviewRuntime,
+  PreviewRuntimeIdentity,
   PreviewScenario,
   PreviewTask,
 } from "../modules/chat/infra/server/preview-runtime";
@@ -20,6 +22,7 @@ export type {
 export function startPreviewRuntime(
   scenario: PreviewScenario = "normal",
   mode: PreviewMode = "empty",
+  identity: PreviewRuntimeIdentity = "farol-next-preview-runtime",
 ): Promise<PreviewRuntime> {
   return startChatPreviewRuntime(
     scenario,
@@ -36,5 +39,6 @@ export function startPreviewRuntime(
       renderTaskPage: taskPage,
     },
     mode,
+    identity,
   );
 }

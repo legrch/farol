@@ -1369,7 +1369,7 @@ async function launch(
   const workspaceRoot = await fs.realpath(workspacePath);
   const workspaceFile = path.join(workspaceRoot, "README.md");
   const supportExport = path.join(isolatedHome, "Farol-Next-Support.json");
-  const codexFixture = path.join(isolatedHome, "codex-fixture");
+  const codexFixture = path.join(isolatedHome, "codex-fixture.cjs");
   const attachmentImage = path.join(isolatedHome, "evidence.png");
   const attachmentDocument = path.join(isolatedHome, "notes.md");
   await fs.writeFile(
@@ -6786,10 +6786,10 @@ demoMainSegment: try {
   // samples do: after Setup, after the workspace stretch, after the support
   // export, with the mismatched-build reading already in place.
   await markActivation(normal.application, "after demo Setup completed");
-  // Setup's last message is not lost with the dialog: it moves to Settings
-  // (finishing Setup opens Browser, so the Settings panel is not shown yet).
+  // Setup's last message is not lost with the dialog: it moves to Connections
+  // (finishing Setup opens ChatGPT, so Connections is not shown yet).
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("Setup saved. Limited mode is open.", { exact: true })
     .waitFor({ state: "attached" });
   cases.push("native-codex-host-live-tool-verified");
@@ -7200,6 +7200,10 @@ demoMainSegment: try {
     await normal.window.locator("#settings-list").innerText(),
     /local\.farol\.next\.preview/u,
   );
+  await normal.window
+    .getByRole("button", { name: "Open Connections", exact: true })
+    .click();
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
   const reviewReadOnlyTask = normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Review read-only task…", exact: true });
@@ -7220,7 +7224,7 @@ demoMainSegment: try {
   await contextPreview.waitFor({ state: "hidden" });
   await waitForWindowCount(normal.application, 1);
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("Context preview cancelled. Nothing was submitted.", {
       exact: true,
     })
@@ -7241,7 +7245,7 @@ demoMainSegment: try {
   const readOnlyTaskPage = await readOnlyTaskWindow;
   await readOnlyTaskPage.waitForURL(normal.chatGptFixture.url);
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText(
       /Read-only task completed from README\.md after \d+ incremental updates/u,
     )
@@ -7289,7 +7293,7 @@ demoMainSegment: try {
   const attachmentTaskPage = await attachmentTaskWindow;
   await attachmentTaskPage.waitForURL(retainedConversationUrl);
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText(/2 attachments delivered intact · \d+ incremental updates/u)
     .waitFor({ timeout: 10_000 });
   const attachmentProof = await attachmentTaskPage.evaluate(
@@ -7388,18 +7392,16 @@ demoMainSegment: try {
     "chatgpt-same-conversation-after-window-close",
     "chatgpt-conversation-binding-content-free",
   );
+  await invokeApplicationMenu(normal.application, "app.settings");
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
   const settingsPanel = normal.window.locator('[data-panel="settings"]');
-  assert.equal(await settingsPanel.locator("#computer-name").count(), 0);
-  assert.equal(await settingsPanel.locator("#add-workspace").count(), 0);
-  await settingsPanel
-    .getByRole("button", { name: "Open Computer", exact: true })
-    .click();
-  await normal.window.locator('[data-panel="computer"].active').waitFor();
-  cases.push("settings-links-to-computer-workspaces");
+  assert.equal(await settingsPanel.locator("#computer-name").count(), 1);
+  assert.equal(await settingsPanel.locator("#add-workspace").count(), 1);
+  cases.push("settings-owns-computer-workspaces");
   await normal.window.locator("#computer-name").fill("Owner Test Mac");
   await normal.window.locator("#save-computer-name").click();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("Computer name saved.", { exact: true })
     .waitFor();
   const renamedConfiguration = await normal.window.evaluate(() =>
@@ -7443,7 +7445,7 @@ demoMainSegment: try {
   // Verify proves the folder opens by identity and lists its top level; it
   // reads no file (UX34-01), so there is no file-read evidence.
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("Farol can open approved-workspace (1 item at the top level).", {
       exact: true,
     })
@@ -7467,7 +7469,7 @@ demoMainSegment: try {
     .getByText("README.md", { exact: true })
     .waitFor();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("Listed 1 entry from the workspace root.", { exact: true })
     .waitFor();
 
@@ -7486,7 +7488,7 @@ demoMainSegment: try {
     .getByText("Farol Next workspace verification fixture", { exact: true })
     .waitFor();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText('Found 1 match for "verification".', { exact: true })
     .waitFor();
   cases.push("workspace-app-list-search");
@@ -7518,7 +7520,7 @@ demoMainSegment: try {
     .getByRole("button", { name: "Enable", exact: true })
     .click();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText(
       "Fixed no-network Git status and HEAD enabled. Verify the workspace again before use.",
       { exact: true },
@@ -7557,7 +7559,7 @@ demoMainSegment: try {
     .getByText(/## main/u)
     .waitFor();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText(
       /^Fixed Git status completed · exit 0 · \d+ bytes · network none\.$/u,
     )
@@ -7579,7 +7581,7 @@ demoMainSegment: try {
     .getByText(expectedHeadResult.stdout.trim(), { exact: true })
     .waitFor();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText(
       /^Fixed Git HEAD completed · exit 0 · \d+ bytes · network none\.$/u,
     )
@@ -7610,7 +7612,7 @@ demoMainSegment: try {
     .getByRole("button", { name: "Save exclusions", exact: true })
     .click();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("approved-workspace exclusions saved and read back.", {
       exact: true,
     })
@@ -7621,7 +7623,7 @@ demoMainSegment: try {
     .click();
   // The excluded README.md is not listed: the top level reads as empty.
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText(
       "Farol can open approved-workspace (0 items at the top level).",
       {
@@ -7641,7 +7643,7 @@ demoMainSegment: try {
     .getByRole("button", { name: "Save exclusions", exact: true })
     .click();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("approved-workspace exclusions saved and read back.", {
       exact: true,
     })
@@ -7651,7 +7653,7 @@ demoMainSegment: try {
     .getByRole("button", { name: "Verify folder", exact: true })
     .click();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("Farol can open approved-workspace (1 item at the top level).", {
       exact: true,
     })
@@ -7690,7 +7692,7 @@ demoMainSegment: try {
     .getByText(/Edited README\.md · 46 bytes/u)
     .waitFor();
   await normal.window
-    .locator("#computer-feedback")
+    .locator("#settings-feedback")
     .getByText("Edited README.md once · durable.", { exact: true })
     .waitFor();
   assert.equal(
@@ -7803,6 +7805,10 @@ demoMainSegment: try {
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "settings-compact.png"),
   });
+  await normal.window
+    .getByRole("button", { name: "Open Connections", exact: true })
+    .click();
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
   await normal.window.locator("#review-setup").click();
   const reviewedSetup = normal.window.locator("#setup-dialog");
   await reviewedSetup.waitFor({ state: "visible" });
@@ -8158,11 +8164,6 @@ demoMainSegment: try {
     restartedSettings.nativeHosts.generation,
   );
   assert.equal(restartedSettings.computer.commands, "verification");
-  await normal.window
-    .locator('[data-panel="settings"]')
-    .getByRole("button", { name: "Open Computer", exact: true })
-    .click();
-  await normal.window.locator('[data-panel="computer"].active').waitFor();
   const restartedWorkspaceCard = normal.window
     .locator("#computer-workspaces .workspace-card")
     .filter({ hasText: "approved-workspace" });
@@ -8179,6 +8180,10 @@ demoMainSegment: try {
   await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
   cases.push("workspace-command-persists-and-runs-after-restart");
+  await normal.window
+    .getByRole("button", { name: "Open Connections", exact: true })
+    .click();
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
   await normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Open sign-in…", exact: true })
@@ -8211,7 +8216,7 @@ demoMainSegment: try {
     .getByRole("button", { name: "Recheck", exact: true })
     .click();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText("ChatGPT composer verified in the isolated Next partition.", {
       exact: true,
     })
@@ -8228,7 +8233,7 @@ demoMainSegment: try {
     .getByRole("button", { name: "Start fresh chat", exact: true })
     .click();
   await normal.window
-    .locator("#settings-feedback")
+    .locator("#computer-feedback")
     .getByText(
       "Retained conversation binding cleared. The next task starts a fresh isolated ChatGPT conversation.",
       { exact: true },
@@ -9900,7 +9905,7 @@ function tunnelInitRecordPath(userData) {
   );
 }
 
-// N09 — the Connection row in Settings, end to end through its own controls.
+// N09 — the Connection row in Connections, end to end through its own controls.
 // Until now the suite reached `connector.start` only by calling the IPC
 // bridge directly, with nothing configured, so the refusal codes were all it
 // could see. This drives the row the way the owner does: choose a client,
@@ -9925,9 +9930,9 @@ n09ConnectorSegment: {
     // connector serves an approved workspace, and until wave 3 the primary
     // action was dead while every requirement it named was satisfied.
     await finishSetupByNext(connector);
-    await connector.window.locator('[data-section="settings"]').click();
+    await connector.window.locator('[data-section="computer"]').click();
     await connector.window.waitForFunction(
-      () => document.documentElement.dataset.section === "settings",
+      () => document.documentElement.dataset.section === "computer",
     );
     const connectionRow = connector.window
       .locator("#connection-readiness .connection-row.connector-row")
@@ -9990,14 +9995,14 @@ n09ConnectorSegment: {
       );
       return { start, state };
     };
-    // Connector commands rewrite `#settings-feedback` from their own
+    // Connector commands rewrite the shared panel feedback from their own
     // evidence, so matching the sentence is also an assertion about which
     // evidence came back.
     const connectorFeedback = (pattern) =>
       connector.window.waitForFunction(
         (source) =>
           new RegExp(source, "u").test(
-            document.querySelector("#settings-feedback")?.textContent ?? "",
+            document.querySelector("#computer-feedback")?.textContent ?? "",
           ),
         pattern.source,
       );
@@ -10045,16 +10050,16 @@ n09ConnectorSegment: {
     cases.push("n09-connector-start-names-earliest-unmet-prerequisite");
 
     // Satisfy it where the sentence says to, then come back.
-    await connector.window.locator('[data-section="computer"]').click();
-    await connector.window.locator('[data-panel="computer"].active').waitFor();
+    await connector.window.locator('[data-section="settings"]').click();
+    await connector.window.locator('[data-panel="settings"].active').waitFor();
     await connector.window.locator("#add-workspace").click();
     await connector.window
-      .locator("#computer-feedback")
+      .locator("#settings-feedback")
       .getByText("Read-only workspace saved and read back.", { exact: true })
       .waitFor();
-    await connector.window.locator('[data-section="settings"]').click();
+    await connector.window.locator('[data-section="computer"]').click();
     await connector.window.waitForFunction(
-      () => document.documentElement.dataset.section === "settings",
+      () => document.documentElement.dataset.section === "computer",
     );
     await connector.window.waitForFunction(() => {
       const button = [
@@ -10190,9 +10195,9 @@ n09ConnectorAttachmentSegment: {
   let peer = null;
   try {
     await completeSetup(attaching, false, true);
-    await attaching.window.locator('[data-section="settings"]').click();
+    await attaching.window.locator('[data-section="computer"]').click();
     await attaching.window.waitForFunction(
-      () => document.documentElement.dataset.section === "settings",
+      () => document.documentElement.dataset.section === "computer",
     );
     const row = attaching.window
       .locator("#connection-readiness .connection-row")
@@ -10201,7 +10206,7 @@ n09ConnectorAttachmentSegment: {
       attaching.window.waitForFunction(
         (source) =>
           new RegExp(source, "u").test(
-            document.querySelector("#settings-feedback")?.textContent ?? "",
+            document.querySelector("#computer-feedback")?.textContent ?? "",
           ),
         pattern.source,
       );
@@ -10529,10 +10534,10 @@ n12AgentDraftSegment: {
     }
 
     await completeSetup(draft, false, true, true, false);
-    const toSettings = async () => {
-      await draft.window.locator('[data-section="settings"]').click();
+    const toConnections = async () => {
+      await draft.window.locator('[data-section="computer"]').click();
       await draft.window.waitForFunction(
-        () => document.documentElement.dataset.section === "settings",
+        () => document.documentElement.dataset.section === "computer",
       );
     };
     const toBrowser = async () => {
@@ -10547,7 +10552,7 @@ n12AgentDraftSegment: {
       draft.window.waitForFunction(
         (source) =>
           new RegExp(source, "u").test(
-            document.querySelector("#settings-feedback")?.textContent ?? "",
+            document.querySelector("#computer-feedback")?.textContent ?? "",
           ),
         pattern.source,
       );
@@ -10555,7 +10560,7 @@ n12AgentDraftSegment: {
       .locator("#connection-readiness .connection-row")
       .filter({ hasText: "Native hosts · " });
 
-    await toSettings();
+    await toConnections();
     await hostRow
       .getByRole("button", { name: "Choose…", exact: true })
       .click({ timeout: 20_000 });
@@ -11212,14 +11217,14 @@ n11AgentScopeSegment: {
     );
 
     await completeSetup(agentScope, false, true, true, false);
-    await agentScope.window.locator('[data-section="settings"]').click();
+    await agentScope.window.locator('[data-section="computer"]').click();
     await agentScope.window.waitForFunction(
-      () => document.documentElement.dataset.section === "settings",
+      () => document.documentElement.dataset.section === "computer",
     );
     const hostRow = agentScope.window
       .locator("#connection-readiness .connection-row")
       .filter({ hasText: "Native hosts · " });
-    // A wait that times out names what Settings actually said and which
+    // A wait that times out names what Connections actually said and which
     // controls the host row was offering, so the next run is a fix rather
     // than a guess.
     const hostRowState = () =>
@@ -11235,7 +11240,7 @@ n11AgentScopeSegment: {
         }));
         return {
           section: document.documentElement.dataset.section ?? null,
-          feedback: document.querySelector("#settings-feedback")?.textContent,
+          feedback: document.querySelector("#computer-feedback")?.textContent,
           rows,
         };
       });
@@ -11244,7 +11249,7 @@ n11AgentScopeSegment: {
         await agentScope.window.waitForFunction(
           (source) =>
             new RegExp(source, "u").test(
-              document.querySelector("#settings-feedback")?.textContent ?? "",
+              document.querySelector("#computer-feedback")?.textContent ?? "",
             ),
           pattern.source,
         );
@@ -11702,8 +11707,8 @@ n10ComputerPanelSegment: {
     // One approved, verified folder, added the only way the suite could add
     // one until now. Everything after this point is the panel's own work.
     await completeSetup(panel, false, true);
-    await panel.window.locator('[data-section="computer"]').click();
-    await panel.window.locator('[data-panel="computer"].active').waitFor();
+    await panel.window.locator('[data-section="settings"]').click();
+    await panel.window.locator('[data-panel="settings"].active').waitFor();
     const workspaceList = panel.window.locator("#computer-workspaces");
     assert.equal(await workspaceList.locator(".workspace-card").count(), 1);
 
@@ -11726,7 +11731,7 @@ n10ComputerPanelSegment: {
 
     await panel.window.locator("#add-workspace").click();
     await panel.window
-      .locator("#computer-feedback")
+      .locator("#settings-feedback")
       .getByText("Read-only workspace saved and read back.", { exact: true })
       .waitFor();
     await workspaceList
@@ -11762,7 +11767,7 @@ n10ComputerPanelSegment: {
       .getByRole("button", { name: "Remove", exact: true })
       .click();
     await panel.window
-      .locator("#computer-feedback")
+      .locator("#settings-feedback")
       .getByText(`${secondLabel} approval removed.`, { exact: true })
       .waitFor();
     await panel.window.waitForFunction(
@@ -11818,7 +11823,7 @@ n10ComputerPanelSegment: {
       .getByRole("button", { name: "Cancel", exact: true })
       .click();
     await panel.window
-      .locator("#computer-feedback")
+      .locator("#settings-feedback")
       .getByText("Guarded edit cancelled.", { exact: true })
       .waitFor();
     await panel.window.waitForFunction(
@@ -11937,8 +11942,8 @@ n10ComputerPanelSegment: {
     cases.push("n10-computer-lost-edit-record-is-the-products-own");
 
     await restart(panel);
-    await panel.window.locator('[data-section="computer"]').click();
-    await panel.window.locator('[data-panel="computer"].active').waitFor();
+    await panel.window.locator('[data-section="settings"]').click();
+    await panel.window.locator('[data-panel="settings"].active').waitFor();
     const restartedCard = panel.window
       .locator("#computer-workspaces .workspace-card")
       .filter({ hasText: "approved-workspace" });
@@ -11959,7 +11964,7 @@ n10ComputerPanelSegment: {
     // The observed outcome, not the optimistic sentence the click sent: the
     // real receipt, reported as redelivered rather than produced again.
     await panel.window
-      .locator("#computer-feedback")
+      .locator("#settings-feedback")
       .getByText("Edited README.md once · durable · result redelivered.", {
         exact: true,
       })
@@ -12047,9 +12052,9 @@ n10ComputerPanelSegment: {
       };
       watchMainStderr(droppedReply);
       await completeSetup(droppedReply, false, true);
-      await droppedReply.window.locator('[data-section="computer"]').click();
+      await droppedReply.window.locator('[data-section="settings"]').click();
       await droppedReply.window
-        .locator('[data-panel="computer"].active')
+        .locator('[data-panel="settings"].active')
         .waitFor();
       const droppedCard = droppedReply.window
         .locator("#computer-workspaces .workspace-card")
@@ -12214,7 +12219,7 @@ n10ComputerPanelSegment: {
       await droppedReply.window.waitForTimeout(500);
       assert.equal(
         await droppedReply.window
-          .locator("#computer-feedback")
+          .locator("#settings-feedback")
           .getByText("Edited README.md once · durable.", { exact: true })
           .count(),
         0,
@@ -12238,9 +12243,9 @@ n10ComputerPanelSegment: {
       // outcome and refuses a second edit until it is known.
       await restart(droppedReply);
       watchMainStderr(droppedReply);
-      await droppedReply.window.locator('[data-section="computer"]').click();
+      await droppedReply.window.locator('[data-section="settings"]').click();
       await droppedReply.window
-        .locator('[data-panel="computer"].active')
+        .locator('[data-panel="settings"].active')
         .waitFor();
       const recoveredCard = droppedReply.window
         .locator("#computer-workspaces .workspace-card")
@@ -12287,7 +12292,7 @@ n10ComputerPanelSegment: {
         .getByRole("button", { name: "Check result", exact: true })
         .click();
       await droppedReply.window
-        .locator("#computer-feedback")
+        .locator("#settings-feedback")
         .getByText("Edited README.md once · durable · result redelivered.", {
           exact: true,
         })
@@ -12407,8 +12412,8 @@ n10ComputerPanelSegment: {
       };
       watchAckDiagnostics(heldAck);
       await completeSetup(heldAck, false, true);
-      await heldAck.window.locator('[data-section="computer"]').click();
-      await heldAck.window.locator('[data-panel="computer"].active').waitFor();
+      await heldAck.window.locator('[data-section="settings"]').click();
+      await heldAck.window.locator('[data-panel="settings"].active').waitFor();
       const heldCard = heldAck.window
         .locator("#computer-workspaces .workspace-card")
         .filter({ hasText: "approved-workspace" });
@@ -12493,7 +12498,7 @@ n10ComputerPanelSegment: {
       // (1) The result reached this window and was rendered. This is the
       // whole difference from a lost reply: the owner saw the outcome.
       await heldAck.window
-        .locator("#computer-feedback")
+        .locator("#settings-feedback")
         .getByText("Edited README.md once · durable.", { exact: true })
         .waitFor();
       await heldCard
@@ -12557,8 +12562,8 @@ n10ComputerPanelSegment: {
       delete heldAck.launchEnvironment.FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK;
       await restart(heldAck);
       watchAckDiagnostics(heldAck);
-      await heldAck.window.locator('[data-section="computer"]').click();
-      await heldAck.window.locator('[data-panel="computer"].active').waitFor();
+      await heldAck.window.locator('[data-section="settings"]').click();
+      await heldAck.window.locator('[data-panel="settings"].active').waitFor();
       const recoveredHeldCard = heldAck.window
         .locator("#computer-workspaces .workspace-card")
         .filter({ hasText: "approved-workspace" });
@@ -12596,7 +12601,7 @@ n10ComputerPanelSegment: {
         .getByRole("button", { name: "Check result", exact: true })
         .click();
       await heldAck.window
-        .locator("#computer-feedback")
+        .locator("#settings-feedback")
         .getByText("Edited README.md once · durable · result redelivered.", {
           exact: true,
         })

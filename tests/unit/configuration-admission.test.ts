@@ -9,6 +9,7 @@ const computerAuthorityCommands = [
   "computer.update-exclusions",
   "computer.update-access",
   "computer.update-commands",
+  "dev-proof.prepare",
 ] as const;
 
 describe("AUTH-07 Computer authority while a native Agent runs", () => {
@@ -40,6 +41,12 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
   it("keeps unrelated preferences available while an Agent runs", () => {
     expect(
       configurationAdmission("general.update", {
+        agentActive: true,
+        connectorRunning: true,
+      }),
+    ).toBe("admitted");
+    expect(
+      configurationAdmission("dev-proof.run", {
         agentActive: true,
         connectorRunning: true,
       }),

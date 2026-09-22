@@ -28,6 +28,7 @@ const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
 
 const preparedTaskSchema = z.union([
   navigatedTaskSchema,
+  z.strictObject({ appSelectionLost: z.literal(true) }),
   z.strictObject({
     ready: z.boolean(),
     baselineAssistantCount: z.number().int().nonnegative(),
@@ -46,6 +47,7 @@ const activatedControlSchema = z.strictObject({ activated: z.boolean() });
 // The send click's acknowledgement: the same, or the in-page refusal above.
 const activatedTaskSchema = z.union([
   navigatedTaskSchema,
+  z.strictObject({ appSelectionLost: z.literal(true) }),
   activatedControlSchema,
 ]);
 
@@ -67,6 +69,41 @@ const taskProbeSchema = z.strictObject({
 });
 
 const activityProbeSchema = z.strictObject({ running: z.boolean() });
+
+const appBindingSchema = z.discriminatedUnion("state", [
+  z.strictObject({ state: z.literal("bound") }),
+  z.strictObject({ state: z.literal("navigated") }),
+  z.strictObject({
+    state: z.literal("blocked"),
+    reason: z.enum([
+      "missing",
+      "ambiguous",
+      "conflict",
+      "draft_present",
+      "selection_not_observed",
+    ]),
+  }),
+]);
+
+function appBindingFailureCode(
+  reason:
+    | "missing"
+    | "ambiguous"
+    | "conflict"
+    | "draft_present"
+    | "selection_not_observed",
+):
+  | "CHATGPT_APP_SELECTION_MISSING"
+  | "CHATGPT_APP_SELECTION_AMBIGUOUS"
+  | "CHATGPT_APP_SELECTION_CONFLICT"
+  | "CHATGPT_APP_SELECTION_LOST"
+  | "CHATGPT_COMPOSER_DRAFT_PRESENT" {
+  if (reason === "ambiguous") return "CHATGPT_APP_SELECTION_AMBIGUOUS";
+  if (reason === "conflict") return "CHATGPT_APP_SELECTION_CONFLICT";
+  if (reason === "draft_present") return "CHATGPT_COMPOSER_DRAFT_PRESENT";
+  if (reason === "selection_not_observed") return "CHATGPT_APP_SELECTION_LOST";
+  return "CHATGPT_APP_SELECTION_MISSING";
+}
 
 // How long one page activity probe may take before activity is unknown.
 const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
@@ -335,6 +372,276 @@ const readinessProbe = `(() => {
   return { composerVisible: composer, signInVisible: explicitSignIn || labelledSignIn };
 })()`;
 
+function appSelectionPrelude(appName: string): string {
+  return `
+    const requiredAppName = ${JSON.stringify(appName)};
+    const appElementVisible = (element) => {
+      if (!(element instanceof HTMLElement)) return false;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+    };
+    const findComposer = () => [
+      document.querySelector("#prompt-textarea"),
+      document.querySelector('[data-testid="prompt-textarea"]'),
+      document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+    ].find(appElementVisible);
+    const selectedSelector = [
+      '[data-testid="composer-app-chip"]',
+      '[data-testid*="app-mention"]',
+      '[data-testid*="connector-chip"]'
+    ].join(",");
+    const normalizedLabel = (element) => {
+      const raw = (
+        element.getAttribute("data-app-name") ||
+        element.getAttribute("aria-label") ||
+        element.textContent ||
+        ""
+      ).trim();
+      return raw
+        .replace(/^remove\\s+/iu, "")
+        .replace(/^app:\\s*/iu, "")
+        .replace(/^@/u, "")
+        .replace(/\\s+button$/iu, "")
+        .trim();
+    };
+    const appSelection = () => {
+      const input = findComposer();
+      if (!(input instanceof HTMLElement)) return { state: "missing" };
+      const root = input.closest("form") || input.parentElement || input;
+      const raw = [...root.querySelectorAll(selectedSelector)].filter(appElementVisible);
+      const markers = raw.filter((candidate) =>
+        !raw.some((other) => other !== candidate && other.contains(candidate))
+      );
+      const labels = markers.map(normalizedLabel).filter(Boolean);
+      const targetCount = labels.filter((label) => label === requiredAppName).length;
+      if (targetCount === 1 && labels.length === 1) return { state: "bound" };
+      if (targetCount > 1 || labels.length > 1) return { state: "ambiguous" };
+      if (labels.length === 1) return { state: "conflict" };
+      return { state: "missing" };
+    };
+  `;
+}
+
+export function bindChatGptAppScript(
+  appName: string,
+  expectedHref: string,
+): string {
+  return `(async () => {
+    const expectedHref = ${JSON.stringify(expectedHref)};
+    if (location.href !== expectedHref) return { state: "navigated" };
+    ${appSelectionPrelude(appName)}
+    const current = appSelection();
+    if (current.state === "bound") return { state: "bound" };
+    if (current.state === "ambiguous" || current.state === "conflict") {
+      return { state: "blocked", reason: current.state };
+    }
+    const input = findComposer();
+    if (!(input instanceof HTMLElement)) return { state: "blocked", reason: "missing" };
+    const existingText = input instanceof HTMLTextAreaElement
+      ? input.value
+      : (input.innerText || input.textContent || "");
+    if (existingText.trim().length > 0) {
+      return { state: "blocked", reason: "draft_present" };
+    }
+    const setComposerText = (value, inputType) => {
+      if (input instanceof HTMLTextAreaElement) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+        if (!setter) return false;
+        setter.call(input, value);
+      } else {
+        input.replaceChildren(document.createTextNode(value));
+      }
+      input.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        data: value,
+        inputType
+      }));
+      return true;
+    };
+    input.focus();
+    if (!setComposerText("@", "insertText")) {
+      return { state: "blocked", reason: "missing" };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    if (location.href !== expectedHref) return { state: "navigated" };
+    const pickerRoots = [...document.querySelectorAll([
+      '[role="listbox"]',
+      '[role="menu"]',
+      '[data-radix-menu-content]',
+      '[data-testid*="mention"]',
+      '[data-testid*="app-picker"]'
+    ].join(","))].filter(appElementVisible);
+    const optionCandidates = [...new Set(pickerRoots.flatMap((root) =>
+      [...root.querySelectorAll('[role="option"],[role="menuitem"],button')]
+    ))].filter((element) =>
+      appElementVisible(element) && normalizedLabel(element) === requiredAppName
+    );
+    if (optionCandidates.length !== 1) {
+      setComposerText("", "deleteContentBackward");
+      return {
+        state: "blocked",
+        reason: optionCandidates.length > 1 ? "ambiguous" : "missing"
+      };
+    }
+    optionCandidates[0].click();
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (location.href !== expectedHref) return { state: "navigated" };
+      const selected = appSelection();
+      if (selected.state === "bound") return { state: "bound" };
+      if (selected.state === "ambiguous" || selected.state === "conflict") {
+        return { state: "blocked", reason: selected.state };
+      }
+    }
+    const textAfterSelection = input instanceof HTMLTextAreaElement
+      ? input.value
+      : (input.innerText || input.textContent || "");
+    if (textAfterSelection.trim() === "@") {
+      setComposerText("", "deleteContentBackward");
+    }
+    return { state: "blocked", reason: "selection_not_observed" };
+  })()`;
+}
+
+export function verifyChatGptAppScript(
+  appName: string,
+  expectedHref: string,
+): string {
+  return `(() => {
+    const expectedHref = ${JSON.stringify(expectedHref)};
+    if (location.href !== expectedHref) return { state: "navigated" };
+    ${appSelectionPrelude(appName)}
+    const selected = appSelection();
+    return selected.state === "bound"
+      ? { state: "bound" }
+      : { state: "blocked", reason: selected.state };
+  })()`;
+}
+
+export function installManualAppGateScript(appName: string): string {
+  return `(() => {
+    ${appSelectionPrelude(appName)}
+    const showBlockedNotice = (reason) => {
+      const noticeId = "farol-dev-app-submit-blocked";
+      let notice = document.getElementById(noticeId);
+      if (!(notice instanceof HTMLElement)) {
+        notice = document.createElement("div");
+        notice.id = noticeId;
+        notice.setAttribute("role", "alert");
+        notice.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;max-width:360px;padding:12px 14px;background:#241b0f;color:#fff4df;border:1px solid #b98230;border-radius:10px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35)";
+        document.documentElement.appendChild(notice);
+      }
+      notice.textContent = reason === "ambiguous"
+        ? "Message blocked before send. Keep exactly one @" + requiredAppName + " app chip, then try again."
+        : reason === "conflict"
+          ? "Message blocked before send. Remove the other selected app and select @" + requiredAppName + "."
+          : "Message blocked before send. Select exactly one @" + requiredAppName + " app, then try again.";
+      setTimeout(() => notice?.remove(), 6000);
+    };
+    const blockUnlessBound = (event) => {
+      const selection = appSelection();
+      if (selection.state === "bound") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      showBlockedNotice(selection.state);
+    };
+    const fallbackComposerSelector = [
+      "textarea",
+      '[contenteditable="true"]',
+      '[role="textbox"][aria-multiline="true"]'
+    ].join(",");
+    const fallbackComposerIn = (root) =>
+      [...root.querySelectorAll(fallbackComposerSelector)].find(appElementVisible);
+    const submissionComposerIn = (root) => {
+      const input = findComposer();
+      if (input instanceof HTMLElement && root.contains(input)) return input;
+      return fallbackComposerIn(root);
+    };
+    const allowDirectFormSubmission = (form) => {
+      if (!(submissionComposerIn(form) instanceof HTMLElement)) return true;
+      const selection = appSelection();
+      if (selection.state === "bound") return true;
+      showBlockedNotice(selection.state);
+      return false;
+    };
+    const originalSubmit = HTMLFormElement.prototype.submit;
+    HTMLFormElement.prototype.submit = function (...args) {
+      if (!allowDirectFormSubmission(this)) return undefined;
+      return Reflect.apply(originalSubmit, this, args);
+    };
+    const originalRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+    if (typeof originalRequestSubmit === "function") {
+      HTMLFormElement.prototype.requestSubmit = function (...args) {
+        if (!allowDirectFormSubmission(this)) return undefined;
+        return Reflect.apply(originalRequestSubmit, this, args);
+      };
+    }
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest("button");
+      const form = button?.closest("form");
+      const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]');
+      const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
+      const formButton =
+        form instanceof HTMLFormElement &&
+        button instanceof HTMLButtonElement &&
+        form.contains(button) &&
+        submissionComposerIn(form) instanceof HTMLElement;
+      const pickerChoice = target.closest('[role="option"],[role="menuitem"]');
+      const exactRequiredAppChoice =
+        pickerChoice instanceof HTMLElement &&
+        normalizedLabel(pickerChoice) === requiredAppName;
+      const appChipRepair = target.closest(selectedSelector);
+      if (
+        knownCancel ||
+        exactRequiredAppChoice ||
+        (appChipRepair instanceof HTMLElement && !knownSend)
+      ) {
+        return;
+      }
+      if (knownSend || formButton) {
+        blockUnlessBound(event);
+      }
+    }, true);
+    document.addEventListener("submit", (event) => {
+      if (
+        event.target instanceof HTMLFormElement &&
+        submissionComposerIn(event.target) instanceof HTMLElement
+      ) {
+        blockUnlessBound(event);
+      }
+    }, true);
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+      const input = findComposer();
+      const target = event.target instanceof Element
+        ? event.target
+        : event.target instanceof Node && event.target.parentElement instanceof Element
+          ? event.target.parentElement
+          : null;
+      const form = target?.closest("form");
+      const fallbackInput = form instanceof HTMLFormElement
+        ? submissionComposerIn(form)
+        : target?.closest(fallbackComposerSelector);
+      if (
+        event.target instanceof Node &&
+        ((input && input.contains(event.target)) ||
+          (fallbackInput instanceof HTMLElement && fallbackInput.contains(event.target)))
+      ) {
+        blockUnlessBound(event);
+      }
+    }, true);
+    // Deliberately install again after each observed navigation. A marker in
+    // the provider page's own global object could be forged before Farol's
+    // first injection and turn idempotence into a send bypass. Duplicate
+    // capture guards are fail-closed: the first refusal stops later handlers,
+    // while a bound submission passes every identical check.
+    return true;
+  })()`;
+}
+
 // Both submission scripts take the page identity the caller validated and
 // compare it against the page's own location as their first act: the main
 // process cannot check anything between dispatching a script and the script
@@ -346,11 +653,14 @@ const readinessProbe = `(() => {
 export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
+  requiredAppName?: string,
 ): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
+    ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
+    ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -378,7 +688,7 @@ export function prepareTaskScript(
       if (!setter) return { ready: false, baselineAssistantCount, baselineUserCount };
       setter.call(composer, prompt);
     } else {
-      composer.replaceChildren(document.createTextNode(prompt));
+      ${requiredAppName ? "composer.append(document.createTextNode(prompt));" : "composer.replaceChildren(document.createTextNode(prompt));"}
     }
     composer.dispatchEvent(new InputEvent("input", {
       bubbles: true,
@@ -389,10 +699,15 @@ export function prepareTaskScript(
   })()`;
 }
 
-export function activateTaskScript(expectedHref: string): string {
+export function activateTaskScript(
+  expectedHref: string,
+  requiredAppName?: string,
+): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
+    ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
+    ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
       const style = getComputedStyle(element);
@@ -499,6 +814,8 @@ export type ChatGptRouteOptions = Readonly<{
   initialUrl: string;
   e2eOrigin: string | null;
   parent: () => BrowserWindow | null;
+  partition?: "persist:farol-next-chatgpt" | "persist:farol-dev-chatgpt";
+  requiredAppName?: string;
   windowPresentation?: ChatGptWindowPresentation;
   surfaceFactory?: ChatGptRouteSurfaceFactory;
   title?: string;
@@ -616,6 +933,11 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_COMPOSER_UNAVAILABLE"
     | "CHATGPT_SUBMIT_UNAVAILABLE"
     | "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
+    | "CHATGPT_APP_SELECTION_MISSING"
+    | "CHATGPT_APP_SELECTION_AMBIGUOUS"
+    | "CHATGPT_APP_SELECTION_CONFLICT"
+    | "CHATGPT_APP_SELECTION_LOST"
+    | "CHATGPT_COMPOSER_DRAFT_PRESENT"
     | "CHATGPT_TASK_PAGE_LOST"
     | "CHATGPT_TASK_ERROR"
     | "CHATGPT_USAGE_LIMITED"
@@ -662,8 +984,14 @@ export class ChatGptRoute {
   private routeWindow: ChatGptRouteSurface | null = null;
   private readonly popupWindows = new Set<BrowserWindow>();
   private readonly readyPopupWindows = new Set<BrowserWindow>();
+  private readonly submissionGatedPopupWindows = new Set<BrowserWindow>();
+  private readonly popupDocumentGenerations = new WeakMap<
+    BrowserWindow,
+    number
+  >();
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
+  private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
   private opening: Promise<ChatGptOpenResult> | null = null;
@@ -690,14 +1018,40 @@ export class ChatGptRoute {
     ) {
       throw new Error("CHATGPT_INITIAL_URL_INVALID");
     }
+    if (
+      options.requiredAppName !== undefined &&
+      !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u.test(options.requiredAppName)
+    ) {
+      throw new Error("CHATGPT_REQUIRED_APP_NAME_INVALID");
+    }
   }
 
   async open(): Promise<ChatGptOpenResult> {
     if (this.opening) return this.opening;
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
+    const retained = this.routeWindow;
+    if (retained && !retained.isDestroyed()) {
+      if (this.options.requiredAppName !== undefined) {
+        if (this.load !== "loaded") return { status: "unreachable" };
+        const gate = await this.installCurrentRouteAppSubmissionGate(
+          retained.webContents,
+        );
+        if (gate !== "installed") {
+          if (gate === "failed" && this.load === "loaded") {
+            this.blockUnsafeManualSurface(retained.webContents);
+          }
+          return { status: "unreachable" };
+        }
+      }
+      if (
+        this.routeWindow !== retained ||
+        retained.isDestroyed() ||
+        (this.options.requiredAppName !== undefined && this.load !== "loaded")
+      ) {
+        return { status: "unreachable" };
+      }
       try {
-        this.routeWindow.reveal();
-        this.routeWindow.focus();
+        retained.reveal();
+        retained.focus();
         return { status: this.load === "loaded" ? "opened" : "unreachable" };
       } catch {
         return { status: "unreachable" };
@@ -800,9 +1154,12 @@ export class ChatGptRoute {
   private async openRouteWindow(): Promise<ChatGptOpenResult> {
     const parent = this.options.parent();
     const restoreParent = parent?.isVisible() ?? false;
-    const routeSession = session.fromPartition(CHATGPT_PARTITION, {
-      cache: true,
-    });
+    const routeSession = session.fromPartition(
+      this.options.partition ?? CHATGPT_PARTITION,
+      {
+        cache: true,
+      },
+    );
     if (this.routeSession !== routeSession) {
       this.hardenSession(routeSession);
       this.routeSession = routeSession;
@@ -899,13 +1256,22 @@ export class ChatGptRoute {
 
     try {
       await candidate.loadURL(this.entryUrl);
+      if (!(await this.installAppSubmissionGate(candidate.webContents))) {
+        this.blockUnsafeManualSurface(candidate.webContents);
+        return { status: "unreachable" };
+      }
       this.load = "loaded";
       candidate.reveal();
       candidate.focus();
       return { status: "opened" };
     } catch {
       this.load = "failed";
-      if (!candidate.isDestroyed()) candidate.reveal();
+      if (
+        this.options.requiredAppName === undefined &&
+        !candidate.isDestroyed()
+      ) {
+        candidate.reveal();
+      }
       return { status: "unreachable" };
     }
   }
@@ -1159,9 +1525,61 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      if (this.options.requiredAppName !== undefined) {
+        let appBindingCandidate: unknown;
+        try {
+          appBindingCandidate = await candidate.webContents.executeJavaScript(
+            bindChatGptAppScript(
+              this.options.requiredAppName,
+              dispatchIdentityUrl,
+            ),
+            true,
+          );
+        } catch {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_UI_UNRECOGNIZED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        const appBinding = appBindingSchema.safeParse(appBindingCandidate);
+        if (!appBinding.success) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_UI_UNRECOGNIZED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if (appBinding.data.state === "navigated") {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if (appBinding.data.state === "blocked") {
+          return {
+            state: "failed_before_submit",
+            code: appBindingFailureCode(appBinding.data.reason),
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+      }
       const prepared = preparedTaskSchema.safeParse(
         await candidate.webContents.executeJavaScript(
-          prepareTaskScript(prompt, dispatchIdentityUrl),
+          prepareTaskScript(
+            prompt,
+            dispatchIdentityUrl,
+            this.options.requiredAppName,
+          ),
           true,
         ),
       );
@@ -1180,6 +1598,15 @@ export class ChatGptRoute {
         return {
           state: "failed_before_submit",
           code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
+      if ("appSelectionLost" in prepared.data) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_APP_SELECTION_LOST",
           deltaCount,
           observedCharacters,
           outputText: observedText,
@@ -1236,10 +1663,56 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        if (this.options.requiredAppName !== undefined) {
+          const selected = appBindingSchema.safeParse(
+            await candidate.webContents.executeJavaScript(
+              verifyChatGptAppScript(
+                this.options.requiredAppName,
+                dispatchIdentityUrl,
+              ),
+              true,
+            ),
+          );
+          if (!selected.success) {
+            return {
+              state: "failed_before_submit",
+              code: "CHATGPT_UI_UNRECOGNIZED",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+          if (selected.data.state === "navigated") {
+            return {
+              state: "failed_before_submit",
+              code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+          if (selected.data.state === "blocked") {
+            const code =
+              selected.data.reason === "missing" ||
+              selected.data.reason === "selection_not_observed"
+                ? "CHATGPT_APP_SELECTION_LOST"
+                : appBindingFailureCode(selected.data.reason);
+            return {
+              state: "failed_before_submit",
+              code,
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+            };
+          }
+        }
         submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
           await candidate.webContents.executeJavaScript(
-            activateTaskScript(dispatchIdentityUrl),
+            activateTaskScript(
+              dispatchIdentityUrl,
+              this.options.requiredAppName,
+            ),
             true,
           ),
         );
@@ -1259,6 +1732,16 @@ export class ChatGptRoute {
           return {
             state: "failed_before_submit",
             code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if ("appSelectionLost" in activated.data) {
+          submissionPhase = "not_attempted";
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_APP_SELECTION_LOST",
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -1754,6 +2237,7 @@ export class ChatGptRoute {
     }
     this.popupWindows.clear();
     this.readyPopupWindows.clear();
+    this.submissionGatedPopupWindows.clear();
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
       this.routeWindow.destroy();
     }
@@ -1771,6 +2255,7 @@ export class ChatGptRoute {
     }
     this.popupWindows.clear();
     this.readyPopupWindows.clear();
+    this.submissionGatedPopupWindows.clear();
     if (this.routeWindow && !this.routeWindow.isDestroyed()) {
       this.routeWindow.destroy();
     }
@@ -1855,6 +2340,10 @@ export class ChatGptRoute {
           // that commits or fails anyway is caught by did-navigate and
           // did-fail-load.
           if (!allowed(url)) return;
+          this.routeDocumentGeneration += 1;
+          if (!inPlace && this.options.requiredAppName !== undefined) {
+            this.routeWindow?.hide();
+          }
           this.load = inPlace ? "loaded" : "failed";
         },
       );
@@ -1862,6 +2351,7 @@ export class ChatGptRoute {
         "did-fail-load",
         (_event, code, _description, _url, isMainFrame) => {
           if (isMainFrame && this.ownsRouteContents(contents)) {
+            this.routeDocumentGeneration += 1;
             this.load = "failed";
             this.reportSignInBlocked({ kind: "load-failed", code });
           }
@@ -1869,19 +2359,30 @@ export class ChatGptRoute {
       );
       contents.on("did-finish-load", () => {
         if (!this.ownsRouteContents(contents)) return;
-        this.load = "loaded";
-        this.reportConversationUrl(contents);
-        if (this.options.onTaskActivityChanged) {
-          this.startTaskActivityWatch(contents);
-        }
-        if (
-          this.signInMode &&
-          isChatGptPage(contents.getURL(), this.options.homeUrl)
-        ) {
-          void contents
-            .executeJavaScript(signInBannerScript(this.displayTitle), true)
-            .catch(() => undefined);
-        }
+        void (async () => {
+          const gate =
+            await this.installCurrentRouteAppSubmissionGate(contents);
+          if (gate === "stale") return;
+          if (gate === "failed") {
+            this.blockUnsafeManualSurface(contents);
+            return;
+          }
+          if (!this.ownsRouteContents(contents)) return;
+          this.load = "loaded";
+          this.reportConversationUrl(contents);
+          this.routeWindow?.reveal();
+          if (this.options.onTaskActivityChanged) {
+            this.startTaskActivityWatch(contents);
+          }
+          if (
+            this.signInMode &&
+            isChatGptPage(contents.getURL(), this.options.homeUrl)
+          ) {
+            void contents
+              .executeJavaScript(signInBannerScript(this.displayTitle), true)
+              .catch(() => undefined);
+          }
+        })();
       });
       contents.on("console-message", (details) => {
         // Only the page's own top-level frame may send the return signal: an
@@ -1902,7 +2403,15 @@ export class ChatGptRoute {
         }
       });
       contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
-        if (isMainFrame) this.reportConversationUrl(contents);
+        if (isMainFrame) {
+          this.routeDocumentGeneration += 1;
+          this.reportConversationUrl(contents);
+          void this.installCurrentRouteAppSubmissionGate(contents).then(
+            (gate) => {
+              if (gate === "failed") this.blockUnsafeManualSurface(contents);
+            },
+          );
+        }
       });
       contents.on("render-process-gone", () => {
         if (!this.ownsRouteContents(contents)) return;
@@ -1910,6 +2419,7 @@ export class ChatGptRoute {
           this.options.onTaskActivityChanged?.("outcome_unknown");
         }
         this.stopTaskActivityWatch();
+        this.routeDocumentGeneration += 1;
         this.load = "failed";
       });
     }
@@ -1931,11 +2441,12 @@ export class ChatGptRoute {
       return {
         action: "allow",
         overrideBrowserWindowOptions: {
-          title: "Sign in · Farol Next",
+          title: `Sign in · ${this.displayTitle}`,
           width: requested.width,
           height: requested.height,
           ...(presentation.bounds ?? {}),
-          ...(this.options.windowPresentation === undefined
+          ...(this.options.windowPresentation === undefined &&
+          this.options.requiredAppName === undefined
             ? {}
             : { show: false }),
           backgroundColor: "#111216",
@@ -1945,13 +2456,18 @@ export class ChatGptRoute {
     });
     contents.on("did-create-window", (popup) => {
       this.popupWindows.add(popup);
+      this.popupDocumentGenerations.set(popup, 0);
       this.hardenContents(popup.webContents, false);
       popup.on("closed", () => {
         this.popupWindows.delete(popup);
         this.readyPopupWindows.delete(popup);
+        this.submissionGatedPopupWindows.delete(popup);
       });
       const presentation = this.options.windowPresentation;
-      if (presentation !== undefined) {
+      if (
+        presentation !== undefined ||
+        this.options.requiredAppName !== undefined
+      ) {
         popup.hide();
         popup.once("ready-to-show", () => {
           if (popup.isDestroyed()) return;
@@ -1959,18 +2475,66 @@ export class ChatGptRoute {
           this.reconcilePopupWindow(popup);
         });
       }
+      if (this.options.requiredAppName !== undefined) {
+        popup.webContents.on(
+          "did-start-navigation",
+          (_event, _url, inPlace, isMainFrame) => {
+            if (!isMainFrame || inPlace || popup.isDestroyed()) return;
+            this.popupDocumentGenerations.set(
+              popup,
+              (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
+            );
+            this.submissionGatedPopupWindows.delete(popup);
+            popup.hide();
+          },
+        );
+        popup.webContents.on("did-finish-load", () => {
+          void this.installCurrentPopupAppSubmissionGate(popup).then((gate) => {
+            if (gate === "stale") return;
+            if (gate === "failed") {
+              if (!popup.isDestroyed()) popup.destroy();
+              return;
+            }
+            this.submissionGatedPopupWindows.add(popup);
+            this.reconcilePopupWindow(popup);
+          });
+        });
+        popup.webContents.on(
+          "did-navigate-in-page",
+          (_event, _url, isMainFrame) => {
+            if (!isMainFrame) return;
+            this.popupDocumentGenerations.set(
+              popup,
+              (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
+            );
+            void this.installCurrentPopupAppSubmissionGate(popup).then(
+              (gate) => {
+                if (gate === "failed" && !popup.isDestroyed()) popup.destroy();
+              },
+            );
+          },
+        );
+      }
     });
   }
 
   private reconcilePopupWindow(popup: BrowserWindow): void {
     popup.hide();
     const presentation = this.options.windowPresentation;
+    if (!this.readyPopupWindows.has(popup)) {
+      return;
+    }
     if (
-      presentation?.mode !== "secondary-visible" ||
-      !this.readyPopupWindows.has(popup)
+      this.options.requiredAppName !== undefined &&
+      !this.submissionGatedPopupWindows.has(popup)
     ) {
       return;
     }
+    if (presentation === undefined) {
+      popup.show();
+      return;
+    }
+    if (presentation.mode !== "secondary-visible") return;
     try {
       const resolved = resolveChatGptWindowPresentation(presentation, {
         width: 720,
@@ -2010,6 +2574,102 @@ export class ChatGptRoute {
       // Navigation policy owns malformed or unsupported URLs. They never alter
       // a retained conversation binding.
     }
+  }
+
+  private async installAppSubmissionGate(
+    contents: WebContents,
+  ): Promise<boolean> {
+    const appName = this.options.requiredAppName;
+    if (
+      appName === undefined ||
+      (this.ownsRouteContents(contents) &&
+        !isChatGptPage(contents.getURL(), this.options.homeUrl))
+    ) {
+      return true;
+    }
+    if (!this.ownsRouteContents(contents)) return false;
+    try {
+      return (
+        (await contents.executeJavaScript(
+          installManualAppGateScript(appName),
+          true,
+        )) === true
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async installCurrentRouteAppSubmissionGate(
+    contents: WebContents,
+  ): Promise<"installed" | "failed" | "stale"> {
+    const generation = this.routeDocumentGeneration;
+    const url = contents.getURL();
+    const installed = await this.installAppSubmissionGate(contents);
+    if (
+      !this.ownsRouteContents(contents) ||
+      this.routeDocumentGeneration !== generation ||
+      contents.getURL() !== url
+    ) {
+      return "stale";
+    }
+    return installed ? "installed" : "failed";
+  }
+
+  private async installPopupAppSubmissionGate(
+    popup: BrowserWindow,
+  ): Promise<boolean> {
+    const appName = this.options.requiredAppName;
+    if (
+      appName === undefined ||
+      !this.popupWindows.has(popup) ||
+      popup.isDestroyed()
+    ) {
+      return appName === undefined;
+    }
+    const contents = popup.webContents;
+    // Identity-provider and MFA pages are never modified. If that popup
+    // returns to a ChatGPT-owned page, the full-navigation hide above keeps
+    // it invisible until this exact gate has been installed there.
+    if (!isChatGptPage(contents.getURL(), this.options.homeUrl)) return true;
+    try {
+      return (
+        (await contents.executeJavaScript(
+          installManualAppGateScript(appName),
+          true,
+        )) === true &&
+        this.popupWindows.has(popup) &&
+        !popup.isDestroyed()
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  private async installCurrentPopupAppSubmissionGate(
+    popup: BrowserWindow,
+  ): Promise<"installed" | "failed" | "stale"> {
+    const generation = this.popupDocumentGenerations.get(popup) ?? 0;
+    const contents = popup.webContents;
+    const url = contents.getURL();
+    const installed = await this.installPopupAppSubmissionGate(popup);
+    if (
+      !this.popupWindows.has(popup) ||
+      popup.isDestroyed() ||
+      this.popupDocumentGenerations.get(popup) !== generation ||
+      contents.getURL() !== url
+    ) {
+      return "stale";
+    }
+    return installed ? "installed" : "failed";
+  }
+
+  private blockUnsafeManualSurface(contents: WebContents): void {
+    if (!this.ownsRouteContents(contents)) return;
+    this.load = "failed";
+    this.stopTaskActivityWatch();
+    const candidate = this.routeWindow;
+    if (candidate && !candidate.isDestroyed()) candidate.destroy();
   }
 
   private startTaskActivityWatch(contents: WebContents): void {
@@ -2092,7 +2752,7 @@ export class ChatGptRoute {
 
   private remoteWebPreferences(): Electron.WebPreferences {
     return {
-      partition: CHATGPT_PARTITION,
+      partition: this.options.partition ?? CHATGPT_PARTITION,
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,

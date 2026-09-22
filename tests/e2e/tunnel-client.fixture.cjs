@@ -26,11 +26,10 @@ const path = require("node:path");
 // Every literal below is copied from the two files this fixture stands in
 // for, not guessed:
 //
-// - `REQUIRED_FLAGS` is `requiredSurfaces` from
-//   vnext/src/apps/desktop/tunnel-client-probe.ts:136-153. `probeTunnelClient`
-//   (same file, :188-202) runs `help <subcommand>` for each key and rejects
-//   this executable as TUNNEL_CLIENT_INCOMPATIBLE unless the combined
-//   stdout+stderr contains every one of its flag substrings.
+// - `REQUIRED_FLAGS` mirrors `requiredSurfaces` in
+//   vnext/src/apps/desktop/tunnel-client-probe.ts. The reviewed client exposes
+//   doctor's flags through `doctor --help`; `help doctor` is prose and is not
+//   a compatibility surface. Init and run retain `help <subcommand>`.
 // - The exact argv shapes documented on each `run*` function below are
 //   what `SecureMcpConnectorRuntime`
 //   (vnext/src/apps/desktop/secure-mcp-connector-runtime.ts) actually
@@ -63,9 +62,8 @@ const REQUIRED_FLAGS = {
 // argv shapes cited above.
 const BOOLEAN_FLAGS = new Set(["--force", "--json", "--explain"]);
 
-// Any literal `X.Y.Z[-+...]` satisfies tunnel-client-probe.ts:182-186's
-// `/\bversion\s+([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)/u`; this
-// exact value is not otherwise load-bearing anywhere in the product.
+// The reviewed binary emits one bare SemVer line for `--version`. The probe
+// rejects prefixes, suffixes, multiple lines, and mixed stdout/stderr.
 const VERSION = "1.0.0";
 
 function parseFlags(argv) {
@@ -283,14 +281,21 @@ function runRun(argv) {
 function main() {
   const argv = process.argv.slice(2);
   if (argv[0] === "--version") {
-    process.stdout.write(`tunnel-client-fixture version ${VERSION}\n`);
+    process.stdout.write(`${VERSION}\n`);
     process.exit(0);
     return;
   }
-  if (
-    argv[0] === "help" &&
-    Object.prototype.hasOwnProperty.call(REQUIRED_FLAGS, argv[1])
-  ) {
+  if (argv[0] === "doctor" && argv[1] === "--help") {
+    process.stdout.write(helpText("doctor"));
+    process.exit(0);
+    return;
+  }
+  if (argv[0] === "help" && argv[1] === "doctor") {
+    process.stdout.write("Run diagnostics for a tunnel profile.\n");
+    process.exit(0);
+    return;
+  }
+  if (argv[0] === "help" && (argv[1] === "init" || argv[1] === "run")) {
     process.stdout.write(helpText(argv[1]));
     process.exit(0);
     return;

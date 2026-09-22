@@ -72,6 +72,7 @@ describe("development launcher environment", () => {
         TMPDIR: "/private/tmp/owner/",
         PATH: "/tmp/poisoned-bin",
         FAROL_NEXT_E2E: "1",
+        FAROL_NEXT_E2E_APP_DATA: "/private/tmp/inherited-app-data",
         FAROL_NEXT_E2E_WORKSPACE_ROOT: "/private/tmp/inherited-root",
         FAROL_NEXT_E2E_CHATGPT_URL: "http://127.0.0.1:43123/chatgpt",
         FAROL_MODEL_E2E_SYNTHETIC_REPLY: "a fabricated answer",
@@ -92,6 +93,7 @@ describe("development launcher environment", () => {
       // `#!/usr/bin/env node` shim, then the system directories the
       // packaged launcher pins. Never the caller's own PATH.
       PATH: "/declared/node/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      FAROL_NEXT_ENVIRONMENT: "dev",
     });
   });
 
@@ -99,6 +101,7 @@ describe("development launcher environment", () => {
     poison({
       [SENTINEL]: "1",
       FAROL_NEXT_E2E: "1",
+      FAROL_NEXT_E2E_APP_DATA: "/private/tmp/inherited-app-data",
       FAROL_MODEL_E2E_SYNTHETIC_REPLY: "a fabricated answer",
     });
 
@@ -108,9 +111,9 @@ describe("development launcher environment", () => {
     expect(inherited).toContain(SENTINEL);
     expect(inherited).toContain("FAROL_MODEL_E2E_SYNTHETIC_REPLY");
 
-    expect(await farolKeysVisibleTo({ env: devLaunchEnvironment() })).toEqual(
-      [],
-    );
+    expect(await farolKeysVisibleTo({ env: devLaunchEnvironment() })).toEqual([
+      "FAROL_NEXT_ENVIRONMENT",
+    ]);
   });
 
   it("is what the preview launch actually spawns Electron with", async () => {
@@ -141,6 +144,7 @@ describe("development launcher environment", () => {
       "the dev launcher must spawn Electron with an explicit environment",
     ).toBeTypeOf("object");
     expect(Object.keys(received.options.env).sort()).toEqual([
+      "FAROL_NEXT_ENVIRONMENT",
       "HOME",
       "LANG",
       "LC_ALL",
@@ -149,6 +153,7 @@ describe("development launcher environment", () => {
     ]);
     expect(received.options.env[SENTINEL]).toBeUndefined();
     expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
+    expect(received.options.env.FAROL_NEXT_E2E_APP_DATA).toBeUndefined();
     expect(
       received.options.env.PATH.startsWith(path.dirname(process.execPath)),
     ).toBe(true);

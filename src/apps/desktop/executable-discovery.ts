@@ -575,14 +575,30 @@ export async function discoverExecutables(
     reviewedArch,
     reviewedDigests,
   };
-  const resolved = new Map<string, DiscoveryCandidate>();
+  const resolved = new Map<string, number>();
   const order: DiscoveryCandidate[] = [];
   for (const seed of seeds) {
     const candidate = await resolveCandidate(seed, kind, ctx);
     if (!candidate) continue;
-    if (resolved.has(candidate.path)) continue;
-    resolved.set(candidate.path, candidate);
-    order.push(candidate);
+    // Multiple fixed locations commonly resolve to the same reviewed build,
+    // either through symlinks or byte-identical copies. Present and probe it
+    // once: path aliases are not independent owner choices.
+    const identity = candidate.sha256
+      ? `sha256:${candidate.sha256}`
+      : `path:${candidate.path}`;
+    const existingIndex = resolved.get(identity);
+    if (existingIndex === undefined) {
+      resolved.set(identity, order.length);
+      order.push(candidate);
+      continue;
+    }
+    const existing = order[existingIndex];
+    if (
+      existing !== undefined &&
+      VERDICT_RANK[candidate.verdict] < VERDICT_RANK[existing.verdict]
+    ) {
+      order[existingIndex] = candidate;
+    }
   }
 
   const candidates = [...order].sort(

@@ -124,7 +124,7 @@ describe("Route B host check", () => {
     root: string,
     violation: "none" | "builtin-tool-enabled",
   ): Promise<Readonly<{ executablePath: string; received: string }>> {
-    const executablePath = path.join(root, "codex-fixture");
+    const executablePath = path.join(root, "codex-fixture.cjs");
     const received = path.join(root, "received.log");
     await fs.writeFile(
       executablePath,

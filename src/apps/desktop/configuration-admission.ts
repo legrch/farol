@@ -11,6 +11,7 @@ const agentGuardedCommands = new Set<string>([
   "computer.update-access",
   "computer.update-commands",
   "computer.verify-workspace",
+  "dev-proof.prepare",
 ]);
 
 const connectorGuardedCommands = new Set<string>([
@@ -21,6 +22,7 @@ const connectorGuardedCommands = new Set<string>([
   "computer.update-access",
   "computer.update-commands",
   "computer.verify-workspace",
+  "dev-proof.prepare",
 ]);
 
 export type ConfigurationAdmission =

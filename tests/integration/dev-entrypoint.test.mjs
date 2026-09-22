@@ -285,6 +285,14 @@ describe("dev.mjs owner stop / second-instance mapping", () => {
       message: null,
     });
   });
+
+  it("classifies a main-process startup failure without calling it another running build", () => {
+    const description = describeLaunchResult("startup-failed");
+    expect(description.exitCode).toBe(1);
+    expect(description.message).toContain("main-process startup failed");
+    expect(description.message).toContain("task dev");
+    expect(description.message).not.toContain("different build");
+  });
 });
 
 describe("createSignalEscalation", () => {

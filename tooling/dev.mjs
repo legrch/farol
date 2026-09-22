@@ -17,6 +17,7 @@ import { ownerLaunchEnvironment } from "./launch-snapshot.mjs";
 export const DECLARED_NODE_VERSIONS = Object.freeze(["24.20.0", "26.7.0"]);
 export const DECLARED_NPM_VERSION = "11.19.0";
 export const TOOLCHAIN_PINNED_ENV = "FAROL_DEV_TOOLCHAIN_PINNED";
+export const DESKTOP_ENVIRONMENT_ENV = "FAROL_NEXT_ENVIRONMENT";
 export const OWNER_STOP_EXIT_CODE = 130;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -331,6 +332,13 @@ export function describeLaunchResult(outcome) {
         "Farol Next is already running as this exact build; its existing window was reopened instead of starting a second copy.",
     };
   }
+  if (outcome === "startup-failed") {
+    return {
+      exitCode: 1,
+      message:
+        "Farol DEV main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.",
+    };
+  }
   return {
     exitCode: 1,
     message:
@@ -441,7 +449,13 @@ export function devLaunchEnvironment(
   nodeBinDirectory = path.dirname(process.execPath),
 ) {
   const owned = ownerLaunchEnvironment(environment);
-  return { ...owned, PATH: `${nodeBinDirectory}:${owned.PATH}` };
+  return {
+    ...owned,
+    PATH: `${nodeBinDirectory}:${owned.PATH}`,
+    // This value is app-owned, not inherited. It selects the persistent DEV
+    // identity before Electron takes its instance lock or opens any state.
+    [DESKTOP_ENVIRONMENT_ENV]: "dev",
+  };
 }
 
 export async function launchPreview(root, spawnProcess = spawn) {

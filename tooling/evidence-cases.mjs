@@ -62,7 +62,7 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "chatgpt-task-journal-content-free",
   "chatgpt-same-conversation-after-window-close",
   "chatgpt-conversation-binding-content-free",
-  "settings-links-to-computer-workspaces",
+  "settings-owns-computer-workspaces",
   "native-agent-proof-invalidated-by-computer-generation",
   "connector-refuses-unheld-summary-fence",
   "connector-start-admitted-when-fence-reconciled",

@@ -183,6 +183,20 @@ export interface ConnectorVerificationRecorder {
   >;
 }
 
+export interface DevMcpProofRecorder {
+  observe(
+    input: Readonly<{
+      request: ReadonlyComputerCallRequest;
+      response:
+        | Readonly<{
+            ok: true;
+            output: Readonly<{ kind: string; text?: string; bytes?: number }>;
+          }>
+        | Readonly<{ ok: false; errorCode: string }>;
+    }>,
+  ): Promise<void>;
+}
+
 function failure(code: string): CallToolResult {
   const value = {
     ok: false,
@@ -267,6 +281,7 @@ async function execute(
   workspaceId: string,
   operation: ReadonlyComputerCallRequest["operation"],
   signal?: AbortSignal,
+  proofRecorder?: DevMcpProofRecorder,
 ): Promise<CallToolResult> {
   const request: ReadonlyComputerCallRequest = {
     ...binding,
@@ -289,6 +304,12 @@ async function execute(
     ) {
       return failure("COMPUTER_CONTRACT_CORRELATION");
     }
+    await proofRecorder
+      ?.observe({
+        request,
+        response: { ok: false, errorCode: parsed.data.error.code },
+      })
+      .catch(() => undefined);
     return {
       content: [{ type: "text", text: JSON.stringify(parsed.data) }],
       structuredContent: { ...parsed.data },
@@ -313,6 +334,9 @@ async function execute(
   if (!correlationMatches(request, value) || !outputMatchesOperation) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
+  await proofRecorder
+    ?.observe({ request, response: { ok: true, output: value.output } })
+    .catch(() => undefined);
   const structuredContent: Record<string, unknown> = {
     ...value,
   };
@@ -531,6 +555,7 @@ export function createReadonlyComputerMcpServer(
   connectorVerification?: ConnectorVerificationRecorder,
   callerRelay?: CodexCallerRelayPort,
   fence?: ExecutionFenceReader,
+  devMcpProof?: DevMcpProofRecorder,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -606,6 +631,7 @@ export function createReadonlyComputerMcpServer(
               }),
         },
         context.mcpReq.signal,
+        devMcpProof,
       ),
     ),
   );

@@ -6,6 +6,7 @@ const OUTCOMES = new Set([
   "reopened",
   "identity-mismatch",
   "reopen-failed",
+  "startup-failed",
   "unverified",
 ]);
 

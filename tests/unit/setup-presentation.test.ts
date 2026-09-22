@@ -8,6 +8,8 @@ import {
   connectorStartPrerequisite,
   connectorStopPrerequisite,
   computerVerificationStale,
+  devProofEvidenceCurrent,
+  localHostRouteReadiness,
   readinessDetail,
   readinessLabel,
   nativeHostActionPrerequisite,
@@ -54,6 +56,63 @@ const verifiedRecord = {
 };
 
 describe("setup presentation", () => {
+  it("invalidates a displayed DEV MCP proof after generation or runtime changes", () => {
+    const proof = {
+      kind: "dev-proof.verified" as const,
+      proofId: "00000000-0000-4000-8000-000000000001",
+      workspaceId: "00000000-0000-4000-8000-000000000002",
+      environment: "dev" as const,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration: 7,
+      buildId: "a".repeat(64),
+      sentinelSha256: "c".repeat(64),
+      answerSha256: "c".repeat(64),
+      receiptSha256: "d".repeat(64),
+      outsideGrantError: "WORKSPACE_PATH_REFUSED",
+    };
+    const current = {
+      buildId: proof.buildId,
+      computerGeneration: proof.computerGeneration,
+      workspaceIds: [proof.workspaceId],
+      runtime: {
+        state: "ready" as const,
+        runtimeGeneration: proof.runtimeGeneration,
+        computerGeneration: proof.computerGeneration,
+        buildId: proof.buildId,
+      },
+      attachment: {
+        workspaceId: proof.workspaceId,
+        runtimeGeneration: proof.runtimeGeneration,
+        computerGeneration: proof.computerGeneration,
+        buildId: proof.buildId,
+      },
+    };
+
+    expect(devProofEvidenceCurrent(proof, current)).toBe(true);
+    expect(
+      devProofEvidenceCurrent(proof, {
+        ...current,
+        computerGeneration: current.computerGeneration + 1,
+      }),
+    ).toBe(false);
+    expect(devProofEvidenceCurrent(proof, { ...current, runtime: null })).toBe(
+      false,
+    );
+    expect(
+      devProofEvidenceCurrent(proof, { ...current, attachment: null }),
+    ).toBe(false);
+  });
+
+  it("keeps zero-turn local host readiness separate from an advanced live turn", () => {
+    expect(localHostRouteReadiness(true, readiness)).toBe("ready");
+    expect(
+      localHostRouteReadiness(false, {
+        ...readiness,
+        reachable: "unreachable",
+      }),
+    ).toBe("failed");
+  });
+
   it("OUX-07 labels a rejoin from the typed recovery, not the wording", () => {
     expect(
       waitsForAgentRejoin({ ...readiness, recovery: "rejoin_agent" }),

@@ -59,17 +59,28 @@ const help: Readonly<Record<string, string>> = {
 };
 
 describe("tunnel-client probe", () => {
-  it("pins one executable and the exact profile, doctor, and run surface", async () => {
+  it("accepts the reviewed client output and probes the flag-bearing doctor help", async () => {
     const selected = await fixture();
     const runner = vi.fn<TunnelClientProbeRunner>(async (command) => {
       if (command.arguments[0] === "--version") {
         return {
-          stdout:
-            "tunnel-client version 0.0.14+0f870e50a973fa820d4c409000059e181e8d242b (git sha: 0f870e50a973fa820d4c409000059e181e8d242b)\n",
+          stdout: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b\n",
           stderr: "",
         };
       }
-      const surface = command.arguments[1];
+      if (
+        command.arguments[0] === "help" &&
+        command.arguments[1] === "doctor"
+      ) {
+        return {
+          stdout: "Run diagnostics for a tunnel profile.\n",
+          stderr: "",
+        };
+      }
+      const surface =
+        command.arguments[0] === "doctor" && command.arguments[1] === "--help"
+          ? "doctor"
+          : command.arguments[1];
       if (surface !== "init" && surface !== "doctor" && surface !== "run") {
         throw new Error("unexpected surface");
       }
@@ -88,6 +99,56 @@ describe("tunnel-client probe", () => {
       protocol: "openai-tunnel-client/v1",
     });
     expect(runner).toHaveBeenCalledTimes(4);
+    expect(runner.mock.calls.map(([command]) => command.arguments)).toEqual([
+      ["--version"],
+      ["help", "init"],
+      ["doctor", "--help"],
+      ["help", "run"],
+    ]);
+  });
+
+  it("keeps the explicit labeled compatibility version format", async () => {
+    const selected = await fixture();
+    const runner = vi.fn<TunnelClientProbeRunner>(async (command) => {
+      if (command.arguments[0] === "--version") {
+        return {
+          stdout:
+            "tunnel-client version 0.0.14+0f870e50a973fa820d4c409000059e181e8d242b (git sha: 0f870e50a973fa820d4c409000059e181e8d242b)\n",
+          stderr: "",
+        };
+      }
+      const surface =
+        command.arguments[0] === "doctor" ? "doctor" : command.arguments[1];
+      if (surface !== "init" && surface !== "doctor" && surface !== "run") {
+        throw new Error("unexpected surface");
+      }
+      return { stdout: help[surface] ?? "", stderr: "" };
+    });
+
+    await expect(
+      probeTunnelClient({ executablePath: selected.selected }, { run: runner }),
+    ).resolves.toMatchObject({
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+    });
+  });
+
+  it.each([
+    "0.0.14+build trailing junk\n",
+    "prefix 0.0.14+build\n",
+    "0.0.14+build\nunexpected\n",
+    "tunnel-client version 0.0.14+build (git sha: other)\n",
+  ])("rejects malformed or extra version output: %j", async (stdout) => {
+    const selected = await fixture();
+    const runner = vi.fn<TunnelClientProbeRunner>(async (command) => {
+      if (command.arguments[0] === "--version") {
+        return { stdout, stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    await expect(
+      probeTunnelClient({ executablePath: selected.selected }, { run: runner }),
+    ).rejects.toThrow("TUNNEL_CLIENT_INCOMPATIBLE");
   });
 
   it("refuses a writable or incompatible executable", async () => {

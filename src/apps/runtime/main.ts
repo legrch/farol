@@ -20,12 +20,16 @@ async function main(): Promise<void> {
   const parsedMode = z
     .enum(["empty", "demo"])
     .safeParse(process.env.FAROL_NEXT_PREVIEW_MODE);
+  const parsedIdentity = z
+    .enum(["farol-next-preview-runtime", "farol-dev-runtime"])
+    .safeParse(process.env.FAROL_NEXT_RUNTIME_IDENTITY);
   if (parsedScenario.data === "startup-failure") {
     throw new Error("RUNTIME_START_FAILURE_FIXTURE");
   }
   const runtime = await startPreviewRuntime(
     parsedScenario.success ? parsedScenario.data : "normal",
     parsedMode.success ? parsedMode.data : "empty",
+    parsedIdentity.success ? parsedIdentity.data : "farol-next-preview-runtime",
   );
 
   runtimeParentPort.postMessage({

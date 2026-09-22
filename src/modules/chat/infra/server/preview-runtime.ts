@@ -21,6 +21,8 @@ import { InMemoryTurns } from "../repo/in-memory-turns";
 
 export type PreviewScenario = FixtureScenario | "stream-failure";
 export type PreviewMode = "empty" | "demo";
+export type PreviewRuntimeIdentity =
+  "farol-next-preview-runtime" | "farol-dev-runtime";
 
 export type PreviewTask = Readonly<{
   ownerId: string;
@@ -34,7 +36,7 @@ export type PreviewTask = Readonly<{
 }>;
 
 export type PreviewRuntime = Readonly<{
-  identity: "farol-next-preview-runtime";
+  identity: PreviewRuntimeIdentity;
   port: number;
   token: string;
   tasks: readonly PreviewTask[];
@@ -161,6 +163,7 @@ export async function startPreviewRuntime(
   scenario: PreviewScenario,
   dependencies: PreviewRuntimeDependencies,
   mode: PreviewMode = "empty",
+  identity: PreviewRuntimeIdentity = "farol-next-preview-runtime",
 ): Promise<PreviewRuntime> {
   const token = randomBytes(32).toString("base64url");
   const runtimeTasks = (mode === "demo" ? tasks : []).map((task) => ({
@@ -226,7 +229,7 @@ export async function startPreviewRuntime(
     if (request.method === "GET" && url.pathname === "/manifest") {
       json(response, 200, {
         schema: 1,
-        identity: "farol-next-preview-runtime",
+        identity,
         scenario,
         mode,
         tasks: runtimeTasks.map(({ readToken: _readToken, ...task }) => task),
@@ -253,7 +256,7 @@ export async function startPreviewRuntime(
       );
       json(response, 200, {
         schema: 1,
-        identity: "farol-next-preview-runtime",
+        identity,
         scenario,
         tasks: taskStates,
         activity: activity.snapshot(),
@@ -482,7 +485,7 @@ export async function startPreviewRuntime(
   }
 
   return {
-    identity: "farol-next-preview-runtime",
+    identity,
     port: address.port,
     token,
     tasks: runtimeTasks,

@@ -48,6 +48,18 @@ const BOUNDED_DISABLED_FEATURES = [
   "workspace_dependencies",
 ] as const;
 
+// These host capabilities are configured outside the feature registry. The
+// installed App Server otherwise advertises `request_user_input` and a
+// generic `skills` tool even with every execution/MCP feature below disabled.
+// The bounded check/Agent children have no interactive owner channel and no
+// skill authority, so both are removed at config parse time as well.
+const BOUNDED_CONFIG_ARGUMENTS = [
+  "-c",
+  "tools.experimental_request_user_input={ enabled = false }",
+  "-c",
+  "skills=[]",
+] as const;
+
 const MCP_SERVER_NAME = /^[A-Za-z0-9_-]{1,120}$/u;
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -59,6 +71,8 @@ function boundedArguments(
   mcpServerNames: readonly string[],
 ): string[] {
   return [
+    "--strict-config",
+    ...BOUNDED_CONFIG_ARGUMENTS,
     "-c",
     'web_search="disabled"',
     "--enable",
@@ -211,7 +225,9 @@ export async function launchCodexAppServer(
     NO_COLOR: "1",
     TERM: "dumb",
   };
-  if (input.codexHomePath) environment.CODEX_HOME = input.codexHomePath;
+  if (input.codexHomePath !== undefined) {
+    environment.CODEX_HOME = input.codexHomePath;
+  }
   if (input.providerRoute) {
     environment.FAROL_NEXT_PROVIDER_TOKEN = input.providerRoute.token;
   }

@@ -7,12 +7,15 @@ import { ROUTE_B_MODEL } from "./route-b-runtime";
 export const ROUTE_B_CHECK_PROMPT =
   "This is a Farol Next connection check. Reply with the single word READY and nothing else.";
 
-// The check's host runs under the launcher's bounded profile: built-in tools,
-// web search and every configured MCP server are disabled and the effective
-// configuration is verified before the host is ready, so the prompt's intent
-// of touching no tool is enforced rather than hoped for. The thread itself
-// offers no dynamic tools. Ordinary Route B hosts are the owner's own and
-// keep their explicitly approved tools; this profile is the check's alone.
+// The check's host runs under the launcher's bounded profile: execution,
+// browser, interactive-input and ambient MCP capabilities are disabled and
+// the effective feature/MCP configuration is verified before readiness. The
+// installed host currently retains an inert `skills` catalogue entry even
+// with private empty skill state and host skill discovery disabled. Production
+// Route B binds that catalogue through its owned relay, while the check prompt
+// asks for fixed text and the caller verifies that no tool call occurred. The
+// thread offers no dynamic tools. Ordinary Route B hosts are the owner's own
+// and keep their explicitly approved tools; this profile is the check's alone.
 export const ROUTE_B_CHECK_TOOL_PROFILE = "dynamic-only";
 
 export type RouteBHostClient = Readonly<{ close(): Promise<void> }>;

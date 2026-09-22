@@ -11,6 +11,7 @@ describe("owner launch result protocol", () => {
     "reopened",
     "identity-mismatch",
     "reopen-failed",
+    "startup-failed",
     "unverified",
   ])("parses the exact %s result", (outcome) => {
     expect(

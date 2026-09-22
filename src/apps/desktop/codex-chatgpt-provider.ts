@@ -143,6 +143,9 @@ export type CodexChatGptProviderRuntime = Readonly<{
     compactionRequests: number;
     lastRefusalCode: string | null;
     lastInputKinds: readonly string[];
+    lastInputRoles: readonly string[];
+    lastInputContentKinds: readonly string[];
+    lastToolNames: readonly string[];
     lastMetadataKeys: readonly string[];
     lastTurnMetadataKeys: readonly string[];
     lastCompactionMarkerKind: string;
@@ -205,6 +208,34 @@ function inputKinds(candidate: unknown): string[] {
   return candidate.input.map((item) =>
     record(item) && typeof item.type === "string" ? item.type : "unknown",
   );
+}
+
+function inputRoles(candidate: unknown): string[] {
+  if (!record(candidate) || !Array.isArray(candidate.input)) return [];
+  return candidate.input.map((item) =>
+    record(item) && typeof item.role === "string" ? item.role : "none",
+  );
+}
+
+function inputContentKinds(candidate: unknown): string[] {
+  if (!record(candidate) || !Array.isArray(candidate.input)) return [];
+  return candidate.input.flatMap((item, itemIndex) => {
+    if (!record(item) || !Array.isArray(item.content)) return [];
+    return item.content.map((part, partIndex) => {
+      const kind =
+        record(part) && typeof part.type === "string" ? part.type : "unknown";
+      return `${itemIndex}:${partIndex}:${kind}`;
+    });
+  });
+}
+
+function toolNames(candidate: unknown): string[] {
+  if (!record(candidate) || !Array.isArray(candidate.tools)) return [];
+  return candidate.tools.map((tool) => {
+    if (!record(tool)) return "unknown";
+    if (typeof tool.name === "string") return tool.name;
+    return typeof tool.type === "string" ? tool.type : "unknown";
+  });
 }
 
 function metadataKeys(candidate: unknown): string[] {
@@ -1323,6 +1354,9 @@ export async function startCodexChatGptProvider(
   let compactionRequests = 0;
   let lastRefusalCode: string | null = null;
   let lastInputKinds: string[] = [];
+  let lastInputRoles: string[] = [];
+  let lastInputContentKinds: string[] = [];
+  let lastToolNames: string[] = [];
   let lastMetadataKeys: string[] = [];
   let lastTurnMetadataKeys: string[] = [];
   let lastCompactionMarkerKind = "absent";
@@ -1354,6 +1388,9 @@ export async function startCodexChatGptProvider(
         const body = await readProviderBody(request, response);
         if (!body.ok) return;
         lastInputKinds = inputKinds(body.value);
+        lastInputRoles = inputRoles(body.value);
+        lastInputContentKinds = inputContentKinds(body.value);
+        lastToolNames = toolNames(body.value);
         lastMetadataKeys = metadataKeys(body.value);
         lastTurnMetadataKeys = turnMetadataKeys(body.value);
         lastCompactionMarkerKind = compactionMarkerKind(body.value);
@@ -1425,6 +1462,9 @@ export async function startCodexChatGptProvider(
       compactionRequests,
       lastRefusalCode,
       lastInputKinds: [...lastInputKinds],
+      lastInputRoles: [...lastInputRoles],
+      lastInputContentKinds: [...lastInputContentKinds],
+      lastToolNames: [...lastToolNames],
       lastMetadataKeys: [...lastMetadataKeys],
       lastTurnMetadataKeys: [...lastTurnMetadataKeys],
       lastCompactionMarkerKind,

@@ -98,6 +98,8 @@ import {
   connectorRoutePrerequisite,
   connectorStartPrerequisite,
   connectorStopPrerequisite,
+  devProofEvidenceCurrent,
+  localHostRouteReadiness,
   readinessDetail,
   readinessLabel,
   nativeHostActionPrerequisite,
@@ -146,8 +148,8 @@ function transitionRefusalMessage(error: string): string | null {
 // only names the app to the owner, so it reads "Farol" with its
 // "Developer Preview" edition mark, matching the window title and the
 // brand mark in shell.html.
-const DISPLAY_PRODUCT_NAME = "Farol";
-const DISPLAY_EDITION = "Developer Preview";
+let displayProductName = "Farol";
+let displayEdition = "Developer Preview";
 
 // Independently declared, not imported: `ui` never imports from
 // `apps/desktop` (architecture.config enforces it), so this mirrors
@@ -211,6 +213,10 @@ const bootstrapSchema = z.strictObject({
   schema: z.literal(3),
   productName: z.literal("Farol Next Preview"),
   bundleId: z.literal("local.farol.next.preview"),
+  environment: z.enum(["preview", "dev"]),
+  displayName: z.enum(["Farol", "Farol DEV"]),
+  displayEdition: z.enum(["Developer Preview", "Development"]),
+  applicationId: z.enum(["local.farol.next.preview", "local.farol.dev"]),
   build: BuildIdentitySchema,
   demoMode: z.boolean(),
   configuration: ProductConfigurationSnapshotSchema,
@@ -222,7 +228,10 @@ const bootstrapSchema = z.strictObject({
   taskRevision: z.number().int().nonnegative(),
   tasks: z.array(ProductTaskSchema).max(5),
   partition: z.string(),
-  chatgptPartition: z.literal("persist:farol-next-chatgpt"),
+  chatgptPartition: z.enum([
+    "persist:farol-next-chatgpt",
+    "persist:farol-dev-chatgpt",
+  ]),
   chatgptRecoveryPending: z.boolean(),
   chatgptConversationState: z.enum([
     "new",
@@ -325,6 +334,32 @@ const required = <ElementType extends Element>(
   if (!element) throw new Error(`UI_ELEMENT_MISSING:${selector}`);
   return element;
 };
+
+function applyProductIdentity(): void {
+  const dev = bootstrap.environment === "dev";
+  if (
+    bootstrap.displayName !== (dev ? "Farol DEV" : "Farol") ||
+    bootstrap.displayEdition !== (dev ? "Development" : "Developer Preview") ||
+    bootstrap.applicationId !==
+      (dev ? "local.farol.dev" : "local.farol.next.preview")
+  ) {
+    throw new Error("UI_DESKTOP_IDENTITY_INVALID");
+  }
+  displayProductName = bootstrap.displayName;
+  displayEdition = bootstrap.displayEdition;
+  document.documentElement.dataset.environment = bootstrap.environment;
+  document.title = `${displayProductName} · ${displayEdition}`;
+  required("#product-brand").setAttribute(
+    "aria-label",
+    `${displayProductName}, ${displayEdition}`,
+  );
+  required("#brand-name").textContent = displayProductName;
+  required("#brand-edition").textContent = displayEdition;
+  required("#window-product-name").textContent = displayProductName;
+  required("#window-product-edition").textContent = displayEdition;
+  required("#setup-product-name").textContent = displayProductName;
+  required("#setup-product-edition").textContent = displayEdition;
+}
 
 const narrowSidebar = window.matchMedia("(max-width: 979px)");
 
@@ -542,6 +577,10 @@ let discoveredCodexCandidates: Extract<
 let discoveredTunnelClientCandidates: Extract<
   ProductConfigurationEvidence,
   { kind: "connector.client-discovery" }
+> | null = null;
+let devProofEvidence: Extract<
+  ProductConfigurationEvidence,
+  { kind: "dev-proof.prepared" | "dev-proof.verified" }
 > | null = null;
 let discoveryRequested: Record<"connect" | "hosts", boolean> = {
   connect: false,
@@ -1836,12 +1875,10 @@ function buildDiscoveryPanel(
   }
 
   if (offered.length > 0) {
-    const list = document.createElement("div");
-    list.className = "discovery-offered";
-    list.append(
-      ...offered.map((candidate) => candidateCard(candidate, "offer")),
-    );
-    panel.append(list);
+    const automatic = document.createElement("p");
+    automatic.className = "discovery-empty";
+    automatic.textContent = `Farol found ${offered.length === 1 ? "a trusted local candidate" : `${offered.length} trusted local candidates`}, but none passed the full compatibility probe automatically. Open Advanced only if you need to inspect or override discovery.`;
+    panel.append(automatic);
   } else {
     const empty = document.createElement("p");
     empty.className = "discovery-empty";
@@ -1864,6 +1901,12 @@ function buildDiscoveryPanel(
   const summary = document.createElement("summary");
   summary.textContent = "Advanced";
   advanced.append(summary);
+
+  if (offered.length > 0) {
+    advanced.append(
+      ...offered.map((candidate) => candidateCard(candidate, "offer")),
+    );
+  }
 
   if (needsChoice.length > 0) {
     const warning = document.createElement("p");
@@ -1913,16 +1956,18 @@ function renderConfigurationFeedback(
     settingsFeedbackSurface === "setup" && !setupJourney.open
       ? "settings"
       : settingsFeedbackSurface;
+  const sharedPanelFeedback = visibleSurface !== "setup" && surface !== "setup";
   feedback.textContent =
     configured.status === "error"
       ? `Settings unavailable · ${configured.error}`
-      : visibleSurface === surface
+      : visibleSurface === surface || sharedPanelFeedback
         ? settingsFeedback
         : "";
   feedback.classList.toggle(
     "error",
     configured.status === "error" ||
-      (visibleSurface === surface && settingsFeedbackError),
+      ((visibleSurface === surface || sharedPanelFeedback) &&
+        settingsFeedbackError),
   );
 }
 
@@ -2486,6 +2531,52 @@ async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
   render();
 }
 
+function chatGptPreSubmitRemedy(code: string | null): string | null {
+  if (code === "CHATGPT_APP_SELECTION_MISSING") {
+    return "Message blocked before send. Open ChatGPT and select exactly one @Farol DEV app, then retry.";
+  }
+  if (code === "CHATGPT_APP_SELECTION_AMBIGUOUS") {
+    return "Message blocked before send because the Farol DEV app selection was ambiguous. Keep exactly one @Farol DEV chip, then retry.";
+  }
+  if (code === "CHATGPT_APP_SELECTION_CONFLICT") {
+    return "Message blocked before send because another app is selected. Remove it and select @Farol DEV; Farol did not switch apps automatically.";
+  }
+  if (code === "CHATGPT_APP_SELECTION_LOST") {
+    return "Message blocked before send because the @Farol DEV selection disappeared. Select it again, then retry.";
+  }
+  if (code === "CHATGPT_COMPOSER_DRAFT_PRESENT") {
+    return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
+  }
+  return null;
+}
+
+function devMcpProofFailureMessage(code: string): string | null {
+  switch (code) {
+    case "DEV_MCP_PROOF_DEV_ONLY":
+      return "The real MCP proof is available only in the isolated Farol DEV environment.";
+    case "DEV_MCP_PROOF_CONNECTOR_MUST_STOP":
+      return "Stop the DEV connector before preparing a fresh synthetic grant.";
+    case "DEV_MCP_PROOF_NOT_PREPARED":
+      return "Prepare the private synthetic fixture first.";
+    case "DEV_MCP_PROOF_CONNECTOR_NOT_READY":
+      return "Start the DEV connector, attach @Farol DEV in ChatGPT, and verify the attachment before the live proof.";
+    case "DEV_MCP_PROOF_STALE":
+      return "The proof belongs to an older build, Computer generation, or prior live attempt. Stop the connector and prepare a fresh fixture.";
+    case "DEV_MCP_PROOF_CHATGPT_FAILED":
+      return "The live ChatGPT proof did not complete. Inspect the owned ChatGPT task before preparing any fresh attempt; nothing was retried.";
+    case "DEV_MCP_PROOF_ANSWER_MISMATCH":
+      return "ChatGPT replied, but its exact answer did not match the private sentinel. The proof failed and was not retried.";
+    case "DEV_MCP_PROOF_RECEIPT_MISSING":
+      return "The reply arrived without both correlated Computer MCP receipts. The proof failed.";
+    case "DEV_MCP_PROOF_RECEIPT_INVALID":
+      return "The Computer MCP receipt did not match this DEV build, generation, exact read, and outside-grant refusal.";
+    case "DEV_MCP_PROOF_PREPARE_FAILED":
+      return "Farol DEV could not create and verify the private synthetic fixture.";
+    default:
+      return null;
+  }
+}
+
 async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
@@ -2497,7 +2588,8 @@ async function configureProduct(
   // panel the dialog is covering).
   settingsFeedbackSurface = setupJourney.open
     ? "setup"
-    : command.kind.startsWith("computer.")
+    : command.kind.startsWith("computer.") ||
+        command.kind.startsWith("dev-proof.")
       ? "computer"
       : "settings";
   if (
@@ -2516,62 +2608,68 @@ async function configureProduct(
   settingsFeedback =
     command.kind === "support.export"
       ? "Preparing a content-free support export…"
-      : command.kind === "connector.select-client"
-        ? "Verifying the exact tunnel-client executable and supported CLI surface…"
-        : command.kind === "connector.configure"
-          ? "Saving the tunnel ID and private runtime-key reference…"
-          : command.kind === "connector.check-attachment"
-            ? "Checking the one-time connector receipt against this runtime, build, and Computer authority…"
-            : command.kind === "connector.start"
-              ? "Checking the profile, starting one owned connector, and waiting for loopback readiness…"
-              : command.kind === "connector.repair"
-                ? "Stopping the known connector, rebuilding its profile, and checking readiness once…"
-                : command.kind === "connector.stop"
-                  ? "Stopping the owned connector and clearing runtime proof…"
-                  : command.kind === "host.select-codex" ||
-                      command.kind === "host.verify-codex"
-                    ? "Verifying the selected Codex executable and bounded App Server contract…"
-                    : command.kind === "host.run-codex-smoke"
-                      ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
-                      : command.kind === "host.run-codex-agent-check"
-                        ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
-                        : command.kind === "host.remove-codex"
-                          ? "Removing the saved Codex host selection…"
-                          : command.kind === "chatgpt.prepare-attachment-task"
-                            ? "Validating and privately staging the selected attachments…"
-                            : command.kind === "chatgpt.submit-attachment-task"
-                              ? "Uploading the reviewed attachments and submitting once…"
+      : command.kind === "dev-proof.prepare"
+        ? "Creating a fresh private sentinel fixture and verifying its local read-only grant…"
+        : command.kind === "dev-proof.run"
+          ? "Running one owner-triggered @Farol DEV ChatGPT proof with no retry…"
+          : command.kind === "connector.select-client"
+            ? "Verifying the exact tunnel-client executable and supported CLI surface…"
+            : command.kind === "connector.configure"
+              ? "Saving the tunnel ID and private runtime-key reference…"
+              : command.kind === "connector.check-attachment"
+                ? "Checking the one-time connector receipt against this runtime, build, and Computer authority…"
+                : command.kind === "connector.start"
+                  ? "Checking the profile, starting one owned connector, and waiting for loopback readiness…"
+                  : command.kind === "connector.repair"
+                    ? "Stopping the known connector, rebuilding its profile, and checking readiness once…"
+                    : command.kind === "connector.stop"
+                      ? "Stopping the owned connector and clearing runtime proof…"
+                      : command.kind === "host.select-codex" ||
+                          command.kind === "host.verify-codex"
+                        ? "Verifying the selected Codex executable and bounded App Server contract…"
+                        : command.kind === "host.run-codex-smoke"
+                          ? "Running one bounded gpt-6-astra host turn with a correlated Farol Next tool…"
+                          : command.kind === "host.run-codex-agent-check"
+                            ? "Running Main → Agent → Critic with one preserved read-only TaskGrant…"
+                            : command.kind === "host.remove-codex"
+                              ? "Removing the saved Codex host selection…"
                               : command.kind ===
-                                  "chatgpt.cancel-attachment-task"
-                                ? "Removing the private attachment staging…"
+                                  "chatgpt.prepare-attachment-task"
+                                ? "Validating and privately staging the selected attachments…"
                                 : command.kind ===
-                                    "chatgpt.prepare-readonly-task"
-                                  ? "Reading the selected file for review…"
+                                    "chatgpt.submit-attachment-task"
+                                  ? "Uploading the reviewed attachments and submitting once…"
                                   : command.kind ===
-                                      "chatgpt.submit-readonly-task"
-                                    ? "Submitting once and waiting for one ChatGPT result…"
+                                      "chatgpt.cancel-attachment-task"
+                                    ? "Removing the private attachment staging…"
                                     : command.kind ===
-                                        "chatgpt.cancel-readonly-task"
-                                      ? "Discarding the prepared context…"
+                                        "chatgpt.prepare-readonly-task"
+                                      ? "Reading the selected file for review…"
                                       : command.kind ===
-                                          "chatgpt.reset-conversation"
-                                        ? "Clearing the retained conversation binding…"
+                                          "chatgpt.submit-readonly-task"
+                                        ? "Submitting once and waiting for one ChatGPT result…"
                                         : command.kind ===
-                                            "computer.prepare-workspace-edit"
-                                          ? "Reading the selected file and preparing a content-free edit review…"
+                                            "chatgpt.cancel-readonly-task"
+                                          ? "Discarding the prepared context…"
                                           : command.kind ===
-                                              "computer.run-git-status"
-                                            ? "Running fixed Apple Git status with no network access…"
+                                              "chatgpt.reset-conversation"
+                                            ? "Clearing the retained conversation binding…"
                                             : command.kind ===
-                                                "computer.run-git-head"
-                                              ? "Reading exact Git HEAD with fixed Apple Git and no network access…"
+                                                "computer.prepare-workspace-edit"
+                                              ? "Reading the selected file and preparing a content-free edit review…"
                                               : command.kind ===
-                                                  "computer.apply-workspace-edit"
-                                                ? "Applying this guarded edit once…"
+                                                  "computer.run-git-status"
+                                                ? "Running fixed Apple Git status with no network access…"
                                                 : command.kind ===
-                                                    "computer.cancel-workspace-edit"
-                                                  ? "Discarding the prepared edit…"
-                                                  : "Saving and reading back…";
+                                                    "computer.run-git-head"
+                                                  ? "Reading exact Git HEAD with fixed Apple Git and no network access…"
+                                                  : command.kind ===
+                                                      "computer.apply-workspace-edit"
+                                                    ? "Applying this guarded edit once…"
+                                                    : command.kind ===
+                                                        "computer.cancel-workspace-edit"
+                                                      ? "Discarding the prepared edit…"
+                                                      : "Saving and reading back…";
   settingsFeedbackError = false;
   render();
   // The IPC promise can reject after the main process already admitted the
@@ -2687,59 +2785,65 @@ async function configureProduct(
                                                   "WORKSPACE_SELECTION_PROTECTED"
                                                 ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
                                                 : parsed.error ===
-                                                    "ROUTE_B_OUTCOME_UNKNOWN"
-                                                  ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
+                                                    "ROUTE_B_CHECK_TOOL_USED"
+                                                  ? "Route B's basic model check invoked a host tool, so the result was refused. Recheck the isolated Codex host before trying again."
                                                   : parsed.error ===
-                                                      "ROUTE_B_HOST_START_FAILED"
-                                                    ? "The isolated Codex host for Route B did not start. Nothing was sent."
+                                                      "ROUTE_B_OUTCOME_UNKNOWN"
+                                                    ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
                                                     : parsed.error ===
-                                                        "ROUTE_B_UNAVAILABLE"
-                                                      ? "Route B is not running in this app. Restart Farol Next and check again."
+                                                        "ROUTE_B_HOST_START_FAILED"
+                                                      ? "The isolated Codex host for Route B did not start. Nothing was sent."
                                                       : parsed.error ===
-                                                          "WORKSPACE_GIT_METADATA_NOT_APPROVED"
-                                                        ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
+                                                          "ROUTE_B_UNAVAILABLE"
+                                                        ? "Route B is not running in this app. Restart Farol Next and check again."
                                                         : parsed.error ===
-                                                            "CODEX_HOST_TASK_IN_PROGRESS"
-                                                          ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
+                                                            "WORKSPACE_GIT_METADATA_NOT_APPROVED"
+                                                          ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
                                                           : parsed.error ===
-                                                              "WORKSPACE_ROOT_CHANGED"
-                                                            ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                                              "CODEX_HOST_TASK_IN_PROGRESS"
+                                                            ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
                                                             : parsed.error ===
-                                                                "MODEL_ENDPOINT_UNAVAILABLE"
-                                                              ? "Farol Model is not running. Nothing was read or changed."
+                                                                "WORKSPACE_ROOT_CHANGED"
+                                                              ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
                                                               : parsed.error ===
-                                                                  "MODEL_CONFIG_INSECURE_PERMISSIONS"
-                                                                ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
+                                                                  "MODEL_ENDPOINT_UNAVAILABLE"
+                                                                ? "Farol Model is not running. Nothing was read or changed."
                                                                 : parsed.error ===
-                                                                    "MODEL_CONFIG_CONFLICT"
-                                                                  ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
+                                                                    "MODEL_CONFIG_INSECURE_PERMISSIONS"
+                                                                  ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
                                                                   : parsed.error ===
-                                                                      "MODEL_CONFIG_SYMLINK"
-                                                                    ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
+                                                                      "MODEL_CONFIG_CONFLICT"
+                                                                    ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
                                                                     : parsed.error ===
-                                                                        "MODEL_CONFIG_MALFORMED"
-                                                                      ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
+                                                                        "MODEL_CONFIG_SYMLINK"
+                                                                      ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
                                                                       : parsed.error ===
-                                                                          "MODEL_TOKEN_ROTATE_FAILED"
-                                                                        ? "Token rotation did not complete. Check status and preview the connection before trying again."
+                                                                          "MODEL_CONFIG_MALFORMED"
+                                                                        ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
                                                                         : parsed.error ===
-                                                                            "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
-                                                                          ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
+                                                                            "MODEL_TOKEN_ROTATE_FAILED"
+                                                                          ? "Token rotation did not complete. Check status and preview the connection before trying again."
                                                                           : parsed.error ===
-                                                                              "FAROL_MODEL_ROTATE_RESTORE_FAILED"
-                                                                            ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                              "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
+                                                                            ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
                                                                             : parsed.error ===
-                                                                                  "MODEL_CONFIG_APPLY_FAILED" ||
-                                                                                parsed.error ===
-                                                                                  "MODEL_CONFIG_ROLLBACK_FAILED"
-                                                                              ? "config.toml could not be changed. Nothing was left half-written."
-                                                                              : (transitionRefusalMessage(
-                                                                                  parsed.error,
-                                                                                ) ??
-                                                                                workspaceEditRefusalMessage(
-                                                                                  parsed.error,
-                                                                                ) ??
-                                                                                `Not applied · ${parsed.error}`);
+                                                                                "FAROL_MODEL_ROTATE_RESTORE_FAILED"
+                                                                              ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                              : parsed.error ===
+                                                                                    "MODEL_CONFIG_APPLY_FAILED" ||
+                                                                                  parsed.error ===
+                                                                                    "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                                                ? "config.toml could not be changed. Nothing was left half-written."
+                                                                                : (devMcpProofFailureMessage(
+                                                                                    parsed.error,
+                                                                                  ) ??
+                                                                                  transitionRefusalMessage(
+                                                                                    parsed.error,
+                                                                                  ) ??
+                                                                                  workspaceEditRefusalMessage(
+                                                                                    parsed.error,
+                                                                                  ) ??
+                                                                                  `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     render();
@@ -2873,6 +2977,13 @@ async function configureProduct(
     settingsFeedback = `Connector ${evidence.state.replace("_", " ")} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · Computer generation ${evidence.computerGeneration}.`;
   } else if (evidence?.kind === "connector.attachment") {
     settingsFeedback = `ChatGPT attachment verified · workspace ${evidence.workspaceId.slice(0, 12)} · runtime ${evidence.runtimeGeneration.slice(0, 12)} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
+  } else if (evidence?.kind === "dev-proof.prepared") {
+    devProofEvidence = evidence;
+    settingsFeedback =
+      "Private DEV fixture prepared and verified locally. Start the connector again, attach @Farol DEV in ChatGPT, then run the real proof.";
+  } else if (evidence?.kind === "dev-proof.verified") {
+    devProofEvidence = evidence;
+    settingsFeedback = `Farol DEV MCP proof verified · exact answer ${evidence.answerSha256.slice(0, 12)} · outside-grant refusal ${evidence.outsideGrantError} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     setShellOverlay("context-preview");
@@ -2892,7 +3003,8 @@ async function configureProduct(
           ? `Outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
           : evidence.state === "not_authenticated"
             ? "The isolated ChatGPT session needs sign-in before this task can start."
-            : `Task not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
+            : (chatGptPreSubmitRemedy(evidence.code) ??
+              `Task not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`);
     if (evidence.deliveryAckRequired) {
       taskResultToAcknowledge = evidence.operationId;
     }
@@ -2914,7 +3026,8 @@ async function configureProduct(
           ? `Attachment task outcome unknown · ${evidence.code ?? "CHATGPT_TASK_ERROR"}. Inspect the isolated ChatGPT window before another task.`
           : evidence.state === "not_authenticated"
             ? "The isolated ChatGPT session needs sign-in before attachments can be sent."
-            : `Attachments not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`;
+            : (chatGptPreSubmitRemedy(evidence.code) ??
+              `Attachments not submitted · ${evidence.code ?? "CHATGPT_TASK_ERROR"}.`);
     if (evidence.deliveryAckRequired) {
       taskResultToAcknowledge = evidence.operationId;
     }
@@ -3049,7 +3162,7 @@ function renderSettings(): void {
   const values = [
     [
       "Application",
-      `${DISPLAY_PRODUCT_NAME} · ${DISPLAY_EDITION} · ${bootstrap.bundleId}`,
+      `${displayProductName} · ${displayEdition} · ${bootstrap.applicationId}`,
     ],
     [
       "Build",
@@ -3122,6 +3235,9 @@ function renderSettings(): void {
   const computerSummary = required<HTMLParagraphElement>(
     "#settings-computer-summary",
   );
+  const connectionsSummary = required<HTMLParagraphElement>(
+    "#settings-connections-summary",
+  );
 
   if (configured.status === "error") {
     for (const control of formControls) control.disabled = true;
@@ -3132,6 +3248,8 @@ function renderSettings(): void {
     computerReadiness.classList.remove("verified");
     computerSummary.textContent =
       "Repair settings before changing workspace authority.";
+    connectionsSummary.textContent =
+      "Connection readiness is unavailable while settings are invalid.";
     return;
   }
 
@@ -3170,10 +3288,65 @@ function renderSettings(): void {
     ["Native hosts", settings.setup.hosts],
     ["Native Agent", settings.setup.verify],
   ];
-  // The same four routes the header, New task control, and Setup checklist
-  // agree on (chatGptRouteState / computerRouteState / connectRouteState /
-  // agentRouteState) — "Native hosts" and "Native Agent" are the two halves
-  // of the single Codex/Agent route, so both rows carry its merged state.
+  const devLocalHostReady =
+    bootstrap.environment === "dev" && settings.nativeHosts.codex !== null;
+  const persistedVerifiedConnectionCount = connectionStates.filter(
+    ([, state]) => state.verified !== null && !state.outcomeUnknown,
+  ).length;
+  const verifiedConnectionCount =
+    persistedVerifiedConnectionCount +
+    (devLocalHostReady && settings.setup.hosts.verified === null ? 1 : 0);
+  connectionsSummary.textContent = `${verifiedConnectionCount} of ${connectionStates.length} independent readiness checks currently have valid evidence. Open Connections for controls and remedies.`;
+  const proofCard = required<HTMLElement>("#dev-proof-card");
+  const proofSummary = required<HTMLElement>("#dev-proof-summary");
+  const proofPrepare = required<HTMLButtonElement>("#dev-proof-prepare");
+  const proofRun = required<HTMLButtonElement>("#dev-proof-run");
+  proofCard.hidden = bootstrap.environment !== "dev";
+  if (bootstrap.environment === "dev") {
+    const connector = settings.connectors.secureMcp;
+    const connectorRunning = connector.runtime !== null;
+    const proofReady =
+      connector.runtime?.state === "ready" && connector.attachment !== null;
+    const currentDevProof =
+      devProofEvidence !== null &&
+      devProofEvidenceCurrent(devProofEvidence, {
+        buildId: bootstrap.build.buildId,
+        computerGeneration: settings.computer.generation,
+        workspaceIds: settings.computer.workspaces.map(
+          (workspace) => workspace.workspaceId,
+        ),
+        runtime: connector.runtime,
+        attachment: connector.attachment,
+      });
+    proofPrepare.disabled = connectorRunning;
+    proofPrepare.title = connectorRunning
+      ? "Stop the DEV connector before changing its synthetic workspace grant"
+      : "Create a fresh random app-owned fixture and verify its read-only grant locally";
+    const proofAttemptReady =
+      proofReady &&
+      currentDevProof &&
+      devProofEvidence?.kind === "dev-proof.prepared";
+    proofRun.disabled = !proofAttemptReady;
+    proofRun.title = proofAttemptReady
+      ? "Owner-trigger one real @Farol DEV ChatGPT call; this uses a model turn and never retries"
+      : devProofEvidence !== null && !currentDevProof
+        ? "Stop the connector and prepare a fresh proof for the current build, workspace and runtime"
+        : devProofEvidence?.kind === "dev-proof.verified"
+          ? "This one-shot proof already completed; prepare a fresh fixture before another attempt"
+          : "Start the connector, attach @Farol DEV, and verify the attachment first";
+    proofSummary.textContent =
+      devProofEvidence?.kind === "dev-proof.verified" && currentDevProof
+        ? `Verified for DEV generation ${devProofEvidence.computerGeneration} · exact answer and ${devProofEvidence.outsideGrantError} refusal correlated. This does not qualify Test model or Agent.`
+        : devProofEvidence !== null && !currentDevProof
+          ? "Previous DEV proof evidence no longer matches the current build, workspace, Computer generation or connector runtime. Stop the connector and prepare a fresh fixture."
+          : devProofEvidence?.kind === "dev-proof.prepared"
+            ? `Fixture prepared for DEV generation ${devProofEvidence.computerGeneration}. Start the connector again, attach @Farol DEV, verify the attachment, then run the live proof.`
+            : "Prepare an app-owned random fixture, start the DEV connector, attach @Farol DEV, then run one real ChatGPT read and one outside-grant refusal. No sentinel value is shown or placed in the prompt.";
+  }
+  // The task routes still share the central readiness functions. DEV's
+  // Native-host row is intentionally narrower: a selected host already
+  // carries a verified executable/App Server contract, while the merged
+  // Agent route keeps its separate live-turn and lineage prerequisites.
   const routeStateForLabel = (label: string): RouteReadinessState => {
     switch (label) {
       case "ChatGPT":
@@ -3183,6 +3356,12 @@ function renderSettings(): void {
       case "Connection":
         return connectRouteState();
       case "Native hosts":
+        return bootstrap.environment === "dev"
+          ? localHostRouteReadiness(
+              settings.nativeHosts.codex !== null,
+              settings.setup.hosts,
+            )
+          : agentRouteState();
       case "Native Agent":
         return agentRouteState();
       default:
@@ -3199,7 +3378,13 @@ function renderSettings(): void {
       row.className = `connection-row route-${routeStatusClass(rowState)}`;
       const copy = document.createElement("div");
       const title = document.createElement("strong");
-      title.textContent = `${label} · ${routeRowLabel(rowState, state)}`;
+      const devHostContractReady =
+        bootstrap.environment === "dev" &&
+        label === "Native hosts" &&
+        settings.nativeHosts.codex !== null;
+      title.textContent = devHostContractReady
+        ? "Native hosts · Local host ready"
+        : `${label} · ${routeRowLabel(rowState, state)}`;
       const detail = document.createElement("small");
       detail.textContent =
         label === "ChatGPT"
@@ -3207,7 +3392,9 @@ function renderSettings(): void {
           : label === "Connection"
             ? `${routeRowDetail(rowState, state)} · ${settings.connectors.secureMcp.tunnelClient ? `tunnel-client ${settings.connectors.secureMcp.tunnelClient.version}` : "client not selected"} · tunnel ${settings.connectors.secureMcp.tunnelId ?? "not set"} · credential ${settings.connectors.secureMcp.credential} · runtime ${settings.connectors.secureMcp.runtime?.state ?? "stopped"}`
             : label === "Native hosts" && settings.nativeHosts.codex
-              ? `${routeRowDetail(rowState, state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
+              ? devHostContractReady
+                ? `Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.protocol} · local executable and App Server contract verified with zero model turns. Advanced host/tool and Agent checks remain separate.`
+                : `${routeRowDetail(rowState, state)} · Codex ${settings.nativeHosts.codex.version} · ${settings.nativeHosts.codex.executablePath}`
               : label === "Native Agent" &&
                   settings.nativeHosts.codex?.agentVerification
                 ? `${routeRowDetail(rowState, state)} · Main → Agent → Critic · one model turn · workspace enforcement ${settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"} · ${settings.nativeHosts.codex.agentVerification.verifiedAt}`
@@ -3398,15 +3585,15 @@ function renderSettings(): void {
         const choose = document.createElement("button");
         choose.type = "button";
         choose.textContent = connector.tunnelClient
-          ? "Replace client…"
-          : "Choose client…";
+          ? "Re-detect client"
+          : "Detect client";
         const choosePrerequisite = connectorChoosePrerequisite(running);
         if (choosePrerequisite !== null) choose.title = choosePrerequisite;
         choose.disabled = running;
         choose.addEventListener("click", () => {
           void configureProduct(
-            { kind: "connector.select-client" },
-            "tunnel-client selected and verified.",
+            { kind: "connector.discover-client" },
+            "Local tunnel-client detected and verified.",
           );
         });
         const start = document.createElement("button");
@@ -3471,11 +3658,11 @@ function renderSettings(): void {
         const selected = settings.nativeHosts.codex;
         const choose = document.createElement("button");
         choose.type = "button";
-        choose.textContent = selected ? "Replace…" : "Choose…";
+        choose.textContent = selected ? "Re-detect host" : "Detect host";
         choose.addEventListener("click", () => {
           void configureProduct(
-            { kind: "host.select-codex" },
-            "Codex host selected and contract verified.",
+            { kind: "host.discover-codex" },
+            "Supported local Codex host detected and contract verified.",
           );
         });
         const verify = document.createElement("button");
@@ -3496,13 +3683,20 @@ function renderSettings(): void {
         });
         const live = document.createElement("button");
         live.type = "button";
-        live.textContent = selected?.liveVerification
-          ? "Run live check again"
-          : "Run live check";
+        live.textContent =
+          bootstrap.environment === "dev"
+            ? selected?.liveVerification
+              ? "Repeat Agent prerequisite"
+              : "Run Agent prerequisite"
+            : selected?.liveVerification
+              ? "Run live check again"
+              : "Run live check";
         live.disabled = selected === null || state.outcomeUnknown;
         live.title = state.outcomeUnknown
           ? "Recheck the host contract before deliberately running another live turn"
-          : "Run one gpt-6-astra turn with the bounded Farol Next ping tool";
+          : bootstrap.environment === "dev"
+            ? "Advanced only: run one gpt-6-astra host/tool turn required for Agent qualification, not basic setup"
+            : "Run one gpt-6-astra turn with the bounded Farol Next ping tool";
         live.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.run-codex-smoke" },
@@ -3571,18 +3765,18 @@ function renderSettings(): void {
           );
         });
         // Route B: an isolated host this app launches answers one harmless
-        // turn through ChatGPT. It needs the live-verified host and a
-        // verified ChatGPT connection.
+        // turn through ChatGPT. The local contract check is enough to expose
+        // this owner-triggered entry point; premium-model/Agent gates remain
+        // separate advanced qualifications.
         const routeB = document.createElement("button");
         routeB.type = "button";
-        routeB.textContent = "Check Route B";
+        routeB.textContent = "Test model";
         const routeBReady =
-          selected?.liveVerification != null &&
-          settings.setup.chatgpt.verified !== null;
+          selected !== null && settings.setup.chatgpt.verified !== null;
         routeB.disabled = !routeBReady;
         routeB.title = routeBReady
-          ? "Run one harmless Codex turn through Farol Next and ChatGPT"
-          : "Run the live Codex host check and verify ChatGPT first";
+          ? "After choosing a supported model in ChatGPT, run one explicit no-fallback turn through Farol DEV"
+          : "Detect the supported Codex host and verify ChatGPT first";
         routeB.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.run-route-b-check" },
@@ -3647,6 +3841,18 @@ function renderModelSection(): void {
   const previewBtn = required<HTMLButtonElement>("#model-preview-btn");
   const applyBtn = required<HTMLButtonElement>("#model-apply-btn");
   const rollbackBtn = required<HTMLButtonElement>("#model-rollback-btn");
+  const devEnvironment = bootstrap.environment === "dev";
+  const selectDefaultLabel = selectDefault.closest("label");
+  if (selectDefaultLabel instanceof HTMLElement) {
+    selectDefaultLabel.hidden = devEnvironment;
+  }
+  if (devEnvironment) {
+    modelSelectAsDefault = false;
+    selectDefault.checked = false;
+  }
+  required<HTMLElement>("#model-config-scope").textContent = devEnvironment
+    ? "Uses only Farol DEV's private Codex home and loopback provider; personal Codex config and authentication are never read or changed."
+    : "Writes only a Farol-managed block to your Codex config.toml, never anything else in the file.";
 
   const status = modelStatusEvidence;
   readiness.textContent =
@@ -3662,7 +3868,7 @@ function renderModelSection(): void {
     status?.state === "connected"
       ? `Connected on port ${status.port} · ${status.requestsServed} request${status.requestsServed === 1 ? "" : "s"} served.`
       : status?.state === "listening"
-        ? `Listening on port ${status.port}, waiting for a request from your Codex host.`
+        ? `Listening on port ${status.port}, waiting for a request from the isolated Farol DEV Codex child.`
         : status?.state === "port_conflict"
           ? modelPortConflictText(status.port, status.occupant)
           : modelDisconnectedSummary(modelEvidenceAbsence);
@@ -3735,7 +3941,9 @@ function renderModelSection(): void {
     rollbackBtn.hidden = !modelConfigApplied;
     restartNote.hidden = !modelConfigApplied;
     if (modelConfigApplied) {
-      restartNote.textContent = modelRestartNoteText(modelConfigCodexHost);
+      restartNote.textContent = devEnvironment
+        ? "Applied only inside Farol DEV's private Codex home. Test model launches a fresh isolated child; your Codex settings and model menu are untouched."
+        : modelRestartNoteText(modelConfigCodexHost);
     }
   }
   previewBtn.disabled = false;
@@ -3753,23 +3961,34 @@ function renderSetup(): void {
   const configured = bootstrap.configuration;
   const readinessState =
     configured.status === "ready" ? configured.settings.setup[step.id] : null;
+  const devHostStep = bootstrap.environment === "dev" && step.id === "hosts";
+  const devHostStepReady =
+    devHostStep &&
+    configured.status === "ready" &&
+    configured.settings.nativeHosts.codex !== null;
   dialog.dataset.mode = setupJourney.mode;
   dialog.dataset.stepId = step.id;
   renderConfigurationFeedback("#setup-feedback", "setup");
   required("#setup-eyeline").textContent = step.eyeline;
   required("#setup-title").textContent = step.title;
-  required("#setup-copy").textContent = step.copy;
+  required("#setup-copy").textContent = devHostStep
+    ? "Detect the installed supported Codex executable and verify its App Server contract locally. This readiness check uses zero model turns; Test model and Agent qualification remain separate owner-triggered steps."
+    : step.copy;
   const status = required<HTMLDivElement>("#setup-status");
   const stepStale =
     configured.status === "ready" &&
     setupStepStale(configured.settings, step.id);
-  const stepState = readinessState
-    ? routeReadiness(readinessState, { stale: stepStale })
-    : "not-configured";
+  const stepState = devHostStepReady
+    ? "ready"
+    : readinessState
+      ? routeReadiness(readinessState, { stale: stepStale })
+      : "not-configured";
   status.className = `setup-status ${routeStatusClass(stepState)}`;
-  required<HTMLElement>("#setup-status strong").textContent = readinessState
-    ? readinessLabel(readinessState, { stale: stepStale })
-    : "Settings unavailable";
+  required<HTMLElement>("#setup-status strong").textContent = devHostStepReady
+    ? "Local host ready"
+    : readinessState
+      ? readinessLabel(readinessState, { stale: stepStale })
+      : "Settings unavailable";
   const details = required<HTMLUListElement>("#setup-details");
   const liveDetails =
     configured.status === "ready" && step.id === "computer"
@@ -3799,8 +4018,14 @@ function renderSetup(): void {
                 `Native workspace enforcement · ${configured.settings.nativeHosts.codex.agentVerification.workspaceEnforcement === "verified" ? "verified" : "not verified"}`,
               ]
             : [];
+  const stepDetails = devHostStep
+    ? [
+        "Detection verifies the executable digest, supported version, protocol and App Server schema without a model request.",
+        "The isolated Test model route and premium-model Agent gates are not part of this local check.",
+      ]
+    : step.details;
   details.replaceChildren(
-    ...[...step.details, ...liveDetails].map((detail) => {
+    ...[...stepDetails, ...liveDetails].map((detail) => {
       const item = document.createElement("li");
       item.textContent = detail;
       return item;
@@ -3817,12 +4042,14 @@ function renderSetup(): void {
           : null;
       item.classList.toggle(
         "complete",
-        progressState !== null &&
-          configured.status === "ready" &&
+        configured.status === "ready" &&
           progressId !== undefined &&
-          routeReadiness(progressState, {
-            stale: setupStepStale(configured.settings, progressId),
-          }) === "ready",
+          (bootstrap.environment === "dev" && progressId === "hosts"
+            ? configured.settings.nativeHosts.codex !== null
+            : progressState !== null &&
+              routeReadiness(progressState, {
+                stale: setupStepStale(configured.settings, progressId),
+              }) === "ready"),
       );
       item.classList.toggle("visited", progressState?.visited === true);
       item.classList.toggle("active", index === setupJourney.step);
@@ -3833,8 +4060,8 @@ function renderSetup(): void {
   required("#setup-counter").textContent =
     `Step ${setupJourney.step + 1} of ${setupSteps.length}`;
   required<HTMLButtonElement>("#setup-back").disabled = setupJourney.step === 0;
-  // "Open Browser" implies there is something to open. With no live
-  // ChatGPT task yet, closing Setup only lands on the empty Browser panel,
+  // "Open ChatGPT" implies there is something to open. With no live
+  // ChatGPT task yet, closing Setup only lands on the empty ChatGPT panel,
   // so the last step must not promise otherwise (UX34-03/04).
   const hasWorkingTask = bootstrap.tasks.some(
     (task) => task.provider === "chatgpt",
@@ -3842,7 +4069,7 @@ function renderSetup(): void {
   required<HTMLButtonElement>("#setup-next").textContent =
     setupJourney.step === setupSteps.length - 1
       ? hasWorkingTask
-        ? "Open Browser"
+        ? "Open ChatGPT"
         : "Finish setup"
       : "Continue";
   required<HTMLButtonElement>("#setup-close").hidden =
@@ -4070,7 +4297,9 @@ function renderSetup(): void {
     const host = configured.settings.nativeHosts.codex;
     const readiness = configured.settings.setup.hosts;
     liveSummary.textContent = host
-      ? `${readinessDetail(readiness)} Codex ${host.version} is selected; a live check uses gpt-6-astra without provider fallback and stores no prompt or response.`
+      ? bootstrap.environment === "dev"
+        ? `Local host ready. Codex ${host.version} and ${host.protocol} were verified without a model turn. Test model is a separate disclosed send; Agent keeps its advanced gate.`
+        : `${readinessDetail(readiness)} Codex ${host.version} is selected; a live check uses gpt-6-astra without provider fallback and stores no prompt or response.`
       : "Farol Next looks for the installed Codex executable itself, in a small set of known locations. It never searches your shell PATH or infers a host from configuration files.";
     if (!host) {
       ensureDiscovery("hosts");
@@ -4087,17 +4316,20 @@ function renderSetup(): void {
     livePrimary.hidden = !host;
     livePrimary.textContent = !host
       ? ""
-      : readiness.outcomeUnknown
-        ? "Recheck contract"
-        : host.liveVerification
-          ? "Run live check again"
-          : "Run live check";
+      : bootstrap.environment === "dev"
+        ? "Recheck local host"
+        : readiness.outcomeUnknown
+          ? "Recheck contract"
+          : host.liveVerification
+            ? "Run live check again"
+            : "Run live check";
     livePrimary.disabled = !host;
     setupPrimaryAction = async () => {
       if (!host) return;
-      const kind = readiness.outcomeUnknown
-        ? "host.verify-codex"
-        : "host.run-codex-smoke";
+      const kind =
+        bootstrap.environment === "dev" || readiness.outcomeUnknown
+          ? "host.verify-codex"
+          : "host.run-codex-smoke";
       await configureProduct(
         { kind },
         kind === "host.verify-codex"
@@ -4899,6 +5131,7 @@ async function start(): Promise<void> {
   });
 
   bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
+  applyProductIdentity();
   windowState = bootstrap.windowState;
   selectedTaskId = bootstrap.tasks[0]?.taskId ?? "";
   if (bootstrap.configuration.status === "ready") {
@@ -5303,6 +5536,32 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#open-computer-settings").addEventListener(
     "click",
     () => selectSection("computer"),
+  );
+  required<HTMLButtonElement>("#open-connections").addEventListener(
+    "click",
+    () => selectSection("computer"),
+  );
+  required<HTMLButtonElement>("#connections-open-chatgpt").addEventListener(
+    "click",
+    () => selectSection("browser"),
+  );
+  required<HTMLButtonElement>("#dev-proof-prepare").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "dev-proof.prepare" },
+        "Farol DEV MCP fixture prepared.",
+      );
+    },
+  );
+  required<HTMLButtonElement>("#dev-proof-run").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "dev-proof.run" },
+        "Farol DEV MCP proof verified.",
+      );
+    },
   );
   required<HTMLButtonElement>("#export-support").addEventListener(
     "click",

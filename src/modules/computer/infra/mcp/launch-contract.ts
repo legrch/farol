@@ -13,6 +13,10 @@ import {
   type ParticipantAuthority,
   type TaskAdmission,
 } from "../../domain/execution-authority";
+import {
+  DevMcpProofPreparationSchema,
+  type DevMcpProofPreparation,
+} from "./dev-mcp-proof";
 import type { ReadonlyComputerMcpBinding } from "./create-readonly-computer-mcp";
 import {
   CodexCallerRelayEndpointSchema,
@@ -258,6 +262,7 @@ const ReadonlyLaunchContractSchema = z
     delegationChain: z.array(ReadonlyParticipantSchema).min(1).max(16),
     binding: BindingSchema,
     connectorVerification: ConnectorVerificationSchema.optional(),
+    devMcpProof: DevMcpProofPreparationSchema.optional(),
     callerRelay: CallerRelayEndpointSchema.optional(),
   })
   .superRefine(validateChain);
@@ -270,6 +275,7 @@ const MutableLaunchContractSchema = z
     delegationChain: z.array(MutableParticipantSchema).min(1).max(16),
     binding: BindingSchema,
     connectorVerification: ConnectorVerificationSchema.optional(),
+    devMcpProof: DevMcpProofPreparationSchema.optional(),
     callerRelay: CallerRelayEndpointSchema.optional(),
   })
   .superRefine(validateChain);
@@ -408,6 +414,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   binding: ReadonlyComputerMcpBinding;
   mutationEnabled: boolean;
   connectorVerification: Readonly<{ challengeSha256: string }> | null;
+  devMcpProof: DevMcpProofPreparation | null;
   callerRelay: CodexCallerRelayEndpoint | null;
 }>;
 
@@ -468,6 +475,7 @@ export function materializeReadonlyComputerLaunch(
       generation: launch.binding.generation,
     },
     connectorVerification: launch.connectorVerification ?? null,
+    devMcpProof: launch.devMcpProof ?? null,
     callerRelay: launch.callerRelay ?? null,
   };
 }

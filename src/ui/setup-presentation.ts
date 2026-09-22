@@ -1,7 +1,57 @@
-import type { ProductSettings } from "../pkg/product-settings/contract";
+import type {
+  ProductConfigurationEvidence,
+  ProductSettings,
+} from "../pkg/product-settings/contract";
 
 type Readiness = ProductSettings["setup"]["verify"];
 type Workspace = ProductSettings["computer"]["workspaces"][number];
+type DevProofEvidence = Extract<
+  ProductConfigurationEvidence,
+  { kind: "dev-proof.prepared" | "dev-proof.verified" }
+>;
+
+export function devProofEvidenceCurrent(
+  evidence: DevProofEvidence,
+  current: Readonly<{
+    buildId: string;
+    computerGeneration: number;
+    workspaceIds: readonly string[];
+    runtime: Readonly<{
+      state: "ready" | "unreachable" | "outcome_unknown";
+      runtimeGeneration: string;
+      computerGeneration: number;
+      buildId: string;
+    }> | null;
+    attachment: Readonly<{
+      workspaceId: string;
+      runtimeGeneration: string;
+      computerGeneration: number;
+      buildId: string;
+    }> | null;
+  }>,
+): boolean {
+  if (
+    evidence.buildId !== current.buildId ||
+    evidence.computerGeneration !== current.computerGeneration ||
+    !current.workspaceIds.includes(evidence.workspaceId)
+  ) {
+    return false;
+  }
+  if (evidence.kind === "dev-proof.prepared") return true;
+  const runtime = current.runtime;
+  const attachment = current.attachment;
+  return (
+    runtime?.state === "ready" &&
+    runtime.runtimeGeneration === evidence.runtimeGeneration &&
+    runtime.computerGeneration === evidence.computerGeneration &&
+    runtime.buildId === evidence.buildId &&
+    attachment !== null &&
+    attachment.workspaceId === evidence.workspaceId &&
+    attachment.runtimeGeneration === evidence.runtimeGeneration &&
+    attachment.computerGeneration === evidence.computerGeneration &&
+    attachment.buildId === evidence.buildId
+  );
+}
 
 // The Agent step waits for a rejoin of the same assignment when its typed
 // recovery says so; the wording in needsAction can change freely.
@@ -49,6 +99,18 @@ export function routeReadiness(
     return "action-required";
   }
   return "not-configured";
+}
+
+// DEV's owned App Server contract is a complete local readiness check. The
+// separately persisted `setup.hosts` verification is intentionally stricter:
+// it records the premium-model host/tool turn that remains an Agent
+// prerequisite. Basic onboarding must not relabel that advanced turn as the
+// local host check or require it to call the installed host ready.
+export function localHostRouteReadiness(
+  contractVerified: boolean,
+  advancedReadiness: Readiness,
+): RouteReadinessState {
+  return contractVerified ? "ready" : routeReadiness(advancedReadiness);
 }
 
 // Whether the Computer verification on record still describes the workspace

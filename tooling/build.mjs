@@ -158,7 +158,7 @@ const common = {
 await Promise.all([
   build({
     ...common,
-    entryPoints: ["src/apps/desktop/main.ts"],
+    entryPoints: ["src/apps/desktop/desktop-entry.ts"],
     outfile: "dist/app/main.cjs",
     platform: "node",
     format: "cjs",

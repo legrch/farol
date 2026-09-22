@@ -21,7 +21,7 @@ describe("Codex App Server process", () => {
       path.join(os.tmpdir(), "farol-codex-process-"),
     );
     roots.push(root);
-    const executablePath = path.join(root, "codex-fixture");
+    const executablePath = path.join(root, "codex-fixture.cjs");
     await fs.writeFile(
       executablePath,
       `#!${process.execPath}
@@ -32,7 +32,7 @@ lines.on("line", (line) => {
   if (message.method === "initialize") {
     process.stdout.write(JSON.stringify({ id: message.id, result: { userAgent: "codex-fixture/1" } }) + "\\n");
   } else if (message.method === "model/list") {
-    process.stdout.write(JSON.stringify({ id: message.id, result: { data: [{ id: "gpt-6-astra" }], inheritedApiKey: Object.hasOwn(process.env, "OPENAI_API_KEY") } }) + "\\n");
+    process.stdout.write(JSON.stringify({ id: message.id, result: { data: [{ id: "gpt-6-astra" }], codexHome: process.env.CODEX_HOME, inheritedApiKey: Object.hasOwn(process.env, "OPENAI_API_KEY") } }) + "\\n");
   }
 });
 `,
@@ -45,10 +45,36 @@ lines.on("line", (line) => {
       homePath: root,
       tempPath: os.tmpdir(),
       clientVersion: "0.1.0-preview.0",
+      codexHomePath: path.join(root, "codex-home"),
     });
     await expect(client.request("model/list", {})).resolves.toEqual({
       data: [{ id: "gpt-6-astra" }],
+      codexHome: path.join(root, "codex-home"),
       inheritedApiKey: false,
+    });
+    await client.close();
+  });
+
+  it("does not invent a Codex home when the preserved Preview caller omits it", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-codex-home-required-"),
+    );
+    roots.push(root);
+    const executablePath = path.join(root, "codex-fixture.cjs");
+    await fs.writeFile(
+      executablePath,
+      `#!${process.execPath}\nconst readline=require("node:readline");const lines=readline.createInterface({input:process.stdin});lines.on("line",line=>{const message=JSON.parse(line);if(message.method==="initialize")process.stdout.write(JSON.stringify({id:message.id,result:{}})+"\\n");else if(message.method==="model/list")process.stdout.write(JSON.stringify({id:message.id,result:{hasCodexHome:Object.hasOwn(process.env,"CODEX_HOME")}})+"\\n")});\n`,
+      { mode: 0o700 },
+    );
+    const client = await launchCodexAppServer({
+      executablePath,
+      cwd: root,
+      homePath: root,
+      tempPath: os.tmpdir(),
+      clientVersion: "0.1.0-preview.0",
+    });
+    await expect(client.request("model/list", {})).resolves.toEqual({
+      hasCodexHome: false,
     });
     await client.close();
   });
@@ -58,7 +84,7 @@ lines.on("line", (line) => {
       path.join(os.tmpdir(), "farol-codex-provider-process-"),
     );
     roots.push(root);
-    const executablePath = path.join(root, "codex-fixture");
+    const executablePath = path.join(root, "codex-fixture.cjs");
     await fs.writeFile(
       executablePath,
       `#!${process.execPath}
@@ -87,6 +113,7 @@ lines.on("line", (line) => {
       homePath: root,
       tempPath: os.tmpdir(),
       clientVersion: "0.1.0-preview.0",
+      codexHomePath: path.join(root, "codex-home"),
       providerRoute: {
         baseUrl: "http://127.0.0.1:43123/v1",
         token: "private-route-token",
@@ -115,7 +142,7 @@ lines.on("line", (line) => {
       path.join(os.tmpdir(), "farol-codex-agent-process-"),
     );
     roots.push(root);
-    const executablePath = path.join(root, "codex-fixture");
+    const executablePath = path.join(root, "codex-fixture.cjs");
     await fs.writeFile(
       executablePath,
       `#!${process.execPath}
@@ -159,6 +186,7 @@ lines.on("line", (line) => {
       homePath: root,
       tempPath: os.tmpdir(),
       clientVersion: "0.1.0-preview.0",
+      codexHomePath: path.join(root, "codex-home"),
       toolProfile: "native-agent",
     });
     const observed = (await client.request("model/list", {})) as {
@@ -169,6 +197,11 @@ lines.on("line", (line) => {
     expect(observed.ready).toBe(true);
     expect(observed.qmdDisabled).toBe(true);
     expect(observed.args).toContain("mcp_servers.qmd.enabled=false");
+    expect(observed.args).toContain("--strict-config");
+    expect(observed.args).toContain(
+      "tools.experimental_request_user_input={ enabled = false }",
+    );
+    expect(observed.args).toContain("skills=[]");
     expect(observed.args).toContain("shell_tool");
     expect(observed.args).toContain("apps");
     expect(observed.args).toContain("browser_use");
@@ -190,7 +223,7 @@ lines.on("line", (line) => {
         path.join(os.tmpdir(), "farol-codex-agent-violation-"),
       );
       roots.push(root);
-      const executablePath = path.join(root, "codex-fixture");
+      const executablePath = path.join(root, "codex-fixture.cjs");
       const received = path.join(root, "received.log");
       await fs.writeFile(
         executablePath,
@@ -235,6 +268,7 @@ lines.on("line", (line) => {
           homePath: root,
           tempPath: os.tmpdir(),
           clientVersion: "0.1.0-preview.0",
+          codexHomePath: path.join(root, "codex-home"),
           toolProfile: "native-agent",
         }),
         violation,
@@ -252,7 +286,7 @@ lines.on("line", (line) => {
       path.join(os.tmpdir(), "farol-codex-agent-denied-process-"),
     );
     roots.push(root);
-    const executablePath = path.join(root, "codex-fixture");
+    const executablePath = path.join(root, "codex-fixture.cjs");
     await fs.writeFile(
       executablePath,
       `#!${process.execPath}
@@ -279,6 +313,7 @@ lines.on("line", (line) => {
         homePath: root,
         tempPath: os.tmpdir(),
         clientVersion: "0.1.0-preview.0",
+        codexHomePath: path.join(root, "codex-home"),
         toolProfile: "native-agent",
       }),
     ).rejects.toThrow("CODEX_APP_SERVER_CAPABILITY_POLICY_UNVERIFIED");

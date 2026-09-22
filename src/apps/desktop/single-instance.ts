@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   constants as fsConstants,
@@ -10,24 +10,31 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import type { BuildIdentity } from "../../pkg/build-info/identity";
+import type { DesktopEnvironment } from "./desktop-environment";
 
 const sourceCommit = z.string().regex(/^[a-f0-9]{40}$/u);
-const sourceTreeDigest = z.string().regex(/^[a-f0-9]{64}$/u);
+const sha256 = z.string().regex(/^[a-f0-9]{64}$/u);
+const sourceTreeDigest = sha256;
 const nonce = z.string().regex(/^[a-f0-9]{32}$/u);
 
 const buildIdentitySchema = z.object({
   schema: z.literal(3),
+  buildId: sha256,
   sourceCommit,
   sourceTreeDigest,
-  dirty: z.literal(false),
-  inputExact: z.literal(true),
+  dirty: z.boolean(),
+  inputExact: z.boolean(),
+  inputLedgerSha256: sha256,
 });
 
 const instanceRequestSchema = z.strictObject({
-  schema: z.literal("farol.next.single-instance/1"),
+  schema: z.literal("farol.next.single-instance/2"),
   nonce,
+  environment: z.enum(["preview", "dev"]),
   sourceCommit,
   sourceTreeDigest,
+  inputLedgerSha256: sha256,
 });
 
 const instanceAcknowledgementSchema = instanceRequestSchema.extend({
@@ -35,8 +42,10 @@ const instanceAcknowledgementSchema = instanceRequestSchema.extend({
 });
 
 export type LaunchIdentity = Readonly<{
+  environment: DesktopEnvironment;
   sourceCommit: string;
   sourceTreeDigest: string;
+  inputLedgerSha256: string;
 }>;
 
 export type InstanceRequest = z.infer<typeof instanceRequestSchema>;
@@ -55,6 +64,7 @@ export type AcknowledgementPublicationOptions = Readonly<{
 
 const ACK_DIRECTORY = "single-instance-acks";
 const MAX_MANIFEST_BYTES = 64 * 1024;
+const MAX_INPUT_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MAX_ACK_BYTES = 4 * 1024;
 const DEFAULT_ACK_TIMEOUT_MS = 10_000;
 const CLOSE_ON_EXEC =
@@ -91,8 +101,10 @@ export function sameLaunchIdentity(
   right: LaunchIdentity,
 ): boolean {
   return (
+    left.environment === right.environment &&
     left.sourceCommit === right.sourceCommit &&
-    left.sourceTreeDigest === right.sourceTreeDigest
+    left.sourceTreeDigest === right.sourceTreeDigest &&
+    left.inputLedgerSha256 === right.inputLedgerSha256
   );
 }
 
@@ -100,7 +112,7 @@ export function createInstanceRequest(
   identity: LaunchIdentity,
 ): InstanceRequest {
   return {
-    schema: "farol.next.single-instance/1",
+    schema: "farol.next.single-instance/2",
     nonce: randomBytes(16).toString("hex"),
     ...identity,
   };
@@ -120,30 +132,71 @@ export function decideSecondInstance(
   };
 }
 
-export function readBuildLaunchIdentity(directory: string): LaunchIdentity {
-  const manifestPath = path.join(directory, "build-manifest.json");
+function readBoundedRegularFile(file: string, maximumBytes: number): Buffer {
   let descriptor: number | undefined;
   try {
     descriptor = openSync(
-      manifestPath,
+      file,
       fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | CLOSE_ON_EXEC,
     );
     const info = fstatSync(descriptor);
-    if (!info.isFile() || info.nlink !== 1 || info.size > MAX_MANIFEST_BYTES) {
+    if (
+      !info.isFile() ||
+      info.nlink !== 1 ||
+      info.size < 1 ||
+      info.size > maximumBytes
+    ) {
       throw new Error("invalid manifest type");
     }
+    return readFileSync(descriptor);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+export function readBuildLaunchIdentity(
+  directory: string,
+  environment: DesktopEnvironment,
+  runtimeIdentity: BuildIdentity,
+): LaunchIdentity {
+  try {
     const parsed = buildIdentitySchema.safeParse(
-      JSON.parse(readFileSync(descriptor, "utf8")),
+      JSON.parse(
+        readBoundedRegularFile(
+          path.join(directory, "build-manifest.json"),
+          MAX_MANIFEST_BYTES,
+        ).toString("utf8"),
+      ),
     );
     if (!parsed.success) throw new Error("invalid manifest identity");
+    const manifest = parsed.data;
+    if (
+      manifest.buildId !== runtimeIdentity.buildId ||
+      manifest.sourceCommit !== runtimeIdentity.sourceCommit ||
+      manifest.sourceTreeDigest !== runtimeIdentity.sourceTreeDigest ||
+      manifest.dirty !== runtimeIdentity.sourceDirty
+    ) {
+      throw new Error("manifest does not match runtime identity");
+    }
+    if (environment === "preview" && (manifest.dirty || !manifest.inputExact)) {
+      throw new Error("candidate identity is not exact");
+    }
+    const ledger = readBoundedRegularFile(
+      path.join(directory, "input-manifest.json"),
+      MAX_INPUT_MANIFEST_BYTES,
+    );
+    const ledgerDigest = createHash("sha256").update(ledger).digest("hex");
+    if (ledgerDigest !== manifest.inputLedgerSha256) {
+      throw new Error("input manifest digest mismatch");
+    }
     return {
-      sourceCommit: parsed.data.sourceCommit,
-      sourceTreeDigest: parsed.data.sourceTreeDigest,
+      environment,
+      sourceCommit: manifest.sourceCommit,
+      sourceTreeDigest: manifest.sourceTreeDigest,
+      inputLedgerSha256: manifest.inputLedgerSha256,
     };
   } catch {
     throw new Error("INSTANCE_BUILD_IDENTITY_INVALID");
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
@@ -188,8 +241,10 @@ export async function writeInstanceAcknowledgement(
   const acknowledgement: InstanceAcknowledgement = {
     schema: request.schema,
     nonce: request.nonce,
+    environment: identity.environment,
     sourceCommit: identity.sourceCommit,
     sourceTreeDigest: identity.sourceTreeDigest,
+    inputLedgerSha256: identity.inputLedgerSha256,
     status,
   };
   const file = acknowledgementPath(userData, request.nonce);

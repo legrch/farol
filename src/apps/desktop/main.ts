@@ -124,7 +124,6 @@ import {
 import { discoverLinkedGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
 import {
   CHATGPT_HOME,
-  CHATGPT_PARTITION,
   canonicalChatGptConversationUrl,
 } from "./chatgpt-page-policy";
 import {
@@ -309,11 +308,55 @@ import {
   readConnectorVerificationReceipt,
 } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
+import {
+  DEV_MCP_PROOF_ALLOWED_PATH,
+  DEV_MCP_PROOF_DENIED_PATH,
+  type DevMcpProofPreparation,
+  claimDevMcpProofAttempt,
+  createDevMcpProofFixture,
+  readDevMcpProofPreparation,
+  readDevMcpProofReceipt,
+  writeDevMcpProofPreparation,
+} from "../../modules/computer/infra/mcp/dev-mcp-proof";
+import {
+  codexChildHomePath,
+  desktopAppDataPath,
+  desktopEnvironment,
+  desktopIdentity,
+} from "./desktop-environment";
+import { terminateDesktopStartup } from "./desktop-startup-failure";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
 const productName = buildIdentity.product;
 const bundleId = buildIdentity.bundleId;
+const runtimeEnvironment = desktopEnvironment(
+  process.env.FAROL_NEXT_ENVIRONMENT,
+);
+const declaredDesktopIdentity = desktopIdentity(
+  runtimeEnvironment,
+  desktopAppDataPath(runtimeEnvironment, app.getPath("appData"), {
+    enabled: process.env.FAROL_NEXT_E2E === "1",
+    override: process.env.FAROL_NEXT_E2E_APP_DATA,
+  }),
+);
+if (runtimeEnvironment === "dev") {
+  // These paths must be selected before the single-instance lock or any
+  // browser session is opened. Ordinary DEV rebuilds therefore retain the
+  // same private state, while packaged Preview keeps its existing defaults.
+  app.setPath("userData", declaredDesktopIdentity.userData);
+  app.setPath("sessionData", declaredDesktopIdentity.sessionData);
+}
+const activeDesktopIdentity = {
+  ...declaredDesktopIdentity,
+  userData: app.getPath("userData"),
+  sessionData: app.getPath("sessionData"),
+  codexHome: path.join(
+    app.getPath("userData"),
+    "farol-next-private",
+    "codex-home",
+  ),
+} as const;
 // `buildIdentity.product` ("Farol Next Preview") is the release identity —
 // it is validated against the packaged app name, the bundle ID, and the
 // build digest, and stays exactly that everywhere those checks read it.
@@ -321,13 +364,17 @@ const bundleId = buildIdentity.bundleId;
 // the macOS app menu, the About panel), it reads "Farol" with a
 // "Developer Preview" edition mark instead — the same pair the renderer's
 // own chrome already shows (see shell.html).
-const displayProductName = "Farol";
-const displayEdition = "Developer Preview";
+const displayProductName = activeDesktopIdentity.displayName;
+const displayEdition = activeDesktopIdentity.displayEdition;
 const displayWindowTitle = `${displayProductName} · ${displayEdition}`;
 // UX34-08: a dedicated, clearly-Farol-owned sign-in window, never a
 // standalone-looking ChatGPT tab.
-const SIGN_IN_WINDOW_TITLE = "Sign in to ChatGPT — Farol";
-const launchIdentity = readBuildLaunchIdentity(directory);
+const SIGN_IN_WINDOW_TITLE = `Sign in to ChatGPT — ${displayProductName}`;
+const launchIdentity = readBuildLaunchIdentity(
+  directory,
+  runtimeEnvironment,
+  buildIdentity,
+);
 const nativeWorkspace = new NativeReadonlyWorkspace({
   helperPath: path.join(directory, "computer-safe-open.py"),
   helper: NEXT_SAFE_OPEN_HELPER,
@@ -374,7 +421,7 @@ const expectedTasks = demoMode ? demoTasks : [];
 
 const readySchema = z.strictObject({
   kind: z.literal("runtime.ready"),
-  identity: z.literal("farol-next-preview-runtime"),
+  identity: z.enum(["farol-next-preview-runtime", "farol-dev-runtime"]),
   port: z.number().int().min(1).max(65_535),
   token: z.string().min(32),
   tasks: z.array(
@@ -403,8 +450,10 @@ const controlSchema = z.strictObject({
 });
 
 type RuntimeReady = z.infer<typeof readySchema>;
-app.setName(productName);
-if (process.platform === "win32") app.setAppUserModelId(bundleId);
+app.setName(activeDesktopIdentity.applicationName);
+process.title = activeDesktopIdentity.applicationName;
+if (process.platform === "win32")
+  app.setAppUserModelId(activeDesktopIdentity.applicationId);
 if (process.platform === "darwin") {
   // macOS's default About panel otherwise reads the raw release identity
   // (app.getName()); this is display-only and does not touch that
@@ -768,6 +817,10 @@ function bootstrap() {
     schema: 3,
     productName,
     bundleId,
+    environment: activeDesktopIdentity.environment,
+    displayName: activeDesktopIdentity.displayName,
+    displayEdition: activeDesktopIdentity.displayEdition,
+    applicationId: activeDesktopIdentity.applicationId,
     build: buildIdentity,
     demoMode,
     configuration: configuration?.snapshot() ?? {
@@ -781,8 +834,8 @@ function bootstrap() {
     embeddedElectron: runtime?.embeddedElectron ?? process.versions.electron,
     taskRevision: taskState.revision,
     tasks: taskState.tasks,
-    partition: "persist:farol-next-preview",
-    chatgptPartition: CHATGPT_PARTITION,
+    partition: activeDesktopIdentity.runtimePartition,
+    chatgptPartition: activeDesktopIdentity.chatGptPartition,
     chatgptRecoveryPending: recoverableChatGptTask !== null,
     chatgptConversationState: chatGptConversationState(),
     updateChannel: buildIdentity.updateChannel,
@@ -909,6 +962,14 @@ function createManagedChatGptRoute(options: ChatGptRouteOptions): ChatGptRoute {
   let route: ChatGptRoute;
   route = new ChatGptRoute({
     ...options,
+    partition: activeDesktopIdentity.chatGptPartition,
+    ...(runtimeEnvironment === "dev"
+      ? {
+          requiredAppName: activeDesktopIdentity.displayName,
+          title:
+            options.title ?? `ChatGPT · ${activeDesktopIdentity.displayName}`,
+        }
+      : {}),
     onDisposed: () => managedChatGptRoutes.delete(route),
   });
   managedChatGptRoutes.add(route);
@@ -958,7 +1019,7 @@ function createLiveChatGptRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
-    title: `${label} · Farol`,
+    title: `${label} · ${displayProductName}`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
       recordTaskActivity(taskRunning ? "outcome_unknown" : "idle");
@@ -999,7 +1060,7 @@ function createContextSummaryFallbackRoute(
     e2eOrigin: chatGptE2eOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),
-    title: "Context recovery · Farol",
+    title: `Context recovery · ${displayProductName}`,
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
@@ -1030,7 +1091,7 @@ async function recordChatGptSignInOutcome(
           ? {
               state: "authenticated",
               profile: "chatgpt.next-partition/1",
-              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-readiness/1",
             }
@@ -1551,19 +1612,14 @@ async function openAdmittedProductAgentSession(
       throw new Error("PRODUCT_AGENT_HOST_CHANGED");
     }
     const runtimeRoot = await codexHostRuntimeRoot();
-    const configuredCodexHome = process.env.CODEX_HOME;
     const client = await launchCodexAppServer({
       executablePath: context.host.executablePath,
       cwd: runtimeRoot,
-      homePath: app.getPath("home"),
+      homePath: await codexHostProcessHomePath(),
       tempPath: app.getPath("temp"),
       clientVersion: buildIdentity.version,
       toolProfile: "native-agent",
-      ...(configuredCodexHome &&
-      path.isAbsolute(configuredCodexHome) &&
-      !configuredCodexHome.includes("\0")
-        ? { codexHomePath: configuredCodexHome }
-        : {}),
+      ...(await codexHostHomeOption()),
     });
     try {
       const computer = new CodexAgentWorkspaceProbe(
@@ -2526,11 +2582,9 @@ function modelEndpointStateRoot(): string {
   );
 }
 
-// The ordinary Codex config.toml this control manages — the owner's own,
-// normally `~/.codex/config.toml`. Only the dev/E2E lane may point this at
-// a disposable directory instead (Decisions.md N04: never the owner's real
-// `~/.codex` from an automated run); production always resolves the real
-// path.
+// DEV manages only the config inside its app-owned Codex home. It never
+// reads, writes or falls back to the owner's ~/.codex. Packaged Preview keeps
+// its existing explicitly owner-operated configuration behavior.
 function farolModelCodexConfigPath(): string {
   const override =
     process.env.FAROL_NEXT_E2E === "1"
@@ -2538,6 +2592,9 @@ function farolModelCodexConfigPath(): string {
       : undefined;
   if (override && path.isAbsolute(override) && !override.includes("\0")) {
     return override;
+  }
+  if (activeDesktopIdentity.environment === "dev") {
+    return path.join(activeDesktopIdentity.codexHome, "config.toml");
   }
   return path.join(os.homedir(), ".codex", "config.toml");
 }
@@ -2648,6 +2705,10 @@ async function farolModelProviderSpec(): Promise<FarolModelProviderSpec | null> 
 async function farolModelCodexHostPresence(): Promise<
   "running" | "not_running" | "unknown"
 > {
+  // DEV never inspects or asks the owner to restart a personal Codex. Its
+  // model route is consumed only by app-owned children with private HOME and
+  // CODEX_HOME directories.
+  if (runtimeEnvironment === "dev") return "not_running";
   const snapshot = configuration ? configuration.snapshot() : null;
   const executablePath =
     snapshot && snapshot.status === "ready"
@@ -2667,6 +2728,14 @@ function secureMcpCredentialRoot(): string {
 
 function secureMcpLaunchRoot(): string {
   return path.join(secureMcpConnectorRoot(), "computer-authority");
+}
+
+function devMcpProofRoot(): string {
+  return path.join(
+    activeDesktopIdentity.userData,
+    "farol-next-private",
+    "dev-mcp-proof",
+  );
 }
 
 function codexHostProbeRoot(): string {
@@ -2713,6 +2782,56 @@ async function codexHostRuntimeRoot(): Promise<string> {
   return root;
 }
 
+async function codexHostHomePath(): Promise<string> {
+  const root = activeDesktopIdentity.codexHome;
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const info = await lstat(root);
+  const effectiveUser = process.geteuid?.();
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    (effectiveUser !== undefined && info.uid !== effectiveUser)
+  ) {
+    throw new Error("CODEX_HOST_HOME_UNSAFE");
+  }
+  if ((info.mode & 0o077) !== 0) await chmod(root, 0o700);
+  return root;
+}
+
+async function codexHostHomeOption(): Promise<
+  Readonly<{ codexHomePath?: string }>
+> {
+  const selected = codexChildHomePath(
+    runtimeEnvironment,
+    activeDesktopIdentity.codexHome,
+    process.env.CODEX_HOME,
+  );
+  if (selected === undefined) return {};
+  if (runtimeEnvironment === "dev") await codexHostHomePath();
+  return { codexHomePath: selected };
+}
+
+async function codexHostProcessHomePath(): Promise<string> {
+  if (runtimeEnvironment !== "dev") return app.getPath("home");
+  const root = path.join(
+    activeDesktopIdentity.userData,
+    "farol-next-private",
+    "process-home",
+  );
+  await mkdir(root, { recursive: true, mode: 0o700 });
+  const info = await lstat(root);
+  const effectiveUser = process.geteuid?.();
+  if (
+    !info.isDirectory() ||
+    info.isSymbolicLink() ||
+    (effectiveUser !== undefined && info.uid !== effectiveUser)
+  ) {
+    throw new Error("CODEX_HOST_PROCESS_HOME_UNSAFE");
+  }
+  if ((info.mode & 0o077) !== 0) await chmod(root, 0o700);
+  return root;
+}
+
 function chatGptConversationState():
   "new" | "retained" | "review_required" | "unavailable" {
   if (!chatGptConversationStore) return "unavailable";
@@ -2735,6 +2854,25 @@ function chatGptConversationContinuity():
   "retained" | "not_observed" | "review_required" | "unavailable" {
   const state = chatGptConversationState();
   return state === "new" ? "not_observed" : state;
+}
+
+const chatGptAppPreSubmitCodes = new Set([
+  "CHATGPT_APP_SELECTION_MISSING",
+  "CHATGPT_APP_SELECTION_AMBIGUOUS",
+  "CHATGPT_APP_SELECTION_CONFLICT",
+  "CHATGPT_APP_SELECTION_LOST",
+  "CHATGPT_COMPOSER_DRAFT_PRESENT",
+]);
+
+function chatGptAppPreSubmitObservation(code: string | null) {
+  if (code === null || !chatGptAppPreSubmitCodes.has(code)) return null;
+  return {
+    state: "authenticated" as const,
+    profile: "chatgpt.next-partition/1",
+    runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
+    buildId: buildIdentity.buildId,
+    protocol: "chatgpt-page-app-binding-block/1",
+  };
 }
 
 async function retainChatGptConversation(
@@ -2774,7 +2912,7 @@ function chatGptJournalObservation(result: ChatGptTaskJournalResult) {
     return {
       state: "authenticated" as const,
       profile: "chatgpt.next-partition/1",
-      runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+      runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
       buildId: buildIdentity.buildId,
       protocol: "chatgpt-page-task-recovery/1",
     };
@@ -2785,6 +2923,8 @@ function chatGptJournalObservation(result: ChatGptTaskJournalResult) {
   if (result.state === "outcome_unknown") {
     return { state: "outcome_unknown" as const };
   }
+  const bindingBlock = chatGptAppPreSubmitObservation(result.code);
+  if (bindingBlock !== null) return bindingBlock;
   return result.code === "CHATGPT_PAGE_UNREACHABLE"
     ? { state: "unreachable" as const }
     : { state: "unsupported" as const };
@@ -3195,6 +3335,23 @@ async function startSecureMcpConnector(
     const verificationChallengeSha256 = createHash("sha256")
       .update(verificationChallenge)
       .digest("hex");
+    const preparedDevProof =
+      runtimeEnvironment === "dev"
+        ? await readDevMcpProofPreparation(devMcpProofRoot()).catch(() => null)
+        : null;
+    const devMcpProof =
+      preparedDevProof !== null &&
+      preparedDevProof.buildId === buildIdentity.buildId &&
+      preparedDevProof.computerGeneration ===
+        snapshot.settings.computer.generation &&
+      snapshot.settings.computer.workspaces.some(
+        (workspace) =>
+          workspace.workspaceId === preparedDevProof.workspaceId &&
+          workspace.root === preparedDevProof.workspaceRoot &&
+          workspace.rootIdentity !== undefined,
+      )
+        ? preparedDevProof
+        : undefined;
     let launchFile: string;
     let launchContractSha256: string;
     try {
@@ -3203,6 +3360,7 @@ async function startSecureMcpConnector(
         now: Date.now(),
         runtimeId,
         challengeSha256: verificationChallengeSha256,
+        ...(devMcpProof === undefined ? {} : { devMcpProof }),
         ...(callerRelayRuntime
           ? { callerRelay: callerRelayRuntime.endpoint }
           : {}),
@@ -3400,6 +3558,270 @@ async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
     });
   } finally {
     connectorTaskAdmission = false;
+  }
+}
+
+async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
+  if (runtimeEnvironment !== "dev") {
+    return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
+  }
+  if (!configuration) {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  // `configureProduct` takes the authority-transition reservation for this
+  // command, but its first admission read happens before that await. Re-read
+  // the live holders after the reservation is ours so an Agent or connector
+  // that won the race cannot have its carried grant replaced underneath it.
+  const readmitted = configurationAdmission("dev-proof.prepare", {
+    agentActive: codexAgentOperationActive(),
+    connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
+  });
+  if (readmitted !== "admitted") {
+    return configurationFailure(
+      readmitted === "CONNECTOR_STOP_REQUIRED"
+        ? "DEV_MCP_PROOF_CONNECTOR_MUST_STOP"
+        : readmitted,
+    );
+  }
+  try {
+    const previous = await readDevMcpProofPreparation(devMcpProofRoot()).catch(
+      () => null,
+    );
+    let snapshot = configuration.snapshot();
+    if (snapshot.status !== "ready") {
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    }
+    if (
+      previous !== null &&
+      snapshot.settings.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === previous.workspaceId,
+      )
+    ) {
+      const removed = await configuration.removeWorkspace(previous.workspaceId);
+      if (!removed.ok) return ProductConfigurationResultSchema.parse(removed);
+      snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+    }
+
+    const fixture = await createDevMcpProofFixture(devMcpProofRoot());
+    const rootIdentity = await measuredRootIdentity(fixture.workspaceRoot);
+    if (rootIdentity === null) {
+      return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
+    }
+    const added = await configuration.addReadonlyWorkspace({
+      root: fixture.workspaceRoot,
+      label: "Farol DEV verification fixture",
+      rootIdentity,
+    });
+    if (!added.ok) return ProductConfigurationResultSchema.parse(added);
+    const addedSnapshot = configuration.snapshot();
+    if (addedSnapshot.status !== "ready") {
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    }
+    const workspace = addedSnapshot.settings.computer.workspaces.find(
+      (candidate) => candidate.root === fixture.workspaceRoot,
+    );
+    if (!workspace) {
+      return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
+    }
+    const listed = await nativeWorkspace.execute({
+      workspace: workspaceDescriptor(workspace, rootIdentity),
+      operation: { kind: "workspace.list", relativePath: "." },
+    });
+    if (!listed.ok || listed.value.kind !== "workspace.entries") {
+      return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
+    }
+    const recorded = await configuration.recordComputerVerification(
+      workspace.workspaceId,
+      {
+        profile: "computer.local.read/1",
+        runtimeGeneration: `${runtime?.identity ?? "runtime-offline"}:${buildIdentity.buildId}`,
+        buildId: buildIdentity.buildId,
+        protocol: "readonly-workspace/1",
+      },
+      { rootIdentity, gitMetadata: null },
+    );
+    if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+    const verifiedSnapshot = configuration.snapshot();
+    if (verifiedSnapshot.status !== "ready") {
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    }
+    const preparation = {
+      schema: 1 as const,
+      proofId: fixture.proofId,
+      environment: "dev" as const,
+      buildId: buildIdentity.buildId,
+      workspaceId: workspace.workspaceId,
+      workspaceRoot: fixture.workspaceRoot,
+      computerGeneration: verifiedSnapshot.settings.computer.generation,
+      sentinelSha256: fixture.sentinelSha256,
+      allowedPath: DEV_MCP_PROOF_ALLOWED_PATH,
+      deniedPath: DEV_MCP_PROOF_DENIED_PATH,
+      preparedAt: new Date().toISOString(),
+    } satisfies DevMcpProofPreparation;
+    await writeDevMcpProofPreparation(devMcpProofRoot(), preparation);
+    return ProductConfigurationResultSchema.parse({
+      ok: true,
+      snapshot: verifiedSnapshot,
+      evidence: {
+        kind: "dev-proof.prepared",
+        proofId: preparation.proofId,
+        workspaceId: preparation.workspaceId,
+        computerGeneration: preparation.computerGeneration,
+        buildId: preparation.buildId,
+        allowedPath: preparation.allowedPath,
+        deniedPath: preparation.deniedPath,
+      },
+    });
+  } catch {
+    return configurationFailure("DEV_MCP_PROOF_PREPARE_FAILED");
+  }
+}
+
+async function runDevMcpProof(): Promise<ProductConfigurationResult> {
+  if (runtimeEnvironment !== "dev") {
+    return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
+  }
+  if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  if (chatGptTaskAdmission) {
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  }
+  const snapshot = configuration.snapshot();
+  if (snapshot.status !== "ready") {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  const connector = snapshot.settings.connectors.secureMcp;
+  const runtimeProof = connector.runtime;
+  if (
+    runtimeProof?.state !== "ready" ||
+    connector.attachment === null ||
+    !secureMcpConnectorRuntime.isRunning() ||
+    !chatGptTaskAdmissionReady()
+  ) {
+    return configurationFailure("DEV_MCP_PROOF_CONNECTOR_NOT_READY");
+  }
+  const preparation = await readDevMcpProofPreparation(devMcpProofRoot()).catch(
+    () => null,
+  );
+  if (preparation === null) {
+    return configurationFailure("DEV_MCP_PROOF_NOT_PREPARED");
+  }
+  if (
+    preparation.environment !== "dev" ||
+    preparation.buildId !== buildIdentity.buildId ||
+    preparation.computerGeneration !== snapshot.settings.computer.generation ||
+    runtimeProof.computerGeneration !== preparation.computerGeneration ||
+    runtimeProof.buildId !== preparation.buildId ||
+    !snapshot.settings.computer.workspaces.some(
+      (workspace) =>
+        workspace.workspaceId === preparation.workspaceId &&
+        workspace.root === preparation.workspaceRoot &&
+        workspace.rootIdentity !== undefined,
+    )
+  ) {
+    return configurationFailure("DEV_MCP_PROOF_STALE");
+  }
+  if (
+    (await readDevMcpProofReceipt(devMcpProofRoot()).catch(() => null)) !== null
+  ) {
+    // A prior live attempt exists. Its outcome must never be overwritten or
+    // retried as though nothing happened; prepare a fresh fixture instead.
+    return configurationFailure("DEV_MCP_PROOF_STALE");
+  }
+  let attemptedAt: string;
+  try {
+    attemptedAt = await claimDevMcpProofAttempt(
+      devMcpProofRoot(),
+      preparation.proofId,
+    );
+  } catch {
+    // The claim is exclusive and durable. Any previous attempt, including one
+    // whose provider outcome is unknown, requires a newly prepared fixture.
+    return configurationFailure("DEV_MCP_PROOF_STALE");
+  }
+  const prompt = [
+    "Use the selected app's Computer tool computer_workspace_read.",
+    `First read workspaceId ${preparation.workspaceId} at relativePath ${preparation.allowedPath}.`,
+    `Then attempt the same tool and workspaceId at relativePath ${preparation.deniedPath}; it must be refused because it leaves the grant through a link.`,
+    "If and only if the first read succeeds and the second is refused, reply with exactly the first file's text and nothing else.",
+  ].join(" ");
+  chatGptTaskAdmission = true;
+  try {
+    const result = await chatGptRoute.runReadonlyTask(prompt);
+    if (result.state !== "completed" || typeof result.outputText !== "string") {
+      return configurationFailure("DEV_MCP_PROOF_CHATGPT_FAILED");
+    }
+    const answerSha256 = createHash("sha256")
+      .update(result.outputText.trim())
+      .digest("hex");
+    if (answerSha256 !== preparation.sentinelSha256) {
+      return configurationFailure("DEV_MCP_PROOF_ANSWER_MISMATCH");
+    }
+    const receipt = await readDevMcpProofReceipt(devMcpProofRoot()).catch(
+      () => null,
+    );
+    if (
+      receipt === null ||
+      receipt.allowed === null ||
+      receipt.denied === null
+    ) {
+      return configurationFailure("DEV_MCP_PROOF_RECEIPT_MISSING");
+    }
+    const sameProofBinding =
+      receipt.allowed.ownerId === receipt.denied.ownerId &&
+      receipt.allowed.sessionId === receipt.denied.sessionId &&
+      receipt.allowed.taskId === receipt.denied.taskId &&
+      receipt.allowed.taskEpoch === receipt.denied.taskEpoch &&
+      receipt.allowed.participantId === receipt.denied.participantId &&
+      receipt.allowed.turnId === receipt.denied.turnId &&
+      receipt.allowed.generation === receipt.denied.generation;
+    if (
+      receipt.proofId !== preparation.proofId ||
+      receipt.environment !== "dev" ||
+      receipt.buildId !== preparation.buildId ||
+      receipt.computerGeneration !== preparation.computerGeneration ||
+      receipt.workspaceId !== preparation.workspaceId ||
+      receipt.sentinelSha256 !== preparation.sentinelSha256 ||
+      receipt.allowed.outputSha256 !== preparation.sentinelSha256 ||
+      receipt.allowed.generation !== preparation.computerGeneration ||
+      receipt.allowed.taskEpoch !== preparation.computerGeneration ||
+      receipt.denied.generation !== preparation.computerGeneration ||
+      receipt.denied.taskEpoch !== preparation.computerGeneration ||
+      receipt.denied.errorCode !== "WORKSPACE_PATH_REFUSED" ||
+      receipt.allowed.ownerId !== "owner-desktop" ||
+      receipt.allowed.callIdSha256 === receipt.denied.callIdSha256 ||
+      receipt.allowed.recordedAt < attemptedAt ||
+      receipt.denied.recordedAt < receipt.allowed.recordedAt ||
+      !sameProofBinding
+    ) {
+      return configurationFailure("DEV_MCP_PROOF_RECEIPT_INVALID");
+    }
+    const receiptSha256 = createHash("sha256")
+      .update(`${JSON.stringify(receipt, null, 2)}\n`)
+      .digest("hex");
+    return ProductConfigurationResultSchema.parse({
+      ok: true,
+      snapshot: configuration.snapshot(),
+      evidence: {
+        kind: "dev-proof.verified",
+        proofId: preparation.proofId,
+        workspaceId: preparation.workspaceId,
+        environment: "dev",
+        runtimeGeneration: runtimeProof.runtimeGeneration,
+        computerGeneration: preparation.computerGeneration,
+        buildId: preparation.buildId,
+        sentinelSha256: preparation.sentinelSha256,
+        answerSha256,
+        receiptSha256,
+        outsideGrantError: receipt.denied.errorCode,
+      },
+    });
+  } finally {
+    chatGptTaskAdmission = false;
   }
 }
 
@@ -3609,6 +4031,11 @@ async function configureAdmittedProduct(
     case "connector.discover-client": {
       try {
         const discovered = await discoverExecutables("tunnel-client");
+        for (const candidate of discovered.candidates) {
+          if (candidate.verdict !== "offer") continue;
+          const verified = await verifyTunnelClientExecutable(candidate.path);
+          if (verified.ok) return verified;
+        }
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
@@ -3672,6 +4099,10 @@ async function configureAdmittedProduct(
       return startSecureMcpConnector(true);
     case "connector.check-attachment":
       return checkSecureMcpAttachment();
+    case "dev-proof.prepare":
+      return prepareDevMcpProof();
+    case "dev-proof.run":
+      return runDevMcpProof();
     case "connector.stop": {
       if (!secureMcpConnectorRuntime) {
         return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -3713,6 +4144,11 @@ async function configureAdmittedProduct(
       }
       try {
         const discovered = await discoverExecutables("codex");
+        for (const candidate of discovered.candidates) {
+          if (candidate.verdict !== "offer") continue;
+          const verified = await verifyCodexExecutable(candidate.path);
+          if (verified.ok) return verified;
+        }
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),
@@ -3764,19 +4200,26 @@ async function configureAdmittedProduct(
       }
       const selected = snapshot.settings.nativeHosts.codex;
       if (!selected) return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
+      const probe = await probeCodexHost({
+        executablePath: selected.executablePath,
+        scratchRoot: codexHostProbeRoot(),
+      }).catch(() => null);
       if (
-        !selected.liveVerification ||
-        selected.liveVerification.executableSha256 !==
-          selected.executableSha256 ||
-        selected.liveVerification.buildId !== buildIdentity.buildId
+        probe === null ||
+        probe.executableSha256 !== selected.executableSha256 ||
+        probe.schemaSha256 !== selected.schemaSha256 ||
+        probe.version !== selected.version ||
+        probe.protocol !== selected.protocol
       ) {
         return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
       }
       if (!chatGptTaskAdmissionReady()) {
         return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
       }
-      const endpoint = routeBRuntime?.endpoint;
-      if (!endpoint) return configurationFailure("ROUTE_B_UNAVAILABLE");
+      const checkRouteB = routeBRuntime;
+      if (!checkRouteB) return configurationFailure("ROUTE_B_UNAVAILABLE");
+      const endpoint = checkRouteB.endpoint;
+      const toolCallsBefore = checkRouteB.provider.diagnostics().toolCalls;
       codexHostTaskAdmission = true;
       // The check closes its host itself; quit reaches it meanwhile.
       const routeBCheckClients: Awaited<
@@ -3787,7 +4230,7 @@ async function configureAdmittedProduct(
           {
             executablePath: selected.executablePath,
             runtimeRoot: await codexHostRuntimeRoot(),
-            homePath: app.getPath("home"),
+            homePath: await codexHostProcessHomePath(),
             tempPath: app.getPath("temp"),
             clientVersion: buildIdentity.version,
             endpoint,
@@ -3807,6 +4250,9 @@ async function configureAdmittedProduct(
         }
         if (checked.status === "outcome_unknown") {
           return configurationFailure("ROUTE_B_OUTCOME_UNKNOWN");
+        }
+        if (checkRouteB.provider.diagnostics().toolCalls !== toolCallsBefore) {
+          return configurationFailure("ROUTE_B_CHECK_TOOL_USED");
         }
         return ProductConfigurationResultSchema.parse({
           ok: true,
@@ -3865,19 +4311,14 @@ async function configureAdmittedProduct(
           return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
         }
         const runtimeRoot = await codexHostRuntimeRoot();
-        const configuredCodexHome = process.env.CODEX_HOME;
         client = await launchCodexAppServer({
           executablePath: selected.executablePath,
           cwd: runtimeRoot,
-          homePath: app.getPath("home"),
+          homePath: await codexHostProcessHomePath(),
           tempPath: app.getPath("temp"),
           clientVersion: buildIdentity.version,
           toolProfile: "dynamic-only",
-          ...(configuredCodexHome &&
-          path.isAbsolute(configuredCodexHome) &&
-          !configuredCodexHome.includes("\0")
-            ? { codexHomePath: configuredCodexHome }
-            : {}),
+          ...(await codexHostHomeOption()),
         });
         hostCheckClients.add(client);
         const live = await runCodexHostSmoke(client, {
@@ -4069,19 +4510,14 @@ async function configureAdmittedProduct(
           }
           settings = recordedContract.snapshot.settings;
           const runtimeRoot = await codexHostRuntimeRoot();
-          const configuredCodexHome = process.env.CODEX_HOME;
           const client = await launchCodexAppServer({
             executablePath: selected.executablePath,
             cwd: runtimeRoot,
-            homePath: app.getPath("home"),
+            homePath: await codexHostProcessHomePath(),
             tempPath: app.getPath("temp"),
             clientVersion: buildIdentity.version,
             toolProfile: "native-agent",
-            ...(configuredCodexHome &&
-            path.isAbsolute(configuredCodexHome) &&
-            !configuredCodexHome.includes("\0")
-              ? { codexHomePath: configuredCodexHome }
-              : {}),
+            ...(await codexHostHomeOption()),
           });
           const host = new CodexNativeAgentHost(
             client,
@@ -4383,7 +4819,7 @@ async function configureAdmittedProduct(
           ? {
               state: "authenticated",
               profile: "chatgpt.next-partition/1",
-              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-readiness/1",
             }
@@ -4678,7 +5114,7 @@ async function configureAdmittedProduct(
           ? {
               state: "authenticated" as const,
               profile: "chatgpt.next-partition/1",
-              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-attachment-task/1",
             }
@@ -4688,7 +5124,9 @@ async function configureAdmittedProduct(
               ? { state: "outcome_unknown" as const }
               : task.code === "CHATGPT_PAGE_UNREACHABLE"
                 ? { state: "unreachable" as const }
-                : { state: "unsupported" as const };
+                : (chatGptAppPreSubmitObservation(task.code) ?? {
+                    state: "unsupported" as const,
+                  });
       const recorded =
         await configuration.recordChatGptObservation(observation);
       if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
@@ -5013,7 +5451,7 @@ async function configureAdmittedProduct(
           ? {
               state: "authenticated" as const,
               profile: "chatgpt.next-partition/1",
-              runtimeGeneration: `${CHATGPT_PARTITION}:${buildIdentity.buildId}`,
+              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
               buildId: buildIdentity.buildId,
               protocol: "chatgpt-page-readonly-task/1",
             }
@@ -5023,7 +5461,9 @@ async function configureAdmittedProduct(
               ? { state: "outcome_unknown" as const }
               : task.code === "CHATGPT_PAGE_UNREACHABLE"
                 ? { state: "unreachable" as const }
-                : { state: "unsupported" as const };
+                : (chatGptAppPreSubmitObservation(task.code) ?? {
+                    state: "unsupported" as const,
+                  });
       const recorded =
         await configuration.recordChatGptObservation(observation);
       if (!recorded.ok) {
@@ -6121,6 +6561,7 @@ async function startRuntime(): Promise<void> {
   const child = utilityProcess.fork(path.join(directory, "runtime.cjs"), [], {
     env: {
       LANG: process.env.LANG ?? "en_US.UTF-8",
+      FAROL_NEXT_RUNTIME_IDENTITY: activeDesktopIdentity.runtimeIdentity,
       FAROL_NEXT_PREVIEW_SCENARIO: process.argv.includes(
         "--preview-stream-failure",
       )
@@ -6133,7 +6574,7 @@ async function startRuntime(): Promise<void> {
             : "normal",
       FAROL_NEXT_PREVIEW_MODE: demoMode ? "demo" : "empty",
     },
-    serviceName: "Farol Next Runtime",
+    serviceName: activeDesktopIdentity.runtimeServiceName,
     stdio: "ignore",
   });
   runtimeChild = child;
@@ -6161,6 +6602,12 @@ async function startRuntime(): Promise<void> {
       child.on("message", (message) => {
         const parsed = readySchema.safeParse(message);
         if (!parsed.success || settled) return;
+        if (parsed.data.identity !== activeDesktopIdentity.runtimeIdentity) {
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error("RUNTIME_IDENTITY_MISMATCH"));
+          return;
+        }
         const exactTasks =
           parsed.data.tasks.length === expectedTasks.length &&
           parsed.data.tasks.every((task, index) => {
@@ -6200,7 +6647,7 @@ async function startRuntime(): Promise<void> {
 }
 
 function partitionName(): string {
-  return "persist:farol-next-preview";
+  return activeDesktopIdentity.runtimePartition;
 }
 
 function installNetworkFence(): Electron.Session | null {
@@ -6949,7 +7396,7 @@ async function main(): Promise<void> {
   });
   secureMcpConnectorRuntime = new SecureMcpConnectorRuntime({
     root: secureMcpConnectorRoot(),
-    homePath: app.getPath("home"),
+    homePath: await codexHostProcessHomePath(),
     tempPath: app.getPath("temp"),
   });
   // Starts with the app, on the persisted port, and never autospawns a
@@ -7234,5 +7681,10 @@ if (!app.requestSingleInstanceLock(instanceRequest)) {
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
       );
     })
-    .catch(() => app.exit(1));
+    .catch((error: unknown) => {
+      terminateDesktopStartup(error, runtimeEnvironment, {
+        write: (message) => process.stderr.write(message),
+        exit: (code) => app.exit(code),
+      });
+    });
 }

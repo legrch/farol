@@ -44,8 +44,11 @@ const scratch = await fs.mkdtemp(
 const privateHome = path.join(scratch, "home");
 const runtimeRoot = path.join(scratch, "runtime");
 const contextRoot = path.join(scratch, "context");
+const effectiveCodexHomePath =
+  codexHomePath ?? path.join(scratch, "codex-home");
 await fs.mkdir(privateHome, { recursive: true, mode: 0o700 });
 await fs.mkdir(runtimeRoot, { recursive: true, mode: 0o700 });
+await fs.mkdir(effectiveCodexHomePath, { recursive: true, mode: 0o700 });
 let toolCount = 0;
 let toolCatalogueSha256 = "";
 let toolNames: string[] = [];
@@ -220,7 +223,7 @@ try {
     homePath: privateHome,
     tempPath: os.tmpdir(),
     clientVersion: "0.1.0-preview.0",
-    ...(codexHomePath ? { codexHomePath } : {}),
+    codexHomePath: effectiveCodexHomePath,
     providerRoute: {
       baseUrl: `${provider.baseUrl}/v1`,
       token,

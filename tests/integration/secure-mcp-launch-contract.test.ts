@@ -89,6 +89,53 @@ function readiness() {
 }
 
 describe("secure MCP Computer launch contract", () => {
+  it("carries only a generation-bound Farol DEV proof into the production launch", () => {
+    const devMcpProof = {
+      schema: 1 as const,
+      proofId: "proof-generation-7",
+      environment: "dev" as const,
+      buildId: "f".repeat(64),
+      workspaceId: "00000000-0000-4000-8000-000000000002",
+      workspaceRoot: "/Users/example/read",
+      computerGeneration: 7,
+      sentinelSha256: "e".repeat(64),
+      allowedPath: "sentinel.txt" as const,
+      deniedPath: "outside-link.txt" as const,
+      preparedAt: new Date(1_789_516_700_000).toISOString(),
+    };
+    const launch = createSecureMcpLaunchContract(settings(), {
+      now: 1_789_516_800_000,
+      runtimeId: "runtime-dev-proof",
+      challengeSha256: "a".repeat(64),
+      devMcpProof,
+    });
+
+    expect(launch.devMcpProof).toEqual(devMcpProof);
+    expect(
+      materializeReadonlyComputerLaunch(launch, 1_789_516_800_000).devMcpProof,
+    ).toEqual(devMcpProof);
+
+    expect(() =>
+      createSecureMcpLaunchContract(settings(), {
+        now: 1_789_516_800_000,
+        runtimeId: "runtime-stale-proof",
+        challengeSha256: "b".repeat(64),
+        devMcpProof: { ...devMcpProof, computerGeneration: 6 },
+      }),
+    ).toThrow("SECURE_MCP_DEV_PROOF_STALE");
+    expect(() =>
+      createSecureMcpLaunchContract(settings(), {
+        now: 1_789_516_800_000,
+        runtimeId: "runtime-rebound-proof",
+        challengeSha256: "c".repeat(64),
+        devMcpProof: {
+          ...devMcpProof,
+          workspaceRoot: "/Users/example/write",
+        },
+      }),
+    ).toThrow("SECURE_MCP_DEV_PROOF_STALE");
+  });
+
   it("preserves all owner-approved workspace authority without per-file narrowing", () => {
     const launch = createSecureMcpLaunchContract(settings(), {
       now: 1_789_516_800_000,

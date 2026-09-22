@@ -4,6 +4,13 @@ Farol Next Preview is the isolated TypeScript/Electron vertical slice under
 `vnext/`. It does not install, activate, register, update, or replace the legacy
 Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 
+The source has two explicit local identities. `task dev` from the repository root
+launches **Farol DEV** (`local.farol.dev`) with persistent private state, dedicated
+browser/runtime partitions and an app-owned `CODEX_HOME`; rebuilding does not clear
+its sign-in or Settings. `task next:package` and `task next:run` keep the existing
+**Farol Next Preview** identity (`local.farol.next.preview`). Neither lane copies
+cookies, keys, profiles or personal Codex configuration from another identity.
+
 ## What runs
 
 - one Electron shell that starts with no tasks on an ordinary launch;
@@ -74,6 +81,7 @@ From the repository root:
 
 ```bash
 npm ci --prefix vnext
+task dev
 task next:ci
 task next:test:e2e:dev
 npm --prefix vnext run test:e2e:computer
@@ -86,6 +94,12 @@ The canonical owner command is:
 
 ```bash
 task next:run
+```
+
+That command opens the packaged Preview. The exact Farol DEV onboarding command is:
+
+```bash
+task dev
 ```
 
 It opens the ordinary product shell with zero synthetic tasks. The retained fixture

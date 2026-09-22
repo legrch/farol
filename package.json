@@ -30,6 +30,8 @@
     "promote": "node tooling/promote-preview.mjs",
     "preview": "electron dist/app/main.cjs",
     "test:e2e:dev": "npm run build && node tests/e2e/preview.e2e.mjs --development",
+    "test:e2e:dev-onboarding-startup": "npm run build && node tests/e2e/dev-onboarding-startup.e2e.mjs",
+    "test:e2e:dev-route-b-host": "node tests/e2e/dev-route-b-host.e2e.mjs",
     "test:e2e:soak": "npm run build && node tests/e2e/preview.e2e.mjs --development --lifecycle-soak",
     "test:e2e:soak:package": "node tests/e2e/preview.e2e.mjs --lifecycle-soak",
     "test:e2e:persistence-fault": "npm run build && node tests/e2e/preview.e2e.mjs --development --persistence-fault",

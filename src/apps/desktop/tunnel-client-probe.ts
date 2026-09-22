@@ -134,23 +134,63 @@ const runProbe: TunnelClientProbeRunner = async (command) =>
   });
 
 const requiredSurfaces = {
-  init: [
-    "--profile",
-    "--profile-dir",
-    "--tunnel-id",
-    "--control-plane-api-key-ref",
-    "--health-listen-addr",
-    "--mcp-command",
-  ],
-  doctor: ["--profile", "--profile-dir", "--json", "--explain"],
-  run: [
-    "--profile",
-    "--profile-dir",
-    "--health.listen-addr",
-    "--health.url-file",
-    "--pid.file",
-  ],
+  init: {
+    arguments: ["help", "init"],
+    flags: [
+      "--profile",
+      "--profile-dir",
+      "--tunnel-id",
+      "--control-plane-api-key-ref",
+      "--health-listen-addr",
+      "--mcp-command",
+    ],
+  },
+  doctor: {
+    // `help doctor` is prose in the reviewed client. The subcommand's own
+    // help is the compatibility surface that lists its accepted flags.
+    arguments: ["doctor", "--help"],
+    flags: ["--profile", "--profile-dir", "--json", "--explain"],
+  },
+  run: {
+    arguments: ["help", "run"],
+    flags: [
+      "--profile",
+      "--profile-dir",
+      "--health.listen-addr",
+      "--health.url-file",
+      "--pid.file",
+    ],
+  },
 } as const;
+
+const SEMVER =
+  "[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?";
+const bareVersion = new RegExp(`^(${SEMVER})$`, "u");
+const labeledVersion = new RegExp(
+  `^tunnel-client version (${SEMVER})(?: \\(git sha: ([0-9a-f]{7,64})\\))?$`,
+  "u",
+);
+
+function parseVersionOutput(
+  output: Readonly<{ stdout: string; stderr: string }>,
+) {
+  const candidates = [output.stdout.trim(), output.stderr.trim()].filter(
+    (candidate) => candidate.length > 0,
+  );
+  if (candidates.length !== 1) return null;
+  const candidate = candidates[0];
+  if (candidate === undefined) return null;
+
+  const bare = bareVersion.exec(candidate);
+  if (bare?.[1]) return bare[1];
+
+  const labeled = labeledVersion.exec(candidate);
+  if (!labeled?.[1]) return null;
+  const gitSha = labeled[2];
+  const build = labeled[1].split("+", 2)[1];
+  if (gitSha && build && gitSha !== build) return null;
+  return labeled[1];
+}
 
 export async function probeTunnelClient(
   input: Readonly<{ executablePath: string }>,
@@ -172,25 +212,23 @@ export async function probeTunnelClient(
     maxBufferBytes: MAX_OUTPUT_BYTES,
   } as const;
 
-  let versionOutput: string;
+  let versionOutput: Readonly<{ stdout: string; stderr: string }>;
   try {
-    const version = await run({ ...common, arguments: ["--version"] });
-    versionOutput = `${version.stdout}\n${version.stderr}`;
+    versionOutput = await run({ ...common, arguments: ["--version"] });
   } catch {
     probeError("TUNNEL_CLIENT_PROBE_FAILED");
   }
-  const version =
-    /\bversion\s+([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)/u.exec(
-      versionOutput,
-    )?.[1];
+  const version = parseVersionOutput(versionOutput);
   if (!version) probeError("TUNNEL_CLIENT_INCOMPATIBLE");
 
-  for (const [surface, flags] of Object.entries(requiredSurfaces)) {
+  for (const { arguments: probeArguments, flags } of Object.values(
+    requiredSurfaces,
+  )) {
     let output: string;
     try {
       const result = await run({
         ...common,
-        arguments: ["help", surface],
+        arguments: probeArguments,
       });
       output = `${result.stdout}\n${result.stderr}`;
     } catch {

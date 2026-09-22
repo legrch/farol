@@ -12,6 +12,7 @@ import {
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
+import type { DevMcpProofPreparation } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
@@ -28,6 +29,7 @@ export function createSecureMcpLaunchContract(
     now: number;
     runtimeId: string;
     challengeSha256: string;
+    devMcpProof?: DevMcpProofPreparation;
     callerRelay?: CodexCallerRelayEndpoint;
   }>,
 ): ReadonlyComputerLaunchContract {
@@ -43,6 +45,18 @@ export function createSecureMcpLaunchContract(
   const workspaces = identityBoundWorkspaces(settings.computer.workspaces);
   if (workspaces.length === 0) launchError("SECURE_MCP_WORKSPACE_REQUIRED");
   if (workspaces.length > 32) launchError("SECURE_MCP_WORKSPACE_LIMIT");
+  if (
+    input.devMcpProof !== undefined &&
+    (input.devMcpProof.environment !== "dev" ||
+      input.devMcpProof.computerGeneration !== settings.computer.generation ||
+      !workspaces.some(
+        (workspace) =>
+          workspace.workspaceId === input.devMcpProof?.workspaceId &&
+          workspace.root === input.devMcpProof.workspaceRoot,
+      ))
+  ) {
+    launchError("SECURE_MCP_DEV_PROOF_STALE");
+  }
 
   const writeEnabled = workspaces.some(
     (workspace) => workspace.access === "write",
@@ -122,6 +136,9 @@ export function createSecureMcpLaunchContract(
     connectorVerification: {
       challengeSha256: input.challengeSha256,
     },
+    ...(input.devMcpProof === undefined
+      ? {}
+      : { devMcpProof: input.devMcpProof }),
     ...(input.callerRelay === undefined
       ? {}
       : { callerRelay: input.callerRelay }),
