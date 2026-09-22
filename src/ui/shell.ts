@@ -124,6 +124,10 @@ import {
   UNCONFIRMED_CONFIGURATION_MESSAGE,
   type ConfigurationTransport,
 } from "./configuration-outcome";
+import {
+  ConfigurationRequestOrder,
+  shouldAdoptConfigurationSnapshot,
+} from "./configuration-request-order";
 import { sidebarToggleLeft } from "./window-chrome-geometry";
 
 // Refusals that name a transition in progress or an open review finding,
@@ -524,6 +528,7 @@ let computerTargetTaskId: string | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
 let settingsFeedbackSurface: "computer" | "settings" | "setup" = "settings";
+const configurationRequestOrder = new ConfigurationRequestOrder();
 let taskAdmissionFeedback = "";
 let taskMenuFeedback = "";
 let taskMenuFeedbackError = false;
@@ -2581,6 +2586,7 @@ async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
 ): Promise<boolean> {
+  const configurationRequest = configurationRequestOrder.begin();
   // While Setup is open it is the only visible surface — a failure or
   // success routed to the Computer or Settings panel behind a modal dialog
   // would never be seen (UX34-09: the step being worked on must always show
@@ -2686,6 +2692,23 @@ async function configureProduct(
     transport = { settled: "rejected" };
   }
   const outcome = classifyConfigurationResponse(transport);
+  const supersededFeedback = configurationRequestOrder.isLatest(
+    configurationRequest,
+  )
+    ? null
+    : {
+        message: settingsFeedback,
+        error: settingsFeedbackError,
+        surface: settingsFeedbackSurface,
+      };
+  const renderOutcome = (): void => {
+    if (supersededFeedback) {
+      settingsFeedback = supersededFeedback.message;
+      settingsFeedbackError = supersededFeedback.error;
+      settingsFeedbackSurface = supersededFeedback.surface;
+    }
+    render();
+  };
   const editToAcknowledge = workspaceEditToAcknowledge(command, outcome);
   if (editToAcknowledge) {
     queueMicrotask(() => {
@@ -2698,13 +2721,17 @@ async function configureProduct(
     // UNCONFIRMED_CONFIGURATION_MESSAGE. No snapshot is adopted either.
     settingsFeedback = UNCONFIRMED_CONFIGURATION_MESSAGE;
     settingsFeedbackError = true;
-    render();
+    renderOutcome();
     return false;
   }
   const parsed = outcome.result;
-  bootstrap = { ...bootstrap, configuration: parsed.snapshot };
-  renderedGeneralSettingsRevision = -1;
-  renderedComputerSettingsRevision = -1;
+  if (
+    shouldAdoptConfigurationSnapshot(bootstrap.configuration, parsed.snapshot)
+  ) {
+    bootstrap = { ...bootstrap, configuration: parsed.snapshot };
+    renderedGeneralSettingsRevision = -1;
+    renderedComputerSettingsRevision = -1;
+  }
   if (!parsed.ok) {
     if (
       command.kind === "chatgpt.submit-readonly-task" ||
@@ -2846,7 +2873,7 @@ async function configureProduct(
                                                                                   `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
-    render();
+    renderOutcome();
     return false;
   }
   const evidence = parsed.evidence;
@@ -3083,7 +3110,7 @@ async function configureProduct(
   ) {
     sidebarPreference = bootstrap.configuration.settings.general.sidebarDefault;
   }
-  render();
+  renderOutcome();
   if (taskResultToAcknowledge) {
     queueMicrotask(() => {
       void acknowledgeChatGptTaskResult(taskResultToAcknowledge);

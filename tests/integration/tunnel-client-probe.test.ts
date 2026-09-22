@@ -59,6 +59,27 @@ const help: Readonly<Record<string, string>> = {
 };
 
 describe("tunnel-client probe", () => {
+  it("executes the synthetic reviewed CLI through the production runner", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-tunnel-probe-real-"),
+    );
+    roots.push(root);
+    const source = await fs.readFile(
+      new URL("../e2e/tunnel-client.fixture.cjs", import.meta.url),
+      "utf8",
+    );
+    const executablePath = path.join(root, "tunnel-client");
+    await fs.writeFile(executablePath, `#!${process.execPath}\n${source}`, {
+      mode: 0o700,
+    });
+
+    await expect(probeTunnelClient({ executablePath })).resolves.toMatchObject({
+      executablePath: await fs.realpath(executablePath),
+      version: "1.0.0",
+      protocol: "openai-tunnel-client/v1",
+    });
+  });
+
   it("accepts the reviewed client output and probes the flag-bearing doctor help", async () => {
     const selected = await fixture();
     const runner = vi.fn<TunnelClientProbeRunner>(async (command) => {
