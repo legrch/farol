@@ -522,7 +522,10 @@ describe("ChatGPT route submission boundary", () => {
 
     function harness(
       selectedLabels: readonly string[],
-      options: Readonly<{ exposeKnownComposer?: boolean }> = {},
+      options: Readonly<{
+        exposeKnownComposer?: boolean;
+        secondarySelectedLabels?: readonly string[];
+      }> = {},
     ) {
       const listeners = new Map<string, (event: GateEvent) => void>();
       const contacts = { submit: 0, requestSubmit: 0 };
@@ -605,6 +608,8 @@ describe("ChatGPT route submission boundary", () => {
       }
       class HTMLFormElement extends HTMLElement {
         readonly children = new Set<Element>();
+        composerElement: HTMLElement | null = null;
+        selectedChips: readonly Element[] = [];
         override contains(candidate: unknown): boolean {
           return candidate === this || this.children.has(candidate as Element);
         }
@@ -614,9 +619,9 @@ describe("ChatGPT route submission boundary", () => {
             selector.includes('[contenteditable="true"]') ||
             selector.includes('[role="textbox"]')
           ) {
-            return [composer];
+            return this.composerElement === null ? [] : [this.composerElement];
           }
-          return chips;
+          return this.selectedChips;
         }
         submit(): void {
           contacts.submit += 1;
@@ -648,6 +653,24 @@ describe("ChatGPT route submission boundary", () => {
         chip.textContent = label;
         return chip;
       });
+      form.composerElement = composer;
+      form.selectedChips = chips;
+
+      const secondaryForm = new HTMLFormElement();
+      const secondaryComposer = new HTMLTextAreaElement();
+      secondaryComposer.parentElement = secondaryForm;
+      const secondaryGenericSubmit = new HTMLButtonElement("other");
+      secondaryGenericSubmit.parentElement = secondaryForm;
+      secondaryForm.children.add(secondaryComposer);
+      secondaryForm.children.add(secondaryGenericSubmit);
+      secondaryForm.composerElement = secondaryComposer;
+      secondaryForm.selectedChips = (options.secondarySelectedLabels ?? []).map(
+        (label) => {
+          const chip = new HTMLElement();
+          chip.textContent = label;
+          return chip;
+        },
+      );
 
       const document = {
         documentElement: {
@@ -721,6 +744,9 @@ describe("ChatGPT route submission boundary", () => {
         picker,
         stop,
         remove,
+        secondaryForm,
+        secondaryComposer,
+        secondaryGenericSubmit,
         event,
       };
     }
@@ -767,6 +793,25 @@ describe("ChatGPT route submission boundary", () => {
     bound.form.submit();
     bound.form.requestSubmit();
     expect(bound.contacts).toEqual({ submit: 1, requestSubmit: 1 });
+
+    for (const secondarySelectedLabels of [[], ["Farol Legacy"]] as const) {
+      const crossForm = harness(["Farol DEV"], { secondarySelectedLabels });
+      for (const [type, candidate] of [
+        ["click", crossForm.event(crossForm.secondaryGenericSubmit)],
+        ["submit", crossForm.event(crossForm.secondaryForm)],
+        [
+          "keydown",
+          crossForm.event(crossForm.secondaryComposer, { key: "Enter" }),
+        ],
+      ] as const) {
+        crossForm.listeners.get(type)?.(candidate);
+        expect(candidate.prevented, `cross-form ${type}`).toBe(true);
+        expect(candidate.stopped, `cross-form ${type}`).toBe(true);
+      }
+      crossForm.secondaryForm.submit();
+      crossForm.secondaryForm.requestSubmit();
+      expect(crossForm.contacts).toEqual({ submit: 0, requestSubmit: 0 });
+    }
 
     const drifted = harness([], { exposeKnownComposer: false });
     for (const [type, candidate] of [

@@ -405,8 +405,7 @@ function appSelectionPrelude(appName: string): string {
         .replace(/\\s+button$/iu, "")
         .trim();
     };
-    const appSelection = () => {
-      const input = findComposer();
+    const appSelectionFor = (input) => {
       if (!(input instanceof HTMLElement)) return { state: "missing" };
       const root = input.closest("form") || input.parentElement || input;
       const raw = [...root.querySelectorAll(selectedSelector)].filter(appElementVisible);
@@ -420,6 +419,7 @@ function appSelectionPrelude(appName: string): string {
       if (labels.length === 1) return { state: "conflict" };
       return { state: "missing" };
     };
+    const appSelection = () => appSelectionFor(findComposer());
   `;
 }
 
@@ -539,8 +539,8 @@ export function installManualAppGateScript(appName: string): string {
           : "Message blocked before send. Select exactly one @" + requiredAppName + " app, then try again.";
       setTimeout(() => notice?.remove(), 6000);
     };
-    const blockUnlessBound = (event) => {
-      const selection = appSelection();
+    const blockUnlessBound = (event, composer) => {
+      const selection = appSelectionFor(composer);
       if (selection.state === "bound") return;
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -559,8 +559,9 @@ export function installManualAppGateScript(appName: string): string {
       return fallbackComposerIn(root);
     };
     const allowDirectFormSubmission = (form) => {
-      if (!(submissionComposerIn(form) instanceof HTMLElement)) return true;
-      const selection = appSelection();
+      const composer = submissionComposerIn(form);
+      if (!(composer instanceof HTMLElement)) return true;
+      const selection = appSelectionFor(composer);
       if (selection.state === "bound") return true;
       showBlockedNotice(selection.state);
       return false;
@@ -584,11 +585,14 @@ export function installManualAppGateScript(appName: string): string {
       const form = button?.closest("form");
       const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]');
       const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
+      const formComposer = form instanceof HTMLFormElement
+        ? submissionComposerIn(form)
+        : null;
       const formButton =
         form instanceof HTMLFormElement &&
         button instanceof HTMLButtonElement &&
         form.contains(button) &&
-        submissionComposerIn(form) instanceof HTMLElement;
+        formComposer instanceof HTMLElement;
       const pickerChoice = target.closest('[role="option"],[role="menuitem"]');
       const exactRequiredAppChoice =
         pickerChoice instanceof HTMLElement &&
@@ -602,15 +606,18 @@ export function installManualAppGateScript(appName: string): string {
         return;
       }
       if (knownSend || formButton) {
-        blockUnlessBound(event);
+        blockUnlessBound(
+          event,
+          form instanceof HTMLFormElement ? formComposer : findComposer()
+        );
       }
     }, true);
     document.addEventListener("submit", (event) => {
-      if (
-        event.target instanceof HTMLFormElement &&
-        submissionComposerIn(event.target) instanceof HTMLElement
-      ) {
-        blockUnlessBound(event);
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement)) return;
+      const composer = submissionComposerIn(form);
+      if (composer instanceof HTMLElement) {
+        blockUnlessBound(event, composer);
       }
     }, true);
     document.addEventListener("keydown", (event) => {
@@ -625,12 +632,15 @@ export function installManualAppGateScript(appName: string): string {
       const fallbackInput = form instanceof HTMLFormElement
         ? submissionComposerIn(form)
         : target?.closest(fallbackComposerSelector);
-      if (
-        event.target instanceof Node &&
-        ((input && input.contains(event.target)) ||
-          (fallbackInput instanceof HTMLElement && fallbackInput.contains(event.target)))
-      ) {
-        blockUnlessBound(event);
+      if (event.target instanceof Node) {
+        const submissionInput = input && input.contains(event.target)
+          ? input
+          : fallbackInput instanceof HTMLElement && fallbackInput.contains(event.target)
+            ? fallbackInput
+            : null;
+        if (submissionInput instanceof HTMLElement) {
+          blockUnlessBound(event, submissionInput);
+        }
       }
     }, true);
     // Deliberately install again after each observed navigation. A marker in
