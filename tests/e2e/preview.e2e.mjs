@@ -7221,9 +7221,7 @@ demoMainSegment: try {
     await normal.window.locator("#settings-list").innerText(),
     /local\.farol\.next\.preview/u,
   );
-  await normal.window
-    .getByRole("button", { name: "Open Connections", exact: true })
-    .click();
+  await normal.window.locator("#open-connections").click();
   await normal.window.locator('[data-panel="computer"].active').waitFor();
   const reviewReadOnlyTask = normal.window
     .locator("#connection-readiness")
@@ -7826,9 +7824,7 @@ demoMainSegment: try {
   await normal.window.screenshot({
     path: path.join(evidenceRoot, "settings-compact.png"),
   });
-  await normal.window
-    .getByRole("button", { name: "Open Connections", exact: true })
-    .click();
+  await normal.window.locator("#open-connections").click();
   await normal.window.locator('[data-panel="computer"].active').waitFor();
   await normal.window.locator("#review-setup").click();
   const reviewedSetup = normal.window.locator("#setup-dialog");
@@ -8201,9 +8197,7 @@ demoMainSegment: try {
   await invokeApplicationMenu(normal.application, "app.settings");
   await normal.window.locator('[data-panel="settings"].active').waitFor();
   cases.push("workspace-command-persists-and-runs-after-restart");
-  await normal.window
-    .getByRole("button", { name: "Open Connections", exact: true })
-    .click();
+  await normal.window.locator("#open-connections").click();
   await normal.window.locator('[data-panel="computer"].active').waitFor();
   await normal.window
     .locator("#connection-readiness")
