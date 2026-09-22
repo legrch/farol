@@ -8251,6 +8251,12 @@ demoMainSegment: try {
     normal.windowMode === "secondary-visible",
     normal.expectedTaskViewCount,
   );
+  // Closing the owner-opened sign-in window deliberately returns to
+  // Settings. Re-enter Connections through its canonical Settings action
+  // before operating on the retained conversation binding.
+  await normal.window.locator('[data-panel="settings"].active').waitFor();
+  await normal.window.locator("#open-connections").click();
+  await normal.window.locator('[data-panel="computer"].active').waitFor();
   await normal.window
     .locator("#connection-readiness")
     .getByRole("button", { name: "Start fresh chat", exact: true })
