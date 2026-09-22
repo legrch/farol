@@ -2102,15 +2102,20 @@ async function rejectMismatchedBuildLaunch(instance) {
       encoding: "utf8",
       timeout: 10_000,
     });
-    assert.equal(mismatched.status, 0);
+    const output = `${mismatched.stdout}${mismatched.stderr}`;
+    // This copy is internally inconsistent before it can make a
+    // single-instance claim: its manifest no longer matches the embedded
+    // runtime identity. Startup must therefore fail closed and non-zero,
+    // without Electron's native uncaught-exception path.
+    assert.equal(mismatched.status, 1, output);
+    assert.equal(mismatched.signal, null);
     assert.match(
-      `${mismatched.stdout}${mismatched.stderr}`,
-      /running build could not be verified as this exact candidate/u,
+      mismatched.stderr,
+      /FAROL_NEXT_STARTUP_FAILURE:INSTANCE_BUILD_IDENTITY_INVALID/u,
     );
-    assert.equal(
-      parseOwnerLaunchResult(`${mismatched.stdout}${mismatched.stderr}`),
-      "identity-mismatch",
-    );
+    assert.equal(parseOwnerLaunchResult(output), "startup-failed");
+    assert.doesNotMatch(mismatched.stderr, /App threw an error during load/u);
+    assert.doesNotMatch(mismatched.stderr, /Uncaught Exception/u);
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
