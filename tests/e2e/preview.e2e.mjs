@@ -11357,9 +11357,14 @@ n11AgentScopeSegment: {
       selectedHost.configuration.settings.nativeHosts.codex.executablePath,
       agentScope.codexFixture,
     );
-    await clickHostButton(
-      development ? "Run Agent prerequisite" : "Run live check",
+    const selectedHostRow = (await hostRowState()).rows.find((candidate) =>
+      candidate.title?.startsWith("Native hosts"),
     );
+    const liveAction = selectedHostRow?.buttons.find((button) =>
+      ["Run Agent prerequisite", "Run live check"].includes(button.label),
+    );
+    assert.ok(liveAction, JSON.stringify(await hostRowState()));
+    await clickHostButton(liveAction.label);
     // The live check reports the turn it ran, not the command's name.
     await settingsFeedback(
       /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,
