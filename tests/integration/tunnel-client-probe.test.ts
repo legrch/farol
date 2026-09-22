@@ -88,7 +88,11 @@ describe("tunnel-client probe", () => {
     const runner = vi.fn<TunnelClientProbeRunner>(async (command) => {
       if (command.arguments[0] === "--version") {
         return {
-          stdout: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b\n",
+          // Exact output from the reviewed Homebrew 0.0.14 wrapper. It is
+          // semver-first (no "tunnel-client version" prefix) but still
+          // carries the matching git-sha annotation.
+          stdout:
+            "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b (git sha: 0f870e50a973fa820d4c409000059e181e8d242b)\n",
           stderr: "",
         };
       }
@@ -160,6 +164,7 @@ describe("tunnel-client probe", () => {
     "0.0.14+build trailing junk\n",
     "prefix 0.0.14+build\n",
     "0.0.14+build\nunexpected\n",
+    "0.0.14+build (git sha: other)\n",
     "tunnel-client version 0.0.14+build (git sha: other)\n",
   ])("rejects malformed or extra version output: %j", async (stdout) => {
     const selected = await fixture();

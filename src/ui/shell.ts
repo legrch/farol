@@ -38,6 +38,7 @@ import {
   type ProductConfigurationEvidence,
   type ProductDiscoveryCandidate,
 } from "../pkg/product-settings/contract";
+import { initialSetupPresentation } from "../pkg/product-settings/setup-entry";
 import {
   advanceSetup,
   createSetupJourney,
@@ -1754,11 +1755,11 @@ function discoveryOriginLabel(
   }
 }
 
-// Discovery never runs itself; the Setup dialog asks for it exactly once per
-// session per step (until a fresh scan is explicitly requested), the same
-// way every other live check here waits for an explicit action. Triggering
-// it from inside render() has to go through queueMicrotask so the async
-// configureProduct call never starts mid-render.
+// Discovery runs at most once per session per surface (until a fresh scan is
+// explicitly requested). Setup may request it when a step is shown, and the
+// unfinished DEV journey requests the tunnel scan from Connections. Both go
+// through queueMicrotask so an async configureProduct call never starts
+// mid-render.
 function ensureDiscovery(kind: "connect" | "hosts"): void {
   if (discoveryRequested[kind]) return;
   discoveryRequested = { ...discoveryRequested, [kind]: true };
@@ -1919,7 +1920,9 @@ function buildDiscoveryPanel(
     const warning = document.createElement("p");
     warning.className = "discovery-warning";
     warning.textContent =
-      "Not signed by OpenAI, or the signature could not be confirmed. Only continue if you placed this file yourself.";
+      advancedKey === "connect"
+        ? "This file does not match the reviewed tunnel-client digest. Only continue if you placed it yourself and intend to override automatic discovery."
+        : "Not signed by OpenAI, or the signature could not be confirmed. Only continue if you placed this file yourself.";
     advanced.append(warning);
     advanced.append(
       ...needsChoice.map((candidate) =>
@@ -2002,6 +2005,15 @@ function renderComputerConfiguration(): void {
   }
 
   const settings = configured.settings;
+  // Farol DEV starts unfinished onboarding on this real Connections page,
+  // not inside the modal wizard. Keep its fixed-location dependency checks
+  // just as automatic here: only exact reviewed/signed candidates are
+  // probed, and each discovery runs at most once per renderer session.
+  if (bootstrap.environment === "dev") {
+    if (settings.connectors.secureMcp.tunnelClient === null) {
+      ensureDiscovery("connect");
+    }
+  }
   computerName.disabled = false;
   saveComputerName.disabled = false;
   addWorkspace.disabled = false;
@@ -5166,18 +5178,18 @@ async function start(): Promise<void> {
   selectedTaskId = bootstrap.tasks[0]?.taskId ?? "";
   if (bootstrap.configuration.status === "ready") {
     const settings = bootstrap.configuration.settings;
-    const persistedStep = Math.max(
-      0,
-      setupSteps.findIndex(
-        (step) => step.id === settings.setup.journey.currentStep,
-      ),
-    );
+    const initialSetup = initialSetupPresentation({
+      environment: bootstrap.environment,
+      dismissed: settings.setup.journey.dismissed,
+      currentStep: settings.setup.journey.currentStep,
+      openAtLaunch: settings.general.openAtLaunch,
+    });
     setupJourney = createSetupJourney({
-      open: !settings.setup.journey.dismissed,
-      step: persistedStep,
+      open: initialSetup.setupOpen,
+      step: initialSetup.setupStep,
     });
     sidebarPreference = settings.general.sidebarDefault;
-    section = settings.general.openAtLaunch;
+    section = initialSetup.section;
   }
 
   document

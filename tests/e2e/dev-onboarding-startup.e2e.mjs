@@ -8,6 +8,9 @@ import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { runBoundedProcess } from "./bounded-process.mjs";
 
 const root = process.cwd();
+const useInstalledTunnelClient = process.argv.includes(
+  "--installed-tunnel-client",
+);
 const buildRoot = path.join(root, "dist/app");
 const executable = path.join(
   root,
@@ -20,10 +23,23 @@ const isolatedHome = path.join(temporaryRoot, "home");
 const isolatedAppData = path.join(temporaryRoot, "app-data");
 await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
 await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
+const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
+const tunnelFixtureSource = await fs.readFile(
+  new URL("./tunnel-client.fixture.cjs", import.meta.url),
+  "utf8",
+);
+await fs.writeFile(
+  tunnelFixture,
+  `#!${process.execPath}\n${tunnelFixtureSource}`,
+  { mode: 0o700 },
+);
 
 const environment = {
   FAROL_NEXT_E2E: "1",
   FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
+  ...(useInstalledTunnelClient
+    ? {}
+    : { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture }),
   FAROL_NEXT_ENVIRONMENT: "dev",
   HOME: isolatedHome,
   LANG: "en_US.UTF-8",
@@ -114,21 +130,25 @@ try {
   );
 
   const setupDialog = window.locator("#setup-dialog");
-  await setupDialog.waitFor({ state: "visible" });
-  assert.equal(await setupDialog.getAttribute("data-step-id"), "chatgpt");
-  for (const stepId of ["computer", "connect", "hosts", "verify"]) {
-    await window.locator("#setup-next").click();
-    await setupDialog.waitFor({ state: "visible" });
-    await window.waitForFunction(
-      (expected) =>
-        document
-          .querySelector("#setup-dialog")
-          ?.getAttribute("data-step-id") === expected,
-      stepId,
-    );
-  }
-  await window.locator("#setup-next").click();
   await setupDialog.waitFor({ state: "hidden" });
+  await window.locator('[data-panel="computer"].active').waitFor();
+  assert.equal(
+    await window.evaluate(() => document.documentElement.dataset.section),
+    "computer",
+  );
+  const registry = JSON.parse(
+    await fs.readFile(path.join(root, "../integrations/registry.json"), "utf8"),
+  );
+  const expectedTunnelVersion = useInstalledTunnelClient
+    ? registry.dependencies.tunnelClient.version.split(" ", 1)[0]
+    : "1.0.0";
+  await window.waitForFunction(
+    (version) =>
+      document
+        .querySelector("#connection-readiness .connector-row")
+        ?.textContent?.includes(`tunnel-client ${version}`),
+    expectedTunnelVersion,
+  );
 
   const connectionsNav = window.locator('.nav-item[data-section="computer"]');
   const settingsNav = window.locator('.nav-item[data-section="settings"]');
@@ -140,12 +160,6 @@ try {
     "DEV_CONNECTIONS_SETTINGS_NOT_AT_BOTTOM",
   );
 
-  await connectionsNav.click();
-  await window.locator('[data-panel="computer"].active').waitFor();
-  assert.equal(
-    await window.evaluate(() => document.documentElement.dataset.section),
-    "computer",
-  );
   const connectionsLayout = await window
     .locator('[data-panel="computer"].active')
     .evaluate((panel) => ({

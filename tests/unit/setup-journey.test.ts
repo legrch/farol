@@ -6,6 +6,7 @@ import {
   retreatSetup,
   setupSteps,
 } from "../../src/ui/setup-journey";
+import { initialSetupPresentation } from "../../src/pkg/product-settings/setup-entry";
 
 describe("setup journey", () => {
   it("keeps the five product-level stages in the required order", () => {
@@ -41,5 +42,47 @@ describe("setup journey", () => {
 
     const reviewed = reopenSetup(advanceSetup(first));
     expect(reviewed).toEqual({ open: true, mode: "review", step: 1 });
+  });
+
+  it("opens unfinished DEV onboarding in the Connections sidebar", () => {
+    expect(
+      initialSetupPresentation({
+        environment: "dev",
+        dismissed: false,
+        currentStep: "connect",
+        openAtLaunch: "browser",
+      }),
+    ).toEqual({
+      setupOpen: false,
+      setupStep: 2,
+      section: "computer",
+    });
+  });
+
+  it("preserves the packaged Preview wizard and completed DEV preference", () => {
+    expect(
+      initialSetupPresentation({
+        environment: "preview",
+        dismissed: false,
+        currentStep: "computer",
+        openAtLaunch: "activity",
+      }),
+    ).toEqual({
+      setupOpen: true,
+      setupStep: 1,
+      section: "activity",
+    });
+    expect(
+      initialSetupPresentation({
+        environment: "dev",
+        dismissed: true,
+        currentStep: "verify",
+        openAtLaunch: "settings",
+      }),
+    ).toEqual({
+      setupOpen: false,
+      setupStep: 4,
+      section: "settings",
+    });
   });
 });

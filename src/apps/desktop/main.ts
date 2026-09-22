@@ -78,6 +78,7 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
+import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
 import {
   ShellLayoutSchema,
   type ShellOverlay,
@@ -7556,9 +7557,15 @@ async function main(): Promise<void> {
   await initializeRouteBRuntime();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
-    section = configured.settings.general.openAtLaunch;
+    const initialSetup = initialSetupPresentation({
+      environment: activeDesktopIdentity.environment,
+      dismissed: configured.settings.setup.journey.dismissed,
+      currentStep: configured.settings.setup.journey.currentStep,
+      openAtLaunch: configured.settings.general.openAtLaunch,
+    });
+    section = initialSetup.section;
     sidebarMode = configured.settings.general.sidebarDefault;
-    setupOpen = !configured.settings.setup.journey.dismissed;
+    setupOpen = initialSetup.setupOpen;
   }
   if (startupDelayMs > 0) await delay(startupDelayMs);
   installIpc();
