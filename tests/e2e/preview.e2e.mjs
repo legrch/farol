@@ -10182,13 +10182,13 @@ n09ConnectorSegment: {
       true,
     );
     const runningState = await connectionState();
-    const replaceClient = runningState.buttons?.find(
-      (button) => button.label === "Replace client…",
+    const redetectClient = runningState.buttons?.find(
+      (button) => button.label === "Re-detect client",
     );
-    assert.ok(replaceClient, JSON.stringify(runningState));
-    assert.equal(replaceClient.disabled, true, JSON.stringify(runningState));
+    assert.ok(redetectClient, JSON.stringify(runningState));
+    assert.equal(redetectClient.disabled, true, JSON.stringify(runningState));
     assert.equal(
-      replaceClient.title,
+      redetectClient.title,
       "Stop the connector before replacing its client.",
       JSON.stringify(runningState),
     );
