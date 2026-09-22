@@ -10623,12 +10623,22 @@ n12AgentDraftSegment: {
       .filter({ hasText: "Native hosts · " });
 
     await toConnections();
+    await draft.window.waitForFunction(() =>
+      [...document.querySelectorAll("#connection-readiness button")].some(
+        (button) => button.textContent === "Re-detect host",
+      ),
+    );
+    const selectedHost = await draft.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(
+      selectedHost.configuration.settings.nativeHosts.codex.executablePath,
+      draft.codexFixture,
+    );
     await hostRow
-      .getByRole("button", { name: "Choose…", exact: true })
-      .click({ timeout: 20_000 });
-    await settingsFeedback(/^Codex \S+ contract verified/u);
-    await hostRow
-      .getByRole("button", { name: "Run live check", exact: true })
+      .getByRole("button", {
+        name: /^(?:Run Agent prerequisite|Run live check)$/u,
+      })
       .click({ timeout: 20_000 });
     await settingsFeedback(
       /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,
@@ -11335,9 +11345,21 @@ n11AgentScopeSegment: {
         .getByRole("button", { name: label, exact: true })
         .click({ timeout: 20_000 });
     };
-    await clickHostButton("Choose…");
-    await settingsFeedback(/^Codex \S+ contract verified/u);
-    await clickHostButton("Run live check");
+    await agentScope.window.waitForFunction(() =>
+      [...document.querySelectorAll("#connection-readiness button")].some(
+        (button) => button.textContent === "Re-detect host",
+      ),
+    );
+    const selectedHost = await agentScope.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(
+      selectedHost.configuration.settings.nativeHosts.codex.executablePath,
+      agentScope.codexFixture,
+    );
+    await clickHostButton(
+      development ? "Run Agent prerequisite" : "Run live check",
+    );
     // The live check reports the turn it ran, not the command's name.
     await settingsFeedback(
       /^gpt-6-astra host turn completed with 1 correlated Farol Next tool call/u,

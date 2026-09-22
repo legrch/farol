@@ -3108,27 +3108,31 @@ async function reverifyDiscoveredCandidate(
   });
 }
 
-async function selectedCodexExecutable(): Promise<
-  string | "cancelled" | "invalid"
-> {
-  let selected: string | undefined;
+function e2eCodexExecutable(): string | "invalid" | undefined {
   const testExecutable =
     process.env.FAROL_NEXT_E2E === "1"
       ? process.env.FAROL_NEXT_E2E_CODEX_EXECUTABLE
       : undefined;
-  if (testExecutable) {
-    selected = testExecutable;
-  } else {
-    if (!window) return "invalid";
-    const result = await dialog.showOpenDialog(window, {
-      title: "Choose the Codex executable",
-      buttonLabel: "Verify Codex",
-      properties: ["openFile"],
-      securityScopedBookmarks: false,
-    });
-    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
-    selected = result.filePaths[0];
-  }
+  if (testExecutable === undefined) return undefined;
+  return path.isAbsolute(testExecutable) && !testExecutable.includes("\0")
+    ? testExecutable
+    : "invalid";
+}
+
+async function selectedCodexExecutable(): Promise<
+  string | "cancelled" | "invalid"
+> {
+  const testExecutable = e2eCodexExecutable();
+  if (testExecutable !== undefined) return testExecutable;
+  if (!window) return "invalid";
+  const result = await dialog.showOpenDialog(window, {
+    title: "Choose the Codex executable",
+    buttonLabel: "Verify Codex",
+    properties: ["openFile"],
+    securityScopedBookmarks: false,
+  });
+  if (result.canceled || result.filePaths.length !== 1) return "cancelled";
+  const selected = result.filePaths[0];
   return selected && path.isAbsolute(selected) && !selected.includes("\0")
     ? selected
     : "invalid";
@@ -4157,6 +4161,16 @@ async function configureAdmittedProduct(
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
       }
       try {
+        // Keep the real Detect host action in the E2E lane while ensuring it
+        // probes only the synthetic App Server fixture, never a Codex binary
+        // or model configuration belonging to the owner.
+        const testExecutable = e2eCodexExecutable();
+        if (testExecutable === "invalid") {
+          return configurationFailure("CODEX_HOST_SELECTION_INVALID");
+        }
+        if (testExecutable !== undefined) {
+          return verifyCodexExecutable(testExecutable);
+        }
         const discovered = await discoverExecutables("codex");
         for (const candidate of discovered.candidates) {
           if (candidate.verdict !== "offer") continue;
