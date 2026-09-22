@@ -98,6 +98,7 @@ import {
   connectorRoutePrerequisite,
   connectorStartPrerequisite,
   connectorStopPrerequisite,
+  devHostSetupSummary,
   devProofEvidenceCurrent,
   localHostRouteReadiness,
   localHostContractVerified,
@@ -4327,7 +4328,7 @@ function renderSetup(): void {
     const readiness = configured.settings.setup.hosts;
     liveSummary.textContent = host
       ? bootstrap.environment === "dev"
-        ? `Local host ready. Codex ${host.version} and ${host.protocol} were verified without a model turn. Test model is a separate disclosed send; Agent keeps its advanced gate.`
+        ? devHostSetupSummary(host, readiness)
         : `${readinessDetail(readiness)} Codex ${host.version} is selected; a live check uses gpt-6-astra without provider fallback and stores no prompt or response.`
       : "Farol Next looks for the installed Codex executable itself, in a small set of known locations. It never searches your shell PATH or infers a host from configuration files.";
     if (!host) {

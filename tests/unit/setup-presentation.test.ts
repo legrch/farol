@@ -8,6 +8,7 @@ import {
   connectorStartPrerequisite,
   connectorStopPrerequisite,
   computerVerificationStale,
+  devHostSetupSummary,
   devProofEvidenceCurrent,
   localHostRouteReadiness,
   localHostContractVerified,
@@ -106,6 +107,8 @@ describe("setup presentation", () => {
 
   it("keeps zero-turn local host readiness separate from an advanced live turn", () => {
     const locallyVerifiedHost = {
+      version: "0.155.0-alpha.9.2",
+      protocol: "codex-app-server/v2" as const,
       localVerification: {
         executableSha256: "a".repeat(64),
         schemaSha256: "b".repeat(64),
@@ -116,6 +119,9 @@ describe("setup presentation", () => {
     const invalidatedHost = { localVerification: null };
 
     expect(localHostContractVerified(locallyVerifiedHost)).toBe(true);
+    expect(devHostSetupSummary(locallyVerifiedHost, readiness)).toContain(
+      "Local host ready",
+    );
     expect(localHostContractVerified(invalidatedHost)).toBe(false);
     expect(
       localHostRouteReadiness(
@@ -130,6 +136,45 @@ describe("setup presentation", () => {
       }),
     ).toBe("failed");
   });
+
+  it.each([
+    [
+      "unreachable",
+      {
+        reachable: "unreachable" as const,
+        needsAction:
+          "Choose the Codex executable again or restore it, then recheck.",
+        unavailable: null,
+      },
+    ],
+    [
+      "unsupported",
+      {
+        reachable: "reachable" as const,
+        needsAction: null,
+        unavailable:
+          "This Codex build does not expose the required bounded App Server contract.",
+      },
+    ],
+  ] as const)(
+    "does not present an invalidated %s local host as ready",
+    (_failureKind, failure) => {
+      const host = {
+        version: "0.155.0-alpha.9.2",
+        protocol: "codex-app-server/v2" as const,
+        localVerification: null,
+      };
+      const summary = devHostSetupSummary(host, {
+        ...readiness,
+        ...failure,
+      });
+
+      expect(summary).toContain("remains selected");
+      expect(summary).toContain("Recheck local host");
+      expect(summary).toContain("without a model turn");
+      expect(summary).not.toContain("Local host ready");
+    },
+  );
 
   it("OUX-07 labels a rejoin from the typed recovery, not the wording", () => {
     expect(

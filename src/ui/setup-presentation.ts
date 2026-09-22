@@ -118,10 +118,26 @@ type LocalHostContract = Pick<
   "localVerification"
 >;
 
+type LocalHostSummary = Pick<
+  NonNullable<ProductSettings["nativeHosts"]["codex"]>,
+  "localVerification" | "protocol" | "version"
+>;
+
 export function localHostContractVerified(
   host: LocalHostContract | null,
 ): boolean {
   return host !== null && host.localVerification !== null;
+}
+
+export function devHostSetupSummary(
+  host: LocalHostSummary,
+  readiness: Readiness,
+): string {
+  if (localHostContractVerified(host)) {
+    return `Local host ready. Codex ${host.version} and ${host.protocol} were verified without a model turn. Test model is a separate disclosed send; Agent keeps its advanced gate.`;
+  }
+  const failure = readiness.unavailable ?? readiness.needsAction;
+  return `Codex ${host.version} remains selected, but its local App Server contract is not verified. Recheck local host without a model turn.${failure ? ` ${failure}` : ""} Test model and Agent qualification remain separate owner-triggered steps.`;
 }
 
 // Whether the Computer verification on record still describes the workspace
