@@ -59,6 +59,9 @@ describe("closing an application that is already gone", () => {
       /const APPLICATION_ALREADY_GONE =\s*\/[^\n]*has been closed[^\n]*\/u;/u,
     );
     expect(e2eSource).toMatch(
+      /const APPLICATION_ALREADY_GONE =\s*\/[^\n]*E2E_WINDOW_MISSING[^\n]*\/u;/u,
+    );
+    expect(e2eSource).toMatch(
       /if \(!APPLICATION_ALREADY_GONE\.test\(String\(error\?\.message \?\? error\)\)\) \{\s*throw error;/u,
     );
   });

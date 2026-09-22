@@ -2268,11 +2268,14 @@ async function closeLegacyAppFixture(fixture) {
   await fs.rm(real, { recursive: true, force: true });
 }
 
-// Playwright reports a vanished Electron target by message alone.  Only these
-// shapes mean "the application is already gone"; anything else is a real
-// harness or product error and still throws.
+// Playwright reports a vanished Electron target by message alone, while this
+// runner reports a still-connected app whose owned shell already vanished as
+// E2E_WINDOW_MISSING. Only these shapes mean the close inspection cannot run;
+// anything else is a real harness or product error and still throws. The
+// observation remains blocking, so recognizing it can never turn the lane
+// green; it only keeps a finally block from masking the first failure.
 const APPLICATION_ALREADY_GONE =
-  /has been closed|Target (page|browser|crashed)|Connection closed/u;
+  /E2E_WINDOW_MISSING|has been closed|Target (page|browser|crashed)|Connection closed/u;
 
 function recordClosedBeforeInspection(instance, stage, error) {
   const message = String(error?.message ?? error).split("\n", 1)[0];
