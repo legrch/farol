@@ -8817,6 +8817,10 @@ ux34SettingsWidthsSegment: {
       window.farolNext.configure({ kind: "computer.add-workspace" }),
     );
     assert.equal(added.ok, true, "the fixture workspace is approved");
+    await settingsWidths.window.locator("#open-connections").click();
+    await settingsWidths.window
+      .locator('[data-panel="computer"].active')
+      .waitFor();
     await settingsWidths.window.locator("#review-setup").click();
     const reviewed = settingsWidths.window.locator("#setup-dialog");
     await reviewed.waitFor({ state: "visible" });
