@@ -581,6 +581,7 @@ const DiscoveryCandidateSchema = z.strictObject({
       "world-or-group-writable",
       "wrong-owner",
       "oversize",
+      "changed-during-discovery",
       "symlink-loop",
       "unreadable",
     ])

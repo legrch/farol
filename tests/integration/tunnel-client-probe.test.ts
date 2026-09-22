@@ -59,6 +59,25 @@ const help: Readonly<Record<string, string>> = {
 };
 
 describe("tunnel-client probe", () => {
+  it("refuses discovery byte drift before starting the executable", async () => {
+    const selected = await fixture();
+    const runner = vi.fn<TunnelClientProbeRunner>();
+
+    await expect(
+      probeTunnelClient(
+        {
+          executablePath: selected.selected,
+          expectedDiscovery: {
+            canonicalPath: await fs.realpath(selected.target),
+            sha256: "f".repeat(64),
+          },
+        },
+        { run: runner },
+      ),
+    ).rejects.toThrow("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("executes the synthetic reviewed CLI through the production runner", async () => {
     const root = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-tunnel-probe-real-"),

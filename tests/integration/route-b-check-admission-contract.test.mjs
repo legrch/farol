@@ -29,4 +29,25 @@ describe("Route B check admission contract", () => {
     expect(finalizer).toBeGreaterThan(firstAwait);
     expect(release).toBeGreaterThan(finalizer);
   });
+
+  it("invalidates local host readiness when the preflight contract no longer matches", async () => {
+    const source = await fs.readFile(
+      path.join(root, "src/apps/desktop/main.ts"),
+      "utf8",
+    );
+    const start = source.indexOf('case "host.run-route-b-check"');
+    const end = source.indexOf('case "host.run-codex-smoke"', start);
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const branch = source.slice(start, end);
+    const mismatch = branch.indexOf(
+      'configurationFailure("CODEX_HOST_RECHECK_REQUIRED")',
+    );
+    const invalidation = branch.indexOf(
+      'configuration.recordCodexHostFailure("unreachable")',
+    );
+
+    expect(invalidation).toBeGreaterThanOrEqual(0);
+    expect(invalidation).toBeLessThan(mismatch);
+  });
 });

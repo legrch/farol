@@ -193,10 +193,23 @@ function parseVersionOutput(
 }
 
 export async function probeTunnelClient(
-  input: Readonly<{ executablePath: string }>,
+  input: Readonly<{
+    executablePath: string;
+    expectedDiscovery?: Readonly<{
+      canonicalPath: string;
+      sha256: string;
+    }>;
+  }>,
   dependencies: ProbeDependencies = {},
 ): Promise<TunnelClientProbe> {
   const pinned = await pinExecutable(input.executablePath);
+  if (
+    input.expectedDiscovery !== undefined &&
+    (input.expectedDiscovery.canonicalPath !== pinned.canonicalPath ||
+      input.expectedDiscovery.sha256 !== pinned.sha256)
+  ) {
+    probeError("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+  }
   const run = dependencies.run ?? runProbe;
   const common = {
     executablePath: pinned.canonicalPath,

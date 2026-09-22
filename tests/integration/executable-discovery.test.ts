@@ -347,6 +347,45 @@ describe("executable discovery — unsafe files are refused, never hashed furthe
 });
 
 describe("executable discovery — codex signature trust", () => {
+  it("never auto-offers when the signed path changes bytes during discovery", async () => {
+    const canonical = "/canonical/codex-drift";
+    const { fs: fakeFsPort } = buildFakeFs({
+      [CODEX_HOMEBREW_ARM]: { kind: "real", target: canonical },
+    });
+    const hash = vi
+      .fn<DiscoveryHash>()
+      .mockResolvedValueOnce({
+        ok: true,
+        bytes: 42,
+        sha256: "a".repeat(64),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        bytes: 43,
+        sha256: "b".repeat(64),
+      });
+
+    const result = await discoverExecutables("codex", {
+      fs: fakeFsPort,
+      home: "/fake-home-codex-drift",
+      arch: "arm64",
+      hash,
+      codesign: fakeCodesign({
+        [canonical]: { verified: true, trustedOpenAI: true },
+      }),
+    });
+
+    expect(hash).toHaveBeenCalledTimes(2);
+    expect(result.candidates[0]).toMatchObject({
+      path: canonical,
+      bytes: 43,
+      sha256: "b".repeat(64),
+      origin: "unknown",
+      verdict: "refused",
+      refusalReason: "changed-during-discovery",
+    });
+  });
+
   it("offers a codex binary signed by the OpenAI team", async () => {
     const fixture = await realFileFixture();
     const { fs: fakeFsPort } = buildFakeFs({
