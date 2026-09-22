@@ -9919,7 +9919,11 @@ async function startTunnelClientFixture() {
     path.join(root, "tests/e2e/tunnel-client.fixture.cjs"),
     "utf8",
   );
-  const executable = path.join(fixtureRoot, "tunnel-client");
+  // The mandated writer-local TMPDIR is inside this package's `type: module`
+  // scope. Keep the reviewed CommonJS fixture explicit: an extensionless
+  // Node script would be reinterpreted as ESM there and fail before the real
+  // production probe reaches `--version`.
+  const executable = path.join(fixtureRoot, "tunnel-client.cjs");
   // The probe refuses a group- or world-writable executable, so 0700 is not
   // tidiness: a looser mode is a refusal, not a warning.
   await fs.writeFile(executable, `#!${process.execPath}\n${source}`, {

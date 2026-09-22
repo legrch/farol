@@ -68,7 +68,10 @@ describe("tunnel-client probe", () => {
       new URL("../e2e/tunnel-client.fixture.cjs", import.meta.url),
       "utf8",
     );
-    const executablePath = path.join(root, "tunnel-client");
+    // This test must also pass when TMPDIR is writer-local and therefore
+    // beneath the package's `type: module` scope. The fixture itself is
+    // reviewed CommonJS, just like the E2E executable that consumes it.
+    const executablePath = path.join(root, "tunnel-client.cjs");
     await fs.writeFile(executablePath, `#!${process.execPath}\n${source}`, {
       mode: 0o700,
     });
