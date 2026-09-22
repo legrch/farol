@@ -24,6 +24,19 @@ describe("the native E2E window policy", () => {
     );
   });
 
+  it("does not request the duplicate sidebar fullscreen proof in the no-focus lane", () => {
+    const start = e2eSource.indexOf("ux34SidebarToggleSegment:");
+    const end = e2eSource.indexOf("// UX34-08 / UX34-07", start);
+    const segment = e2eSource.slice(start, end);
+    const focusGuard = segment.indexOf("if (nativeWindowProofAvailable)");
+    const fullScreenRequest = segment.indexOf("shell?.setFullScreen(true)");
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(focusGuard).toBeGreaterThan(-1);
+    expect(fullScreenRequest).toBeGreaterThan(focusGuard);
+  });
+
   it("records an unavailable secondary topology before any visible launch", () => {
     const preflight = e2eSource.indexOf(
       "await writeWindowTopologyBlockedReport(ordinary.presentation)",

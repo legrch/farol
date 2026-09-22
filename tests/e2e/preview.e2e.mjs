@@ -8888,7 +8888,9 @@ ux34SettingsWidthsSegment: {
 // UX34-06: the sidebar toggle must never share screen space with the
 // macOS traffic lights, at every width, and a real click on it must carry
 // the sidebar through a full -> rail -> full roundtrip, including after a
-// resize and a fullscreen enter/exit.
+// resize. Native fullscreen/focus geometry is the separate
+// traffic-light-and-fullscreen-geometry proof above and is repeated here
+// only when that proof is authorized.
 ux34SidebarToggleSegment: {
   if (!segmentSelected("ux34-sidebar-toggle")) break ux34SidebarToggleSegment;
   const sidebarRoundtrip = await launch([], "secondary-visible");
@@ -9016,40 +9018,42 @@ ux34SidebarToggleSegment: {
     );
     state = await assertToggleClearOfTrafficLights();
     assert.equal(state.sidebar, "full", "roundtrip survives a resize");
-    // Fullscreen enter/exit: the traffic lights move out of the way
-    // entirely, and the toggle must still be present and reachable both
-    // during and after.
-    await sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
-      const shell = BrowserWindow.getAllWindows().find((candidate) => {
-        const url = candidate.webContents.getURL();
-        return (
-          candidate.getTitle() === "Farol · Developer Preview" &&
-          url.startsWith("file:") &&
-          url.endsWith("/shell.html")
-        );
+    if (nativeWindowProofAvailable) {
+      // Fullscreen enter/exit: the traffic lights move out of the way
+      // entirely, and the toggle must still be present and reachable both
+      // during and after.
+      await sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol · Developer Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        shell?.setFullScreen(true);
       });
-      shell?.setFullScreen(true);
-    });
-    await sidebarRoundtrip.window.waitForFunction(
-      () => document.documentElement.dataset.fullScreen === "true",
-    );
-    state = await sidebarRoundtrip.window.evaluate(measureChrome);
-    assert.equal(state.toggleReachable, true, "toggle usable in fullscreen");
-    await sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
-      const shell = BrowserWindow.getAllWindows().find((candidate) => {
-        const url = candidate.webContents.getURL();
-        return (
-          candidate.getTitle() === "Farol · Developer Preview" &&
-          url.startsWith("file:") &&
-          url.endsWith("/shell.html")
-        );
+      await sidebarRoundtrip.window.waitForFunction(
+        () => document.documentElement.dataset.fullScreen === "true",
+      );
+      state = await sidebarRoundtrip.window.evaluate(measureChrome);
+      assert.equal(state.toggleReachable, true, "toggle usable in fullscreen");
+      await sidebarRoundtrip.application.evaluate(({ BrowserWindow }) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return (
+            candidate.getTitle() === "Farol · Developer Preview" &&
+            url.startsWith("file:") &&
+            url.endsWith("/shell.html")
+          );
+        });
+        shell?.setFullScreen(false);
       });
-      shell?.setFullScreen(false);
-    });
-    await sidebarRoundtrip.window.waitForFunction(
-      () => document.documentElement.dataset.fullScreen === "false",
-    );
-    await assertToggleClearOfTrafficLights();
+      await sidebarRoundtrip.window.waitForFunction(
+        () => document.documentElement.dataset.fullScreen === "false",
+      );
+      await assertToggleClearOfTrafficLights();
+    }
     cases.push("ux34-sidebar-toggle-roundtrip");
   } finally {
     await close(sidebarRoundtrip);
