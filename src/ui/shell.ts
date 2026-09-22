@@ -100,6 +100,7 @@ import {
   connectorStopPrerequisite,
   devProofEvidenceCurrent,
   localHostRouteReadiness,
+  localHostContractVerified,
   readinessDetail,
   readinessLabel,
   nativeHostActionPrerequisite,
@@ -3316,7 +3317,8 @@ function renderSettings(): void {
     ["Native Agent", settings.setup.verify],
   ];
   const devLocalHostReady =
-    bootstrap.environment === "dev" && settings.nativeHosts.codex !== null;
+    bootstrap.environment === "dev" &&
+    localHostContractVerified(settings.nativeHosts.codex);
   const persistedVerifiedConnectionCount = connectionStates.filter(
     ([, state]) => state.verified !== null && !state.outcomeUnknown,
   ).length;
@@ -3385,7 +3387,7 @@ function renderSettings(): void {
       case "Native hosts":
         return bootstrap.environment === "dev"
           ? localHostRouteReadiness(
-              settings.nativeHosts.codex !== null,
+              localHostContractVerified(settings.nativeHosts.codex),
               settings.setup.hosts,
             )
           : agentRouteState();
@@ -3408,7 +3410,7 @@ function renderSettings(): void {
       const devHostContractReady =
         bootstrap.environment === "dev" &&
         label === "Native hosts" &&
-        settings.nativeHosts.codex !== null;
+        localHostContractVerified(settings.nativeHosts.codex);
       title.textContent = devHostContractReady
         ? "Native hosts · Local host ready"
         : `${label} · ${routeRowLabel(rowState, state)}`;
@@ -3992,7 +3994,7 @@ function renderSetup(): void {
   const devHostStepReady =
     devHostStep &&
     configured.status === "ready" &&
-    configured.settings.nativeHosts.codex !== null;
+    localHostContractVerified(configured.settings.nativeHosts.codex);
   dialog.dataset.mode = setupJourney.mode;
   dialog.dataset.stepId = step.id;
   renderConfigurationFeedback("#setup-feedback", "setup");
@@ -4072,7 +4074,7 @@ function renderSetup(): void {
         configured.status === "ready" &&
           progressId !== undefined &&
           (bootstrap.environment === "dev" && progressId === "hosts"
-            ? configured.settings.nativeHosts.codex !== null
+            ? localHostContractVerified(configured.settings.nativeHosts.codex)
             : progressState !== null &&
               routeReadiness(progressState, {
                 stale: setupStepStale(configured.settings, progressId),

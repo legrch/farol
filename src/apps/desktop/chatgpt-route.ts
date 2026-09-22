@@ -29,6 +29,7 @@ const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
 const preparedTaskSchema = z.union([
   navigatedTaskSchema,
   z.strictObject({ appSelectionLost: z.literal(true) }),
+  z.strictObject({ draftPresent: z.literal(true) }),
   z.strictObject({
     ready: z.boolean(),
     baselineAssistantCount: z.number().int().nonnegative(),
@@ -420,6 +421,14 @@ function appSelectionPrelude(appName: string): string {
       return { state: "missing" };
     };
     const appSelection = () => appSelectionFor(findComposer());
+    const composerDraftText = (input) => {
+      if (!(input instanceof HTMLElement)) return "";
+      if (input instanceof HTMLTextAreaElement) return input.value;
+      const clone = input.cloneNode(true);
+      if (!(clone instanceof HTMLElement)) return "";
+      for (const marker of clone.querySelectorAll(selectedSelector)) marker.remove();
+      return clone.innerText || clone.textContent || "";
+    };
   `;
 }
 
@@ -431,18 +440,15 @@ export function bindChatGptAppScript(
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { state: "navigated" };
     ${appSelectionPrelude(appName)}
-    const current = appSelection();
+    const input = findComposer();
+    if (!(input instanceof HTMLElement)) return { state: "blocked", reason: "missing" };
+    if (composerDraftText(input).trim().length > 0) {
+      return { state: "blocked", reason: "draft_present" };
+    }
+    const current = appSelectionFor(input);
     if (current.state === "bound") return { state: "bound" };
     if (current.state === "ambiguous" || current.state === "conflict") {
       return { state: "blocked", reason: current.state };
-    }
-    const input = findComposer();
-    if (!(input instanceof HTMLElement)) return { state: "blocked", reason: "missing" };
-    const existingText = input instanceof HTMLTextAreaElement
-      ? input.value
-      : (input.innerText || input.textContent || "");
-    if (existingText.trim().length > 0) {
-      return { state: "blocked", reason: "draft_present" };
     }
     const setComposerText = (value, inputType) => {
       if (input instanceof HTMLTextAreaElement) {
@@ -692,6 +698,7 @@ export function prepareTaskScript(
     if (!(composer instanceof HTMLElement)) {
       return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
+    ${requiredAppName ? "if (composerDraftText(composer).trim().length > 0) return { draftPresent: true };" : ""}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
@@ -1266,7 +1273,11 @@ export class ChatGptRoute {
 
     try {
       await candidate.loadURL(this.entryUrl);
-      if (!(await this.installAppSubmissionGate(candidate.webContents))) {
+      const gate = await this.installCurrentRouteAppSubmissionGate(
+        candidate.webContents,
+      );
+      if (gate === "stale") return { status: "unreachable" };
+      if (gate === "failed") {
         this.blockUnsafeManualSurface(candidate.webContents);
         return { status: "unreachable" };
       }
@@ -1617,6 +1628,15 @@ export class ChatGptRoute {
         return {
           state: "failed_before_submit",
           code: "CHATGPT_APP_SELECTION_LOST",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
+      }
+      if ("draftPresent" in prepared.data) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
           deltaCount,
           observedCharacters,
           outputText: observedText,

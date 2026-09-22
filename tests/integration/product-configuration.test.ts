@@ -839,6 +839,12 @@ describe("Farol Next product configuration", () => {
               protocol: "codex-app-server/v2",
               schemaSha256: "b".repeat(64),
               verifiedAt: "2026-09-16T10:00:00.000Z",
+              localVerification: {
+                executableSha256: "a".repeat(64),
+                schemaSha256: "b".repeat(64),
+                buildId: "c".repeat(64),
+                verifiedAt: "2026-09-16T10:00:00.000Z",
+              },
               liveVerification: null,
             },
           },
@@ -862,6 +868,46 @@ describe("Farol Next product configuration", () => {
     );
     await restarted.initialize();
     expect(restarted.snapshot()).toEqual(recorded.snapshot);
+  });
+
+  it("invalidates local Codex contract evidence after a failed recheck without forgetting the selected path", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    await service.recordCodexHost({
+      executablePath: "/Users/example/bin/codex",
+      executableSha256: "a".repeat(64),
+      version: "0.153.4",
+      protocol: "codex-app-server/v2",
+      schemaSha256: "b".repeat(64),
+      buildId: "c".repeat(64),
+    });
+
+    const failed = await service.recordCodexHostFailure("unreachable");
+
+    expect(failed).toMatchObject({
+      ok: true,
+      snapshot: {
+        status: "ready",
+        settings: {
+          nativeHosts: {
+            codex: {
+              executablePath: "/Users/example/bin/codex",
+              localVerification: null,
+            },
+          },
+          setup: {
+            hosts: {
+              reachable: "unreachable",
+              verified: null,
+            },
+          },
+        },
+      },
+    });
   });
 
   it("records live Codex readiness only for the exact selected contract", async () => {
@@ -1272,7 +1318,16 @@ describe("Farol Next product configuration", () => {
       snapshot: {
         status: "ready",
         settings: {
-          nativeHosts: { codex: { liveVerification: null } },
+          nativeHosts: {
+            codex: {
+              localVerification: {
+                executableSha256: "a".repeat(64),
+                schemaSha256: "b".repeat(64),
+                buildId: "c".repeat(64),
+              },
+              liveVerification: null,
+            },
+          },
           setup: {
             hosts: {
               configured: true,

@@ -395,6 +395,13 @@ describe("ChatGPT route submission boundary", () => {
     ).resolves.toEqual({ state: "bound" });
     expect(contacts.values).toEqual(["@"]);
     expect(contacts.pickerClicks).toBe(1);
+
+    composerValue = "OWNER_DRAFT";
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol DEV", expectedHref), context),
+    ).resolves.toEqual({ state: "blocked", reason: "draft_present" });
+    expect(composerValue).toBe("OWNER_DRAFT");
+    expect(contacts.values).toEqual(["@"]);
   });
 
   it("does not accept a matching-name generic Lexical decorator as an app chip", () => {
@@ -485,6 +492,27 @@ describe("ChatGPT route submission boundary", () => {
     });
 
     expect(executeJavaScript).toHaveBeenCalledTimes(3);
+    expect(
+      executeJavaScript.mock.calls.some(([script]) =>
+        String(script).includes("send.click()"),
+      ),
+    ).toBe(false);
+  });
+
+  it("preserves a draft that appears after app binding and blocks before send", async () => {
+    const executeJavaScript = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ draftPresent: true });
+
+    await expect(
+      devTaskRoute(executeJavaScript).runReadonlyTask("must not replace draft"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    });
+
+    expect(executeJavaScript).toHaveBeenCalledTimes(2);
     expect(
       executeJavaScript.mock.calls.some(([script]) =>
         String(script).includes("send.click()"),
@@ -1045,6 +1073,63 @@ describe("ChatGPT route submission boundary", () => {
     expect(Reflect.get(candidate, "load")).toBe("failed");
     expect(surface.reveal).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "does not apply a stale initial-open gate result (%s) to the next document",
+    async (installed) => {
+      let currentUrl = "about:blank";
+      let resolveGate: ((value: boolean) => void) | undefined;
+      const gate = new Promise<boolean>((resolve) => {
+        resolveGate = resolve;
+      });
+      const contents = Object.assign(new EventEmitter(), {
+        getURL: () => currentUrl,
+        isDestroyed: () => false,
+        executeJavaScript: vi.fn(async () => gate),
+        setWindowOpenHandler: vi.fn(),
+        mainFrame: { processId: 1, routingId: 1 },
+      });
+      const surface = {
+        kind: "window" as const,
+        webContents: contents,
+        isDestroyed: vi.fn(() => false),
+        loadURL: vi.fn(async (nextUrl: string) => {
+          currentUrl = nextUrl;
+        }),
+        hide: vi.fn(),
+        reveal: vi.fn(),
+        focus: vi.fn(),
+        setTitle: vi.fn(),
+        destroy: vi.fn(),
+        onPageTitleUpdated: vi.fn(),
+        onClosing: vi.fn(),
+        onClosed: vi.fn(),
+      };
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/c/initial",
+        e2eOrigin: null,
+        parent: () => null,
+        requiredAppName: "Farol DEV",
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+      });
+
+      const opening = candidate.open();
+      await vi.waitFor(() =>
+        expect(contents.executeJavaScript).toHaveBeenCalledTimes(1),
+      );
+      currentUrl = "https://chatgpt.com/c/next";
+      contents.emit("did-start-navigation", undefined, currentUrl, false, true);
+      resolveGate?.(installed);
+
+      await expect(opening).resolves.toEqual({ status: "unreachable" });
+      expect(Reflect.get(candidate, "load")).toBe("failed");
+      expect(surface.reveal).not.toHaveBeenCalled();
+      expect(surface.focus).not.toHaveBeenCalled();
+      expect(surface.destroy).not.toHaveBeenCalled();
+    },
+  );
 
   it("blocks a busy retained page before touching the composer", async () => {
     const executeJavaScript = vi.fn();
@@ -2539,6 +2624,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
   function pageContext(
     href: string,
     selectedAppName?: string,
+    options: Readonly<{
+      composer?: "textarea" | "rich";
+      draft?: string;
+    }> = {},
   ): Readonly<{
     context: vm.Context;
     contacts: Contacts;
@@ -2552,10 +2641,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     };
 
     class StubElement {
-      value = "";
       disabled = false;
       parentElement: StubElement | null = null;
       textContent = "";
+      innerText = "";
       focus(): void {
         contacts.focused += 1;
       }
@@ -2564,6 +2653,9 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       }
       replaceChildren(): void {
         contacts.replaced += 1;
+      }
+      append(node: { text?: string }): void {
+        contacts.typed.push(node.text ?? "");
       }
       dispatchEvent(event: { type: string }): boolean {
         contacts.events.push(event.type);
@@ -2584,13 +2676,25 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       querySelectorAll(): readonly StubElement[] {
         return [];
       }
+      cloneNode(): StubElement {
+        const clone = new (this.constructor as new () => StubElement)();
+        clone.textContent = this.textContent;
+        clone.innerText = this.innerText;
+        return clone;
+      }
+      remove(): void {}
     }
 
     class HTMLElement extends StubElement {}
     class HTMLTextAreaElement extends HTMLElement {}
     class HTMLButtonElement extends HTMLElement {}
 
-    const composer = new HTMLTextAreaElement();
+    const composer =
+      options.composer === "rich"
+        ? new HTMLElement()
+        : new HTMLTextAreaElement();
+    composer.innerText = options.draft ?? "";
+    composer.textContent = options.draft ?? "";
     const send = new HTMLButtonElement();
     const appChip = new HTMLElement();
     appChip.textContent = selectedAppName ?? "";
@@ -2598,12 +2702,14 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       selectedAppName === undefined ? [] : [appChip];
 
     // The value setter the prepare script reaches for, instrumented.
+    let composerValue = options.draft ?? "";
     Object.defineProperty(HTMLTextAreaElement.prototype, "value", {
       configurable: true,
       get() {
-        return "";
+        return composerValue;
       },
       set(next: string) {
+        composerValue = next;
         contacts.typed.push(next);
       },
     });
@@ -2684,6 +2790,27 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(result).toEqual({ activated: true });
     expect(contacts.clicked).toBe(1);
   });
+
+  it.each(["textarea", "rich"] as const)(
+    "the DEV preparation bytes preserve an owner draft in a bound %s composer",
+    (composer) => {
+      const { context, contacts } = pageContext(expectedHref, "Farol DEV", {
+        composer,
+        draft: "OWNER_DRAFT",
+      });
+
+      expect(
+        vm.runInContext(
+          prepareTaskScript("AUTHORIZED_CHECK", expectedHref, "Farol DEV"),
+          context,
+        ),
+      ).toEqual({ draftPresent: true });
+      expect(contacts.focused).toBe(0);
+      expect(contacts.typed).toEqual([]);
+      expect(contacts.replaced).toBe(0);
+      expect(contacts.events).toEqual([]);
+    },
+  );
 
   it("control: on the expected href both scripts reach the composer and the send button", () => {
     const prepareRun = pageContext(expectedHref);

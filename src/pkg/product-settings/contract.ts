@@ -40,6 +40,13 @@ const CodexHostLiveVerificationSchema = z.strictObject({
   verifiedAt: CanonicalTimestampSchema,
 });
 
+const CodexHostLocalVerificationSchema = z.strictObject({
+  executableSha256: Sha256Schema,
+  schemaSha256: Sha256Schema,
+  buildId: Sha256Schema,
+  verifiedAt: CanonicalTimestampSchema,
+});
+
 export const CodexAgentVerificationFieldsSchema = z.strictObject({
   model: z.literal("gpt-6-astra"),
   executableSha256: Sha256Schema,
@@ -74,6 +81,7 @@ export const CodexHostSelectionSchema = z.strictObject({
   protocol: z.literal("codex-app-server/v2"),
   schemaSha256: Sha256Schema,
   verifiedAt: CanonicalTimestampSchema,
+  localVerification: CodexHostLocalVerificationSchema.nullable().default(null),
   liveVerification: CodexHostLiveVerificationSchema.nullable().default(null),
   agentVerification: CodexAgentVerificationSchema.nullable().default(null),
 });

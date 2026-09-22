@@ -4228,32 +4228,32 @@ async function configureAdmittedProduct(
       }
       const selected = snapshot.settings.nativeHosts.codex;
       if (!selected) return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
-      const probe = await probeCodexHost({
-        executablePath: selected.executablePath,
-        scratchRoot: codexHostProbeRoot(),
-      }).catch(() => null);
-      if (
-        probe === null ||
-        probe.executableSha256 !== selected.executableSha256 ||
-        probe.schemaSha256 !== selected.schemaSha256 ||
-        probe.version !== selected.version ||
-        probe.protocol !== selected.protocol
-      ) {
-        return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
-      }
-      if (!chatGptTaskAdmissionReady()) {
-        return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
-      }
-      const checkRouteB = routeBRuntime;
-      if (!checkRouteB) return configurationFailure("ROUTE_B_UNAVAILABLE");
-      const endpoint = checkRouteB.endpoint;
-      const toolCallsBefore = checkRouteB.provider.diagnostics().toolCalls;
       codexHostTaskAdmission = true;
       // The check closes its host itself; quit reaches it meanwhile.
       const routeBCheckClients: Awaited<
         ReturnType<typeof launchCodexAppServer>
       >[] = [];
       try {
+        const probe = await probeCodexHost({
+          executablePath: selected.executablePath,
+          scratchRoot: codexHostProbeRoot(),
+        }).catch(() => null);
+        if (
+          probe === null ||
+          probe.executableSha256 !== selected.executableSha256 ||
+          probe.schemaSha256 !== selected.schemaSha256 ||
+          probe.version !== selected.version ||
+          probe.protocol !== selected.protocol
+        ) {
+          return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
+        }
+        if (!chatGptTaskAdmissionReady()) {
+          return configurationFailure("CHATGPT_CONNECTION_NOT_VERIFIED");
+        }
+        const checkRouteB = routeBRuntime;
+        if (!checkRouteB) return configurationFailure("ROUTE_B_UNAVAILABLE");
+        const endpoint = checkRouteB.endpoint;
+        const toolCallsBefore = checkRouteB.provider.diagnostics().toolCalls;
         const checked = await runRouteBHostCheck(
           {
             executablePath: selected.executablePath,

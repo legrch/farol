@@ -10,6 +10,7 @@ import {
   computerVerificationStale,
   devProofEvidenceCurrent,
   localHostRouteReadiness,
+  localHostContractVerified,
   readinessDetail,
   readinessLabel,
   nativeHostActionPrerequisite,
@@ -104,9 +105,26 @@ describe("setup presentation", () => {
   });
 
   it("keeps zero-turn local host readiness separate from an advanced live turn", () => {
-    expect(localHostRouteReadiness(true, readiness)).toBe("ready");
+    const locallyVerifiedHost = {
+      localVerification: {
+        executableSha256: "a".repeat(64),
+        schemaSha256: "b".repeat(64),
+        buildId: "c".repeat(64),
+        verifiedAt: "2026-01-01T00:00:00.000Z",
+      },
+    };
+    const invalidatedHost = { localVerification: null };
+
+    expect(localHostContractVerified(locallyVerifiedHost)).toBe(true);
+    expect(localHostContractVerified(invalidatedHost)).toBe(false);
     expect(
-      localHostRouteReadiness(false, {
+      localHostRouteReadiness(
+        localHostContractVerified(locallyVerifiedHost),
+        readiness,
+      ),
+    ).toBe("ready");
+    expect(
+      localHostRouteReadiness(localHostContractVerified(invalidatedHost), {
         ...readiness,
         reachable: "unreachable",
       }),

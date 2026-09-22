@@ -113,6 +113,17 @@ export function localHostRouteReadiness(
   return contractVerified ? "ready" : routeReadiness(advancedReadiness);
 }
 
+type LocalHostContract = Pick<
+  NonNullable<ProductSettings["nativeHosts"]["codex"]>,
+  "localVerification"
+>;
+
+export function localHostContractVerified(
+  host: LocalHostContract | null,
+): boolean {
+  return host !== null && host.localVerification !== null;
+}
+
 // Whether the Computer verification on record still describes the workspace
 // and config generation in front of the owner.
 //

@@ -1565,6 +1565,12 @@ export class ProductConfigurationService {
             protocol: parsed.data.protocol,
             schemaSha256: parsed.data.schemaSha256,
             verifiedAt,
+            localVerification: {
+              executableSha256: parsed.data.executableSha256,
+              schemaSha256: parsed.data.schemaSha256,
+              buildId: parsed.data.buildId,
+              verifiedAt,
+            },
             liveVerification,
             agentVerification,
           },
@@ -1864,6 +1870,7 @@ export class ProductConfigurationService {
               generation: settings.nativeHosts.generation + 1,
               codex: {
                 ...selected,
+                localVerification: null,
                 liveVerification: null,
                 agentVerification: null,
               },
