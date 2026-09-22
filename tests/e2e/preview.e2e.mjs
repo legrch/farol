@@ -9945,7 +9945,7 @@ function tunnelInitRecordPath(userData) {
 // N09 — the Connection row in Connections, end to end through its own controls.
 // Until now the suite reached `connector.start` only by calling the IPC
 // bridge directly, with nothing configured, so the refusal codes were all it
-// could see. This drives the row the way the owner does: choose a client,
+// could see. This drives the row the way the owner does: detect a client,
 // save a route, meet each unmet prerequisite by name, start a real supervised
 // child, then stop it.
 //
@@ -10052,7 +10052,14 @@ n09ConnectorSegment: {
       "Choose the tunnel client first.",
       JSON.stringify(noClient.state),
     );
-    await clickRowButton("Choose client…");
+    assert.equal(
+      noClient.state.buttons.some(
+        (button) => button.label === "Choose client…",
+      ),
+      false,
+      JSON.stringify(noClient.state),
+    );
+    await clickRowButton("Detect client");
     await connectorFeedback(
       /^tunnel-client \S+ verified · \S+ · executable [0-9a-f]{12}\.$/u,
     );
@@ -10248,7 +10255,7 @@ n09ConnectorAttachmentSegment: {
         pattern.source,
       );
     await row
-      .getByRole("button", { name: "Choose client…", exact: true })
+      .getByRole("button", { name: "Detect client", exact: true })
       .click();
     await feedback(/^tunnel-client \S+ verified/u);
     await attaching.window

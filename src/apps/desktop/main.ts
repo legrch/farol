@@ -3181,27 +3181,31 @@ async function verifyCodexExecutable(
   }
 }
 
-async function selectedTunnelClientExecutable(): Promise<
-  string | "cancelled" | "invalid"
-> {
-  let selected: string | undefined;
+function e2eTunnelClientExecutable(): string | "invalid" | undefined {
   const testExecutable =
     process.env.FAROL_NEXT_E2E === "1"
       ? process.env.FAROL_NEXT_E2E_TUNNEL_CLIENT
       : undefined;
-  if (testExecutable) {
-    selected = testExecutable;
-  } else {
-    if (!window) return "invalid";
-    const result = await dialog.showOpenDialog(window, {
-      title: "Choose the tunnel-client executable",
-      buttonLabel: "Verify tunnel-client",
-      properties: ["openFile"],
-      securityScopedBookmarks: false,
-    });
-    if (result.canceled || result.filePaths.length !== 1) return "cancelled";
-    selected = result.filePaths[0];
-  }
+  if (testExecutable === undefined) return undefined;
+  return path.isAbsolute(testExecutable) && !testExecutable.includes("\0")
+    ? testExecutable
+    : "invalid";
+}
+
+async function selectedTunnelClientExecutable(): Promise<
+  string | "cancelled" | "invalid"
+> {
+  const testExecutable = e2eTunnelClientExecutable();
+  if (testExecutable !== undefined) return testExecutable;
+  if (!window) return "invalid";
+  const result = await dialog.showOpenDialog(window, {
+    title: "Choose the tunnel-client executable",
+    buttonLabel: "Verify tunnel-client",
+    properties: ["openFile"],
+    securityScopedBookmarks: false,
+  });
+  if (result.canceled || result.filePaths.length !== 1) return "cancelled";
+  const selected = result.filePaths[0];
   return selected && path.isAbsolute(selected) && !selected.includes("\0")
     ? selected
     : "invalid";
@@ -4030,6 +4034,16 @@ async function configureAdmittedProduct(
     }
     case "connector.discover-client": {
       try {
+        // The real UI still drives discovery. This exact E2E-only seam lets
+        // that button verify the synthetic CLI fixture instead of
+        // probing or starting any tunnel-client installed on the owner host.
+        const testExecutable = e2eTunnelClientExecutable();
+        if (testExecutable === "invalid") {
+          return configurationFailure("TUNNEL_CLIENT_SELECTION_INVALID");
+        }
+        if (testExecutable !== undefined) {
+          return verifyTunnelClientExecutable(testExecutable);
+        }
         const discovered = await discoverExecutables("tunnel-client");
         for (const candidate of discovered.candidates) {
           if (candidate.verdict !== "offer") continue;
