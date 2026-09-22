@@ -37,7 +37,10 @@ export async function drainOwnedChildren(
     closing,
     new Promise<void>((resolve) => {
       timer = setTimeout(resolve, deadlineMs);
-      timer.unref?.();
+      // This timer is the last-resort path to the real app.quit(). It must
+      // remain referenced: a stalled closer may own no active handle, and an
+      // unref'd deadline would then let Node stop servicing the drain before
+      // either the receipt or the final quit can run.
     }),
   ]);
   clearTimeout(timer);
@@ -100,7 +103,9 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
             ports.record(receipt).catch(() => undefined),
             new Promise<void>((resolve) => {
               recordTimer = setTimeout(resolve, remaining);
-              recordTimer.unref?.();
+              // The diagnostic write must not be able to strand the real
+              // quit. Keep its absolute-deadline timer referenced for the
+              // same reason as the child-drain deadline above.
             }),
           ]);
         })
