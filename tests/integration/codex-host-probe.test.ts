@@ -85,12 +85,33 @@ async function writeCompatibleSchema(root: string): Promise<void> {
 }
 
 describe("Codex host probe", () => {
+  it("refuses discovery byte drift before starting the executable", async () => {
+    const selected = await fixture();
+    const runner = vi.fn<CodexProbeRunner>();
+
+    await expect(
+      probeCodexHost(
+        {
+          executablePath: selected.executablePath,
+          scratchRoot: selected.scratchRoot,
+          expectedDiscovery: {
+            canonicalPath: await fs.realpath(selected.executablePath),
+            sha256: "f".repeat(64),
+          },
+        },
+        { run: runner },
+      ),
+    ).rejects.toThrow("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it("proves one selected executable against a generated bounded schema", async () => {
     const selected = await fixture();
+    const canonicalPath = await fs.realpath(selected.executablePath);
     const runner = vi.fn<CodexProbeRunner>(async (command) => {
-      expect(command.executablePath).toBe(selected.executablePath);
+      expect(command.executablePath).toBe(canonicalPath);
       expect(command.environment.PATH?.split(":")[0]).toBe(
-        path.dirname(selected.executablePath),
+        path.dirname(canonicalPath),
       );
       if (command.arguments[0] === "--version") {
         return { stdout: "codex-cli 0.153.4\n", stderr: "" };
@@ -116,7 +137,7 @@ describe("Codex host probe", () => {
     );
 
     expect(result).toMatchObject({
-      executablePath: selected.executablePath,
+      executablePath: canonicalPath,
       executableSha256: selected.executableSha256,
       version: "0.153.4",
       protocol: "codex-app-server/v2",

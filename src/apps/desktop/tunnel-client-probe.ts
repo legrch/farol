@@ -165,7 +165,10 @@ const requiredSurfaces = {
 
 const SEMVER =
   "[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?(?:\\+[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?";
-const bareVersion = new RegExp(`^(${SEMVER})$`, "u");
+const bareVersion = new RegExp(
+  `^(${SEMVER})(?: \\(git sha: ([0-9a-f]{7,64})\\))?$`,
+  "u",
+);
 const labeledVersion = new RegExp(
   `^tunnel-client version (${SEMVER})(?: \\(git sha: ([0-9a-f]{7,64})\\))?$`,
   "u",
@@ -181,22 +184,32 @@ function parseVersionOutput(
   const candidate = candidates[0];
   if (candidate === undefined) return null;
 
-  const bare = bareVersion.exec(candidate);
-  if (bare?.[1]) return bare[1];
-
-  const labeled = labeledVersion.exec(candidate);
-  if (!labeled?.[1]) return null;
-  const gitSha = labeled[2];
-  const build = labeled[1].split("+", 2)[1];
+  const parsed = bareVersion.exec(candidate) ?? labeledVersion.exec(candidate);
+  if (!parsed?.[1]) return null;
+  const gitSha = parsed[2];
+  const build = parsed[1].split("+", 2)[1];
   if (gitSha && build && gitSha !== build) return null;
-  return labeled[1];
+  return parsed[1];
 }
 
 export async function probeTunnelClient(
-  input: Readonly<{ executablePath: string }>,
+  input: Readonly<{
+    executablePath: string;
+    expectedDiscovery?: Readonly<{
+      canonicalPath: string;
+      sha256: string;
+    }>;
+  }>,
   dependencies: ProbeDependencies = {},
 ): Promise<TunnelClientProbe> {
   const pinned = await pinExecutable(input.executablePath);
+  if (
+    input.expectedDiscovery !== undefined &&
+    (input.expectedDiscovery.canonicalPath !== pinned.canonicalPath ||
+      input.expectedDiscovery.sha256 !== pinned.sha256)
+  ) {
+    probeError("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+  }
   const run = dependencies.run ?? runProbe;
   const common = {
     executablePath: pinned.canonicalPath,

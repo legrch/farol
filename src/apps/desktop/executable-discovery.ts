@@ -58,6 +58,7 @@ export type RefusalReason =
   | "world-or-group-writable"
   | "wrong-owner"
   | "oversize"
+  | "changed-during-discovery"
   | "symlink-loop"
   | "unreadable";
 
@@ -505,6 +506,38 @@ async function resolveCandidate(
 
   if (kind === "codex") {
     const inspection = await safeCodesignInspect(ctx.codesign, canonicalPath);
+    // Bind the signature verdict to the same bytes that discovery reports.
+    // codesign operates on a path, so hash again after it returns. A change
+    // across that boundary is refused: no signer verdict can be bound to it.
+    const afterSignature = await ctx.hash(canonicalPath);
+    if (!afterSignature.ok) {
+      return {
+        requestedPath: seed.path,
+        path: canonicalPath,
+        source: seed.source,
+        ...(afterSignature.bytes !== undefined
+          ? { bytes: afterSignature.bytes }
+          : {}),
+        origin: "unknown",
+        verdict: "refused",
+        refusalReason: afterSignature.reason,
+      };
+    }
+    if (
+      afterSignature.sha256 !== hashed.sha256 ||
+      afterSignature.bytes !== hashed.bytes
+    ) {
+      return {
+        requestedPath: seed.path,
+        path: canonicalPath,
+        source: seed.source,
+        bytes: afterSignature.bytes,
+        sha256: afterSignature.sha256,
+        origin: "unknown",
+        verdict: "refused",
+        refusalReason: "changed-during-discovery",
+      };
+    }
     const origin = classifyCodexOrigin(inspection);
     return {
       requestedPath: seed.path,

@@ -226,7 +226,7 @@ const ChatGptAttachmentMetadataSchema = z.strictObject({
 });
 
 export const ProductGeneralSettingsSchema = z.strictObject({
-  openAtLaunch: z.enum(["browser", "activity", "settings"]),
+  openAtLaunch: z.enum(["browser", "computer", "activity", "settings"]),
   sidebarDefault: z.enum(["full", "rail"]),
   activityDetail: z.enum(["summary", "technical"]),
 });
@@ -581,6 +581,7 @@ const DiscoveryCandidateSchema = z.strictObject({
       "world-or-group-writable",
       "wrong-owner",
       "oversize",
+      "changed-during-discovery",
       "symlink-loop",
       "unreadable",
     ])

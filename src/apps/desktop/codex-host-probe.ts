@@ -58,7 +58,10 @@ function permittedOwner(uid: number): boolean {
   return effectiveUser === undefined || uid === effectiveUser || uid === 0;
 }
 
-async function hashSelectedExecutable(executablePath: string): Promise<string> {
+async function pinSelectedExecutable(executablePath: string): Promise<{
+  canonicalPath: string;
+  sha256: string;
+}> {
   if (!path.isAbsolute(executablePath) || executablePath.includes("\0")) {
     probeError("CODEX_HOST_SELECTION_INVALID");
   }
@@ -112,7 +115,7 @@ async function hashSelectedExecutable(executablePath: string): Promise<string> {
       digest.update(buffer.subarray(0, bytesRead));
       position += bytesRead;
     }
-    return digest.digest("hex");
+    return { canonicalPath, sha256: digest.digest("hex") };
   } finally {
     await handle.close();
   }
@@ -162,19 +165,33 @@ const runCodexProbe: CodexProbeRunner = async (command) =>
   });
 
 export async function probeCodexHost(
-  input: Readonly<{ executablePath: string; scratchRoot: string }>,
+  input: Readonly<{
+    executablePath: string;
+    scratchRoot: string;
+    expectedDiscovery?: Readonly<{
+      canonicalPath: string;
+      sha256: string;
+    }>;
+  }>,
   dependencies: ProbeDependencies = {},
 ): Promise<CodexHostProbe> {
-  const executableSha256 = await hashSelectedExecutable(input.executablePath);
+  const pinned = await pinSelectedExecutable(input.executablePath);
+  if (
+    input.expectedDiscovery !== undefined &&
+    (input.expectedDiscovery.canonicalPath !== pinned.canonicalPath ||
+      input.expectedDiscovery.sha256 !== pinned.sha256)
+  ) {
+    probeError("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
+  }
   await prepareScratchRoot(input.scratchRoot);
   const work = await fs.mkdtemp(path.join(input.scratchRoot, "probe-"));
   await fs.chmod(work, 0o700);
   const run = dependencies.run ?? runCodexProbe;
   const common = {
-    executablePath: input.executablePath,
+    executablePath: pinned.canonicalPath,
     cwd: work,
     environment: {
-      PATH: `${path.dirname(input.executablePath)}:${SAFE_PATH}`,
+      PATH: `${path.dirname(pinned.canonicalPath)}:${SAFE_PATH}`,
       NO_COLOR: "1",
       TERM: "dumb",
     },
@@ -216,8 +233,8 @@ export async function probeCodexHost(
       probeError("CODEX_HOST_INCOMPATIBLE");
     }
     return {
-      executablePath: input.executablePath,
-      executableSha256,
+      executablePath: pinned.canonicalPath,
+      executableSha256: pinned.sha256,
       ...contract,
     };
   } finally {

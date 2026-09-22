@@ -78,6 +78,7 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
+import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
 import {
   ShellLayoutSchema,
   type ShellOverlay,
@@ -3140,12 +3141,14 @@ async function selectedCodexExecutable(): Promise<
 
 async function verifyCodexExecutable(
   executablePath: string,
+  expectedDiscovery?: Readonly<{ canonicalPath: string; sha256: string }>,
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   try {
     const probe = await probeCodexHost({
       executablePath,
       scratchRoot: codexHostProbeRoot(),
+      ...(expectedDiscovery ? { expectedDiscovery } : {}),
     });
     const recorded = await configuration.recordCodexHost({
       executablePath: probe.executablePath,
@@ -3169,6 +3172,9 @@ async function verifyCodexExecutable(
     });
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
+    if (code === "CODEX_HOST_DISCOVERY_CANDIDATE_STALE") {
+      return configurationFailure("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
+    }
     const unsupported = code === "CODEX_HOST_INCOMPATIBLE";
     const recorded = await configuration.recordCodexHostFailure(
       unsupported ? "unsupported" : "unreachable",
@@ -3217,10 +3223,14 @@ async function selectedTunnelClientExecutable(): Promise<
 
 async function verifyTunnelClientExecutable(
   executablePath: string,
+  expectedDiscovery?: Readonly<{ canonicalPath: string; sha256: string }>,
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   try {
-    const probe = await probeTunnelClient({ executablePath });
+    const probe = await probeTunnelClient({
+      executablePath,
+      ...(expectedDiscovery ? { expectedDiscovery } : {}),
+    });
     if (secureMcpConnectorRuntime?.isRunning()) {
       return configurationFailure("CONNECTOR_STOP_REQUIRED");
     }
@@ -3237,6 +3247,9 @@ async function verifyTunnelClientExecutable(
     });
   } catch (error) {
     const code = error instanceof Error ? error.message : "";
+    if (code === "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE") {
+      return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+    }
     if (code === "TUNNEL_CLIENT_SELECTION_INVALID") {
       return configurationFailure("TUNNEL_CLIENT_SELECTION_INVALID");
     }
@@ -4051,7 +4064,11 @@ async function configureAdmittedProduct(
         const discovered = await discoverExecutables("tunnel-client");
         for (const candidate of discovered.candidates) {
           if (candidate.verdict !== "offer") continue;
-          const verified = await verifyTunnelClientExecutable(candidate.path);
+          if (!candidate.sha256) continue;
+          const verified = await verifyTunnelClientExecutable(candidate.path, {
+            canonicalPath: candidate.path,
+            sha256: candidate.sha256,
+          });
           if (verified.ok) return verified;
         }
         return ProductConfigurationResultSchema.parse({
@@ -4081,7 +4098,13 @@ async function configureAdmittedProduct(
       if (candidate === "declined") {
         return configurationFailure("TUNNEL_CLIENT_PICKER_CANCELLED");
       }
-      return verifyTunnelClientExecutable(candidate.path);
+      if (!candidate.sha256) {
+        return configurationFailure("TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE");
+      }
+      return verifyTunnelClientExecutable(candidate.path, {
+        canonicalPath: candidate.path,
+        sha256: candidate.sha256,
+      });
     }
     case "connector.configure": {
       if (!connectorCredentialStore || secureMcpConnectorRuntime?.isRunning()) {
@@ -4174,7 +4197,11 @@ async function configureAdmittedProduct(
         const discovered = await discoverExecutables("codex");
         for (const candidate of discovered.candidates) {
           if (candidate.verdict !== "offer") continue;
-          const verified = await verifyCodexExecutable(candidate.path);
+          if (!candidate.sha256) continue;
+          const verified = await verifyCodexExecutable(candidate.path, {
+            canonicalPath: candidate.path,
+            sha256: candidate.sha256,
+          });
           if (verified.ok) return verified;
         }
         return ProductConfigurationResultSchema.parse({
@@ -4204,7 +4231,13 @@ async function configureAdmittedProduct(
       if (candidate === "declined") {
         return configurationFailure("CODEX_HOST_PICKER_CANCELLED");
       }
-      return verifyCodexExecutable(candidate.path);
+      if (!candidate.sha256) {
+        return configurationFailure("CODEX_HOST_DISCOVERY_CANDIDATE_STALE");
+      }
+      return verifyCodexExecutable(candidate.path, {
+        canonicalPath: candidate.path,
+        sha256: candidate.sha256,
+      });
     }
     case "host.verify-codex": {
       if (codexAgentOperationActive()) {
@@ -4245,6 +4278,11 @@ async function configureAdmittedProduct(
           probe.version !== selected.version ||
           probe.protocol !== selected.protocol
         ) {
+          const invalidated =
+            await configuration.recordCodexHostFailure("unreachable");
+          if (!invalidated.ok) {
+            return ProductConfigurationResultSchema.parse(invalidated);
+          }
           return configurationFailure("CODEX_HOST_RECHECK_REQUIRED");
         }
         if (!chatGptTaskAdmissionReady()) {
@@ -7556,9 +7594,15 @@ async function main(): Promise<void> {
   await initializeRouteBRuntime();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
-    section = configured.settings.general.openAtLaunch;
+    const initialSetup = initialSetupPresentation({
+      environment: activeDesktopIdentity.environment,
+      dismissed: configured.settings.setup.journey.dismissed,
+      currentStep: configured.settings.setup.journey.currentStep,
+      openAtLaunch: configured.settings.general.openAtLaunch,
+    });
+    section = initialSetup.section;
     sidebarMode = configured.settings.general.sidebarDefault;
-    setupOpen = !configured.settings.setup.journey.dismissed;
+    setupOpen = initialSetup.setupOpen;
   }
   if (startupDelayMs > 0) await delay(startupDelayMs);
   installIpc();
