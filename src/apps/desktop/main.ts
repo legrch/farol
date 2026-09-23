@@ -3542,7 +3542,9 @@ async function startSecureMcpConnector(
   }
 }
 
-async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
+async function checkSecureMcpAttachment(
+  expectedWorkspaceId?: string,
+): Promise<ProductConfigurationResult> {
   if (!configuration || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
   }
@@ -3558,6 +3560,13 @@ async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
     const connector = snapshot.settings.connectors.secureMcp;
     const runtime = connector.runtime;
     const challenge = connector.challenge;
+    if (
+      expectedWorkspaceId !== undefined &&
+      snapshot.settings.setup.computer.verified?.workspaceId !==
+        expectedWorkspaceId
+    ) {
+      return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
+    }
     if (
       runtime?.state !== "ready" ||
       challenge === null ||
@@ -3589,6 +3598,7 @@ async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
       approvedWorkspaceIds: snapshot.settings.computer.workspaces.map(
         (workspace) => workspace.workspaceId,
       ),
+      expectedWorkspaceId,
     });
     if (!verdict.attached) {
       return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
@@ -3638,6 +3648,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
   // both pass the check and race to claim or release the same verification.
   chatGptTaskAdmission = true;
   connectorTaskAdmission = true;
+  let requestedWorkspaceId: string | null = null;
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready")
@@ -3666,6 +3677,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     ) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
+    requestedWorkspaceId = workspaceId;
     const stateRoot = secureMcpLaunchRoot();
     try {
       if (
@@ -3732,7 +3744,10 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     chatGptTaskAdmission = false;
     connectorTaskAdmission = false;
   }
-  return checkSecureMcpAttachment();
+  if (requestedWorkspaceId === null) {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
+  }
+  return checkSecureMcpAttachment(requestedWorkspaceId);
 }
 
 async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {

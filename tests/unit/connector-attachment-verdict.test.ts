@@ -56,6 +56,7 @@ function check(
     preparedAt: string;
     computerGeneration: number;
     approvedWorkspaceIds: readonly string[];
+    expectedWorkspaceId: string;
   }> = {},
 ) {
   return checkConnectorAttachment({
@@ -66,12 +67,37 @@ function check(
     },
     computerGeneration: context.computerGeneration ?? GENERATION,
     approvedWorkspaceIds: context.approvedWorkspaceIds ?? [WORKSPACE_ID],
+    expectedWorkspaceId: context.expectedWorkspaceId,
   });
 }
 
 describe("connector attachment verdict", () => {
   it("S35-TA-6 accepts this runtime's receipt for this challenge at the current generation", () => {
     expect(check()).toEqual({ attached: true });
+  });
+
+  it("rejects another approved workspace when app verification requested a specific one", () => {
+    expect(
+      check(
+        {},
+        {
+          approvedWorkspaceIds: [WORKSPACE_ID, "workspace-selected"],
+          expectedWorkspaceId: "workspace-selected",
+        },
+      ),
+    ).toEqual({ attached: false, reason: "workspace-not-requested" });
+  });
+
+  it("accepts the requested workspace when another approved grant exists", () => {
+    expect(
+      check(
+        {},
+        {
+          approvedWorkspaceIds: [WORKSPACE_ID, "workspace-other"],
+          expectedWorkspaceId: WORKSPACE_ID,
+        },
+      ),
+    ).toEqual({ attached: true });
   });
 
   // THE REPLAY CASE. A receipt recorded before the challenge it claims to

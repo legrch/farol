@@ -289,6 +289,7 @@ export type ConnectorAttachmentVerdict =
         | "challenge-mismatch"
         | "binding-not-current"
         | "workspace-not-approved"
+        | "workspace-not-requested"
         | "recorded-at-unreadable"
         | "challenge-time-unreadable"
         | "recorded-before-challenge";
@@ -302,6 +303,8 @@ export type ConnectorAttachmentCheck = Readonly<{
   computerGeneration: number;
   /** The workspace ids the owner has approved right now. */
   approvedWorkspaceIds: readonly string[];
+  /** The one workspace requested by an app verification, when applicable. */
+  expectedWorkspaceId?: string | undefined;
 }>;
 
 /**
@@ -335,8 +338,13 @@ export function connectorReceiptBindingIsCurrent(
 export function checkConnectorAttachment(
   input: ConnectorAttachmentCheck,
 ): ConnectorAttachmentVerdict {
-  const { receipt, challenge, computerGeneration, approvedWorkspaceIds } =
-    input;
+  const {
+    receipt,
+    challenge,
+    computerGeneration,
+    approvedWorkspaceIds,
+    expectedWorkspaceId,
+  } = input;
   if (receipt.challengeSha256 !== challenge.challengeSha256) {
     return { attached: false, reason: "challenge-mismatch" };
   }
@@ -345,6 +353,12 @@ export function checkConnectorAttachment(
   }
   if (!approvedWorkspaceIds.includes(receipt.workspaceId)) {
     return { attached: false, reason: "workspace-not-approved" };
+  }
+  if (
+    expectedWorkspaceId !== undefined &&
+    receipt.workspaceId !== expectedWorkspaceId
+  ) {
+    return { attached: false, reason: "workspace-not-requested" };
   }
   const recordedAt = Date.parse(receipt.recordedAt);
   const preparedAt = Date.parse(challenge.preparedAt);
