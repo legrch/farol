@@ -146,6 +146,11 @@ try {
     completedBefore,
     "VISITING_IS_NOT_VERIFICATION",
   );
+  await window.locator('[data-onboarding-step="tunnel"]').click();
+  assert.equal(await window.locator("#onboarding-primary").isEnabled(), false);
+  await window.screenshot({
+    path: path.join(output, "09-activation-blocked.png"),
+  });
   await window.locator('[data-onboarding-step="chatgpt"]').click();
   await window.locator("#onboarding-primary").click();
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
@@ -186,9 +191,69 @@ try {
     Buffer.from(embeddedCapture, "base64"),
     { mode: 0o600 },
   );
+  const verificationSurfaceId = await application.evaluate(
+    async ({ BrowserWindow, WebContentsView }) => {
+      const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      );
+      if (!page) throw new Error("VERIFICATION_SURFACE_MISSING");
+      await page.webContents.executeJavaScript(
+        `document.querySelector("button").remove();
+         const composer = document.createElement("textarea");
+         composer.id = "prompt-textarea";
+         composer.value = "retained-synthetic-draft";
+         document.body.append(composer);`,
+        true,
+      );
+      return page.webContents.id;
+    },
+  );
+  const taskCountBeforeRecovery = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).tasks.length;
   await window.locator("#sign-in-return").click();
   await window.locator("#guided-onboarding").waitFor({ state: "visible" });
   await window.locator("#sign-in-return").waitFor({ state: "hidden" });
+  await window
+    .locator('[data-onboarding-step="chatgpt"].complete')
+    .waitFor({ state: "visible" });
+  await window.locator('[data-onboarding-step="app"]').click();
+  await window
+    .locator('[data-onboarding-content="app"] > .onboarding-help > summary')
+    .click();
+  await window.locator("#onboarding-open-chatgpt").click();
+  await window.locator("#sign-in-return").waitFor({ state: "visible" });
+  const recoveredSurface = await application.evaluate(
+    async ({ BrowserWindow, WebContentsView }) => {
+      const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.getVisible() &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      );
+      if (!page) return null;
+      return {
+        id: page.webContents.id,
+        draft: await page.webContents.executeJavaScript(
+          'document.querySelector("#prompt-textarea")?.value',
+          true,
+        ),
+      };
+    },
+  );
+  assert.deepEqual(recoveredSurface, {
+    id: verificationSurfaceId,
+    draft: "retained-synthetic-draft",
+  });
+  assert.equal(
+    (await window.evaluate(() => window.farolNext.bootstrap())).tasks.length,
+    taskCountBeforeRecovery,
+    "APP_RECOVERY_CREATED_UNRELATED_TASK",
+  );
+  await window.locator("#sign-in-return").click();
+  await window.locator("#guided-onboarding").waitFor({ state: "visible" });
   await window.locator('[data-onboarding-step="folder"]').click();
   await window.locator("#onboarding-primary").click();
   await window
@@ -202,9 +267,9 @@ try {
     path: path.join(output, "08-folder-verified.png"),
   });
   await window.locator('[data-onboarding-step="tunnel"]').click();
-  assert.equal(await window.locator("#onboarding-primary").isEnabled(), false);
+  assert.equal(await window.locator("#onboarding-primary").isEnabled(), true);
   await window.screenshot({
-    path: path.join(output, "09-activation-blocked.png"),
+    path: path.join(output, "10-activation-ready.png"),
   });
   await window.locator("#onboarding-tunnel-id").fill("tunnel_ui_fixture");
   await window
@@ -229,7 +294,7 @@ try {
     JSON.stringify({
       label,
       placement,
-      screenshots: steps.length + 5,
+      screenshots: steps.length + 6,
       signInSurface,
       navigationChangesNoReadiness: true,
       modelSends: 0,

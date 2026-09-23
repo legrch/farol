@@ -98,7 +98,9 @@ export class GuidedOnboardingView {
       });
     element<HTMLButtonElement>("#onboarding-open-chatgpt").addEventListener(
       "click",
-      () => port.openChat(),
+      () => {
+        void this.openVerificationChat();
+      },
     );
     element<HTMLButtonElement>("#onboarding-copy-check").addEventListener(
       "click",
@@ -341,6 +343,25 @@ export class GuidedOnboardingView {
         return row;
       }),
     );
+  }
+
+  private async openVerificationChat(): Promise<void> {
+    if (this.busy) return;
+    this.busy = true;
+    this.message = "";
+    this.port.render();
+    try {
+      await this.port.configure(
+        { kind: "chatgpt.open-sign-in" },
+        "ChatGPT opened inside Farol Dev. Return to Setup when done.",
+      );
+    } catch {
+      this.message =
+        "ChatGPT could not be opened. Inspect the current route before trying again.";
+    } finally {
+      this.busy = false;
+      this.port.render();
+    }
   }
 
   private async copyCheck(): Promise<void> {
