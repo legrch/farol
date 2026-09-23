@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ProductConfigurationCommandSchema } from "../../src/pkg/product-settings/contract";
 import {
   AGENT_AUTHORITY_CHANGED,
   agentAuthorityUnchanged,
@@ -24,7 +25,7 @@ describe("what a shell action may do to an assignment being written", () => {
   it("keeps the editor and offers a way out when a background publisher fires", () => {
     // The owner's rule: a background completion, auth-window close or
     // runtime refresh must not tear down the editor solely to navigate.
-    for (const source of ["auth-window-closed"]) {
+    for (const source of ["auth-window-closed", "verification-completed"]) {
       const decision = decideShellAction({ ...noProvenance, source }, writing);
       expect(decision.navigate, source).toBe(false);
       expect(decision.offerReturn, source).toBe(true);
@@ -33,6 +34,14 @@ describe("what a shell action may do to an assignment being written", () => {
       expect(decision.refreshReadiness, source).toBe(true);
       expect(decision.reason).toBe("background-publisher");
     }
+  });
+
+  it("uses a separate command for a completed background app check", () => {
+    expect(
+      ProductConfigurationCommandSchema.safeParse({
+        kind: "chatgpt.verification-return",
+      }).success,
+    ).toBe(true);
   });
 
   it("ignores the navigation of an auth window older than the one held", () => {
@@ -72,6 +81,7 @@ describe("what a shell action may do to an assignment being written", () => {
       "settings-command",
       "quick-switcher-command",
       "overlay-dismissed",
+      "sign-in-return-command",
     ]) {
       const decision = decideShellAction({ ...noProvenance, source }, writing);
       expect(decision.navigate, source).toBe(true);

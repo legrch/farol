@@ -439,6 +439,18 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     expect(calls).toEqual(["ensureDependencies", "runBuild", "launch"]);
   });
 
+  it("selects the isolated real profile only for the explicit acceptance launch", async () => {
+    const selected = [];
+    const { overrides } = baseOverrides({
+      launch: async (acceptanceProfile) => {
+        selected.push(acceptanceProfile);
+      },
+    });
+    await main(["--acceptance-profile"], overrides);
+    await main([], overrides);
+    expect(selected).toEqual([true, false]);
+  });
+
   it("exits with the dependency status and never builds when dependencies fail", async () => {
     const { overrides, calls } = baseOverrides({
       ensureDependencies: async () => {

@@ -40,15 +40,37 @@ export function desktopEnvironment(
 export function desktopAppDataPath(
   environment: DesktopEnvironment,
   nativeAppData: string,
-  e2e: Readonly<{ enabled: boolean; override: string | undefined }>,
+  options: Readonly<{
+    enabled: boolean;
+    override: string | undefined;
+    acceptanceProfile?: string | undefined;
+  }>,
 ): string {
-  if (environment !== "dev" || !e2e.enabled || e2e.override === undefined) {
+  if (
+    options.acceptanceProfile !== undefined &&
+    options.acceptanceProfile !== "1"
+  ) {
+    throw new Error("DESKTOP_ACCEPTANCE_PROFILE_INVALID");
+  }
+  if (options.acceptanceProfile === "1") {
+    if (environment !== "dev" || options.enabled) {
+      throw new Error("DESKTOP_ACCEPTANCE_PROFILE_CONFLICT");
+    }
+    // A real, persistent first-run profile. No E2E seams and no mutation of
+    // the ordinary DEV directory. The launcher owns the marker.
+    return path.join(nativeAppData, "Farol Dev Acceptance");
+  }
+  if (
+    environment !== "dev" ||
+    !options.enabled ||
+    options.override === undefined
+  ) {
     return nativeAppData;
   }
-  if (!path.isAbsolute(e2e.override) || e2e.override.includes("\0")) {
+  if (!path.isAbsolute(options.override) || options.override.includes("\0")) {
     throw new Error("DESKTOP_E2E_APP_DATA_INVALID");
   }
-  return e2e.override;
+  return options.override;
 }
 
 export function desktopIdentity(

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   claimConnectorAppVerificationAttempt,
   connectorAppVerificationAttemptExists,
+  prepareConnectorAppVerificationAttempt,
 } from "../../src/apps/desktop/connector-app-verification-attempt";
 
 const roots: string[] = [];
@@ -40,5 +41,20 @@ describe("one-shot connector app verification", () => {
     await expect(
       claimConnectorAppVerificationAttempt(root, "../bad"),
     ).rejects.toThrow("CONNECTOR_APP_VERIFICATION_CHALLENGE_INVALID");
+  });
+
+  it("never persists pending uncertainty when the one-shot claim fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "farol-app-verify-"));
+    roots.push(root);
+    const challenge = "c".repeat(64);
+    await claimConnectorAppVerificationAttempt(root, challenge);
+    let pendingWrites = 0;
+    await expect(
+      prepareConnectorAppVerificationAttempt(root, challenge, async () => {
+        pendingWrites += 1;
+        return true;
+      }),
+    ).rejects.toThrow("CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED");
+    expect(pendingWrites).toBe(0);
   });
 });

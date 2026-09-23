@@ -96,6 +96,40 @@ describe("desktop environment identity", () => {
     ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
   });
 
+  it("selects a stable real acceptance profile without changing the ordinary DEV path", () => {
+    const acceptance = path.join(appData, "Farol Dev Acceptance");
+    expect(
+      desktopAppDataPath("dev", appData, {
+        enabled: false,
+        override: undefined,
+        acceptanceProfile: "1",
+      }),
+    ).toBe(acceptance);
+    expect(desktopIdentity("dev", acceptance).userData).toBe(
+      path.join(acceptance, "Farol Dev"),
+    );
+    expect(
+      desktopAppDataPath("dev", appData, {
+        enabled: false,
+        override: undefined,
+      }),
+    ).toBe(appData);
+    expect(() =>
+      desktopAppDataPath("dev", appData, {
+        enabled: true,
+        override: "/private/tmp/e2e",
+        acceptanceProfile: "1",
+      }),
+    ).toThrow("DESKTOP_ACCEPTANCE_PROFILE_CONFLICT");
+    expect(() =>
+      desktopAppDataPath("dev", appData, {
+        enabled: false,
+        override: undefined,
+        acceptanceProfile: "unexpected",
+      }),
+    ).toThrow("DESKTOP_ACCEPTANCE_PROFILE_INVALID");
+  });
+
   it("forces only DEV children into the app-owned Codex home", () => {
     const privateHome = "/private/farol-dev/codex-home";
     expect(codexChildHomePath("dev", privateHome, "/Users/owner/.codex")).toBe(

@@ -8,6 +8,7 @@ import {
   setupStepStale,
   type RouteReadinessState,
 } from "./setup-presentation";
+import { allFoldersChecked } from "./folder-access-state";
 
 // A projection of the existing configuration, never another settings store.
 // In particular, neither visiting a step nor saving a key is verification.
@@ -17,6 +18,8 @@ export interface OnboardingFacts {
   readonly folder: RouteReadinessState;
   readonly hasFolder: boolean;
   readonly authority: string;
+  readonly connectionIdentity: string;
+  readonly verificationIdentity: string | null;
   readonly client: boolean;
   readonly tunnelId: string | null;
   readonly credentialStored: boolean;
@@ -37,6 +40,8 @@ export function onboardingFacts(
       folder: "not-configured",
       hasFolder: false,
       authority: "unavailable",
+      connectionIdentity: "unavailable",
+      verificationIdentity: null,
       client: false,
       tunnelId: null,
       credentialStored: false,
@@ -66,7 +71,8 @@ export function onboardingFacts(
     folder: routeReadiness(settings.setup.computer, {
       stale:
         setupStepStale(settings, "computer") ||
-        settings.setup.computer.verified?.buildId !== buildId,
+        settings.setup.computer.verified?.buildId !== buildId ||
+        !allFoldersChecked(settings, buildId),
     }),
     hasFolder: workspaceIds.length > 0,
     authority: JSON.stringify([
@@ -74,6 +80,26 @@ export function onboardingFacts(
       settings.computer.generation,
       workspaceIds,
     ]),
+    connectionIdentity: JSON.stringify([
+      connector.generation,
+      connector.tunnelId,
+      connector.credential,
+      connector.tunnelClient?.executableSha256 ?? null,
+    ]),
+    verificationIdentity:
+      runtime !== null &&
+      connector.challenge !== null &&
+      settings.setup.computer.verified !== null
+        ? JSON.stringify([
+            runtime.buildId,
+            runtime.runtimeGeneration,
+            connector.challenge.challengeSha256,
+            connector.challenge.runtimeGeneration,
+            settings.setup.computer.verified.workspaceId,
+            settings.computer.generation,
+            connector.generation,
+          ])
+        : null,
     client: connector.tunnelClient !== null,
     tunnelId: connector.tunnelId,
     credentialStored: connector.credential === "stored",
@@ -106,27 +132,27 @@ export const onboardingSteps = [
   },
   {
     id: "folder",
-    label: "Choose a folder",
-    title: "Choose what ChatGPT can read",
-    copy: "Choose one folder. Farol checks access locally; files stay private until you ask ChatGPT to use them.",
+    label: "Folders",
+    title: "Your folders, your choice",
+    copy: "Add the folders you want to use with ChatGPT. Check their access here, or remove them at any time. Your files stay on this computer.",
   },
   {
     id: "tunnel",
-    label: "Activate",
+    label: "Connection",
     title: "Connect this computer",
-    copy: "Create a separate DEV tunnel and runtime key, then paste them below. Activate saves the connection and starts it for you.",
+    copy: "Save your tunnel credentials once, then check the connection. You can replace them later without starting setup again.",
   },
   {
     id: "app",
     label: "Add to ChatGPT",
     title: "Add Farol Dev to ChatGPT",
-    copy: "The tunnel is local-ready. Add its app in ChatGPT, then verify that ChatGPT can reach this computer.",
+    copy: "Add Farol Dev in ChatGPT once. Then check the connection here — Farol selects the app and sends one small verification message.",
   },
   {
     id: "finish",
-    label: "Ready",
-    title: "You're connected",
-    copy: "ChatGPT can reach the folder you approved. Use @Farol Dev when asking it to work with your computer.",
+    label: "Overview",
+    title: "Your setup",
+    copy: "Four steps connect ChatGPT to this computer. Open any step to check or change it; only confirmed checks turn green.",
   },
 ] as const;
 export type OnboardingStep = (typeof onboardingSteps)[number]["id"];

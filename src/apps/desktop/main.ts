@@ -6,6 +6,7 @@ import {
   Menu,
   screen,
   session,
+  shell,
   utilityProcess,
   WebContentsView,
   type Input,
@@ -41,6 +42,7 @@ import {
   type ProductTaskCommandResult,
 } from "../../modules/chat/contract/product-task";
 import { LiveTaskRegistry, type LiveTaskAdmission } from "./live-task-registry";
+import { onboardingHelpUrl } from "./onboarding-help";
 import {
   journalUnderPromotionLease,
   PromotionPendingRefusal,
@@ -114,6 +116,10 @@ import {
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
+  readPendingConnectorReceipt,
+  waitForConnectorAppReceipt,
+} from "./connector-app-receipt-wait";
+import {
   ProductConfigurationService,
   ProductSettingsStore,
 } from "./product-configuration";
@@ -166,8 +172,8 @@ import {
   configurationAdmission,
 } from "./configuration-admission";
 import {
-  claimConnectorAppVerificationAttempt,
   connectorAppVerificationAttemptExists,
+  prepareConnectorAppVerificationAttempt,
 } from "./connector-app-verification-attempt";
 import {
   WORKSPACE_EDIT_ACK_HOLD_ENV,
@@ -311,6 +317,7 @@ import {
   checkConnectorAttachment,
   clearConnectorVerificationReceipt,
   readConnectorVerificationReceipt,
+  type ConnectorVerificationReceipt,
 } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import {
@@ -345,6 +352,7 @@ const desktopAppData = desktopAppDataPath(
   {
     enabled: process.env.FAROL_NEXT_E2E === "1",
     override: process.env.FAROL_NEXT_E2E_APP_DATA,
+    acceptanceProfile: process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
   },
 );
 const declaredDesktopIdentity = desktopIdentity(
@@ -3542,8 +3550,35 @@ async function startSecureMcpConnector(
   }
 }
 
+type ConnectorAppVerificationBinding = Readonly<{
+  tunnelId: string;
+  connectorGeneration: number;
+  computerGeneration: number;
+  runtimeGeneration: string;
+  challengeSha256: string;
+  buildId: string;
+  workspaceId: string;
+}>;
+
+function connectorAppBindingCurrent(
+  settings: ProductSettings,
+  expected: ConnectorAppVerificationBinding,
+): boolean {
+  const connector = settings.connectors.secureMcp;
+  return (
+    settings.computer.generation === expected.computerGeneration &&
+    settings.setup.computer.verified?.workspaceId === expected.workspaceId &&
+    connector.tunnelId === expected.tunnelId &&
+    connector.generation === expected.connectorGeneration &&
+    connector.runtime?.runtimeGeneration === expected.runtimeGeneration &&
+    connector.runtime?.buildId === expected.buildId &&
+    connector.challenge?.challengeSha256 === expected.challengeSha256
+  );
+}
+
 async function checkSecureMcpAttachment(
   expectedWorkspaceId?: string,
+  expectedBinding?: ConnectorAppVerificationBinding,
 ): Promise<ProductConfigurationResult> {
   if (!configuration || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -3556,6 +3591,12 @@ async function checkSecureMcpAttachment(
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready") {
       return configurationFailure("SETTINGS_UNAVAILABLE");
+    }
+    if (
+      expectedBinding &&
+      !connectorAppBindingCurrent(snapshot.settings, expectedBinding)
+    ) {
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     }
     const connector = snapshot.settings.connectors.secureMcp;
     const runtime = connector.runtime;
@@ -3603,6 +3644,14 @@ async function checkSecureMcpAttachment(
     if (!verdict.attached) {
       return configurationFailure("CONNECTOR_ATTACHMENT_INVALID");
     }
+    const latest = configuration.snapshot();
+    if (
+      expectedBinding &&
+      (latest.status !== "ready" ||
+        !connectorAppBindingCurrent(latest.settings, expectedBinding))
+    ) {
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+    }
     const receiptSha256 = createHash("sha256")
       .update(`${JSON.stringify(receipt, null, 2)}\n`)
       .digest("hex");
@@ -3649,6 +3698,8 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
   chatGptTaskAdmission = true;
   connectorTaskAdmission = true;
   let requestedWorkspaceId: string | null = null;
+  let receiptPending = false;
+  let expectedBinding: ConnectorAppVerificationBinding | null = null;
   try {
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready")
@@ -3671,13 +3722,29 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
       challenge.computerGeneration !== runtime.computerGeneration ||
       challenge.runtimeGeneration !== runtime.runtimeGeneration ||
       workspaceId === undefined ||
+      workspaceId === null ||
       !settings.computer.workspaces.some(
         (workspace) => workspace.workspaceId === workspaceId,
       )
     ) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
     }
+    if (connector.tunnelId === null) {
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    }
     requestedWorkspaceId = workspaceId;
+    expectedBinding = {
+      tunnelId: connector.tunnelId,
+      connectorGeneration: connector.generation,
+      computerGeneration: settings.computer.generation,
+      runtimeGeneration: runtime.runtimeGeneration,
+      challengeSha256: challenge.challengeSha256,
+      buildId: runtime.buildId,
+      workspaceId,
+    };
+    if (settings.setup.connect.outcomeUnknown) {
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
+    }
     const stateRoot = secureMcpLaunchRoot();
     try {
       if (
@@ -3700,43 +3767,63 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     const result = await chatGptRoute.runReadonlyTask(prompt, [], {
       onDispatchIntent: async () => {
         if (claimed) return;
-        await claimConnectorAppVerificationAttempt(
+        await prepareConnectorAppVerificationAttempt(
           stateRoot,
           challenge.challengeSha256,
+          async () =>
+            (
+              await configuration!.recordSecureMcpAppPending(
+                runtime.runtimeGeneration,
+              )
+            ).ok,
         );
         claimed = true;
       },
     });
-    if (result.state !== "completed") {
+    if (
+      result.state === "failed_before_submit" ||
+      result.state === "not_authenticated"
+    ) {
+      const beforeSubmit = configuration.snapshot();
+      if (
+        beforeSubmit.status !== "ready" ||
+        !connectorAppBindingCurrent(beforeSubmit.settings, expectedBinding)
+      )
+        return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+      if (beforeSubmit.settings.setup.connect.outcomeUnknown) {
+        const cleared =
+          await configuration.clearSecureMcpAppPendingBeforeSubmit(
+            expectedBinding,
+          );
+        if (!cleared.ok)
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+          );
+      }
       const preSubmitCode = result.code;
       return configurationFailure(
-        claimed
-          ? "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
-          : preSubmitCode === "CHATGPT_APP_SELECTION_MISSING" ||
-              preSubmitCode === "CHATGPT_APP_SELECTION_AMBIGUOUS" ||
-              preSubmitCode === "CHATGPT_APP_SELECTION_CONFLICT" ||
-              preSubmitCode === "CHATGPT_APP_SELECTION_LOST" ||
-              preSubmitCode === "CHATGPT_COMPOSER_DRAFT_PRESENT"
-            ? preSubmitCode
-            : "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
+        preSubmitCode === "CHATGPT_APP_SELECTION_MISSING" ||
+          preSubmitCode === "CHATGPT_APP_SELECTION_AMBIGUOUS" ||
+          preSubmitCode === "CHATGPT_APP_SELECTION_CONFLICT" ||
+          preSubmitCode === "CHATGPT_APP_SELECTION_LOST" ||
+          preSubmitCode === "CHATGPT_COMPOSER_DRAFT_PRESENT"
+          ? preSubmitCode
+          : "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
       );
     }
     if (!claimed) {
       return configurationFailure(
-        "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
+        result.state === "outcome_unknown"
+          ? "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
+          : "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
       );
     }
+    receiptPending = true;
     const current = configuration.snapshot();
     if (
       current.status !== "ready" ||
-      current.settings.computer.generation !== settings.computer.generation ||
-      current.settings.connectors.secureMcp.tunnelId !== connector.tunnelId ||
-      current.settings.connectors.secureMcp.generation !==
-        connector.generation ||
-      current.settings.connectors.secureMcp.runtime?.runtimeGeneration !==
-        runtime.runtimeGeneration ||
-      current.settings.connectors.secureMcp.challenge?.challengeSha256 !==
-        challenge.challengeSha256
+      expectedBinding === null ||
+      !connectorAppBindingCurrent(current.settings, expectedBinding)
     ) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
     }
@@ -3744,10 +3831,49 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     chatGptTaskAdmission = false;
     connectorTaskAdmission = false;
   }
-  if (requestedWorkspaceId === null) {
+  if (requestedWorkspaceId === null || expectedBinding === null) {
     return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
   }
-  return checkSecureMcpAttachment(requestedWorkspaceId);
+  if (!receiptPending) {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
+  }
+  type ReceiptProbe = Readonly<
+    | { state: "changed" }
+    | { state: "receipt"; receipt: ConnectorVerificationReceipt }
+  >;
+  let observed: ReceiptProbe | null;
+  try {
+    observed = await waitForConnectorAppReceipt<ReceiptProbe>(
+      async () => {
+        const current = configuration?.snapshot();
+        if (
+          current?.status !== "ready" ||
+          !connectorAppBindingCurrent(current.settings, expectedBinding)
+        ) {
+          return { state: "changed" };
+        }
+        const receipt = await readPendingConnectorReceipt(() =>
+          readConnectorVerificationReceipt(secureMcpLaunchRoot(), {
+            readOnly: true,
+          }),
+        );
+        return receipt === null ? null : { state: "receipt", receipt };
+      },
+      (probe) =>
+        probe.state === "changed" ||
+        (probe.receipt.challengeSha256 === expectedBinding.challengeSha256 &&
+          probe.receipt.workspaceId === requestedWorkspaceId),
+    );
+  } catch {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
+  }
+  if (observed === null) {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
+  }
+  if (observed.state === "changed") {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+  }
+  return checkSecureMcpAttachment(requestedWorkspaceId, expectedBinding);
 }
 
 async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
@@ -4207,6 +4333,17 @@ async function configureAdmittedProduct(
 ): Promise<ProductConfigurationResult> {
   if (!configuration) return configurationFailure("SETTINGS_UNAVAILABLE");
   switch (command.kind) {
+    case "onboarding.open-help": {
+      try {
+        await shell.openExternal(onboardingHelpUrl(command.destination));
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: configuration.snapshot(),
+        });
+      } catch {
+        return configurationFailure("ONBOARDING_HELP_OPEN_FAILED");
+      }
+    }
     case "connector.select-client": {
       const selected = await selectedTunnelClientExecutable();
       if (selected === "cancelled") {
@@ -4306,6 +4443,57 @@ async function configureAdmittedProduct(
       return startSecureMcpConnector(false);
     case "connector.repair":
       return startSecureMcpConnector(true);
+    case "connector.check-health": {
+      if (!secureMcpConnectorRuntime)
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      if (connectorTaskAdmission)
+        return configurationFailure("CONNECTOR_ALREADY_RUNNING");
+      connectorTaskAdmission = true;
+      try {
+        const before = configuration.snapshot();
+        if (before.status !== "ready")
+          return configurationFailure("SETTINGS_UNAVAILABLE");
+        const connector = before.settings.connectors.secureMcp;
+        const current = connector.runtime;
+        if (
+          !current ||
+          current.state !== "ready" ||
+          current.buildId !== buildIdentity.buildId ||
+          current.computerGeneration !== before.settings.computer.generation ||
+          current.connectorGeneration !== connector.generation
+        )
+          return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+        const healthy = await secureMcpConnectorRuntime.checkHealth();
+        const after = configuration.snapshot();
+        if (
+          after.status !== "ready" ||
+          after.settings.computer.generation !==
+            before.settings.computer.generation ||
+          after.settings.connectors.secureMcp.generation !==
+            connector.generation ||
+          after.settings.connectors.secureMcp.runtime?.runtimeGeneration !==
+            current.runtimeGeneration
+        )
+          return configurationFailure(
+            "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+          );
+        if (!healthy) {
+          const failure = await recordConnectorRuntime(
+            "unreachable",
+            current.runtimeGeneration,
+            current.computerGeneration,
+          );
+          if (failure) return failure;
+          return configurationFailure("CONNECTOR_DOCTOR_FAILED");
+        }
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot: after,
+        });
+      } finally {
+        connectorTaskAdmission = false;
+      }
+    }
     case "connector.check-attachment":
       return checkSecureMcpAttachment();
     case "connector.verify-app":
@@ -5020,8 +5208,10 @@ async function configureAdmittedProduct(
       chatGptSignInOutcome = null;
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
-      if (runtimeEnvironment === "dev" && !signInSurfaceOpen) {
-        signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
+      if (runtimeEnvironment === "dev") {
+        if (!signInSurfaceOpen || section !== "browser" || setupOpen) {
+          signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
+        }
         signInSurfaceOpen = true;
         section = "browser";
         setupOpen = false;
@@ -5078,8 +5268,26 @@ async function configureAdmittedProduct(
         evidence: { kind: "chatgpt.readiness", ...observed },
       });
     }
-    case "chatgpt.sign-in-return": {
-      if (runtimeEnvironment === "dev") chatGptRoute?.returnFromSignIn();
+    case "chatgpt.sign-in-return":
+    case "chatgpt.verification-return": {
+      if (runtimeEnvironment === "dev") {
+        // A readonly app check leaves sign-in mode before it dispatches. The
+        // embedded page still occupies the browser surface, so Return must
+        // restore Setup even when there is no sign-in observation to finish.
+        const observingSignIn = chatGptRoute?.returnFromSignIn() ?? false;
+        if (!observingSignIn && signInSurfaceOpen) {
+          const closing = chatGptSignInOpenGeneration;
+          chatGptSignInOpenGeneration = null;
+          restoreEmbeddedSignInLayout();
+          publishShellAction(
+            "sign-in-returned",
+            command.kind === "chatgpt.verification-return"
+              ? "verification-completed"
+              : "sign-in-return-command",
+            closing,
+          );
+        }
+      }
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot: configuration.snapshot(),
@@ -5784,9 +5992,23 @@ async function configureAdmittedProduct(
       if (selected === "invalid") {
         return configurationFailure("WORKSPACE_SELECTION_INVALID");
       }
-      return ProductConfigurationResultSchema.parse(
-        await configuration.addReadonlyWorkspace(selected),
+      const added = await configuration.addReadonlyWorkspace(selected);
+      if (!added.ok || added.snapshot.status !== "ready")
+        return ProductConfigurationResultSchema.parse(added);
+      // Report the native pick even when it is an already approved folder.
+      // Inferring it from a snapshot diff fails on that no-op path.
+      const workspace = added.snapshot.settings.computer.workspaces.find(
+        (candidate) => candidate.root === selected.root,
       );
+      if (!workspace)
+        return configurationFailure("WORKSPACE_SELECTION_INVALID");
+      return ProductConfigurationResultSchema.parse({
+        ...added,
+        evidence: {
+          kind: "computer.workspace-selection",
+          workspaceId: workspace.workspaceId,
+        },
+      });
     }
     case "computer.remove-workspace":
       return ProductConfigurationResultSchema.parse(
@@ -5821,6 +6043,41 @@ async function configureAdmittedProduct(
       return ProductConfigurationResultSchema.parse(
         await configuration.updateComputerCommands(command.commands),
       );
+    case "computer.check-folder": {
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready")
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      const workspace = snapshot.settings.computer.workspaces.find(
+        (item) => item.workspaceId === command.workspaceId,
+      );
+      if (!workspace) return configurationFailure("WORKSPACE_NOT_FOUND");
+      const identity = workspace.rootIdentity;
+      if (!identity)
+        return configurationFailure("WORKSPACE_VERIFICATION_REQUIRED");
+      // Recheck only the already approved root through the same descriptor.
+      // No child names/content are returned and no selected-folder binding changes.
+      let reachable = false;
+      try {
+        const checked = await nativeWorkspace.execute({
+          workspace: workspaceDescriptor(workspace, identity),
+          operation: { kind: "workspace.list", relativePath: "." },
+        });
+        reachable = checked.ok && checked.value.kind === "workspace.entries";
+      } catch {
+        reachable = false;
+      }
+      const recorded = await configuration.recordFolderAccessCheck(
+        workspace.workspaceId,
+        snapshot.settings.computer.generation,
+        buildIdentity.buildId,
+        identity,
+        reachable,
+      );
+      if (!recorded.ok) return ProductConfigurationResultSchema.parse(recorded);
+      return reachable
+        ? ProductConfigurationResultSchema.parse(recorded)
+        : configurationFailure("WORKSPACE_VERIFICATION_FAILED");
+    }
     case "computer.verify-workspace": {
       const snapshot = configuration.snapshot();
       const workspace =

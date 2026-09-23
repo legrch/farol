@@ -2621,6 +2621,7 @@ function connectorAppVerificationFailureMessage(code: string): string {
 async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
+  onEvidence?: (evidence: ProductConfigurationEvidence | undefined) => void,
 ): Promise<boolean> {
   const configurationRequest = configurationRequestOrder.begin();
   // While Setup is open it is the only visible surface — a failure or
@@ -2916,6 +2917,7 @@ async function configureProduct(
     return false;
   }
   const evidence = parsed.evidence;
+  if (!supersededFeedback) onEvidence?.(evidence);
   let evidenceError = false;
   let taskResultToAcknowledge: string | null = null;
   if (evidence?.kind === "computer.workspace-read") {
@@ -4734,9 +4736,9 @@ function render(notify = true): void {
     settingsFeedbackError,
   );
   if (guidedEnabled) {
-    const pendingApproval = unresolvedComputerRequest(selectedTaskId) !== null;
+    const pendingApproval = pendingComputerTask() !== null;
     required<HTMLElement>("#connection-permission").hidden = !pendingApproval;
-    required<HTMLElement>("#connection-scope").hidden = !pendingApproval;
+    required<HTMLElement>("#connection-scope").hidden = true;
     required('.nav-item[data-section="computer"] .nav-label').textContent =
       "Setup";
   }
@@ -5249,6 +5251,27 @@ async function start(): Promise<void> {
     buildId: () => bootstrap.build.buildId,
     isActive: () => section === "computer",
     configure: configureProduct,
+    pickFolder: async () => {
+      let selected: string | null = null;
+      await configureProduct(
+        { kind: "computer.add-workspace" },
+        "Folder selected.",
+        (evidence) => {
+          if (evidence?.kind === "computer.workspace-selection")
+            selected = evidence.workspaceId;
+        },
+      );
+      return selected;
+    },
+    openSettings: () => selectSection("settings"),
+    openDiagnostics: () => {
+      selectSection("settings");
+      const diagnostics = required<HTMLDetailsElement>(
+        "#connection-diagnostics",
+      );
+      diagnostics.open = true;
+      diagnostics.scrollIntoView({ block: "start" });
+    },
     render: () => render(),
     returnToChat: () => selectSection("browser"),
     openChat: () => {
@@ -5258,13 +5281,15 @@ async function start(): Promise<void> {
       if (!chat) required<HTMLButtonElement>("#new-task").click();
     },
   });
-  const tunnelHelp = required("#onboarding-tunnel-help");
-  for (const id of ["create-tunnel", "create-key"] as const) {
-    const help = buildMediaInstructions(id);
-    if (help) tunnelHelp.append(help);
+  // Diagnostic and optional model/Agent controls are available in Settings,
+  // not a second setup journey beneath the guided steps.
+  if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
+    const diagnostics = required<HTMLDetailsElement>("#connection-diagnostics");
+    diagnostics.open = false;
+    required('[data-panel="settings"]').append(diagnostics);
+    required("#connection-diagnostics > summary").textContent =
+      "Connection diagnostics";
   }
-  const appHelp = buildMediaInstructions("attach-connector");
-  if (appHelp) required("#onboarding-app-help").append(appHelp);
 
   document
     .querySelectorAll<HTMLButtonElement>(".nav-item")

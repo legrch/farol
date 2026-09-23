@@ -393,6 +393,236 @@ describe("ChatGPT route submission boundary", () => {
     expect(nativeInputs).toEqual(["@Farol Dev"]);
   });
 
+  it("selects one exact app from a visible non-semantic Plugins picker", async () => {
+    const expectedHref = "https://chatgpt.com/c/plain-picker";
+    let selected = false;
+    let pickerVisible = false;
+    let pickerAvailable = true;
+    let headingVisible = true;
+    let fileHeadingVisible = false;
+    let transcriptVisible = false;
+    let transcriptClicks = 0;
+    let clicks = 0;
+    class HTMLElement {
+      parentElement: HTMLElement | null = null;
+      article = false;
+      textContent = "";
+      innerText = "";
+      children: HTMLElement[] = [];
+      rect = {
+        left: 550,
+        right: 640,
+        top: 540,
+        bottom: 560,
+        width: 90,
+        height: 20,
+      };
+      getBoundingClientRect() {
+        return this.rect;
+      }
+      getAttribute(): null {
+        return null;
+      }
+      closest(selector: string): HTMLElement | null {
+        if (
+          selector.includes("article") ||
+          selector.includes("data-message-author-role")
+        ) {
+          let current: HTMLElement | null = this;
+          while (current) {
+            if (current.article) return current;
+            current = current.parentElement;
+          }
+          return null;
+        }
+        return this.parentElement;
+      }
+      contains(candidate: unknown): boolean {
+        let current = candidate as HTMLElement | null;
+        while (current) {
+          if (current === this) return true;
+          current = current.parentElement;
+        }
+        return false;
+      }
+      querySelectorAll(): readonly HTMLElement[] {
+        return [];
+      }
+      cloneNode(): HTMLElement {
+        return new HTMLElement();
+      }
+      focus(): void {}
+      replaceChildren(): void {}
+      dispatchEvent(): boolean {
+        return true;
+      }
+      click(): void {}
+    }
+    class HTMLTextAreaElement extends HTMLElement {}
+    class InputEvent {
+      constructor(..._arguments: unknown[]) {}
+    }
+    const form = new HTMLElement();
+    const composer = new HTMLElement();
+    composer.rect = {
+      left: 510,
+      right: 1130,
+      top: 420,
+      bottom: 470,
+      width: 620,
+      height: 50,
+    };
+    composer.parentElement = form;
+    const popup = new HTMLElement();
+    popup.rect = {
+      left: 510,
+      right: 1130,
+      top: 480,
+      bottom: 730,
+      width: 620,
+      height: 250,
+    };
+    popup.parentElement = form;
+    const chip = new HTMLElement();
+    chip.textContent = "Farol Dev";
+    form.querySelectorAll = () => (selected ? [chip] : []);
+    const heading = new HTMLElement();
+    heading.textContent = "Plugins";
+    heading.rect = {
+      left: 530,
+      right: 590,
+      top: 500,
+      bottom: 520,
+      width: 60,
+      height: 20,
+    };
+    heading.parentElement = popup;
+    const fileHeading = new HTMLElement();
+    fileHeading.textContent = "Files";
+    fileHeading.rect = {
+      left: 530,
+      right: 570,
+      top: 580,
+      bottom: 600,
+      width: 40,
+      height: 20,
+    };
+    fileHeading.parentElement = popup;
+    const title = new HTMLElement();
+    title.textContent = "Farol Dev";
+    title.parentElement = popup;
+    title.click = () => {
+      clicks += 1;
+      selected = true;
+    };
+    const wrong = new HTMLElement();
+    wrong.textContent = "Farol Dev Other";
+    wrong.rect = {
+      left: 560,
+      right: 700,
+      top: 570,
+      bottom: 590,
+      width: 140,
+      height: 20,
+    };
+    wrong.parentElement = popup;
+    const transcriptHeading = new HTMLElement();
+    transcriptHeading.textContent = "Plugins";
+    transcriptHeading.rect = { ...heading.rect };
+    const transcriptTitle = new HTMLElement();
+    transcriptTitle.textContent = "Farol Dev";
+    transcriptTitle.rect = { ...title.rect };
+    const message = new HTMLElement();
+    message.article = true;
+    const transcriptPopup = new HTMLElement();
+    transcriptPopup.rect = { ...popup.rect };
+    transcriptPopup.parentElement = message;
+    transcriptHeading.parentElement = transcriptPopup;
+    transcriptTitle.parentElement = transcriptPopup;
+    transcriptTitle.click = () => {
+      transcriptClicks += 1;
+    };
+    const context = vm.createContext({
+      location: { href: expectedHref },
+      document: {
+        querySelector: (selector: string) =>
+          selector.includes("prompt-textarea") ? composer : null,
+        querySelectorAll: (selector: string) =>
+          selector !== "span,div,strong"
+            ? []
+            : pickerVisible
+              ? [
+                  ...(headingVisible ? [heading] : []),
+                  ...(fileHeadingVisible ? [fileHeading] : []),
+                  title,
+                  wrong,
+                ]
+              : transcriptVisible
+                ? [transcriptHeading, transcriptTitle]
+                : [],
+        createTextNode: (text: string) => ({ text }),
+        execCommand: () => {
+          pickerVisible = pickerAvailable;
+          return true;
+        },
+      },
+      getComputedStyle: (element: HTMLElement) => ({
+        display: "block",
+        visibility: "visible",
+        position:
+          element === popup || element === transcriptPopup
+            ? "absolute"
+            : "static",
+      }),
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
+      HTMLElement,
+      HTMLTextAreaElement,
+      InputEvent,
+      Set,
+      Object,
+      Array,
+    });
+
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "bound" });
+    expect(clicks).toBe(1);
+    selected = false;
+    headingVisible = false;
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "blocked", reason: "missing" });
+    expect(clicks).toBe(1);
+
+    fileHeadingVisible = false;
+    pickerAvailable = false;
+    transcriptVisible = true;
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "blocked", reason: "missing" });
+    expect(transcriptClicks).toBe(0);
+
+    pickerAvailable = true;
+    transcriptVisible = false;
+    headingVisible = true;
+    fileHeadingVisible = true;
+    title.rect = {
+      left: 560,
+      right: 650,
+      top: 610,
+      bottom: 630,
+      width: 90,
+      height: 20,
+    };
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "blocked", reason: "missing" });
+    expect(clicks).toBe(1);
+  });
+
   it("filters the real @ picker and accepts one exact Farol Dev option with description", async () => {
     const expectedHref = "https://chatgpt.com/c/dev-binding";
     let selected = false;
@@ -2140,6 +2370,48 @@ describe("ChatGPT sign-in return", () => {
     candidate.dispose();
   });
 
+  it("recreates a failed embedded sign-in page on the next explicit open", async () => {
+    const first = embeddedSurface();
+    const second = embeddedSurface();
+    for (const surface of [first, second]) {
+      Object.assign(surface.webContents, {
+        executeJavaScript: vi.fn(async () => ({})),
+      });
+    }
+    const surfaces = [first, second];
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() =>
+        surfaces.shift()) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+
+    await expect(
+      candidate.openForSignIn("Sign in to ChatGPT — Farol Dev"),
+    ).resolves.toEqual({ status: "opened" });
+    first.webContents.emit(
+      "did-fail-load",
+      {},
+      -105,
+      "ERR_NAME_NOT_RESOLVED",
+      "https://chatgpt.com/auth/login",
+      true,
+    );
+    candidate.returnFromSignIn();
+    await vi.waitFor(() => expect(outcomes).toEqual(["unknown"]));
+
+    expect(first.destroy).toHaveBeenCalledTimes(1);
+    await expect(
+      candidate.openForSignIn("Sign in to ChatGPT — Farol Dev"),
+    ).resolves.toEqual({ status: "opened" });
+    expect(second.reveal).toHaveBeenCalledTimes(1);
+    candidate.dispose();
+  });
+
   it("closes on one Return and reports one unknown outcome when the page read never settles", async () => {
     vi.useFakeTimers();
     try {
@@ -2802,6 +3074,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       composer?: "textarea" | "rich";
       draft?: string;
       chipTextInComposer?: boolean;
+      linkOnly?: boolean;
+      extraSelectedLink?: string;
+      separateRepresentations?: boolean;
+      markerPluginId?: string;
     }> = {},
   ): Readonly<{
     context: vm.Context;
@@ -2843,7 +3119,12 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
         return null;
       }
       contains(candidate: unknown): boolean {
-        return candidate === this;
+        let current = candidate as StubElement | null;
+        while (current) {
+          if (current === this) return true;
+          current = current.parentElement;
+        }
+        return false;
       }
       getAttribute(_name: string): string | null {
         return null;
@@ -2876,18 +3157,29 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     const send = new HTMLButtonElement();
     const appChip = new HTMLElement();
     appChip.textContent = selectedAppName ?? "";
+    appChip.getAttribute = (name: string) =>
+      name === "data-app-id" ? (options.markerPluginId ?? null) : null;
     const appLink = new HTMLElement();
     appLink.textContent = selectedAppName ?? "";
+    if (!options.linkOnly && !options.separateRepresentations) {
+      appLink.parentElement = appChip;
+    }
     appLink.getAttribute = (name: string) =>
       name === "href"
-        ? "/plugins/plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a"
+        ? "/plugins/plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a?plugin_detail_origin=inline_selection_pill"
+        : null;
+    const otherLink = new HTMLElement();
+    otherLink.textContent = options.extraSelectedLink ?? "";
+    otherLink.getAttribute = (name: string) =>
+      name === "href"
+        ? "/plugins/plugin_asdk_app_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa?plugin_detail_origin=inline_selection_pill"
         : null;
     composer.querySelectorAll = (selector: string) =>
       selector.includes('a[href*="/plugins/plugin_asdk_app_"]')
         ? options.chipTextInComposer && selectedAppName !== undefined
-          ? [appLink]
+          ? [appLink, ...(options.extraSelectedLink ? [otherLink] : [])]
           : []
-        : selectedAppName === undefined
+        : selectedAppName === undefined || options.linkOnly
           ? []
           : [appChip];
 
@@ -2996,6 +3288,74 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       ),
     ).toMatchObject({ ready: true });
     expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+  });
+
+  it("keeps the exact selected plugin link bound after the picker marker disappears", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      linkOnly: true,
+    });
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol Dev", expectedHref),
+        context,
+      ),
+    ).toEqual({ state: "bound" });
+    expect(
+      vm.runInContext(
+        prepareTaskScript("AUTHORIZED_CHECK", expectedHref, "Farol Dev"),
+        context,
+      ),
+    ).toMatchObject({ ready: true });
+    expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+  });
+
+  it("blocks a second selected plugin link beside the Farol Dev marker", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      extraSelectedLink: "Other app",
+    });
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol Dev", expectedHref),
+        context,
+      ),
+    ).toEqual({ state: "blocked", reason: "ambiguous" });
+    expect(
+      vm.runInContext(activateTaskScript(expectedHref, "Farol Dev"), context),
+    ).toEqual({ appSelectionLost: true });
+    expect(contacts.clicked).toBe(0);
+  });
+
+  it("deduplicates separate marker and link only when their plugin IDs match", () => {
+    const exactId = "plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a";
+    const same = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      separateRepresentations: true,
+      markerPluginId: exactId,
+    });
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol Dev", expectedHref),
+        same.context,
+      ),
+    ).toEqual({ state: "bound" });
+
+    const different = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      separateRepresentations: true,
+      markerPluginId: "plugin_asdk_app_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol Dev", expectedHref),
+        different.context,
+      ),
+    ).toEqual({ state: "blocked", reason: "ambiguous" });
   });
 
   it("still preserves a real draft beside the selected app link", async () => {

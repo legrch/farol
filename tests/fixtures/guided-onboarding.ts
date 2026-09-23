@@ -52,6 +52,13 @@ export function guidedSettingsFixture() {
           label: "Demo project",
           access: "read",
           excludedPaths: [],
+          rootIdentity: { device: "1", inode: "2" },
+          accessCheck: {
+            buildId: fixtureBuildId,
+            computerGeneration: 1,
+            verifiedAt: verified.verifiedAt,
+            rootIdentity: { device: "1", inode: "2" },
+          },
         },
       ],
     },

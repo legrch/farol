@@ -21,6 +21,8 @@ const empty: OnboardingFacts = {
   folder: "not-configured",
   hasFolder: false,
   authority: "build-a:1:workspace-a",
+  connectionIdentity: "connector-a:1",
+  verificationIdentity: null,
   client: false,
   tunnelId: null,
   credentialStored: false,

@@ -84,6 +84,8 @@ describe("shell action provenance", () => {
       "settings-command",
       "quick-switcher-command",
       "overlay-dismissed",
+      "sign-in-return-command",
+      "verification-completed",
       "auth-window-closed",
     ]);
     // "app-menu" is deliberately NOT a source: requestSettings and
@@ -102,7 +104,7 @@ describe("shell action provenance", () => {
     const calls = [...source.matchAll(/publishShellAction\(\s*([^;]*?)\)/gsu)]
       .map((match) => match[1] ?? "")
       .filter((body) => !body.includes("action:"));
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     expect(
       calls.filter((body) => body.includes('"quick-switcher-command"')),
     ).toHaveLength(1);
@@ -115,10 +117,16 @@ describe("shell action provenance", () => {
     expect(
       calls.filter((body) => body.includes('"auth-window-closed"')),
     ).toHaveLength(1);
+    expect(
+      calls.filter((body) => body.includes('"sign-in-return-command"')),
+    ).toHaveLength(1);
+    expect(
+      calls.filter((body) => body.includes('"verification-completed"')),
+    ).toHaveLength(1);
     // Every publish is stamped: no call site may omit provenance.
     for (const body of calls) {
       expect(body).toMatch(
-        /"(settings-command|quick-switcher-command|overlay-dismissed|auth-window-closed)"/u,
+        /"(settings-command|quick-switcher-command|overlay-dismissed|sign-in-return-command|verification-completed|auth-window-closed)"/u,
       );
     }
   });

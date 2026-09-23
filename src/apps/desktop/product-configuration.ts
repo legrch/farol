@@ -1215,6 +1215,135 @@ export class ProductConfigurationService {
   // verification observed, and a bound workspace is never rebound to another
   // object. It also approves exactly the linked Git metadata it observed, or
   // clears a grant when the metadata now lives inside the root (null).
+  // Persist uncertainty before the app verification is dispatched. A lost
+  // renderer reply or restart must not turn that attempt into a retry button.
+  async recordSecureMcpAppPending(
+    runtimeGeneration: string,
+  ): Promise<MutationResult> {
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      if (
+        this.current.connectors.secureMcp.runtime?.runtimeGeneration !==
+        runtimeGeneration
+      )
+        return this.failure("SETTINGS_INPUT_INVALID");
+      return this.commit((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        setup: {
+          ...settings.setup,
+          connect: {
+            ...settings.setup.connect,
+            outcomeUnknown: true,
+            needsAction:
+              "Check the pending ChatGPT connection result before sending another check.",
+          },
+        },
+      }));
+    });
+  }
+
+  // The route may positively report that no click occurred after dispatch
+  // intent was recorded. Clear only that exact attempt's uncertainty; a lost
+  // acknowledgement or any changed binding must remain outcome-unknown.
+  async clearSecureMcpAppPendingBeforeSubmit(
+    expected: Readonly<{
+      tunnelId: string;
+      connectorGeneration: number;
+      computerGeneration: number;
+      runtimeGeneration: string;
+      challengeSha256: string;
+      buildId: string;
+      workspaceId: string;
+    }>,
+  ): Promise<MutationResult> {
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      const settings = this.current;
+      const connector = settings.connectors.secureMcp;
+      const runtime = connector.runtime;
+      const challenge = connector.challenge;
+      if (
+        !settings.setup.connect.outcomeUnknown ||
+        settings.computer.generation !== expected.computerGeneration ||
+        settings.setup.computer.verified?.workspaceId !==
+          expected.workspaceId ||
+        connector.tunnelId !== expected.tunnelId ||
+        connector.generation !== expected.connectorGeneration ||
+        runtime?.state !== "ready" ||
+        runtime.runtimeGeneration !== expected.runtimeGeneration ||
+        runtime.buildId !== expected.buildId ||
+        challenge?.challengeSha256 !== expected.challengeSha256 ||
+        challenge.runtimeGeneration !== expected.runtimeGeneration
+      )
+        return this.failure("SETTINGS_INPUT_INVALID");
+      return this.commit((current) => ({
+        ...current,
+        revision: current.revision + 1,
+        setup: {
+          ...current.setup,
+          connect: {
+            ...current.setup.connect,
+            outcomeUnknown: false,
+            needsAction:
+              "The app check stopped before sending. Reconnect to prepare a new challenge.",
+          },
+        },
+      }));
+    });
+  }
+
+  // Refresh only content-free setup evidence for an already bound folder.
+  // This does not select a workspace, broaden a grant, or change generation.
+  async recordFolderAccessCheck(
+    workspaceId: string,
+    expectedGeneration: number,
+    buildId: string,
+    rootIdentity: WorkspaceRootIdentity,
+    success: boolean,
+  ): Promise<MutationResult> {
+    if (
+      !/^[a-f0-9]{64}$/u.test(buildId) ||
+      !WorkspaceRootIdentitySchema.safeParse(rootIdentity).success
+    )
+      return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      const workspace = this.current.computer.workspaces.find(
+        (item) => item.workspaceId === workspaceId,
+      );
+      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
+      if (
+        this.current.computer.generation !== expectedGeneration ||
+        workspace.rootIdentity?.device !== rootIdentity.device ||
+        workspace.rootIdentity?.inode !== rootIdentity.inode
+      )
+        return this.failure("WORKSPACE_ROOT_CHANGED");
+      return this.commit((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        computer: {
+          ...settings.computer,
+          workspaces: settings.computer.workspaces.map((item) =>
+            item.workspaceId !== workspaceId
+              ? item
+              : {
+                  ...item,
+                  accessCheck: success
+                    ? {
+                        buildId,
+                        computerGeneration: expectedGeneration,
+                        verifiedAt: this.now(),
+                        rootIdentity,
+                      }
+                    : null,
+                },
+          ),
+        },
+      }));
+    });
+  }
+
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
@@ -1258,6 +1387,12 @@ export class ProductConfigurationService {
         return {
           ...(gitMetadata.data === undefined ? workspace : rest),
           rootIdentity,
+          accessCheck: {
+            buildId: parsed.data.buildId,
+            computerGeneration: this.current!.computer.generation,
+            verifiedAt: this.now(),
+            rootIdentity,
+          },
           ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
         };
       };

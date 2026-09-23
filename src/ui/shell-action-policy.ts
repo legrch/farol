@@ -66,16 +66,19 @@ const IGNORED: ShellActionDecision = Object.freeze({
 });
 
 /**
- * The one publisher that is not an owner action.
+ * Publishers that may complete without a current owner gesture.
  *
  * Named from the real publishers rather than guessed: `settings-command`,
- * `quick-switcher-command` and `overlay-dismissed` are all reached from an
- * owner gesture, and `auth-window-closed` is published after a ChatGPT auth
- * window's outcome is recorded — which happens whether or not the owner
- * touched anything. It is also the publisher the owner's own sentence names:
- * an auth-window close must not tear down an editor to navigate.
+ * `quick-switcher-command`, `overlay-dismissed` and
+ * `sign-in-return-command` are all reached from an owner gesture, and
+ * `auth-window-closed` follows a ChatGPT auth outcome and
+ * `verification-completed` follows a network check. Both can arrive after
+ * the owner moves to an editor; neither may tear down that draft.
  */
-const BACKGROUND_SOURCE = "auth-window-closed";
+const BACKGROUND_SOURCES = new Set([
+  "auth-window-closed",
+  "verification-completed",
+]);
 
 export function decideShellAction(
   provenance: ShellActionProvenance,
@@ -101,7 +104,7 @@ export function decideShellAction(
     return { ...base, navigate: true, offerReturn: false, reason: "no-draft" };
   }
 
-  if (provenance.source === BACKGROUND_SOURCE) {
+  if (provenance.source !== null && BACKGROUND_SOURCES.has(provenance.source)) {
     // An auth window closing never takes the editor, current or not. The
     // generation only changes what this is called: a close from a window
     // older than the one being held is worth telling apart in a diagnostic

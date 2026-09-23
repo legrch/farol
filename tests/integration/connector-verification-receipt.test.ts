@@ -28,6 +28,24 @@ async function receiptRoot(): Promise<string> {
 }
 
 describe("connector verification receipt", () => {
+  it("does not create or repair a root during a bounded read-only probe", async () => {
+    const root = await receiptRoot();
+    await expect(
+      readConnectorVerificationReceipt(root, { readOnly: true }),
+    ).resolves.toBeNull();
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.mkdir(root, { mode: 0o700 });
+    // Create the deliberately unsafe fixture explicitly: the caller's umask
+    // may otherwise turn mkdir(0755) into a safe 0700 directory.
+    await fs.chmod(root, 0o755);
+    expect((await fs.stat(root)).mode & 0o777).toBe(0o755);
+    await expect(
+      readConnectorVerificationReceipt(root, { readOnly: true }),
+    ).rejects.toThrow("CONNECTOR_VERIFICATION_RECEIPT_UNSAFE");
+    expect((await fs.stat(root)).mode & 0o777).toBe(0o755);
+  });
+
   it("accepts one exact challenge and writes one content-free private receipt", async () => {
     const root = await receiptRoot();
     const challenge = "00000000-0000-4000-8000-000000000001";

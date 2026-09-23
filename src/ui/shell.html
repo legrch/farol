@@ -115,7 +115,10 @@
         <button id="onboarding-return" class="onboarding-return" type="button">
           ‹ Back to ChatGPT
         </button>
-        <p class="onboarding-nav-label">GET STARTED</p>
+        <p class="onboarding-nav-label">SETUP</p>
+        <button type="button" data-onboarding-step="finish">
+          <span aria-hidden="true">◫</span><b>Overview</b>
+        </button>
         <button type="button" data-onboarding-step="chatgpt">
           <span>1</span><b>Sign in</b>
         </button>
@@ -127,9 +130,6 @@
         </button>
         <button type="button" data-onboarding-step="app">
           <span>4</span><b>Add to ChatGPT</b>
-        </button>
-        <button type="button" data-onboarding-step="finish">
-          <span>5</span><b>Ready</b>
         </button>
       </nav>
 
@@ -291,144 +291,275 @@
           hidden
         >
           <form id="onboarding-form" novalidate>
-            <header class="onboarding-heading">
-              <span id="onboarding-counter">STEP 1 OF 5</span>
-              <h2 id="onboarding-title">Connect your ChatGPT</h2>
-              <p id="onboarding-copy"></p>
-            </header>
-            <div class="onboarding-body">
-              <section data-onboarding-content="chatgpt">
-                <div class="onboarding-callout">
-                  <span class="onboarding-symbol" aria-hidden="true">↗</span>
-                  <div>
-                    <strong>Your account, inside Farol</strong>
+            <div class="onboarding-scroll" id="onboarding-scroll">
+              <header class="onboarding-heading">
+                <span id="onboarding-counter">SETUP OVERVIEW</span>
+                <h2 id="onboarding-title" tabindex="-1">Your setup</h2>
+                <p id="onboarding-copy"></p>
+              </header>
+              <p
+                id="onboarding-status"
+                class="onboarding-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+              <div class="onboarding-body">
+                <section data-onboarding-content="chatgpt">
+                  <div class="onboarding-callout">
+                    <span class="onboarding-symbol" aria-hidden="true">↗</span>
+                    <div>
+                      <strong>Your account, inside Farol</strong>
+                      <p id="onboarding-chat-copy">
+                        Use the sign-in button below. ChatGPT opens in Farol's
+                        browser. When you finish, choose Return to Setup.
+                      </p>
+                    </div>
+                  </div>
+                  <p class="onboarding-note">
+                    Signing in does not send a message or change your everyday
+                    Codex setup.
+                  </p>
+                </section>
+                <section data-onboarding-content="folder" hidden>
+                  <div class="onboarding-empty" id="onboarding-folder-empty">
+                    <span class="onboarding-symbol" aria-hidden="true">▱</span>
+                    <strong>Add your first folder</strong>
                     <p>
-                      Use the sign-in button below. ChatGPT opens in Farol's
-                      browser. When you finish, choose Return to Setup.
+                      Choose a project, documents, or another folder using the
+                      macOS picker.
                     </p>
                   </div>
-                </div>
-                <p class="onboarding-note">
-                  Signing in does not send a message or change your everyday
-                  Codex setup.
-                </p>
-              </section>
-              <section data-onboarding-content="folder" hidden>
-                <label
-                  class="onboarding-folder-choice"
-                  for="onboarding-folder-choice"
-                  >Folder for this setup
-                  <select id="onboarding-folder-choice"></select>
-                </label>
-                <div class="onboarding-callout">
-                  <span class="onboarding-symbol" aria-hidden="true">▱</span>
-                  <div>
-                    <strong id="onboarding-folder-name"
-                      >No folder chosen yet</strong
-                    >
-                    <p>
-                      Read-only access. You can change folders and permissions
-                      later in Settings.
-                    </p>
-                  </div>
-                </div>
-                <p class="onboarding-note">
-                  Choose a small project or a dedicated test folder, not your
-                  entire home folder.
-                </p>
-              </section>
-              <section data-onboarding-content="tunnel" hidden>
-                <div class="onboarding-fields" id="onboarding-tunnel-fields">
-                  <label for="onboarding-tunnel-id"
-                    >Tunnel ID<input
-                      id="onboarding-tunnel-id"
-                      type="text"
-                      autocomplete="off"
-                      spellcheck="false"
-                      placeholder="tunnel_…"
-                  /></label>
-                  <label for="onboarding-runtime-key"
-                    >Runtime key<input
-                      id="onboarding-runtime-key"
-                      type="password"
-                      autocomplete="off"
-                      spellcheck="false"
-                      placeholder="Paste the key for this DEV tunnel"
-                  /></label>
-                </div>
-                <p class="onboarding-note" id="onboarding-tunnel-note">
-                  Use a separate DEV tunnel. Do not reuse the tunnel running
-                  Legacy.
-                </p>
-                <details class="onboarding-help">
-                  <summary>Where do I get these?</summary>
-                  <div id="onboarding-tunnel-help"></div>
-                </details>
-              </section>
-              <section data-onboarding-content="app" hidden>
-                <ol class="onboarding-instructions">
-                  <li>
-                    Use the dedicated ChatGPT app for this DEV tunnel, named
-                    <strong>Farol Dev</strong>. Update an existing DEV app
-                    instead of creating a duplicate.
-                  </li>
-                  <li>
-                    Return here and select <strong>Verify app</strong>. Farol
-                    selects the exact app and sends one connection check.
-                  </li>
-                </ol>
-                <p class="onboarding-note" id="onboarding-app-tunnel"></p>
-                <p class="onboarding-note">
-                  Verify app sends one small ChatGPT message. It checks the
-                  connection without reading your file contents. An unknown
-                  outcome is not sent again automatically.
-                </p>
-                <details class="onboarding-help">
-                  <summary>Advanced app setup and manual repair</summary>
-                  <div id="onboarding-app-help"></div>
-                  <label
-                    class="onboarding-request"
-                    for="onboarding-check-request"
-                    >Manual connection check<textarea
-                      id="onboarding-check-request"
-                      rows="3"
-                      readonly
-                      spellcheck="false"
-                    ></textarea>
-                  </label>
+                  <ul
+                    id="onboarding-folder-list"
+                    class="onboarding-folder-list"
+                    aria-label="Folders available to Farol"
+                  ></ul>
                   <div class="onboarding-link-actions">
-                    <button id="onboarding-copy-check" type="button">
-                      Copy check</button
-                    ><button id="onboarding-open-chatgpt" type="button">
-                      Open verification chat
+                    <button id="onboarding-add-folder" type="button">
+                      ＋ Add folder…
                     </button>
                   </div>
-                </details>
-              </section>
-              <section data-onboarding-content="finish" hidden>
-                <ul
-                  id="onboarding-finish-list"
-                  class="onboarding-finish-list"
-                ></ul>
-                <p class="onboarding-note">
-                  This confirms the basic ChatGPT connection, not a model or
-                  Agent test. Codex model integration is a separate optional
-                  step in Advanced.
-                </p>
-              </section>
+                  <p class="onboarding-note" id="onboarding-folder-scope"></p>
+                  <p class="onboarding-note">
+                    Remove takes a folder out of Farol; it never deletes your
+                    files. Prefer project folders to your entire home folder.
+                  </p>
+                  <div
+                    class="onboarding-recovery"
+                    id="onboarding-folder-confirmation"
+                    hidden
+                  >
+                    <p id="onboarding-folder-confirmation-copy"></p>
+                    <button type="button" id="onboarding-confirm-folder">
+                      Continue
+                    </button>
+                    <button type="button" id="onboarding-cancel-folder">
+                      Cancel
+                    </button>
+                  </div>
+                </section>
+                <section data-onboarding-content="tunnel" hidden>
+                  <div
+                    class="onboarding-saved-card"
+                    id="onboarding-credentials-saved"
+                    hidden
+                  >
+                    <span class="onboarding-success-icon" aria-hidden="true"
+                      >✓</span
+                    >
+                    <div>
+                      <strong>Tunnel credentials saved</strong>
+                      <p>Your API key is stored privately on this computer.</p>
+                    </div>
+                    <button type="button" id="onboarding-replace-credentials">
+                      Replace credentials
+                    </button>
+                  </div>
+                  <div class="onboarding-fields" id="onboarding-tunnel-fields">
+                    <label for="onboarding-tunnel-id"
+                      >Tunnel ID<input
+                        id="onboarding-tunnel-id"
+                        type="text"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="tunnel_…"
+                    /></label>
+                    <label for="onboarding-runtime-key"
+                      >API key <small>Runtime key, not an admin key</small
+                      ><input
+                        id="onboarding-runtime-key"
+                        type="password"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="sk-…"
+                    /></label>
+                  </div>
+                  <p class="onboarding-note" id="onboarding-tunnel-note"></p>
+                  <p id="onboarding-key-status" class="onboarding-note"></p>
+                  <div class="onboarding-link-actions">
+                    <button type="button" id="onboarding-keep-credentials">
+                      Keep saved credentials
+                    </button>
+                    <button type="button" id="onboarding-copy-tunnel">
+                      Copy tunnel ID
+                    </button>
+                  </div>
+                  <ol
+                    class="onboarding-guide-cards"
+                    aria-label="Get your tunnel credentials"
+                  >
+                    <li>
+                      <span class="onboarding-guide-number" aria-hidden="true"
+                        >1</span
+                      >
+                      <div>
+                        <strong>Create a tunnel</strong>
+                        <p>
+                          Name it Farol Dev and associate it with the ChatGPT
+                          workspace you use.
+                        </p>
+                        <button type="button" data-onboarding-help="tunnels">
+                          Open Tunnels ↗
+                        </button>
+                      </div>
+                    </li>
+                    <li>
+                      <span class="onboarding-guide-number" aria-hidden="true"
+                        >2</span
+                      >
+                      <div>
+                        <strong>Create a runtime key</strong>
+                        <p>
+                          Choose Restricted permissions:
+                          <b>Tunnels Read + Use</b>. Copy the key once; do not
+                          use an admin key.
+                        </p>
+                        <button type="button" data-onboarding-help="api-keys">
+                          Create API key ↗
+                        </button>
+                      </div>
+                    </li>
+                  </ol>
+                  <p class="onboarding-note">
+                    Save both values here, then choose
+                    <strong>Activate and check</strong>. Saving alone does not
+                    verify the connection.
+                  </p>
+                </section>
+                <section data-onboarding-content="app" hidden>
+                  <div class="onboarding-flow" aria-label="Verification route">
+                    <span>ChatGPT</span><b aria-hidden="true">↔</b
+                    ><span>Your tunnel</span><b aria-hidden="true">↔</b
+                    ><span>This computer</span>
+                  </div>
+                  <div class="onboarding-link-actions">
+                    <button type="button" data-onboarding-help="chatgpt">
+                      Open ChatGPT Plugins ↗
+                    </button>
+                    <button type="button" data-onboarding-help="setup-guide">
+                      Connection guide ↗
+                    </button>
+                  </div>
+                  <ol class="onboarding-instructions onboarding-short-guide">
+                    <li>
+                      In ChatGPT, open
+                      <strong
+                        >Settings → Security and login → Developer mode</strong
+                      >. Then open <strong>Plugins</strong> using the link
+                      above.
+                    </li>
+                    <li>
+                      Select <strong>＋</strong>, name the app
+                      <strong>Farol Dev</strong>, and choose
+                      <strong>Connection → Tunnel</strong>. Select your tunnel
+                      and <strong>No authentication</strong>. Keep your runtime
+                      key in Farol, not in this form. Reuse an existing Farol
+                      Dev app instead of creating a duplicate.
+                    </li>
+                    <li>
+                      Return here and select <strong>Verify app</strong>. Farol
+                      opens ChatGPT, selects that app, and sends one short
+                      connection check. You can watch the reply.
+                    </li>
+                  </ol>
+                  <p class="onboarding-note" id="onboarding-app-tunnel"></p>
+                  <p class="onboarding-note">
+                    This check reads no file contents. Opening the page or
+                    saving the app does not count as verification.
+                  </p>
+                  <div class="onboarding-link-actions">
+                    <button id="onboarding-open-chatgpt" type="button">
+                      Open ChatGPT inside Farol
+                    </button>
+                    <button type="button" id="onboarding-verify-again">
+                      Run a new check
+                    </button>
+                  </div>
+                  <div
+                    id="onboarding-new-check-confirmation"
+                    class="onboarding-recovery"
+                    hidden
+                  >
+                    <p>
+                      This briefly reconnects the tunnel and sends one new
+                      ChatGPT message. A check with an unknown result is never
+                      sent again automatically.
+                    </p>
+                    <button type="button" id="onboarding-confirm-new-check">
+                      Reconnect and run one check
+                    </button>
+                    <button type="button" id="onboarding-cancel-new-check">
+                      Cancel
+                    </button>
+                  </div>
+                </section>
+                <section data-onboarding-content="finish" hidden>
+                  <ul
+                    id="onboarding-finish-list"
+                    class="onboarding-finish-list"
+                  ></ul>
+                  <p class="onboarding-note">
+                    This overview confirms sign-in, folder access and the
+                    ChatGPT connection. Model and Agent tests are separate; they
+                    are not required to finish setup.
+                  </p>
+                </section>
+              </div>
+              <div
+                class="onboarding-link-actions"
+                id="onboarding-secondary-actions"
+              >
+                <button id="onboarding-recheck" type="button">
+                  Verify again
+                </button>
+                <button id="onboarding-open-account" type="button">
+                  Open ChatGPT / change account
+                </button>
+                <button id="onboarding-reconnect" type="button">
+                  Reconnect
+                </button>
+              </div>
+              <div class="onboarding-recovery" id="onboarding-recovery" hidden>
+                <p id="onboarding-recovery-copy"></p>
+                <div class="onboarding-link-actions">
+                  <button id="onboarding-check-result" type="button">
+                    Check previous result
+                  </button>
+                  <button id="onboarding-stop" type="button">
+                    Stop connection
+                  </button>
+                  <button id="onboarding-diagnostics" type="button">
+                    Connection details
+                  </button>
+                </div>
+              </div>
+              <p
+                id="onboarding-feedback"
+                class="settings-feedback"
+                role="status"
+                aria-live="polite"
+              ></p>
             </div>
-            <p
-              id="onboarding-status"
-              class="onboarding-status"
-              role="status"
-              aria-live="polite"
-            ></p>
-            <p
-              id="onboarding-feedback"
-              class="settings-feedback"
-              role="status"
-              aria-live="polite"
-            ></p>
             <footer class="onboarding-footer">
               <button id="onboarding-back" type="button">Back</button
               ><button

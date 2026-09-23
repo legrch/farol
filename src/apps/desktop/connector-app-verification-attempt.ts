@@ -89,3 +89,17 @@ export async function claimConnectorAppVerificationAttempt(
     await handle?.close().catch(() => undefined);
   }
 }
+
+// Both durable steps finish before the route is allowed to click Send. The
+// claim comes first: a failed or partial claim cannot leave settings claiming
+// that an unsubmitted ChatGPT message has an unknown outcome.
+export async function prepareConnectorAppVerificationAttempt(
+  root: string,
+  challengeSha256: string,
+  recordPending: () => Promise<boolean>,
+): Promise<void> {
+  await claimConnectorAppVerificationAttempt(root, challengeSha256);
+  if (!(await recordPending())) {
+    throw new Error("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
+  }
+}

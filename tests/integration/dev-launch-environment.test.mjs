@@ -97,6 +97,20 @@ describe("development launcher environment", () => {
     });
   });
 
+  it("allows an explicit real acceptance profile without E2E seams", () => {
+    const environment = devLaunchEnvironment(
+      {
+        HOME: "/Users/owner",
+        FAROL_NEXT_ACCEPTANCE_PROFILE: "1",
+        FAROL_NEXT_E2E: "1",
+      },
+      "/declared/node/bin",
+      true,
+    );
+    expect(environment.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
+    expect(environment.FAROL_NEXT_E2E).toBeUndefined();
+  });
+
   it("hides a sentinel from a real child that the inherited shape reveals", async () => {
     poison({
       [SENTINEL]: "1",
@@ -157,5 +171,26 @@ describe("development launcher environment", () => {
     expect(
       received.options.env.PATH.startsWith(path.dirname(process.execPath)),
     ).toBe(true);
+  });
+
+  it("places the acceptance app on the secondary display before showing it", async () => {
+    let received;
+    const stop = new Error("SPAWN_INTERCEPTED");
+    await expect(
+      launchPreview(
+        "/tmp/farol-next-dev-root",
+        (command, args, options) => {
+          received = { command, args, options };
+          throw stop;
+        },
+        true,
+      ),
+    ).rejects.toBe(stop);
+    expect(received.args).toEqual([
+      "dist/app/main.cjs",
+      "--preview-window-mode=secondary-visible",
+    ]);
+    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
+    expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
   });
 });

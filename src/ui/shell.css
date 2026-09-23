@@ -2764,7 +2764,26 @@ html[data-guided-onboarding="true"] [data-panel="computer"] > .panel-heading {
   display: none;
 }
 html[data-guided-onboarding="true"] [data-panel="computer"] {
-  padding: clamp(24px, 4.5vw, 56px);
+  padding: clamp(20px, 3vh, 32px) clamp(24px, 4.5vw, 56px) 0;
+  overflow: hidden;
+}
+html[data-guided-onboarding="true"] [data-panel="computer"].active {
+  display: flex;
+  flex-direction: column;
+}
+html[data-guided-onboarding="true"] #guided-onboarding {
+  flex: 1 1 auto;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+}
+html[data-guided-onboarding="true"] #connection-permission:not([hidden]) {
+  flex: 0 0 auto;
+  width: min(720px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 12px 0;
+  background: var(--surface);
 }
 .onboarding-nav {
   display: grid;
@@ -2839,6 +2858,7 @@ html[data-sidebar="rail"] .sign-in-return-button:not([hidden]) {
 }
 .onboarding-nav button.complete span {
   border-color: transparent;
+  background: color-mix(in srgb, var(--complete) 14%, transparent);
   color: var(--complete);
 }
 .onboarding-nav button b {
@@ -2859,8 +2879,56 @@ html[data-sidebar="rail"] .onboarding-nav button {
   padding-inline: 4px;
 }
 .guided-onboarding {
-  max-width: 680px;
+  max-width: 720px;
   margin: 0 auto;
+  height: 100%;
+  min-height: 0;
+}
+#onboarding-form {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: 100%;
+  min-height: 0;
+}
+.onboarding-scroll {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 12px 24px 0;
+  scrollbar-gutter: stable;
+}
+.onboarding-scroll > .settings-feedback:empty {
+  display: none;
+}
+.onboarding-short-guide {
+  margin-top: 20px;
+}
+.onboarding-recovery {
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.onboarding-recovery > p {
+  margin: 0 0 10px;
+}
+.onboarding-recovery > button {
+  padding: 10px 14px;
+  margin-right: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.guided-onboarding button:focus-visible,
+.guided-onboarding input:focus-visible {
+  outline: 2px solid var(--iris-bright);
+  outline-offset: 3px;
 }
 .onboarding-heading > span {
   color: var(--iris-bright);
@@ -2883,8 +2951,7 @@ html[data-sidebar="rail"] .onboarding-nav button {
   line-height: 1.65;
 }
 .onboarding-body {
-  min-height: 212px;
-  margin-top: 24px;
+  margin-top: 20px;
 }
 .onboarding-callout {
   display: flex;
@@ -3019,22 +3086,33 @@ html[data-sidebar="rail"] .onboarding-nav button {
   font-size: 12px;
 }
 .onboarding-status {
-  min-height: 20px;
+  margin: 20px 0 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   color: var(--text-soft);
-  font-size: 12px;
+  background: var(--surface-raised);
+  font-size: 13px;
   line-height: 1.6;
 }
+.onboarding-status[data-state="ready"] {
+  color: var(--complete);
+  border-color: color-mix(in srgb, var(--complete) 40%, transparent);
+  background: color-mix(in srgb, var(--complete) 9%, var(--surface));
+}
+.onboarding-status[data-state="attention"] {
+  border-color: var(--iris-bright);
+  color: var(--text);
+}
+/* The actions occupy their own row, never overlaying help or form fields. */
 .onboarding-footer {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
   border-top: 1px solid var(--line);
-  padding: 22px 0 12px;
-  margin-top: 24px;
+  padding: 18px 0;
+  margin-top: 0;
   background: var(--surface);
 }
 .onboarding-footer button {
@@ -3059,14 +3137,44 @@ html[data-sidebar="rail"] .onboarding-nav button {
   cursor: default;
 }
 .onboarding-finish-list {
-  padding: 22px;
+  padding: 0;
   margin: 0;
   list-style: none;
-  background: var(--surface-raised);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  line-height: 2.4;
+  display: grid;
+  gap: 10px;
+  line-height: 1.4;
   font-size: 14px;
+}
+.onboarding-overview-row {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  min-height: 76px;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.onboarding-overview-row strong {
+  font-weight: 550;
+}
+.onboarding-overview-row span {
+  color: var(--text-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.onboarding-overview-row.complete strong {
+  color: var(--complete);
+}
+.onboarding-overview-row.complete {
+  border-color: color-mix(in srgb, var(--complete) 30%, var(--line));
+}
+.onboarding-overview-row:hover:not(:disabled) {
+  border-color: var(--iris-bright);
 }
 .connection-diagnostics {
   max-width: 760px;
@@ -3076,4 +3184,188 @@ html[data-sidebar="rail"] .onboarding-nav button {
 }
 .connection-diagnostics > .settings-group {
   margin-top: 20px;
+}
+
+/* Small visual guides are explanatory UI, not imitations of upstream screens. */
+.onboarding-empty {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 30px 22px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  text-align: center;
+}
+.onboarding-empty p,
+.onboarding-saved-card p,
+.onboarding-guide-cards p {
+  margin: 6px 0 0;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.onboarding-folder-list {
+  display: grid;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.onboarding-folder-card {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+.onboarding-folder-card[data-state="ready"] {
+  border-color: color-mix(in srgb, var(--complete) 32%, var(--line));
+}
+.onboarding-folder-copy {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+.onboarding-folder-copy strong {
+  font-size: 15px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.onboarding-folder-path {
+  color: var(--text-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+.onboarding-folder-copy small {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+.onboarding-folder-card[data-state="ready"] small {
+  color: var(--complete);
+}
+.onboarding-folder-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.onboarding-folder-actions button,
+.onboarding-saved-card button,
+.onboarding-guide-cards button {
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.onboarding-folder-actions button:hover:not(:disabled),
+.onboarding-saved-card button:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+.onboarding-saved-card {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--complete) 40%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--complete) 7%, var(--surface));
+}
+.onboarding-saved-card strong {
+  color: var(--complete);
+  font-size: 15px;
+  font-weight: 550;
+}
+.onboarding-success-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: var(--complete);
+  background: color-mix(in srgb, var(--complete) 15%, transparent);
+}
+.onboarding-fields label > small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-soft);
+}
+.onboarding-guide-cards {
+  list-style: none;
+  padding: 0;
+  margin: 24px 0 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.onboarding-guide-cards li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.onboarding-guide-cards strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+.onboarding-guide-cards button {
+  color: var(--iris-bright);
+  margin-top: 12px;
+}
+.onboarding-guide-number {
+  display: grid;
+  place-items: center;
+  flex: 0 0 25px;
+  height: 25px;
+  border-radius: 8px;
+  background: var(--iris-soft);
+  color: var(--iris-bright);
+  font-size: 12px;
+}
+.onboarding-flow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 18px;
+  background: var(--surface-raised);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.onboarding-flow span {
+  flex: 1;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-align: center;
+  font-size: 13px;
+}
+.onboarding-flow b {
+  font-weight: 400;
+  color: var(--iris-bright);
+}
+@media (max-width: 900px) {
+  .onboarding-guide-cards {
+    grid-template-columns: 1fr;
+  }
+  .onboarding-saved-card {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+  .onboarding-saved-card button {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .onboarding-folder-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

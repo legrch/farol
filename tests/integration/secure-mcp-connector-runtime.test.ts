@@ -185,6 +185,62 @@ describe("secure MCP connector runtime", () => {
     expect(child.signals).toEqual(["SIGTERM"]);
   });
 
+  it("checks the owned ready endpoint without restarting and refuses stale in-flight health", async () => {
+    const selected = await fixture();
+    const child = new FakeChild();
+    const start = vi.fn<ConnectorProcessStarter>(async (command) => {
+      await fs.writeFile(
+        option(command, "--health.url-file"),
+        "http://127.0.0.1:43125\n",
+        { mode: 0o600 },
+      );
+      return child;
+    });
+    const get = vi.fn(async (_url: string) => true);
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      { start, get },
+    );
+    expect(await runtime.checkHealth()).toBe(false);
+    expect(get).not.toHaveBeenCalled();
+    await runtime.start({
+      executablePath: selected.executablePath,
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    });
+    get.mockClear();
+    expect(await runtime.checkHealth()).toBe(true);
+    expect(get).toHaveBeenCalledExactlyOnceWith(
+      "http://127.0.0.1:43125/readyz",
+    );
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(child.signals).toEqual([]);
+    get.mockResolvedValueOnce(false);
+    expect(await runtime.checkHealth()).toBe(false);
+    expect(start).toHaveBeenCalledTimes(1);
+    let release!: (value: boolean) => void;
+    get.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = runtime.checkHealth();
+    await runtime.stop();
+    release(true);
+    expect(await pending).toBe(false);
+    const before = get.mock.calls.length;
+    expect(await runtime.checkHealth()).toBe(false);
+    expect(get.mock.calls).toHaveLength(before);
+  });
+
   it("does not auto-restart a daemon with an unknown readiness outcome", async () => {
     const selected = await fixture();
     const child = new FakeChild();

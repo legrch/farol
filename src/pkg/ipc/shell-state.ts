@@ -33,15 +33,17 @@ export const ShellLayoutSchema = z.strictObject({
  * describe one owner intent.
  *
  * The distinction this exists for is whether an owner asked for it.
- * `settings-command`, `quick-switcher-command` and `overlay-dismissed` are
- * owner actions; `auth-window-closed` is not — it is published after a
- * ChatGPT auth window's outcome is recorded, and that window can close
- * without the owner touching anything.
+ * `settings-command`, `quick-switcher-command`, `overlay-dismissed` and
+ * `sign-in-return-command` are owner actions. `auth-window-closed` follows
+ * an auth window outcome, and `verification-completed` follows a network
+ * check; either may arrive after the owner has moved to another surface.
  */
 export const ShellActionSourceSchema = z.enum([
   "settings-command",
   "quick-switcher-command",
   "overlay-dismissed",
+  "sign-in-return-command",
+  "verification-completed",
   "auth-window-closed",
 ]);
 

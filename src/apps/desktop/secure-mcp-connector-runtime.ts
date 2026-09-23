@@ -208,6 +208,7 @@ export class SecureMcpConnectorRuntime {
   private readonly id: () => string;
   private readonly readinessTimeoutMs: number;
   private child: ConnectorChild | null = null;
+  private healthBaseUrl: string | null = null;
 
   constructor(
     private readonly options: Options,
@@ -301,6 +302,7 @@ export class SecureMcpConnectorRuntime {
       runtimeError("CONNECTOR_ALREADY_RUNNING");
     }
     await this.ensureRoots();
+    this.healthBaseUrl = null;
     await this.removeRuntimeFile(this.healthUrlFile());
     await this.removeRuntimeFile(this.pidFile());
     const runtimeGeneration = createHash("sha256")
@@ -361,6 +363,7 @@ export class SecureMcpConnectorRuntime {
       if (healthBaseUrl !== null) {
         healthObserved = true;
         if (await this.get(`${healthBaseUrl}/readyz`)) {
+          this.healthBaseUrl = healthBaseUrl;
           return { state: "ready", runtimeGeneration, healthBaseUrl };
         }
       }
@@ -380,9 +383,29 @@ export class SecureMcpConnectorRuntime {
     };
   }
 
+  // One non-disruptive probe of the endpoint observed for this exact child.
+  // No caller URL, shell command, credential read, restart or model turn.
+  async checkHealth(): Promise<boolean> {
+    const child = this.child;
+    const base = this.healthBaseUrl;
+    if (!child || child.exitCode !== null || base === null) return false;
+    try {
+      const ready = await this.get(`${base}/readyz`);
+      return (
+        ready &&
+        this.child === child &&
+        child.exitCode === null &&
+        this.healthBaseUrl === base
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async stop(): Promise<void> {
     const child = this.child;
     this.child = null;
+    this.healthBaseUrl = null;
     if (!child || child.exitCode !== null) return;
     child.kill("SIGTERM");
     if (!(await child.waitForExit(5_000))) {

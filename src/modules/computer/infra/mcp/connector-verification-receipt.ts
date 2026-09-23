@@ -227,8 +227,29 @@ export class PrivateConnectorVerificationRecorder implements ConnectorVerificati
 
 export async function readConnectorVerificationReceipt(
   root: string,
+  options: Readonly<{ readOnly?: boolean }> = {},
 ): Promise<ConnectorVerificationReceipt | null> {
-  await ensureRoot(root);
+  if (options.readOnly) {
+    assertRoot(root);
+    let directory;
+    try {
+      directory = await fs.lstat(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    const effectiveUser = process.geteuid?.();
+    if (
+      !directory.isDirectory() ||
+      directory.isSymbolicLink() ||
+      (effectiveUser !== undefined && directory.uid !== effectiveUser) ||
+      (directory.mode & 0o077) !== 0
+    ) {
+      receiptError("CONNECTOR_VERIFICATION_RECEIPT_UNSAFE");
+    }
+  } else {
+    await ensureRoot(root);
+  }
   const target = path.join(root, CONNECTOR_VERIFICATION_RECEIPT_BASENAME);
   let handle;
   try {

@@ -419,9 +419,33 @@ function appSelectionPrelude(appName: string): string {
     const appSelectionFor = (input) => {
       if (!(input instanceof HTMLElement)) return { state: "missing" };
       const root = input.closest("form") || input.parentElement || input;
-      const raw = [...root.querySelectorAll(selectedSelector)].filter(appElementVisible);
-      const markers = raw.filter((candidate) =>
-        !raw.some((other) => other !== candidate && other.contains(candidate))
+      const pluginIdentity = (element) => {
+        const marked = element.getAttribute("data-plugin-id") ||
+          element.getAttribute("data-app-id");
+        if (marked && /^plugin_asdk_app_[A-Za-z0-9]+$/u.test(marked)) return marked;
+        const href = element.getAttribute("href") || "";
+        if (!href.startsWith("/plugins/plugin_asdk_app_")) return null;
+        const [id, query] = href.slice("/plugins/plugin_asdk_app_".length).split("?");
+        return /^[A-Za-z0-9]+$/u.test(id) &&
+          (query || "").split("&").includes("plugin_detail_origin=inline_selection_pill")
+          ? "plugin_asdk_app_" + id : null;
+      };
+      const selectedLinks = [...input.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
+        .filter((link) => pluginIdentity(link) !== null && appElementVisible(link));
+      const markerCandidates = [...root.querySelectorAll(selectedSelector)]
+        .filter(appElementVisible);
+      const raw = [...new Set([...markerCandidates, ...selectedLinks])];
+      const markers = raw.filter((candidate, index) =>
+        !raw.some((other, otherIndex) => {
+          if (other === candidate) return false;
+          if (other.contains(candidate)) return true;
+          const crossRepresentation =
+            (markerCandidates.includes(candidate) && selectedLinks.includes(other)) ||
+            (selectedLinks.includes(candidate) && markerCandidates.includes(other));
+          const identity = pluginIdentity(candidate);
+          return otherIndex < index && crossRepresentation && identity !== null &&
+            identity === pluginIdentity(other);
+        })
       );
       const labels = markers.map(normalizedLabel).filter(Boolean);
       const targetCount = labels.filter((label) => label === requiredAppName).length;
@@ -502,9 +526,62 @@ export function bindChatGptAppScript(
       '[data-testid*="mention"]',
       '[data-testid*="app-picker"]'
     ].join(","))].filter(appElementVisible);
-    const optionCandidates = [...new Set(pickerRoots.flatMap((root) =>
+    let optionCandidates = [...new Set(pickerRoots.flatMap((root) =>
       [...root.querySelectorAll('[role="option"],[role="menuitem"],button')]
     ))].filter(exactPickerOption);
+    if (optionCandidates.length === 0) {
+      // ChatGPT also renders the mention picker as plain divs. Only use
+      // its visible Plugins section next to this composer; never click an
+      // arbitrary matching title elsewhere in the conversation.
+      const composerRect = input.getBoundingClientRect();
+      const nearComposer = (element) => {
+        if (!appElementVisible(element) || input.contains(element)) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.right > composerRect.left && rect.left < composerRect.right &&
+          rect.top > composerRect.top - 400 &&
+          rect.bottom < composerRect.bottom + 450;
+      };
+      const labels = [...document.querySelectorAll("span,div,strong")]
+        .filter((element) => element instanceof HTMLElement && nearComposer(element));
+      const pickerRootFor = (element) => {
+        if (element.closest('[data-message-author-role],article,[role="article"]')) {
+          return null;
+        }
+        for (let parent = element.parentElement; parent && parent !== document.body;
+          parent = parent.parentElement) {
+          if (parent.matches?.('[data-message-author-role],article,[role="article"]')) {
+            return null;
+          }
+          const position = getComputedStyle(parent).position;
+          if (position !== "absolute" && position !== "fixed") continue;
+          const box = parent.getBoundingClientRect();
+          return appElementVisible(parent) && !parent.contains(input) &&
+            box.width <= Math.max(720, composerRect.width * 1.25) && box.height <= 600
+            ? parent : null;
+        }
+        return null;
+      };
+      const headings = labels.filter((element) => normalizedLabel(element) === "Plugins" &&
+        pickerRootFor(element) !== null);
+      const fileHeadings = labels.filter((element) => normalizedLabel(element) === "Files");
+      optionCandidates = labels.filter((element) =>
+        normalizedLabel(element) === requiredAppName &&
+        ![...element.children].some((child) => normalizedLabel(child) === requiredAppName) &&
+        headings.some((heading) => {
+          const pickerRoot = pickerRootFor(heading);
+          if (pickerRoot === null || pickerRootFor(element) !== pickerRoot) return false;
+          const header = heading.getBoundingClientRect();
+          const title = element.getBoundingClientRect();
+          const nextFilesTop = Math.min(...fileHeadings
+            .filter((files) => pickerRootFor(files) === pickerRoot)
+            .map((files) => files.getBoundingClientRect().top)
+            .filter((top) => top > header.bottom), Infinity);
+          return header.bottom <= title.top + 8 && title.top - header.bottom <= 80 &&
+            title.top < nextFilesTop &&
+            Math.abs(title.left - header.left) <= 180;
+        })
+      );
+    }
     if (optionCandidates.length !== 1) {
       setComposerText("", "deleteContentBackward");
       return {
@@ -1129,8 +1206,10 @@ export class ChatGptRoute {
     return result;
   }
 
-  returnFromSignIn(): void {
-    if (this.signInMode) this.requestSignInReturn();
+  returnFromSignIn(): boolean {
+    if (!this.signInMode) return false;
+    this.requestSignInReturn();
+    return true;
   }
 
   private exitSignInMode(): void {
@@ -1192,8 +1271,10 @@ export class ChatGptRoute {
       void pending.then((read) => {
         if (!this.signInMode || this.routeWindow !== candidate) return;
         this.pendingSignInObservation = null;
-        candidate.hide();
+        const keepPage = this.load === "loaded";
         this.exitSignInMode();
+        if (keepPage) candidate.hide();
+        else candidate.destroy();
         this.reportSignInOutcome(
           read.observation?.state === "authenticated"
             ? "authenticated"

@@ -447,6 +447,7 @@ export async function runOwnerManagedChild({
 export function devLaunchEnvironment(
   environment = process.env,
   nodeBinDirectory = path.dirname(process.execPath),
+  acceptanceProfile = false,
 ) {
   const owned = ownerLaunchEnvironment(environment);
   return {
@@ -455,19 +456,37 @@ export function devLaunchEnvironment(
     // This value is app-owned, not inherited. It selects the persistent DEV
     // identity before Electron takes its instance lock or opens any state.
     [DESKTOP_ENVIRONMENT_ENV]: "dev",
+    ...(acceptanceProfile ? { FAROL_NEXT_ACCEPTANCE_PROFILE: "1" } : {}),
   };
 }
 
-export async function launchPreview(root, spawnProcess = spawn) {
+export async function launchPreview(
+  root,
+  spawnProcess = spawn,
+  acceptanceProfile = false,
+) {
   const electronBin = path.join(root, "node_modules/.bin/electron");
   const { stopLabel, outcome, protocolError, resultCollector } =
     await runOwnerManagedChild({
       spawnChild: () =>
-        spawnProcess(electronBin, ["dist/app/main.cjs"], {
-          cwd: root,
-          env: devLaunchEnvironment(),
-          stdio: ["inherit", "pipe", "pipe"],
-        }),
+        spawnProcess(
+          electronBin,
+          [
+            "dist/app/main.cjs",
+            ...(acceptanceProfile
+              ? ["--preview-window-mode=secondary-visible"]
+              : []),
+          ],
+          {
+            cwd: root,
+            env: devLaunchEnvironment(
+              process.env,
+              path.dirname(process.execPath),
+              acceptanceProfile,
+            ),
+            stdio: ["inherit", "pipe", "pipe"],
+          },
+        ),
     });
 
   const ownerExitCode = exitCodeForOwnerStop(stopLabel);
@@ -538,13 +557,15 @@ export async function main(argv, overrides = {}) {
       ensureDependencies(vnextRoot, "npm", log),
     runBuild = () =>
       runInherited(process.execPath, ["tooling/build.mjs"], { cwd: vnextRoot }),
-    launch = () => launchPreview(vnextRoot),
+    launch = (acceptanceProfile) =>
+      launchPreview(vnextRoot, spawn, acceptanceProfile),
     log = (line) => process.stdout.write(`${line}\n`),
     logError = (line) => process.stderr.write(`${line}\n`),
     exit = (code) => process.exit(code),
   } = overrides;
 
   const checkOnly = argv.includes("--check");
+  const acceptanceProfile = argv.includes("--acceptance-profile");
 
   if (!pinned) {
     const decision = resolveToolchain({
@@ -591,7 +612,7 @@ export async function main(argv, overrides = {}) {
   }
 
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
-  await launch();
+  await launch(acceptanceProfile);
 }
 
 const isMainModule =

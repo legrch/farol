@@ -259,6 +259,17 @@ export const ApprovedProductWorkspaceSchema = z
     excludedPaths: z.array(CanonicalAbsolutePathSchema).max(32),
     rootIdentity: WorkspaceRootIdentitySchema.optional(),
     gitMetadata: WorkspaceGitMetadataSchema.optional(),
+    // Content-free evidence for the setup folder list, not another grant.
+    // The descriptor and existing authority checks still admit every read.
+    accessCheck: z
+      .strictObject({
+        buildId: z.string().regex(/^[a-f0-9]{64}$/u),
+        computerGeneration: z.number().int().positive(),
+        verifiedAt: CanonicalTimestampSchema,
+        rootIdentity: WorkspaceRootIdentitySchema,
+      })
+      .nullable()
+      .optional(),
   })
   .superRefine((workspace, context) => {
     const prefix = workspace.root === "/" ? "/" : `${workspace.root}/`;
@@ -388,6 +399,12 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
 export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
+
+  // Fixed public destinations only; the renderer cannot supply a URL.
+  z.strictObject({
+    kind: z.literal("onboarding.open-help"),
+    destination: z.enum(["tunnels", "api-keys", "chatgpt", "setup-guide"]),
+  }),
   z.strictObject({ kind: z.literal("chatgpt.verify") }),
   // A read-only refresh the renderer sends itself once it is told the
   // sign-in window has closed (UX34-08: "returned to Setup with the status
@@ -396,6 +413,9 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   // `onSignInOutcome` — so it is always safe to call and never shows a
   // "Verifying…" message the way `chatgpt.verify` does.
   z.strictObject({ kind: z.literal("chatgpt.sign-in-return") }),
+  // A completed network check may finish after the owner has opened a task
+  // editor. Keep its background provenance separate from an explicit Return.
+  z.strictObject({ kind: z.literal("chatgpt.verification-return") }),
   z.strictObject({ kind: z.literal("chatgpt.reset-conversation") }),
   z.strictObject({ kind: z.literal("support.export") }),
   z.strictObject({ kind: z.literal("host.select-codex") }),
@@ -438,6 +458,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("connector.repair") }),
   z.strictObject({ kind: z.literal("connector.stop") }),
   z.strictObject({ kind: z.literal("connector.check-attachment") }),
+  z.strictObject({ kind: z.literal("connector.check-health") }),
   z.strictObject({ kind: z.literal("connector.verify-app") }),
   z.strictObject({ kind: z.literal("dev-proof.prepare") }),
   z.strictObject({ kind: z.literal("dev-proof.run") }),
@@ -492,6 +513,10 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("computer.update-commands"),
     commands: z.enum(["none", "verification"]),
+  }),
+  z.strictObject({
+    kind: z.literal("computer.check-folder"),
+    workspaceId: IdentifierSchema,
   }),
   z.strictObject({
     kind: z.literal("computer.verify-workspace"),
@@ -590,6 +615,10 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("computer.workspace-selection"),
+    workspaceId: IdentifierSchema,
+  }),
   z.strictObject({
     kind: z.literal("host.codex-discovery"),
     candidates: z.array(DiscoveryCandidateSchema).max(32),
@@ -1039,6 +1068,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
     ok: z.literal(false),
     error: z.enum([
       "SETTINGS_UNAVAILABLE",
+      "ONBOARDING_HELP_OPEN_FAILED",
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
       "CHATGPT_ROUTE_UNAVAILABLE",

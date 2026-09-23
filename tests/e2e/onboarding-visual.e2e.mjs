@@ -7,7 +7,7 @@ import path from "node:path";
 import { _electron as electron } from "playwright-core";
 
 const root = process.cwd();
-const label = "guided";
+const label = "guided-owner-editable";
 const output = path.resolve(root, "../_output/onboarding-visual", label);
 const tempParent = path.resolve(root, "../_output/tmp");
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
@@ -18,9 +18,11 @@ const temporaryRoot = await fs.mkdtemp(
 const home = path.join(temporaryRoot, "home");
 const appData = path.join(temporaryRoot, "app-data");
 const workspaceRoot = path.join(temporaryRoot, "approved-folder");
+const secondWorkspaceRoot = path.join(temporaryRoot, "another-project");
 await fs.mkdir(home, { recursive: true, mode: 0o700 });
 await fs.mkdir(appData, { recursive: true, mode: 0o700 });
 await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
+await fs.mkdir(secondWorkspaceRoot, { recursive: true, mode: 0o700 });
 const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
 const chatGptFixture = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -104,7 +106,67 @@ try {
     await window.locator("#connection-permission").isVisible(),
     false,
   );
+  // Layout fixture only: expose the existing permission card without creating
+  // a task or granting authority. Its real pending state is owned by the host.
+  await window.locator("#connection-permission").evaluate((card) => {
+    card.hidden = false;
+    card.querySelector("button").disabled = false;
+  });
+  const permissionLayout = await window.evaluate(() => {
+    const card = document
+      .querySelector("#connection-permission")
+      .getBoundingClientRect();
+    const footer = document
+      .querySelector("#onboarding-primary")
+      .getBoundingClientRect();
+    const button = document.querySelector("#approve-tool");
+    const target = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(
+      target.x + target.width / 2,
+      target.y + target.height / 2,
+    );
+    return {
+      cardTop: card.top,
+      cardBottom: card.bottom,
+      footerBottom: footer.bottom,
+      viewportHeight: innerHeight,
+      buttonHittable: hit === button || button.contains(hit),
+    };
+  });
+  assert.ok(
+    permissionLayout.cardTop >= permissionLayout.footerBottom,
+    "GUIDED_PERMISSION_OVERLAPS_FOOTER",
+  );
+  assert.ok(
+    permissionLayout.cardBottom <= permissionLayout.viewportHeight,
+    "GUIDED_PERMISSION_CLIPPED",
+  );
+  assert.ok(
+    permissionLayout.buttonHittable,
+    "GUIDED_PERMISSION_BUTTON_OBSCURED",
+  );
+  await window.screenshot({
+    path: path.join(output, "permission-layout-fixture.png"),
+  });
+  await window.locator("#connection-permission").evaluate((card) => {
+    card.hidden = true;
+  });
+  assert.equal(
+    await window.locator('[data-onboarding-content="finish"]').isVisible(),
+    true,
+  );
+  assert.equal(
+    await window.locator("#onboarding-finish-list button").count(),
+    4,
+  );
+  assert.equal(await window.locator("#guided-onboarding details").count(), 0);
+  assert.equal(await window.locator("#onboarding-folder-choice").count(), 0);
+  assert.equal(
+    await window.locator("#connection-diagnostics").isVisible(),
+    false,
+  );
   const steps = ["chatgpt", "folder", "tunnel", "app", "finish"];
+  let footerY = null;
   const completedBefore = await window
     .locator("[data-onboarding-step].complete")
     .count();
@@ -116,6 +178,22 @@ try {
     const primary = window.locator("#onboarding-primary");
     await primary.scrollIntoViewIfNeeded();
     const geometry = await primary.boundingBox();
+    if (footerY === null) footerY = geometry?.y ?? null;
+    assert.ok(
+      geometry && footerY !== null && Math.abs(geometry.y - footerY) < 1,
+      `GUIDED_FOOTER_MOVED:${step}`,
+    );
+    await window.locator("#onboarding-scroll").evaluate((node) => {
+      node.scrollTop = node.scrollHeight;
+    });
+    const afterScroll = await primary.boundingBox();
+    assert.ok(
+      afterScroll && geometry && Math.abs(afterScroll.y - geometry.y) < 1,
+      `GUIDED_FOOTER_SCROLLED:${step}`,
+    );
+    await window.locator("#onboarding-scroll").evaluate((node) => {
+      node.scrollTop = 0;
+    });
     const viewport = await window.evaluate(() => ({
       width: innerWidth,
       height: innerHeight,
@@ -147,7 +225,22 @@ try {
     "VISITING_IS_NOT_VERIFICATION",
   );
   await window.locator('[data-onboarding-step="tunnel"]').click();
-  assert.equal(await window.locator("#onboarding-primary").isEnabled(), false);
+  assert.equal(await window.locator("#onboarding-primary").isEnabled(), true);
+  assert.equal(
+    await window.locator("#onboarding-primary").innerText(),
+    "Save credentials",
+  );
+  // Saving is independent; an app check still routes to missing sign-in.
+  await window.locator('[data-onboarding-step="app"]').click();
+  assert.equal(
+    await window.locator("#onboarding-primary").innerText(),
+    "Go to Sign in",
+  );
+  await window.locator("#onboarding-primary").click();
+  assert.equal(
+    await window.locator('[data-onboarding-content="chatgpt"]').isVisible(),
+    true,
+  );
   await window.screenshot({
     path: path.join(output, "09-activation-blocked.png"),
   });
@@ -220,9 +313,6 @@ try {
     .locator('[data-onboarding-step="chatgpt"].complete')
     .waitFor({ state: "visible" });
   await window.locator('[data-onboarding-step="app"]').click();
-  await window
-    .locator('[data-onboarding-content="app"] > .onboarding-help > summary')
-    .click();
   await window.locator("#onboarding-open-chatgpt").click();
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
   const recoveredSurface = await application.evaluate(
@@ -257,12 +347,71 @@ try {
   await window.locator('[data-onboarding-step="folder"]').click();
   await window.locator("#onboarding-primary").click();
   await window
-    .locator('#onboarding-primary:disabled:text("Working…")')
+    .locator('#onboarding-form[aria-busy="false"]')
     .waitFor({ state: "visible" });
-  await window.screenshot({ path: path.join(output, "07-folder-busy.png") });
   await window
     .locator('[data-onboarding-step="folder"].complete')
     .waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator("#onboarding-status").getAttribute("data-state"),
+    "ready",
+  );
+  assert.equal(
+    await window.locator(".onboarding-folder-path").innerText(),
+    workspaceRoot,
+  );
+  // The same native pick is a no-op addition; it must not duplicate the grant.
+  await window.locator("#onboarding-add-folder").click();
+  await window
+    .locator('#onboarding-primary:not(:disabled):text("Continue")')
+    .waitFor();
+  assert.equal(
+    await window.locator(".onboarding-folder-path").innerText(),
+    workspaceRoot,
+  );
+  assert.equal(await window.locator(".onboarding-folder-card").count(), 1);
+  await application.evaluate((_electron, selectedRoot) => {
+    process.env.FAROL_NEXT_E2E_WORKSPACE_ROOT = selectedRoot;
+  }, secondWorkspaceRoot);
+  await window.locator("#onboarding-add-folder").click();
+  await window
+    .locator('#onboarding-primary:not(:disabled):text("Continue")')
+    .waitFor();
+  assert.equal(
+    await window.locator('.onboarding-folder-card[data-state="ready"]').count(),
+    2,
+  );
+  assert.deepEqual(
+    await window.locator(".onboarding-folder-path").allTextContents(),
+    [workspaceRoot, secondWorkspaceRoot],
+  );
+  await window.screenshot({
+    path: path.join(output, "07-multiple-folders.png"),
+  });
+  await window
+    .getByRole("button", {
+      name: "Remove another-project from Farol",
+      exact: true,
+    })
+    .click();
+  await window.locator("#onboarding-confirm-folder").click();
+  await window
+    .locator('#onboarding-primary:not(:disabled):text("Continue")')
+    .waitFor();
+  assert.equal(await window.locator(".onboarding-folder-card").count(), 1);
+  assert.equal(
+    (await fs.stat(secondWorkspaceRoot)).isDirectory(),
+    true,
+    "REMOVE_DELETED_OWNER_FILES",
+  );
+  assert.equal(
+    await window.locator("#onboarding-status").getAttribute("data-state"),
+    "ready",
+  );
+  await window.locator("#onboarding-recheck").click();
+  await window
+    .locator('#onboarding-primary:not(:disabled):text("Continue")')
+    .waitFor();
   await window.screenshot({
     path: path.join(output, "08-folder-verified.png"),
   });
@@ -289,12 +438,132 @@ try {
     await window.locator("#onboarding-runtime-key").getAttribute("type"),
     "password",
   );
-  await window.locator("#onboarding-runtime-key").fill("");
+  await window.locator("#onboarding-primary").click();
+  await window
+    .locator("#onboarding-credentials-saved")
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator("#onboarding-tunnel-fields").isVisible(),
+    false,
+  );
+  assert.equal(
+    await window.locator("#onboarding-primary").innerText(),
+    "Activate and check",
+  );
+  const savedConfiguration = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).configuration;
+  assert.equal(savedConfiguration.status, "ready");
+  assert.equal(
+    savedConfiguration.settings.connectors.secureMcp.runtime,
+    null,
+    "SAVE_STARTED_THE_TUNNEL",
+  );
+  await window.screenshot({
+    path: path.join(output, "11-credentials-saved.png"),
+  });
+  await window.locator("#onboarding-replace-credentials").click();
+  assert.equal(
+    await window.locator("#onboarding-runtime-key").inputValue(),
+    "",
+    "SAVED_KEY_ENTERED_THE_RENDERER",
+  );
+  await window
+    .locator("#onboarding-runtime-key")
+    .fill("sk-synthetic-unsaved-replacement-123456");
+  await window
+    .locator("#onboarding-tunnel-id")
+    .fill("tunnel_unsaved_replacement");
+  await window.locator("#onboarding-keep-credentials").click();
+  await window
+    .locator("#onboarding-credentials-saved")
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator("#onboarding-runtime-key").inputValue(),
+    "",
+  );
+  const keptConfiguration = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).configuration;
+  assert.deepEqual(
+    keptConfiguration,
+    savedConfiguration,
+    "CANCELLED_REPLACEMENT_CHANGED_SETTINGS",
+  );
+  await window.locator("#onboarding-primary").click();
+  await window
+    .locator('[data-onboarding-step="tunnel"].complete')
+    .waitFor({ state: "visible", timeout: 30000 });
+  await window
+    .locator('#onboarding-primary:not(:disabled):text("Continue")')
+    .waitFor();
+  const activeConfiguration = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).configuration;
+  assert.equal(activeConfiguration.status, "ready");
+  const runtimeGeneration =
+    activeConfiguration.settings.connectors.secureMcp.runtime.runtimeGeneration;
+  assert.equal(
+    activeConfiguration.settings.connectors.secureMcp.attachment,
+    null,
+    "LOCAL_READY_IS_NOT_MCP_PROOF",
+  );
+  await window.locator("#onboarding-recheck").click();
+  await window
+    .locator('#onboarding-primary:not(:disabled):text("Continue")')
+    .waitFor();
+  const checkedConfiguration = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).configuration;
+  assert.equal(
+    checkedConfiguration.settings.connectors.secureMcp.runtime
+      .runtimeGeneration,
+    runtimeGeneration,
+    "HEALTH_CHECK_RESTARTED_TUNNEL",
+  );
+  await window.screenshot({ path: path.join(output, "12-tunnel-checked.png") });
+  // A failed pre-submit app check exits route sign-in mode. Return to Setup
+  // must still work; otherwise the embedded ChatGPT page traps the owner.
+  await window.locator('[data-onboarding-step="app"]').click();
+  await window.locator("#onboarding-primary").click();
+  await window
+    .locator('#onboarding-form[aria-busy="false"]')
+    .waitFor({ state: "attached", timeout: 15000 });
+  await window.locator("#sign-in-return").waitFor({ state: "visible" });
+  await window.locator("#sign-in-return").click();
+  await window.locator("#guided-onboarding").waitFor({
+    state: "visible",
+    timeout: 3000,
+  });
+  await window.screenshot({
+    path: path.join(output, "13-return-after-app-check.png"),
+  });
+  await window.locator('[data-onboarding-step="folder"]').click();
+  await window.locator("#onboarding-add-folder").click();
+  await window
+    .locator("#onboarding-folder-confirmation")
+    .waitFor({ state: "visible" });
+  await window.locator("#onboarding-cancel-folder").click();
+  const cancelledConfiguration = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).configuration;
+  assert.equal(
+    cancelledConfiguration.settings.connectors.secureMcp.runtime
+      .runtimeGeneration,
+    runtimeGeneration,
+    "CANCELLED_FOLDER_CHANGE_RESTARTED_TUNNEL",
+  );
   console.log(
     JSON.stringify({
       label,
       placement,
-      screenshots: steps.length + 6,
+      screenshots: (await fs.readdir(output)).filter((file) =>
+        file.endsWith(".png"),
+      ).length,
+      multipleFoldersChecked: true,
+      removePreservedFiles: true,
+      cancelledCredentialReplacementPreservedSettings: true,
+      healthCheckDidNotRestart: true,
       signInSurface,
       navigationChangesNoReadiness: true,
       modelSends: 0,
