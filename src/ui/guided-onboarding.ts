@@ -88,6 +88,8 @@ export function onboardingFacts(
       attachment.connectorGeneration === connector.generation &&
       attachment.computerGeneration === settings.computer.generation &&
       attachment.runtimeGeneration === runtime?.runtimeGeneration &&
+      attachment.workspaceId ===
+        settings.setup.computer.verified?.workspaceId &&
       workspaceIds.includes(attachment.workspaceId),
     outcomeUnknown:
       settings.setup.connect.outcomeUnknown ||

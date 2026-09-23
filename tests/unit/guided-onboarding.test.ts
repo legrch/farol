@@ -148,6 +148,33 @@ describe("onboarding snapshot projection", () => {
       false,
     ]);
   });
+  it("does not reuse an attachment for another saved and verified folder", () => {
+    const settings = guidedSettingsFixture();
+    const otherWorkspace = {
+      ...settings.computer.workspaces[0]!,
+      workspaceId: "00000000-0000-4000-8000-000000000099",
+      root: "/tmp/farol-onboarding-other-fixture",
+      label: "Other project",
+    };
+    settings.computer.workspaces.push(otherWorkspace);
+    settings.setup.computer.verified = {
+      ...settings.setup.computer.verified!,
+      workspaceId: otherWorkspace.workspaceId,
+    };
+    expect(defaultOnboardingFolderChoice(settings, fixtureBuildId)).toBe(
+      otherWorkspace.workspaceId,
+    );
+    const facts = onboardingFacts(settings, fixtureBuildId);
+    expect(facts.folder).toBe("ready");
+    expect(facts.attachmentCurrent).toBe(false);
+    expect(onboardingProgressForFolderChoice(facts, true)).toEqual([
+      true,
+      true,
+      true,
+      false,
+      false,
+    ]);
+  });
   it("requires a current build to reuse a prior folder verification", () => {
     const settings = guidedSettingsFixture();
     expect(

@@ -3634,53 +3634,57 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
   if (chatGptTaskAdmission || connectorTaskAdmission) {
     return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
   }
-  const snapshot = configuration.snapshot();
-  if (snapshot.status !== "ready")
-    return configurationFailure("SETTINGS_UNAVAILABLE");
-  const settings = snapshot.settings;
-  const connector = settings.connectors.secureMcp;
-  const runtime = connector.runtime;
-  const challenge = connector.challenge;
-  const workspaceId = settings.setup.computer.verified?.workspaceId;
-  if (
-    !chatGptTaskAdmissionReady() ||
-    !secureMcpConnectorRuntime.isRunning() ||
-    connector.tunnelId === null ||
-    runtime?.state !== "ready" ||
-    runtime.buildId !== buildIdentity.buildId ||
-    runtime.computerGeneration !== settings.computer.generation ||
-    runtime.connectorGeneration !== connector.generation ||
-    challenge === null ||
-    challenge.buildId !== runtime.buildId ||
-    challenge.computerGeneration !== runtime.computerGeneration ||
-    challenge.runtimeGeneration !== runtime.runtimeGeneration ||
-    workspaceId === undefined ||
-    !settings.computer.workspaces.some(
-      (workspace) => workspace.workspaceId === workspaceId,
-    )
-  ) {
-    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
-  }
-  const stateRoot = secureMcpLaunchRoot();
-  try {
-    if (
-      await connectorAppVerificationAttemptExists(
-        stateRoot,
-        challenge.challengeSha256,
-      )
-    ) {
-      return configurationFailure(
-        "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
-      );
-    }
-  } catch {
-    return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
-  }
-  const prompt = `Use the selected Farol Dev app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
-  let claimed = false;
+  // Reserve both routes before the first await so concurrent IPC calls cannot
+  // both pass the check and race to claim or release the same verification.
   chatGptTaskAdmission = true;
   connectorTaskAdmission = true;
   try {
+    const snapshot = configuration.snapshot();
+    if (snapshot.status !== "ready")
+      return configurationFailure("SETTINGS_UNAVAILABLE");
+    const settings = snapshot.settings;
+    const connector = settings.connectors.secureMcp;
+    const runtime = connector.runtime;
+    const challenge = connector.challenge;
+    const workspaceId = settings.setup.computer.verified?.workspaceId;
+    if (
+      !chatGptTaskAdmissionReady() ||
+      !secureMcpConnectorRuntime.isRunning() ||
+      connector.tunnelId === null ||
+      runtime?.state !== "ready" ||
+      runtime.buildId !== buildIdentity.buildId ||
+      runtime.computerGeneration !== settings.computer.generation ||
+      runtime.connectorGeneration !== connector.generation ||
+      challenge === null ||
+      challenge.buildId !== runtime.buildId ||
+      challenge.computerGeneration !== runtime.computerGeneration ||
+      challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+      workspaceId === undefined ||
+      !settings.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === workspaceId,
+      )
+    ) {
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+    }
+    const stateRoot = secureMcpLaunchRoot();
+    try {
+      if (
+        await connectorAppVerificationAttemptExists(
+          stateRoot,
+          challenge.challengeSha256,
+        )
+      ) {
+        return configurationFailure(
+          "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
+        );
+      }
+    } catch {
+      return configurationFailure(
+        "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
+      );
+    }
+    const prompt = `Use the selected Farol Dev app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+    let claimed = false;
     const result = await chatGptRoute.runReadonlyTask(prompt, [], {
       onDispatchIntent: async () => {
         if (claimed) return;
