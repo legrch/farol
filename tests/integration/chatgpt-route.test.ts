@@ -306,6 +306,93 @@ describe("ChatGPT test-window presentation", () => {
 });
 
 describe("ChatGPT route submission boundary", () => {
+  it("opens the rich ChatGPT app picker through native editing", async () => {
+    const expectedHref = "https://chatgpt.com/c/native-picker";
+    const nativeInputs: string[] = [];
+    let pickerVisible = false;
+    let selected = false;
+    class HTMLElement {
+      parentElement: HTMLElement | null = null;
+      textContent = "";
+      innerText = "";
+      getBoundingClientRect(): Readonly<{ width: number; height: number }> {
+        return { width: 240, height: 40 };
+      }
+      getAttribute(): null {
+        return null;
+      }
+      closest(): HTMLElement | null {
+        return this.parentElement;
+      }
+      contains(candidate: unknown): boolean {
+        return candidate === this;
+      }
+      querySelectorAll(): readonly HTMLElement[] {
+        return [];
+      }
+      cloneNode(): HTMLElement {
+        return new HTMLElement();
+      }
+      focus(): void {}
+      replaceChildren(): void {}
+      dispatchEvent(): boolean {
+        return true;
+      }
+      click(): void {}
+    }
+    class HTMLTextAreaElement extends HTMLElement {}
+    class InputEvent {
+      constructor(..._arguments: unknown[]) {}
+    }
+    const form = new HTMLElement();
+    const composer = new HTMLElement();
+    composer.parentElement = form;
+    const chip = new HTMLElement();
+    chip.textContent = "Farol Dev";
+    form.querySelectorAll = () => (selected ? [chip] : []);
+    const title = new HTMLElement();
+    title.textContent = "Farol Dev";
+    const option = new HTMLElement();
+    option.textContent = "Farol Dev Private development connector";
+    option.querySelectorAll = () => [title];
+    option.click = () => {
+      selected = true;
+    };
+    const picker = new HTMLElement();
+    picker.querySelectorAll = () => [option];
+    const context = vm.createContext({
+      location: { href: expectedHref },
+      document: {
+        querySelector: (selector: string) =>
+          selector.includes("prompt-textarea") ? composer : null,
+        querySelectorAll: () => (pickerVisible ? [picker] : []),
+        createTextNode: (text: string) => ({ text }),
+        execCommand: (command: string, _showUi: boolean, value: string) => {
+          if (command !== "insertText") return false;
+          nativeInputs.push(value);
+          pickerVisible = true;
+          return true;
+        },
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
+      HTMLElement,
+      HTMLTextAreaElement,
+      InputEvent,
+      Set,
+      Object,
+      Array,
+    });
+
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "bound" });
+    expect(nativeInputs).toEqual(["@Farol Dev"]);
+  });
+
   it("filters the real @ picker and accepts one exact Farol Dev option with description", async () => {
     const expectedHref = "https://chatgpt.com/c/dev-binding";
     let selected = false;

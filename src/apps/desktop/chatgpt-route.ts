@@ -485,7 +485,12 @@ export function bindChatGptAppScript(
       return true;
     };
     input.focus();
-    if (!setComposerText("@" + requiredAppName, "insertText")) {
+    const pickerQuery = "@" + requiredAppName;
+    const pickerInputAccepted = input instanceof HTMLTextAreaElement
+      ? setComposerText(pickerQuery, "insertText")
+      : typeof document.execCommand === "function" &&
+        document.execCommand("insertText", false, pickerQuery);
+    if (!pickerInputAccepted) {
       return { state: "blocked", reason: "missing" };
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
