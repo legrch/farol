@@ -108,6 +108,9 @@ function appBindingFailureCode(
 
 // How long one page activity probe may take before activity is unknown.
 const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
+const ROUTE_OPEN_DEADLINE_MS = 30_000;
+
+class RouteOpenTimedOut extends Error {}
 
 export type ChatGptProviderErrorKind = "usage_limited" | "generic";
 
@@ -1292,10 +1295,17 @@ export class ChatGptRoute {
       }, 100);
     });
 
+    const openDeadline = Date.now() + ROUTE_OPEN_DEADLINE_MS;
     try {
-      await candidate.loadURL(this.entryUrl);
-      const gate = await this.installCurrentRouteAppSubmissionGate(
-        candidate.webContents,
+      await this.awaitRouteOpenStep(
+        candidate,
+        candidate.loadURL(this.entryUrl),
+        openDeadline,
+      );
+      const gate = await this.awaitRouteOpenStep(
+        candidate,
+        this.installCurrentRouteAppSubmissionGate(candidate.webContents),
+        openDeadline,
       );
       if (gate === "stale") return { status: "unreachable" };
       if (gate === "failed") {
@@ -1306,8 +1316,18 @@ export class ChatGptRoute {
       candidate.reveal();
       candidate.focus();
       return { status: "opened" };
-    } catch {
+    } catch (error) {
       this.load = "failed";
+      if (error instanceof RouteOpenTimedOut) {
+        if (!candidate.isDestroyed()) {
+          try {
+            candidate.hide();
+          } catch {
+            // Never reveal a page whose opening outcome is unknown.
+          }
+        }
+        return { status: "unreachable" };
+      }
       if (
         this.options.requiredAppName === undefined &&
         !candidate.isDestroyed()
@@ -1315,6 +1335,42 @@ export class ChatGptRoute {
         candidate.reveal();
       }
       return { status: "unreachable" };
+    }
+  }
+
+  private async awaitRouteOpenStep<T>(
+    candidate: ChatGptRouteSurface,
+    work: Promise<T>,
+    deadline: number,
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work,
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(
+            () => {
+              // A page load or app gate may never settle. Destroy this attempt
+              // before returning so it cannot reveal later.
+              if (this.routeWindow === candidate) {
+                if (this.signInMode) {
+                  this.signInMode = false;
+                  if (activeSignInRoute === this) activeSignInRoute = null;
+                }
+                try {
+                  if (!candidate.isDestroyed()) candidate.destroy();
+                } catch {
+                  // The failed surface is hidden in the caller's catch path.
+                }
+              }
+              reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
+            },
+            Math.max(0, deadline - Date.now()),
+          );
+        }),
+      ]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 

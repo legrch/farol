@@ -1966,6 +1966,49 @@ describe("ChatGPT shared partition lifecycle", () => {
 });
 
 describe("ChatGPT sign-in return", () => {
+  it.each([false, true])(
+    "bounds an embedded sign-in page that never finishes loading (teardown throws: %s)",
+    async (teardownThrows) => {
+      vi.useFakeTimers();
+      try {
+        const base = embeddedSurface();
+        let destroyed = false;
+        const surface = {
+          ...base,
+          isDestroyed: vi.fn(() => destroyed),
+          loadURL: vi.fn(() => new Promise<void>(() => undefined)),
+          destroy: vi.fn(() => {
+            if (teardownThrows) throw new Error("TEARDOWN_FAILED");
+            destroyed = true;
+            base.destroy();
+          }),
+        };
+        const outcomes: string[] = [];
+        const candidate = new ChatGptRoute({
+          homeUrl: "https://chatgpt.com/",
+          initialUrl: "https://chatgpt.com/",
+          e2eOrigin: null,
+          parent: () => null,
+          surfaceFactory: (() =>
+            surface) as unknown as ChatGptRouteSurfaceFactory,
+          onSignInOutcome: (status) => outcomes.push(status),
+        });
+
+        const opening = candidate.openForSignIn(
+          "Sign in to ChatGPT — Farol Dev",
+        );
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(opening).resolves.toEqual({ status: "unreachable" });
+        expect(surface.destroy).toHaveBeenCalledTimes(1);
+        expect(surface.reveal).not.toHaveBeenCalled();
+        expect(surface.hide).toHaveBeenCalledTimes(teardownThrows ? 1 : 0);
+        expect(outcomes).toEqual(["unknown"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("returns from an embedded sign-in without destroying its verified page", async () => {
     const surface = embeddedSurface();
     Object.assign(surface.webContents, {
