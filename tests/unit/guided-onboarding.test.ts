@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   GuidedActivation,
+  defaultOnboardingFolderChoice,
   onboardingProgress,
+  onboardingProgressForFolderChoice,
   onboardingFacts,
+  selectedOnboardingWorkspace,
   type OnboardingFacts,
 } from "../../src/ui/guided-onboarding";
 
 import {
   fixtureBuildId,
+  fixtureWorkspaceId,
   guidedSettingsFixture,
 } from "../fixtures/guided-onboarding";
 
@@ -102,6 +106,54 @@ describe("guided onboarding progress", () => {
 });
 
 describe("onboarding snapshot projection", () => {
+  it("never silently chooses a stale saved grant for folder verification", () => {
+    const settings = guidedSettingsFixture();
+    expect(defaultOnboardingFolderChoice(settings, fixtureBuildId)).toBe(
+      fixtureWorkspaceId,
+    );
+    settings.computer.workspaces.unshift({
+      ...settings.computer.workspaces[0]!,
+      workspaceId: "00000000-0000-4000-8000-000000000099",
+      root: "/Users/ac",
+      label: "Home",
+    });
+    expect(defaultOnboardingFolderChoice(settings, fixtureBuildId)).toBe(
+      fixtureWorkspaceId,
+    );
+    settings.computer.generation += 1;
+    expect(defaultOnboardingFolderChoice(settings, fixtureBuildId)).toBe("new");
+    expect(defaultOnboardingFolderChoice(settings, "f".repeat(64))).toBe("new");
+    expect(selectedOnboardingWorkspace(settings, "new")).toBeNull();
+    expect(
+      selectedOnboardingWorkspace(settings, fixtureWorkspaceId)?.root,
+    ).toBe("/tmp/farol-onboarding-fixture");
+    expect(
+      selectedOnboardingWorkspace(settings, "not-an-existing-workspace"),
+    ).toBeNull();
+  });
+  it("does not carry Ready badges to a newly selected folder", () => {
+    const ready = onboardingFacts(guidedSettingsFixture(), fixtureBuildId);
+    expect(onboardingProgressForFolderChoice(ready, true)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(onboardingProgressForFolderChoice(ready, false)).toEqual([
+      true,
+      false,
+      false,
+      false,
+      false,
+    ]);
+  });
+  it("requires a current build to reuse a prior folder verification", () => {
+    const settings = guidedSettingsFixture();
+    expect(
+      onboardingProgress(onboardingFacts(settings, "f".repeat(64)))[1],
+    ).toBe(false);
+  });
   it("uses actual settings without advanced host or Agent readiness", () => {
     expect(
       onboardingProgress(

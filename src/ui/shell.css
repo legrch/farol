@@ -2895,6 +2895,26 @@ html[data-sidebar="rail"] .onboarding-nav button {
   border: 1px solid var(--line);
   border-radius: 12px;
 }
+.onboarding-folder-choice {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 14px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 550;
+}
+.onboarding-folder-choice select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-raised);
+  font: inherit;
+  font-weight: 400;
+}
 .onboarding-symbol {
   font-size: 30px;
   color: var(--iris-bright);

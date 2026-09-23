@@ -3,10 +3,13 @@ import type {
   ProductSettings,
 } from "../pkg/product-settings/contract";
 import {
+  defaultOnboardingFolderChoice,
   GuidedActivation,
   onboardingFacts,
   onboardingProgress,
+  onboardingProgressForFolderChoice,
   onboardingSteps,
+  selectedOnboardingWorkspace,
 } from "./guided-onboarding";
 
 export interface GuidedOnboardingPort {
@@ -53,6 +56,8 @@ export class GuidedOnboardingView {
   private initialized = false;
   private tunnelEdited = false;
   private signInOpened = false;
+  private folderChoice = "new";
+  private folderChoiceInitialized = false;
   private message = "";
   private readonly activation = new GuidedActivation();
 
@@ -78,6 +83,14 @@ export class GuidedOnboardingView {
         this.tunnelEdited = true;
       },
     );
+    element<HTMLSelectElement>("#onboarding-folder-choice").addEventListener(
+      "change",
+      (event) => {
+        this.folderChoice = (event.currentTarget as HTMLSelectElement).value;
+        this.message = "";
+        this.port.render();
+      },
+    );
     document
       .querySelectorAll<HTMLButtonElement>("[data-onboarding-step]")
       .forEach((button, index) => {
@@ -101,9 +114,20 @@ export class GuidedOnboardingView {
 
   restart(): void {
     if (this.busy) return;
-    const first = onboardingProgress(this.facts()).findIndex(
-      (complete) => !complete,
-    );
+    const facts = this.facts();
+    const settings = this.port.settings();
+    const selectedFolder = settings
+      ? selectedOnboardingWorkspace(settings, this.folderChoice)
+      : null;
+    const selectedFolderReady =
+      selectedFolder !== null &&
+      facts.folder === "ready" &&
+      settings?.setup.computer.verified?.workspaceId ===
+        selectedFolder.workspaceId;
+    const first = onboardingProgressForFolderChoice(
+      facts,
+      selectedFolderReady,
+    ).findIndex((complete) => !complete);
     this.select(first === -1 ? 4 : first);
   }
 
@@ -135,6 +159,47 @@ export class GuidedOnboardingView {
       const first = progress.findIndex((complete) => !complete);
       this.step = first === -1 ? 4 : first;
     }
+    if (settings && !this.folderChoiceInitialized) {
+      this.folderChoice = defaultOnboardingFolderChoice(
+        settings,
+        this.port.buildId(),
+      );
+      this.folderChoiceInitialized = true;
+    }
+    if (
+      settings &&
+      this.folderChoice !== "new" &&
+      !selectedOnboardingWorkspace(settings, this.folderChoice)
+    ) {
+      this.folderChoice = "new";
+    }
+    const selectedFolder = settings
+      ? selectedOnboardingWorkspace(settings, this.folderChoice)
+      : null;
+    const selectedFolderReady =
+      selectedFolder !== null &&
+      facts.folder === "ready" &&
+      settings?.setup.computer.verified?.workspaceId ===
+        selectedFolder.workspaceId;
+    const visibleProgress = onboardingProgressForFolderChoice(
+      facts,
+      selectedFolderReady,
+    );
+    const folderChoice = element<HTMLSelectElement>(
+      "#onboarding-folder-choice",
+    );
+    folderChoice.replaceChildren(
+      new Option("Choose a new folder…", "new"),
+      ...(settings?.computer.workspaces.map(
+        (workspace) =>
+          new Option(
+            `${workspace.label} — ${workspace.root}`,
+            workspace.workspaceId,
+          ),
+      ) ?? []),
+    );
+    folderChoice.value = this.folderChoice;
+    folderChoice.disabled = this.busy;
     const step = onboardingSteps[this.step]!;
     document
       .querySelectorAll<HTMLButtonElement>("[data-onboarding-step]")
@@ -142,27 +207,27 @@ export class GuidedOnboardingView {
         const current = index === this.step;
         button.disabled = this.busy;
         button.classList.toggle("active", current);
-        button.classList.toggle("complete", progress[index] === true);
+        button.classList.toggle("complete", visibleProgress[index] === true);
         if (current) button.setAttribute("aria-current", "step");
         else button.removeAttribute("aria-current");
-        button.querySelector("span")!.textContent = progress[index]
+        button.querySelector("span")!.textContent = visibleProgress[index]
           ? "✓"
           : String(index + 1);
         button.setAttribute(
           "aria-label",
-          `${index + 1}. ${onboardingSteps[index]!.label}${progress[index] ? ", completed" : ""}`,
+          `${index + 1}. ${onboardingSteps[index]!.label}${visibleProgress[index] ? ", completed" : ""}`,
         );
       });
     element("#onboarding-counter").textContent =
       `STEP ${this.step + 1} OF ${onboardingSteps.length}`;
     element("#onboarding-title").textContent =
-      this.step === 4 && !progress[4]
+      this.step === 4 && !visibleProgress[4]
         ? "A few steps still need attention"
         : step.title;
     element("#onboarding-copy").textContent =
-      this.step === 4 && !progress[4]
+      this.step === 4 && !visibleProgress[4]
         ? "Use the steps on the left to finish connecting. Nothing becomes verified just by visiting a page."
-        : this.step === 3 && !progress[2]
+        : this.step === 3 && !visibleProgress[2]
           ? "Activate the DEV tunnel first. Then add its app in ChatGPT and check that it can reach this computer."
           : step.copy;
     document
@@ -172,9 +237,10 @@ export class GuidedOnboardingView {
       });
     const primary = element<HTMLButtonElement>("#onboarding-primary");
     primary.disabled = this.busy || !facts.available;
+    const stepComplete = visibleProgress[this.step];
     primary.textContent = this.busy
       ? "Working…"
-      : progress[this.step]
+      : stepComplete
         ? this.step === 4
           ? "Open ChatGPT"
           : "Continue"
@@ -183,7 +249,7 @@ export class GuidedOnboardingView {
             ? "Check sign-in"
             : "Sign in to ChatGPT"
           : this.step === 1
-            ? facts.hasFolder
+            ? selectedFolder
               ? "Verify folder"
               : "Choose a folder"
             : this.step === 2
@@ -192,12 +258,15 @@ export class GuidedOnboardingView {
                 ? "Verify app"
                 : "Review incomplete step";
     let prerequisite = "";
-    if (this.step === 2 && !progress[2] && (!progress[0] || !progress[1]))
+    if (this.step === 2 && (!visibleProgress[0] || !visibleProgress[1]))
       prerequisite = "Complete sign-in and choose a verified folder first.";
-    if (this.step === 2 && facts.runtime !== "stopped" && !progress[2])
+    if (this.step === 2 && facts.runtime !== "stopped" && !visibleProgress[2])
       prerequisite =
         "An existing tunnel needs attention. Inspect Advanced; do not start another one.";
-    if (this.step === 3 && (!progress[0] || !progress[1] || !progress[2]))
+    if (
+      this.step === 3 &&
+      (!visibleProgress[0] || !visibleProgress[1] || !visibleProgress[2])
+    )
       prerequisite = "Complete sign-in, folder access and activation first.";
     if (facts.outcomeUnknown && this.step >= 2)
       prerequisite =
@@ -210,7 +279,7 @@ export class GuidedOnboardingView {
     status.textContent =
       this.message ||
       prerequisite ||
-      (progress[this.step]
+      (stepComplete
         ? this.step === 2
           ? "Tunnel active. Next, add its app in ChatGPT."
           : "This step is complete."
@@ -222,9 +291,8 @@ export class GuidedOnboardingView {
     element("#computer-feedback").hidden = active;
     element("#review-setup").textContent = "Return to guided setup";
 
-    const folder = settings?.computer.workspaces[0];
     element("#onboarding-folder-name").textContent =
-      folder?.label ?? "No folder chosen yet";
+      selectedFolder?.label ?? "No folder chosen for this setup yet";
     const tunnel = element<HTMLInputElement>("#onboarding-tunnel-id");
     const key = element<HTMLInputElement>("#onboarding-runtime-key");
     if (!this.tunnelEdited && document.activeElement !== tunnel)
@@ -235,8 +303,8 @@ export class GuidedOnboardingView {
     key.placeholder = facts.credentialStored
       ? "Stored privately; leave blank for this tunnel"
       : "Paste the key for this DEV tunnel";
-    element("#onboarding-tunnel-fields").hidden = progress[2] === true;
-    element("#onboarding-tunnel-note").textContent = progress[2]
+    element("#onboarding-tunnel-fields").hidden = visibleProgress[2] === true;
+    element("#onboarding-tunnel-note").textContent = visibleProgress[2]
       ? `Tunnel ${facts.tunnelId ?? ""} is active. No ChatGPT app attachment has been assumed.`
       : "Use a separate DEV tunnel. Do not reuse the tunnel running Legacy.";
     const connector = settings?.connectors.secureMcp;
@@ -259,17 +327,17 @@ export class GuidedOnboardingView {
     request.value =
       challengeCurrent && verifiedWorkspace
         ? `With @Farol Dev selected, call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${verifiedWorkspace.workspaceId}". Do not read file contents.`
-        : progress[3]
+        : visibleProgress[3]
           ? "Connection already verified. No new message is needed."
           : "A current connection check will appear after activation.";
     element<HTMLButtonElement>("#onboarding-copy-check").disabled =
       this.busy || !challengeCurrent || !verifiedWorkspace;
     element<HTMLButtonElement>("#onboarding-open-chatgpt").disabled =
-      this.busy || !progress[0];
+      this.busy || !visibleProgress[0];
     element("#onboarding-finish-list").replaceChildren(
       ...onboardingSteps.slice(0, 4).map((item, index) => {
         const row = document.createElement("li");
-        row.textContent = `${progress[index] ? "✓" : "○"} ${item.label}${progress[index] ? "" : " — not yet verified"}`;
+        row.textContent = `${visibleProgress[index] ? "✓" : "○"} ${item.label}${visibleProgress[index] ? "" : " — not yet verified"}`;
         return row;
       }),
     );
@@ -294,7 +362,19 @@ export class GuidedOnboardingView {
       return;
     const index = this.step;
     const facts = this.facts();
-    const progress = onboardingProgress(facts);
+    const settings = this.port.settings();
+    const selectedFolder = settings
+      ? selectedOnboardingWorkspace(settings, this.folderChoice)
+      : null;
+    const selectedFolderReady =
+      selectedFolder !== null &&
+      facts.folder === "ready" &&
+      settings?.setup.computer.verified?.workspaceId ===
+        selectedFolder.workspaceId;
+    const progress = onboardingProgressForFolderChoice(
+      facts,
+      selectedFolderReady,
+    );
     if (progress[index] && index < 4) {
       this.select(index + 1);
       return;
@@ -322,7 +402,9 @@ export class GuidedOnboardingView {
         else if (ok) this.signInOpened = true;
       } else if (index === 1) {
         const before = this.port.settings();
-        let workspace = before?.computer.workspaces[0];
+        let workspace = before
+          ? selectedOnboardingWorkspace(before, this.folderChoice)
+          : null;
         if (!workspace) {
           const oldIds = new Set(
             before?.computer.workspaces.map((entry) => entry.workspaceId),
@@ -345,7 +427,8 @@ export class GuidedOnboardingView {
               "Folder selection changed. Review it before verifying.";
             return;
           }
-          workspace = added[0];
+          workspace = added[0]!;
+          this.folderChoice = workspace.workspaceId;
         }
         if (workspace)
           await this.port.configure(

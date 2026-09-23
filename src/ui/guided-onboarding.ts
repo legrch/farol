@@ -64,7 +64,9 @@ export function onboardingFacts(
     available: true,
     chat: routeReadiness(settings.setup.chatgpt),
     folder: routeReadiness(settings.setup.computer, {
-      stale: setupStepStale(settings, "computer"),
+      stale:
+        setupStepStale(settings, "computer") ||
+        settings.setup.computer.verified?.buildId !== buildId,
     }),
     hasFolder: workspaceIds.length > 0,
     authority: JSON.stringify([
@@ -135,6 +137,57 @@ export function onboardingProgress(facts: OnboardingFacts): readonly boolean[] {
     facts.runtime === "ready" && facts.runtimeCurrent && !facts.outcomeUnknown;
   const app = tunnel && folder && facts.attachmentCurrent;
   return [chat, folder, tunnel, app, chat && folder && tunnel && app];
+}
+
+// Selecting another saved grant, or choosing a new folder, cannot inherit the
+// previous folder's Ready badge while the new choice is still unverified.
+export function onboardingProgressForFolderChoice(
+  facts: OnboardingFacts,
+  selectedFolderReady: boolean,
+): readonly boolean[] {
+  const [chat, folder, tunnel, app, ready] = onboardingProgress(facts);
+  return [
+    chat ?? false,
+    (folder ?? false) && selectedFolderReady,
+    (tunnel ?? false) && selectedFolderReady,
+    (app ?? false) && selectedFolderReady,
+    (ready ?? false) && selectedFolderReady,
+  ];
+}
+
+// A saved grant is not consent to select it for this setup. Only a current
+// verification may be preselected; a stale grant needs an explicit choice.
+export function defaultOnboardingFolderChoice(
+  settings: ProductSettings,
+  buildId: string,
+): string {
+  const verified = settings.setup.computer.verified?.workspaceId;
+  if (
+    verified &&
+    routeReadiness(settings.setup.computer, {
+      stale:
+        setupStepStale(settings, "computer") ||
+        settings.setup.computer.verified?.buildId !== buildId,
+    }) === "ready" &&
+    settings.computer.workspaces.some(
+      (workspace) => workspace.workspaceId === verified,
+    )
+  ) {
+    return verified;
+  }
+  return "new";
+}
+
+export function selectedOnboardingWorkspace(
+  settings: ProductSettings,
+  choice: string,
+): ProductSettings["computer"]["workspaces"][number] | null {
+  if (choice === "new") return null;
+  return (
+    settings.computer.workspaces.find(
+      (workspace) => workspace.workspaceId === choice,
+    ) ?? null
+  );
 }
 
 export interface ActivationPort {

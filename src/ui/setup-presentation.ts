@@ -152,11 +152,13 @@ export function computerVerificationStale(
   workspaces: readonly Workspace[],
   generation: number,
 ): boolean {
-  const workspace = workspaces[0];
-  if (workspace === undefined) return false;
+  const verified = computer.verified;
+  if (verified === null) return false;
   return (
-    computer.verified?.workspaceId !== workspace.workspaceId ||
-    computer.verified.configRevision !== generation
+    verified.configRevision !== generation ||
+    !workspaces.some(
+      (workspace) => workspace.workspaceId === verified.workspaceId,
+    )
   );
 }
 

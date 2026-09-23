@@ -457,6 +457,13 @@ describe("one definition of a stale Computer verification", () => {
     expect(computerVerificationStale(computer, [workspace], 7)).toBe(false);
   });
 
+  it("accepts an explicitly verified workspace regardless of list order", () => {
+    const home = { ...workspace, workspaceId: "home", root: "/Users/ac" };
+    expect(computerVerificationStale(computer, [home, workspace], 7)).toBe(
+      false,
+    );
+  });
+
   it("is stale once the config generation has moved on", () => {
     expect(computerVerificationStale(computer, [workspace], 8)).toBe(true);
   });
@@ -471,8 +478,8 @@ describe("one definition of a stale Computer verification", () => {
     ).toBe(true);
   });
 
-  it("is not stale when there is no workspace to have outgrown", () => {
-    expect(computerVerificationStale(computer, [], 7)).toBe(false);
+  it("is stale when the previously verified workspace was removed", () => {
+    expect(computerVerificationStale(computer, [], 7)).toBe(true);
   });
 
   it("answers false, never undefined, for a step that has no staleness", () => {
