@@ -940,6 +940,7 @@ export type ChatGptRouteOptions = Readonly<{
   onTaskActivityChanged?: (
     state: "idle" | "running" | "outcome_unknown",
   ) => void;
+  onLoadStateChanged?: (state: "loading" | "loaded" | "failed") => void;
   onDisposed?: () => void;
   taskTimeoutMs?: number;
   taskPollMs?: number;
@@ -1107,6 +1108,7 @@ export class ChatGptRoute {
   >();
   private routeSession: Session | null = null;
   private load: "failed" | "loaded" = "failed";
+  private routeDocumentLoadFailed = false;
   private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
@@ -1181,6 +1183,26 @@ export class ChatGptRoute {
     } finally {
       if (this.opening === opening) this.opening = null;
     }
+  }
+
+  // A failed navigation leaves a retained surface that open() deliberately
+  // refuses. An explicit owner retry may discard only that failed surface;
+  // it never repeats a model submission or resets a successful conversation.
+  async retryFailedOpen(): Promise<ChatGptOpenResult> {
+    if (this.taskInFlight || this.signInMode || this.opening) {
+      return { status: "unreachable" };
+    }
+    if (this.load === "failed" && this.routeWindow) {
+      const failed = this.routeWindow;
+      this.disposing = true;
+      try {
+        if (!failed.isDestroyed()) failed.destroy();
+      } finally {
+        if (this.routeWindow === failed) this.routeWindow = null;
+        this.disposing = false;
+      }
+    }
+    return this.open();
   }
 
   // The explicit "Sign in" entry point (UX34-08): opens the same route as
@@ -1312,6 +1334,7 @@ export class ChatGptRoute {
           webPreferences: this.remoteWebPreferences(),
         })
       : this.createWindowSurface();
+    this.routeDocumentLoadFailed = false;
     this.routeWindow = candidate;
     this.disposing = false;
     this.hardenContents(candidate.webContents, true);
@@ -1403,6 +1426,10 @@ export class ChatGptRoute {
         candidate.loadURL(this.entryUrl),
         openDeadline,
       );
+      if (this.routeDocumentLoadFailed) {
+        candidate.hide();
+        return { status: "unreachable" };
+      }
       const gate = await this.awaitRouteOpenStep(
         candidate,
         this.installCurrentRouteAppSubmissionGate(candidate.webContents),
@@ -1413,12 +1440,18 @@ export class ChatGptRoute {
         this.blockUnsafeManualSurface(candidate.webContents);
         return { status: "unreachable" };
       }
+      if (this.routeDocumentLoadFailed) {
+        candidate.hide();
+        return { status: "unreachable" };
+      }
       this.load = "loaded";
+      this.options.onLoadStateChanged?.("loaded");
       candidate.reveal();
       candidate.focus();
       return { status: "opened" };
     } catch (error) {
       this.load = "failed";
+      this.options.onLoadStateChanged?.("failed");
       if (error instanceof RouteOpenTimedOut) {
         if (!candidate.isDestroyed()) {
           try {
@@ -2549,10 +2582,12 @@ export class ChatGptRoute {
           // did-fail-load.
           if (!allowed(url)) return;
           this.routeDocumentGeneration += 1;
+          if (!inPlace) this.routeDocumentLoadFailed = false;
           if (!inPlace && this.options.requiredAppName !== undefined) {
             this.routeWindow?.hide();
           }
           this.load = inPlace ? "loaded" : "failed";
+          if (!inPlace) this.options.onLoadStateChanged?.("loading");
         },
       );
       contents.on(
@@ -2560,13 +2595,16 @@ export class ChatGptRoute {
         (_event, code, _description, _url, isMainFrame) => {
           if (isMainFrame && this.ownsRouteContents(contents)) {
             this.routeDocumentGeneration += 1;
+            this.routeDocumentLoadFailed = true;
             this.load = "failed";
+            this.options.onLoadStateChanged?.("failed");
             this.reportSignInBlocked({ kind: "load-failed", code });
           }
         },
       );
       contents.on("did-finish-load", () => {
         if (!this.ownsRouteContents(contents)) return;
+        if (this.routeDocumentLoadFailed) return;
         void (async () => {
           const gate =
             await this.installCurrentRouteAppSubmissionGate(contents);
@@ -2577,6 +2615,7 @@ export class ChatGptRoute {
           }
           if (!this.ownsRouteContents(contents)) return;
           this.load = "loaded";
+          this.options.onLoadStateChanged?.("loaded");
           this.reportConversationUrl(contents);
           this.routeWindow?.reveal();
           if (this.options.onTaskActivityChanged) {
@@ -2584,6 +2623,7 @@ export class ChatGptRoute {
           }
           if (
             this.signInMode &&
+            this.routeWindow?.kind === "window" &&
             isChatGptPage(contents.getURL(), this.options.homeUrl)
           ) {
             void contents
@@ -2629,6 +2669,8 @@ export class ChatGptRoute {
         this.stopTaskActivityWatch();
         this.routeDocumentGeneration += 1;
         this.load = "failed";
+        this.options.onLoadStateChanged?.("failed");
+        this.routeWindow?.hide();
       });
     }
     contents.setWindowOpenHandler(({ url }) => {
@@ -2875,6 +2917,7 @@ export class ChatGptRoute {
   private blockUnsafeManualSurface(contents: WebContents): void {
     if (!this.ownsRouteContents(contents)) return;
     this.load = "failed";
+    this.options.onLoadStateChanged?.("failed");
     this.stopTaskActivityWatch();
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) candidate.destroy();

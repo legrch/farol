@@ -159,7 +159,22 @@ try {
     await window.locator("#onboarding-finish-list button").count(),
     4,
   );
-  assert.equal(await window.locator("#guided-onboarding details").count(), 0);
+  assert.equal(await window.locator("#guided-onboarding details").count(), 1);
+  assert.equal(
+    await window.locator("#onboarding-app-guide").getAttribute("open"),
+    null,
+  );
+  const scrollRail = await window.evaluate(() => ({
+    rail: document.querySelector("#onboarding-scroll").getBoundingClientRect()
+      .right,
+    panel: document
+      .querySelector('[data-panel="computer"].active')
+      .getBoundingClientRect().right,
+  }));
+  assert.ok(
+    Math.abs(scrollRail.rail - scrollRail.panel) <= 1,
+    "GUIDED_SCROLLBAR_SHOULD_REACH_PANEL_EDGE",
+  );
   assert.equal(await window.locator("#onboarding-folder-choice").count(), 0);
   assert.equal(
     await window.locator("#connection-diagnostics").isVisible(),
@@ -248,6 +263,20 @@ try {
   await window.locator("#onboarding-primary").click();
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
   await window.locator('[data-panel="browser"].active').waitFor();
+  assert.equal(
+    await window.locator("#task-tabs").isVisible(),
+    false,
+    "SIGN_IN_SHOULD_NOT_SHOW_EMPTY_TASK_TABS",
+  );
+  assert.equal(
+    await window.locator("#task-dossier").isVisible(),
+    false,
+    "SIGN_IN_SHOULD_NOT_SHOW_TASK_DIAGNOSTICS",
+  );
+  assert.match(
+    await window.locator("#browser-state-title").innerText(),
+    /^(Opening ChatGPT|ChatGPT is open)$/u,
+  );
   const signInSurface = await application.evaluate(
     ({ BrowserWindow, WebContentsView }) => {
       const windows = BrowserWindow.getAllWindows();
@@ -260,10 +289,35 @@ try {
               child.getVisible() &&
               child.webContents.getURL().startsWith("http://127.0.0.1:"),
           ).length ?? 0,
+        pageTop:
+          windows[0]?.contentView.children
+            .find(
+              (child) =>
+                child instanceof WebContentsView &&
+                child.getVisible() &&
+                child.webContents.getURL().startsWith("http://127.0.0.1:"),
+            )
+            ?.getBounds().y ?? null,
       };
     },
   );
-  assert.deepEqual(signInSurface, { windows: 1, pages: 1 });
+  assert.deepEqual(signInSurface, { windows: 1, pages: 1, pageTop: 52 });
+  assert.equal(
+    await application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+      const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.getVisible() &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      );
+      return page?.webContents.executeJavaScript(
+        'document.querySelector("#farol-sign-in-banner") === null',
+        true,
+      );
+    }),
+    true,
+    "EMBEDDED_SIGN_IN_MUST_USE_THE_SHELL_RETURN_CONTROL",
+  );
   await window.screenshot({
     path: path.join(output, "06-sign-in-shell.png"),
   });
@@ -284,6 +338,23 @@ try {
     Buffer.from(embeddedCapture, "base64"),
     { mode: 0o600 },
   );
+  await window.locator("#sign-in-return").click();
+  await window.locator("#guided-onboarding").waitFor({ state: "visible" });
+  await window.locator("#sign-in-return").waitFor({ state: "hidden" });
+  await window.locator("#onboarding-recheck").click();
+  await window
+    .locator('#onboarding-status:text("Sign-in is not complete yet")')
+    .waitFor();
+  assert.equal(
+    await window.locator('[data-onboarding-step="chatgpt"].complete').count(),
+    0,
+    "A read-only signed-out check must not turn the step green",
+  );
+  await window
+    .locator('#onboarding-primary:text("Sign in to ChatGPT")')
+    .waitFor();
+  await window.locator("#onboarding-primary").click();
+  await window.locator("#sign-in-return").waitFor({ state: "visible" });
   const verificationSurfaceId = await application.evaluate(
     async ({ BrowserWindow, WebContentsView }) => {
       const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
@@ -443,6 +514,25 @@ try {
     .locator("#onboarding-credentials-saved")
     .waitFor({ state: "visible" });
   assert.equal(
+    await window.locator("#onboarding-connection-guide").isVisible(),
+    false,
+    "SAVED_CONNECTION_REPEATED_CREATION_GUIDE",
+  );
+  assert.equal(
+    await window.locator("#onboarding-connection-help").isVisible(),
+    false,
+  );
+  const statusAlignment = await window.evaluate(() => ({
+    heading: document.querySelector("#onboarding-title").getBoundingClientRect()
+      .left,
+    status: document.querySelector("#onboarding-status").getBoundingClientRect()
+      .left,
+  }));
+  assert.ok(
+    Math.abs(statusAlignment.heading - statusAlignment.status) <= 1,
+    "STATUS_NOT_ALIGNED_WITH_CONTENT",
+  );
+  assert.equal(
     await window.locator("#onboarding-tunnel-fields").isVisible(),
     false,
   );
@@ -553,6 +643,34 @@ try {
     runtimeGeneration,
     "CANCELLED_FOLDER_CHANGE_RESTARTED_TUNNEL",
   );
+  const tasksBeforeBrowser = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).tasks.length;
+  await window.locator("#onboarding-return").click();
+  await window.locator('[data-panel="browser"].active').waitFor();
+  const plainBrowser = await application.evaluate(
+    ({ BrowserWindow, WebContentsView }) => {
+      const owned = BrowserWindow.getAllWindows()[0];
+      const page = owned.contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.getVisible() &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      );
+      return {
+        visible: Boolean(page),
+        pageTop: page?.getBounds().y ?? null,
+      };
+    },
+  );
+  assert.deepEqual(plainBrowser, { visible: true, pageTop: 52 });
+  assert.equal(
+    (await window.evaluate(() => window.farolNext.bootstrap())).tasks.length,
+    tasksBeforeBrowser,
+    "OPENING_BROWSER_CREATED_A_TASK",
+  );
+  assert.equal(await window.locator("#task-tabs").isVisible(), false);
+  await window.screenshot({ path: path.join(output, "14-browser-home.png") });
   console.log(
     JSON.stringify({
       label,
@@ -569,6 +687,136 @@ try {
       modelSends: 0,
       externalResourcesCreated: 0,
       evidence: "real-electron-synthetic-home",
+    }),
+  );
+  await application.close();
+  application = undefined;
+
+  // A cold Browser open must end in a visible error if its page cannot load.
+  // This second instance has its own empty fixture profile and no live traffic.
+  await new Promise((resolve) => chatGptFixture.close(resolve));
+  const failedAppData = path.join(temporaryRoot, "failed-app-data");
+  const failedHome = path.join(temporaryRoot, "failed-home");
+  const failedUrl = `http://127.0.0.1:${chatGptAddress.port}/failure-only-${process.pid}-${Date.now()}`;
+  await fs.mkdir(failedAppData, { recursive: true, mode: 0o700 });
+  await fs.mkdir(failedHome, { recursive: true, mode: 0o700 });
+  application = await electron.launch({
+    executablePath: path.join(
+      root,
+      "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    ),
+    args: [
+      path.join(root, "dist/app/main.cjs"),
+      "--preview-window-mode=secondary-visible",
+    ],
+    env: {
+      HOME: failedHome,
+      TMPDIR: temporaryRoot,
+      LANG: "en_US.UTF-8",
+      LC_ALL: "en_US.UTF-8",
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      FAROL_NEXT_ENVIRONMENT: "dev",
+      FAROL_NEXT_E2E: "1",
+      FAROL_NEXT_E2E_APP_DATA: failedAppData,
+      FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
+      FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture,
+      FAROL_NEXT_E2E_CHATGPT_URL: failedUrl,
+    },
+    timeout: 15000,
+  });
+  const failedWindow = await application.firstWindow({ timeout: 15000 });
+  await failedWindow.locator('[data-panel="computer"].active').waitFor();
+  assert.equal(
+    await application.evaluate(({ BrowserWindow, screen }) => {
+      const owned = BrowserWindow.getAllWindows()[0];
+      const display = screen.getDisplayMatching(owned.getBounds());
+      return (
+        owned.isVisible() &&
+        !owned.isFocused() &&
+        display.internal &&
+        display.id !== screen.getPrimaryDisplay().id
+      );
+    }),
+    true,
+    "FAILED_BROWSER_CASE_MUST_STAY_ON_INACTIVE_SECONDARY_DISPLAY",
+  );
+  await failedWindow.locator("#onboarding-return").click();
+  await failedWindow.locator('[data-panel="browser"].active').waitFor();
+  await failedWindow.screenshot({
+    path: path.join(output, "15-browser-opening.png"),
+  });
+  await failedWindow.waitForTimeout(2000);
+  console.log(
+    JSON.stringify({
+      failedFixtureListening: chatGptFixture.listening,
+      failedWindowState: await failedWindow.evaluate(async () => {
+        const state = await window.farolNext.bootstrap();
+        return {
+          environment: state.environment,
+          taskCount: state.tasks.length,
+          section: document.documentElement.dataset.section,
+          title: document.querySelector("#browser-state-title")?.textContent,
+        };
+      }),
+      failedNativeState: await application.evaluate(
+        ({ BrowserWindow, WebContentsView }) =>
+          BrowserWindow.getAllWindows()[0]
+            .contentView.children.filter(
+              (child) => child instanceof WebContentsView,
+            )
+            .map((child) => ({
+              url: child.webContents.getURL(),
+              visible: child.getVisible(),
+              loading: child.webContents.isLoading(),
+            })),
+      ),
+    }),
+  );
+  await failedWindow
+    .locator('#browser-state-title:text("ChatGPT could not open")')
+    .waitFor({ timeout: 40000 });
+  assert.equal(await failedWindow.locator("#browser-retry").isVisible(), true);
+  await failedWindow.screenshot({
+    path: path.join(output, "15-browser-open-failed.png"),
+  });
+  await new Promise((resolve) =>
+    chatGptFixture.listen(chatGptAddress.port, "127.0.0.1", resolve),
+  );
+  await failedWindow.locator("#browser-retry").click();
+  await failedWindow.locator('#browser-loading[data-state="ready"]').waitFor();
+  const recoveredNativePage = await application.evaluate(
+    ({ BrowserWindow, WebContentsView }) =>
+      BrowserWindow.getAllWindows()[0].contentView.children.some(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.getVisible() &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      ),
+  );
+  assert.equal(recoveredNativePage, true, "RETRY_DID_NOT_REOPEN_EMBEDDED_PAGE");
+  await new Promise((resolve) => chatGptFixture.close(resolve));
+  await application.evaluate(
+    async ({ BrowserWindow, WebContentsView }, url) => {
+      const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      );
+      if (!page) throw new Error("RECOVERED_PAGE_MISSING");
+      await page.webContents.loadURL(url).catch(() => undefined);
+    },
+    `http://127.0.0.1:${chatGptAddress.port}/unavailable`,
+  );
+  await failedWindow
+    .locator('#browser-state-title:text("ChatGPT could not open")')
+    .waitFor({ timeout: 15000 });
+  await failedWindow.screenshot({
+    path: path.join(output, "16-browser-late-failure.png"),
+  });
+  console.log(
+    JSON.stringify({
+      failedBrowserRecoveryVisible: true,
+      laterNavigationFailureVisible: true,
     }),
   );
 } finally {
@@ -594,5 +842,7 @@ try {
     }
   }
   await fs.rm(temporaryRoot, { recursive: true, force: true });
-  await new Promise((resolve) => chatGptFixture.close(resolve));
+  if (chatGptFixture.listening) {
+    await new Promise((resolve) => chatGptFixture.close(resolve));
+  }
 }

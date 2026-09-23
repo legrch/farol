@@ -866,12 +866,13 @@ html:not([data-section="browser"]) .surface {
   top: var(--window-height);
 }
 
-html[data-has-tasks="false"] .dossier {
+html[data-browser-chrome="false"] .task-bar,
+html[data-browser-chrome="false"] .dossier {
   display: none;
 }
 
-html[data-has-tasks="false"] .surface {
-  top: calc(var(--window-height) + var(--task-height));
+html[data-browser-chrome="false"] .surface {
+  top: var(--window-height);
 }
 
 .panel {
@@ -888,6 +889,22 @@ html[data-has-tasks="false"] .surface {
   background:
     linear-gradient(var(--line-soft), var(--line-soft)) 0 0 / 100% 1px no-repeat,
     var(--bg);
+}
+
+html[data-browser-chrome="false"][data-section="browser"] .browser-panel {
+  display: flow-root;
+  background: #fff;
+}
+
+html[data-browser-chrome="false"][data-section="browser"] .browser-loading {
+  border-color: #e5e5e8;
+  color: #666872;
+}
+
+html[data-browser-chrome="false"][data-section="browser"]
+  .browser-loading
+  strong {
+  color: #22242a;
 }
 
 .browser-loading {
@@ -922,6 +939,22 @@ html[data-has-tasks="false"] .surface {
 
 .browser-loading span {
   font-size: 13px;
+}
+
+#browser-retry {
+  grid-column: 2;
+  justify-self: start;
+  border: 1px solid #d6d6dc;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #fff;
+  color: #363047;
+  font: inherit;
+  cursor: pointer;
+}
+
+#browser-retry[hidden] {
+  display: none;
 }
 
 .content-panel {
@@ -2764,7 +2797,7 @@ html[data-guided-onboarding="true"] [data-panel="computer"] > .panel-heading {
   display: none;
 }
 html[data-guided-onboarding="true"] [data-panel="computer"] {
-  padding: clamp(20px, 3vh, 32px) clamp(24px, 4.5vw, 56px) 0;
+  padding: clamp(20px, 3vh, 32px) 0 0;
   overflow: hidden;
 }
 html[data-guided-onboarding="true"] [data-panel="computer"].active {
@@ -2879,8 +2912,7 @@ html[data-sidebar="rail"] .onboarding-nav button {
   padding-inline: 4px;
 }
 .guided-onboarding {
-  max-width: 720px;
-  margin: 0 auto;
+  width: 100%;
   height: 100%;
   min-height: 0;
 }
@@ -2894,8 +2926,18 @@ html[data-sidebar="rail"] .onboarding-nav button {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 12px 24px 0;
-  scrollbar-gutter: stable;
+  padding: 0 0 24px;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text-faint) 35%, transparent)
+    transparent;
+}
+.onboarding-scroll:hover {
+  scrollbar-color: color-mix(in srgb, var(--text-faint) 68%, transparent)
+    transparent;
+}
+.onboarding-scroll > * {
+  width: min(720px, calc(100% - 48px));
+  margin-inline: auto;
 }
 .onboarding-scroll > .settings-feedback:empty {
   display: none;
@@ -3086,22 +3128,19 @@ html[data-sidebar="rail"] .onboarding-nav button {
   font-size: 12px;
 }
 .onboarding-status {
-  margin: 20px 0 0;
-  padding: 12px 16px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
+  margin: 20px auto 0;
+  padding: 6px 0 6px 14px;
+  border-left: 2px solid var(--line);
   color: var(--text-soft);
-  background: var(--surface-raised);
   font-size: 13px;
   line-height: 1.6;
 }
 .onboarding-status[data-state="ready"] {
   color: var(--complete);
-  border-color: color-mix(in srgb, var(--complete) 40%, transparent);
-  background: color-mix(in srgb, var(--complete) 9%, var(--surface));
+  border-left-color: var(--complete);
 }
 .onboarding-status[data-state="attention"] {
-  border-color: var(--iris-bright);
+  border-left-color: var(--iris-bright);
   color: var(--text);
 }
 /* The actions occupy their own row, never overlaying help or form fields. */
@@ -3111,7 +3150,7 @@ html[data-sidebar="rail"] .onboarding-nav button {
   align-items: center;
   gap: 16px;
   border-top: 1px solid var(--line);
-  padding: 18px 0;
+  padding: 18px max(24px, calc((100% - 720px) / 2));
   margin-top: 0;
   background: var(--surface);
 }
@@ -3131,6 +3170,10 @@ html[data-sidebar="rail"] .onboarding-nav button {
   color: white;
   border-color: transparent;
   font-weight: 550;
+}
+.onboarding-footer .onboarding-primary[data-complete="true"] {
+  background: var(--complete);
+  color: #11251b;
 }
 .guided-onboarding button:disabled {
   opacity: 0.48;
@@ -3304,6 +3347,9 @@ html[data-sidebar="rail"] .onboarding-nav button {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
+}
+.onboarding-guide-cards[hidden] {
+  display: none;
 }
 .onboarding-guide-cards li {
   display: flex;

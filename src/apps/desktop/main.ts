@@ -578,6 +578,7 @@ const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
 let signInSurfaceOpen = false;
+let browserHomeSurfaceOpen = false;
 let signInReturnLayout: {
   section: SurfaceSection;
   setupOpen: boolean;
@@ -5209,6 +5210,7 @@ async function configureAdmittedProduct(
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
       if (runtimeEnvironment === "dev") {
+        browserHomeSurfaceOpen = false;
         if (!signInSurfaceOpen || section !== "browser" || setupOpen) {
           signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
         }
@@ -5245,6 +5247,37 @@ async function configureAdmittedProduct(
               },
             }
           : {}),
+      });
+    }
+    case "chatgpt.open-browser": {
+      if (runtimeEnvironment !== "dev" || !chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (chatGptSignInOpenGeneration !== null) {
+        return configurationFailure("CHATGPT_SIGN_IN_IN_PROGRESS");
+      }
+      if (chatGptTaskAdmission || connectorTaskAdmission) {
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      }
+      browserHomeSurfaceOpen = true;
+      section = "browser";
+      setupOpen = false;
+      applyLayout();
+      publishLayout();
+      let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
+      try {
+        opened = await chatGptRoute.retryFailedOpen();
+      } catch {
+        opened = { status: "unreachable" };
+      }
+      if (opened.status !== "opened") {
+        browserHomeSurfaceOpen = false;
+        applyLayout();
+        return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
       });
     }
     case "chatgpt.verify": {
@@ -7243,7 +7276,10 @@ function handleShortcut(input: Input): boolean {
 function applyLayout(): void {
   if (!window) return;
   const [width = 1, height = 1] = window.getContentSize();
-  const selectedViewKind = signInSurfaceOpen
+  const showBrowserHome =
+    signInSurfaceOpen ||
+    (browserHomeSurfaceOpen && productTasksState().tasks.length === 0);
+  const selectedViewKind = showBrowserHome
     ? "chatgpt"
     : taskViewKinds.get(selectedTaskId);
   const layout = deriveSurfaceLayout({
@@ -7254,12 +7290,14 @@ function applyLayout(): void {
     section,
     setupOpen,
     runtimeReady: selectedViewKind === "chatgpt" || runtimeState === "ready",
-    selectedTaskPresent: signInSurfaceOpen || taskViews.has(selectedTaskId),
+    selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
+    browserChromeVisible:
+      !showBrowserHome && productTasksState().tasks.length > 0,
   });
   for (const [taskId, view] of taskViews) {
     const visible =
       layout.pageVisible &&
-      taskId === (signInSurfaceOpen ? SIGN_IN_SURFACE_ID : selectedTaskId);
+      taskId === (showBrowserHome ? SIGN_IN_SURFACE_ID : selectedTaskId);
     view.setVisible(visible);
     view.setBounds(layout.pageBounds);
   }
@@ -8048,6 +8086,20 @@ async function main(): Promise<void> {
     },
     onSignInBlocked: (diagnostic) => {
       chatGptSignInBlocked.record(diagnostic);
+    },
+    onLoadStateChanged: (state) => {
+      if (runtimeEnvironment !== "dev") return;
+      if (
+        !signInSurfaceOpen &&
+        section === "browser" &&
+        productTasksState().tasks.length === 0
+      ) {
+        if (state === "loading" || state === "failed")
+          browserHomeSurfaceOpen = false;
+        if (state === "loaded") browserHomeSurfaceOpen = true;
+        applyLayout();
+      }
+      window?.webContents.send(channels.browserRouteState, { state });
     },
   });
   await initializeLiveTaskState();

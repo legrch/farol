@@ -264,6 +264,9 @@ export class GuidedOnboardingView {
   }
   signInReturned(): void {
     this.signInOpened = false;
+    // A fresh page observation replaces the last failed local check. The
+    // persisted evidence still decides whether the step is complete.
+    this.failedChecks.delete(0);
     this.port.render();
   }
   private select(index: number): void {
@@ -345,6 +348,7 @@ export class GuidedOnboardingView {
       });
     const primary = element<HTMLButtonElement>("#onboarding-primary");
     primary.disabled = this.busy || !facts.available;
+    primary.dataset.complete = String(complete && this.step !== 4);
     primary.textContent = this.busy
       ? this.busyLabel
       : this.step === 4
@@ -388,7 +392,7 @@ export class GuidedOnboardingView {
           : "pending";
     const successes = [
       "✓ Signed in to ChatGPT",
-      "✓ Folder access checked",
+      "✓ Folders ready",
       "✓ Tunnel connection verified",
       "✓ Farol Dev connection verified",
       "✓ All four setup checks complete",
@@ -426,6 +430,8 @@ export class GuidedOnboardingView {
     this.renderFolders(settings);
     element("#onboarding-credentials-saved").hidden = !saved || editing;
     element("#onboarding-tunnel-fields").hidden = !editing;
+    element("#onboarding-connection-guide").hidden = saved && !editing;
+    element("#onboarding-connection-help").hidden = saved && !editing;
     tunnel.disabled = this.busy || !facts.available;
     key.disabled = this.busy || !facts.available;
     element<HTMLButtonElement>("#onboarding-replace-credentials").disabled =
@@ -462,7 +468,7 @@ export class GuidedOnboardingView {
       this.step === 0
         ? "Check sign-in"
         : this.step === 1
-          ? "Check all folders"
+          ? "Verify access again"
           : this.step === 2
             ? "Check connection"
             : "Check previous result";
@@ -558,7 +564,7 @@ export class GuidedOnboardingView {
         actions.className = "onboarding-folder-actions";
         const check = document.createElement("button");
         check.type = "button";
-        check.textContent = "Check";
+        check.textContent = "Retry access check";
         check.disabled = this.busy;
         check.setAttribute("aria-label", `Check ${folderDisplayName(folder)}`);
         check.addEventListener("click", () =>
@@ -575,7 +581,8 @@ export class GuidedOnboardingView {
         remove.addEventListener("click", () =>
           this.requestFolderAction("remove", [folder.workspaceId]),
         );
-        actions.append(check, remove);
+        if (!checked) actions.append(check);
+        actions.append(remove);
         row.append(copy, actions);
         return row;
       }),
@@ -957,11 +964,17 @@ export class GuidedOnboardingView {
             "Check completed without sending a message.",
           )
         ) {
-          this.failedChecks.delete(this.step);
-          this.message =
-            this.step === 0
-              ? "✓ Signed in to ChatGPT. No message was sent."
-              : "✓ Tunnel client is ready. No restart or ChatGPT message was needed.";
+          if (this.step === 0 && !onboardingProgress(this.facts())[0]) {
+            this.failedChecks.add(0);
+            this.message =
+              "Sign-in is not complete yet. Finish the ChatGPT login, then check again.";
+          } else {
+            this.failedChecks.delete(this.step);
+            this.message =
+              this.step === 0
+                ? "✓ Signed in to ChatGPT. No message was sent."
+                : "✓ Tunnel client is ready. No restart or ChatGPT message was needed.";
+          }
         } else this.failedChecks.add(this.step);
       },
     );

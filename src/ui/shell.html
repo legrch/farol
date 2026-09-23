@@ -272,6 +272,9 @@
               >Starting the isolated local runtime…</span
             >
           </div>
+          <button type="button" id="browser-retry" hidden>
+            Try opening ChatGPT again
+          </button>
         </div>
       </section>
 
@@ -405,6 +408,7 @@
                     </button>
                   </div>
                   <ol
+                    id="onboarding-connection-guide"
                     class="onboarding-guide-cards"
                     aria-label="Get your tunnel credentials"
                   >
@@ -440,49 +444,61 @@
                       </div>
                     </li>
                   </ol>
-                  <p class="onboarding-note">
+                  <p class="onboarding-note" id="onboarding-connection-help">
                     Save both values here, then choose
                     <strong>Activate and check</strong>. Saving alone does not
                     verify the connection.
                   </p>
                 </section>
                 <section data-onboarding-content="app" hidden>
-                  <div class="onboarding-flow" aria-label="Verification route">
-                    <span>ChatGPT</span><b aria-hidden="true">↔</b
-                    ><span>Your tunnel</span><b aria-hidden="true">↔</b
-                    ><span>This computer</span>
-                  </div>
+                  <p class="onboarding-note">
+                    Already added Farol Dev in ChatGPT? Choose
+                    <strong>Verify app</strong> below. Farol will select it and
+                    send one short check.
+                  </p>
                   <div class="onboarding-link-actions">
                     <button type="button" data-onboarding-help="chatgpt">
                       Open ChatGPT Plugins ↗
                     </button>
+                  </div>
+                  <details class="onboarding-help" id="onboarding-app-guide">
+                    <summary>How to add Farol Dev in ChatGPT</summary>
+                    <div
+                      class="onboarding-flow"
+                      aria-label="Verification route"
+                    >
+                      <span>ChatGPT</span><b aria-hidden="true">↔</b
+                      ><span>Your tunnel</span><b aria-hidden="true">↔</b
+                      ><span>This computer</span>
+                    </div>
+                    <ol class="onboarding-instructions onboarding-short-guide">
+                      <li>
+                        In ChatGPT, open
+                        <strong
+                          >Settings → Security and login → Developer
+                          mode</strong
+                        >. Then open <strong>Plugins</strong> using the link
+                        above.
+                      </li>
+                      <li>
+                        Select <strong>＋</strong>, name the app
+                        <strong>Farol Dev</strong>, and choose
+                        <strong>Connection → Tunnel</strong>. Select your tunnel
+                        and <strong>No authentication</strong>. Keep your
+                        runtime key in Farol, not in this form. Reuse an
+                        existing Farol Dev app instead of creating a duplicate.
+                      </li>
+                      <li>
+                        Return here and select <strong>Verify app</strong>.
+                        Farol opens ChatGPT, selects that app, and sends one
+                        short connection check. You can watch the reply.
+                      </li>
+                    </ol>
+                    <p class="onboarding-note" id="onboarding-app-tunnel"></p>
                     <button type="button" data-onboarding-help="setup-guide">
                       Connection guide ↗
                     </button>
-                  </div>
-                  <ol class="onboarding-instructions onboarding-short-guide">
-                    <li>
-                      In ChatGPT, open
-                      <strong
-                        >Settings → Security and login → Developer mode</strong
-                      >. Then open <strong>Plugins</strong> using the link
-                      above.
-                    </li>
-                    <li>
-                      Select <strong>＋</strong>, name the app
-                      <strong>Farol Dev</strong>, and choose
-                      <strong>Connection → Tunnel</strong>. Select your tunnel
-                      and <strong>No authentication</strong>. Keep your runtime
-                      key in Farol, not in this form. Reuse an existing Farol
-                      Dev app instead of creating a duplicate.
-                    </li>
-                    <li>
-                      Return here and select <strong>Verify app</strong>. Farol
-                      opens ChatGPT, selects that app, and sends one short
-                      connection check. You can watch the reply.
-                    </li>
-                  </ol>
-                  <p class="onboarding-note" id="onboarding-app-tunnel"></p>
+                  </details>
                   <p class="onboarding-note">
                     This check reads no file contents. Opening the page or
                     saving the app does not count as verification.

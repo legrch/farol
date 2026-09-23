@@ -399,6 +399,7 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
 export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
+  z.strictObject({ kind: z.literal("chatgpt.open-browser") }),
 
   // Fixed public destinations only; the renderer cannot supply a URL.
   z.strictObject({
@@ -1072,6 +1073,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SETTINGS_INPUT_INVALID",
       "SETTINGS_WRITE_FAILED",
       "CHATGPT_ROUTE_UNAVAILABLE",
+      "CHATGPT_SIGN_IN_IN_PROGRESS",
+      "CHATGPT_PAGE_UNREACHABLE",
       "CHATGPT_CONNECTION_NOT_VERIFIED",
       "CHATGPT_TASK_IN_PROGRESS",
       "CHATGPT_TASK_PREVIEW_PENDING",

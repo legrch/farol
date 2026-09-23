@@ -13,6 +13,7 @@ import {
   type ProductTasksState,
 } from "../modules/chat/contract/product-task";
 import {
+  BrowserRouteStatusSchema,
   RuntimeStatusSchema,
   type RuntimeStatus,
 } from "../pkg/ipc/runtime-status";
@@ -326,6 +327,7 @@ declare global {
       ): void;
       onRuntimeEvent(listener: (event: unknown) => void): () => void;
       onRuntimeState(listener: (status: unknown) => void): () => void;
+      onBrowserRouteState(listener: (status: unknown) => void): () => void;
       onTaskSurfaceState(listener: (status: unknown) => void): () => void;
       onTasksState(listener: (state: unknown) => void): () => void;
       onLayout(listener: (layout: unknown) => void): () => void;
@@ -535,6 +537,8 @@ let settingsFeedbackError = false;
 let settingsFeedbackSurface: "computer" | "settings" | "setup" = "settings";
 const configurationRequestOrder = new ConfigurationRequestOrder();
 let taskAdmissionFeedback = "";
+let browserHomeStatus: "idle" | "opening" | "ready" | "failed" = "idle";
+let browserHomeOpening = false;
 let taskMenuFeedback = "";
 let taskMenuFeedbackError = false;
 // Why a task-menu command's sentence did or did not reach the note. See
@@ -857,7 +861,7 @@ function renderRuntime(): void {
           : (() => {
               switch (chatGptRouteState()) {
                 case "ready":
-                  return "Ready for a new task";
+                  return "ChatGPT connected";
                 case "checking":
                   return "Checking ChatGPT connection…";
                 case "outcome-unknown":
@@ -893,10 +897,38 @@ function renderBrowser(): void {
   const title = required<HTMLElement>("#browser-state-title");
   const detail = required<HTMLElement>("#browser-state-detail");
   const mark = required<HTMLElement>("#browser-state-mark");
+  const retry = required<HTMLButtonElement>("#browser-retry");
+  retry.hidden = true;
   const task = taskById(selectedTaskId);
   const surfaceFailed =
     taskSurfaceStatuses.get(selectedTaskId)?.state === "failed";
-  if (bootstrap.runtimeState === "ready" && bootstrap.tasks.length === 0) {
+  if (
+    bootstrap.environment === "dev" &&
+    section === "browser" &&
+    bootstrap.tasks.length === 0
+  ) {
+    const failed = browserHomeStatus === "failed";
+    loading.dataset.state = failed
+      ? "browser-error"
+      : browserHomeStatus === "ready"
+        ? "ready"
+        : "sign-in";
+    mark.className = `state-lamp ${failed ? "failed" : "running"}`;
+    title.textContent = failed
+      ? "ChatGPT could not open"
+      : browserHomeStatus === "ready"
+        ? "ChatGPT is open"
+        : "Opening ChatGPT";
+    detail.textContent = failed
+      ? "Check your connection, then try opening ChatGPT again."
+      : chatGptSignInOpened
+        ? "Finish signing in here, then choose Return to Setup in the sidebar."
+        : "ChatGPT opens inside Farol. You can return to Setup at any time.";
+    retry.hidden = !failed;
+  } else if (
+    bootstrap.runtimeState === "ready" &&
+    bootstrap.tasks.length === 0
+  ) {
     loading.dataset.state = "empty";
     mark.className = "state-lamp unavailable";
     title.textContent = taskAdmissionFeedback
@@ -4682,6 +4714,9 @@ function render(notify = true): void {
   const root = document.documentElement;
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
+  root.dataset.browserChrome = String(
+    bootstrap.tasks.length > 0 && !chatGptSignInOpened,
+  );
   const newTask = required<HTMLButtonElement>("#new-task");
   const chatGptReady = chatGptRouteState() === "ready";
   required("#window-mode").textContent = windowModeLabel({
@@ -4689,6 +4724,13 @@ function render(notify = true): void {
     taskCount: bootstrap.tasks.length,
     chatGptReady,
   });
+  if (
+    bootstrap.environment === "dev" &&
+    section === "browser" &&
+    bootstrap.tasks.length === 0
+  ) {
+    required("#window-mode").textContent = "ChatGPT inside Farol";
+  }
   const taskCapacityAvailable = bootstrap.tasks.length < 5;
   newTask.disabled =
     bootstrap.demoMode || !chatGptReady || !taskCapacityAvailable;
@@ -4989,6 +5031,37 @@ function selectSection(next: SurfaceSection): void {
   sidebarOverlayOpen = false;
   setShellOverlay("none");
   render();
+  if (
+    next === "browser" &&
+    bootstrap.environment === "dev" &&
+    bootstrap.tasks.length === 0 &&
+    !chatGptSignInOpened
+  ) {
+    void openBrowserHome();
+  }
+}
+
+async function openBrowserHome(): Promise<void> {
+  if (
+    browserHomeOpening ||
+    bootstrap.environment !== "dev" ||
+    bootstrap.tasks.length !== 0 ||
+    chatGptSignInOpened
+  )
+    return;
+  browserHomeOpening = true;
+  browserHomeStatus = "opening";
+  render();
+  try {
+    const opened = await configureProduct(
+      { kind: "chatgpt.open-browser" },
+      "ChatGPT opened inside Farol Dev.",
+    );
+    browserHomeStatus = opened ? "ready" : "failed";
+  } finally {
+    browserHomeOpening = false;
+    render();
+  }
 }
 
 function recordEvent(event: ClientEventDto): void {
@@ -5015,6 +5088,7 @@ function applyRuntimeStatus(status: RuntimeStatus): void {
 
 function applyTasksState(state: ProductTasksState): void {
   if (state.revision < bootstrap.taskRevision) return;
+  const hadTasks = bootstrap.tasks.length > 0;
   bootstrap = {
     ...bootstrap,
     taskRevision: state.revision,
@@ -5044,6 +5118,9 @@ function applyTasksState(state: ProductTasksState): void {
     }
   }
   render();
+  if (hadTasks && state.tasks.length === 0 && section === "browser") {
+    void openBrowserHome();
+  }
 }
 
 function applyTaskSurfaceStatus(status: TaskSurfaceStatus): void {
@@ -5204,6 +5281,17 @@ async function start(): Promise<void> {
     }
     applyRuntimeStatus(parsed.data);
   });
+  window.farolNext.onBrowserRouteState((value) => {
+    const parsed = BrowserRouteStatusSchema.safeParse(value);
+    if (!parsed.success) return;
+    browserHomeStatus =
+      parsed.data.state === "loaded"
+        ? "ready"
+        : parsed.data.state === "failed"
+          ? "failed"
+          : "opening";
+    if (bootstrapReady) render();
+  });
   window.farolNext.onTaskSurfaceState((value) => {
     const parsed = TaskSurfaceStatusSchema.safeParse(value);
     if (!parsed.success) return;
@@ -5274,12 +5362,7 @@ async function start(): Promise<void> {
     },
     render: () => render(),
     returnToChat: () => selectSection("browser"),
-    openChat: () => {
-      const chat = bootstrap.tasks.find((task) => task.provider === "chatgpt");
-      if (chat) selectedTaskId = chat.taskId;
-      selectSection("browser");
-      if (!chat) required<HTMLButtonElement>("#new-task").click();
-    },
+    openChat: () => selectSection("browser"),
   });
   // Diagnostic and optional model/Agent controls are available in Settings,
   // not a second setup journey beneath the guided steps.
@@ -5306,6 +5389,12 @@ async function start(): Promise<void> {
     "click",
     () => {
       void window.farolNext.configure({ kind: "chatgpt.sign-in-return" });
+    },
+  );
+  required<HTMLButtonElement>("#browser-retry").addEventListener(
+    "click",
+    () => {
+      void openBrowserHome();
     },
   );
   required<HTMLButtonElement>("#sidebar-backdrop").addEventListener(
@@ -5915,6 +6004,16 @@ async function start(): Promise<void> {
     applyHostLayout(layout);
   } else {
     render();
+  }
+  if (
+    section === "browser" &&
+    bootstrap.environment === "dev" &&
+    bootstrap.tasks.length === 0 &&
+    !setupJourney.open
+  ) {
+    queueMicrotask(() => {
+      void openBrowserHome();
+    });
   }
   if (bootstrap.chatgptRecoveryPending) {
     queueMicrotask(() => {

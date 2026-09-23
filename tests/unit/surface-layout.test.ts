@@ -37,6 +37,15 @@ describe("native Browser surface layout", () => {
     });
   });
 
+  it("gives embedded sign-in the full browser height without task controls", () => {
+    expect(
+      deriveSurfaceLayout({ ...base, browserChromeVisible: false }),
+    ).toMatchObject({
+      pageVisible: true,
+      pageBounds: { x: 216, y: 52, width: 964, height: 708 },
+    });
+  });
+
   it.each([
     { setupOpen: true },
     { overlay: "sidebar" as const },

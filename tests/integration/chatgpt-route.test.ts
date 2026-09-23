@@ -2267,6 +2267,88 @@ describe("ChatGPT embedded task surface", () => {
     candidate.dispose();
     expect(surface.destroy).toHaveBeenCalledTimes(1);
   });
+
+  it("refuses a Chromium error document and recreates it only on explicit retry", async () => {
+    const first = embeddedSurface();
+    const second = embeddedSurface();
+    const originalLoad = first.loadURL.getMockImplementation()!;
+    first.loadURL.mockImplementation(async (url: string) => {
+      await originalLoad(url);
+      first.webContents.emit("did-start-navigation", {}, url, false, true);
+      first.webContents.emit(
+        "did-fail-load",
+        {},
+        -102,
+        "ERR_CONNECTION_REFUSED",
+        url,
+        true,
+      );
+      first.webContents.emit("did-finish-load");
+    });
+    const surfaces = [first, second];
+    const changes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() =>
+        surfaces.shift()) as unknown as ChatGptRouteSurfaceFactory,
+      onLoadStateChanged: (state) => changes.push(state),
+    });
+
+    await expect(candidate.open()).resolves.toEqual({ status: "unreachable" });
+    expect(first.reveal).not.toHaveBeenCalled();
+    expect(changes).toEqual(["loading", "failed"]);
+    await expect(candidate.retryFailedOpen()).resolves.toEqual({
+      status: "opened",
+    });
+    expect(first.destroy).toHaveBeenCalledTimes(1);
+    expect(second.reveal).toHaveBeenCalledTimes(1);
+    candidate.dispose();
+  });
+
+  it("keeps a full navigation hidden until its app gate settles and reports renderer loss", async () => {
+    const surface = embeddedSurface();
+    const contents = Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(async () => true),
+    });
+    const changes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol Dev",
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onLoadStateChanged: (state) => changes.push(state),
+    });
+    await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+
+    let releaseGate: ((value: boolean) => void) | undefined;
+    const gate = new Promise<boolean>((resolve) => {
+      releaseGate = resolve;
+    });
+    contents.executeJavaScript.mockImplementation(async () => gate);
+    const nextUrl = "https://chatgpt.com/c/new-document";
+    await surface.loadURL(nextUrl);
+    contents.emit("did-start-navigation", {}, nextUrl, false, true);
+    contents.emit("did-finish-load");
+    await vi.waitFor(() =>
+      expect(contents.executeJavaScript).toHaveBeenCalledTimes(2),
+    );
+    expect(changes.at(-1)).toBe("loading");
+    expect(surface.hide).toHaveBeenCalled();
+    expect(surface.reveal).toHaveBeenCalledTimes(1);
+
+    releaseGate?.(true);
+    await vi.waitFor(() => expect(changes.at(-1)).toBe("loaded"));
+    expect(surface.reveal).toHaveBeenCalledTimes(2);
+    contents.emit("render-process-gone");
+    expect(changes.at(-1)).toBe("failed");
+    expect(surface.hide).toHaveBeenCalledTimes(2);
+    candidate.dispose();
+  });
 });
 
 describe("ChatGPT shared partition lifecycle", () => {

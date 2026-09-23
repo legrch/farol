@@ -9,3 +9,9 @@ export const RuntimeStatusSchema = z.strictObject({
 });
 
 export type RuntimeStatus = z.infer<typeof RuntimeStatusSchema>;
+
+export const BrowserRouteStatusSchema = z.strictObject({
+  state: z.enum(["loading", "loaded", "failed"]),
+});
+
+export type BrowserRouteStatus = z.infer<typeof BrowserRouteStatusSchema>;

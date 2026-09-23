@@ -23,6 +23,7 @@ export function deriveSurfaceLayout(input: {
   setupOpen: boolean;
   runtimeReady: boolean;
   selectedTaskPresent: boolean;
+  browserChromeVisible?: boolean;
 }) {
   const autoRail = input.width < shellGeometry.autoRailBelow;
   const sidebarWidth =
@@ -30,7 +31,10 @@ export function deriveSurfaceLayout(input: {
       ? shellGeometry.sidebarRail
       : shellGeometry.sidebarFull;
   const pageTop =
-    shellGeometry.windowBar + shellGeometry.taskStrip + shellGeometry.dossier;
+    shellGeometry.windowBar +
+    (input.browserChromeVisible === false
+      ? 0
+      : shellGeometry.taskStrip + shellGeometry.dossier);
   return {
     sidebarWidth,
     autoRail,

@@ -40,6 +40,13 @@ contextBridge.exposeInMainWorld("farolNext", {
     ipcRenderer.on(channels.runtimeState, wrapped);
     return () => ipcRenderer.removeListener(channels.runtimeState, wrapped);
   },
+  onBrowserRouteState: (listener: (status: unknown) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
+      listener(value);
+    ipcRenderer.on(channels.browserRouteState, wrapped);
+    return () =>
+      ipcRenderer.removeListener(channels.browserRouteState, wrapped);
+  },
   onTaskSurfaceState: (listener: (status: unknown) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, value: unknown) =>
       listener(value);
