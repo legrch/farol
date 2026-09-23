@@ -408,6 +408,14 @@ function appSelectionPrelude(appName: string): string {
         .replace(/\\s+button$/iu, "")
         .trim();
     };
+    const exactPickerOption = (option) => {
+      if (!(option instanceof HTMLElement) || !appElementVisible(option)) return false;
+      if (normalizedLabel(option) === requiredAppName) return true;
+      // ChatGPT's picker puts the app description in the option's text.
+      // Require a separately rendered exact title, never a text prefix.
+      return [...option.querySelectorAll("[data-app-name],[aria-label],span,div,strong")]
+        .some((part) => appElementVisible(part) && normalizedLabel(part) === requiredAppName);
+    };
     const appSelectionFor = (input) => {
       if (!(input instanceof HTMLElement)) return { state: "missing" };
       const root = input.closest("form") || input.parentElement || input;
@@ -429,7 +437,16 @@ function appSelectionPrelude(appName: string): string {
       const clone = input.cloneNode(true);
       if (!(clone instanceof HTMLElement)) return "";
       for (const marker of clone.querySelectorAll(selectedSelector)) marker.remove();
-      return clone.innerText || clone.textContent || "";
+      const text = clone.innerText || clone.textContent || "";
+      // ChatGPT can render the selected app as a plugin link inside the
+      // contenteditable while keeping its selection marker beside it. The
+      // link alone is not an owner draft; any additional text still blocks.
+      if (text.trim() === requiredAppName && appSelectionFor(input).state === "bound") {
+        const exactLinks = [...input.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
+          .filter((link) => appElementVisible(link) && normalizedLabel(link) === requiredAppName);
+        if (exactLinks.length === 1) return "";
+      }
+      return text;
     };
   `;
 }
@@ -468,7 +485,7 @@ export function bindChatGptAppScript(
       return true;
     };
     input.focus();
-    if (!setComposerText("@", "insertText")) {
+    if (!setComposerText("@" + requiredAppName, "insertText")) {
       return { state: "blocked", reason: "missing" };
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -482,9 +499,7 @@ export function bindChatGptAppScript(
     ].join(","))].filter(appElementVisible);
     const optionCandidates = [...new Set(pickerRoots.flatMap((root) =>
       [...root.querySelectorAll('[role="option"],[role="menuitem"],button')]
-    ))].filter((element) =>
-      appElementVisible(element) && normalizedLabel(element) === requiredAppName
-    );
+    ))].filter(exactPickerOption);
     if (optionCandidates.length !== 1) {
       setComposerText("", "deleteContentBackward");
       return {
@@ -505,7 +520,7 @@ export function bindChatGptAppScript(
     const textAfterSelection = input instanceof HTMLTextAreaElement
       ? input.value
       : (input.innerText || input.textContent || "");
-    if (textAfterSelection.trim() === "@") {
+    if (textAfterSelection.trim() === "@" + requiredAppName) {
       setComposerText("", "deleteContentBackward");
     }
     return { state: "blocked", reason: "selection_not_observed" };
@@ -604,7 +619,7 @@ export function installManualAppGateScript(appName: string): string {
       const pickerChoice = target.closest('[role="option"],[role="menuitem"]');
       const exactRequiredAppChoice =
         pickerChoice instanceof HTMLElement &&
-        normalizedLabel(pickerChoice) === requiredAppName;
+        exactPickerOption(pickerChoice);
       const appChipRepair = target.closest(selectedSelector);
       if (
         knownCancel ||

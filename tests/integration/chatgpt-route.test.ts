@@ -306,7 +306,7 @@ describe("ChatGPT test-window presentation", () => {
 });
 
 describe("ChatGPT route submission boundary", () => {
-  it("uses the real @ picker and accepts only one observed exact Farol DEV chip", async () => {
+  it("filters the real @ picker and accepts one exact Farol Dev option with description", async () => {
     const expectedHref = "https://chatgpt.com/c/dev-binding";
     let selected = false;
     const contacts = { pickerClicks: 0, values: [] as string[] };
@@ -343,11 +343,15 @@ describe("ChatGPT route submission boundary", () => {
     const composer = new HTMLTextAreaElement();
     composer.parentElement = form;
     const chip = new HTMLElement();
-    chip.textContent = "Farol DEV";
+    chip.textContent = "Farol Dev";
     form.querySelectorAll = () => (selected ? [chip] : []);
     const picker = new HTMLElement();
     const option = new HTMLButtonElement();
-    option.textContent = "Farol DEV";
+    option.textContent =
+      "Farol Dev Private development connector to the approved Farol Dev test workspace.";
+    const optionTitle = new HTMLElement();
+    optionTitle.textContent = "Farol Dev";
+    option.querySelectorAll = () => [optionTitle];
     option.click = () => {
       contacts.pickerClicks += 1;
       selected = true;
@@ -391,17 +395,25 @@ describe("ChatGPT route submission boundary", () => {
     });
 
     await expect(
-      vm.runInContext(bindChatGptAppScript("Farol DEV", expectedHref), context),
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
     ).resolves.toEqual({ state: "bound" });
-    expect(contacts.values).toEqual(["@"]);
+    expect(contacts.values).toEqual(["@Farol Dev"]);
     expect(contacts.pickerClicks).toBe(1);
 
     composerValue = "OWNER_DRAFT";
     await expect(
-      vm.runInContext(bindChatGptAppScript("Farol DEV", expectedHref), context),
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
     ).resolves.toEqual({ state: "blocked", reason: "draft_present" });
     expect(composerValue).toBe("OWNER_DRAFT");
-    expect(contacts.values).toEqual(["@"]);
+    expect(contacts.values).toEqual(["@Farol Dev"]);
+
+    selected = false;
+    composerValue = "";
+    optionTitle.textContent = "Farol Dev Other";
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "blocked", reason: "missing" });
+    expect(contacts.pickerClicks).toBe(1);
   });
 
   it("does not accept a matching-name generic Lexical decorator as an app chip", () => {
@@ -2702,6 +2714,7 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     options: Readonly<{
       composer?: "textarea" | "rich";
       draft?: string;
+      chipTextInComposer?: boolean;
     }> = {},
   ): Readonly<{
     context: vm.Context;
@@ -2745,10 +2758,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       contains(candidate: unknown): boolean {
         return candidate === this;
       }
-      getAttribute(): null {
+      getAttribute(_name: string): string | null {
         return null;
       }
-      querySelectorAll(): readonly StubElement[] {
+      querySelectorAll(_selector: string): readonly StubElement[] {
         return [];
       }
       cloneNode(): StubElement {
@@ -2768,13 +2781,28 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       options.composer === "rich"
         ? new HTMLElement()
         : new HTMLTextAreaElement();
-    composer.innerText = options.draft ?? "";
-    composer.textContent = options.draft ?? "";
+    const composerText =
+      options.draft ??
+      (options.chipTextInComposer ? (selectedAppName ?? "") : "");
+    composer.innerText = composerText;
+    composer.textContent = composerText;
     const send = new HTMLButtonElement();
     const appChip = new HTMLElement();
     appChip.textContent = selectedAppName ?? "";
-    composer.querySelectorAll = () =>
-      selectedAppName === undefined ? [] : [appChip];
+    const appLink = new HTMLElement();
+    appLink.textContent = selectedAppName ?? "";
+    appLink.getAttribute = (name: string) =>
+      name === "href"
+        ? "/plugins/plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a"
+        : null;
+    composer.querySelectorAll = (selector: string) =>
+      selector.includes('a[href*="/plugins/plugin_asdk_app_"]')
+        ? options.chipTextInComposer && selectedAppName !== undefined
+          ? [appLink]
+          : []
+        : selectedAppName === undefined
+          ? []
+          : [appChip];
 
     // The value setter the prepare script reaches for, instrumented.
     let composerValue = options.draft ?? "";
@@ -2864,6 +2892,35 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     );
     expect(result).toEqual({ activated: true });
     expect(contacts.clicked).toBe(1);
+  });
+
+  it("does not treat the selected app link alone as an owner draft", async () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+    });
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "bound" });
+    expect(
+      vm.runInContext(
+        prepareTaskScript("AUTHORIZED_CHECK", expectedHref, "Farol Dev"),
+        context,
+      ),
+    ).toMatchObject({ ready: true });
+    expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+  });
+
+  it("still preserves a real draft beside the selected app link", async () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      draft: "Farol Dev OWNER_DRAFT",
+    });
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "blocked", reason: "draft_present" });
+    expect(contacts.typed).toEqual([]);
   });
 
   it.each(["Farol DEV", "farol dev", "Farol", "Farol-Dev", "Farol Dev Other"])(
