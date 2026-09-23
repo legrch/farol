@@ -16,11 +16,13 @@ export function desktopStartupFailureReport(
   environment: DesktopEnvironment,
 ): string {
   const code = desktopStartupFailureCode(error);
-  const product = environment === "dev" ? "Farol DEV" : "Farol Next Preview";
+  const product = environment === "dev" ? "Farol Dev" : "Farol Next Preview";
   const remedy =
-    environment === "dev"
-      ? "Fix the reported local build or configuration issue, then run 'task dev' again."
-      : "Rebuild the exact candidate, then launch it again.";
+    environment === "dev" && code === "DEV_PROFILE_DIRECTORY_AMBIGUOUS"
+      ? "Two distinct Dev profiles exist. Stop here and choose a profile explicitly; neither was moved or merged."
+      : environment === "dev"
+        ? "Fix the reported local build or configuration issue, then run 'task dev' again."
+        : "Rebuild the exact candidate, then launch it again.";
   return (
     `${product} main-process startup failed before the app became ready (${code}). ${remedy}\n` +
     `${DESKTOP_STARTUP_FAILURE_PREFIX}${code}\n` +

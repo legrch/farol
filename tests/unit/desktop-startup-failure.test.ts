@@ -19,7 +19,7 @@ describe("desktop startup failure boundary", () => {
 
     expect(write).toHaveBeenCalledOnce();
     expect(write.mock.calls[0]?.[0]).toContain(
-      "Farol DEV main-process startup failed",
+      "Farol Dev main-process startup failed",
     );
     expect(write.mock.calls[0]?.[0]).toContain(
       `${DESKTOP_STARTUP_FAILURE_PREFIX}INSTANCE_BUILD_IDENTITY_INVALID`,
@@ -27,6 +27,24 @@ describe("desktop startup failure boundary", () => {
     expect(write.mock.calls[0]?.[0]).toContain(
       `${DESKTOP_LAUNCH_RESULT_PREFIX}startup-failed`,
     );
+    expect(exit).toHaveBeenCalledExactlyOnceWith(1);
+  });
+
+  it("reports distinct Dev profiles without moving or merging them", () => {
+    const write = vi.fn<(message: string) => void>();
+    const exit = vi.fn<(code: number) => void>();
+    terminateDesktopStartup(
+      new Error("DEV_PROFILE_DIRECTORY_AMBIGUOUS"),
+      "dev",
+      {
+        write,
+        exit,
+      },
+    );
+    expect(write.mock.calls[0]?.[0]).toContain(
+      "Two distinct Dev profiles exist",
+    );
+    expect(write.mock.calls[0]?.[0]).toContain("neither was moved or merged");
     expect(exit).toHaveBeenCalledExactlyOnceWith(1);
   });
 

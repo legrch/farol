@@ -45,7 +45,7 @@ export function candidateToolchainDirectories(home) {
 
 export function toolchainMissingMessage() {
   return (
-    `Farol dev needs Node ${DECLARED_NODE_VERSIONS.join(" or ")} with npm ${DECLARED_NPM_VERSION}, and none was found ` +
+    `Farol Dev needs Node ${DECLARED_NODE_VERSIONS.join(" or ")} with npm ${DECLARED_NPM_VERSION}, and none was found ` +
     "at the running interpreter or at the usual nvm/Homebrew locations. Install one, for example " +
     "'nvm install 24.20.0' or 'brew install node@26', then run 'task dev' again."
   );
@@ -336,7 +336,7 @@ export function describeLaunchResult(outcome) {
     return {
       exitCode: 1,
       message:
-        "Farol DEV main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.",
+        "Farol Dev main-process startup failed. The classified cause is above; fix it, then run 'task dev' again.",
     };
   }
   return {
@@ -565,7 +565,7 @@ export async function main(argv, overrides = {}) {
   }
 
   log(
-    `Farol dev toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
+    `Farol Dev toolchain: Node ${currentNode}, npm ${getCurrentNpmVersion()}.`,
   );
 
   const dependencyStatus = await ensureDependenciesFn();
@@ -585,12 +585,12 @@ export async function main(argv, overrides = {}) {
 
   if (checkOnly) {
     log(
-      "Farol dev check complete: toolchain, dependencies, and build are current. Not launching.",
+      "Farol Dev check complete: toolchain, dependencies, and build are current. Not launching.",
     );
     return;
   }
 
-  log("Running Farol Next in this terminal. Press Ctrl+C to stop.");
+  log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
   await launch();
 }
 

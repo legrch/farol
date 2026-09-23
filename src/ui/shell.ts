@@ -39,6 +39,7 @@ import {
   type ProductDiscoveryCandidate,
 } from "../pkg/product-settings/contract";
 import { initialSetupPresentation } from "../pkg/product-settings/setup-entry";
+import { GuidedOnboardingView } from "./guided-onboarding-view";
 import {
   advanceSetup,
   createSetupJourney,
@@ -221,7 +222,7 @@ const bootstrapSchema = z.strictObject({
   productName: z.literal("Farol Next Preview"),
   bundleId: z.literal("local.farol.next.preview"),
   environment: z.enum(["preview", "dev"]),
-  displayName: z.enum(["Farol", "Farol DEV"]),
+  displayName: z.enum(["Farol", "Farol Dev"]),
   displayEdition: z.enum(["Developer Preview", "Development"]),
   applicationId: z.enum(["local.farol.next.preview", "local.farol.dev"]),
   build: BuildIdentitySchema,
@@ -345,7 +346,7 @@ const required = <ElementType extends Element>(
 function applyProductIdentity(): void {
   const dev = bootstrap.environment === "dev";
   if (
-    bootstrap.displayName !== (dev ? "Farol DEV" : "Farol") ||
+    bootstrap.displayName !== (dev ? "Farol Dev" : "Farol") ||
     bootstrap.displayEdition !== (dev ? "Development" : "Developer Preview") ||
     bootstrap.applicationId !==
       (dev ? "local.farol.dev" : "local.farol.next.preview")
@@ -375,6 +376,7 @@ let bootstrapReady = false;
 let section: SurfaceSection = "browser";
 let selectedTaskId = "";
 let setupJourney = createSetupJourney();
+let guidedOnboarding: GuidedOnboardingView | null = null;
 let setupFocusKey = "";
 let sidebarPreference: Exclude<SidebarMode, "overlay"> = "full";
 let sidebarOverlayOpen = false;
@@ -2005,7 +2007,7 @@ function renderComputerConfiguration(): void {
   }
 
   const settings = configured.settings;
-  // Farol DEV starts unfinished onboarding on this real Connections page,
+  // Farol Dev starts unfinished onboarding on this real Connections page,
   // not inside the modal wizard. Keep its fixed-location dependency checks
   // just as automatic here: only exact reviewed/signed candidates are
   // probed, and each discovery runs at most once per renderer session.
@@ -2552,16 +2554,16 @@ async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
 
 function chatGptPreSubmitRemedy(code: string | null): string | null {
   if (code === "CHATGPT_APP_SELECTION_MISSING") {
-    return "Message blocked before send. Open ChatGPT and select exactly one @Farol DEV app, then retry.";
+    return "Message blocked before send. Open ChatGPT and select exactly one @Farol Dev app, then retry.";
   }
   if (code === "CHATGPT_APP_SELECTION_AMBIGUOUS") {
-    return "Message blocked before send because the Farol DEV app selection was ambiguous. Keep exactly one @Farol DEV chip, then retry.";
+    return "Message blocked before send because the Farol Dev app selection was ambiguous. Keep exactly one @Farol Dev chip, then retry.";
   }
   if (code === "CHATGPT_APP_SELECTION_CONFLICT") {
-    return "Message blocked before send because another app is selected. Remove it and select @Farol DEV; Farol did not switch apps automatically.";
+    return "Message blocked before send because another app is selected. Remove it and select @Farol Dev; Farol did not switch apps automatically.";
   }
   if (code === "CHATGPT_APP_SELECTION_LOST") {
-    return "Message blocked before send because the @Farol DEV selection disappeared. Select it again, then retry.";
+    return "Message blocked before send because the @Farol Dev selection disappeared. Select it again, then retry.";
   }
   if (code === "CHATGPT_COMPOSER_DRAFT_PRESENT") {
     return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
@@ -2572,13 +2574,13 @@ function chatGptPreSubmitRemedy(code: string | null): string | null {
 function devMcpProofFailureMessage(code: string): string | null {
   switch (code) {
     case "DEV_MCP_PROOF_DEV_ONLY":
-      return "The real MCP proof is available only in the isolated Farol DEV environment.";
+      return "The real MCP proof is available only in the isolated Farol Dev environment.";
     case "DEV_MCP_PROOF_CONNECTOR_MUST_STOP":
       return "Stop the DEV connector before preparing a fresh synthetic grant.";
     case "DEV_MCP_PROOF_NOT_PREPARED":
       return "Prepare the private synthetic fixture first.";
     case "DEV_MCP_PROOF_CONNECTOR_NOT_READY":
-      return "Start the DEV connector, attach @Farol DEV in ChatGPT, and verify the attachment before the live proof.";
+      return "Start the DEV connector, attach @Farol Dev in ChatGPT, and verify the attachment before the live proof.";
     case "DEV_MCP_PROOF_STALE":
       return "The proof belongs to an older build, Computer generation, or prior live attempt. Stop the connector and prepare a fresh fixture.";
     case "DEV_MCP_PROOF_CHATGPT_FAILED":
@@ -2590,9 +2592,29 @@ function devMcpProofFailureMessage(code: string): string | null {
     case "DEV_MCP_PROOF_RECEIPT_INVALID":
       return "The Computer MCP receipt did not match this DEV build, generation, exact read, and outside-grant refusal.";
     case "DEV_MCP_PROOF_PREPARE_FAILED":
-      return "Farol DEV could not create and verify the private synthetic fixture.";
+      return "Farol Dev could not create and verify the private synthetic fixture.";
     default:
       return null;
+  }
+}
+
+function connectorAppVerificationFailureMessage(code: string): string {
+  const preSubmit = chatGptPreSubmitRemedy(code);
+  if (preSubmit) return preSubmit;
+  switch (code) {
+    case "CONNECTOR_APP_VERIFICATION_NOT_READY":
+      return "Sign in, verify a folder, and activate this DEV tunnel before verifying the app.";
+    case "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED":
+    case "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN":
+      return "This check may have been sent. Inspect the existing ChatGPT conversation and Advanced receipt before deliberately starting a fresh challenge; Farol did not resend it.";
+    case "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED":
+      return "The check stopped before a confirmed send. Inspect the ChatGPT window before trying again.";
+    case "CONNECTOR_APP_VERIFICATION_STATE_CHANGED":
+      return "The folder or tunnel changed during verification. Inspect Advanced before starting a new challenge.";
+    case "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE":
+      return "Farol could not safely record this one-time check. No verified result was accepted.";
+    default:
+      return `App verification failed: ${code}`;
   }
 }
 
@@ -2631,7 +2653,7 @@ async function configureProduct(
       : command.kind === "dev-proof.prepare"
         ? "Creating a fresh private sentinel fixture and verifying its local read-only grant…"
         : command.kind === "dev-proof.run"
-          ? "Running one owner-triggered @Farol DEV ChatGPT proof with no retry…"
+          ? "Running one owner-triggered @Farol Dev ChatGPT proof with no retry…"
           : command.kind === "connector.select-client"
             ? "Verifying the exact tunnel-client executable and supported CLI surface…"
             : command.kind === "connector.configure"
@@ -2772,119 +2794,122 @@ async function configureProduct(
       "TUNNEL_CLIENT_PICKER_CANCELLED",
       "SUPPORT_EXPORT_CANCELLED",
     ].includes(parsed.error);
-    settingsFeedback = cancellation
-      ? "No selection was made."
-      : parsed.error === "CODEX_AGENT_STILL_RUNNING"
-        ? "The same native Agent child is still running. Use Rejoin Agent to collect its result; no second child will be created."
-        : parsed.error === "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
-          ? "Native Agent outcome unknown. Inspect the existing Codex task before any deliberate recovery."
-          : parsed.error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
-            ? "Connector readiness is unknown. Inspect the current connector before an explicit Repair."
-            : parsed.error === "CONNECTOR_ATTACHMENT_NOT_FOUND"
-              ? "No connector receipt exists yet. Attach this tunnel in ChatGPT, run the displayed one-time challenge, then check again."
-              : parsed.error === "CONNECTOR_ATTACHMENT_INVALID"
-                ? "The connector receipt does not match this runtime, build, workspace, or Computer authority. Stop and deliberately start a fresh challenge."
-                : parsed.error === "CONNECTOR_CHALLENGE_UNAVAILABLE"
-                  ? "No current connector challenge is available. Start the connector before checking its ChatGPT attachment."
-                  : parsed.error === "CONNECTOR_STOP_REQUIRED"
-                    ? "Stop the connector before changing Computer authority or connector identity."
-                    : parsed.error === "WORKSPACE_MUTATION_RESULT_PENDING"
-                      ? "The last guarded edit has no delivered result yet. Check its result first."
-                      : parsed.error === "WORKSPACE_MUTATION_NOT_ADMITTED"
-                        ? "The last guarded edit was never admitted, so nothing was changed."
-                        : parsed.error === "WORKSPACE_MUTATION_NOT_PENDING"
-                          ? "There is no undelivered edit result to check."
-                          : parsed.error === "WORKSPACE_NOT_GIT_REPOSITORY"
-                            ? "This workspace is not a Git repository."
-                            : parsed.error === "WORKSPACE_GIT_HEAD_UNBORN"
-                              ? "This repository has no commits yet, so there is no HEAD commit to read."
-                              : parsed.error ===
-                                  "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED"
-                                ? "This repository borrows objects from another object store (objects/info/alternates), which the fixed Git checks cannot follow. Nothing was read."
-                                : parsed.error ===
-                                    "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT"
-                                  ? "The repository index changed while the check was being prepared, so no single instant could be reported. Run the check again."
+    settingsFeedback =
+      command.kind === "connector.verify-app"
+        ? connectorAppVerificationFailureMessage(parsed.error)
+        : cancellation
+          ? "No selection was made."
+          : parsed.error === "CODEX_AGENT_STILL_RUNNING"
+            ? "The same native Agent child is still running. Use Rejoin Agent to collect its result; no second child will be created."
+            : parsed.error === "CODEX_AGENT_LIVE_OUTCOME_UNKNOWN"
+              ? "Native Agent outcome unknown. Inspect the existing Codex task before any deliberate recovery."
+              : parsed.error === "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
+                ? "Connector readiness is unknown. Inspect the current connector before an explicit Repair."
+                : parsed.error === "CONNECTOR_ATTACHMENT_NOT_FOUND"
+                  ? "No connector receipt exists yet. Attach this tunnel in ChatGPT, run the displayed one-time challenge, then check again."
+                  : parsed.error === "CONNECTOR_ATTACHMENT_INVALID"
+                    ? "The connector receipt does not match this runtime, build, workspace, or Computer authority. Stop and deliberately start a fresh challenge."
+                    : parsed.error === "CONNECTOR_CHALLENGE_UNAVAILABLE"
+                      ? "No current connector challenge is available. Start the connector before checking its ChatGPT attachment."
+                      : parsed.error === "CONNECTOR_STOP_REQUIRED"
+                        ? "Stop the connector before changing Computer authority or connector identity."
+                        : parsed.error === "WORKSPACE_MUTATION_RESULT_PENDING"
+                          ? "The last guarded edit has no delivered result yet. Check its result first."
+                          : parsed.error === "WORKSPACE_MUTATION_NOT_ADMITTED"
+                            ? "The last guarded edit was never admitted, so nothing was changed."
+                            : parsed.error === "WORKSPACE_MUTATION_NOT_PENDING"
+                              ? "There is no undelivered edit result to check."
+                              : parsed.error === "WORKSPACE_NOT_GIT_REPOSITORY"
+                                ? "This workspace is not a Git repository."
+                                : parsed.error === "WORKSPACE_GIT_HEAD_UNBORN"
+                                  ? "This repository has no commits yet, so there is no HEAD commit to read."
                                   : parsed.error ===
-                                      "WORKSPACE_CHANGED_DURING_SNAPSHOT"
-                                    ? "A tracked file changed while the check was being prepared, so no single instant could be reported. Run the check again."
+                                      "WORKSPACE_GIT_ALTERNATES_UNSUPPORTED"
+                                    ? "This repository borrows objects from another object store (objects/info/alternates), which the fixed Git checks cannot follow. Nothing was read."
                                     : parsed.error ===
-                                        "WORKSPACE_TRACKED_LIST_TOO_LARGE"
-                                      ? "This repository tracks more files than one check can list. Nothing was read."
+                                        "WORKSPACE_INDEX_CHANGED_DURING_SNAPSHOT"
+                                      ? "The repository index changed while the check was being prepared, so no single instant could be reported. Run the check again."
                                       : parsed.error ===
-                                          "WORKSPACE_TRACKED_PATH_UNSUPPORTED"
-                                        ? "A tracked path in this repository contains a character the fixed Git checks will not carry (a backslash or a line break). Nothing was reported."
+                                          "WORKSPACE_CHANGED_DURING_SNAPSHOT"
+                                        ? "A tracked file changed while the check was being prepared, so no single instant could be reported. Run the check again."
                                         : parsed.error ===
-                                            "WORKSPACE_SNAPSHOT_TOO_LARGE"
-                                          ? "The tracked files are too large to snapshot for one check. Nothing was read."
+                                            "WORKSPACE_TRACKED_LIST_TOO_LARGE"
+                                          ? "This repository tracks more files than one check can list. Nothing was read."
                                           : parsed.error ===
-                                              "WORKSPACE_SNAPSHOT_CROSS_VOLUME"
-                                            ? "The workspace and Farol Next's runtime directory are on different volumes, so the private snapshot cannot be made. Nothing was read."
+                                              "WORKSPACE_TRACKED_PATH_UNSUPPORTED"
+                                            ? "A tracked path in this repository contains a character the fixed Git checks will not carry (a backslash or a line break). Nothing was reported."
                                             : parsed.error ===
-                                                "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED"
-                                              ? "This volume cannot make file clones (it is not APFS), so the private snapshot cannot be made. Nothing was read."
+                                                "WORKSPACE_SNAPSHOT_TOO_LARGE"
+                                              ? "The tracked files are too large to snapshot for one check. Nothing was read."
                                               : parsed.error ===
-                                                  "WORKSPACE_SELECTION_PROTECTED"
-                                                ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
+                                                  "WORKSPACE_SNAPSHOT_CROSS_VOLUME"
+                                                ? "The workspace and Farol Next's runtime directory are on different volumes, so the private snapshot cannot be made. Nothing was read."
                                                 : parsed.error ===
-                                                    "ROUTE_B_CHECK_TOOL_USED"
-                                                  ? "Route B's basic model check invoked a host tool, so the result was refused. Recheck the isolated Codex host before trying again."
+                                                    "WORKSPACE_SNAPSHOT_CLONE_UNSUPPORTED"
+                                                  ? "This volume cannot make file clones (it is not APFS), so the private snapshot cannot be made. Nothing was read."
                                                   : parsed.error ===
-                                                      "ROUTE_B_OUTCOME_UNKNOWN"
-                                                    ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
+                                                      "WORKSPACE_SELECTION_PROTECTED"
+                                                    ? "This folder holds credentials, so it cannot be a workspace. Choose a project folder instead."
                                                     : parsed.error ===
-                                                        "ROUTE_B_HOST_START_FAILED"
-                                                      ? "The isolated Codex host for Route B did not start. Nothing was sent."
+                                                        "ROUTE_B_CHECK_TOOL_USED"
+                                                      ? "Route B's basic model check invoked a host tool, so the result was refused. Recheck the isolated Codex host before trying again."
                                                       : parsed.error ===
-                                                          "ROUTE_B_UNAVAILABLE"
-                                                        ? "Route B is not running in this app. Restart Farol Next and check again."
+                                                          "ROUTE_B_OUTCOME_UNKNOWN"
+                                                        ? "Route B's check may have reached ChatGPT, but its result was not observed. Inspect the Codex task before checking again."
                                                         : parsed.error ===
-                                                            "WORKSPACE_GIT_METADATA_NOT_APPROVED"
-                                                          ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
+                                                            "ROUTE_B_HOST_START_FAILED"
+                                                          ? "The isolated Codex host for Route B did not start. Nothing was sent."
                                                           : parsed.error ===
-                                                              "CODEX_HOST_TASK_IN_PROGRESS"
-                                                            ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
+                                                              "ROUTE_B_UNAVAILABLE"
+                                                            ? "Route B is not running in this app. Restart Farol Next and check again."
                                                             : parsed.error ===
-                                                                "WORKSPACE_ROOT_CHANGED"
-                                                              ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                                                "WORKSPACE_GIT_METADATA_NOT_APPROVED"
+                                                              ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
                                                               : parsed.error ===
-                                                                  "MODEL_ENDPOINT_UNAVAILABLE"
-                                                                ? "Farol Model is not running. Nothing was read or changed."
+                                                                  "CODEX_HOST_TASK_IN_PROGRESS"
+                                                                ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
                                                                 : parsed.error ===
-                                                                    "MODEL_CONFIG_INSECURE_PERMISSIONS"
-                                                                  ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
+                                                                    "WORKSPACE_ROOT_CHANGED"
+                                                                  ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
                                                                   : parsed.error ===
-                                                                      "MODEL_CONFIG_CONFLICT"
-                                                                    ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
+                                                                      "MODEL_ENDPOINT_UNAVAILABLE"
+                                                                    ? "Farol Model is not running. Nothing was read or changed."
                                                                     : parsed.error ===
-                                                                        "MODEL_CONFIG_SYMLINK"
-                                                                      ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
+                                                                        "MODEL_CONFIG_INSECURE_PERMISSIONS"
+                                                                      ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
                                                                       : parsed.error ===
-                                                                          "MODEL_CONFIG_MALFORMED"
-                                                                        ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
+                                                                          "MODEL_CONFIG_CONFLICT"
+                                                                        ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
                                                                         : parsed.error ===
-                                                                            "MODEL_TOKEN_ROTATE_FAILED"
-                                                                          ? "Token rotation did not complete. Check status and preview the connection before trying again."
+                                                                            "MODEL_CONFIG_SYMLINK"
+                                                                          ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
                                                                           : parsed.error ===
-                                                                              "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
-                                                                            ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
+                                                                              "MODEL_CONFIG_MALFORMED"
+                                                                            ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
                                                                             : parsed.error ===
-                                                                                "FAROL_MODEL_ROTATE_RESTORE_FAILED"
-                                                                              ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                                "MODEL_TOKEN_ROTATE_FAILED"
+                                                                              ? "Token rotation did not complete. Check status and preview the connection before trying again."
                                                                               : parsed.error ===
-                                                                                    "MODEL_CONFIG_APPLY_FAILED" ||
-                                                                                  parsed.error ===
-                                                                                    "MODEL_CONFIG_ROLLBACK_FAILED"
-                                                                                ? "config.toml could not be changed. Nothing was left half-written."
-                                                                                : (devMcpProofFailureMessage(
-                                                                                    parsed.error,
-                                                                                  ) ??
-                                                                                  transitionRefusalMessage(
-                                                                                    parsed.error,
-                                                                                  ) ??
-                                                                                  workspaceEditRefusalMessage(
-                                                                                    parsed.error,
-                                                                                  ) ??
-                                                                                  `Not applied · ${parsed.error}`);
+                                                                                  "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
+                                                                                ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
+                                                                                : parsed.error ===
+                                                                                    "FAROL_MODEL_ROTATE_RESTORE_FAILED"
+                                                                                  ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                                  : parsed.error ===
+                                                                                        "MODEL_CONFIG_APPLY_FAILED" ||
+                                                                                      parsed.error ===
+                                                                                        "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                                                    ? "config.toml could not be changed. Nothing was left half-written."
+                                                                                    : (devMcpProofFailureMessage(
+                                                                                        parsed.error,
+                                                                                      ) ??
+                                                                                      transitionRefusalMessage(
+                                                                                        parsed.error,
+                                                                                      ) ??
+                                                                                      workspaceEditRefusalMessage(
+                                                                                        parsed.error,
+                                                                                      ) ??
+                                                                                      `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     renderOutcome();
@@ -3021,10 +3046,10 @@ async function configureProduct(
   } else if (evidence?.kind === "dev-proof.prepared") {
     devProofEvidence = evidence;
     settingsFeedback =
-      "Private DEV fixture prepared and verified locally. Start the connector again, attach @Farol DEV in ChatGPT, then run the real proof.";
+      "Private DEV fixture prepared and verified locally. Start the connector again, attach @Farol Dev in ChatGPT, then run the real proof.";
   } else if (evidence?.kind === "dev-proof.verified") {
     devProofEvidence = evidence;
-    settingsFeedback = `Farol DEV MCP proof verified · exact answer ${evidence.answerSha256.slice(0, 12)} · outside-grant refusal ${evidence.outsideGrantError} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
+    settingsFeedback = `Farol Dev MCP proof verified · exact answer ${evidence.answerSha256.slice(0, 12)} · outside-grant refusal ${evidence.outsideGrantError} · receipt ${evidence.receiptSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "chatgpt.readonly-task-preview") {
     pendingChatGptPreview = evidence;
     setShellOverlay("context-preview");
@@ -3116,6 +3141,9 @@ async function configureProduct(
   }
   if (command.kind === "computer.cancel-workspace-edit") {
     workspaceEvidence = null;
+  }
+  if (command.kind === "chatgpt.open-sign-in") {
+    chatGptSignInOpened = true;
   }
   settingsFeedbackError = evidenceError;
   if (
@@ -3370,20 +3398,20 @@ function renderSettings(): void {
       devProofEvidence?.kind === "dev-proof.prepared";
     proofRun.disabled = !proofAttemptReady;
     proofRun.title = proofAttemptReady
-      ? "Owner-trigger one real @Farol DEV ChatGPT call; this uses a model turn and never retries"
+      ? "Owner-trigger one real @Farol Dev ChatGPT call; this uses a model turn and never retries"
       : devProofEvidence !== null && !currentDevProof
         ? "Stop the connector and prepare a fresh proof for the current build, workspace and runtime"
         : devProofEvidence?.kind === "dev-proof.verified"
           ? "This one-shot proof already completed; prepare a fresh fixture before another attempt"
-          : "Start the connector, attach @Farol DEV, and verify the attachment first";
+          : "Start the connector, attach @Farol Dev, and verify the attachment first";
     proofSummary.textContent =
       devProofEvidence?.kind === "dev-proof.verified" && currentDevProof
         ? `Verified for DEV generation ${devProofEvidence.computerGeneration} · exact answer and ${devProofEvidence.outsideGrantError} refusal correlated. This does not qualify Test model or Agent.`
         : devProofEvidence !== null && !currentDevProof
           ? "Previous DEV proof evidence no longer matches the current build, workspace, Computer generation or connector runtime. Stop the connector and prepare a fresh fixture."
           : devProofEvidence?.kind === "dev-proof.prepared"
-            ? `Fixture prepared for DEV generation ${devProofEvidence.computerGeneration}. Start the connector again, attach @Farol DEV, verify the attachment, then run the live proof.`
-            : "Prepare an app-owned random fixture, start the DEV connector, attach @Farol DEV, then run one real ChatGPT read and one outside-grant refusal. No sentinel value is shown or placed in the prompt.";
+            ? `Fixture prepared for DEV generation ${devProofEvidence.computerGeneration}. Start the connector again, attach @Farol Dev, verify the attachment, then run the live proof.`
+            : "Prepare an app-owned random fixture, start the DEV connector, attach @Farol Dev, then run one real ChatGPT read and one outside-grant refusal. No sentinel value is shown or placed in the prompt.";
   }
   // The task routes still share the central readiness functions. DEV's
   // Native-host row is intentionally narrower: a selected host already
@@ -3817,7 +3845,7 @@ function renderSettings(): void {
           selected !== null && settings.setup.chatgpt.verified !== null;
         routeB.disabled = !routeBReady;
         routeB.title = routeBReady
-          ? "After choosing a supported model in ChatGPT, run one explicit no-fallback turn through Farol DEV"
+          ? "After choosing a supported model in ChatGPT, run one explicit no-fallback turn through Farol Dev"
           : "Detect the supported Codex host and verify ChatGPT first";
         routeB.addEventListener("click", () => {
           void configureProduct(
@@ -3893,7 +3921,7 @@ function renderModelSection(): void {
     selectDefault.checked = false;
   }
   required<HTMLElement>("#model-config-scope").textContent = devEnvironment
-    ? "Uses only Farol DEV's private Codex home and loopback provider; personal Codex config and authentication are never read or changed."
+    ? "Uses only Farol Dev's private Codex home and loopback provider; personal Codex config and authentication are never read or changed."
     : "Writes only a Farol-managed block to your Codex config.toml, never anything else in the file.";
 
   const status = modelStatusEvidence;
@@ -3910,7 +3938,7 @@ function renderModelSection(): void {
     status?.state === "connected"
       ? `Connected on port ${status.port} · ${status.requestsServed} request${status.requestsServed === 1 ? "" : "s"} served.`
       : status?.state === "listening"
-        ? `Listening on port ${status.port}, waiting for a request from the isolated Farol DEV Codex child.`
+        ? `Listening on port ${status.port}, waiting for a request from the isolated Farol Dev Codex child.`
         : status?.state === "port_conflict"
           ? modelPortConflictText(status.port, status.occupant)
           : modelDisconnectedSummary(modelEvidenceAbsence);
@@ -3984,7 +4012,7 @@ function renderModelSection(): void {
     restartNote.hidden = !modelConfigApplied;
     if (modelConfigApplied) {
       restartNote.textContent = devEnvironment
-        ? "Applied only inside Farol DEV's private Codex home. Test model launches a fresh isolated child; your Codex settings and model menu are untouched."
+        ? "Applied only inside Farol Dev's private Codex home. Test model launches a fresh isolated child; your Codex settings and model menu are untouched."
         : modelRestartNoteText(modelConfigCodexHost);
     }
   }
@@ -4682,6 +4710,8 @@ function render(notify = true): void {
   document.querySelectorAll<HTMLElement>(".panel").forEach((panel) => {
     panel.classList.toggle("active", panel.dataset.panel === section);
   });
+  required<HTMLButtonElement>("#sign-in-return").hidden =
+    !chatGptSignInOpened || bootstrap.environment !== "dev";
   renderWindowState();
   renderBuildIdentity();
   renderRuntime();
@@ -4693,6 +4723,19 @@ function render(notify = true): void {
   renderComputer();
   renderActivity();
   renderSettings();
+  const guidedEnabled = bootstrap.environment === "dev" && !bootstrap.demoMode;
+  guidedOnboarding?.render(
+    guidedEnabled,
+    settingsFeedback,
+    settingsFeedbackError,
+  );
+  if (guidedEnabled) {
+    const pendingApproval = unresolvedComputerRequest(selectedTaskId) !== null;
+    required<HTMLElement>("#connection-permission").hidden = !pendingApproval;
+    required<HTMLElement>("#connection-scope").hidden = !pendingApproval;
+    required('.nav-item[data-section="computer"] .nav-label').textContent =
+      "Setup";
+  }
   renderSetup();
   renderOverlayState();
   if (notify) notifyHost();
@@ -5115,11 +5158,13 @@ async function start(): Promise<void> {
       );
       if (!decision.refreshReadiness) return;
       chatGptSignInOpened = false;
+      guidedOnboarding?.signInReturned();
       if (decision.navigate) {
         taskMenuReturnOffered = false;
         if (parsed.data.action === "open-settings") {
           setupJourney = { ...setupJourney, open: false };
-          selectSection("settings");
+          if (bootstrap.environment === "dev") selectSection("computer");
+          else selectSection("settings");
         }
       } else if (decision.offerReturn) {
         // Readiness still changes; the editor does not move.
@@ -5192,6 +5237,31 @@ async function start(): Promise<void> {
     section = initialSetup.section;
   }
 
+  guidedOnboarding = new GuidedOnboardingView({
+    settings: () =>
+      bootstrap.configuration.status === "ready"
+        ? bootstrap.configuration.settings
+        : null,
+    buildId: () => bootstrap.build.buildId,
+    isActive: () => section === "computer",
+    configure: configureProduct,
+    render: () => render(),
+    returnToChat: () => selectSection("browser"),
+    openChat: () => {
+      const chat = bootstrap.tasks.find((task) => task.provider === "chatgpt");
+      if (chat) selectedTaskId = chat.taskId;
+      selectSection("browser");
+      if (!chat) required<HTMLButtonElement>("#new-task").click();
+    },
+  });
+  const tunnelHelp = required("#onboarding-tunnel-help");
+  for (const id of ["create-tunnel", "create-key"] as const) {
+    const help = buildMediaInstructions(id);
+    if (help) tunnelHelp.append(help);
+  }
+  const appHelp = buildMediaInstructions("attach-connector");
+  if (appHelp) required("#onboarding-app-help").append(appHelp);
+
   document
     .querySelectorAll<HTMLButtonElement>(".nav-item")
     .forEach((button) => {
@@ -5202,6 +5272,12 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#sidebar-toggle").addEventListener(
     "click",
     toggleSidebar,
+  );
+  required<HTMLButtonElement>("#sign-in-return").addEventListener(
+    "click",
+    () => {
+      void window.farolNext.configure({ kind: "chatgpt.sign-in-return" });
+    },
   );
   required<HTMLButtonElement>("#sidebar-backdrop").addEventListener(
     "click",
@@ -5293,8 +5369,14 @@ async function start(): Promise<void> {
     "click",
     () => {
       setShellOverlay("none");
-      setupJourney = reopenSetup(setupJourney);
-      render();
+      if (bootstrap.environment === "dev") {
+        setupJourney = { ...setupJourney, open: false };
+        selectSection("computer");
+        guidedOnboarding?.restart();
+      } else {
+        setupJourney = reopenSetup(setupJourney);
+        render();
+      }
     },
   );
   const renameLiveTask = () => {
@@ -5592,7 +5674,7 @@ async function start(): Promise<void> {
     () => {
       void configureProduct(
         { kind: "dev-proof.prepare" },
-        "Farol DEV MCP fixture prepared.",
+        "Farol Dev MCP fixture prepared.",
       );
     },
   );
@@ -5601,7 +5683,7 @@ async function start(): Promise<void> {
     () => {
       void configureProduct(
         { kind: "dev-proof.run" },
-        "Farol DEV MCP proof verified.",
+        "Farol Dev MCP proof verified.",
       );
     },
   );
@@ -5686,8 +5768,14 @@ async function start(): Promise<void> {
     render();
   });
   required<HTMLButtonElement>("#review-setup").addEventListener("click", () => {
-    setupJourney = reopenSetup(setupJourney);
-    render();
+    if (bootstrap.environment === "dev") {
+      setupJourney = { ...setupJourney, open: false };
+      selectSection("computer");
+      guidedOnboarding?.restart();
+    } else {
+      setupJourney = reopenSetup(setupJourney);
+      render();
+    }
   });
   required<HTMLInputElement>("#model-select-default").addEventListener(
     "change",

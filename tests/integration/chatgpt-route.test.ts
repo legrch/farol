@@ -1966,6 +1966,38 @@ describe("ChatGPT shared partition lifecycle", () => {
 });
 
 describe("ChatGPT sign-in return", () => {
+  it("returns from an embedded sign-in without destroying its verified page", async () => {
+    const surface = embeddedSurface();
+    Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(async () => ({
+        composerVisible: true,
+        signInVisible: false,
+      })),
+    });
+    const outcomes: string[] = [];
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+      onSignInOutcome: (status) => outcomes.push(status),
+    });
+
+    await expect(
+      candidate.openForSignIn("Sign in to ChatGPT — Farol Dev"),
+    ).resolves.toEqual({ status: "opened" });
+    candidate.returnFromSignIn();
+    candidate.returnFromSignIn();
+    await vi.waitFor(() => expect(outcomes).toEqual(["authenticated"]));
+    expect(surface.hide).toHaveBeenCalled();
+    expect(surface.destroy).not.toHaveBeenCalled();
+    await expect(candidate.observe()).resolves.toMatchObject({
+      state: "authenticated",
+    });
+    candidate.dispose();
+  });
+
   it("closes on one Return and reports one unknown outcome when the page read never settles", async () => {
     vi.useFakeTimers();
     try {
@@ -2781,6 +2813,36 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(contacts.clicked).toBe(0);
   });
 
+  it("the renamed Dev activation accepts only the configured title-case app", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev");
+    const result = vm.runInContext(
+      activateTaskScript(expectedHref, "Farol Dev"),
+      context,
+    );
+    expect(result).toEqual({ activated: true });
+    expect(contacts.clicked).toBe(1);
+  });
+
+  it.each(["Farol DEV", "farol dev", "Farol", "Farol-Dev", "Farol Dev Other"])(
+    "does not silently accept %s as the renamed Farol Dev app",
+    (selectedName) => {
+      const { context, contacts } = pageContext(expectedHref, selectedName);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("SYNTHETIC_CHECK", expectedHref, "Farol Dev"),
+          context,
+        ),
+      ).toEqual({ appSelectionLost: true });
+      expect(
+        vm.runInContext(activateTaskScript(expectedHref, "Farol Dev"), context),
+      ).toEqual({ appSelectionLost: true });
+      expect(contacts.clicked).toBe(0);
+      expect(contacts.typed).toEqual([]);
+    },
+  );
+
+  // Older fixtures below request the uppercase name explicitly. They still
+  // exercise the generic exact-label contract, not a legacy-name fallback.
   it("the DEV activation bytes click only with one exact Farol DEV chip", () => {
     const { context, contacts } = pageContext(expectedHref, "Farol DEV");
     const result = vm.runInContext(

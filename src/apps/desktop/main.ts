@@ -166,6 +166,10 @@ import {
   configurationAdmission,
 } from "./configuration-admission";
 import {
+  claimConnectorAppVerificationAttempt,
+  connectorAppVerificationAttemptExists,
+} from "./connector-app-verification-attempt";
+import {
   WORKSPACE_EDIT_ACK_HOLD_ENV,
   WORKSPACE_EDIT_ACK_HOLD_INVALID,
   createConfigurationReplyFault,
@@ -326,6 +330,7 @@ import {
   desktopIdentity,
 } from "./desktop-environment";
 import { terminateDesktopStartup } from "./desktop-startup-failure";
+import { resolveDevDataDirectoryName } from "./dev-profile-directory";
 
 const directory = __dirname;
 const buildIdentity = readRuntimeBuildIdentity(directory);
@@ -334,12 +339,20 @@ const bundleId = buildIdentity.bundleId;
 const runtimeEnvironment = desktopEnvironment(
   process.env.FAROL_NEXT_ENVIRONMENT,
 );
-const declaredDesktopIdentity = desktopIdentity(
+const desktopAppData = desktopAppDataPath(
   runtimeEnvironment,
-  desktopAppDataPath(runtimeEnvironment, app.getPath("appData"), {
+  app.getPath("appData"),
+  {
     enabled: process.env.FAROL_NEXT_E2E === "1",
     override: process.env.FAROL_NEXT_E2E_APP_DATA,
-  }),
+  },
+);
+const declaredDesktopIdentity = desktopIdentity(
+  runtimeEnvironment,
+  desktopAppData,
+  runtimeEnvironment === "dev"
+    ? resolveDevDataDirectoryName(desktopAppData)
+    : undefined,
 );
 if (runtimeEnvironment === "dev") {
   // These paths must be selected before the single-instance lock or any
@@ -556,6 +569,31 @@ const liveTaskRegistry = new LiveTaskRegistry(5, {
 });
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
+const SIGN_IN_SURFACE_ID = "farol-sign-in";
+let signInSurfaceOpen = false;
+let signInReturnLayout: {
+  section: SurfaceSection;
+  setupOpen: boolean;
+  taskId: string;
+} | null = null;
+
+function restoreEmbeddedSignInLayout(): void {
+  signInSurfaceOpen = false;
+  const previous = signInReturnLayout;
+  signInReturnLayout = null;
+  if (
+    previous &&
+    section === "browser" &&
+    !setupOpen &&
+    selectedTaskId === previous.taskId &&
+    shellOverlay === "none"
+  ) {
+    section = previous.section;
+    setupOpen = previous.setupOpen;
+  }
+  applyLayout();
+  publishLayout();
+}
 const liveTaskConversationUrls = new Map<string, string | null>();
 let liveTaskStore: PrivateLiveTaskStore | null = null;
 let productAgentStore: PrivateProductAgentStore | null = null;
@@ -1107,7 +1145,9 @@ async function recordChatGptSignInOutcome(
   // step is told the window closed, so it shows the recorded outcome and
   // its next action instead of the state from before sign-in.
   publishShellAction(
-    setupOpen ? "sign-in-returned" : "open-settings",
+    runtimeEnvironment === "dev" || setupOpen
+      ? "sign-in-returned"
+      : "open-settings",
     "auth-window-closed",
     generation,
   );
@@ -3582,6 +3622,116 @@ async function checkSecureMcpAttachment(): Promise<ProductConfigurationResult> {
   }
 }
 
+// One explicit owner click sends one small app-bound ChatGPT message. The
+// existing route proves the exact selected app before submit; only the local
+// Computer MCP receipt can complete the attachment, never the model's prose.
+async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
+  if (runtimeEnvironment !== "dev") {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_DEV_ONLY");
+  }
+  if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  }
+  if (chatGptTaskAdmission || connectorTaskAdmission) {
+    return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+  }
+  const snapshot = configuration.snapshot();
+  if (snapshot.status !== "ready")
+    return configurationFailure("SETTINGS_UNAVAILABLE");
+  const settings = snapshot.settings;
+  const connector = settings.connectors.secureMcp;
+  const runtime = connector.runtime;
+  const challenge = connector.challenge;
+  const workspaceId = settings.setup.computer.verified?.workspaceId;
+  if (
+    !chatGptTaskAdmissionReady() ||
+    !secureMcpConnectorRuntime.isRunning() ||
+    connector.tunnelId === null ||
+    runtime?.state !== "ready" ||
+    runtime.buildId !== buildIdentity.buildId ||
+    runtime.computerGeneration !== settings.computer.generation ||
+    runtime.connectorGeneration !== connector.generation ||
+    challenge === null ||
+    challenge.buildId !== runtime.buildId ||
+    challenge.computerGeneration !== runtime.computerGeneration ||
+    challenge.runtimeGeneration !== runtime.runtimeGeneration ||
+    workspaceId === undefined ||
+    !settings.computer.workspaces.some(
+      (workspace) => workspace.workspaceId === workspaceId,
+    )
+  ) {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_NOT_READY");
+  }
+  const stateRoot = secureMcpLaunchRoot();
+  try {
+    if (
+      await connectorAppVerificationAttemptExists(
+        stateRoot,
+        challenge.challengeSha256,
+      )
+    ) {
+      return configurationFailure(
+        "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
+      );
+    }
+  } catch {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE");
+  }
+  const prompt = `Use the selected Farol Dev app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+  let claimed = false;
+  chatGptTaskAdmission = true;
+  connectorTaskAdmission = true;
+  try {
+    const result = await chatGptRoute.runReadonlyTask(prompt, [], {
+      onDispatchIntent: async () => {
+        if (claimed) return;
+        await claimConnectorAppVerificationAttempt(
+          stateRoot,
+          challenge.challengeSha256,
+        );
+        claimed = true;
+      },
+    });
+    if (result.state !== "completed") {
+      const preSubmitCode = result.code;
+      return configurationFailure(
+        claimed
+          ? "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
+          : preSubmitCode === "CHATGPT_APP_SELECTION_MISSING" ||
+              preSubmitCode === "CHATGPT_APP_SELECTION_AMBIGUOUS" ||
+              preSubmitCode === "CHATGPT_APP_SELECTION_CONFLICT" ||
+              preSubmitCode === "CHATGPT_APP_SELECTION_LOST" ||
+              preSubmitCode === "CHATGPT_COMPOSER_DRAFT_PRESENT"
+            ? preSubmitCode
+            : "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
+      );
+    }
+    if (!claimed) {
+      return configurationFailure(
+        "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
+      );
+    }
+    const current = configuration.snapshot();
+    if (
+      current.status !== "ready" ||
+      current.settings.computer.generation !== settings.computer.generation ||
+      current.settings.connectors.secureMcp.tunnelId !== connector.tunnelId ||
+      current.settings.connectors.secureMcp.generation !==
+        connector.generation ||
+      current.settings.connectors.secureMcp.runtime?.runtimeGeneration !==
+        runtime.runtimeGeneration ||
+      current.settings.connectors.secureMcp.challenge?.challengeSha256 !==
+        challenge.challengeSha256
+    ) {
+      return configurationFailure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+    }
+  } finally {
+    chatGptTaskAdmission = false;
+    connectorTaskAdmission = false;
+  }
+  return checkSecureMcpAttachment();
+}
+
 async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
   if (runtimeEnvironment !== "dev") {
     return configurationFailure("DEV_MCP_PROOF_DEV_ONLY");
@@ -3633,7 +3783,7 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
     }
     const added = await configuration.addReadonlyWorkspace({
       root: fixture.workspaceRoot,
-      label: "Farol DEV verification fixture",
+      label: "Farol Dev verification fixture",
       rootIdentity,
     });
     if (!added.ok) return ProductConfigurationResultSchema.parse(added);
@@ -4140,6 +4290,8 @@ async function configureAdmittedProduct(
       return startSecureMcpConnector(true);
     case "connector.check-attachment":
       return checkSecureMcpAttachment();
+    case "connector.verify-app":
+      return verifySecureMcpApp();
     case "dev-proof.prepare":
       return prepareDevMcpProof();
     case "dev-proof.run":
@@ -4850,11 +5002,23 @@ async function configureAdmittedProduct(
       chatGptSignInOutcome = null;
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
+      if (runtimeEnvironment === "dev" && !signInSurfaceOpen) {
+        signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
+        signInSurfaceOpen = true;
+        section = "browser";
+        setupOpen = false;
+        applyLayout();
+        publishLayout();
+      }
       let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
       try {
         opened = await chatGptRoute.openForSignIn(SIGN_IN_WINDOW_TITLE);
       } catch {
         opened = { status: "unreachable" };
+      }
+      if (opened.status !== "opened" && runtimeEnvironment === "dev") {
+        chatGptRoute.returnFromSignIn();
+        restoreEmbeddedSignInLayout();
       }
       const recorded =
         opened.status === "opened"
@@ -4897,6 +5061,7 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.sign-in-return": {
+      if (runtimeEnvironment === "dev") chatGptRoute?.returnFromSignIn();
       return ProductConfigurationResultSchema.parse({
         ok: true,
         snapshot: configuration.snapshot(),
@@ -6562,6 +6727,20 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
   };
 }
 
+function signInChatGptSurfaceFactory(): ChatGptRouteSurfaceFactory {
+  const create = liveChatGptSurfaceFactory(SIGN_IN_SURFACE_ID);
+  return (options) => {
+    const surface = create(options);
+    return {
+      ...surface,
+      focus: () => {
+        if (window?.isFocused()) surface.focus();
+      },
+      close: () => surface.destroy(),
+    };
+  };
+}
+
 function disposeTaskView(taskId: string, view: WebContentsView): void {
   taskViews.delete(taskId);
   taskViewKinds.delete(taskId);
@@ -6789,7 +6968,9 @@ function handleShortcut(input: Input): boolean {
 function applyLayout(): void {
   if (!window) return;
   const [width = 1, height = 1] = window.getContentSize();
-  const selectedViewKind = taskViewKinds.get(selectedTaskId);
+  const selectedViewKind = signInSurfaceOpen
+    ? "chatgpt"
+    : taskViewKinds.get(selectedTaskId);
   const layout = deriveSurfaceLayout({
     width,
     height,
@@ -6798,10 +6979,12 @@ function applyLayout(): void {
     section,
     setupOpen,
     runtimeReady: selectedViewKind === "chatgpt" || runtimeState === "ready",
-    selectedTaskPresent: taskViews.has(selectedTaskId),
+    selectedTaskPresent: signInSurfaceOpen || taskViews.has(selectedTaskId),
   });
   for (const [taskId, view] of taskViews) {
-    const visible = layout.pageVisible && taskId === selectedTaskId;
+    const visible =
+      layout.pageVisible &&
+      taskId === (signInSurfaceOpen ? SIGN_IN_SURFACE_ID : selectedTaskId);
     view.setVisible(visible);
     view.setBounds(layout.pageBounds);
   }
@@ -7573,10 +7756,16 @@ async function main(): Promise<void> {
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),
+    ...(runtimeEnvironment === "dev"
+      ? { surfaceFactory: signInChatGptSurfaceFactory() }
+      : {}),
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
     onSignInOutcome: (status, diagnostic) => {
+      if (runtimeEnvironment === "dev") {
+        restoreEmbeddedSignInLayout();
+      }
       chatGptSignInOutcome = diagnostic;
       const closing = chatGptSignInOpenGeneration;
       chatGptSignInOpenGeneration = null;

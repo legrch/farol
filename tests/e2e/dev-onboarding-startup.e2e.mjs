@@ -108,7 +108,7 @@ try {
     .waitFor({ state: "visible" });
   const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
   assert.equal(bootstrap.environment, "dev");
-  assert.equal(bootstrap.displayName, "Farol DEV");
+  assert.equal(bootstrap.displayName, "Farol Dev");
   assert.equal(bootstrap.applicationId, "local.farol.dev");
   assert.equal(bootstrap.partition, "persist:farol-dev-runtime");
   assert.equal(bootstrap.chatgptPartition, "persist:farol-dev-chatgpt");
@@ -117,9 +117,9 @@ try {
     userData: app.getPath("userData"),
     sessionData: app.getPath("sessionData"),
   }));
-  const expectedUserData = path.join(isolatedAppData, "Farol DEV");
+  const expectedUserData = path.join(isolatedAppData, "Farol Dev");
   assert.deepEqual(paths, {
-    name: "Farol DEV",
+    name: "Farol Dev",
     userData: expectedUserData,
     sessionData: expectedUserData,
   });
@@ -150,7 +150,9 @@ try {
     expectedTunnelVersion,
   );
 
-  const connectionsNav = window.locator('.nav-item[data-section="computer"]');
+  const connectionsNav = window.locator(
+    '#onboarding-nav [data-onboarding-step="chatgpt"]',
+  );
   const settingsNav = window.locator('.nav-item[data-section="settings"]');
   const connectionsBox = await connectionsNav.boundingBox();
   const settingsBox = await settingsNav.boundingBox();
@@ -187,7 +189,7 @@ try {
   await window.locator("#open-connections").click();
   await window.locator('[data-panel="computer"].active').waitFor();
 
-  const returnToChatGpt = window.locator("#connections-open-chatgpt");
+  const returnToChatGpt = window.locator("#onboarding-return");
   await returnToChatGpt.scrollIntoViewIfNeeded();
   await returnToChatGpt.click();
   await window.locator('[data-panel="browser"].active').waitFor();
@@ -201,6 +203,83 @@ try {
   application = undefined;
   assert.doesNotMatch(stderr, /INSTANCE_BUILD_IDENTITY_INVALID/u);
   assert.doesNotMatch(stderr, /App threw an error during load/u);
+
+  // A legacy-spelled DEV directory is synthetic owner data, not a migration
+  // input. Reopening must keep the same storage object and saved folder grant.
+  const legacyAppData = path.join(temporaryRoot, "legacy-app-data");
+  const legacyDirectory = path.join(legacyAppData, "Farol DEV");
+  const preferredDirectory = path.join(legacyAppData, "Farol Dev");
+  const workspaceRoot = path.join(temporaryRoot, "approved-folder");
+  await fs.mkdir(legacyDirectory, { recursive: true, mode: 0o700 });
+  await fs.mkdir(workspaceRoot, { recursive: true, mode: 0o700 });
+  const marker = path.join(legacyDirectory, "retained-marker.txt");
+  await fs.writeFile(marker, "synthetic pre-existing DEV profile\n", {
+    mode: 0o600,
+  });
+  const legacyIdentity = await fs.stat(legacyDirectory);
+  const preferredIdentity = await fs.stat(preferredDirectory).catch(() => null);
+  const expectedLegacyPath =
+    preferredIdentity &&
+    preferredIdentity.dev === legacyIdentity.dev &&
+    preferredIdentity.ino === legacyIdentity.ino
+      ? preferredDirectory
+      : legacyDirectory;
+  const legacyEnvironment = {
+    ...environment,
+    FAROL_NEXT_E2E_APP_DATA: legacyAppData,
+    FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
+  };
+  let savedWorkspace;
+  for (let launch = 0; launch < 2; launch += 1) {
+    application = await electron.launch({
+      executablePath: executable,
+      args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
+      env: legacyEnvironment,
+      timeout: 15_000,
+    });
+    const legacyWindow = await application.firstWindow({ timeout: 15_000 });
+    await legacyWindow.locator('#runtime-pill[data-state="ready"]').waitFor();
+    const actualPath = await application.evaluate(({ app }) =>
+      app.getPath("userData"),
+    );
+    assert.equal(actualPath, expectedLegacyPath);
+    const actualIdentity = await fs.stat(actualPath);
+    assert.equal(actualIdentity.dev, legacyIdentity.dev);
+    assert.equal(actualIdentity.ino, legacyIdentity.ino);
+    assert.equal(
+      await fs.readFile(marker, "utf8"),
+      "synthetic pre-existing DEV profile\n",
+    );
+    if (launch === 0) {
+      await legacyWindow.locator('[data-onboarding-step="folder"]').click();
+      await legacyWindow.locator("#onboarding-primary").click();
+      await legacyWindow
+        .locator('[data-onboarding-step="folder"].complete')
+        .waitFor({ state: "visible" });
+      const value = await legacyWindow.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      savedWorkspace = {
+        workspaces: value.configuration.settings.computer.workspaces,
+        verified: value.configuration.settings.setup.computer.verified,
+      };
+      assert.equal(savedWorkspace.workspaces.length, 1);
+    } else {
+      const value = await legacyWindow.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.deepEqual(
+        value.configuration.settings.computer.workspaces,
+        savedWorkspace.workspaces,
+      );
+      assert.deepEqual(
+        value.configuration.settings.setup.computer.verified,
+        savedWorkspace.verified,
+      );
+    }
+    await closeApplication(application);
+    application = undefined;
+  }
 
   const brokenRoot = path.join(temporaryRoot, "broken-app");
   await fs.cp(buildRoot, brokenRoot, { recursive: true });
@@ -229,7 +308,7 @@ try {
   assert.doesNotMatch(broken.stderr, /App threw an error during load/u);
   assert.doesNotMatch(broken.stderr, /Uncaught Exception/u);
 
-  process.stdout.write("Farol DEV hidden startup smoke: PASS\n");
+  process.stdout.write("Farol Dev hidden startup smoke: PASS\n");
 } finally {
   if (application) await closeApplication(application).catch(() => undefined);
   await fs.rm(temporaryRoot, { recursive: true, force: true });

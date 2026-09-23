@@ -5,11 +5,29 @@ Farol Next Preview is the isolated TypeScript/Electron vertical slice under
 Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 
 The source has two explicit local identities. `task dev` from the repository root
-launches **Farol DEV** (`local.farol.dev`) with persistent private state, dedicated
+launches **Farol Dev** (`local.farol.dev`) with persistent private state, dedicated
 browser/runtime partitions and an app-owned `CODEX_HOME`; rebuilding does not clear
 its sign-in or Settings. `task next:package` and `task next:run` keep the existing
 **Farol Next Preview** identity (`local.farol.next.preview`). Neither lane copies
 cookies, keys, profiles or personal Codex configuration from another identity.
+
+### Dev names and profile compatibility
+
+The visible app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID
+`local.farol.dev`, runtime `farol-dev-runtime`, and `persist:farol-dev-*` partitions
+are stable machine identifiers; they are not derived from the display label.
+
+New profiles use `Application Support/Farol Dev`. A legacy-only `Farol DEV`
+directory on a case-sensitive volume remains in place and is reused. When both
+spellings resolve to the same device/inode, the preferred spelling addresses that
+same directory without moving or copying it. Two distinct profiles fail closed
+with `DEV_PROFILE_DIRECTORY_AMBIGUOUS` instead of being merged or reset. Profile
+selection reads directory metadata only; it does not migrate cookies or credentials.
+
+The browser requires the actual exact `Farol Dev` app selection. An existing
+external app still named `Farol DEV` is not silently treated as the new label;
+rename and verify the intended external app separately, then reselect it. Display
+renaming never authorizes another tunnel, broader access, or a message retry.
 
 ## What runs
 
@@ -96,7 +114,7 @@ The canonical owner command is:
 task next:run
 ```
 
-That command opens the packaged Preview. The exact Farol DEV onboarding command is:
+That command opens the packaged Preview. The exact Farol Dev onboarding command is:
 
 ```bash
 task dev

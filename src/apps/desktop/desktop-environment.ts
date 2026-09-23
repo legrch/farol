@@ -1,4 +1,11 @@
 import path from "node:path";
+import {
+  DEV_DATA_DIRECTORY_NAME,
+  LEGACY_DEV_DATA_DIRECTORY_NAME,
+  type DevDataDirectoryName,
+} from "./dev-profile-directory";
+
+export const DEV_DISPLAY_NAME = "Farol Dev";
 
 export type DesktopEnvironment = "preview" | "dev";
 
@@ -13,7 +20,7 @@ export type DesktopIdentity = Readonly<{
   runtimePartition: string;
   chatGptPartition: "persist:farol-next-chatgpt" | "persist:farol-dev-chatgpt";
   runtimeIdentity: "farol-next-preview-runtime" | "farol-dev-runtime";
-  runtimeServiceName: "Farol Next Runtime" | "Farol DEV Runtime";
+  runtimeServiceName: "Farol Next Runtime" | "Farol Dev Runtime";
   codexHome: string;
 }>;
 
@@ -47,18 +54,29 @@ export function desktopAppDataPath(
 export function desktopIdentity(
   environment: DesktopEnvironment,
   appData: string,
+  devDataDirectoryName: DevDataDirectoryName = DEV_DATA_DIRECTORY_NAME,
 ): DesktopIdentity {
   if (!path.isAbsolute(appData) || appData.includes("\0")) {
     throw new Error("DESKTOP_APP_DATA_INVALID");
   }
   const dev = environment === "dev";
-  const userData = path.join(appData, dev ? "Farol DEV" : "Farol Next Preview");
+  if (
+    dev &&
+    devDataDirectoryName !== DEV_DATA_DIRECTORY_NAME &&
+    devDataDirectoryName !== LEGACY_DEV_DATA_DIRECTORY_NAME
+  ) {
+    throw new Error("DEV_PROFILE_DIRECTORY_INVALID");
+  }
+  const userData = path.join(
+    appData,
+    dev ? devDataDirectoryName : "Farol Next Preview",
+  );
   return {
     environment,
-    displayName: dev ? "Farol DEV" : "Farol",
+    displayName: dev ? DEV_DISPLAY_NAME : "Farol",
     displayEdition: dev ? "Development" : "Developer Preview",
     applicationId: dev ? "local.farol.dev" : "local.farol.next.preview",
-    applicationName: dev ? "Farol DEV" : "Farol Next Preview",
+    applicationName: dev ? DEV_DISPLAY_NAME : "Farol Next Preview",
     userData,
     sessionData: userData,
     runtimePartition: dev
@@ -68,7 +86,7 @@ export function desktopIdentity(
       ? "persist:farol-dev-chatgpt"
       : "persist:farol-next-chatgpt",
     runtimeIdentity: dev ? "farol-dev-runtime" : "farol-next-preview-runtime",
-    runtimeServiceName: dev ? "Farol DEV Runtime" : "Farol Next Runtime",
+    runtimeServiceName: dev ? "Farol Dev Runtime" : "Farol Next Runtime",
     codexHome: path.join(userData, "farol-next-private", "codex-home"),
   };
 }

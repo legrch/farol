@@ -1107,6 +1107,10 @@ export class ChatGptRoute {
     return result;
   }
 
+  returnFromSignIn(): void {
+    if (this.signInMode) this.requestSignInReturn();
+  }
+
   private exitSignInMode(): void {
     if (!this.signInMode) return;
     this.signInMode = false;
@@ -1160,6 +1164,24 @@ export class ChatGptRoute {
         this.observeForSignIn(),
         "return",
       );
+    }
+    if (candidate.kind === "embedded") {
+      const pending = this.pendingSignInObservation;
+      void pending.then((read) => {
+        if (!this.signInMode || this.routeWindow !== candidate) return;
+        this.pendingSignInObservation = null;
+        candidate.hide();
+        this.exitSignInMode();
+        this.reportSignInOutcome(
+          read.observation?.state === "authenticated"
+            ? "authenticated"
+            : read.observation?.state === "signed_out"
+              ? "not_authenticated"
+              : "unknown",
+          read.diagnostic,
+        );
+      });
+      return;
     }
     // A repeated Return joins the read the first one started instead of
     // closing at once: closing now would tear the page down under that read
