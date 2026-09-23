@@ -124,10 +124,9 @@ const hardenedRouteSessions = new WeakSet<Session>();
 
 // A dedicated sign-in surface (see `openForSignIn`) is distinct from the
 // same route being reused to run a task: it carries a title of its own, a
-// "Return to Farol" banner (this is a real, separate window rather than an
-// embedded task view, precisely so the owner is never left staring at an
-// unbranded ChatGPT page — see UX34-08), and a truthful signed-in/not/
-// unknown status reported once, when it closes.
+// "Return to Farol" banner, and a truthful signed-in/not/unknown status
+// reported once on return. DEV embeds the surface in its main window;
+// Preview retains the separate-window presentation (UX34-08).
 export type ChatGptSignInStatus =
   "authenticated" | "not_authenticated" | "unknown";
 

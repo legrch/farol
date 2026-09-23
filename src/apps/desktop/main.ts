@@ -381,8 +381,8 @@ const activeDesktopIdentity = {
 const displayProductName = activeDesktopIdentity.displayName;
 const displayEdition = activeDesktopIdentity.displayEdition;
 const displayWindowTitle = `${displayProductName} · ${displayEdition}`;
-// UX34-08: a dedicated, clearly-Farol-owned sign-in window, never a
-// standalone-looking ChatGPT tab.
+// UX34-08: a dedicated, clearly-Farol-owned sign-in surface. DEV embeds it in
+// the main window; Preview keeps its existing window presentation.
 const SIGN_IN_WINDOW_TITLE = `Sign in to ChatGPT — ${displayProductName}`;
 const launchIdentity = readBuildLaunchIdentity(
   directory,
@@ -519,14 +519,13 @@ const chatGptSignInBlocked = new ChatGptSignInBlockLedger();
 // content-free contract as the block above (a fixed reason token, the page
 // state the read classified, how long it ran, which trigger started it;
 // never a URL, page text or error message). Kept only in memory and
-// cleared when a new sign-in window is opened, so a stale explanation is
+// cleared when a new sign-in surface is opened, so a stale explanation is
 // never read as this attempt's. It explains an outcome; it never changes
 // one, and `recordChatGptSignInOutcome` still writes nothing for
 // "unknown".
 let chatGptSignInOutcome: ChatGptSignInOutcomeDiagnostic | null = null;
-// S35-TA-16 (U1 seam): each auth window this process opens gets the next
-// number, and the publish its outcome produces carries the number of the
-// window that closed. A delayed close from an older window therefore
+// S35-TA-16 (U1 seam): each sign-in attempt gets the next number, and the
+// published outcome carries that attempt's number. A delayed return therefore
 // reports the OLDER generation, which is how a recipient tells a late event
 // from a current one without guessing from timing.
 let chatGptSignInGeneration = 0;

@@ -552,8 +552,8 @@ const handledShellActionIds = new Set<string>();
 // writing an assignment, so the menu offers a way out instead of taking
 // the editor.
 let taskMenuReturnOffered = false;
-// The auth window this renderer last saw opened. A close stamped with an
-// older number is a delayed event from a window that is already gone.
+// The sign-in surface this renderer last saw opened. A return stamped with an
+// older number is a delayed event from a previous attempt.
 let currentAuthWindowGeneration: number | null = null;
 let chatGptSignInOpened = false;
 let workspaceEvidence: Extract<
@@ -3165,8 +3165,8 @@ async function configureProduct(
 // ("open-settings" — see onShellAction below). It is always safe to call:
 // `chatgpt.sign-in-return` reads the current settings snapshot only, never
 // probes the ChatGPT page itself, and never shows a "Verifying…" message
-// the way `configureProduct` does — the sign-in surface's own window
-// close already recorded a truthful observation (UX34-08). A failure here
+// the way `configureProduct` does — returning from the sign-in surface
+// already recorded a truthful observation (UX34-08). A failure here
 // leaves the existing "Check connection" action as the correct fallback.
 async function refreshSettingsAfterReturn(): Promise<void> {
   try {
@@ -3488,7 +3488,9 @@ function renderSettings(): void {
         open.addEventListener("click", () => {
           void configureProduct(
             { kind: "chatgpt.open-sign-in" },
-            "Isolated ChatGPT window opened.",
+            bootstrap.environment === "dev"
+              ? "ChatGPT opened inside Farol Dev."
+              : "Isolated ChatGPT window opened.",
           );
         });
         const verify = document.createElement("button");
@@ -4175,7 +4177,9 @@ function renderSetup(): void {
         if (
           await configureProduct(
             { kind: "chatgpt.open-sign-in" },
-            "Isolated ChatGPT window opened.",
+            bootstrap.environment === "dev"
+              ? "ChatGPT opened inside Farol Dev."
+              : "Isolated ChatGPT window opened.",
           )
         ) {
           chatGptSignInOpened = true;
