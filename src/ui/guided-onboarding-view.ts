@@ -26,7 +26,8 @@ export interface GuidedOnboardingPort {
     command: ProductConfigurationCommand,
     message: string,
   ) => Promise<boolean>;
-  readonly pickFolder: () => Promise<string | null>;
+  readonly chooseFolder: () => Promise<string | null>;
+  readonly pickFolder: (selectionId: string) => Promise<string | null>;
   readonly openSettings: () => void;
   readonly openDiagnostics: () => void;
   readonly render: () => void;
@@ -55,7 +56,7 @@ const failureMessages = {
     "The tunnel has not reported ready. Check the message below before reconnecting.",
 } as const;
 type FolderAction = Readonly<{
-  kind: "add" | "remove" | "check";
+  kind: "add" | "remove";
   ids: readonly string[];
   authority: string;
   connectionIdentity: string;
@@ -370,9 +371,7 @@ export class GuidedOnboardingView {
                     ? "Check sign-in"
                     : "Sign in to ChatGPT"
                   : this.step === 1
-                    ? facts.hasFolder
-                      ? "Check folders"
-                      : "Add folder…"
+                    ? "Add folder…"
                     : this.step === 2
                       ? facts.runtime === "stopped"
                         ? "Activate and check"
@@ -397,6 +396,13 @@ export class GuidedOnboardingView {
       "✓ Farol Dev connection verified",
       "✓ All four setup checks complete",
     ];
+    status.hidden =
+      this.step === 3 &&
+      !complete &&
+      !this.busy &&
+      !this.message &&
+      !unknown &&
+      !localError;
     status.textContent = this.busy
       ? this.busyLabel
       : this.message ||
@@ -414,7 +420,9 @@ export class GuidedOnboardingView {
                     ? "Credentials saved. Activate the tunnel to check that it works."
                     : this.step === 4
                       ? `${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete. Open a step to continue or change it.`
-                      : "Not checked yet");
+                      : this.step === 1
+                        ? "Add a folder to continue. Farol checks it automatically."
+                        : "Not checked yet");
     const feedbackNode = element("#onboarding-feedback");
     feedbackNode.textContent =
       active && this.feedbackStep === this.step && feedbackError
@@ -460,7 +468,7 @@ export class GuidedOnboardingView {
     const recheck = element<HTMLButtonElement>("#onboarding-recheck");
     recheck.hidden =
       this.step === 4 ||
-      (this.step === 1 && !facts.hasFolder) ||
+      this.step === 1 ||
       (this.step === 2 && (editing || !facts.runtimeCurrent)) ||
       unknown;
     recheck.disabled = this.busy || !facts.available || prerequisite !== null;
@@ -468,7 +476,7 @@ export class GuidedOnboardingView {
       this.step === 0
         ? "Check sign-in"
         : this.step === 1
-          ? "Verify access again"
+          ? "Add folder…"
           : this.step === 2
             ? "Check connection"
             : "Check previous result";
@@ -517,7 +525,7 @@ export class GuidedOnboardingView {
         const detail = document.createElement("span");
         detail.textContent =
           index === 1
-            ? `${settings?.computer.workspaces.length ?? 0} folders · ${progress[1] ? "Checked" : "Add or check access"}`
+            ? `${settings?.computer.workspaces.length ?? 0} folders · ${progress[1] ? "Ready" : "Add a folder"}`
             : index === 2 && changed
               ? "Unsaved replacement"
               : progress[index]
@@ -539,8 +547,8 @@ export class GuidedOnboardingView {
     element<HTMLButtonElement>("#onboarding-add-folder").disabled =
       this.busy || !settings;
     element("#onboarding-folder-scope").textContent = folders.length
-      ? `${folders.length} ${folders.length === 1 ? "folder is" : "folders are"} available to Farol. This list shows every approved folder.`
-      : "Add one or several folders. Farol checks access locally, without reading file contents.";
+      ? `${folders.length} ${folders.length === 1 ? "folder" : "folders"} available to Farol. Add more or remove one at any time.`
+      : "Choose one or several folders. Farol confirms each one automatically.";
     element("#onboarding-folder-list").replaceChildren(
       ...folders.map((folder) => {
         const checked =
@@ -558,18 +566,10 @@ export class GuidedOnboardingView {
         path.textContent = folder.root;
         path.title = folder.root;
         const state = document.createElement("small");
-        state.textContent = `${checked ? "✓ Access checked" : "Added · needs checking"} · ${folder.access === "write" ? "Read and write" : "Read only"}`;
+        state.textContent = `${checked ? "✓ Ready to use" : "Access needs attention"} · ${folder.access === "write" ? "Read and write" : "Read only"}`;
         copy.append(title, path, state);
         const actions = document.createElement("div");
         actions.className = "onboarding-folder-actions";
-        const check = document.createElement("button");
-        check.type = "button";
-        check.textContent = "Retry access check";
-        check.disabled = this.busy;
-        check.setAttribute("aria-label", `Check ${folderDisplayName(folder)}`);
-        check.addEventListener("click", () =>
-          this.requestFolderAction("check", [folder.workspaceId]),
-        );
         const remove = document.createElement("button");
         remove.type = "button";
         remove.textContent = "Remove";
@@ -581,7 +581,6 @@ export class GuidedOnboardingView {
         remove.addEventListener("click", () =>
           this.requestFolderAction("remove", [folder.workspaceId]),
         );
-        if (!checked) actions.append(check);
         actions.append(remove);
         row.append(copy, actions);
         return row;
@@ -597,15 +596,13 @@ export class GuidedOnboardingView {
       element("#onboarding-folder-confirmation-copy").textContent =
         pending.kind === "remove"
           ? `Remove ${target ? folderDisplayName(target) : "this folder"} from Farol? Your files will not be deleted.${paused ? " The connection will pause while access changes." : ""}`
-          : "The connection must pause to update folder access. Your saved credentials stay in place; reconnect afterwards.";
+          : "Farol will update folder access and reconnect if the connection was running.";
       element<HTMLButtonElement>("#onboarding-confirm-folder").textContent =
         pending.kind === "remove"
           ? paused
             ? "Pause and remove"
             : "Remove folder"
-          : pending.kind === "add"
-            ? "Pause and add folder…"
-            : "Pause and check folders";
+          : "Add folder…";
     }
   }
 
@@ -658,19 +655,7 @@ export class GuidedOnboardingView {
       authority: facts.authority,
       connectionIdentity: facts.connectionIdentity,
     };
-    const bindingNeeded =
-      !this.hasCurrentFolderWitness() ||
-      ids.some(
-        (id) =>
-          !this.port
-            .settings()
-            ?.computer.workspaces.find((item) => item.workspaceId === id)
-            ?.rootIdentity,
-      );
-    if (
-      kind === "remove" ||
-      (facts.runtime !== "stopped" && (kind !== "check" || bindingNeeded))
-    ) {
+    if (kind === "remove") {
       this.pendingFolder = action;
       this.port.render();
       return;
@@ -679,11 +664,7 @@ export class GuidedOnboardingView {
   }
   private async updateFolders(action: FolderAction): Promise<void> {
     await this.perform(
-      action.kind === "add"
-        ? "Choosing a folder…"
-        : action.kind === "remove"
-          ? "Removing access…"
-          : "Checking folders…",
+      action.kind === "add" ? "Adding a folder…" : "Removing access…",
       async () => {
         const initial = this.facts();
         if (
@@ -694,19 +675,23 @@ export class GuidedOnboardingView {
           this.message = failureMessages["state-changed"];
           return;
         }
-        const bindingNeeded =
-          !this.hasCurrentFolderWitness() ||
-          action.ids.some(
-            (id) =>
-              !this.port
-                .settings()
-                ?.computer.workspaces.find((item) => item.workspaceId === id)
-                ?.rootIdentity,
-          );
+        const selectionId =
+          action.kind === "add" ? await this.port.chooseFolder() : null;
+        if (action.kind === "add" && !selectionId) {
+          this.message = "No folder added. Your connection is unchanged.";
+          return;
+        }
+        const afterPicker = this.facts();
         if (
-          initial.runtime !== "stopped" &&
-          (action.kind !== "check" || bindingNeeded)
+          afterPicker.outcomeUnknown ||
+          afterPicker.authority !== initial.authority ||
+          afterPicker.connectionIdentity !== initial.connectionIdentity ||
+          afterPicker.runtime !== initial.runtime
         ) {
+          this.message = failureMessages["state-changed"];
+          return;
+        }
+        if (initial.runtime !== "stopped") {
           if (
             !(await this.port.configure(
               { kind: "connector.stop" },
@@ -727,13 +712,10 @@ export class GuidedOnboardingView {
         }
         let first = action.ids[0];
         if (action.kind === "add") {
-          const selected = await this.port.pickFolder();
+          const selected = await this.port.pickFolder(selectionId!);
           if (!selected) {
             this.message =
-              this.facts().runtime === "stopped" &&
-              initial.runtime !== "stopped"
-                ? "No folder added. Your folders are unchanged; reconnect the paused connection when ready."
-                : "No folder added. Your folders are unchanged.";
+              "The folder change was not confirmed. Review the current folder list before reconnecting.";
             return;
           }
           first = selected;
@@ -760,7 +742,7 @@ export class GuidedOnboardingView {
           this.port
             .settings()
             ?.computer.workspaces.map((item) => item.workspaceId) ?? [];
-        const ids = action.kind === "check" ? action.ids : all;
+        const ids = all;
         if (ids.length === 0) {
           this.failedChecks.delete(1);
           this.message = "No folders are shared. Add a folder to continue.";
@@ -805,12 +787,22 @@ export class GuidedOnboardingView {
           }
         }
         this.failedChecks.delete(1);
+        if (initial.runtime === "ready" && this.facts().runtime === "stopped") {
+          if (
+            !(await this.port.configure(
+              { kind: "connector.start" },
+              "Connection restarted after the folder change.",
+            ))
+          ) {
+            this.message =
+              "Folder access is ready. The connection needs attention before ChatGPT can use it.";
+            return;
+          }
+        }
         this.message =
           action.kind === "remove"
-            ? "Folder removed. Remaining folder access checked; your files were not deleted."
-            : action.kind === "add"
-              ? "Folder added. Folder access checked."
-              : "Folder access checked. No file contents were read.";
+            ? "Folder removed. Your files were not deleted."
+            : "Folder added and ready to use.";
       },
     );
   }
@@ -910,14 +902,9 @@ export class GuidedOnboardingView {
               "Farol Dev connection verified.",
             );
       if (ok) {
-        // The app check has finished. Return to the Setup result with one
-        // click; this command only closes the embedded check surface.
-        await this.port.configure(
-          { kind: "chatgpt.verification-return" },
-          "Returned to Setup.",
-        );
         this.failedChecks.delete(3);
-        this.message = "✓ ChatGPT reached this computer. Connection verified.";
+        this.message =
+          "✓ Connection verified. Read the ChatGPT reply, then return to Setup.";
       } else {
         this.failedChecks.add(3);
         if (freshResult !== null && !freshResult.ok)
@@ -938,15 +925,6 @@ export class GuidedOnboardingView {
     });
   }
   private async recheck(): Promise<void> {
-    if (this.step === 1) {
-      this.requestFolderAction(
-        "check",
-        this.port
-          .settings()
-          ?.computer.workspaces.map((item) => item.workspaceId) ?? [],
-      );
-      return;
-    }
     if (this.step === 3) {
       await this.checkAttachment();
       return;
@@ -1026,13 +1004,7 @@ export class GuidedOnboardingView {
     if (this.step === 0) {
       if (this.signInOpened) await this.recheck();
       else await this.openVerificationChat();
-    } else if (this.step === 1)
-      this.requestFolderAction(
-        this.facts().hasFolder ? "check" : "add",
-        this.port
-          .settings()
-          ?.computer.workspaces.map((item) => item.workspaceId) ?? [],
-      );
+    } else if (this.step === 1) this.requestFolderAction("add", []);
     else if (this.step === 2) await this.applyConnection();
     else await this.verifyApp(false);
   }

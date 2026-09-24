@@ -493,7 +493,11 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     kind: z.literal("computer.rename"),
     name: z.string().trim().min(1).max(80),
   }),
-  z.strictObject({ kind: z.literal("computer.add-workspace") }),
+  z.strictObject({ kind: z.literal("computer.choose-workspace") }),
+  z.strictObject({
+    kind: z.literal("computer.add-workspace"),
+    selectionId: IdentifierSchema.optional(),
+  }),
   z.strictObject({
     kind: z.literal("computer.remove-workspace"),
     workspaceId: IdentifierSchema,
@@ -616,6 +620,10 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("computer.workspace-pick"),
+    selectionId: IdentifierSchema,
+  }),
   z.strictObject({
     kind: z.literal("computer.workspace-selection"),
     workspaceId: IdentifierSchema,

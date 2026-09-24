@@ -632,6 +632,42 @@ html:not([data-full-screen="true"])[data-sidebar="overlay"] .window-bar {
   overflow: hidden;
 }
 
+.task-tab-item {
+  position: relative;
+  flex: 1 1 210px;
+  min-width: 0;
+  max-width: 320px;
+  display: flex;
+}
+
+.task-tab-item .task-tab {
+  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.task-tab-close {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.task-tab-close:hover,
+.task-tab-close:focus-visible {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
 .task-tab {
   position: relative;
   flex: 1 1 210px;
@@ -852,6 +888,138 @@ html[data-window-active="false"] .task-tab.active::before {
   bottom: 0;
   overflow: hidden;
   background: var(--bg);
+}
+
+.browser-status-bar {
+  display: none;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"] {
+  --task-height: 0px;
+  --dossier-height: 0px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .window-identity {
+  display: none;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-bar {
+  z-index: 20;
+  top: 0;
+  right: 94px;
+  height: var(--window-height);
+  gap: 4px;
+  padding-left: 8px;
+  border-bottom: 0;
+  -webkit-app-region: drag;
+}
+
+html:not(
+    [data-full-screen="true"]
+  )[data-sidebar="rail"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-bar,
+html:not(
+    [data-full-screen="true"]
+  )[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-bar {
+  padding-left: 50px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .window-bar {
+  justify-content: flex-end;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab,
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab-close,
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .browser-task-menu {
+  -webkit-app-region: no-drag;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 34px 0 11px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab
+  > span:not(.state-lamp) {
+  flex: 1 1 auto;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab
+  small {
+  display: none;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .new-task,
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .dossier {
+  display: none;
+}
+
+.browser-task-menu {
+  display: none;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .browser-task-menu {
+  align-self: center;
+  flex: 0 0 28px;
+  display: block;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .surface {
+  top: var(--window-height);
+  bottom: 25px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .browser-status-bar {
+  position: fixed;
+  z-index: 19;
+  left: var(--sidebar-current);
+  right: 0;
+  bottom: 0;
+  height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  border-top: 1px solid var(--line);
+  background: var(--chrome);
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .browser-status-bar {
+  left: var(--sidebar-full);
+}
+
+.browser-status-bar button {
+  border: 0;
+  background: transparent;
+  color: var(--iris-bright);
+  cursor: pointer;
+  font-size: 11px;
 }
 
 html:not([data-section="browser"]) .task-bar {
@@ -3100,6 +3268,12 @@ html[data-sidebar="rail"] .onboarding-nav button {
   margin-top: 20px;
   color: var(--text-soft);
   font-size: 12px;
+}
+.onboarding-help h3 {
+  margin: 0 0 10px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
 }
 .onboarding-help summary,
 .connection-diagnostics > summary {

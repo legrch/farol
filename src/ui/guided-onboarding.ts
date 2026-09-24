@@ -134,7 +134,7 @@ export const onboardingSteps = [
     id: "folder",
     label: "Folders",
     title: "Your folders, your choice",
-    copy: "Add the folders you want to use with ChatGPT. Check their access here, or remove them at any time. Your files stay on this computer.",
+    copy: "Add the folders you want to use with ChatGPT. Farol checks each folder for you. You can add or remove folders at any time; your files stay on this computer.",
   },
   {
     id: "tunnel",
@@ -146,7 +146,7 @@ export const onboardingSteps = [
     id: "app",
     label: "Add to ChatGPT",
     title: "Add Farol Dev to ChatGPT",
-    copy: "Add Farol Dev in ChatGPT once. Then check the connection here — Farol selects the app and sends one small verification message.",
+    copy: "Add Farol Dev in ChatGPT once. Then choose Verify app. Farol sends one short message, and you can read the reply before returning to Setup.",
   },
   {
     id: "finish",

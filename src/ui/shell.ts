@@ -952,9 +952,8 @@ function renderBrowser(): void {
   } else if (task?.provider === "chatgpt") {
     loading.dataset.state = "ready";
     mark.className = "state-lamp complete";
-    title.textContent = "Isolated ChatGPT task";
-    detail.textContent =
-      "The actual provider page is embedded below this dossier; Farol does not mirror its conversation.";
+    title.textContent = "Opening ChatGPT";
+    detail.textContent = "Your ChatGPT page opens in this tab.";
   } else if (bootstrap.runtimeState === "ready") {
     loading.dataset.state = "ready";
     mark.className = "state-lamp running";
@@ -985,6 +984,8 @@ function renderTabs(): void {
   tabs.replaceChildren(
     ...bootstrap.tasks.map((task) => {
       const state = taskState(task.taskId);
+      const item = document.createElement("div");
+      item.className = "task-tab-item";
       const button = document.createElement("button");
       button.className = `task-tab ${task.taskId === selectedTaskId ? "active" : ""}`;
       button.dataset.taskId = task.taskId;
@@ -1003,9 +1004,65 @@ function renderTabs(): void {
       status.textContent = state.label;
       button.append(label, lamp, status);
       button.addEventListener("click", () => selectTask(task.taskId));
-      return button;
+      item.append(button);
+      if (bootstrap.environment === "dev" && task.provider === "chatgpt") {
+        const close = document.createElement("button");
+        close.type = "button";
+        close.className = "task-tab-close";
+        close.textContent = "×";
+        close.setAttribute("aria-label", `Close ${taskLabel(task)}`);
+        close.title = `Close ${taskLabel(task)}`;
+        close.addEventListener("click", () => void closeTaskTab(task.taskId));
+        item.append(close);
+      }
+      return item;
     }),
   );
+}
+
+async function closeTaskTab(taskId: string): Promise<void> {
+  let response: unknown;
+  try {
+    response = await window.farolNext.task({ kind: "task.close", taskId });
+  } catch {
+    selectedTaskId = taskId;
+    openTaskMenu();
+    taskMenuFeedback =
+      "The task close result was not confirmed. Check this task before trying again.";
+    taskMenuFeedbackError = true;
+    render();
+    return;
+  }
+  const parsed = ProductTaskCommandResultSchema.safeParse(response);
+  if (parsed.success) applyTasksState(parsed.data.state);
+  if (!parsed.success || !parsed.data.ok) {
+    selectedTaskId = taskId;
+    openTaskMenu();
+    taskMenuFeedback = !parsed.success
+      ? "The task route returned an invalid result."
+      : !parsed.data.ok
+        ? taskMenuErrorMessage(parsed.data.error)
+        : "The task could not be closed.";
+    taskMenuFeedbackError = true;
+    render();
+    return;
+  }
+  selectedTaskId = parsed.data.selectedTaskId ?? "";
+  render();
+}
+
+function renderBrowserStatus(): void {
+  const task = taskById(selectedTaskId);
+  const request = task ? unresolvedComputerRequest(task.taskId) : null;
+  const state = task ? taskState(task.taskId) : null;
+  required("#browser-status").textContent = request
+    ? "Computer permission requested"
+    : state?.attention
+      ? `${taskLabel(task!)} · ${state.label}`
+      : task
+        ? `${taskLabel(task)} · ${state?.label ?? "Ready"}`
+        : "ChatGPT inside Farol";
+  required<HTMLButtonElement>("#browser-review-request").hidden = !request;
 }
 
 function renderSignals(): void {
@@ -4765,6 +4822,7 @@ function render(notify = true): void {
   renderRuntime();
   renderBrowser();
   renderTabs();
+  renderBrowserStatus();
   renderSignals();
   renderDossier();
   renderTaskMenu();
@@ -5339,10 +5397,22 @@ async function start(): Promise<void> {
     buildId: () => bootstrap.build.buildId,
     isActive: () => section === "computer",
     configure: configureProduct,
-    pickFolder: async () => {
+    chooseFolder: async () => {
+      let selectionId: string | null = null;
+      await configureProduct(
+        { kind: "computer.choose-workspace" },
+        "Folder selected.",
+        (evidence) => {
+          if (evidence?.kind === "computer.workspace-pick")
+            selectionId = evidence.selectionId;
+        },
+      );
+      return selectionId;
+    },
+    pickFolder: async (selectionId) => {
       let selected: string | null = null;
       await configureProduct(
-        { kind: "computer.add-workspace" },
+        { kind: "computer.add-workspace", selectionId },
         "Folder selected.",
         (evidence) => {
           if (evidence?.kind === "computer.workspace-selection")
@@ -5404,6 +5474,14 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#command-button").addEventListener(
     "click",
     openCommands,
+  );
+  required<HTMLButtonElement>("#browser-task-menu").addEventListener(
+    "click",
+    openTaskMenu,
+  );
+  required<HTMLButtonElement>("#browser-review-request").addEventListener(
+    "click",
+    () => selectSection("computer"),
   );
   required<HTMLButtonElement>("#new-task").addEventListener(
     "click",
@@ -5678,6 +5756,12 @@ async function start(): Promise<void> {
     (event) => {
       event.preventDefault();
       closeOverlay();
+    },
+  );
+  required<HTMLDialogElement>("#command-dialog").addEventListener(
+    "click",
+    (event) => {
+      if (event.target === event.currentTarget) closeOverlay();
     },
   );
   required<HTMLDialogElement>("#context-preview").addEventListener(

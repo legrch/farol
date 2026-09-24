@@ -1066,6 +1066,7 @@ function createLiveChatGptRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
+    collapseSidebarByDefault: runtimeEnvironment === "dev",
     title: `${label} · ${displayProductName}`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
@@ -3083,6 +3084,11 @@ async function selectedWorkspace(): Promise<
   | "cancelled"
   | "invalid"
 > {
+  if (
+    process.env.FAROL_NEXT_E2E === "1" &&
+    process.env.FAROL_NEXT_E2E_CANCEL_WORKSPACE_PICKER === "1"
+  )
+    return "cancelled";
   let selected: string | undefined;
   const testRoot =
     process.env.FAROL_NEXT_E2E === "1"
@@ -3114,6 +3120,17 @@ async function selectedWorkspace(): Promise<
     return "invalid";
   }
 }
+
+// A native choice is held only in this process. The renderer receives an
+// opaque short-lived reference, so cancellation never stops a live connector.
+let pendingWorkspacePick: Readonly<{
+  id: string;
+  selected: Exclude<
+    Awaited<ReturnType<typeof selectedWorkspace>>,
+    "cancelled" | "invalid"
+  >;
+  expiresAt: number;
+}> | null = null;
 
 // A renderer-chosen discovery candidate is never trusted at face value: the
 // main process re-runs discovery itself and only accepts a path that is
@@ -6017,13 +6034,52 @@ async function configureAdmittedProduct(
       return ProductConfigurationResultSchema.parse(
         await configuration.renameComputer(command.name),
       );
-    case "computer.add-workspace": {
+    case "computer.choose-workspace": {
+      if (codexAgentOperationActive())
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      pendingWorkspacePick = null;
       const selected = await selectedWorkspace();
+      if (selected === "cancelled")
+        return configurationFailure("WORKSPACE_PICKER_CANCELLED");
+      if (selected === "invalid")
+        return configurationFailure("WORKSPACE_SELECTION_INVALID");
+      if (codexAgentOperationActive())
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      const selectionId = randomUUID();
+      pendingWorkspacePick = {
+        id: selectionId,
+        selected,
+        expiresAt: Date.now() + 300_000,
+      };
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+        evidence: { kind: "computer.workspace-pick", selectionId },
+      });
+    }
+    case "computer.add-workspace": {
+      if (codexAgentOperationActive())
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      const picked = pendingWorkspacePick;
+      if (command.selectionId) pendingWorkspacePick = null;
+      const selected = command.selectionId
+        ? picked?.id === command.selectionId && picked.expiresAt > Date.now()
+          ? picked.selected
+          : "invalid"
+        : await selectedWorkspace();
       if (selected === "cancelled") {
         return configurationFailure("WORKSPACE_PICKER_CANCELLED");
       }
       if (selected === "invalid") {
         return configurationFailure("WORKSPACE_SELECTION_INVALID");
+      }
+      const currentIdentity = await measuredRootIdentity(selected.root);
+      if (
+        !currentIdentity ||
+        currentIdentity.device !== selected.rootIdentity.device ||
+        currentIdentity.inode !== selected.rootIdentity.inode
+      ) {
+        return configurationFailure("WORKSPACE_ROOT_CHANGED");
       }
       const added = await configuration.addReadonlyWorkspace(selected);
       if (!added.ok || added.snapshot.status !== "ready")
@@ -7293,6 +7349,7 @@ function applyLayout(): void {
     selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
     browserChromeVisible:
       !showBrowserHome && productTasksState().tasks.length > 0,
+    compactDevBrowser: runtimeEnvironment === "dev",
   });
   for (const [taskId, view] of taskViews) {
     const visible =

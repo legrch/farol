@@ -195,6 +195,15 @@
         aria-label="Task sessions"
       ></div>
       <button
+        class="browser-task-menu"
+        id="browser-task-menu"
+        type="button"
+        aria-label="Selected task options"
+        title="Selected task options"
+      >
+        •••
+      </button>
+      <button
         class="new-task"
         id="new-task"
         type="button"
@@ -461,16 +470,8 @@
                       Open ChatGPT Plugins ↗
                     </button>
                   </div>
-                  <details class="onboarding-help" id="onboarding-app-guide">
-                    <summary>How to add Farol Dev in ChatGPT</summary>
-                    <div
-                      class="onboarding-flow"
-                      aria-label="Verification route"
-                    >
-                      <span>ChatGPT</span><b aria-hidden="true">↔</b
-                      ><span>Your tunnel</span><b aria-hidden="true">↔</b
-                      ><span>This computer</span>
-                    </div>
+                  <div class="onboarding-help" id="onboarding-app-guide">
+                    <h3>How to add Farol Dev in ChatGPT</h3>
                     <ol class="onboarding-instructions onboarding-short-guide">
                       <li>
                         In ChatGPT, open
@@ -498,7 +499,7 @@
                     <button type="button" data-onboarding-help="setup-guide">
                       Connection guide ↗
                     </button>
-                  </details>
+                  </div>
                   <p class="onboarding-note">
                     This check reads no file contents. Opening the page or
                     saving the app does not count as verification.
@@ -859,6 +860,16 @@
         </details>
       </section>
     </main>
+    <footer
+      class="browser-status-bar shell-region"
+      id="browser-status-bar"
+      aria-live="polite"
+    >
+      <span id="browser-status"></span
+      ><button id="browser-review-request" type="button" hidden>
+        Review request
+      </button>
+    </footer>
 
     <dialog class="task-menu" id="task-menu" aria-labelledby="task-menu-title">
       <header>

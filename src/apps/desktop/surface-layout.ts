@@ -12,6 +12,7 @@ export const shellGeometry = Object.freeze({
   windowBar: 52,
   taskStrip: 54,
   dossier: 72,
+  devStatusStrip: 25,
 });
 
 export function deriveSurfaceLayout(input: {
@@ -24,6 +25,7 @@ export function deriveSurfaceLayout(input: {
   runtimeReady: boolean;
   selectedTaskPresent: boolean;
   browserChromeVisible?: boolean;
+  compactDevBrowser?: boolean;
 }) {
   const autoRail = input.width < shellGeometry.autoRailBelow;
   const sidebarWidth =
@@ -34,7 +36,13 @@ export function deriveSurfaceLayout(input: {
     shellGeometry.windowBar +
     (input.browserChromeVisible === false
       ? 0
-      : shellGeometry.taskStrip + shellGeometry.dossier);
+      : input.compactDevBrowser
+        ? 0
+        : shellGeometry.taskStrip + shellGeometry.dossier);
+  const bottomReserved =
+    input.compactDevBrowser && input.browserChromeVisible !== false
+      ? shellGeometry.devStatusStrip
+      : 0;
   return {
     sidebarWidth,
     autoRail,
@@ -48,7 +56,7 @@ export function deriveSurfaceLayout(input: {
       x: sidebarWidth,
       y: pageTop,
       width: Math.max(1, input.width - sidebarWidth),
-      height: Math.max(1, input.height - pageTop),
+      height: Math.max(1, input.height - pageTop - bottomReserved),
     },
   } as const;
 }

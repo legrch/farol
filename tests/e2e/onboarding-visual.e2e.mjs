@@ -98,6 +98,18 @@ try {
   );
   await window.locator("#onboarding-nav").waitFor({ state: "visible" });
   await window.locator("#setup-dialog").waitFor({ state: "hidden" });
+  await window.locator("#sidebar-toggle").click();
+  await window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  await window.locator("#sidebar-toggle").click();
+  await window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
+  await window.locator("#command-button").click();
+  await window.locator("#command-dialog").waitFor({ state: "visible" });
+  await window.mouse.click(1120, 500);
+  await window.locator("#command-dialog").waitFor({ state: "hidden" });
   assert.equal(
     await window.locator("#connection-diagnostics").getAttribute("open"),
     null,
@@ -159,11 +171,8 @@ try {
     await window.locator("#onboarding-finish-list button").count(),
     4,
   );
-  assert.equal(await window.locator("#guided-onboarding details").count(), 1);
-  assert.equal(
-    await window.locator("#onboarding-app-guide").getAttribute("open"),
-    null,
-  );
+  assert.equal(await window.locator("#onboarding-app-guide ol li").count(), 3);
+  assert.equal(await window.locator("#onboarding-flow").count(), 0);
   const scrollRail = await window.evaluate(() => ({
     rail: document.querySelector("#onboarding-scroll").getBoundingClientRect()
       .right,
@@ -479,10 +488,7 @@ try {
     await window.locator("#onboarding-status").getAttribute("data-state"),
     "ready",
   );
-  await window.locator("#onboarding-recheck").click();
-  await window
-    .locator('#onboarding-primary:not(:disabled):text("Continue")')
-    .waitFor();
+  assert.equal(await window.locator("#onboarding-recheck").isVisible(), false);
   await window.screenshot({
     path: path.join(output, "08-folder-verified.png"),
   });
@@ -629,11 +635,20 @@ try {
     path: path.join(output, "13-return-after-app-check.png"),
   });
   await window.locator('[data-onboarding-step="folder"]').click();
+  await application.evaluate(() => {
+    process.env.FAROL_NEXT_E2E_CANCEL_WORKSPACE_PICKER = "1";
+  });
   await window.locator("#onboarding-add-folder").click();
   await window
-    .locator("#onboarding-folder-confirmation")
-    .waitFor({ state: "visible" });
-  await window.locator("#onboarding-cancel-folder").click();
+    .locator('#onboarding-form[aria-busy="false"]')
+    .waitFor({ state: "attached" });
+  await application.evaluate(() => {
+    delete process.env.FAROL_NEXT_E2E_CANCEL_WORKSPACE_PICKER;
+  });
+  assert.equal(
+    await window.locator("#onboarding-folder-confirmation").isVisible(),
+    false,
+  );
   const cancelledConfiguration = (
     await window.evaluate(() => window.farolNext.bootstrap())
   ).configuration;
@@ -643,6 +658,33 @@ try {
     runtimeGeneration,
     "CANCELLED_FOLDER_CHANGE_RESTARTED_TUNNEL",
   );
+  await window.locator("#onboarding-add-folder").click();
+  await window.waitForFunction(
+    () =>
+      document.querySelectorAll('.onboarding-folder-card[data-state="ready"]')
+        .length === 2 &&
+      document.querySelector("#onboarding-form")?.getAttribute("aria-busy") ===
+        "false",
+  );
+  const addedWhileRunning = (
+    await window.evaluate(() => window.farolNext.bootstrap())
+  ).configuration;
+  assert.equal(
+    addedWhileRunning.settings.connectors.secureMcp.runtime.state,
+    "ready",
+  );
+  assert.notEqual(
+    addedWhileRunning.settings.connectors.secureMcp.runtime.runtimeGeneration,
+    runtimeGeneration,
+    "FOLDER_SCOPE_CHANGE_REUSED_OLD_CONNECTOR",
+  );
+  assert.equal(
+    addedWhileRunning.settings.connectors.secureMcp.attachment,
+    null,
+  );
+  await window.screenshot({
+    path: path.join(output, "13-folder-added-while-connected.png"),
+  });
   const tasksBeforeBrowser = (
     await window.evaluate(() => window.farolNext.bootstrap())
   ).tasks.length;
@@ -671,6 +713,74 @@ try {
   );
   assert.equal(await window.locator("#task-tabs").isVisible(), false);
   await window.screenshot({ path: path.join(output, "14-browser-home.png") });
+  const created = await window.evaluate(() =>
+    window.farolNext.task({ kind: "task.create-chatgpt" }),
+  );
+  assert.equal(created.ok, true, "SYNTHETIC_CHATGPT_TASK_NOT_CREATED");
+  await window.locator("#task-tabs .task-tab").waitFor({ state: "visible" });
+  assert.equal(await window.locator("#task-dossier").isVisible(), false);
+  assert.equal(await window.locator("#new-task").isVisible(), false);
+  assert.equal(await window.locator("#browser-status-bar").isVisible(), true);
+  const compactLayout = await application.evaluate(
+    ({ BrowserWindow, WebContentsView }) => {
+      const owned = BrowserWindow.getAllWindows()[0];
+      const page = owned.contentView.children.find(
+        (child) => child instanceof WebContentsView && child.getVisible(),
+      );
+      return {
+        y: page?.getBounds().y ?? null,
+        height: page?.getBounds().height ?? null,
+      };
+    },
+  );
+  assert.equal(compactLayout.y, 52);
+  assert.equal(compactLayout.height, 683);
+  await window.locator("#sidebar-toggle").click();
+  await window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  const railChrome = await window.evaluate(() => {
+    const tab = document.querySelector("#task-tabs .task-tab");
+    const tabRect = tab.getBoundingClientRect();
+    const toggleRect = document
+      .querySelector("#sidebar-toggle")
+      .getBoundingClientRect();
+    const footerRect = document
+      .querySelector("#browser-status-bar")
+      .getBoundingClientRect();
+    return {
+      tabLeft: tabRect.left,
+      toggleRight: toggleRect.right,
+      footerLeft: footerRect.left,
+      sidebarWidth: document.querySelector("#sidebar").getBoundingClientRect()
+        .width,
+      firstTabHittable: tab.contains(
+        document.elementFromPoint(tabRect.left + 15, tabRect.top + 20),
+      ),
+    };
+  });
+  assert.ok(railChrome.tabLeft >= railChrome.toggleRight);
+  assert.equal(railChrome.footerLeft, railChrome.sidebarWidth);
+  assert.equal(railChrome.firstTabHittable, true);
+  await window.locator("#sidebar-toggle").click();
+  await window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
+  const fullChrome = await window.evaluate(() => ({
+    footerLeft: document
+      .querySelector("#browser-status-bar")
+      .getBoundingClientRect().left,
+    sidebarWidth: document.querySelector("#sidebar").getBoundingClientRect()
+      .width,
+  }));
+  assert.equal(fullChrome.footerLeft, fullChrome.sidebarWidth);
+  await window.locator("#command-button").click();
+  await window.locator("#command-dialog").waitFor({ state: "visible" });
+  await window.mouse.click(1120, 500);
+  await window.locator("#command-dialog").waitFor({ state: "hidden" });
+  await window.screenshot({ path: path.join(output, "14-compact-task.png") });
+  await window.locator("#task-tabs .task-tab-close").click();
+  await window.locator("#task-tabs .task-tab").waitFor({ state: "hidden" });
   console.log(
     JSON.stringify({
       label,

@@ -46,6 +46,23 @@ describe("native Browser surface layout", () => {
     });
   });
 
+  it("gives the DEV browser a compact tab strip and a status strip", () => {
+    expect(
+      deriveSurfaceLayout({ ...base, compactDevBrowser: true }),
+    ).toMatchObject({
+      pageBounds: { x: 216, y: 52, width: 964, height: 683 },
+    });
+    expect(
+      deriveSurfaceLayout({
+        ...base,
+        compactDevBrowser: true,
+        browserChromeVisible: false,
+      }),
+    ).toMatchObject({
+      pageBounds: { x: 216, y: 52, width: 964, height: 708 },
+    });
+  });
+
   it.each([
     { setupOpen: true },
     { overlay: "sidebar" as const },

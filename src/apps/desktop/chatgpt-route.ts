@@ -321,6 +321,28 @@ function signInBannerRemovalScript(): string {
   })()`;
 }
 
+// ChatGPT owns its sidebar. Ask its own visible control to collapse once per
+// document; never hide provider content or keep toggling after the owner opens it.
+function collapseChatGptSidebarScript(): string {
+  return `(() => {
+    const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar"]);
+    const collapse = () => {
+      const button = [...document.querySelectorAll("button[aria-label]")].find(
+        (candidate) => labels.has(candidate.getAttribute("aria-label"))
+      );
+      if (!button) return false;
+      button.click();
+      return true;
+    };
+    if (collapse()) return;
+    const observer = new MutationObserver(() => {
+      if (collapse()) observer.disconnect();
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label"] });
+    setTimeout(() => observer.disconnect(), 5000);
+  })()`;
+}
+
 const activityProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -932,6 +954,7 @@ export type ChatGptRouteOptions = Readonly<{
   parent: () => BrowserWindow | null;
   partition?: "persist:farol-next-chatgpt" | "persist:farol-dev-chatgpt";
   requiredAppName?: string;
+  collapseSidebarByDefault?: boolean;
   windowPresentation?: ChatGptWindowPresentation;
   surfaceFactory?: ChatGptRouteSurfaceFactory;
   title?: string;
@@ -2614,6 +2637,14 @@ export class ChatGptRoute {
             return;
           }
           if (!this.ownsRouteContents(contents)) return;
+          if (
+            this.options.collapseSidebarByDefault &&
+            isChatGptPage(contents.getURL(), this.options.homeUrl)
+          ) {
+            void contents
+              .executeJavaScript(collapseChatGptSidebarScript(), true)
+              .catch(() => undefined);
+          }
           this.load = "loaded";
           this.options.onLoadStateChanged?.("loaded");
           this.reportConversationUrl(contents);
