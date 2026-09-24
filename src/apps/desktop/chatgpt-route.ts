@@ -569,6 +569,15 @@ export function bindChatGptAppScript(
           rect.top > composerRect.top - 400 &&
           rect.bottom < composerRect.bottom + 450;
       };
+      // The current ChatGPT picker exposes the app row as a plain button
+      // without a menu/listbox root. Match that exact row near the composer;
+      // never select a similarly named control inside a conversation.
+      const buttonOptions = [...document.querySelectorAll('button,[role="option"],[role="menuitem"]')]
+        .filter((element) => element instanceof HTMLElement &&
+          nearComposer(element) &&
+          !element.closest('[data-message-author-role],article,[role="article"]') &&
+          exactPickerOption(element));
+      if (buttonOptions.length !== 0) return buttonOptions;
       const labels = [...document.querySelectorAll("span,div,strong")]
         .filter((element) => element instanceof HTMLElement && nearComposer(element));
       const pickerRootFor = (element) => {

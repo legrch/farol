@@ -409,6 +409,8 @@ describe("ChatGPT route submission boundary", () => {
     let transcriptVisible = false;
     let transcriptClicks = 0;
     let clicks = 0;
+    let buttonAvailable = false;
+    let buttonClicks = 0;
     class HTMLElement {
       parentElement: HTMLElement | null = null;
       article = false;
@@ -535,6 +537,18 @@ describe("ChatGPT route submission boundary", () => {
       height: 20,
     };
     wrong.parentElement = popup;
+    const buttonTitle = new HTMLElement();
+    buttonTitle.textContent = "Farol Dev";
+    const appButton = new HTMLElement();
+    appButton.textContent =
+      "Farol Dev Private development connector to the approved workspace.";
+    appButton.parentElement = popup;
+    appButton.querySelectorAll = () => [buttonTitle];
+    appButton.click = () => {
+      buttonClicks += 1;
+      selected = true;
+      composer.innerText = "";
+    };
     const transcriptHeading = new HTMLElement();
     transcriptHeading.textContent = "Plugins";
     transcriptHeading.rect = { ...heading.rect };
@@ -557,9 +571,11 @@ describe("ChatGPT route submission boundary", () => {
         querySelector: (selector: string) =>
           selector.includes("prompt-textarea") ? composer : null,
         querySelectorAll: (selector: string) =>
-          selector !== "span,div,strong"
-            ? []
-            : pickerVisible
+          selector.includes("button")
+            ? pickerVisible && buttonAvailable
+              ? [appButton]
+              : []
+            : selector === "span,div,strong" && pickerVisible
               ? [
                   ...(headingVisible ? [heading] : []),
                   ...(fileHeadingVisible ? [fileHeading] : []),
@@ -602,11 +618,15 @@ describe("ChatGPT route submission boundary", () => {
     expect(clicks).toBe(1);
     selected = false;
     headingVisible = false;
+    buttonAvailable = true;
     await expect(
       vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
-    ).resolves.toEqual({ state: "blocked", reason: "missing" });
+    ).resolves.toEqual({ state: "bound" });
     expect(clicks).toBe(1);
+    expect(buttonClicks).toBe(1);
 
+    selected = false;
+    buttonAvailable = false;
     fileHeadingVisible = false;
     pickerAvailable = false;
     transcriptVisible = true;

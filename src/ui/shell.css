@@ -952,11 +952,54 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
 }
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab-item {
+  flex: 0 1 176px;
+  max-width: 200px;
+  min-width: 80px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tabs {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   .task-tab {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 34px 0 11px;
+  min-width: 0;
+  max-width: none;
+  padding: 0 32px 0 10px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab-home {
+  cursor: default;
+  padding-right: 12px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab-home:hover {
+  background: var(--surface-soft);
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab.active {
+  background: rgba(255, 255, 255, 0.045);
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .task-tab.active::before {
+  height: 2px;
+  background: color-mix(in srgb, var(--iris) 72%, transparent);
 }
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
@@ -1020,6 +1063,32 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   font-size: 11px;
 }
 
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
+  .surface {
+  bottom: 36px;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
+  .browser-status-bar {
+  height: 36px;
+  padding-inline: 16px;
+  font-size: 12px;
+}
+
+.browser-status-bar[data-check-tone="failed"] #browser-status {
+  color: var(--failed);
+  font-weight: 600;
+}
+
+.browser-status-bar[data-check-tone="complete"] #browser-status {
+  color: var(--complete);
+  font-weight: 600;
+}
+
+.browser-status-bar[data-check-tone="running"] #browser-status {
+  color: var(--text);
+}
+
 html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   .browser-status-bar {
   left: var(--sidebar-full);
@@ -1032,6 +1101,14 @@ html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][dat
   color: var(--iris-bright);
   cursor: pointer;
   font-size: 11px;
+}
+
+.browser-status-bar[data-check-tone]:not([data-check-tone=""]) button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .browser-status-bar #browser-status {
@@ -3291,6 +3368,18 @@ html[data-sidebar="rail"] .onboarding-nav button {
 }
 .onboarding-scroll > .settings-feedback:empty {
   display: none;
+}
+.onboarding-scroll > .settings-feedback:not(:empty) {
+  margin-block: 14px 18px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.onboarding-scroll > .settings-feedback.error:not(:empty) {
+  border-color: color-mix(in srgb, var(--failed) 55%, var(--line));
 }
 .onboarding-short-guide {
   margin-top: 20px;

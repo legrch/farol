@@ -103,3 +103,98 @@ export class ActivityLog {
     return this.omittedRecords;
   }
 }
+
+const SETUP_CHECK_STORAGE_KEY = "farol.next.setup-check-history.v1";
+const SETUP_CHECK_HISTORY_LIMIT = 64;
+export type SetupCheckOperation =
+  "connector.check-health" | "connector.verify-app";
+export type SetupCheckPhase =
+  "running" | "completed" | "failed" | "outcome_unknown";
+
+function isSetupCheckRecord(value: unknown): value is SafeActivity {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<SafeActivity>;
+  return (
+    record.taskId === "setup" &&
+    record.kind === "setup.check" &&
+    typeof record.turnId === "string" &&
+    /^\d{1,16}-\d{1,5}$/u.test(record.turnId) &&
+    record.generation === 0 &&
+    ["running", "completed", "failed", "outcome_unknown"].includes(
+      record.phase ?? "",
+    ) &&
+    record.sequence === null &&
+    record.callId === null &&
+    ["connector.check-health", "connector.verify-app"].includes(
+      record.operation ?? "",
+    ) &&
+    (record.code === null ||
+      (typeof record.code === "string" &&
+        /^[A-Z][A-Z0-9_]{0,79}$/u.test(record.code))) &&
+    typeof record.at === "number" &&
+    Number.isFinite(record.at) &&
+    record.at > 0 &&
+    record.coalesced === 1
+  );
+}
+
+/** Content-free setup attempts, retained across app restarts in the Dev profile. */
+export class SetupCheckHistory {
+  private readonly records: SafeActivity[];
+  private nextId = 0;
+
+  constructor(private readonly storage: Pick<Storage, "getItem" | "setItem">) {
+    let loaded: unknown = null;
+    try {
+      loaded = JSON.parse(storage.getItem(SETUP_CHECK_STORAGE_KEY) ?? "null");
+    } catch {
+      // An unavailable or damaged store must not block Setup.
+    }
+    this.records = Array.isArray(loaded)
+      ? loaded.filter(isSetupCheckRecord).slice(-SETUP_CHECK_HISTORY_LIMIT)
+      : [];
+  }
+
+  start(operation: SetupCheckOperation): string {
+    const runId = `${Date.now()}-${++this.nextId}`;
+    this.record(operation, "running", runId);
+    return runId;
+  }
+
+  record(
+    operation: SetupCheckOperation,
+    phase: SetupCheckPhase,
+    runId: string,
+    code: string | null = null,
+  ): SafeActivity {
+    const entry: SafeActivity = {
+      taskId: "setup",
+      turnId: runId,
+      generation: 0,
+      kind: "setup.check",
+      phase,
+      sequence: null,
+      callId: null,
+      operation,
+      code: code && /^[A-Z][A-Z0-9_]{0,79}$/u.test(code) ? code : null,
+      at: Date.now(),
+      coalesced: 1,
+    };
+    this.records.push(entry);
+    if (this.records.length > SETUP_CHECK_HISTORY_LIMIT)
+      this.records.splice(0, this.records.length - SETUP_CHECK_HISTORY_LIMIT);
+    try {
+      this.storage.setItem(
+        SETUP_CHECK_STORAGE_KEY,
+        JSON.stringify(this.records),
+      );
+    } catch {
+      // Keep the current session's evidence even if persistence is unavailable.
+    }
+    return entry;
+  }
+
+  entries(): readonly SafeActivity[] {
+    return this.records;
+  }
+}

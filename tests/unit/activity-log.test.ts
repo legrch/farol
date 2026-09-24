@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ActivityLog,
+  SetupCheckHistory,
   projectActivity,
   type SafeActivity,
 } from "../../src/ui/activity-log";
@@ -92,6 +93,35 @@ describe("OBS-F1 activity keeps its links, not identities", () => {
     expect(JSON.stringify(log.entries())).not.toMatch(
       /OWNER-CANARY|SESSION-CANARY/u,
     );
+  });
+});
+
+describe("Dev Setup check history", () => {
+  it("keeps bounded content-free attempts across restarts", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+    };
+    const history = new SetupCheckHistory(storage);
+    const runId = history.start("connector.verify-app");
+    history.record("connector.verify-app", "failed", runId, "CHECK_FAILED");
+    expect(new SetupCheckHistory(storage).entries()).toMatchObject([
+      {
+        kind: "setup.check",
+        phase: "running",
+        operation: "connector.verify-app",
+      },
+      { kind: "setup.check", phase: "failed", code: "CHECK_FAILED" },
+    ]);
+    history.record("connector.verify-app", "failed", runId, "private reply");
+    expect(JSON.stringify(values)).not.toContain("private reply");
+    for (let index = 0; index < 70; index += 1) {
+      history.start("connector.check-health");
+    }
+    expect(new SetupCheckHistory(storage).entries()).toHaveLength(64);
   });
 });
 

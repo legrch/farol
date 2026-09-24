@@ -92,7 +92,13 @@ import {
   workspaceEditRefusalMessage,
   workspaceEditToAcknowledge,
 } from "./workspace-edit-delivery";
-import { ActivityLog, projectActivity } from "./activity-log";
+import {
+  ActivityLog,
+  SetupCheckHistory,
+  projectActivity,
+  type SetupCheckOperation,
+  type SetupCheckPhase,
+} from "./activity-log";
 import { captureInputDraft, restoreInputDraft } from "./input-draft";
 import {
   agentRouteReadiness,
@@ -309,6 +315,7 @@ const phaseLabels: Readonly<Record<string, string>> = {
 };
 
 const activityLabels: Readonly<Record<string, string>> = {
+  "setup.check": "Setup check",
   "turn.phase": "Turn state changed",
   "text.delta": "Response fragment received",
   "computer.requested": "Computer approval requested",
@@ -386,6 +393,7 @@ let bootstrapReady = false;
 let section: SurfaceSection = "browser";
 let selectedTaskId = "";
 let connectionCheckFeedback: string | null = null;
+let connectionCheckTone: "running" | "failed" | "complete" | null = null;
 let setupJourney = createSetupJourney();
 let guidedOnboarding: GuidedOnboardingView | null = null;
 let setupFocusKey = "";
@@ -659,6 +667,26 @@ let renderedComputerSettingsRevision = -1;
 let setupPrimaryAction: (() => Promise<void>) | null = null;
 const taskEvents = new Map<string, ClientEventDto[]>();
 const activity = new ActivityLog();
+const setupCheckHistory = new SetupCheckHistory(localStorage);
+for (const entry of setupCheckHistory.entries()) activity.record(entry);
+
+function setupCheckOperation(
+  command: ProductConfigurationCommand,
+): SetupCheckOperation | null {
+  return command.kind === "connector.verify-app" ||
+    command.kind === "connector.check-health"
+    ? command.kind
+    : null;
+}
+
+function recordSetupCheck(
+  operation: SetupCheckOperation,
+  phase: SetupCheckPhase,
+  runId: string,
+  code: string | null = null,
+): void {
+  activity.record(setupCheckHistory.record(operation, phase, runId, code));
+}
 const pendingRuntimeEvents: ClientEventDto[] = [];
 let pendingRuntimeStatus: RuntimeStatus | null = null;
 const pendingTaskSurfaceStatuses: TaskSurfaceStatus[] = [];
@@ -1014,14 +1042,23 @@ function renderTabs(): void {
     const item = document.createElement("div");
     item.className = "task-tab-item";
     const button = document.createElement("button");
-    button.className = "task-tab active";
+    button.className = "task-tab task-tab-home active";
     button.type = "button";
     button.setAttribute("role", "tab");
     button.setAttribute("aria-selected", "true");
     button.setAttribute("aria-label", "ChatGPT page");
     const label = document.createElement("span");
     label.textContent = chatGptSignInOpened ? "ChatGPT check" : "ChatGPT";
-    button.append(label);
+    const lamp = document.createElement("i");
+    lamp.className = `state-lamp ${browserHomeStatus === "ready" ? "complete" : browserHomeStatus === "failed" ? "failed" : "starting"}`;
+    lamp.setAttribute("aria-hidden", "true");
+    button.title =
+      browserHomeStatus === "ready"
+        ? "ChatGPT page ready"
+        : browserHomeStatus === "failed"
+          ? "ChatGPT page unavailable"
+          : "Opening ChatGPT";
+    button.append(label, lamp);
     item.append(button);
     tabs.replaceChildren(item);
     return;
@@ -1101,7 +1138,12 @@ function renderBrowserStatus(): void {
   const request = task ? unresolvedComputerRequest(task.taskId) : null;
   const state = task ? taskState(task.taskId) : null;
   const feedback = chatGptSignInOpened ? connectionCheckFeedback : null;
+  document.documentElement.dataset.checkFeedback = feedback ? "true" : "false";
   const status = required<HTMLElement>("#browser-status");
+  const statusBar = required<HTMLElement>("#browser-status-bar");
+  statusBar.dataset.checkTone = feedback
+    ? (connectionCheckTone ?? "running")
+    : "";
   status.textContent =
     feedback ??
     (request
@@ -1824,13 +1866,21 @@ function renderActivity(): void {
       const dot = document.createElement("i");
       const task = document.createElement("span");
       task.className = "activity-task";
-      task.textContent = taskLabel(taskById(record.taskId));
+      task.textContent =
+        record.kind === "setup.check"
+          ? "Setup"
+          : taskLabel(taskById(record.taskId));
       const message = document.createElement("b");
-      message.textContent = activityLabels[record.kind] ?? "Lifecycle event";
+      message.textContent =
+        record.kind === "setup.check"
+          ? record.operation === "connector.verify-app"
+            ? "ChatGPT end-to-end check"
+            : "Connection check"
+          : (activityLabels[record.kind] ?? "Lifecycle event");
       const phase = document.createElement("span");
       phase.textContent =
         record.sequence === null
-          ? (phaseLabels[record.phase] ?? "Updated")
+          ? `${phaseLabels[record.phase] ?? "Updated"}${record.kind === "setup.check" && record.code ? ` · ${record.code}` : ""}`
           : record.coalesced > 1
             ? `Part ${record.sequence} · ${record.coalesced} updates`
             : `Part ${record.sequence}`;
@@ -2778,10 +2828,19 @@ async function configureProduct(
   onEvidence?: (evidence: ProductConfigurationEvidence | undefined) => void,
 ): Promise<boolean> {
   const configurationRequest = configurationRequestOrder.begin();
+  const checkOperation = setupCheckOperation(command);
+  const checkRunId = checkOperation
+    ? setupCheckHistory.start(checkOperation)
+    : null;
+  if (checkOperation && checkRunId) {
+    activity.record(setupCheckHistory.entries().at(-1)!);
+  }
   if (command.kind === "chatgpt.open-sign-in") {
     connectionCheckFeedback = null;
+    connectionCheckTone = null;
   } else if (command.kind === "connector.verify-app") {
     connectionCheckFeedback = "Running the ChatGPT end-to-end check…";
+    connectionCheckTone = "running";
   }
   // While Setup is open it is the only visible surface — a failure or
   // success routed to the Computer or Settings panel behind a modal dialog
@@ -2912,6 +2971,8 @@ async function configureProduct(
     });
   }
   if (outcome.kind === "unconfirmed") {
+    if (checkOperation && checkRunId)
+      recordSetupCheck(checkOperation, "outcome_unknown", checkRunId);
     // Neither a malformed reply nor a lost promise proves the command was
     // not applied, so this must not claim "nothing was applied" — see
     // UNCONFIRMED_CONFIGURATION_MESSAGE. No snapshot is adopted either.
@@ -2920,6 +2981,7 @@ async function configureProduct(
     if (command.kind === "connector.verify-app")
       connectionCheckFeedback =
         "Check outcome unknown. Return to Setup for the existing result.";
+    if (command.kind === "connector.verify-app") connectionCheckTone = "failed";
     renderOutcome();
     return false;
   }
@@ -2932,6 +2994,8 @@ async function configureProduct(
     renderedComputerSettingsRevision = -1;
   }
   if (!parsed.ok) {
+    if (checkOperation && checkRunId)
+      recordSetupCheck(checkOperation, "failed", checkRunId, parsed.error);
     if (
       command.kind === "chatgpt.submit-readonly-task" ||
       command.kind === "chatgpt.cancel-readonly-task" ||
@@ -3075,8 +3139,10 @@ async function configureProduct(
                                                                                       `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
-    if (command.kind === "connector.verify-app")
+    if (command.kind === "connector.verify-app") {
       connectionCheckFeedback = settingsFeedback;
+      connectionCheckTone = "failed";
+    }
     renderOutcome();
     return false;
   }
@@ -3297,9 +3363,11 @@ async function configureProduct(
   } else {
     settingsFeedback = successMessage;
   }
-  if (command.kind === "connector.verify-app")
+  if (command.kind === "connector.verify-app") {
     connectionCheckFeedback =
       "End-to-end check passed. Read the reply, then return to Setup.";
+    connectionCheckTone = "complete";
+  }
   if (command.kind === "chatgpt.cancel-readonly-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") setShellOverlay("none");
@@ -3315,6 +3383,12 @@ async function configureProduct(
     chatGptSignInOpened = true;
   }
   settingsFeedbackError = evidenceError;
+  if (checkOperation && checkRunId)
+    recordSetupCheck(
+      checkOperation,
+      evidenceError ? "failed" : "completed",
+      checkRunId,
+    );
   if (
     command.kind === "general.update" &&
     bootstrap.configuration.status === "ready"
