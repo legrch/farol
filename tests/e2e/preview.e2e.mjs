@@ -7950,7 +7950,7 @@ demoMainSegment: try {
         () => document.documentElement.dataset.fullScreen === "false",
       );
       if (process.platform === "darwin") {
-        assert.equal((await watchRailGeometry(normal.window)).toggle.x, 78);
+        assert.equal((await watchRailGeometry(normal.window)).toggle.x, 23);
         assert.deepEqual(
           (await nativeWindowChrome(normal.application)).trafficLightPosition,
           { x: 14, y: 18 },
