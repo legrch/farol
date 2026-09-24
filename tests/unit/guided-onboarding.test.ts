@@ -77,6 +77,23 @@ describe("guided onboarding progress", () => {
     expect(onboardingCompletedSteps(settings)[3]).toBe(false);
   });
 
+  it("accepts current folder access checks after an update without promoting the older Computer witness", () => {
+    const settings = guidedSettingsFixture();
+    const newBuildId = "f".repeat(64);
+    settings.connectors.secureMcp.runtime!.buildId = newBuildId;
+    settings.computer.workspaces[0]!.accessCheck!.buildId = newBuildId;
+    settings.connectors.secureMcp.attachment = null;
+    settings.setup.connect.verified = null;
+    expect(settings.setup.computer.verified?.buildId).toBe(fixtureBuildId);
+    expect(onboardingFacts(settings, newBuildId).folder).toBe("ready");
+    expect(onboardingProgress(onboardingFacts(settings, newBuildId))[2]).toBe(
+      true,
+    );
+    expect(onboardingCompletedSteps(settings)[2]).toBe(true);
+    settings.computer.workspaces[0]!.rootIdentity!.inode = "changed";
+    expect(onboardingFacts(settings, newBuildId).folder).not.toBe("ready");
+  });
+
   it("does not carry a saved completion across a changed folder or attachment", () => {
     const settings = guidedSettingsFixture();
     settings.computer.workspaces[0]!.rootIdentity!.inode = "changed";

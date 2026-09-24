@@ -10,11 +10,14 @@ import {
   firstIncompleteSetupStep,
   GuidedConnectionUpdate,
   GuidedCredentialSave,
+  onboardingActionPrerequisite,
   onboardingPrerequisite,
   progressWithConnectionDraft,
+  refreshApprovedFolderAccess,
 } from "../../src/ui/guided-onboarding-actions";
 import {
   fixtureBuildId,
+  fixtureWorkspaceId,
   guidedSettingsFixture,
 } from "../fixtures/guided-onboarding";
 
@@ -35,7 +38,51 @@ it("aligns Continue with remembered setup and refreshes a stale connection befor
   );
   expect(
     completedStepAction(3, current, [true, true, true, false, false]),
-  ).toBe(null);
+  ).toBe("reconnect-and-continue");
+  expect(
+    onboardingActionPrerequisite(3, current, [true, true, true, false, false]),
+  ).toBeNull();
+  expect(onboardingActionPrerequisite(3, current, current)).toBe(2);
+});
+
+it("refreshes an approved folder for the current build before reconnecting", async () => {
+  const settings = guidedSettingsFixture();
+  const nextBuild = "f".repeat(64);
+  const check = vi.fn(async (workspaceId: string) => {
+    expect(workspaceId).toBe(fixtureWorkspaceId);
+    settings.computer.workspaces[0]!.accessCheck!.buildId = nextBuild;
+    return true;
+  });
+  expect(
+    await refreshApprovedFolderAccess({
+      settings: () => settings,
+      buildId: () => nextBuild,
+      check,
+    }),
+  ).toBe("ready");
+  expect(check).toHaveBeenCalledTimes(1);
+  expect(settings.setup.computer.verified?.buildId).toBe(fixtureBuildId);
+  expect(
+    await refreshApprovedFolderAccess({
+      settings: () => settings,
+      buildId: () => nextBuild,
+      check,
+    }),
+  ).toBe("ready");
+  expect(check).toHaveBeenCalledTimes(1);
+});
+
+it("does not continue when a saved folder cannot be checked", async () => {
+  const settings = guidedSettingsFixture();
+  const check = vi.fn(async () => false);
+  expect(
+    await refreshApprovedFolderAccess({
+      settings: () => settings,
+      buildId: () => "f".repeat(64),
+      check,
+    }),
+  ).toBe("failed");
+  expect(check).toHaveBeenCalledTimes(1);
 });
 function harness(initial = saved()) {
   let current = { ...initial };

@@ -71,7 +71,6 @@ export function onboardingFacts(
     folder: routeReadiness(settings.setup.computer, {
       stale:
         setupStepStale(settings, "computer") ||
-        settings.setup.computer.verified?.buildId !== buildId ||
         !allFoldersChecked(settings, buildId),
     }),
     hasFolder: workspaceIds.length > 0,
@@ -146,7 +145,7 @@ export const onboardingSteps = [
     id: "app",
     label: "Add to ChatGPT",
     title: "Add Farol Dev to ChatGPT",
-    copy: "Add Farol Dev in ChatGPT once. Then choose Verify app. Farol sends one short message, and you can read the reply before returning to Setup.",
+    copy: "Add Farol Dev in ChatGPT once. Then run an end-to-end check: Farol selects the app, sends one short message, and checks the local receipt. Read the reply before returning to Setup.",
   },
   {
     id: "finish",
@@ -225,7 +224,7 @@ export function onboardingCompletedSteps(
   const currentConnection =
     configuredConnection &&
     runtime?.state === "ready" &&
-    runtime.buildId === witness?.buildId &&
+    allFoldersChecked(settings, runtime.buildId) &&
     runtime.computerGeneration === settings.computer.generation &&
     runtime.connectorGeneration === connector.generation &&
     !settings.setup.connect.outcomeUnknown;

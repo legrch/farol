@@ -15,8 +15,10 @@ import {
   GuidedConnectionUpdate,
   GuidedCredentialSave,
   GuidedFreshAppVerification,
+  onboardingActionPrerequisite,
   onboardingPrerequisite,
   progressWithConnectionDraft,
+  refreshApprovedFolderAccess,
 } from "./guided-onboarding-actions";
 import { folderAccessChecked, folderDisplayName } from "./folder-access-state";
 
@@ -79,7 +81,8 @@ export class GuidedOnboardingView {
   private message = "";
   private feedbackStep: number | null = null;
   private readonly failedChecks = new Set<number>();
-  private readonly backgroundFolderChecks = new Set<string>();
+  private readonly backgroundFolderChecks = new Map<string, Promise<boolean>>();
+  private backgroundFolderCheckTail: Promise<boolean> = Promise.resolve(true);
   private readonly connection = new GuidedConnectionUpdate();
   private readonly credentials = new GuidedCredentialSave();
   private readonly freshAppVerification = new GuidedFreshAppVerification();
@@ -305,13 +308,19 @@ export class GuidedOnboardingView {
           continue;
         const key = `${this.port.buildId()}:${settings.computer.generation}:${folder.workspaceId}`;
         if (this.backgroundFolderChecks.has(key)) continue;
-        this.backgroundFolderChecks.add(key);
-        queueMicrotask(() => {
-          void this.port.configure(
-            { kind: "computer.check-folder", workspaceId: folder.workspaceId },
-            "Folder access refreshed.",
-          );
-        });
+        const check = this.backgroundFolderCheckTail
+          .then(() =>
+            this.port.configure(
+              {
+                kind: "computer.check-folder",
+                workspaceId: folder.workspaceId,
+              },
+              "Saved folder access refreshed.",
+            ),
+          )
+          .catch(() => false);
+        this.backgroundFolderChecks.set(key, check);
+        this.backgroundFolderCheckTail = check;
       }
     }
     const saved = facts.credentialStored && facts.tunnelId !== null;
@@ -334,7 +343,9 @@ export class GuidedOnboardingView {
     const complete = progress[this.step] === true;
     const prerequisite = onboardingPrerequisite(this.step, currentProgress);
     const actionPrerequisite =
-      this.step === 3 && complete ? null : prerequisite;
+      this.step === 3 && complete
+        ? null
+        : onboardingActionPrerequisite(this.step, currentProgress, completed);
     const completedAction = completedStepAction(
       this.step,
       currentProgress,
@@ -416,7 +427,9 @@ export class GuidedOnboardingView {
               : actionPrerequisite !== null
                 ? `Go to ${onboardingSteps[actionPrerequisite]!.label}`
                 : completedAction === "reconnect-and-continue"
-                  ? "Reconnect and continue"
+                  ? this.step === 3
+                    ? "Restore connection for check"
+                    : "Reconnect and continue"
                   : completedAction === "continue"
                     ? "Continue"
                     : this.step === 0
@@ -429,7 +442,7 @@ export class GuidedOnboardingView {
                           ? facts.runtime === "stopped"
                             ? "Activate and check"
                             : "Reconnect and check"
-                          : "Verify app";
+                          : "Run end-to-end check";
     const back = element<HTMLButtonElement>("#onboarding-back");
     back.disabled = this.busy;
     back.hidden = this.step === 4;
@@ -448,7 +461,7 @@ export class GuidedOnboardingView {
         ? "✓ No folders shared (optional)"
         : "✓ Folder choice saved. Farol checks access in the background.",
       "✓ Tunnel connection verified",
-      "✓ Farol Dev connection verified",
+      "✓ End-to-end check passed through Farol Dev",
       "✓ All four setup checks complete",
     ];
     status.hidden =
@@ -458,7 +471,8 @@ export class GuidedOnboardingView {
       !this.busy &&
       !this.message &&
       !unknown &&
-      !localError;
+      !localError &&
+      completedAction !== "reconnect-and-continue";
     status.textContent = this.busy
       ? this.busyLabel
       : this.message ||
@@ -470,19 +484,21 @@ export class GuidedOnboardingView {
               ? "First, save your tunnel credentials below."
               : complete
                 ? !currentProgress[this.step]
-                  ? "✓ Completed before this update · check current connection before using Computer"
+                  ? "✓ Completed earlier. Check the current connection before using this computer."
                   : successes[this.step]!
                 : unknown
                   ? "Check the previous result. It will not be sent again automatically."
-                  : prerequisite !== null
-                    ? `Next: finish ${onboardingSteps[prerequisite]!.label}. The button below takes you there.`
-                    : this.step === 2 && saved
-                      ? "Credentials saved. Activate the tunnel to check that it works."
-                      : this.step === 4
-                        ? `${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete. Open a step to continue or change it.`
-                        : this.step === 1
-                          ? "Add a folder to continue. Farol checks it automatically."
-                          : "Not checked yet");
+                  : completedAction === "reconnect-and-continue"
+                    ? "This connection worked before, but needs a fresh local check on this version. Farol will check your saved folders and reconnect if needed."
+                    : actionPrerequisite !== null
+                      ? `Next: finish ${onboardingSteps[actionPrerequisite]!.label}. The button below takes you there.`
+                      : this.step === 2 && saved
+                        ? "Credentials saved. Activate the tunnel to check that it works."
+                        : this.step === 4
+                          ? `${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete. Open a step to continue or change it.`
+                          : this.step === 1
+                            ? "Add a folder to continue. Farol checks it automatically."
+                            : "Not checked yet");
     const feedbackNode = element("#onboarding-feedback");
     feedbackNode.textContent =
       active && this.feedbackStep === this.step && feedbackError
@@ -916,9 +932,56 @@ export class GuidedOnboardingView {
   ): Promise<void> {
     let ready = false;
     await this.perform(
-      reconnect ? "Reconnecting and checking…" : "Activating and checking…",
+      reconnect
+        ? "Checking saved folders and reconnecting…"
+        : "Checking saved folders and activating…",
       async () => {
+        const settings = this.port.settings();
+        if (settings) {
+          const prefix = `${this.port.buildId()}:${settings.computer.generation}:`;
+          await Promise.all(
+            [...this.backgroundFolderChecks]
+              .filter(([key]) => key.startsWith(prefix))
+              .map(([, check]) => check),
+          );
+        }
+        const folder = await refreshApprovedFolderAccess({
+          settings: () => this.port.settings(),
+          buildId: () => this.port.buildId(),
+          check: (workspaceId) =>
+            this.port.configure(
+              { kind: "computer.check-folder", workspaceId },
+              "Saved folder access checked.",
+            ),
+        });
+        if (folder !== "ready") {
+          this.failedChecks.add(2);
+          this.message =
+            folder === "failed"
+              ? "Farol could not open one of your saved folders. Open Folders to review it; no ChatGPT message was sent."
+              : folder === "changed"
+                ? "The saved folder changed while checking access. Review Folders before continuing."
+                : "No folder is available for local access. Add one in Folders, or continue without local access.";
+          return;
+        }
         const facts = this.facts();
+        const connector = this.port.settings()?.connectors.secureMcp;
+        const challenge = connector?.challenge;
+        const runtime = connector?.runtime;
+        if (
+          facts.runtimeCurrent &&
+          facts.runtime === "ready" &&
+          !facts.outcomeUnknown &&
+          challenge !== null &&
+          challenge !== undefined &&
+          challenge.runtimeGeneration === runtime?.runtimeGeneration &&
+          challenge.buildId === this.port.buildId()
+        ) {
+          ready = true;
+          this.failedChecks.delete(2);
+          this.message = "✓ Saved folders and current connection are ready.";
+          return;
+        }
         const result = await this.connection.run(
           {
             read: () => this.facts(),
@@ -993,7 +1056,7 @@ export class GuidedOnboardingView {
       if (ok) {
         this.failedChecks.delete(3);
         this.message =
-          "✓ Connection verified. Read the ChatGPT reply, then return to Setup.";
+          "✓ End-to-end check passed. Read the ChatGPT reply, then return to Setup.";
       } else {
         this.failedChecks.add(3);
         if (freshResult !== null && !freshResult.ok)
@@ -1099,13 +1162,17 @@ export class GuidedOnboardingView {
       this.select(4);
       return;
     }
-    const prerequisite = onboardingPrerequisite(this.step, progress);
-    if (prerequisite !== null) {
-      this.select(prerequisite);
+    const actionPrerequisite = onboardingActionPrerequisite(
+      this.step,
+      progress,
+      completed,
+    );
+    if (actionPrerequisite !== null) {
+      this.select(actionPrerequisite);
       return;
     }
     if (completedAction === "reconnect-and-continue") {
-      await this.applyConnection(true, true);
+      await this.applyConnection(true, this.step === 2);
       return;
     }
     if (completedAction === "continue") {

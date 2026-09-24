@@ -1,4 +1,8 @@
-import { ProductConfigurationCommandSchema } from "../pkg/product-settings/contract";
+import {
+  ProductConfigurationCommandSchema,
+  type ProductSettings,
+} from "../pkg/product-settings/contract";
+import { folderAccessChecked } from "./folder-access-state";
 import {
   GuidedActivation,
   type ActivationPort,
@@ -38,6 +42,19 @@ export function onboardingPrerequisite(
   return prerequisites.find((index) => progress[index] !== true) ?? null;
 }
 
+export function onboardingActionPrerequisite(
+  step: number,
+  current: readonly boolean[],
+  remembered: readonly boolean[],
+): number | null {
+  const prerequisite = onboardingPrerequisite(step, current);
+  // A saved connection may need local recovery after an update. Keep the app
+  // check in place so its primary action can do that recovery explicitly.
+  return step === 3 && prerequisite === 2 && remembered[2]
+    ? null
+    : prerequisite;
+}
+
 // Share the remembered-step decision between the button label and its click.
 export function completedStepAction(
   step: number,
@@ -45,9 +62,66 @@ export function completedStepAction(
   remembered: readonly boolean[],
 ): "continue" | "reconnect-and-continue" | null {
   if (step < 0 || step >= 4) return null;
-  if (step === 2 && remembered[2] && !current[2] && !remembered[3])
+  if (
+    (step === 2 || step === 3) &&
+    remembered[2] &&
+    !current[2] &&
+    !remembered[3]
+  )
     return "reconnect-and-continue";
   return current[step] || remembered[step] ? "continue" : null;
+}
+
+export async function refreshApprovedFolderAccess(port: {
+  readonly settings: () => ProductSettings | null;
+  readonly buildId: () => string;
+  readonly check: (workspaceId: string) => Promise<boolean>;
+}): Promise<"ready" | "missing" | "changed" | "failed"> {
+  const initial = port.settings();
+  if (!initial || initial.computer.workspaces.length === 0) return "missing";
+  const generation = initial.computer.generation;
+  const approved = initial.computer.workspaces.map((workspace) => ({
+    workspaceId: workspace.workspaceId,
+    device: workspace.rootIdentity?.device,
+    inode: workspace.rootIdentity?.inode,
+  }));
+  const approvedUnchanged = (settings: ProductSettings | null): boolean =>
+    settings !== null &&
+    settings.computer.generation === generation &&
+    settings.computer.workspaces.length === approved.length &&
+    settings.computer.workspaces.every((workspace) =>
+      approved.some(
+        (expected) =>
+          expected.workspaceId === workspace.workspaceId &&
+          expected.device === workspace.rootIdentity?.device &&
+          expected.inode === workspace.rootIdentity?.inode,
+      ),
+    );
+  for (const expected of approved) {
+    const before = port.settings();
+    const workspace = before?.computer.workspaces.find(
+      (item) => item.workspaceId === expected.workspaceId,
+    );
+    if (
+      !before ||
+      !approvedUnchanged(before) ||
+      !workspace ||
+      !expected.device ||
+      !expected.inode
+    )
+      return "changed";
+    if (!folderAccessChecked(before, workspace, port.buildId())) {
+      await port.check(expected.workspaceId);
+    }
+    const after = port.settings();
+    const checked = after?.computer.workspaces.find(
+      (item) => item.workspaceId === expected.workspaceId,
+    );
+    if (!after || !approvedUnchanged(after)) return "changed";
+    if (!checked || !folderAccessChecked(after, checked, port.buildId()))
+      return "failed";
+  }
+  return "ready";
 }
 
 export function progressWithConnectionDraft(
