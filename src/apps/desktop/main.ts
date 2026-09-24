@@ -589,6 +589,7 @@ const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";
 let signInSurfaceOpen = false;
 let browserHomeSurfaceOpen = false;
+let checkFeedbackVisible = false;
 let signInReturnLayout: {
   section: SurfaceSection;
   setupOpen: boolean;
@@ -6851,6 +6852,7 @@ function publishLayout(): void {
     section,
     taskId: selectedTaskId,
     setupOpen,
+    checkFeedbackVisible,
     sidebar: sidebarMode,
     overlay: shellOverlay,
   });
@@ -7370,6 +7372,7 @@ function applyLayout(): void {
     browserChromeVisible:
       showBrowserHome || productTasksState().tasks.length > 0,
     compactDevBrowser: runtimeEnvironment === "dev",
+    checkFeedbackVisible,
   });
   for (const [taskId, view] of taskViews) {
     const visible =
@@ -7739,6 +7742,7 @@ function installIpc(): void {
     section = parsed.data.section;
     selectedTaskId = parsed.data.taskId;
     setupOpen = parsed.data.setupOpen;
+    checkFeedbackVisible = parsed.data.checkFeedbackVisible;
     sidebarMode = parsed.data.sidebar;
     shellOverlay = parsed.data.overlay;
     applyLayout();

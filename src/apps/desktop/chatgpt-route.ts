@@ -323,9 +323,10 @@ function signInBannerRemovalScript(): string {
 
 // ChatGPT owns its sidebar. Ask its own visible control to collapse once per
 // document; never hide provider content or keep toggling after the owner opens it.
-function collapseChatGptSidebarScript(): string {
+export function collapseChatGptSidebarScript(): string {
   return `(() => {
     const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar"]);
+    const openLabels = new Set(["Open sidebar", "Show sidebar", "Expand sidebar"]);
     const deadline = Date.now() + 12000;
     let lastAttempt = 0;
     const timer = setInterval(() => {
@@ -337,8 +338,14 @@ function collapseChatGptSidebarScript(): string {
           !candidate.disabled
       );
       if (!close) {
-        const open = document.querySelector('button[aria-label="Open sidebar"][aria-expanded="false"]');
-        if (open) clearInterval(timer);
+        // ChatGPT currently calls this control "Show sidebar" and omits
+        // aria-expanded. Stop after the first successful collapse; otherwise
+        // a human's next click is immediately undone by this timer.
+        const open = [...document.querySelectorAll("button[aria-label]")].some(
+          (candidate) => openLabels.has(candidate.getAttribute("aria-label")) &&
+            candidate.getClientRects().length > 0
+        );
+        if (open || lastAttempt > 0) clearInterval(timer);
         return;
       }
       // The first click can happen before ChatGPT hydrates its handler. Only
@@ -453,11 +460,11 @@ function appSelectionPrelude(appName: string): string {
           element.getAttribute("data-app-id");
         if (marked && /^plugin_asdk_app_[A-Za-z0-9]+$/u.test(marked)) return marked;
         const href = element.getAttribute("href") || "";
-        if (!href.startsWith("/plugins/plugin_asdk_app_")) return null;
-        const [id, query] = href.slice("/plugins/plugin_asdk_app_".length).split("?");
-        return /^[A-Za-z0-9]+$/u.test(id) &&
-          (query || "").split("&").includes("plugin_detail_origin=inline_selection_pill")
-          ? "plugin_asdk_app_" + id : null;
+        // ChatGPT can change the chip's origin query after the picker closes.
+        // Its exact plugin path inside the composer is the durable identity;
+        // the query describes how the details page was opened, not selection.
+        const match = /^\\/plugins\\/(plugin_asdk_app_[A-Za-z0-9]+)(?:[?#]|$)/u.exec(href);
+        return match?.[1] ?? null;
       };
       const selectedLinks = [...input.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
         .filter((link) => pluginIdentity(link) !== null && appElementVisible(link));
@@ -858,14 +865,39 @@ export function prepareTaskScript(
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
       if (!setter) return { ready: false, baselineAssistantCount, baselineUserCount };
       setter.call(composer, prompt);
+      composer.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        data: prompt,
+        inputType: "insertText"
+      }));
     } else {
-      ${requiredAppName ? "composer.append(document.createTextNode(prompt));" : "composer.replaceChildren(document.createTextNode(prompt));"}
+      ${
+        requiredAppName
+          ? `
+      // Editing a live ChatGPT composer by appending a DOM node bypasses its
+      // editor state and can detach the selected app on the next render.
+      const range = document.createRange();
+      const selection = document.getSelection();
+      if (!selection || typeof document.execCommand !== "function") {
+        return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
+      }
+      range.selectNodeContents(composer);
+      range.collapse(false);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      if (!document.execCommand("insertText", false, prompt)) {
+        return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
+      }
+      `
+          : `
+      composer.replaceChildren(document.createTextNode(prompt));
+      composer.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        data: prompt,
+        inputType: "insertText"
+      }));`
+      }
     }
-    composer.dispatchEvent(new InputEvent("input", {
-      bubbles: true,
-      data: prompt,
-      inputType: "insertText"
-    }));
     return { ready: true, baselineAssistantCount, baselineUserCount, baselineMessageIds };
   })()`;
 }

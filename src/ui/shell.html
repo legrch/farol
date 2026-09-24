@@ -265,6 +265,21 @@
     </header>
 
     <section
+      class="browser-check-banner shell-region"
+      id="browser-check-banner"
+      role="status"
+      aria-live="polite"
+      hidden
+    >
+      <span class="browser-check-indicator" aria-hidden="true"></span>
+      <div class="browser-check-copy">
+        <strong id="browser-check-title"></strong>
+        <span id="browser-check-detail"></span>
+      </div>
+      <button id="browser-check-return" type="button">Return to Setup</button>
+    </section>
+
+    <section
       class="dossier shell-region"
       id="task-dossier"
       aria-label="Selected task dossier"

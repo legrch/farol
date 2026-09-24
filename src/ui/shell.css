@@ -901,6 +901,10 @@ html[data-window-active="false"] .task-tab.active::before {
   display: none;
 }
 
+.browser-check-banner {
+  display: none;
+}
+
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"] {
   --task-height: 0px;
   --dossier-height: 0px;
@@ -1027,15 +1031,7 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   .browser-task-menu {
-  align-self: center;
-  flex: 0 0 28px;
-  display: block;
-  height: 28px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-soft);
-  cursor: pointer;
+  display: none;
 }
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
@@ -1065,28 +1061,82 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
   .surface {
-  bottom: 36px;
+  top: calc(var(--window-height) + 58px);
 }
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
-  .browser-status-bar {
-  height: 36px;
-  padding-inline: 16px;
+  .browser-check-banner:not([hidden]) {
+  position: fixed;
+  z-index: 19;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  top: var(--window-height);
+  left: var(--sidebar-current);
+  right: 0;
+  height: 58px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome);
+  -webkit-app-region: no-drag;
+}
+
+html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"]
+  .browser-check-banner {
+  left: var(--sidebar-full);
+}
+
+.browser-check-indicator {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--waiting);
+}
+
+.browser-check-banner[data-tone="failed"] .browser-check-indicator {
+  background: var(--failed);
+}
+
+.browser-check-banner[data-tone="complete"] .browser-check-indicator {
+  background: var(--complete);
+}
+
+.browser-check-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
   font-size: 12px;
 }
 
-.browser-status-bar[data-check-tone="failed"] #browser-status {
-  color: var(--failed);
-  font-weight: 600;
+.browser-check-copy strong {
+  font-size: 12px;
+  font-weight: 650;
 }
 
-.browser-status-bar[data-check-tone="complete"] #browser-status {
-  color: var(--complete);
-  font-weight: 600;
+.browser-check-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-soft);
 }
 
-.browser-status-bar[data-check-tone="running"] #browser-status {
+.browser-check-banner button {
+  flex: none;
+  min-height: 34px;
+  border: 1px solid rgba(168, 156, 255, 0.45);
+  border-radius: 7px;
+  padding: 0 12px;
+  background: var(--iris-soft);
   color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.browser-check-banner button:hover {
+  background: rgba(120, 103, 255, 0.3);
 }
 
 html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
@@ -1101,14 +1151,6 @@ html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][dat
   color: var(--iris-bright);
   cursor: pointer;
   font-size: 11px;
-}
-
-.browser-status-bar[data-check-tone]:not([data-check-tone=""]) button {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 5px 9px;
-  font-size: 12px;
-  font-weight: 600;
 }
 
 .browser-status-bar #browser-status {

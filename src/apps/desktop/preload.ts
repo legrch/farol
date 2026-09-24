@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld("farolNext", {
     section: string,
     taskId: string,
     setupOpen: boolean,
+    checkFeedbackVisible: boolean,
     sidebar: string,
     overlay: string,
   ) => {
@@ -29,6 +30,7 @@ contextBridge.exposeInMainWorld("farolNext", {
       section,
       taskId,
       setupOpen,
+      checkFeedbackVisible,
       sidebar,
       overlay,
     });

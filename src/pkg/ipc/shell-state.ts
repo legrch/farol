@@ -21,6 +21,7 @@ export const ShellLayoutSchema = z.strictObject({
   section: SurfaceSectionSchema,
   taskId: z.string(),
   setupOpen: z.boolean(),
+  checkFeedbackVisible: z.boolean().default(false),
   sidebar: SidebarModeSchema,
   overlay: ShellOverlaySchema,
 });

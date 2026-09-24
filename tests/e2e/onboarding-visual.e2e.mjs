@@ -691,16 +691,34 @@ try {
     .locator('#onboarding-form[aria-busy="false"]')
     .waitFor({ state: "attached", timeout: 15000 });
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
-  await window.locator("#browser-review-request").waitFor({ state: "visible" });
+  await window.locator("#browser-check-return").waitFor({ state: "visible" });
   assert.notEqual(
-    await window.locator("#browser-status").innerText(),
-    "ChatGPT inside Farol",
+    await window.locator("#browser-check-detail").innerText(),
+    "",
     "The browser must show the check result before returning to Setup",
   );
+  assert.equal(await window.locator("#browser-task-menu").isVisible(), false);
+  assert.equal(
+    await window.locator("#browser-check-banner").getAttribute("data-tone"),
+    "failed",
+  );
+  const checkViewBounds = await application.evaluate(
+    ({ BrowserWindow, WebContentsView }) => {
+      const owned = BrowserWindow.getAllWindows()[0];
+      return (
+        owned.contentView.children
+          .find(
+            (child) => child instanceof WebContentsView && child.getVisible(),
+          )
+          ?.getBounds() ?? null
+      );
+    },
+  );
+  assert.equal(checkViewBounds?.y, 110);
   await window.screenshot({
     path: path.join(output, "13-app-check-browser-result.png"),
   });
-  await window.locator("#browser-review-request").click();
+  await window.locator("#browser-check-return").click();
   await window.locator("#guided-onboarding").waitFor({
     state: "visible",
     timeout: 3000,

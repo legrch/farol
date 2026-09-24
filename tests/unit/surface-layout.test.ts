@@ -63,6 +63,18 @@ describe("native Browser surface layout", () => {
     });
   });
 
+  it("reserves a visible native-free row for the DEV check result", () => {
+    expect(
+      deriveSurfaceLayout({
+        ...base,
+        compactDevBrowser: true,
+        checkFeedbackVisible: true,
+      }),
+    ).toMatchObject({
+      pageBounds: { x: 216, y: 110, width: 964, height: 625 },
+    });
+  });
+
   it.each([
     { setupOpen: true },
     { overlay: "sidebar" as const },

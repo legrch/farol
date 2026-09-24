@@ -13,6 +13,7 @@ export const shellGeometry = Object.freeze({
   taskStrip: 54,
   dossier: 72,
   devStatusStrip: 25,
+  devCheckBanner: 58,
 });
 
 export function deriveSurfaceLayout(input: {
@@ -26,6 +27,7 @@ export function deriveSurfaceLayout(input: {
   selectedTaskPresent: boolean;
   browserChromeVisible?: boolean;
   compactDevBrowser?: boolean;
+  checkFeedbackVisible?: boolean;
 }) {
   const autoRail = input.width < shellGeometry.autoRailBelow;
   const sidebarWidth =
@@ -38,7 +40,10 @@ export function deriveSurfaceLayout(input: {
       ? 0
       : input.compactDevBrowser
         ? 0
-        : shellGeometry.taskStrip + shellGeometry.dossier);
+        : shellGeometry.taskStrip + shellGeometry.dossier) +
+    (input.compactDevBrowser && input.checkFeedbackVisible
+      ? shellGeometry.devCheckBanner
+      : 0);
   const bottomReserved =
     input.compactDevBrowser && input.browserChromeVisible !== false
       ? shellGeometry.devStatusStrip

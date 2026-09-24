@@ -25,6 +25,7 @@ import {
   ChatGptSignInBlockLedger,
   activateTaskScript,
   bindChatGptAppScript,
+  collapseChatGptSidebarScript,
   installManualAppGateScript,
   classifyChatGptProviderError,
   prepareTaskScript,
@@ -41,6 +42,44 @@ const prepared = {
   baselineUserCount: 0,
   baselineMessageIds: [],
 } as const;
+
+it("stops the initial sidebar collapse after ChatGPT exposes Show sidebar", () => {
+  let tick: (() => void) | null = null;
+  let collapsed = false;
+  let clicks = 0;
+  let clears = 0;
+  const control = {
+    disabled: false,
+    getAttribute: (name: string) =>
+      name === "aria-label"
+        ? collapsed
+          ? "Show sidebar"
+          : "Hide sidebar"
+        : null,
+    getClientRects: () => [1],
+    click: () => {
+      collapsed = true;
+      clicks += 1;
+    },
+  };
+  vm.runInNewContext(collapseChatGptSidebarScript(), {
+    document: { querySelectorAll: () => [control] },
+    setInterval: (callback: () => void) => {
+      tick = callback;
+      return 1;
+    },
+    clearInterval: () => {
+      clears += 1;
+    },
+    Date,
+    Set,
+  });
+  expect(tick).not.toBeNull();
+  tick!();
+  expect(clicks).toBe(1);
+  tick!();
+  expect(clears).toBe(1);
+});
 
 const attachment: StagedChatGptAttachment = {
   name: "evidence.md",
@@ -3214,6 +3253,8 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       extraSelectedLink?: string;
       separateRepresentations?: boolean;
       markerPluginId?: string;
+      linkHref?: string;
+      invalidateChipOnAppend?: boolean;
     }> = {},
   ): Readonly<{
     context: vm.Context;
@@ -3285,6 +3326,13 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       options.composer === "rich"
         ? new HTMLElement()
         : new HTMLTextAreaElement();
+    let selectedChipPresent = true;
+    if (options.invalidateChipOnAppend) {
+      composer.append = (node: { text?: string }): void => {
+        contacts.typed.push(node.text ?? "");
+        selectedChipPresent = false;
+      };
+    }
     const composerText =
       options.draft ??
       (options.chipTextInComposer ? (selectedAppName ?? "") : "");
@@ -3302,7 +3350,8 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     }
     appLink.getAttribute = (name: string) =>
       name === "href"
-        ? "/plugins/plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a?plugin_detail_origin=inline_selection_pill"
+        ? (options.linkHref ??
+          "/plugins/plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a?plugin_detail_origin=inline_selection_pill")
         : null;
     const otherLink = new HTMLElement();
     otherLink.textContent = options.extraSelectedLink ?? "";
@@ -3312,10 +3361,14 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
         : null;
     composer.querySelectorAll = (selector: string) =>
       selector.includes('a[href*="/plugins/plugin_asdk_app_"]')
-        ? options.chipTextInComposer && selectedAppName !== undefined
+        ? selectedChipPresent &&
+          options.chipTextInComposer &&
+          selectedAppName !== undefined
           ? [appLink, ...(options.extraSelectedLink ? [otherLink] : [])]
           : []
-        : selectedAppName === undefined || options.linkOnly
+        : !selectedChipPresent ||
+            selectedAppName === undefined ||
+            options.linkOnly
           ? []
           : [appChip];
 
@@ -3350,6 +3403,12 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       },
       querySelectorAll: (): readonly unknown[] => [],
       createTextNode: (text: string) => ({ text }),
+      execCommand: (_command: string, _showUi: boolean, text: string) => {
+        contacts.typed.push(text);
+        return true;
+      },
+      createRange: () => ({ selectNodeContents() {}, collapse() {} }),
+      getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
     };
 
     const context = vm.createContext({
@@ -3445,6 +3504,48 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       ),
     ).toMatchObject({ ready: true });
     expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+  });
+
+  it("keeps a selected app bound when ChatGPT changes its chip link origin", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      linkOnly: true,
+      linkHref:
+        "/plugins/plugin_asdk_app_6ab3b56de6d48191beec1e050abb549a?plugin_detail_origin=mention_selection",
+    });
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol Dev", expectedHref),
+        context,
+      ),
+    ).toEqual({ state: "bound" });
+    expect(
+      vm.runInContext(
+        prepareTaskScript("AUTHORIZED_CHECK", expectedHref, "Farol Dev"),
+        context,
+      ),
+    ).toMatchObject({ ready: true });
+    expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+  });
+
+  it("inserts the check through the editor without detaching the selected app", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      linkOnly: true,
+      invalidateChipOnAppend: true,
+    });
+    expect(
+      vm.runInContext(
+        prepareTaskScript("AUTHORIZED_CHECK", expectedHref, "Farol Dev"),
+        context,
+      ),
+    ).toMatchObject({ ready: true });
+    expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+    expect(
+      vm.runInContext(activateTaskScript(expectedHref, "Farol Dev"), context),
+    ).toEqual({ activated: true });
   });
 
   it("blocks a second selected plugin link beside the Farol Dev marker", () => {

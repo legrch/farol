@@ -337,6 +337,7 @@ declare global {
         section: string,
         taskId: string,
         setupOpen: boolean,
+        checkFeedbackVisible: boolean,
         sidebar: string,
         overlay: string,
       ): void;
@@ -842,6 +843,11 @@ function currentLayout() {
     section,
     taskId: selectedTaskId,
     setupOpen: setupJourney.open,
+    checkFeedbackVisible:
+      bootstrap.environment === "dev" &&
+      section === "browser" &&
+      chatGptSignInOpened &&
+      Boolean(connectionCheckFeedback),
     sidebar: sidebarMode(),
     overlay: shellOverlay,
   } as const;
@@ -856,6 +862,7 @@ function notifyHost(): void {
     layout.section,
     layout.taskId,
     layout.setupOpen,
+    layout.checkFeedbackVisible,
     layout.sidebar,
     layout.overlay,
   );
@@ -1139,24 +1146,29 @@ function renderBrowserStatus(): void {
   const state = task ? taskState(task.taskId) : null;
   const feedback = chatGptSignInOpened ? connectionCheckFeedback : null;
   document.documentElement.dataset.checkFeedback = feedback ? "true" : "false";
+  const checkBanner = required<HTMLElement>("#browser-check-banner");
+  checkBanner.hidden = !feedback;
+  checkBanner.dataset.tone = feedback ? (connectionCheckTone ?? "running") : "";
+  required<HTMLElement>("#browser-check-title").textContent =
+    connectionCheckTone === "failed"
+      ? "Check needs attention"
+      : connectionCheckTone === "complete"
+        ? "Check passed"
+        : "Checking ChatGPT";
+  required<HTMLElement>("#browser-check-detail").textContent = feedback ?? "";
+  checkBanner.title = feedback ?? "";
   const status = required<HTMLElement>("#browser-status");
-  const statusBar = required<HTMLElement>("#browser-status-bar");
-  statusBar.dataset.checkTone = feedback
-    ? (connectionCheckTone ?? "running")
-    : "";
-  status.textContent =
-    feedback ??
-    (request
-      ? "Computer permission requested"
-      : state?.attention
-        ? `${taskLabel(task!)} · ${state.label}`
-        : task
-          ? `${taskLabel(task)} · ${state?.label ?? "Ready"}`
-          : "ChatGPT inside Farol");
-  status.title = feedback ?? "";
+  status.textContent = request
+    ? "Computer permission requested"
+    : state?.attention
+      ? `${taskLabel(task!)} · ${state.label}`
+      : task
+        ? `${taskLabel(task)} · ${state?.label ?? "Ready"}`
+        : "ChatGPT inside Farol";
+  status.title = "";
   const action = required<HTMLButtonElement>("#browser-review-request");
-  action.hidden = !request && !feedback;
-  action.textContent = feedback ? "Return to Setup" : "Review request";
+  action.hidden = !request;
+  action.textContent = "Review request";
 }
 
 function renderSignals(): void {
@@ -5820,10 +5832,12 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#browser-review-request").addEventListener(
     "click",
     () => {
-      if (chatGptSignInOpened && connectionCheckFeedback) {
-        required<HTMLButtonElement>("#sign-in-return").click();
-      } else selectSection("computer");
+      selectSection("computer");
     },
+  );
+  required<HTMLButtonElement>("#browser-check-return").addEventListener(
+    "click",
+    () => required<HTMLButtonElement>("#sign-in-return").click(),
   );
   required<HTMLButtonElement>("#new-task").addEventListener(
     "click",
@@ -6091,6 +6105,12 @@ async function start(): Promise<void> {
     (event) => {
       event.preventDefault();
       closeOverlay();
+    },
+  );
+  required<HTMLDialogElement>("#task-menu").addEventListener(
+    "click",
+    (event) => {
+      if (event.target === event.currentTarget) closeOverlay();
     },
   );
   required<HTMLDialogElement>("#command-dialog").addEventListener(
