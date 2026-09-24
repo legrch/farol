@@ -282,9 +282,9 @@ try {
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
   await window.locator('[data-panel="browser"].active').waitFor();
   assert.equal(
-    await window.locator("#task-tabs").isVisible(),
-    false,
-    "SIGN_IN_SHOULD_NOT_SHOW_EMPTY_TASK_TABS",
+    await window.locator('#task-tabs [role="tab"]').innerText(),
+    "ChatGPT check",
+    "SIGN_IN_SHOULD_SHOW_CHATGPT_TAB",
   );
   assert.equal(
     await window.locator("#task-dossier").isVisible(),
@@ -429,6 +429,10 @@ try {
   await window.locator('[data-onboarding-step="app"]').click();
   await window.locator("#onboarding-open-chatgpt").click();
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator('#task-tabs [role="tab"]').innerText(),
+    "ChatGPT check",
+  );
   const recoveredSurface = await application.evaluate(
     async ({ BrowserWindow, WebContentsView }) => {
       const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
@@ -687,7 +691,16 @@ try {
     .locator('#onboarding-form[aria-busy="false"]')
     .waitFor({ state: "attached", timeout: 15000 });
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
-  await window.locator("#sign-in-return").click();
+  await window.locator("#browser-review-request").waitFor({ state: "visible" });
+  assert.notEqual(
+    await window.locator("#browser-status").innerText(),
+    "ChatGPT inside Farol",
+    "The browser must show the check result before returning to Setup",
+  );
+  await window.screenshot({
+    path: path.join(output, "13-app-check-browser-result.png"),
+  });
+  await window.locator("#browser-review-request").click();
   await window.locator("#guided-onboarding").waitFor({
     state: "visible",
     timeout: 3000,
@@ -772,7 +785,11 @@ try {
     tasksBeforeBrowser,
     "OPENING_BROWSER_CREATED_A_TASK",
   );
-  assert.equal(await window.locator("#task-tabs").isVisible(), false);
+  assert.equal(
+    await window.locator('#task-tabs [role="tab"]').innerText(),
+    "ChatGPT",
+  );
+  assert.equal(await window.locator("#task-tabs .task-tab-close").count(), 0);
   await window.screenshot({ path: path.join(output, "14-browser-home.png") });
   const created = await window.evaluate(() =>
     window.farolNext.task({ kind: "task.create-chatgpt" }),
@@ -841,7 +858,16 @@ try {
   await window.locator("#command-dialog").waitFor({ state: "hidden" });
   await window.screenshot({ path: path.join(output, "14-compact-task.png") });
   await window.locator("#task-tabs .task-tab-close").click();
-  await window.locator("#task-tabs .task-tab").waitFor({ state: "hidden" });
+  await window.waitForFunction(
+    () =>
+      document.querySelector('#task-tabs [role="tab"]')?.textContent ===
+      "ChatGPT",
+  );
+  assert.equal(
+    await window.locator('#task-tabs [role="tab"]').innerText(),
+    "ChatGPT",
+  );
+  assert.equal(await window.locator("#task-tabs .task-tab-close").count(), 0);
   await window.locator('.nav-item[data-section="settings"]').click();
   await window.locator("#settings-nav").waitFor({ state: "visible" });
   assert.equal(await window.locator("#nav").isVisible(), false);

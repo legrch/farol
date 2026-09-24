@@ -546,19 +546,18 @@ export function bindChatGptAppScript(
     if (!pickerInputAccepted) {
       return { state: "blocked", reason: "missing" };
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    if (location.href !== expectedHref) return { state: "navigated" };
-    const pickerRoots = [...document.querySelectorAll([
-      '[role="listbox"]',
-      '[role="menu"]',
-      '[data-radix-menu-content]',
-      '[data-testid*="mention"]',
-      '[data-testid*="app-picker"]'
-    ].join(","))].filter(appElementVisible);
-    let optionCandidates = [...new Set(pickerRoots.flatMap((root) =>
-      [...root.querySelectorAll('[role="option"],[role="menuitem"],button')]
-    ))].filter(exactPickerOption);
-    if (optionCandidates.length === 0) {
+    const pickerOptions = () => {
+      const pickerRoots = [...document.querySelectorAll([
+        '[role="listbox"]',
+        '[role="menu"]',
+        '[data-radix-menu-content]',
+        '[data-testid*="mention"]',
+        '[data-testid*="app-picker"]'
+      ].join(","))].filter(appElementVisible);
+      let optionCandidates = [...new Set(pickerRoots.flatMap((root) =>
+        [...root.querySelectorAll('[role="option"],[role="menuitem"],button')]
+      ))].filter(exactPickerOption);
+      if (optionCandidates.length !== 0) return optionCandidates;
       // ChatGPT also renders the mention picker as plain divs. Only use
       // its visible Plugins section next to this composer; never click an
       // arbitrary matching title elsewhere in the conversation.
@@ -610,17 +609,35 @@ export function bindChatGptAppScript(
             Math.abs(title.left - header.left) <= 180;
         })
       );
+      return optionCandidates;
+    };
+    let optionCandidates = [];
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      if (location.href !== expectedHref) return { state: "navigated" };
+      if (appSelectionFor(input).state === "bound") return { state: "bound" };
+      const draft = input instanceof HTMLTextAreaElement
+        ? input.value
+        : (input.innerText || input.textContent || "");
+      if (draft.trim() !== pickerQuery) {
+        return { state: "blocked", reason: "draft_present" };
+      }
+      optionCandidates = pickerOptions();
+      if (optionCandidates.length > 0) break;
     }
     if (optionCandidates.length !== 1) {
-      setComposerText("", "deleteContentBackward");
+      const draft = input instanceof HTMLTextAreaElement
+        ? input.value
+        : (input.innerText || input.textContent || "");
+      if (draft.trim() === pickerQuery) setComposerText("", "deleteContentBackward");
       return {
         state: "blocked",
         reason: optionCandidates.length > 1 ? "ambiguous" : "missing"
       };
     }
     optionCandidates[0].click();
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
       if (location.href !== expectedHref) return { state: "navigated" };
       const selected = appSelection();
       if (selected.state === "bound") return { state: "bound" };

@@ -7368,7 +7368,7 @@ function applyLayout(): void {
     runtimeReady: selectedViewKind === "chatgpt" || runtimeState === "ready",
     selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
     browserChromeVisible:
-      !showBrowserHome && productTasksState().tasks.length > 0,
+      showBrowserHome || productTasksState().tasks.length > 0,
     compactDevBrowser: runtimeEnvironment === "dev",
   });
   for (const [taskId, view] of taskViews) {

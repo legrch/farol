@@ -310,6 +310,7 @@ describe("ChatGPT route submission boundary", () => {
     const expectedHref = "https://chatgpt.com/c/native-picker";
     const nativeInputs: string[] = [];
     let pickerVisible = false;
+    let pickerDelayTicks = 0;
     let selected = false;
     class HTMLElement {
       parentElement: HTMLElement | null = null;
@@ -334,7 +335,9 @@ describe("ChatGPT route submission boundary", () => {
         return new HTMLElement();
       }
       focus(): void {}
-      replaceChildren(): void {}
+      replaceChildren(...children: Array<{ text?: string }>): void {
+        this.innerText = children.map((child) => child.text ?? "").join("");
+      }
       dispatchEvent(): boolean {
         return true;
       }
@@ -370,12 +373,14 @@ describe("ChatGPT route submission boundary", () => {
         execCommand: (command: string, _showUi: boolean, value: string) => {
           if (command !== "insertText") return false;
           nativeInputs.push(value);
-          pickerVisible = true;
+          composer.innerText = value;
           return true;
         },
       },
       getComputedStyle: () => ({ display: "block", visibility: "visible" }),
       setTimeout: (callback: () => void) => {
+        pickerDelayTicks += 1;
+        if (pickerDelayTicks === 3) pickerVisible = true;
         callback();
         return 0;
       },
@@ -391,6 +396,7 @@ describe("ChatGPT route submission boundary", () => {
       vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
     ).resolves.toEqual({ state: "bound" });
     expect(nativeInputs).toEqual(["@Farol Dev"]);
+    expect(pickerDelayTicks).toBeGreaterThanOrEqual(3);
   });
 
   it("selects one exact app from a visible non-semantic Plugins picker", async () => {
@@ -452,7 +458,9 @@ describe("ChatGPT route submission boundary", () => {
         return new HTMLElement();
       }
       focus(): void {}
-      replaceChildren(): void {}
+      replaceChildren(...children: Array<{ text?: string }>): void {
+        this.innerText = children.map((child) => child.text ?? "").join("");
+      }
       dispatchEvent(): boolean {
         return true;
       }
@@ -514,6 +522,7 @@ describe("ChatGPT route submission boundary", () => {
     title.click = () => {
       clicks += 1;
       selected = true;
+      composer.innerText = "";
     };
     const wrong = new HTMLElement();
     wrong.textContent = "Farol Dev Other";
@@ -561,7 +570,8 @@ describe("ChatGPT route submission boundary", () => {
                 ? [transcriptHeading, transcriptTitle]
                 : [],
         createTextNode: (text: string) => ({ text }),
-        execCommand: () => {
+        execCommand: (_command: string, _showUi: boolean, value: string) => {
+          composer.innerText = value;
           pickerVisible = pickerAvailable;
           return true;
         },

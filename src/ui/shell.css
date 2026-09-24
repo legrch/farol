@@ -1012,6 +1012,7 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 0 12px;
   border-top: 1px solid var(--line);
   background: var(--chrome);
@@ -1025,11 +1026,19 @@ html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][dat
 }
 
 .browser-status-bar button {
+  flex: none;
   border: 0;
   background: transparent;
   color: var(--iris-bright);
   cursor: pointer;
   font-size: 11px;
+}
+
+.browser-status-bar #browser-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 html:not([data-section="browser"]) .task-bar {

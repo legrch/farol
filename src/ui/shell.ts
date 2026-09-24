@@ -385,6 +385,7 @@ let bootstrap: Bootstrap;
 let bootstrapReady = false;
 let section: SurfaceSection = "browser";
 let selectedTaskId = "";
+let connectionCheckFeedback: string | null = null;
 let setupJourney = createSetupJourney();
 let guidedOnboarding: GuidedOnboardingView | null = null;
 let setupFocusKey = "";
@@ -1006,6 +1007,25 @@ function renderBrowser(): void {
 
 function renderTabs(): void {
   const tabs = required<HTMLDivElement>("#task-tabs");
+  if (
+    bootstrap.environment === "dev" &&
+    (chatGptSignInOpened || bootstrap.tasks.length === 0)
+  ) {
+    const item = document.createElement("div");
+    item.className = "task-tab-item";
+    const button = document.createElement("button");
+    button.className = "task-tab active";
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", "true");
+    button.setAttribute("aria-label", "ChatGPT page");
+    const label = document.createElement("span");
+    label.textContent = chatGptSignInOpened ? "ChatGPT check" : "ChatGPT";
+    button.append(label);
+    item.append(button);
+    tabs.replaceChildren(item);
+    return;
+  }
   tabs.replaceChildren(
     ...bootstrap.tasks.map((task) => {
       const state = taskState(task.taskId);
@@ -1080,14 +1100,21 @@ function renderBrowserStatus(): void {
   const task = taskById(selectedTaskId);
   const request = task ? unresolvedComputerRequest(task.taskId) : null;
   const state = task ? taskState(task.taskId) : null;
-  required("#browser-status").textContent = request
-    ? "Computer permission requested"
-    : state?.attention
-      ? `${taskLabel(task!)} · ${state.label}`
-      : task
-        ? `${taskLabel(task)} · ${state?.label ?? "Ready"}`
-        : "ChatGPT inside Farol";
-  required<HTMLButtonElement>("#browser-review-request").hidden = !request;
+  const feedback = chatGptSignInOpened ? connectionCheckFeedback : null;
+  const status = required<HTMLElement>("#browser-status");
+  status.textContent =
+    feedback ??
+    (request
+      ? "Computer permission requested"
+      : state?.attention
+        ? `${taskLabel(task!)} · ${state.label}`
+        : task
+          ? `${taskLabel(task)} · ${state?.label ?? "Ready"}`
+          : "ChatGPT inside Farol");
+  status.title = feedback ?? "";
+  const action = required<HTMLButtonElement>("#browser-review-request");
+  action.hidden = !request && !feedback;
+  action.textContent = feedback ? "Return to Setup" : "Review request";
 }
 
 function renderSignals(): void {
@@ -2681,7 +2708,7 @@ async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
 
 function chatGptPreSubmitRemedy(code: string | null): string | null {
   if (code === "CHATGPT_APP_SELECTION_MISSING") {
-    return "Message blocked before send. Open ChatGPT and select exactly one @Farol Dev app, then retry.";
+    return "Farol could not select the Farol Dev app in ChatGPT. Nothing was sent. Check that the app is available, then run the check again.";
   }
   if (code === "CHATGPT_APP_SELECTION_AMBIGUOUS") {
     return "Message blocked before send because the Farol Dev app selection was ambiguous. Keep exactly one @Farol Dev chip, then retry.";
@@ -2690,7 +2717,7 @@ function chatGptPreSubmitRemedy(code: string | null): string | null {
     return "Message blocked before send because another app is selected. Remove it and select @Farol Dev; Farol did not switch apps automatically.";
   }
   if (code === "CHATGPT_APP_SELECTION_LOST") {
-    return "Message blocked before send because the @Farol Dev selection disappeared. Select it again, then retry.";
+    return "The Farol Dev app selection disappeared before send. Nothing was sent. Run the check again.";
   }
   if (code === "CHATGPT_COMPOSER_DRAFT_PRESENT") {
     return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
@@ -2751,6 +2778,11 @@ async function configureProduct(
   onEvidence?: (evidence: ProductConfigurationEvidence | undefined) => void,
 ): Promise<boolean> {
   const configurationRequest = configurationRequestOrder.begin();
+  if (command.kind === "chatgpt.open-sign-in") {
+    connectionCheckFeedback = null;
+  } else if (command.kind === "connector.verify-app") {
+    connectionCheckFeedback = "Running the ChatGPT end-to-end check…";
+  }
   // While Setup is open it is the only visible surface — a failure or
   // success routed to the Computer or Settings panel behind a modal dialog
   // would never be seen (UX34-09: the step being worked on must always show
@@ -2885,6 +2917,9 @@ async function configureProduct(
     // UNCONFIRMED_CONFIGURATION_MESSAGE. No snapshot is adopted either.
     settingsFeedback = UNCONFIRMED_CONFIGURATION_MESSAGE;
     settingsFeedbackError = true;
+    if (command.kind === "connector.verify-app")
+      connectionCheckFeedback =
+        "Check outcome unknown. Return to Setup for the existing result.";
     renderOutcome();
     return false;
   }
@@ -3040,6 +3075,8 @@ async function configureProduct(
                                                                                       `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
+    if (command.kind === "connector.verify-app")
+      connectionCheckFeedback = settingsFeedback;
     renderOutcome();
     return false;
   }
@@ -3260,6 +3297,9 @@ async function configureProduct(
   } else {
     settingsFeedback = successMessage;
   }
+  if (command.kind === "connector.verify-app")
+    connectionCheckFeedback =
+      "End-to-end check passed. Read the reply, then return to Setup.";
   if (command.kind === "chatgpt.cancel-readonly-task") {
     pendingChatGptPreview = null;
     if (shellOverlay === "context-preview") setShellOverlay("none");
@@ -4921,7 +4961,10 @@ function render(notify = true): void {
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
   root.dataset.browserChrome = String(
-    bootstrap.tasks.length > 0 && !chatGptSignInOpened,
+    (bootstrap.tasks.length > 0 && !chatGptSignInOpened) ||
+      (bootstrap.environment === "dev" &&
+        section === "browser" &&
+        !setupJourney.open),
   );
   const newTask = required<HTMLButtonElement>("#new-task");
   const chatGptReady = chatGptRouteState() === "ready";
@@ -5702,7 +5745,11 @@ async function start(): Promise<void> {
   );
   required<HTMLButtonElement>("#browser-review-request").addEventListener(
     "click",
-    () => selectSection("computer"),
+    () => {
+      if (chatGptSignInOpened && connectionCheckFeedback) {
+        required<HTMLButtonElement>("#sign-in-return").click();
+      } else selectSection("computer");
+    },
   );
   required<HTMLButtonElement>("#new-task").addEventListener(
     "click",
