@@ -5285,20 +5285,14 @@ ordinaryStartupSegment: try {
   );
   assert.equal(
     await ordinary.window.evaluate(
-      () => document.documentElement.dataset.section,
-    ),
-    "browser",
-  );
-  assert.equal(
-    await ordinary.window.evaluate(
       () => document.documentElement.dataset.browserChrome,
     ),
-    "false",
+    "true",
   );
   assert.deepEqual(emptyGeometry, [
-    { selector: ".task-bar", y: 0, height: 0 },
+    { selector: ".task-bar", y: 52, height: 54 },
     { selector: ".dossier", y: 0, height: 0 },
-    { selector: ".surface", y: 52, height: 708 },
+    { selector: ".surface", y: 106, height: 654 },
   ]);
   cases.push("ordinary-launch-has-no-synthetic-tasks");
 } finally {

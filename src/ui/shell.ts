@@ -5053,7 +5053,8 @@ function render(notify = true): void {
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
   root.dataset.browserChrome = String(
-    (bootstrap.tasks.length > 0 && !chatGptSignInOpened) ||
+    (bootstrap.environment !== "dev" && !chatGptSignInOpened) ||
+      (bootstrap.tasks.length > 0 && !chatGptSignInOpened) ||
       (bootstrap.environment === "dev" &&
         section === "browser" &&
         !setupJourney.open),
