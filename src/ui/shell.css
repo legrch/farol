@@ -938,6 +938,14 @@ html[data-window-active="false"] .task-tab.active::before {
   display: none;
 }
 
+html[data-section="browser"][data-has-tasks="false"] {
+  --dossier-height: 0px;
+}
+
+html[data-section="browser"][data-has-tasks="false"] .dossier {
+  display: none;
+}
+
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"] {
   --task-height: 0px;
   --dossier-height: 0px;
