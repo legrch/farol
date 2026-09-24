@@ -5282,7 +5282,11 @@ ordinaryStartupSegment: try {
   );
   assert.equal(
     await ordinary.window.evaluate(() => document.documentElement.dataset.section),
-    "computer",
+    "browser",
+  );
+  assert.equal(
+    await ordinary.window.evaluate(() => document.documentElement.dataset.browserChrome),
+    "false",
   );
   assert.deepEqual(emptyGeometry, [
     { selector: ".task-bar", y: 0, height: 0 },
