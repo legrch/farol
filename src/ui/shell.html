@@ -140,12 +140,21 @@
         hidden
       >
         <button
+          id="settings-return"
+          class="settings-return"
           type="button"
-          data-settings-category="general"
-          data-rail-label="G"
-          title="General"
+          aria-label="Back to app"
         >
-          General
+          ‹ Back to app
+        </button>
+        <p class="settings-nav-label">SETTINGS</p>
+        <button
+          type="button"
+          data-settings-category="preferences"
+          data-rail-label="P"
+          title="Preferences"
+        >
+          Preferences
         </button>
         <button
           type="button"
@@ -157,11 +166,19 @@
         </button>
         <button
           type="button"
-          data-settings-category="advanced"
-          data-rail-label="A"
-          title="Advanced"
+          data-settings-category="model"
+          data-rail-label="M"
+          title="Farol Model"
         >
-          Advanced
+          Farol Model
+        </button>
+        <button
+          type="button"
+          data-settings-category="diagnostics"
+          data-rail-label="D"
+          title="Diagnostics"
+        >
+          Diagnostics
         </button>
       </nav>
 
@@ -730,12 +747,12 @@
         <p class="settings-feedback" id="settings-feedback" role="status"></p>
         <section
           class="settings-group"
-          data-settings-page="general"
+          data-settings-page="preferences"
           aria-labelledby="settings-general-title"
         >
           <header>
             <div>
-              <p>General</p>
+              <p>Preferences</p>
               <h2 id="settings-general-title">Window and activity</h2>
             </div>
           </header>
@@ -894,7 +911,7 @@
 
         <section
           class="settings-group"
-          data-settings-page="advanced"
+          data-settings-page="model"
           aria-labelledby="settings-model-title"
         >
           <header>
@@ -934,7 +951,7 @@
         <details
           class="settings-group diagnostics-group"
           id="diagnostics-group"
-          data-settings-page="advanced"
+          data-settings-page="diagnostics"
         >
           <summary>About &amp; Diagnostics</summary>
           <dl class="settings-list" id="settings-list"></dl>

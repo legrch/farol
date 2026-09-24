@@ -425,7 +425,29 @@ try {
   await window.locator("#sign-in-return").click();
   await window.locator("#guided-onboarding").waitFor({ state: "visible" });
   await window.locator('[data-onboarding-step="folder"]').click();
+  await window.locator('[data-onboarding-step="folder"].complete').waitFor();
+  assert.equal(
+    await window.locator("#onboarding-primary").innerText(),
+    "Continue",
+  );
   await window.locator("#onboarding-primary").click();
+  await window
+    .locator('[data-onboarding-content="tunnel"]')
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator("#onboarding-primary").innerText(),
+    "Continue without local access",
+  );
+  await window.locator("#onboarding-primary").click();
+  await window
+    .locator('[data-onboarding-content="finish"]')
+    .waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator("#onboarding-primary").innerText(),
+    "Open ChatGPT",
+  );
+  await window.locator('[data-onboarding-step="folder"]').click();
+  await window.locator("#onboarding-add-folder").click();
   await window
     .locator('#onboarding-form[aria-busy="false"]')
     .waitFor({ state: "visible" });
@@ -795,6 +817,14 @@ try {
     false,
     "SETTINGS_DUPLICATED_SETUP",
   );
+  await window.locator("#settings-general-title").waitFor({ state: "visible" });
+  await window.locator('[data-settings-category="model"]').click();
+  await window.locator("#settings-model-title").waitFor({ state: "visible" });
+  await window.locator('[data-settings-category="diagnostics"]').click();
+  await window.locator("#diagnostics-group").waitFor({ state: "visible" });
+  await window.locator("#settings-return").click();
+  await window.locator('[data-panel="browser"]').waitFor({ state: "visible" });
+  await window.locator('.nav-item[data-section="settings"]').click();
   await window.locator('[data-settings-category="shortcuts"]').click();
   await window.locator("#settings-shortcuts-title").waitFor({
     state: "visible",

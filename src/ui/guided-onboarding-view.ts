@@ -42,7 +42,7 @@ function element<T extends HTMLElement>(selector: string): T {
 }
 const failureMessages = {
   busy: "Another connection change is already running.",
-  prerequisite: "Check your sign-in and folders before connecting.",
+  prerequisite: "Sign in and add a folder before activating local access.",
   "invalid-fields":
     "Enter a valid tunnel ID and runtime API key, not an admin key. The connection was not stopped.",
   "new-key-required":
@@ -236,6 +236,9 @@ export class GuidedOnboardingView {
     const facts = this.facts();
     const progress = [...onboardingProgress(facts)];
     for (const index of this.failedChecks) {
+      // A folder check can fail without undoing the owner's optional choice.
+      // The folder card reports the access problem; connection stays unready.
+      if (index === 1) continue;
       progress[index] = false;
       if (index < 3) progress[3] = false;
     }
@@ -325,6 +328,7 @@ export class GuidedOnboardingView {
       (ready, index) => ready || completed[index],
     );
     const savedCompletion = progress[4] === true && currentProgress[4] !== true;
+    const localAccessOff = !facts.hasFolder;
     const step = onboardingSteps[this.step]!;
     const complete = progress[this.step] === true;
     const prerequisite = onboardingPrerequisite(this.step, currentProgress);
@@ -368,13 +372,17 @@ export class GuidedOnboardingView {
         ? "Your setup is saved"
         : this.step === 4 && complete
           ? "You're connected"
-          : step.title;
+          : this.step === 4 && localAccessOff && progress[0]
+            ? "ChatGPT is ready"
+            : step.title;
     element("#onboarding-copy").textContent =
       this.step === 4 && savedCompletion
         ? "You completed setup before this update. ChatGPT is available; check the connection again before using this computer from ChatGPT."
         : this.step === 4 && complete
           ? "Your connection is verified. Review a step any time to check it again or change your settings."
-          : step.copy;
+          : this.step === 4 && localAccessOff && progress[0]
+            ? "No folders are shared, so local Computer access is off. Add a folder later if you want to connect this computer to ChatGPT."
+            : step.copy;
     document
       .querySelectorAll<HTMLElement>("[data-onboarding-content]")
       .forEach((panel) => {
@@ -386,32 +394,32 @@ export class GuidedOnboardingView {
     primary.textContent = this.busy
       ? this.busyLabel
       : this.step === 4
-        ? complete
-          ? savedCompletion
-            ? "Back to app"
-            : "Open ChatGPT"
+        ? complete || (localAccessOff && progress[0])
+          ? "Open ChatGPT"
           : "Continue setup"
         : unknown
           ? facts.runtime === "ready"
             ? "Check previous result"
             : "Stop connection"
-          : this.step === 2 && editing
-            ? "Save credentials"
-            : prerequisite !== null
-              ? `Go to ${onboardingSteps[prerequisite]!.label}`
-              : complete
-                ? "Continue"
-                : this.step === 0
-                  ? this.signInOpened
-                    ? "Check sign-in"
-                    : "Sign in to ChatGPT"
-                  : this.step === 1
-                    ? "Add folder…"
-                    : this.step === 2
-                      ? facts.runtime === "stopped"
-                        ? "Activate and check"
-                        : "Reconnect and check"
-                      : "Verify app";
+          : localAccessOff && (this.step === 2 || this.step === 3)
+            ? "Continue without local access"
+            : this.step === 2 && editing
+              ? "Save credentials"
+              : prerequisite !== null
+                ? `Go to ${onboardingSteps[prerequisite]!.label}`
+                : complete
+                  ? "Continue"
+                  : this.step === 0
+                    ? this.signInOpened
+                      ? "Check sign-in"
+                      : "Sign in to ChatGPT"
+                    : this.step === 1
+                      ? "Add folder…"
+                      : this.step === 2
+                        ? facts.runtime === "stopped"
+                          ? "Activate and check"
+                          : "Reconnect and check"
+                        : "Verify app";
     const back = element<HTMLButtonElement>("#onboarding-back");
     back.disabled = this.busy;
     back.hidden = this.step === 4;
@@ -426,7 +434,9 @@ export class GuidedOnboardingView {
           : "pending";
     const successes = [
       "✓ Signed in to ChatGPT",
-      "✓ Folders ready",
+      localAccessOff
+        ? "✓ No folders shared (optional)"
+        : "✓ Folder choice saved. Farol checks access in the background.",
       "✓ Tunnel connection verified",
       "✓ Farol Dev connection verified",
       "✓ All four setup checks complete",
@@ -434,6 +444,7 @@ export class GuidedOnboardingView {
     status.hidden =
       this.step === 3 &&
       !complete &&
+      !localAccessOff &&
       !this.busy &&
       !this.message &&
       !unknown &&
@@ -441,25 +452,27 @@ export class GuidedOnboardingView {
     status.textContent = this.busy
       ? this.busyLabel
       : this.message ||
-        (this.step === 2 && editing && changed
-          ? "Your saved connection stays in use until you save the replacement."
-          : this.step === 2 && editing && !saved
-            ? "First, save your tunnel credentials below."
-            : complete
-              ? !currentProgress[this.step]
-                ? "✓ Completed before this update · check current connection before using Computer"
-                : successes[this.step]!
-              : unknown
-                ? "Check the previous result. It will not be sent again automatically."
-                : prerequisite !== null
-                  ? `Next: finish ${onboardingSteps[prerequisite]!.label}. The button below takes you there.`
-                  : this.step === 2 && saved
-                    ? "Credentials saved. Activate the tunnel to check that it works."
-                    : this.step === 4
-                      ? `${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete. Open a step to continue or change it.`
-                      : this.step === 1
-                        ? "Add a folder to continue. Farol checks it automatically."
-                        : "Not checked yet");
+        (localAccessOff && (this.step === 2 || this.step === 3)
+          ? "Local Computer access is off. Add a folder later to enable this connection."
+          : this.step === 2 && editing && changed
+            ? "Your saved connection stays in use until you save the replacement."
+            : this.step === 2 && editing && !saved
+              ? "First, save your tunnel credentials below."
+              : complete
+                ? !currentProgress[this.step]
+                  ? "✓ Completed before this update · check current connection before using Computer"
+                  : successes[this.step]!
+                : unknown
+                  ? "Check the previous result. It will not be sent again automatically."
+                  : prerequisite !== null
+                    ? `Next: finish ${onboardingSteps[prerequisite]!.label}. The button below takes you there.`
+                    : this.step === 2 && saved
+                      ? "Credentials saved. Activate the tunnel to check that it works."
+                      : this.step === 4
+                        ? `${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete. Open a step to continue or change it.`
+                        : this.step === 1
+                          ? "Add a folder to continue. Farol checks it automatically."
+                          : "Not checked yet");
     const feedbackNode = element("#onboarding-feedback");
     feedbackNode.textContent =
       active && this.feedbackStep === this.step && feedbackError
@@ -473,10 +486,13 @@ export class GuidedOnboardingView {
       : "Sign in inside Farol, then choose Return to Setup. Your everyday browser and Codex remain unchanged.";
 
     this.renderFolders(settings);
-    element("#onboarding-credentials-saved").hidden = !saved || editing;
-    element("#onboarding-tunnel-fields").hidden = !editing;
-    element("#onboarding-connection-guide").hidden = saved && !editing;
-    element("#onboarding-connection-help").hidden = saved && !editing;
+    element("#onboarding-credentials-saved").hidden =
+      localAccessOff || !saved || editing;
+    element("#onboarding-tunnel-fields").hidden = localAccessOff || !editing;
+    element("#onboarding-connection-guide").hidden =
+      localAccessOff || (saved && !editing);
+    element("#onboarding-connection-help").hidden =
+      localAccessOff || (saved && !editing);
     tunnel.disabled = this.busy || !facts.available;
     key.disabled = this.busy || !facts.available;
     element<HTMLButtonElement>("#onboarding-replace-credentials").disabled =
@@ -488,8 +504,9 @@ export class GuidedOnboardingView {
     element("#onboarding-key-status").hidden = !editing;
     element("#onboarding-key-status").textContent =
       "The key is secret. Paste a runtime API key with Tunnels Read + Use. Farol never loads a saved key into this form.";
-    element("#onboarding-tunnel-note").textContent =
-      editing && facts.runtime !== "stopped"
+    element("#onboarding-tunnel-note").textContent = localAccessOff
+      ? "Local Computer access is off. Add a folder later to activate this connection."
+      : editing && facts.runtime !== "stopped"
         ? "Saving a replacement pauses this connection. Activate it again after saving; cancellation changes nothing."
         : facts.runtimeCurrent
           ? "The tunnel is ready. Check connection probes it without restarting or sending a ChatGPT message."
@@ -562,16 +579,22 @@ export class GuidedOnboardingView {
         const detail = document.createElement("span");
         detail.textContent =
           index === 1
-            ? `${settings?.computer.workspaces.length ?? 0} folders · ${currentProgress[1] ? "Ready" : progress[1] ? "Added; check on this version" : "Add a folder"}`
-            : index === 2 && changed
-              ? "Unsaved replacement"
-              : progress[index]
-                ? currentProgress[index]
-                  ? "Verified · review or check again"
-                  : "Completed before update · check current connection"
-                : index === 2 && saved
-                  ? "Credentials saved · check connection"
-                  : "Needs setup or verification";
+            ? localAccessOff
+              ? "Optional · no folders shared"
+              : `${settings?.computer.workspaces.length ?? 0} folders added · access checked separately`
+            : localAccessOff && index === 2
+              ? "Local Computer access off"
+              : localAccessOff && index === 3
+                ? "Available after local access"
+                : index === 2 && changed
+                  ? "Unsaved replacement"
+                  : progress[index]
+                    ? currentProgress[index]
+                      ? "Verified · review or check again"
+                      : "Completed before update · check current connection"
+                    : index === 2 && saved
+                      ? "Credentials saved · check connection"
+                      : "Needs setup or verification";
         button.append(name, detail);
         button.addEventListener("click", () => this.select(index));
         row.append(button);
@@ -587,7 +610,7 @@ export class GuidedOnboardingView {
       this.busy || !settings;
     element("#onboarding-folder-scope").textContent = folders.length
       ? `${folders.length} ${folders.length === 1 ? "folder" : "folders"} available to Farol. Add more or remove one at any time.`
-      : "Choose one or several folders. Farol confirms each one automatically.";
+      : "No folders shared. Add one any time if you want local Computer access.";
     element("#onboarding-folder-list").replaceChildren(
       ...folders.map((folder) => {
         const checked =
@@ -794,7 +817,8 @@ export class GuidedOnboardingView {
         const ids = all;
         if (ids.length === 0) {
           this.failedChecks.delete(1);
-          this.message = "No folders are shared. Add a folder to continue.";
+          this.message =
+            "No folders shared. You can continue and add one later.";
           return;
         }
         // The witness is an internal connection proof, never a hidden selection
@@ -1011,6 +1035,10 @@ export class GuidedOnboardingView {
       return;
     const progress = this.progress();
     if (this.step === 4) {
+      if (!this.facts().hasFolder && progress[0]) {
+        this.port.openChat();
+        return;
+      }
       if (onboardingCompletedSteps(this.port.settings())[4]) {
         this.port.openChat();
         return;
@@ -1036,6 +1064,10 @@ export class GuidedOnboardingView {
     if (this.step >= 2 && this.facts().outcomeUnknown) {
       if (this.facts().runtime === "ready") await this.checkAttachment();
       else await this.stopConnection();
+      return;
+    }
+    if ((this.step === 2 || this.step === 3) && !this.facts().hasFolder) {
+      this.select(4);
       return;
     }
     if (

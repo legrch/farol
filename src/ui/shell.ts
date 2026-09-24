@@ -391,7 +391,8 @@ let setupFocusKey = "";
 let sidebarPreference: Exclude<SidebarMode, "overlay"> = "full";
 let sidebarOverlayOpen = false;
 let shellOverlay: ShellOverlay = "none";
-let settingsCategory: "general" | "shortcuts" | "advanced" = "general";
+let settingsCategory: "preferences" | "shortcuts" | "model" | "diagnostics" =
+  "preferences";
 const navigationShortcutStorageKey = "farol.next.navigation-shortcuts.v1";
 function storedNavigationShortcuts(): NavigationShortcuts {
   try {
@@ -3377,6 +3378,9 @@ function renderSettingsNavigation(): void {
         ? group.dataset.settingsPage !== settingsCategory
         : group.dataset.settingsPage === "shortcuts";
     });
+  if (enabled && settingsCategory === "diagnostics") {
+    required<HTMLDetailsElement>("#diagnostics-group").open = true;
+  }
 }
 
 function shortcutSelects(): HTMLSelectElement[] {
@@ -5587,7 +5591,7 @@ async function start(): Promise<void> {
     },
     openSettings: () => selectSection("settings"),
     openDiagnostics: () => {
-      settingsCategory = "advanced";
+      settingsCategory = "diagnostics";
       selectSection("settings");
       const diagnostics = required<HTMLDetailsElement>(
         "#connection-diagnostics",
@@ -5604,7 +5608,7 @@ async function start(): Promise<void> {
   if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
     const diagnostics = required<HTMLDetailsElement>("#connection-diagnostics");
     diagnostics.open = false;
-    diagnostics.dataset.settingsPage = "advanced";
+    diagnostics.dataset.settingsPage = "diagnostics";
     required('[data-panel="settings"]').append(diagnostics);
     required("#connection-diagnostics > summary").textContent =
       "Connection diagnostics";
@@ -5627,7 +5631,9 @@ async function start(): Promise<void> {
   }
   setShortcutDraft(navigationShortcuts);
   document
-    .querySelectorAll<HTMLButtonElement>("#settings-nav button")
+    .querySelectorAll<HTMLButtonElement>(
+      "#settings-nav button[data-settings-category]",
+    )
     .forEach((button) => {
       button.addEventListener("click", () => {
         settingsCategory = button.dataset
@@ -5636,6 +5642,10 @@ async function start(): Promise<void> {
         required<HTMLElement>('[data-panel="settings"]').scrollTop = 0;
       });
     });
+  required<HTMLButtonElement>("#settings-return").addEventListener(
+    "click",
+    () => selectSection("browser"),
+  );
   required<HTMLButtonElement>("#apply-shortcuts").addEventListener(
     "click",
     applyShortcutDraft,

@@ -44,7 +44,7 @@ describe("guided onboarding progress", () => {
     const settings = guidedSettingsFixture();
     expect(
       onboardingProgress(onboardingFacts(settings, "f".repeat(64))),
-    ).toEqual([true, false, false, false, false]);
+    ).toEqual([true, true, false, false, false]);
     expect(onboardingCompletedSteps(settings)).toEqual([
       true,
       true,
@@ -64,10 +64,10 @@ describe("guided onboarding progress", () => {
     changedAttachment.connectors.secureMcp.attachment!.buildId = "f".repeat(64);
     expect(onboardingCompletedSteps(changedAttachment)[3]).toBe(false);
   });
-  it("starts with sign-in and never confuses navigation with verification", () => {
+  it("treats folder sharing as optional without claiming a connection", () => {
     expect(onboardingProgress(empty)).toEqual([
       false,
-      false,
+      true,
       false,
       false,
       false,
@@ -202,11 +202,27 @@ describe("onboarding snapshot projection", () => {
       false,
     ]);
   });
-  it("requires a current build to reuse a prior folder verification", () => {
+  it("keeps the optional folder choice complete across a build while connection proof expires", () => {
     const settings = guidedSettingsFixture();
+    const progress = onboardingProgress(
+      onboardingFacts(settings, "f".repeat(64)),
+    );
+    expect(progress[1]).toBe(true);
+    expect(progress[2]).toBe(false);
+  });
+  it("keeps zero approved folders optional without inheriting old connector proof", () => {
+    const settings = guidedSettingsFixture();
+    settings.computer.workspaces = [];
     expect(
-      onboardingProgress(onboardingFacts(settings, "f".repeat(64)))[1],
-    ).toBe(false);
+      onboardingProgress(onboardingFacts(settings, fixtureBuildId))[1],
+    ).toBe(true);
+    expect(onboardingCompletedSteps(settings)).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+    ]);
   });
   it("uses actual settings without advanced host or Agent readiness", () => {
     expect(

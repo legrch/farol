@@ -134,7 +134,7 @@ export const onboardingSteps = [
     id: "folder",
     label: "Folders",
     title: "Your folders, your choice",
-    copy: "Add the folders you want to use with ChatGPT. Farol checks each folder for you. You can add or remove folders at any time; your files stay on this computer.",
+    copy: "Sharing folders is optional. Add a folder if you want ChatGPT to use files on this computer, or continue without local access. You can change this later.",
   },
   {
     id: "tunnel",
@@ -160,9 +160,15 @@ export type OnboardingStep = (typeof onboardingSteps)[number]["id"];
 export function onboardingProgress(facts: OnboardingFacts): readonly boolean[] {
   if (!facts.available) return [false, false, false, false, false];
   const chat = facts.chat === "ready";
-  const folder = facts.hasFolder && facts.folder === "ready";
+  // Choosing whether to share folders is optional and complete as soon as
+  // setup is available. Access and connector proof remain separate.
+  const folder = true;
   const tunnel =
-    facts.runtime === "ready" && facts.runtimeCurrent && !facts.outcomeUnknown;
+    facts.hasFolder &&
+    facts.folder === "ready" &&
+    facts.runtime === "ready" &&
+    facts.runtimeCurrent &&
+    !facts.outcomeUnknown;
   const app = tunnel && folder && facts.attachmentCurrent;
   return [chat, folder, tunnel, app, chat && folder && tunnel && app];
 }
@@ -182,26 +188,28 @@ export function onboardingCompletedSteps(
   const chat = routeReadiness(settings.setup.chatgpt) === "ready";
   const witness = settings.setup.computer.verified;
   const folder =
-    witness !== null &&
-    witness.configRevision === settings.computer.generation &&
-    witness.workspaceId !== null &&
-    workspaceIds.has(witness.workspaceId) &&
-    !settings.setup.computer.outcomeUnknown &&
-    settings.computer.workspaces.length > 0 &&
-    settings.computer.workspaces.every((workspace) => {
-      const check = workspace.accessCheck;
-      const identity = workspace.rootIdentity;
-      return (
-        check != null &&
-        identity !== undefined &&
-        check.computerGeneration === settings.computer.generation &&
-        check.rootIdentity.device === identity.device &&
-        check.rootIdentity.inode === identity.inode
-      );
-    });
+    workspaceIds.size === 0 ||
+    (witness !== null &&
+      witness.configRevision === settings.computer.generation &&
+      witness.workspaceId !== null &&
+      workspaceIds.has(witness.workspaceId) &&
+      !settings.setup.computer.outcomeUnknown &&
+      settings.computer.workspaces.length > 0 &&
+      settings.computer.workspaces.every((workspace) => {
+        const check = workspace.accessCheck;
+        const identity = workspace.rootIdentity;
+        return (
+          check != null &&
+          identity !== undefined &&
+          check.computerGeneration === settings.computer.generation &&
+          check.rootIdentity.device === identity.device &&
+          check.rootIdentity.inode === identity.inode
+        );
+      }));
   const runtime = connector.runtime;
   const connection =
     folder &&
+    workspaceIds.size > 0 &&
     connector.tunnelClient !== null &&
     connector.credential === "stored" &&
     connector.tunnelId !== null &&

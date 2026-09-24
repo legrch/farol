@@ -1384,6 +1384,31 @@ html[data-environment="dev"] [data-panel="settings"] .panel-heading h1 {
   font-size: 29px;
 }
 
+.settings-nav-label {
+  margin: 14px 12px 6px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+}
+
+.settings-nav .settings-return {
+  min-height: 42px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+html[data-sidebar="rail"] .settings-nav-label {
+  display: none;
+}
+
+html[data-sidebar="rail"] .settings-nav .settings-return::before {
+  content: "‹";
+  font-size: 20px;
+}
+
 .settings-nav button {
   min-height: 38px;
   padding: 0 11px;
