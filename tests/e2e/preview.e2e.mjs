@@ -2433,9 +2433,7 @@ async function restart(instance) {
   );
   const expectedTaskViewCount = bootstrap.demoMode
     ? instance.expectedTaskViewCount
-    : bootstrap.tasks.length > 0
-      ? 1
-      : 0;
+    : bootstrap.tasks.length;
   instance.presentation = await phases.step(
     `${label}.presentation`,
     LAUNCH_PHASE_BUDGET_MS,
