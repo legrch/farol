@@ -618,6 +618,31 @@ describe("selected native Agent route (in-process contract only)", () => {
     host.dispose();
   });
 
+  it("instructs a custom-provider child to inherit route and effort without native catalogue overrides", async () => {
+    const peer = new NativeAgentPeer(true, neutralOptions.model);
+    const host = new CodexNativeAgentHost(
+      peer,
+      neutralOptions,
+      verifiedWorkspaceProbe(),
+    );
+    try {
+      const spawned = await host.spawn(request);
+      expect(spawned.status).toBe("started");
+      const turn = peer.requests.find(({ method }) => method === "turn/start")
+        ?.params as { input: { text: string }[]; effort: string };
+      expect(turn.effort).toBe("low");
+      expect(turn.input[0]!.text).toContain(
+        "Omit model and reasoning_effort overrides",
+      );
+      expect(turn.input[0]!.text).toContain("fork_context=false");
+      expect(turn.input[0]!.text).toContain(
+        "Never substitute a built-in model",
+      );
+    } finally {
+      host.dispose();
+    }
+  });
+
   it.each(["gpt-6-astra", "other-model", null, undefined])(
     "refuses a substituted start model %s before any turn",
     async (model) => {

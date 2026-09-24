@@ -1828,6 +1828,12 @@ export class CodexNativeAgentHost implements AgentHost {
   ): string {
     return [
       "Use the native collaboration tools to spawn exactly one child, then wait for that same child to finish.",
+      ...(this.options.model === "farol-next/chatgpt"
+        ? [
+            "Omit model and reasoning_effort overrides when spawning the child: inherit this parent's exact Farol provider route and effort. Native override validation uses a different model catalogue.",
+            "Set fork_context=false and supply only the exact child prompt below. Never substitute a built-in model or another provider. Farol independently verifies the retained child route.",
+          ]
+        : []),
       `The Farol responsibility role is ${request.authority.role}.`,
       "Set the child's prompt to exactly the text between the markers, byte-for-byte, without either marker or any additional text.",
       "FAROL_CHILD_PROMPT_BEGIN",
