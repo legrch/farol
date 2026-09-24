@@ -5382,7 +5382,7 @@ liveTasksSegment: try {
   );
   assert.match(
     await ordinaryLiveTasks.window.locator("#browser-state-detail").innerText(),
-    /actual provider page is embedded/u,
+    /Your ChatGPT page opens in this tab/u,
   );
   const embeddedSurfaces = await liveChatGptSurfaces(
     ordinaryLiveTasks.application,
