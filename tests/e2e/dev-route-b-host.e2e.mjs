@@ -7,7 +7,9 @@
 // Route B conversation. No personal Codex state or live model is involved.
 //
 // Run with:
-//   node tests/e2e/dev-route-b-host.e2e.mjs [--report=<absolute path>]
+//   node tests/e2e/dev-route-b-host.e2e.mjs [--visible-output] [--report=<absolute path>]
+// --visible-output proves status/commentary/final output against the real host,
+// still with synthetic upstream content and no browser/model/account access.
 
 // Exit codes: 0 PASS, 1 FAIL, 3 REAL_HOST_UNAVAILABLE.
 
@@ -28,6 +30,8 @@ const EXIT_PASS = 0;
 const EXIT_FAIL = 1;
 const EXIT_REAL_HOST_UNAVAILABLE = 3;
 const CLIENT_VERSION = "0.1.0-preview.0";
+const visibleOutput = process.argv.includes("--visible-output");
+const FIXTURE_COMMENTARY = "Fixture commentary.";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(here, "../../..");
@@ -36,12 +40,18 @@ const reportArgument = process.argv
   .find((argument) => argument.startsWith("--report="));
 const reportPath = reportArgument
   ? path.resolve(reportArgument.slice("--report=".length))
-  : path.join(repositoryRoot, "_output", "evidence", "dev-route-b-host.json");
+  : path.join(
+      repositoryRoot,
+      "_output",
+      "evidence",
+      visibleOutput ? "dev-route-b-visible-host.json" : "dev-route-b-host.json",
+    );
 
 const report = {
   schemaVersion: 1,
   status: "FAIL",
   classification: "real-host-synthetic-upstream",
+  outputMode: visibleOutput ? "semantic" : "text",
   startedAtIso: new Date().toISOString(),
   finishedAtIso: null,
   host: null,
@@ -223,22 +233,44 @@ async function main() {
   const surface = {
     runReadonlyTask: async (prompt, _attachments = [], observer = {}) => {
       prompts.push(prompt);
-      await observer.onTextDelta?.({
-        sequence: 1,
-        delta: "RE",
-        text: "RE",
-        observedCharacters: 2,
-      });
-      await observer.onTextDelta?.({
-        sequence: 2,
-        delta: "ADY",
-        text: "READY",
-        observedCharacters: 5,
-      });
+      if (visibleOutput) {
+        assert.equal(typeof observer.onVisibleItem, "function");
+        await observer.onVisibleItem({
+          sequence: 1,
+          id: "status",
+          channel: "status",
+          text: "Inspecting synthetic files",
+        });
+        await observer.onVisibleItem({
+          sequence: 2,
+          id: "commentary",
+          channel: "commentary",
+          text: FIXTURE_COMMENTARY,
+        });
+        await observer.onVisibleItem({
+          sequence: 3,
+          id: "answer",
+          channel: "answer",
+          text: "READY",
+        });
+      } else {
+        await observer.onTextDelta?.({
+          sequence: 1,
+          delta: "RE",
+          text: "RE",
+          observedCharacters: 2,
+        });
+        await observer.onTextDelta?.({
+          sequence: 2,
+          delta: "ADY",
+          text: "READY",
+          observedCharacters: 5,
+        });
+      }
       return {
         state: "completed",
         code: null,
-        deltaCount: 2,
+        deltaCount: visibleOutput ? 3 : 2,
         observedCharacters: 5,
         outputText: "READY",
       };
@@ -293,6 +325,7 @@ async function main() {
   let routed = null;
   let routeFailure = null;
   const hostTrace = [];
+  const hostItems = [];
   const checked = await production.runRouteBHostCheck(
     {
       executablePath: selected.path,
@@ -306,6 +339,22 @@ async function main() {
     {
       launch: production.launchCodexAppServer,
       route: async (client, input) => {
+        const removeItems = client.handleNotification(
+          "item/completed",
+          (value) => {
+            if (!value || typeof value !== "object" || !value.item) return;
+            hostItems.push({
+              threadIdSha256: identifierDigest(value.threadId),
+              turnIdSha256: identifierDigest(value.turnId),
+              type: value.item.type ?? null,
+              phase: value.item.phase ?? null,
+              textCharacters:
+                typeof value.item.text === "string"
+                  ? value.item.text.length
+                  : null,
+            });
+          },
+        );
         const peer = {
           request: async (method, params) => {
             const response = await client.request(method, params);
@@ -324,6 +373,8 @@ async function main() {
         } catch (error) {
           routeFailure = error instanceof Error ? error.message : String(error);
           throw error;
+        } finally {
+          removeItems();
         }
       },
     },
@@ -334,6 +385,7 @@ async function main() {
     promptCount: prompts.length,
     routeFailure,
     hostTrace,
+    hostItems,
     provider: routeRuntime.provider.diagnostics(),
     prepareTurn: prepareTurnTrace,
   };
@@ -354,7 +406,27 @@ async function main() {
     routed.deltaCount >= 1,
     "the host must deliver an incremental delta",
   );
-  assert.equal(routed.observedCharacters, 5);
+  assert.equal(
+    routed.observedCharacters,
+    5 + (visibleOutput ? FIXTURE_COMMENTARY.length : 0),
+  );
+  if (visibleOutput) {
+    const currentItems = hostItems.filter(
+      (item) =>
+        item.threadIdSha256 === identifierDigest(routed.threadId) &&
+        item.turnIdSha256 === identifierDigest(routed.turnId),
+    );
+    assert.ok(
+      currentItems.some((item) => item.type === "reasoning"),
+      "visible status must reach the native host",
+    );
+    assert.deepEqual(
+      currentItems
+        .filter((item) => item.type === "agentMessage")
+        .map((item) => item.phase),
+      ["commentary", "final_answer"],
+    );
+  }
   assert.equal(prompts.length, 1);
   assert.ok(
     prompts[0].includes(production.ROUTE_B_CHECK_PROMPT),

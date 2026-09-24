@@ -156,6 +156,184 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(stream.events).toEqual([{ type: "first" }, { type: "second" }]);
   });
 
+  it("streams visible status, commentary and answer as distinct ordered non-executable items", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    runtime = await startCodexChatGptProvider({
+      model: "farol-next/chatgpt",
+      token: "visible-output-test-token",
+      turns: memoryJournal(),
+      conversation: {
+        run: async (_input, observer) => {
+          await observer.onVisibleItem!({
+            sequence: 1,
+            id: "status-1",
+            channel: "status",
+            text: "Reading files",
+          });
+          await observer.onVisibleItem!({
+            sequence: 2,
+            id: "comment-1",
+            channel: "commentary",
+            text: "Found the test.",
+          });
+          await observer.onVisibleItem!({
+            sequence: 3,
+            id: "comment-2",
+            channel: "commentary",
+            text: "Checking the result.",
+          });
+          await observer.onVisibleItem!({
+            sequence: 4,
+            id: "answer-1",
+            channel: "answer",
+            text: "First paragraph.",
+          });
+          await gate;
+          await observer.onVisibleItem!({
+            sequence: 5,
+            id: "answer-2",
+            channel: "answer",
+            text: "```go\nprintln(42)\n```",
+          });
+          return {
+            state: "completed",
+            code: null,
+            outputText: "First paragraph.\n\n```go\nprintln(42)\n```",
+            observedProvider: "chatgpt-web",
+            observedModel: null,
+            observedMode: null,
+          };
+        },
+      },
+    });
+    const response = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer visible-output-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(requestBody("farol-next/chatgpt")),
+    });
+    const stream = new SseReader(response);
+    await expect(
+      stream.until("response.reasoning_summary_text.delta"),
+    ).resolves.toMatchObject({ delta: "Reading files" });
+    await expect(
+      stream.until("response.output_text.delta"),
+    ).resolves.toMatchObject({ delta: "Found the test." });
+    expect(
+      stream.events.some((event) => event.type === "response.completed"),
+    ).toBe(false);
+    release();
+    const completed = await stream.until("response.completed");
+    expect(completed).toMatchObject({
+      response: {
+        output: [
+          {
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "Reading files" }],
+          },
+          {
+            type: "message",
+            phase: "commentary",
+            content: [
+              {
+                type: "output_text",
+                text: "Found the test.\n\nChecking the result.",
+              },
+            ],
+          },
+          {
+            type: "message",
+            phase: "final_answer",
+            content: [
+              {
+                type: "output_text",
+                text: "First paragraph.\n\n```go\nprintln(42)\n```",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const openings = stream.events.filter(
+      (event) => event.type === "response.output_item.added",
+    );
+    const endings = stream.events.filter(
+      (event) => event.type === "response.output_item.done",
+    );
+    expect(openings.map((event) => event.output_index)).toEqual([0, 1, 2]);
+    expect(endings.map((event) => event.output_index)).toEqual([0, 1, 2]);
+    expect(openings.map((event) => (event.item as { id: string }).id)).toEqual(
+      endings.map((event) => (event.item as { id: string }).id),
+    );
+    expect(
+      stream.events.some(
+        (event) => event.type === "response.function_call_arguments.delta",
+      ),
+    ).toBe(false);
+    expect(runtime.diagnostics().toolCalls).toBe(0);
+  });
+
+  it.each(["duplicate", "sequence", "mixed", "status-only"])(
+    "refuses invalid visible output: %s",
+    async (kind) => {
+      runtime = await startCodexChatGptProvider({
+        model: "farol-next/chatgpt",
+        token: "visible-output-test-token",
+        turns: memoryJournal(),
+        conversation: {
+          run: async (_input, observer) => {
+            await observer.onVisibleItem!({
+              sequence: 1,
+              id: "one",
+              channel: "status",
+              text: "Working",
+            });
+            if (kind === "mixed") {
+              await observer.onTextDelta({
+                sequence: 2,
+                delta: "Answer",
+                text: "Answer",
+                observedCharacters: 6,
+              });
+            } else if (kind !== "status-only") {
+              await observer.onVisibleItem!({
+                sequence: kind === "sequence" ? 3 : 2,
+                id: kind === "duplicate" ? "one" : "two",
+                channel: "answer",
+                text: "Answer",
+              });
+            }
+            return {
+              state: "completed",
+              code: null,
+              outputText: "",
+              observedProvider: "chatgpt-web",
+              observedModel: null,
+              observedMode: null,
+            };
+          },
+        },
+      });
+      const response = await fetch(`${runtime.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer visible-output-test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(requestBody("farol-next/chatgpt")),
+      });
+      const body = await response.text();
+      expect(body).toContain("response.failed");
+      expect(body).not.toContain('"type":"response.completed"');
+      expect(runtime.diagnostics().toolCalls).toBe(0);
+    },
+  );
+
   it("HR-007 holds an initial request's thread until its first round is served, and releases it after a refusal", async () => {
     const holds: string[] = [];
     let released = 0;
@@ -313,6 +491,133 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     });
     expect(conversation.run).toHaveBeenCalledTimes(1);
   });
+
+  it.each([false, true])(
+    "queues display output across a real tool-response boundary (cancel=%s)",
+    async (cancel) => {
+      let toolResult = "";
+      let displayDelivered = false;
+      let runSettled = false;
+      runtime = await startCodexChatGptProvider({
+        model: "farol-next/mind",
+        token: "route-b-test-token",
+        turns: memoryJournal(),
+        conversation: {
+          run: async (_input, observer) => {
+            try {
+              await observer.onVisibleItem!({
+                sequence: 1,
+                id: "commentary",
+                channel: "commentary",
+                text: "Starting one tool.",
+              });
+              const pendingTool = observer.onToolCall({
+                name: "exec_command",
+                arguments: { cmd: "printf FIXTURE" },
+              });
+              // A browser may observe progress while the separate MCP caller
+              // waits for Codex. That display must not interleave the tool's
+              // terminal frame, disappear, or initiate another execution.
+              const pendingDisplay = observer.onVisibleItem!({
+                sequence: 2,
+                id: "progress",
+                channel: "status",
+                text: "Tool is running",
+              });
+              const [output] = await Promise.all([pendingTool, pendingDisplay]);
+              toolResult = output;
+              displayDelivered = true;
+              await observer.onVisibleItem!({
+                sequence: 3,
+                id: "answer",
+                channel: "answer",
+                text: "Tool complete.",
+              });
+              return {
+                state: "completed",
+                code: null,
+                outputText: "Tool complete.",
+                observedProvider: "chatgpt-web",
+                observedModel: null,
+                observedMode: null,
+              };
+            } finally {
+              runSettled = true;
+            }
+          },
+        },
+      });
+      const post = (body: unknown) =>
+        fetch(`${runtime!.baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-b-test-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+      const body = toolRequestBody();
+      const initial = new SseReader(await post(body));
+      const completed = await initial.until("response.completed");
+      const output = (
+        completed.response as { output: Record<string, unknown>[] }
+      ).output;
+      expect(output.map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+      ]);
+      const call = output[1]!;
+      expect(displayDelivered).toBe(false);
+      expect(toolResult).toBe("");
+      expect(
+        initial.events.some(
+          (event) => event.type === "response.reasoning_summary_text.delta",
+        ),
+      ).toBe(false);
+      if (cancel) {
+        await runtime.close();
+        await vi.waitFor(() => expect(runSettled).toBe(true));
+        expect(displayDelivered).toBe(false);
+        expect(toolResult).toBe("");
+        return;
+      }
+      const continuation = new SseReader(
+        await post({
+          ...body,
+          tools: [],
+          input: [
+            call,
+            {
+              type: "function_call_output",
+              call_id: call.call_id,
+              output: "FIXTURE",
+            },
+          ],
+        }),
+      );
+      await expect(
+        continuation.until("response.reasoning_summary_text.delta"),
+      ).resolves.toMatchObject({ delta: "Tool is running" });
+      await expect(
+        continuation.until("response.completed"),
+      ).resolves.toMatchObject({
+        response: {
+          output: [
+            { type: "reasoning" },
+            {
+              type: "message",
+              phase: "final_answer",
+              content: [{ type: "output_text", text: "Tool complete." }],
+            },
+          ],
+        },
+      });
+      expect(displayDelivered).toBe(true);
+      expect(toolResult).toBe("FIXTURE");
+      expect(runSettled).toBe(true);
+      expect(runtime.diagnostics().toolCalls).toBe(1);
+    },
+  );
 
   it("round-trips one exact native tool call before resuming the same conversation", async () => {
     let observedToolOutput = "";

@@ -15,6 +15,7 @@ import {
 } from "./chatgpt-page-policy";
 import type { StagedChatGptAttachment } from "./chatgpt-attachment-staging";
 import { uploadChatGptAttachments } from "./chatgpt-attachment-upload";
+import type { VisibleOutputItem } from "./chatgpt-visible-output";
 
 const probeSchema = z.strictObject({
   composerVisible: z.boolean(),
@@ -1296,6 +1297,9 @@ export type ChatGptTaskTextDelta = Readonly<{
 
 export type ChatGptTaskObserver = Readonly<{
   onTextDelta?: (delta: ChatGptTaskTextDelta) => void | Promise<void>;
+  // A source adapter chooses either legacy text deltas or semantic items for
+  // one turn, never both. Items describe visible output, not tool execution.
+  onVisibleItem?: (item: VisibleOutputItem) => void | Promise<void>;
   onDispatchIntent?: () => void | Promise<void>;
   onCorrelation?: (
     correlation: Readonly<{

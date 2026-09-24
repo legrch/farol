@@ -18,6 +18,8 @@ class FakePeer implements CodexChatGptHostPeer {
       observedProvider?: string;
       staleTerminalBeforeTurnResponse?: boolean;
       terminalBeforeDelta?: boolean;
+      messages?: readonly Readonly<{ id: string; text: string }>[];
+      retainedMessages?: readonly Readonly<{ id: string; text: string }>[];
     }> = {},
   ) {}
 
@@ -48,18 +50,18 @@ class FakePeer implements CodexChatGptHostPeer {
           });
           return;
         }
-        this.notify("item/agentMessage/delta", {
-          threadId: "thread-route-b",
-          turnId: "turn-route-b",
-          itemId: "message-route-b",
-          delta: "Hel",
-        });
-        this.notify("item/agentMessage/delta", {
-          threadId: "thread-route-b",
-          turnId: "turn-route-b",
-          itemId: "message-route-b",
-          delta: "lo",
-        });
+        const messages = this.options.messages ?? [
+          { id: "message-route-b", text: "Hel" },
+          { id: "message-route-b", text: "lo" },
+        ];
+        for (const message of messages) {
+          this.notify("item/agentMessage/delta", {
+            threadId: "thread-route-b",
+            turnId: "turn-route-b",
+            itemId: message.id,
+            delta: message.text,
+          });
+        }
         this.notify("turn/completed", {
           threadId: "thread-route-b",
           turn: { id: "turn-route-b", status: "completed" },
@@ -73,19 +75,17 @@ class FakePeer implements CodexChatGptHostPeer {
       return {
         thread: {
           id: "thread-route-b",
-          model: "farol-next/mind",
+          model: this.options.observedModel ?? "farol-next/mind",
           modelProvider: "farol_next",
           turns: [
             {
               id: "turn-route-b",
               status: "completed",
-              items: [
-                {
-                  id: "message-route-b",
-                  type: "agentMessage",
-                  text: "Hello",
-                },
-              ],
+              items: (
+                this.options.retainedMessages ?? [
+                  { id: "message-route-b", text: "Hello" },
+                ]
+              ).map((message) => ({ ...message, type: "agentMessage" })),
             },
           ],
         },
@@ -156,6 +156,74 @@ describe("isolated Codex to ChatGPT host route", () => {
         params: { threadId: "thread-route-b", includeTurns: true },
       },
     ]);
+  });
+
+  it("correlates commentary and answer separately on the neutral provider route", async () => {
+    const messages = [
+      { id: "commentary", text: "Checking." },
+      { id: "answer", text: "Done." },
+    ];
+    const peer = new FakePeer({
+      observedModel: "farol-next/chatgpt",
+      messages,
+      retainedMessages: messages,
+    });
+    await expect(
+      runCodexChatGptHostRoute(peer, {
+        model: "farol-next/chatgpt",
+        cwd: "/private/tmp/farol-route-b",
+        prompt: "Check the answer",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toMatchObject({
+      deltaCount: 2,
+      observedCharacters: "Checking.Done.".length,
+      retainedResult: true,
+    });
+  });
+
+  it.each(["missing", "changed", "duplicate", "reordered"])(
+    "refuses %s retained multi-message history",
+    async (kind) => {
+      const messages = [
+        { id: "commentary", text: "Checking." },
+        { id: "answer", text: "Done." },
+      ];
+      const retainedMessages =
+        kind === "missing"
+          ? messages.slice(1)
+          : kind === "changed"
+            ? [messages[0]!, { id: "answer", text: "Not done." }]
+            : kind === "duplicate"
+              ? [messages[0]!, messages[1]!, messages[1]!]
+              : [...messages].reverse();
+      await expect(
+        runCodexChatGptHostRoute(new FakePeer({ messages, retainedMessages }), {
+          model: "farol-next/mind",
+          cwd: "/private/tmp/farol-route-b",
+          prompt: "Check the answer",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("CODEX_CHATGPT_RETAINED_RESULT_INVALID");
+    },
+  );
+
+  it("rejects a delta that reopens an earlier message after a later one", async () => {
+    const peer = new FakePeer({
+      messages: [
+        { id: "first", text: "A" },
+        { id: "second", text: "B" },
+        { id: "first", text: "C" },
+      ],
+    });
+    await expect(
+      runCodexChatGptHostRoute(peer, {
+        model: "farol-next/mind",
+        cwd: "/private/tmp/farol-route-b",
+        prompt: "Check the answer",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("CODEX_CHATGPT_HOST_CORRELATION_INVALID");
   });
 
   it("refuses an observed provider or model fallback", async () => {

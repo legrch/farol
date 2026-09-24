@@ -306,6 +306,12 @@ async function runAdmitted(
     result = conversationResult(
       await admitted.surface.runReadonlyTask(prompt, [], {
         onTextDelta: (delta) => observer.onTextDelta(delta),
+        onVisibleItem: async (item) => {
+          if (!observer.onVisibleItem) {
+            throw new Error("FAROL_NEXT_VISIBLE_OUTPUT_UNSUPPORTED");
+          }
+          await observer.onVisibleItem(item);
+        },
       }),
     );
   } catch {

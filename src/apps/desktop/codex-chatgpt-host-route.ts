@@ -106,10 +106,11 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-type HostModel = "farol-next/mind" | "farol-next/drive";
+type HostModel = "farol-next/chatgpt" | "farol-next/mind" | "farol-next/drive";
 
 type TurnObservation = {
   itemId: string | null;
+  messages: Map<string, string>;
   outputText: string;
   deltaCount: number;
   terminal: z.infer<typeof turnCompletedSchema> | null;
@@ -168,6 +169,7 @@ export async function continueCodexChatGptHostThread(
     if (observations.size >= 32) return null;
     const created: TurnObservation = {
       itemId: null,
+      messages: new Map(),
       outputText: "",
       deltaCount: 0,
       terminal: null,
@@ -204,7 +206,11 @@ export async function continueCodexChatGptHostThread(
       if (!candidate) return;
       if (
         candidate.terminal !== null ||
-        (candidate.itemId !== null && candidate.itemId !== parsed.data.itemId)
+        (candidate.itemId !== null &&
+          candidate.itemId !== parsed.data.itemId &&
+          candidate.messages.has(parsed.data.itemId)) ||
+        (!candidate.messages.has(parsed.data.itemId) &&
+          candidate.messages.size >= 512)
       ) {
         fail(candidate, "CODEX_CHATGPT_HOST_CORRELATION_INVALID");
       } else if (
@@ -214,6 +220,10 @@ export async function continueCodexChatGptHostThread(
         fail(candidate, "CODEX_CHATGPT_HOST_RESULT_TOO_LARGE");
       } else {
         candidate.itemId = parsed.data.itemId;
+        candidate.messages.set(
+          parsed.data.itemId,
+          `${candidate.messages.get(parsed.data.itemId) ?? ""}${parsed.data.delta}`,
+        );
         candidate.outputText += parsed.data.delta;
         candidate.deltaCount += 1;
       }
@@ -302,15 +312,22 @@ export async function continueCodexChatGptHostThread(
     const retainedTurn = retained.data.thread.turns.find(
       (turn) => turn.id === expectedTurnId,
     );
-    const retainedMessage = retainedTurn?.items
-      .map((item) => retainedMessageSchema.safeParse(item))
-      .find(
-        (item) =>
-          item?.success &&
-          item.data.id === observed.itemId &&
-          item.data.text === observed.outputText,
-      );
-    if (retainedTurn?.status !== "completed" || !retainedMessage?.success) {
+    // Commentary and final answers are distinct host messages. Verify every
+    // streamed message against retained history in the same order, rather
+    // than accepting one matching fragment or concatenating unrelated IDs.
+    const retainedMessages = (retainedTurn?.items ?? []).flatMap((item) => {
+      const parsed = retainedMessageSchema.safeParse(item);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const streamedMessages = [...observed.messages];
+    if (
+      retainedTurn?.status !== "completed" ||
+      retainedMessages.length !== streamedMessages.length ||
+      !retainedMessages.every((item, index) => {
+        const streamed = streamedMessages[index];
+        return streamed && item.id === streamed[0] && item.text === streamed[1];
+      })
+    ) {
       throw routeError("CODEX_CHATGPT_RETAINED_RESULT_INVALID");
     }
 

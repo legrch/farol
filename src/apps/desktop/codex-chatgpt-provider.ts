@@ -29,6 +29,17 @@ import type {
   ProviderTurnAdmission,
   ProviderTurnJournal,
 } from "./provider-turn-journal";
+import type { VisibleOutputItem } from "./chatgpt-visible-output";
+
+const visibleItemSchema = z.strictObject({
+  sequence: z.number().int().positive(),
+  id: z.string().min(1).max(256),
+  channel: z.enum(["answer", "commentary", "status"]),
+  text: z
+    .string()
+    .min(1)
+    .max(256 * 1_024),
+});
 
 const MAX_REQUEST_BYTES = 1 * 1_024 * 1_024;
 // The longest prompt a Route B turn sends into one ChatGPT message.
@@ -93,6 +104,7 @@ export type CodexChatGptConversation = Readonly<{
     input: CodexChatGptTurnInput,
     observer: Readonly<{
       onTextDelta(delta: CodexChatGptTextDelta): void | Promise<void>;
+      onVisibleItem?(item: VisibleOutputItem): void | Promise<void>;
       onToolCall(request: CodexNativeToolRequest): Promise<string>;
     }>,
   ): Promise<CodexChatGptConversationResult>;
@@ -499,6 +511,11 @@ type IssuedToolCall = ResolvedCodexNativeToolCall & {
 type TurnEvent =
   | Readonly<{ kind: "tool"; call: IssuedToolCall }>
   | Readonly<{
+      kind: "visible";
+      item: VisibleOutputItem;
+      delivered: Deferred<void>;
+    }>
+  | Readonly<{
       kind: "final";
       result: CodexChatGptConversationResult | null;
       code: string | null;
@@ -588,10 +605,11 @@ function outputText(value: unknown): string | null {
 
 class ResponseRound {
   private readonly responseId = `resp_${randomUUID()}`;
-  private readonly messageId = `${this.responseId}_message`;
+  private messageId = `${this.responseId}_message`;
   private readonly output: Readonly<Record<string, unknown>>[] = [];
   private text = "";
   private textStarted = false;
+  private textPhase: "commentary" | "final_answer" | null = null;
   private ended = false;
 
   constructor(
@@ -613,8 +631,74 @@ class ResponseRound {
   }
 
   async delta(value: string): Promise<void> {
+    await this.appendText(value, null, false);
+  }
+
+  async visible(item: VisibleOutputItem): Promise<void> {
     if (this.ended) throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+    if (item.channel !== "status") {
+      await this.appendText(
+        item.text,
+        item.channel === "answer" ? "final_answer" : "commentary",
+        true,
+      );
+      return;
+    }
+    await this.finishText();
+    const outputIndex = this.output.length;
+    const id = `${this.responseId}_status_${outputIndex}`;
+    const itemFields = { id, type: "reasoning" } as const;
+    const eventFields = {
+      item_id: id,
+      output_index: outputIndex,
+      summary_index: 0,
+    };
+    await writeEvent(this.response, "response.output_item.added", {
+      type: "response.output_item.added",
+      output_index: outputIndex,
+      item: { ...itemFields, summary: [] },
+    });
+    await writeEvent(this.response, "response.reasoning_summary_part.added", {
+      type: "response.reasoning_summary_part.added",
+      ...eventFields,
+      part: { type: "summary_text", text: "" },
+    });
+    await writeEvent(this.response, "response.reasoning_summary_text.delta", {
+      type: "response.reasoning_summary_text.delta",
+      ...eventFields,
+      delta: item.text,
+    });
+    await writeEvent(this.response, "response.reasoning_summary_text.done", {
+      type: "response.reasoning_summary_text.done",
+      ...eventFields,
+      text: item.text,
+    });
+    const part = { type: "summary_text", text: item.text } as const;
+    await writeEvent(this.response, "response.reasoning_summary_part.done", {
+      type: "response.reasoning_summary_part.done",
+      ...eventFields,
+      part,
+    });
+    const completed = { ...itemFields, summary: [part] };
+    await writeEvent(this.response, "response.output_item.done", {
+      type: "response.output_item.done",
+      output_index: outputIndex,
+      item: completed,
+    });
+    this.output.push(completed);
+  }
+
+  private async appendText(
+    value: string,
+    phase: "commentary" | "final_answer" | null,
+    separateBlock: boolean,
+  ): Promise<void> {
+    if (this.ended) throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+    if (this.textStarted && this.textPhase !== phase) await this.finishText();
+    const separator = separateBlock && this.textStarted ? "\n\n" : "";
     if (!this.textStarted) {
+      this.textPhase = phase;
+      this.messageId = `${this.responseId}_message_${this.output.length}`;
       this.textStarted = true;
       await writeEvent(this.response, "response.output_item.added", {
         type: "response.output_item.added",
@@ -625,6 +709,7 @@ class ResponseRound {
           role: "assistant",
           status: "in_progress",
           content: [],
+          ...(phase === null ? {} : { phase }),
         },
       });
       await writeEvent(this.response, "response.content_part.added", {
@@ -635,13 +720,14 @@ class ResponseRound {
         part: { type: "output_text", text: "" },
       });
     }
-    this.text += value;
+    const delta = `${separator}${value}`;
+    this.text += delta;
     await writeEvent(this.response, "response.output_text.delta", {
       type: "response.output_text.delta",
       item_id: this.messageId,
       output_index: this.output.length,
       content_index: 0,
-      delta: value,
+      delta,
     });
   }
 
@@ -654,6 +740,7 @@ class ResponseRound {
       role: "assistant",
       status: "completed",
       content: [{ type: "output_text", text: this.text }],
+      ...(this.textPhase === null ? {} : { phase: this.textPhase }),
     } as const;
     await writeEvent(this.response, "response.output_text.done", {
       type: "response.output_text.done",
@@ -675,6 +762,9 @@ class ResponseRound {
       item,
     });
     this.output.push(item);
+    this.text = "";
+    this.textStarted = false;
+    this.textPhase = null;
   }
 
   async completeTool(call: IssuedToolCall): Promise<void> {
@@ -773,6 +863,10 @@ class ActiveProviderTurn {
   private pending: IssuedToolCall | null = null;
   private sequence = 0;
   private text = "";
+  private streamMode: "unset" | "text" | "visible" = "unset";
+  private readonly visibleIds = new Set<string>();
+  private readonly visibleDeliveries = new Set<Deferred<void>>();
+  private visibleCharacters = 0;
   private state: "created" | "running" | "ended" = "created";
   private readonly lifetime: NodeJS.Timeout;
 
@@ -832,6 +926,7 @@ class ActiveProviderTurn {
       .then(() =>
         this.conversation.run(this.input, {
           onTextDelta: (delta) => this.observeDelta(delta),
+          onVisibleItem: (item) => this.observeVisibleItem(item),
           onToolCall: (request) => this.requestTool(request),
         }),
       )
@@ -872,6 +967,10 @@ class ActiveProviderTurn {
     clearTimeout(this.lifetime);
     this.pending?.result.reject(new Error(code));
     this.pending = null;
+    for (const delivery of this.visibleDeliveries) {
+      delivery.reject(new Error(code));
+    }
+    this.visibleDeliveries.clear();
     this.push({ kind: "final", result: null, code });
     this.onTerminal();
   }
@@ -892,7 +991,26 @@ class ActiveProviderTurn {
 
   private async finishRound(writer: ResponseRound): Promise<boolean> {
     try {
-      const event = await this.next();
+      let event = await this.next();
+      while (event.kind === "visible") {
+        try {
+          if (this.state === "ended") {
+            throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+          }
+          await writer.visible(event.item);
+          event.delivered.resolve();
+        } catch (error) {
+          event.delivered.reject(
+            error instanceof Error
+              ? error
+              : new Error("FAROL_NEXT_HOST_DELIVERY_LOST"),
+          );
+          throw error;
+        } finally {
+          this.visibleDeliveries.delete(event.delivered);
+        }
+        event = await this.next();
+      }
       if (event.kind === "tool") {
         await writer.completeTool(event.call);
         return false;
@@ -924,6 +1042,7 @@ class ActiveProviderTurn {
   private async observeDelta(delta: CodexChatGptTextDelta): Promise<void> {
     if (
       this.state !== "running" ||
+      this.streamMode === "visible" ||
       delta.sequence !== this.sequence + 1 ||
       delta.observedCharacters !== delta.text.length ||
       delta.text !== `${this.text}${delta.delta}` ||
@@ -931,9 +1050,40 @@ class ActiveProviderTurn {
     ) {
       throw new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
     }
+    this.streamMode = "text";
     this.sequence = delta.sequence;
     this.text = delta.text;
     await this.writer.delta(delta.delta);
+  }
+
+  private async observeVisibleItem(input: VisibleOutputItem): Promise<void> {
+    const parsed = visibleItemSchema.safeParse(input);
+    if (!parsed.success) throw new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+    const item = parsed.data;
+    if (
+      this.state !== "running" ||
+      this.streamMode === "text" ||
+      item.sequence !== this.sequence + 1 ||
+      this.visibleIds.has(item.id) ||
+      this.visibleIds.size >= 512 ||
+      this.visibleCharacters + item.text.length > 256 * 1_024
+    ) {
+      throw new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+    }
+    this.streamMode = "visible";
+    this.sequence = item.sequence;
+    this.visibleIds.add(item.id);
+    this.visibleCharacters += item.text.length;
+    if (item.channel === "answer") {
+      this.text += `${this.text ? "\n\n" : ""}${item.text}`;
+    }
+    // Display observations and actual tool requests share the same ordered
+    // queue. A status arriving while Codex executes a tool waits for the next
+    // response round; it cannot interleave SSE writes or execute that tool.
+    const delivered = deferred<void>();
+    this.visibleDeliveries.add(delivered);
+    this.push({ kind: "visible", item, delivered });
+    await delivered.promise;
   }
 
   private async requestTool(request: CodexNativeToolRequest): Promise<string> {
