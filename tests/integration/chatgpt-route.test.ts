@@ -26,6 +26,13 @@ import {
   activateTaskScript,
   bindChatGptAppScript,
   collapseChatGptSidebarScript,
+  temporaryInstantProfileProbe,
+  openInstantPowerPickerScript,
+  focusInstantPowerSliderScript,
+  openTemporaryPersonalizationScript,
+  selectTemporaryPersonalizationScript,
+  taskProbeScript,
+  toggleChatGptSidebarScript,
   installManualAppGateScript,
   classifyChatGptProviderError,
   prepareTaskScript,
@@ -42,6 +49,283 @@ const prepared = {
   baselineUserCount: 0,
   baselineMessageIds: [],
 } as const;
+
+describe("temporary Instant connector profile", () => {
+  type Profile = {
+    composerReady: boolean;
+    draftPresent: boolean;
+    temporary: boolean;
+    personalized: boolean;
+    personalizationReady: boolean;
+    instant: boolean;
+    modelReady: boolean;
+  };
+  const regular: Profile = {
+    composerReady: true,
+    draftPresent: false,
+    temporary: false,
+    personalized: false,
+    personalizationReady: false,
+    instant: false,
+    modelReady: true,
+  };
+  const temporary = {
+    ...regular,
+    temporary: true,
+    personalized: true,
+    personalizationReady: true,
+  };
+
+  function profileRoute(
+    initial: Profile = regular,
+    afterLoad: Profile = temporary,
+    hydrating?: Profile,
+  ) {
+    const route = devTaskRoute(vi.fn());
+    let current = initial;
+    let minimum = false;
+    let pickerOpens = 0;
+    let personalizationOpens = 0;
+    let readsDuringHydration = 0;
+    const loadURL = vi.fn(async () => {
+      current = hydrating ?? afterLoad;
+    });
+    const sendInputEvent = vi.fn(() => {
+      minimum = true;
+      current = { ...current, instant: true };
+    });
+    const executeJavaScript = vi.fn(async (script: string) => {
+      if (script === temporaryInstantProfileProbe) {
+        if (hydrating && current === hydrating && ++readsDuringHydration > 2)
+          current = afterLoad;
+        return current;
+      }
+      if (script === openInstantPowerPickerScript) {
+        pickerOpens += 1;
+        return true;
+      }
+      if (script === openTemporaryPersonalizationScript) {
+        personalizationOpens += 1;
+        return true;
+      }
+      if (script === selectTemporaryPersonalizationScript) {
+        current = { ...current, personalized: true };
+        return true;
+      }
+      if (script === focusInstantPowerSliderScript)
+        return { ready: true, atMinimum: minimum };
+      throw new Error("Unexpected provider script");
+    });
+    const surface = {
+      isDestroyed: () => false,
+      loadURL,
+      webContents: { executeJavaScript, sendInputEvent },
+    };
+    Reflect.set(route, "routeWindow", surface);
+    const prepare = Reflect.get(route, "prepareTemporaryInstantProfile") as (
+      candidate: typeof surface,
+    ) => Promise<string | null>;
+    return {
+      prepare: () => prepare.call(route, surface),
+      loadURL,
+      sendInputEvent,
+      executeJavaScript,
+      pickerOpens: () => pickerOpens,
+      personalizationOpens: () => personalizationOpens,
+    };
+  }
+
+  it("opens a fresh temporary chat and actively lowers the model before continuing", async () => {
+    const route = profileRoute();
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.loadURL).toHaveBeenCalledWith(
+      "https://chatgpt.com/?temporary-chat=true",
+    );
+    expect(route.sendInputEvent).toHaveBeenCalledWith({
+      type: "keyDown",
+      keyCode: "Left",
+    });
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.sendInputEvent).toHaveBeenCalledWith({
+      type: "keyDown",
+      keyCode: "Escape",
+    });
+  });
+
+  it("preserves an owner draft before any profile navigation", async () => {
+    const route = profileRoute({ ...regular, draftPresent: true });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    );
+    expect(route.loadURL).not.toHaveBeenCalled();
+  });
+
+  it("selects Personalized so the approved app is available in temporary chat", async () => {
+    const route = profileRoute(regular, { ...temporary, personalized: false });
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.personalizationOpens()).toBe(1);
+  });
+
+  it("waits for the temporary chat controls to hydrate before choosing the model", async () => {
+    const loading = {
+      ...temporary,
+      personalized: false,
+      personalizationReady: false,
+      modelReady: false,
+    };
+    const route = profileRoute(regular, temporary, loading);
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.personalizationOpens()).toBe(0);
+  });
+
+  it("recognizes the visible Instant label when hidden button text describes thinking effort", () => {
+    class HTMLElement {
+      constructor(
+        readonly textContent = "",
+        readonly innerText = textContent,
+        readonly ariaLabel: string | null = null,
+      ) {}
+      getAttribute(name: string) {
+        return name === "aria-label" ? this.ariaLabel : null;
+      }
+      getBoundingClientRect() {
+        return { width: 100, height: 32 };
+      }
+      getClientRects() {
+        return [1];
+      }
+    }
+    class HTMLTextAreaElement extends HTMLElement {
+      value = "";
+    }
+    const composer = new HTMLTextAreaElement();
+    const controls = [
+      new HTMLElement("", "", "Turn off temporary chat"),
+      new HTMLElement("Personalized"),
+      new HTMLElement(
+        "Thinking effortInstant",
+        "Instant",
+        "Select ChatGPT model",
+      ),
+    ];
+    const result = vm.runInNewContext(temporaryInstantProfileProbe, {
+      document: {
+        querySelector: (selector: string) =>
+          selector === "#prompt-textarea" ? composer : null,
+        querySelectorAll: () => controls,
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+      location: { href: "https://chatgpt.com/?temporary-chat=true" },
+      HTMLElement,
+      HTMLTextAreaElement,
+      URL,
+    });
+    expect(result).toMatchObject({
+      composerReady: true,
+      temporary: true,
+      personalized: true,
+      instant: true,
+    });
+  });
+
+  it("fails closed when ChatGPT does not confirm temporary mode", async () => {
+    const route = profileRoute(regular, regular);
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(13_000);
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    );
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
+  });
+
+  it("checks the active profile again in the send script before clicking", () => {
+    let sends = 0;
+    class HTMLElement {
+      getClientRects() {
+        return [1];
+      }
+      getAttribute() {
+        return null;
+      }
+      click() {
+        sends += 1;
+      }
+    }
+    const button = new HTMLElement();
+    const context = vm.createContext({
+      location: { href: "https://chatgpt.com/" },
+      document: { querySelectorAll: () => [button] },
+      HTMLElement,
+      URL,
+    });
+    expect(
+      vm.runInContext(
+        activateTaskScript("https://chatgpt.com/", undefined, true),
+        context,
+      ),
+    ).toEqual({ profileLost: true });
+    expect(sends).toBe(0);
+  });
+});
+
+it("correlates an app-bound reply when ChatGPT renders the selected app before the prompt", () => {
+  class HTMLElement {
+    constructor(
+      readonly role: string,
+      readonly id: string,
+      readonly textContent: string,
+      readonly innerText = textContent,
+    ) {}
+    getAttribute(name: string) {
+      return name === "data-message-author-role"
+        ? this.role
+        : name === "data-message-id"
+          ? this.id
+          : null;
+    }
+    closest(selector: string) {
+      return selector === "[data-message-id]" ? this : null;
+    }
+    getBoundingClientRect() {
+      return { width: 100, height: 32 };
+    }
+  }
+  const user = new HTMLElement("user", "user-1", "Farol Dev  Check once.");
+  const assistant = new HTMLElement("assistant", "assistant-1", "ok");
+  const send = new HTMLElement("button", "send", "");
+  const document = {
+    querySelector: (selector: string) =>
+      selector === 'button[aria-label="Send"]' ? send : null,
+    querySelectorAll: (selector: string) =>
+      selector.includes('data-message-author-role="user"') &&
+      selector.includes('data-message-author-role="assistant"')
+        ? [user, assistant]
+        : selector === '[data-message-author-role="user"]'
+          ? [user]
+          : [],
+  };
+  const context = {
+    document,
+    HTMLElement,
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+  };
+  expect(
+    vm.runInNewContext(
+      taskProbeScript("Check once.", [], "Farol Dev"),
+      context,
+    ),
+  ).toMatchObject({
+    turnUserId: "user-1",
+    turnAssistantId: "assistant-1",
+    assistantText: "ok",
+  });
+  expect(
+    vm.runInNewContext(
+      taskProbeScript("Different prompt.", [], "Farol Dev"),
+      context,
+    ),
+  ).toMatchObject({ turnUserId: null, turnAssistantId: null });
+});
 
 it("stops the initial sidebar collapse after ChatGPT exposes Show sidebar", () => {
   let tick: (() => void) | null = null;
@@ -79,6 +363,26 @@ it("stops the initial sidebar collapse after ChatGPT exposes Show sidebar", () =
   expect(clicks).toBe(1);
   tick!();
   expect(clears).toBe(1);
+});
+
+it("toggles the provider sidebar through its own visible control", () => {
+  let clicks = 0;
+  const button = {
+    disabled: false,
+    getAttribute: (name: string) =>
+      name === "aria-label" ? "Show sidebar" : null,
+    getClientRects: () => [1],
+    click: () => {
+      clicks += 1;
+    },
+  };
+  expect(
+    vm.runInNewContext(toggleChatGptSidebarScript, {
+      document: { querySelectorAll: () => [button] },
+      Set,
+    }),
+  ).toBe(true);
+  expect(clicks).toBe(1);
 });
 
 const attachment: StagedChatGptAttachment = {
@@ -3254,6 +3558,8 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       separateRepresentations?: boolean;
       markerPluginId?: string;
       linkHref?: string;
+      promptLinkHref?: string;
+      sendLabelOnly?: boolean;
       invalidateChipOnAppend?: boolean;
     }> = {},
   ): Readonly<{
@@ -3311,8 +3617,14 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       }
       cloneNode(): StubElement {
         const clone = new (this.constructor as new () => StubElement)();
-        clone.textContent = this.textContent;
-        clone.innerText = this.innerText;
+        // The live rich editor puts its app mention inside the composer.
+        // Removing that selected element from a clone leaves only owner text.
+        const ownerText =
+          this === composer && options.promptLinkHref
+            ? (options.draft ?? "")
+            : this.textContent;
+        clone.textContent = ownerText;
+        clone.innerText = ownerText;
         return clone;
       }
       remove(): void {}
@@ -3342,7 +3654,11 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     const appChip = new HTMLElement();
     appChip.textContent = selectedAppName ?? "";
     appChip.getAttribute = (name: string) =>
-      name === "data-app-id" ? (options.markerPluginId ?? null) : null;
+      name === "data-app-id"
+        ? (options.markerPluginId ?? null)
+        : name === "data-prompt-link-href"
+          ? (options.promptLinkHref ?? null)
+          : null;
     const appLink = new HTMLElement();
     appLink.textContent = selectedAppName ?? "";
     if (!options.linkOnly && !options.separateRepresentations) {
@@ -3366,11 +3682,16 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
           selectedAppName !== undefined
           ? [appLink, ...(options.extraSelectedLink ? [otherLink] : [])]
           : []
-        : !selectedChipPresent ||
-            selectedAppName === undefined ||
-            options.linkOnly
-          ? []
-          : [appChip];
+        : options.promptLinkHref
+          ? selector.includes("[data-prompt-link-href]") ||
+            selector.includes('[data-prompt-link-href^="app://asdk_app_"]')
+            ? [appChip]
+            : []
+          : !selectedChipPresent ||
+              selectedAppName === undefined ||
+              options.linkOnly
+            ? []
+            : [appChip];
 
     // The value setter the prepare script reaches for, instrumented.
     let composerValue = options.draft ?? "";
@@ -3396,7 +3717,11 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     const document = {
       querySelector: (selector: string): unknown => {
         if (selector.includes("prompt-textarea")) return composer;
-        if (selector.includes("send-button") || selector.includes("Send")) {
+        if (
+          options.sendLabelOnly
+            ? selector === 'button[aria-label="Send"]'
+            : selector.includes("send-button") || selector.includes("Send")
+        ) {
           return send;
         }
         return null;
@@ -3420,6 +3745,10 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       HTMLTextAreaElement,
       HTMLButtonElement,
       InputEvent,
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 0;
+      },
       Set,
       Object,
       RegExp,
@@ -3527,6 +3856,62 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       ),
     ).toMatchObject({ ready: true });
     expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+  });
+
+  it("accepts the live ChatGPT app mention only with its exact app identity", async () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      linkHref: "",
+      promptLinkHref: "app://asdk_app_6ab3b56de6d48191beec1e050abb549a",
+    });
+    await expect(
+      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
+    ).resolves.toEqual({ state: "bound" });
+    expect(
+      vm.runInContext(
+        prepareTaskScript("AUTHORIZED_CHECK", expectedHref, "Farol Dev"),
+        context,
+      ),
+    ).toMatchObject({ ready: true });
+    expect(
+      vm.runInContext(activateTaskScript(expectedHref, "Farol Dev"), context),
+    ).toEqual({ activated: true });
+    expect(contacts.typed).toEqual(["AUTHORIZED_CHECK"]);
+    expect(contacts.clicked).toBe(1);
+  });
+
+  it("activates the current ChatGPT Send control with the selected app", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      linkHref: "",
+      promptLinkHref: "app://asdk_app_6ab3b56de6d48191beec1e050abb549a",
+      sendLabelOnly: true,
+    });
+    expect(
+      vm.runInContext(activateTaskScript(expectedHref, "Farol Dev"), context),
+    ).toEqual({ activated: true });
+    expect(contacts.clicked).toBe(1);
+  });
+
+  it("rejects a matching app name with a non-app prompt link", () => {
+    const { context, contacts } = pageContext(expectedHref, "Farol Dev", {
+      composer: "rich",
+      chipTextInComposer: true,
+      linkHref: "",
+      promptLinkHref: "https://example.com/farol-dev",
+    });
+    expect(
+      vm.runInContext(
+        verifyChatGptAppScript("Farol Dev", expectedHref),
+        context,
+      ),
+    ).toEqual({ state: "blocked", reason: "missing" });
+    expect(
+      vm.runInContext(activateTaskScript(expectedHref, "Farol Dev"), context),
+    ).toEqual({ appSelectionLost: true });
+    expect(contacts.clicked).toBe(0);
   });
 
   it("inserts the check through the editor without detaching the selected app", () => {

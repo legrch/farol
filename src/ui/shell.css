@@ -639,6 +639,39 @@ html:not([data-full-screen="true"])[data-sidebar="overlay"] .window-bar {
   overflow: hidden;
 }
 
+.browser-sidebar-toggle {
+  flex: 0 0 30px;
+  align-self: center;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.browser-sidebar-toggle:hover,
+.browser-sidebar-toggle:focus-visible {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.browser-sidebar-toggle[hidden] {
+  display: none;
+}
+
+.browser-sidebar-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
 .task-tab-item {
   position: relative;
   flex: 1 1 210px;

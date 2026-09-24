@@ -2784,6 +2784,12 @@ function chatGptPreSubmitRemedy(code: string | null): string | null {
   if (code === "CHATGPT_COMPOSER_DRAFT_PRESENT") {
     return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
   }
+  if (code === "CHATGPT_TEMPORARY_CHAT_REQUIRED") {
+    return "Nothing was sent. Farol could not confirm a personalized temporary chat; your history and draft were left unchanged.";
+  }
+  if (code === "CHATGPT_INSTANT_MODEL_REQUIRED") {
+    return "Nothing was sent. Farol could not confirm Instant as the selected model for this check.";
+  }
   return null;
 }
 
@@ -5052,6 +5058,12 @@ function render(notify = true): void {
         section === "browser" &&
         !setupJourney.open),
   );
+  required<HTMLButtonElement>("#browser-sidebar-toggle").hidden = !(
+    bootstrap.environment === "dev" &&
+    section === "browser" &&
+    !setupJourney.open &&
+    browserHomeStatus === "ready"
+  );
   const newTask = required<HTMLButtonElement>("#new-task");
   const chatGptReady = chatGptRouteState() === "ready";
   required("#window-mode").textContent = windowModeLabel({
@@ -5828,6 +5840,15 @@ async function start(): Promise<void> {
   required<HTMLButtonElement>("#browser-task-menu").addEventListener(
     "click",
     openTaskMenu,
+  );
+  required<HTMLButtonElement>("#browser-sidebar-toggle").addEventListener(
+    "click",
+    () => {
+      void configureProduct(
+        { kind: "chatgpt.toggle-sidebar" },
+        "ChatGPT sidebar toggled.",
+      );
+    },
   );
   required<HTMLButtonElement>("#browser-review-request").addEventListener(
     "click",

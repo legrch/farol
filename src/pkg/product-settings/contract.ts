@@ -404,6 +404,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   ProductGeneralSettingsSchema.extend({ kind: z.literal("general.update") }),
   z.strictObject({ kind: z.literal("chatgpt.open-sign-in") }),
   z.strictObject({ kind: z.literal("chatgpt.open-browser") }),
+  z.strictObject({ kind: z.literal("chatgpt.toggle-sidebar") }),
 
   // Fixed public destinations only; the renderer cannot supply a URL.
   z.strictObject({
@@ -772,6 +773,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
         "CHATGPT_APP_SELECTION_CONFLICT",
         "CHATGPT_APP_SELECTION_LOST",
         "CHATGPT_COMPOSER_DRAFT_PRESENT",
+        "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
         "CHATGPT_TASK_PAGE_LOST",
         "CHATGPT_TASK_ERROR",
         "CHATGPT_USAGE_LIMITED",
@@ -834,6 +837,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
         "CHATGPT_APP_SELECTION_CONFLICT",
         "CHATGPT_APP_SELECTION_LOST",
         "CHATGPT_COMPOSER_DRAFT_PRESENT",
+        "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
         "CHATGPT_TASK_PAGE_LOST",
         "CHATGPT_TASK_ERROR",
         "CHATGPT_USAGE_LIMITED",
@@ -1210,6 +1215,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CHATGPT_APP_SELECTION_CONFLICT",
       "CHATGPT_APP_SELECTION_LOST",
       "CHATGPT_COMPOSER_DRAFT_PRESENT",
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
       "DEV_MCP_PROOF_DEV_ONLY",
       "DEV_MCP_PROOF_PREPARE_FAILED",
       "DEV_MCP_PROOF_NOT_PREPARED",

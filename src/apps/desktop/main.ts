@@ -3793,22 +3793,27 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     }
     const prompt = `Use the selected Farol Dev app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
-    const result = await chatGptRoute.runReadonlyTask(prompt, [], {
-      onDispatchIntent: async () => {
-        if (claimed) return;
-        await prepareConnectorAppVerificationAttempt(
-          stateRoot,
-          challenge.challengeSha256,
-          async () =>
-            (
-              await configuration!.recordSecureMcpAppPending(
-                runtime.runtimeGeneration,
-              )
-            ).ok,
-        );
-        claimed = true;
+    const result = await chatGptRoute.runReadonlyTask(
+      prompt,
+      [],
+      {
+        onDispatchIntent: async () => {
+          if (claimed) return;
+          await prepareConnectorAppVerificationAttempt(
+            stateRoot,
+            challenge.challengeSha256,
+            async () =>
+              (
+                await configuration!.recordSecureMcpAppPending(
+                  runtime.runtimeGeneration,
+                )
+              ).ok,
+          );
+          claimed = true;
+        },
       },
-    });
+      "temporary-instant",
+    );
     if (
       result.state === "failed_before_submit" ||
       result.state === "not_authenticated"
@@ -3835,7 +3840,9 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
           preSubmitCode === "CHATGPT_APP_SELECTION_AMBIGUOUS" ||
           preSubmitCode === "CHATGPT_APP_SELECTION_CONFLICT" ||
           preSubmitCode === "CHATGPT_APP_SELECTION_LOST" ||
-          preSubmitCode === "CHATGPT_COMPOSER_DRAFT_PRESENT"
+          preSubmitCode === "CHATGPT_COMPOSER_DRAFT_PRESENT" ||
+          preSubmitCode === "CHATGPT_TEMPORARY_CHAT_REQUIRED" ||
+          preSubmitCode === "CHATGPT_INSTANT_MODEL_REQUIRED"
           ? preSubmitCode
           : "CONNECTOR_APP_VERIFICATION_BEFORE_SUBMIT_FAILED",
       );
@@ -5301,6 +5308,18 @@ async function configureAdmittedProduct(
       if (opened.status !== "opened") {
         browserHomeSurfaceOpen = false;
         applyLayout();
+        return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
+      }
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: configuration.snapshot(),
+      });
+    }
+    case "chatgpt.toggle-sidebar": {
+      if (runtimeEnvironment !== "dev" || !chatGptRoute) {
+        return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
+      }
+      if (!(await chatGptRoute.toggleSidebar())) {
         return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
       }
       return ProductConfigurationResultSchema.parse({

@@ -49,6 +49,7 @@ const activatedControlSchema = z.strictObject({ activated: z.boolean() });
 const activatedTaskSchema = z.union([
   navigatedTaskSchema,
   z.strictObject({ appSelectionLost: z.literal(true) }),
+  z.strictObject({ profileLost: z.literal(true) }),
   activatedControlSchema,
 ]);
 
@@ -357,6 +358,100 @@ export function collapseChatGptSidebarScript(): string {
   })()`;
 }
 
+export const toggleChatGptSidebarScript = `(() => {
+  const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar",
+    "Open sidebar", "Show sidebar", "Expand sidebar"]);
+  const button = [...document.querySelectorAll("button[aria-label]")].find(
+    (candidate) => labels.has(candidate.getAttribute("aria-label")) &&
+      candidate.getClientRects().length > 0 && !candidate.disabled);
+  if (!button) return false;
+  button.click();
+  return true;
+})()`;
+
+// Connector checks must not inherit the owner's current conversation or model.
+// These probes intentionally inspect provider controls instead of trusting a
+// URL parameter or a saved ChatGPT preference as proof of the active mode.
+export const temporaryInstantProfileProbe = `(() => {
+  const visible = (element) => {
+    if (!(element instanceof HTMLElement)) return false;
+    const style = getComputedStyle(element);
+    const box = element.getBoundingClientRect();
+    return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+  };
+  const composer = [
+    document.querySelector("#prompt-textarea"),
+    document.querySelector('[data-testid="prompt-textarea"]'),
+    document.querySelector('[contenteditable="true"][data-virtualkeyboard="true"]')
+  ].find(visible);
+  const draft = composer instanceof HTMLTextAreaElement
+    ? composer.value
+    : composer?.textContent || "";
+  const controls = [...document.querySelectorAll("button")].filter(visible);
+  const temporary = new URL(location.href).searchParams.get("temporary-chat") === "true" &&
+    controls.some((button) => button.getAttribute("aria-label") === "Turn off temporary chat");
+  const personalized = controls.some((button) => /^Personalized$/u.test((button.textContent || "").trim()));
+  const personalizationReady = controls.some((button) =>
+    /^(Personalized|Unpersonalized)$/u.test((button.textContent || "").trim()));
+  const modelButton = controls.find((button) =>
+    button.getAttribute("aria-label") === "Select ChatGPT model");
+  const instant = modelButton && /^Instant$/u.test((modelButton.innerText || "").trim());
+  return { composerReady: !!composer, draftPresent: draft.trim().length > 0,
+    temporary, personalized, personalizationReady, instant: !!instant, modelReady: !!modelButton };
+})()`;
+
+export const openInstantPowerPickerScript = `(() => {
+  const modelButton = [...document.querySelectorAll("button")].find((button) =>
+    button.getAttribute("aria-label") === "Select ChatGPT model" && !button.disabled &&
+    button.getClientRects().length > 0);
+  if (!modelButton) return false;
+  modelButton.click();
+  return true;
+})()`;
+
+export const openTemporaryPersonalizationScript = `(() => {
+  const button = [...document.querySelectorAll("button")].find((candidate) =>
+    (candidate.textContent || "").trim() === "Unpersonalized" &&
+    candidate.getClientRects().length > 0 && !candidate.disabled);
+  if (!button) return false;
+  button.click();
+  return true;
+})()`;
+
+export const selectTemporaryPersonalizationScript = `(() => {
+  const option = [...document.querySelectorAll('[role="menuitemradio"],[role="menuitem"],[role="option"]')]
+    .find((candidate) => /^Personalized\\b/u.test((candidate.textContent || "").trim()) &&
+      candidate.getClientRects().length > 0);
+  if (!option) return false;
+  option.click();
+  return true;
+})()`;
+
+export const focusInstantPowerSliderScript = `(() => {
+  const slider = [...document.querySelectorAll('[role="slider"],input[type="range"]')]
+    .find((element) => element.getClientRects().length > 0);
+  if (!(slider instanceof HTMLElement)) return { ready: false };
+  const minimum = Number(slider.getAttribute("aria-valuemin") ?? (slider instanceof HTMLInputElement ? slider.min : ""));
+  const current = Number(slider.getAttribute("aria-valuenow") ?? (slider instanceof HTMLInputElement ? slider.value : ""));
+  if (!Number.isFinite(minimum) || !Number.isFinite(current)) return { ready: false };
+  slider.focus();
+  return { ready: true, atMinimum: current === minimum };
+})()`;
+
+const temporaryInstantProfileSchema = z.object({
+  composerReady: z.boolean(),
+  draftPresent: z.boolean(),
+  temporary: z.boolean(),
+  personalized: z.boolean(),
+  personalizationReady: z.boolean(),
+  instant: z.boolean(),
+  modelReady: z.boolean(),
+});
+const instantPowerSliderSchema = z.object({
+  ready: z.boolean(),
+  atMinimum: z.boolean().optional(),
+});
+
 const activityProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -428,7 +523,8 @@ function appSelectionPrelude(appName: string): string {
     const selectedSelector = [
       '[data-testid="composer-app-chip"]',
       '[data-testid*="app-mention"]',
-      '[data-testid*="connector-chip"]'
+      '[data-testid*="connector-chip"]',
+      '[data-prompt-link-href^="app://asdk_app_"]'
     ].join(",");
     const normalizedLabel = (element) => {
       const raw = (
@@ -456,6 +552,9 @@ function appSelectionPrelude(appName: string): string {
       if (!(input instanceof HTMLElement)) return { state: "missing" };
       const root = input.closest("form") || input.parentElement || input;
       const pluginIdentity = (element) => {
+        const promptLink = element.getAttribute("data-prompt-link-href") || "";
+        const promptMatch = /^app:\\/\\/(asdk_app_[A-Za-z0-9]+)$/u.exec(promptLink);
+        if (promptMatch) return "plugin_" + promptMatch[1];
         const marked = element.getAttribute("data-plugin-id") ||
           element.getAttribute("data-app-id");
         if (marked && /^plugin_asdk_app_[A-Za-z0-9]+$/u.test(marked)) return marked;
@@ -469,7 +568,9 @@ function appSelectionPrelude(appName: string): string {
       const selectedLinks = [...input.querySelectorAll('a[href*="/plugins/plugin_asdk_app_"]')]
         .filter((link) => pluginIdentity(link) !== null && appElementVisible(link));
       const markerCandidates = [...root.querySelectorAll(selectedSelector)]
-        .filter(appElementVisible);
+        .filter((element) => appElementVisible(element) &&
+          (element.getAttribute("data-prompt-link-href") === null ||
+            pluginIdentity(element) !== null));
       const raw = [...new Set([...markerCandidates, ...selectedLinks])];
       const markers = raw.filter((candidate, index) =>
         !raw.some((other, otherIndex) => {
@@ -750,7 +851,7 @@ export function installManualAppGateScript(appName: string): string {
       if (!(target instanceof Element)) return;
       const button = target.closest("button");
       const form = button?.closest("form");
-      const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"]');
+      const knownSend = target.closest('[data-testid="send-button"],button[aria-label="Send prompt"],button[aria-label="Send message"],button[aria-label="Send"]');
       const knownCancel = target.closest('[data-testid="stop-button"],button[aria-label="Stop generating"],button[aria-label="Stop"]');
       const formComposer = form instanceof HTMLFormElement
         ? submissionComposerIn(form)
@@ -905,10 +1006,24 @@ export function prepareTaskScript(
 export function activateTaskScript(
   expectedHref: string,
   requiredAppName?: string,
+  requireTemporaryInstant = false,
 ): string {
   return `(() => {
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
+    ${
+      requireTemporaryInstant
+        ? `if (new URL(location.href).searchParams.get("temporary-chat") !== "true" ||
+      ![...document.querySelectorAll("button")].some((button) =>
+        button.getAttribute("aria-label") === "Turn off temporary chat" && button.getClientRects().length > 0) ||
+      ![...document.querySelectorAll("button")].some((button) =>
+        (button.textContent || "").trim() === "Personalized" && button.getClientRects().length > 0) ||
+      ![...document.querySelectorAll("button")].some((button) =>
+        button.getAttribute("aria-label") === "Select ChatGPT model" &&
+        (button.innerText || "").trim() === "Instant" && button.getClientRects().length > 0))
+      return { profileLost: true };`
+        : ""
+    }
     ${requiredAppName ? appSelectionPrelude(requiredAppName) : ""}
     ${requiredAppName ? 'if (appSelection().state !== "bound") return { appSelectionLost: true };' : ""}
     const visible = (element) => {
@@ -920,7 +1035,8 @@ export function activateTaskScript(
     const send = [
       document.querySelector('[data-testid="send-button"]'),
       document.querySelector('button[aria-label="Send prompt"]'),
-      document.querySelector('button[aria-label="Send message"]')
+      document.querySelector('button[aria-label="Send message"]'),
+      document.querySelector('button[aria-label="Send"]')
     ].find((element) => visible(element) && element instanceof HTMLButtonElement && !element.disabled);
     if (!(send instanceof HTMLButtonElement)) return { activated: false };
     send.click();
@@ -928,13 +1044,15 @@ export function activateTaskScript(
   })()`;
 }
 
-function taskProbeScript(
+export function taskProbeScript(
   prompt: string,
   baselineMessageIds: readonly string[],
+  requiredAppName?: string,
 ): string {
   return `(() => {
     const prompt = ${JSON.stringify(prompt)};
     const baselineMessageIds = new Set(${JSON.stringify(baselineMessageIds)});
+    const requiredAppName = ${JSON.stringify(requiredAppName ?? null)};
     const usageLimitPattern = new RegExp(${JSON.stringify(chatGptUsageLimitPattern.source)}, ${JSON.stringify(chatGptUsageLimitPattern.flags)});
     const visible = (element) => {
       if (!(element instanceof HTMLElement)) return false;
@@ -948,7 +1066,11 @@ function taskProbeScript(
     const users = messages.filter((element) => element.getAttribute('data-message-author-role') === 'user');
     const currentUser = [...users].reverse().find((element) => {
       const id = messageId(element);
-      return id !== null && !baselineMessageIds.has(id) && (element.textContent || '').trim() === prompt.trim();
+      if (id === null || baselineMessageIds.has(id)) return false;
+      const rendered = (element.textContent || '').trim();
+      if (rendered === prompt.trim()) return true;
+      return requiredAppName !== null && rendered.startsWith(requiredAppName) &&
+        rendered.slice(requiredAppName.length).trim() === prompt.trim();
     }) ?? null;
     const turnUserId = messageId(currentUser);
     let currentAssistant = null;
@@ -982,7 +1104,8 @@ function taskProbeScript(
     const sendVisible = [
       document.querySelector('[data-testid="send-button"]'),
       document.querySelector('button[aria-label="Send prompt"]'),
-      document.querySelector('button[aria-label="Send message"]')
+      document.querySelector('button[aria-label="Send message"]'),
+      document.querySelector('button[aria-label="Send"]')
     ].some(visible);
     const errors = [
       document.querySelector('[data-testid="conversation-turn-error"]'),
@@ -1146,6 +1269,8 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_APP_SELECTION_CONFLICT"
     | "CHATGPT_APP_SELECTION_LOST"
     | "CHATGPT_COMPOSER_DRAFT_PRESENT"
+    | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
+    | "CHATGPT_INSTANT_MODEL_REQUIRED"
     | "CHATGPT_TASK_PAGE_LOST"
     | "CHATGPT_TASK_ERROR"
     | "CHATGPT_USAGE_LIMITED"
@@ -1232,6 +1357,26 @@ export class ChatGptRoute {
       !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u.test(options.requiredAppName)
     ) {
       throw new Error("CHATGPT_REQUIRED_APP_NAME_INVALID");
+    }
+  }
+
+  async toggleSidebar(): Promise<boolean> {
+    const candidate = this.routeWindow;
+    if (
+      !candidate ||
+      candidate.isDestroyed() ||
+      !isChatGptPage(candidate.webContents.getURL(), this.options.homeUrl)
+    )
+      return false;
+    try {
+      return (
+        (await candidate.webContents.executeJavaScript(
+          toggleChatGptSidebarScript,
+          true,
+        )) === true
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -1711,10 +1856,150 @@ export class ChatGptRoute {
     };
   }
 
+  private async prepareTemporaryInstantProfile(
+    candidate: ChatGptRouteSurface,
+  ): Promise<
+    | "CHATGPT_COMPOSER_DRAFT_PRESENT"
+    | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
+    | "CHATGPT_INSTANT_MODEL_REQUIRED"
+    | null
+  > {
+    const contents = candidate.webContents;
+    const read = async () => {
+      try {
+        return temporaryInstantProfileSchema.safeParse(
+          await contents.executeJavaScript(temporaryInstantProfileProbe, true),
+        );
+      } catch {
+        return temporaryInstantProfileSchema.safeParse(null);
+      }
+    };
+    const initial = await read();
+    if (!initial.success || !initial.data.composerReady)
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
+
+    const temporaryUrl = new URL(this.options.homeUrl);
+    temporaryUrl.searchParams.set("temporary-chat", "true");
+    try {
+      await candidate.loadURL(temporaryUrl.href);
+    } catch {
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    }
+    if (this.routeWindow !== candidate || candidate.isDestroyed())
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    const deadline = Date.now() + 12_000;
+    let profile = await read();
+    while (
+      Date.now() < deadline &&
+      (!profile.success ||
+        !profile.data.composerReady ||
+        !profile.data.temporary ||
+        !profile.data.personalizationReady ||
+        !profile.data.modelReady)
+    ) {
+      await delay(200);
+      if (this.routeWindow !== candidate || candidate.isDestroyed())
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      profile = await read();
+    }
+    if (
+      !profile.success ||
+      !profile.data.composerReady ||
+      !profile.data.temporary ||
+      !profile.data.personalizationReady ||
+      !profile.data.modelReady ||
+      profile.data.draftPresent
+    )
+      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    if (!profile.data.personalized) {
+      try {
+        if (
+          (await contents.executeJavaScript(
+            openTemporaryPersonalizationScript,
+            true,
+          )) !== true
+        )
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        let selected = false;
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          if (
+            (await contents.executeJavaScript(
+              selectTemporaryPersonalizationScript,
+              true,
+            )) === true
+          ) {
+            selected = true;
+            break;
+          }
+          await delay(100);
+        }
+        if (!selected) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+        profile = await read();
+        if (!profile.success || !profile.data.personalized)
+          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      } catch {
+        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+      }
+    }
+    if (!profile.data.modelReady) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+
+    try {
+      if (
+        (await contents.executeJavaScript(
+          openInstantPowerPickerScript,
+          true,
+        )) !== true
+      )
+        return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      let minimumObserved = false;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const slider = instantPowerSliderSchema.safeParse(
+          await contents.executeJavaScript(focusInstantPowerSliderScript, true),
+        );
+        if (!slider.success || !slider.data.ready)
+          return "CHATGPT_INSTANT_MODEL_REQUIRED";
+        if (slider.data.atMinimum) {
+          minimumObserved = true;
+          break;
+        }
+        contents.sendInputEvent({ type: "keyDown", keyCode: "Left" });
+        contents.sendInputEvent({ type: "keyUp", keyCode: "Left" });
+        await delay(80);
+      }
+      if (!minimumObserved) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      contents.sendInputEvent({ type: "keyDown", keyCode: "Escape" });
+      contents.sendInputEvent({ type: "keyUp", keyCode: "Escape" });
+    } catch {
+      return "CHATGPT_INSTANT_MODEL_REQUIRED";
+    }
+    let selected = await read();
+    const selectedDeadline = Date.now() + 2_000;
+    while (
+      selected.success &&
+      !selected.data.instant &&
+      Date.now() < selectedDeadline
+    ) {
+      await delay(100);
+      if (this.routeWindow !== candidate || candidate.isDestroyed())
+        return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      selected = await read();
+    }
+    return selected.success &&
+      selected.data.composerReady &&
+      !selected.data.draftPresent &&
+      selected.data.temporary &&
+      selected.data.personalized &&
+      selected.data.instant
+      ? null
+      : "CHATGPT_INSTANT_MODEL_REQUIRED";
+  }
+
   async runReadonlyTask(
     prompt: string,
     attachments: readonly StagedChatGptAttachment[] = [],
     observer: ChatGptTaskObserver = {},
+    profile: "ordinary" | "temporary-instant" = "ordinary",
   ): Promise<ChatGptReadonlyTaskResult> {
     if (this.taskInFlight) {
       return {
@@ -1785,6 +2070,32 @@ export class ChatGptRoute {
           observedCharacters,
           outputText: observedText,
         };
+      }
+      if (profile === "temporary-instant") {
+        const running = await candidate.webContents
+          .executeJavaScript(activityProbe, true)
+          .then((answer) => activityProbeSchema.safeParse(answer))
+          .catch(() => activityProbeSchema.safeParse(null));
+        if (!running.success || running.data.running) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_IN_PROGRESS",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        const profileFailure =
+          await this.prepareTemporaryInstantProfile(candidate);
+        if (profileFailure !== null) {
+          return {
+            state: "failed_before_submit",
+            code: profileFailure,
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
       }
       // The page identity `observe()` just validated, checked once before
       // dispatch. Every remaining step before the click that actually
@@ -2044,6 +2355,7 @@ export class ChatGptRoute {
             activateTaskScript(
               dispatchIdentityUrl,
               this.options.requiredAppName,
+              profile === "temporary-instant",
             ),
             true,
           ),
@@ -2074,6 +2386,16 @@ export class ChatGptRoute {
           return {
             state: "failed_before_submit",
             code: "CHATGPT_APP_SELECTION_LOST",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if ("profileLost" in activated.data) {
+          submissionPhase = "not_attempted";
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_INSTANT_MODEL_REQUIRED",
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -2150,7 +2472,11 @@ export class ChatGptRoute {
         }
         const probe = taskProbeSchema.safeParse(
           await active.webContents.executeJavaScript(
-            taskProbeScript(prompt, preparedTask.baselineMessageIds),
+            taskProbeScript(
+              prompt,
+              preparedTask.baselineMessageIds,
+              this.options.requiredAppName,
+            ),
             true,
           ),
         );
@@ -2386,7 +2712,7 @@ export class ChatGptRoute {
         }
         const probe = taskProbeSchema.safeParse(
           await active.webContents.executeJavaScript(
-            taskProbeScript(input.prompt, []),
+            taskProbeScript(input.prompt, [], this.options.requiredAppName),
             true,
           ),
         );
