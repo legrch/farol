@@ -12,6 +12,7 @@ import {
   completedStepAction,
   connectionDraftChanged,
   firstIncompleteSetupStep,
+  freshAppCheckNeedsRepair,
   GuidedConnectionUpdate,
   GuidedCredentialSave,
   GuidedFreshAppVerification,
@@ -45,7 +46,8 @@ function element<T extends HTMLElement>(selector: string): T {
 }
 const failureMessages = {
   busy: "Another connection change is already running.",
-  prerequisite: "Sign in and add a folder before activating local access.",
+  prerequisite:
+    "Check ChatGPT sign-in, saved folder access, and the current Connection before using local access.",
   "invalid-fields":
     "Enter a valid tunnel ID and runtime API key, not an admin key. The connection was not stopped.",
   "new-key-required":
@@ -1032,6 +1034,60 @@ export class GuidedOnboardingView {
         this.message = failureMessages["inspect-existing-operation"];
         return;
       }
+      if (fresh) {
+        const folder = await refreshApprovedFolderAccess({
+          settings: () => this.port.settings(),
+          buildId: () => this.port.buildId(),
+          check: (workspaceId) =>
+            this.port.configure(
+              { kind: "computer.check-folder", workspaceId },
+              "Saved folder access checked.",
+            ),
+        });
+        if (folder !== "ready") {
+          this.message =
+            folder === "missing"
+              ? "No folder is shared, so the local connector cannot be checked. Add a folder if you want local access."
+              : "Saved folder access needs attention. Review Folders before running another check.";
+          return;
+        }
+        const before = this.facts();
+        if (
+          before.runtime !== "ready" ||
+          !before.runtimeCurrent ||
+          before.verificationIdentity === null
+        ) {
+          const reconnected = await this.connection.run(
+            {
+              read: () => this.facts(),
+              run: (command) =>
+                this.port.configure(command, "Connection action confirmed."),
+            },
+            { tunnelId: before.tunnelId ?? "", runtimeKey: "" },
+            true,
+          );
+          if (!reconnected.ok) {
+            this.message = failureMessages[reconnected.reason];
+            return;
+          }
+        }
+      }
+      const ready = this.facts();
+      if (
+        !ready.available ||
+        ready.chat !== "ready" ||
+        ready.folder !== "ready" ||
+        !ready.hasFolder ||
+        !ready.client ||
+        !ready.credentialStored ||
+        ready.runtime !== "ready" ||
+        !ready.runtimeCurrent ||
+        ready.verificationIdentity === null
+      ) {
+        this.message =
+          "The current connector is not ready for a ChatGPT check. Review Connection; no message was sent.";
+        return;
+      }
       if (
         !(await this.port.configure(
           { kind: "chatgpt.open-sign-in" },
@@ -1039,13 +1095,14 @@ export class GuidedOnboardingView {
         ))
       )
         return;
-      const freshResult = fresh
-        ? await this.freshAppVerification.run({
-            read: () => this.facts(),
-            run: (command) =>
-              this.port.configure(command, "Connection check completed."),
-          })
-        : null;
+      const freshResult =
+        fresh && freshAppCheckNeedsRepair(ready)
+          ? await this.freshAppVerification.run({
+              read: () => this.facts(),
+              run: (command) =>
+                this.port.configure(command, "Connection check completed."),
+            })
+          : null;
       const ok =
         freshResult !== null
           ? freshResult.ok

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProductConfigurationCommand } from "../../src/pkg/product-settings/contract";
-import { GuidedFreshAppVerification } from "../../src/ui/guided-onboarding-actions";
+import {
+  freshAppCheckNeedsRepair,
+  GuidedFreshAppVerification,
+} from "../../src/ui/guided-onboarding-actions";
 import {
   onboardingFacts,
   type OnboardingFacts,
@@ -38,6 +41,23 @@ function harness() {
 }
 
 describe("explicit fresh Farol Dev app verification", () => {
+  it("uses the current challenge when the saved app proof is stale", () => {
+    expect(
+      freshAppCheckNeedsRepair({
+        ...initial(),
+        runtimeCurrent: true,
+        attachmentCurrent: false,
+      }),
+    ).toBe(false);
+    expect(
+      freshAppCheckNeedsRepair({
+        ...initial(),
+        runtimeCurrent: true,
+        attachmentCurrent: true,
+      }),
+    ).toBe(true);
+  });
+
   it("requires a new runtime/challenge before sending exactly one message", async () => {
     const port = harness();
     expect(await new GuidedFreshAppVerification().run(port)).toEqual({

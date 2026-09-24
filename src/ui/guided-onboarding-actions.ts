@@ -72,6 +72,13 @@ export function completedStepAction(
   return current[step] || remembered[step] ? "continue" : null;
 }
 
+// A remembered app receipt can outlive the current runtime. Rechecking that
+// stale receipt must use the current challenge directly: the repair path
+// requires an attachment to this very runtime and would refuse before send.
+export function freshAppCheckNeedsRepair(facts: OnboardingFacts): boolean {
+  return facts.runtimeCurrent && facts.attachmentCurrent;
+}
+
 export async function refreshApprovedFolderAccess(port: {
   readonly settings: () => ProductSettings | null;
   readonly buildId: () => string;
