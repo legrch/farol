@@ -137,6 +137,7 @@ import { sidebarToggleLeft } from "./window-chrome-geometry";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
+  sidebarShortcutMatches,
   sectionForShortcut,
   type NavigationShortcuts,
 } from "../pkg/ipc/navigation-shortcuts";
@@ -3358,7 +3359,8 @@ function renderSettingsNavigation(): void {
   required<HTMLElement>("#settings-description").textContent = enabled
     ? "Preferences are saved in this Farol Dev profile."
     : "Changes are saved to Farol Next state only and read back before they are shown as applied.";
-  required<HTMLElement>("#settings-nav").hidden = !enabled;
+  required<HTMLElement>("#settings-nav").hidden =
+    !enabled || section !== "settings" || setupJourney.open;
   document
     .querySelectorAll<HTMLButtonElement>("#settings-nav button")
     .forEach((button) => {
@@ -3386,6 +3388,8 @@ function shortcutSelects(): HTMLSelectElement[] {
 }
 
 function setShortcutDraft(shortcuts: NavigationShortcuts): void {
+  required<HTMLSelectElement>("#setting-sidebar-shortcut").value =
+    shortcuts.sidebar;
   for (const select of shortcutSelects()) {
     const section = select.dataset.shortcutSection as keyof NavigationShortcuts;
     select.value = String(shortcuts[section]);
@@ -3401,6 +3405,9 @@ async function applyShortcutDraft(): Promise<void> {
       Number(select.value),
     ]),
   );
+  values.sidebar = required<HTMLSelectElement>(
+    "#setting-sidebar-shortcut",
+  ).value;
   const parsed = parseNavigationShortcuts(values);
   const feedback = required<HTMLElement>("#shortcut-feedback");
   if (!parsed) {
@@ -4770,7 +4777,7 @@ function renderOverlayState(): void {
       : "Expand sidebar";
   toggle.setAttribute("aria-expanded", String(expanded));
   toggle.setAttribute("aria-label", label);
-  toggle.title = `${label} (⌃⌘S)`;
+  toggle.title = `${label}${navigationShortcuts.sidebar === "off" ? "" : ` (⌃⌘${navigationShortcuts.sidebar.toUpperCase()})`}`;
   required<HTMLButtonElement>("#sidebar-backdrop").hidden =
     shellOverlay !== "sidebar";
 
@@ -6249,6 +6256,17 @@ async function start(): Promise<void> {
     if (event.key === "Escape" && shellOverlay !== "none") {
       event.preventDefault();
       closeOverlay();
+      return;
+    }
+    if (
+      event.ctrlKey &&
+      event.metaKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      sidebarShortcutMatches(navigationShortcuts, event.key)
+    ) {
+      event.preventDefault();
+      toggleSidebar();
       return;
     }
     if (event.metaKey && !event.altKey && !event.ctrlKey && !event.shiftKey) {

@@ -167,6 +167,63 @@ export function onboardingProgress(facts: OnboardingFacts): readonly boolean[] {
   return [chat, folder, tunnel, app, chat && folder && tunnel && app];
 }
 
+// The checklist describes what the owner has completed. A new build may
+// require fresh runtime evidence before Computer is usable, but installing it
+// does not erase the already completed setup. Match every saved witness to
+// the still-approved folder and connection before showing a past completion.
+export function onboardingCompletedSteps(
+  settings: ProductSettings | null,
+): readonly boolean[] {
+  if (!settings) return [false, false, false, false, false];
+  const connector = settings.connectors.secureMcp;
+  const workspaceIds = new Set(
+    settings.computer.workspaces.map((item) => item.workspaceId),
+  );
+  const chat = routeReadiness(settings.setup.chatgpt) === "ready";
+  const witness = settings.setup.computer.verified;
+  const folder =
+    witness !== null &&
+    witness.configRevision === settings.computer.generation &&
+    witness.workspaceId !== null &&
+    workspaceIds.has(witness.workspaceId) &&
+    !settings.setup.computer.outcomeUnknown &&
+    settings.computer.workspaces.length > 0 &&
+    settings.computer.workspaces.every((workspace) => {
+      const check = workspace.accessCheck;
+      const identity = workspace.rootIdentity;
+      return (
+        check != null &&
+        identity !== undefined &&
+        check.computerGeneration === settings.computer.generation &&
+        check.rootIdentity.device === identity.device &&
+        check.rootIdentity.inode === identity.inode
+      );
+    });
+  const runtime = connector.runtime;
+  const connection =
+    folder &&
+    connector.tunnelClient !== null &&
+    connector.credential === "stored" &&
+    connector.tunnelId !== null &&
+    runtime?.state === "ready" &&
+    runtime.buildId === witness?.buildId &&
+    runtime.computerGeneration === settings.computer.generation &&
+    runtime.connectorGeneration === connector.generation &&
+    !settings.setup.connect.outcomeUnknown;
+  const attachment = connector.attachment;
+  const app =
+    connection &&
+    attachment !== null &&
+    settings.setup.connect.verified !== null &&
+    attachment.buildId === runtime?.buildId &&
+    attachment.tunnelId === connector.tunnelId &&
+    attachment.connectorGeneration === connector.generation &&
+    attachment.computerGeneration === settings.computer.generation &&
+    attachment.runtimeGeneration === runtime?.runtimeGeneration &&
+    attachment.workspaceId === witness?.workspaceId;
+  return [chat, folder, connection, app, chat && folder && connection && app];
+}
+
 // Selecting another saved grant, or choosing a new folder, cannot inherit the
 // previous folder's Ready badge while the new choice is still unverified.
 export function onboardingProgressForFolderChoice(

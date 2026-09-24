@@ -784,6 +784,13 @@ try {
   await window.locator('.nav-item[data-section="settings"]').click();
   await window.locator("#settings-nav").waitFor({ state: "visible" });
   assert.equal(
+    await window
+      .locator("#settings-nav")
+      .evaluate((nav) => nav.parentElement.id),
+    "sidebar",
+    "SETTINGS_CATEGORIES_NOT_IN_FAROL_SIDEBAR",
+  );
+  assert.equal(
     await window.locator("#settings-computer-title").isVisible(),
     false,
     "SETTINGS_DUPLICATED_SETUP",
@@ -792,6 +799,20 @@ try {
   await window.locator("#settings-shortcuts-title").waitFor({
     state: "visible",
   });
+  await window.locator("#setting-sidebar-shortcut").selectOption("b");
+  await window.locator("#apply-shortcuts").click();
+  await window.locator('#shortcut-feedback[data-state="ready"]').waitFor();
+  await window.keyboard.press("Control+Meta+B");
+  await window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "rail",
+  );
+  await window.keyboard.press("Control+Meta+B");
+  await window.waitForFunction(
+    () => document.documentElement.dataset.sidebar === "full",
+  );
+  const savedBeforeConflict = await window.evaluate(() =>
+    localStorage.getItem("farol.next.navigation-shortcuts.v1"),
+  );
   await window.locator('[data-shortcut-section="browser"]').selectOption("4");
   await window.locator("#apply-shortcuts").click();
   assert.equal(
@@ -802,7 +823,7 @@ try {
     await window.evaluate(() =>
       localStorage.getItem("farol.next.navigation-shortcuts.v1"),
     ),
-    null,
+    savedBeforeConflict,
   );
   await window.locator('[data-shortcut-section="settings"]').selectOption("1");
   await window.locator("#apply-shortcuts").click();

@@ -326,20 +326,26 @@ function signInBannerRemovalScript(): string {
 function collapseChatGptSidebarScript(): string {
   return `(() => {
     const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar"]);
-    const collapse = () => {
-      const button = [...document.querySelectorAll("button[aria-label]")].find(
-        (candidate) => labels.has(candidate.getAttribute("aria-label"))
+    const deadline = Date.now() + 12000;
+    let lastAttempt = 0;
+    const timer = setInterval(() => {
+      if (Date.now() > deadline) { clearInterval(timer); return; }
+      const close = [...document.querySelectorAll("button[aria-label]")].find(
+        (candidate) => labels.has(candidate.getAttribute("aria-label")) &&
+          candidate.getAttribute("aria-expanded") !== "false" &&
+          getComputedStyle(candidate).pointerEvents !== "none"
       );
-      if (!button) return false;
-      button.click();
-      return true;
-    };
-    if (collapse()) return;
-    const observer = new MutationObserver(() => {
-      if (collapse()) observer.disconnect();
-    });
-    observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-label"] });
-    setTimeout(() => observer.disconnect(), 5000);
+      if (!close) {
+        const open = document.querySelector('button[aria-label="Open sidebar"][aria-expanded="false"]');
+        if (open && getComputedStyle(open).pointerEvents !== "none") clearInterval(timer);
+        return;
+      }
+      // The first click can happen before ChatGPT hydrates its handler. Only
+      // stop once its own controls confirm that the sidebar actually closed.
+      if (Date.now() - lastAttempt < 500) return;
+      lastAttempt = Date.now();
+      close.click();
+    }, 250);
   })()`;
 }
 

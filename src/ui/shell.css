@@ -179,6 +179,13 @@ html[data-sidebar="overlay"] .rail {
   background: var(--surface-soft);
 }
 
+/* A native ChatGPT view begins at the rail's right edge. Keep the reopen
+   control inside Farol's own hit-test area when the sidebar is collapsed. */
+html[data-sidebar="rail"] .sidebar-toggle {
+  top: 62px;
+  left: 23px;
+}
+
 .sidebar-toggle svg {
   width: 19px;
   height: 19px;
@@ -1359,13 +1366,10 @@ html[data-browser-chrome="false"][data-section="browser"]
 }
 
 .settings-nav {
-  position: sticky;
-  top: 16px;
-  float: left;
-  width: 170px;
   display: grid;
   gap: 4px;
-  margin: 16px 20px 0 0;
+  margin-top: 12px;
+  min-width: 0;
 }
 
 html[data-environment="dev"] [data-panel="settings"] {
@@ -1392,6 +1396,20 @@ html[data-environment="dev"] [data-panel="settings"] .panel-heading h1 {
   cursor: pointer;
 }
 
+html[data-sidebar="rail"] .settings-nav button {
+  width: 46px;
+  min-height: 38px;
+  overflow: hidden;
+  font-size: 0;
+  padding: 0;
+  text-align: center;
+}
+
+html[data-sidebar="rail"] .settings-nav button::before {
+  content: attr(data-rail-label);
+  font-size: 12px;
+}
+
 .settings-nav button:hover,
 .settings-nav button[aria-current="page"] {
   border-color: var(--line);
@@ -1412,8 +1430,7 @@ html[data-environment="dev"] [data-panel="settings"] .panel-heading h1 {
 html[data-environment="dev"] [data-panel="settings"] .settings-group,
 html[data-environment="dev"] [data-panel="settings"] #connection-diagnostics,
 html[data-environment="dev"] [data-panel="settings"] .settings-feedback {
-  margin-left: 190px;
-  max-width: min(940px, calc(100% - 190px));
+  max-width: 940px;
 }
 
 .shortcut-controls {
@@ -1467,14 +1484,6 @@ html[data-environment="dev"] [data-panel="settings"] .settings-feedback {
 }
 
 @media (max-width: 950px) {
-  .settings-nav {
-    position: static;
-    float: none;
-    width: auto;
-    display: flex;
-    flex-wrap: wrap;
-  }
-
   html[data-environment="dev"] [data-panel="settings"] .settings-group,
   html[data-environment="dev"] [data-panel="settings"] #connection-diagnostics,
   html[data-environment="dev"] [data-panel="settings"] .settings-feedback {
@@ -3203,8 +3212,11 @@ html[data-sidebar="rail"] .sign-in-return-button:not([hidden]) {
   font-weight: 550;
 }
 .onboarding-nav .onboarding-return {
-  font-size: 12px;
-  min-height: 34px;
+  font-size: 13px;
+  font-weight: 650;
+  min-height: 42px;
+  color: var(--text);
+  background: var(--surface-soft);
 }
 html[data-sidebar="rail"] .onboarding-nav button b,
 html[data-sidebar="rail"] .onboarding-nav-label,

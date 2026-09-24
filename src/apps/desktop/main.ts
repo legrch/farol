@@ -71,6 +71,7 @@ import { channels } from "../../pkg/ipc/channels";
 import {
   defaultNavigationShortcuts,
   parseNavigationShortcuts,
+  sidebarShortcutMatches,
   sectionForShortcut,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
@@ -6988,7 +6989,11 @@ function installApplicationMenu(): void {
         {
           id: "view.toggle-sidebar",
           label: "Show/Hide Sidebar",
-          accelerator: "Control+Command+S",
+          ...(navigationShortcuts.sidebar === "off"
+            ? {}
+            : {
+                accelerator: `Control+Command+${navigationShortcuts.sidebar.toUpperCase()}`,
+              }),
           click: requestSidebarToggle,
         },
         {
@@ -7289,7 +7294,11 @@ function handleShortcut(input: Input): boolean {
     return true;
   }
   if (setupOpen) return false;
-  if (input.control && input.meta && key === "s") {
+  if (
+    input.control &&
+    input.meta &&
+    sidebarShortcutMatches(navigationShortcuts, key)
+  ) {
     requestSidebarToggle();
     return true;
   }
@@ -7662,6 +7671,7 @@ function installIpc(): void {
     const parsed = parseNavigationShortcuts(value);
     if (!parsed) return { ok: false };
     navigationShortcuts = parsed;
+    installApplicationMenu();
     return { ok: true };
   });
   ipcMain.handle(channels.control, async (event, value: unknown) => {
@@ -7801,6 +7811,14 @@ async function createWindow(): Promise<void> {
   await createTaskViews();
   if (!demoMode && selectedTaskId) {
     await openLiveTaskSurface(selectedTaskId);
+    // Restore the other retained ChatGPT views behind the selected one. A
+    // tab switch can then show its already loaded page in the same frame;
+    // embedded surfaces only focus when they are actually visible.
+    void Promise.allSettled(
+      [...liveTaskRoutes.entries()]
+        .filter(([taskId]) => taskId !== selectedTaskId)
+        .map(([, route]) => route.open()),
+    );
   }
   for (const task of runtime?.tasks ?? []) {
     void consumeSse(task).catch((error: unknown) => {

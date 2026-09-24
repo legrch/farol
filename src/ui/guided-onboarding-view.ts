@@ -3,6 +3,7 @@ import type {
   ProductSettings,
 } from "../pkg/product-settings/contract";
 import {
+  onboardingCompletedSteps,
   onboardingFacts,
   onboardingProgress,
   onboardingSteps,
@@ -77,6 +78,7 @@ export class GuidedOnboardingView {
   private message = "";
   private feedbackStep: number | null = null;
   private readonly failedChecks = new Set<number>();
+  private readonly backgroundFolderChecks = new Set<string>();
   private readonly connection = new GuidedConnectionUpdate();
   private readonly credentials = new GuidedCredentialSave();
   private readonly freshAppVerification = new GuidedFreshAppVerification();
@@ -290,6 +292,24 @@ export class GuidedOnboardingView {
     if (!enabled) return;
     const facts = this.facts();
     const settings = this.port.settings();
+    if (active && settings && !this.busy) {
+      for (const folder of settings.computer.workspaces) {
+        if (
+          folder.accessCheck == null ||
+          folderAccessChecked(settings, folder, this.port.buildId())
+        )
+          continue;
+        const key = `${this.port.buildId()}:${settings.computer.generation}:${folder.workspaceId}`;
+        if (this.backgroundFolderChecks.has(key)) continue;
+        this.backgroundFolderChecks.add(key);
+        queueMicrotask(() => {
+          void this.port.configure(
+            { kind: "computer.check-folder", workspaceId: folder.workspaceId },
+            "Folder access refreshed.",
+          );
+        });
+      }
+    }
     const saved = facts.credentialStored && facts.tunnelId !== null;
     if (this.credentialsEditing === null && settings)
       this.credentialsEditing = !saved;
@@ -299,15 +319,22 @@ export class GuidedOnboardingView {
     if (!this.tunnelEdited && document.activeElement !== tunnel)
       tunnel.value = facts.tunnelId ?? "";
     const changed = editing && connectionDraftChanged(facts, this.draft());
-    const progress = this.progress();
+    const currentProgress = this.progress();
+    const completed = onboardingCompletedSteps(settings);
+    const progress = currentProgress.map(
+      (ready, index) => ready || completed[index],
+    );
+    const savedCompletion = progress[4] === true && currentProgress[4] !== true;
     const step = onboardingSteps[this.step]!;
     const complete = progress[this.step] === true;
-    const prerequisite = onboardingPrerequisite(this.step, progress);
+    const prerequisite = onboardingPrerequisite(this.step, currentProgress);
     const unknown = facts.outcomeUnknown && this.step >= 2 && this.step < 4;
     if (active)
-      element("#window-mode").textContent = progress[4]
+      element("#window-mode").textContent = currentProgress[4]
         ? "Setup complete · connection verified"
-        : `Setup · ${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete`;
+        : savedCompletion
+          ? "Setup complete · connection check needed"
+          : `Setup · ${progress.slice(0, 4).filter(Boolean).length} of 4 checks complete`;
     element<HTMLFormElement>("#onboarding-form").setAttribute(
       "aria-busy",
       String(this.busy),
@@ -337,11 +364,17 @@ export class GuidedOnboardingView {
     element("#onboarding-counter").textContent =
       this.step === 4 ? "SETUP OVERVIEW" : `STEP ${this.step + 1} OF 4`;
     element("#onboarding-title").textContent =
-      this.step === 4 && complete ? "You're connected" : step.title;
+      this.step === 4 && savedCompletion
+        ? "Your setup is saved"
+        : this.step === 4 && complete
+          ? "You're connected"
+          : step.title;
     element("#onboarding-copy").textContent =
-      this.step === 4 && complete
-        ? "Your connection is verified. Review a step any time to check it again or change your settings."
-        : step.copy;
+      this.step === 4 && savedCompletion
+        ? "You completed setup before this update. ChatGPT is available; check the connection again before using this computer from ChatGPT."
+        : this.step === 4 && complete
+          ? "Your connection is verified. Review a step any time to check it again or change your settings."
+          : step.copy;
     document
       .querySelectorAll<HTMLElement>("[data-onboarding-content]")
       .forEach((panel) => {
@@ -354,7 +387,9 @@ export class GuidedOnboardingView {
       ? this.busyLabel
       : this.step === 4
         ? complete
-          ? "Open ChatGPT"
+          ? savedCompletion
+            ? "Back to app"
+            : "Open ChatGPT"
           : "Continue setup"
         : unknown
           ? facts.runtime === "ready"
@@ -411,7 +446,9 @@ export class GuidedOnboardingView {
           : this.step === 2 && editing && !saved
             ? "First, save your tunnel credentials below."
             : complete
-              ? successes[this.step]!
+              ? !currentProgress[this.step]
+                ? "✓ Completed before this update · check current connection before using Computer"
+                : successes[this.step]!
               : unknown
                 ? "Check the previous result. It will not be sent again automatically."
                 : prerequisite !== null
@@ -525,11 +562,13 @@ export class GuidedOnboardingView {
         const detail = document.createElement("span");
         detail.textContent =
           index === 1
-            ? `${settings?.computer.workspaces.length ?? 0} folders · ${progress[1] ? "Ready" : "Add a folder"}`
+            ? `${settings?.computer.workspaces.length ?? 0} folders · ${currentProgress[1] ? "Ready" : progress[1] ? "Added; check on this version" : "Add a folder"}`
             : index === 2 && changed
               ? "Unsaved replacement"
               : progress[index]
-                ? "Verified · review or check again"
+                ? currentProgress[index]
+                  ? "Verified · review or check again"
+                  : "Completed before update · check current connection"
                 : index === 2 && saved
                   ? "Credentials saved · check connection"
                   : "Needs setup or verification";
@@ -554,9 +593,19 @@ export class GuidedOnboardingView {
         const checked =
           settings !== null &&
           folderAccessChecked(settings, folder, this.port.buildId());
+        const priorCheck = folder.accessCheck;
+        const checkedBeforeUpdate =
+          !checked &&
+          settings !== null &&
+          priorCheck != null &&
+          folder.rootIdentity !== undefined &&
+          priorCheck.computerGeneration === settings.computer.generation &&
+          priorCheck.rootIdentity.device === folder.rootIdentity.device &&
+          priorCheck.rootIdentity.inode === folder.rootIdentity.inode;
         const row = document.createElement("li");
         row.className = "onboarding-folder-card";
-        row.dataset.state = checked ? "ready" : "pending";
+        row.dataset.state =
+          checked || checkedBeforeUpdate ? "ready" : "pending";
         const copy = document.createElement("div");
         copy.className = "onboarding-folder-copy";
         const title = document.createElement("strong");
@@ -566,7 +615,7 @@ export class GuidedOnboardingView {
         path.textContent = folder.root;
         path.title = folder.root;
         const state = document.createElement("small");
-        state.textContent = `${checked ? "✓ Ready to use" : "Access needs attention"} · ${folder.access === "write" ? "Read and write" : "Read only"}`;
+        state.textContent = `${checked ? "✓ Ready to use" : checkedBeforeUpdate ? "✓ Added · check on this version before use" : "Access needs attention"} · ${folder.access === "write" ? "Read and write" : "Read only"}`;
         copy.append(title, path, state);
         const actions = document.createElement("div");
         actions.className = "onboarding-folder-actions";
@@ -962,6 +1011,10 @@ export class GuidedOnboardingView {
       return;
     const progress = this.progress();
     if (this.step === 4) {
+      if (onboardingCompletedSteps(this.port.settings())[4]) {
+        this.port.openChat();
+        return;
+      }
       const first = firstIncompleteSetupStep(progress);
       if (first !== null) {
         this.select(first);

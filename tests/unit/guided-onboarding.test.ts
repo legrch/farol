@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GuidedActivation,
   defaultOnboardingFolderChoice,
+  onboardingCompletedSteps,
   onboardingProgress,
   onboardingProgressForFolderChoice,
   onboardingFacts,
@@ -39,6 +40,30 @@ const prepared: OnboardingFacts = {
 };
 
 describe("guided onboarding progress", () => {
+  it("keeps completed setup visible across a build update without claiming current runtime readiness", () => {
+    const settings = guidedSettingsFixture();
+    expect(
+      onboardingProgress(onboardingFacts(settings, "f".repeat(64))),
+    ).toEqual([true, false, false, false, false]);
+    expect(onboardingCompletedSteps(settings)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    settings.computer.generation += 1;
+    expect(onboardingCompletedSteps(settings)[4]).toBe(false);
+  });
+
+  it("does not carry a saved completion across a changed folder or attachment", () => {
+    const settings = guidedSettingsFixture();
+    settings.computer.workspaces[0]!.rootIdentity!.inode = "changed";
+    expect(onboardingCompletedSteps(settings)[1]).toBe(false);
+    const changedAttachment = guidedSettingsFixture();
+    changedAttachment.connectors.secureMcp.attachment!.buildId = "f".repeat(64);
+    expect(onboardingCompletedSteps(changedAttachment)[3]).toBe(false);
+  });
   it("starts with sign-in and never confuses navigation with verification", () => {
     expect(onboardingProgress(empty)).toEqual([
       false,

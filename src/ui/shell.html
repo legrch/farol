@@ -113,7 +113,7 @@
         hidden
       >
         <button id="onboarding-return" class="onboarding-return" type="button">
-          ‹ Back to ChatGPT
+          ‹ Back to app
         </button>
         <p class="onboarding-nav-label">SETUP</p>
         <button type="button" data-onboarding-step="finish">
@@ -130,6 +130,38 @@
         </button>
         <button type="button" data-onboarding-step="app">
           <span>4</span><b>Add to ChatGPT</b>
+        </button>
+      </nav>
+
+      <nav
+        class="settings-nav"
+        id="settings-nav"
+        aria-label="Settings sections"
+        hidden
+      >
+        <button
+          type="button"
+          data-settings-category="general"
+          data-rail-label="G"
+          title="General"
+        >
+          General
+        </button>
+        <button
+          type="button"
+          data-settings-category="shortcuts"
+          data-rail-label="K"
+          title="Keyboard shortcuts"
+        >
+          Keyboard shortcuts
+        </button>
+        <button
+          type="button"
+          data-settings-category="advanced"
+          data-rail-label="A"
+          title="Advanced"
+        >
+          Advanced
         </button>
       </nav>
 
@@ -695,22 +727,6 @@
             they are shown as applied.</span
           >
         </div>
-        <nav
-          class="settings-nav"
-          id="settings-nav"
-          aria-label="Settings sections"
-          hidden
-        >
-          <button type="button" data-settings-category="general">
-            General
-          </button>
-          <button type="button" data-settings-category="shortcuts">
-            Keyboard shortcuts
-          </button>
-          <button type="button" data-settings-category="advanced">
-            Advanced
-          </button>
-        </nav>
         <p class="settings-feedback" id="settings-feedback" role="status"></p>
         <section
           class="settings-group"
@@ -771,6 +787,14 @@
             unbound. The same number cannot open two sections.
           </p>
           <div class="shortcut-controls">
+            <label
+              >Toggle Farol sidebar
+              <select id="setting-sidebar-shortcut">
+                <option value="s">⌃⌘S</option>
+                <option value="b">⌃⌘B</option>
+                <option value="off">Off</option>
+              </select>
+            </label>
             <label
               >ChatGPT
               <select data-shortcut-section="browser"></select
