@@ -69,6 +69,9 @@ const soakIdleMs = integerOption("soak-idle-ms", 0, 120_000);
 const selection = createSelection(process.argv);
 const selectionActive = selection !== null;
 const segmentSelected = (name) => isSegmentSelected(selection, name);
+async function assertSameFixtureExecutable(actual, expected) {
+  assert.equal(await fs.realpath(actual), await fs.realpath(expected));
+}
 // Each special lane drives one declared workload end to end, so combining it
 // with a partial selection would name an attempt after more than it ran.
 assert.equal(
@@ -3703,7 +3706,7 @@ async function completeSetup(
           window.farolNext.configure({ kind: "host.select-codex" }),
         );
         assert.equal(selectedFixture.ok, true, JSON.stringify(selectedFixture));
-        assert.equal(
+        await assertSameFixtureExecutable(
           selectedFixture.snapshot.settings.nativeHosts.codex.executablePath,
           instance.codexFixture,
         );
@@ -3728,7 +3731,7 @@ async function completeSetup(
       let bootstrap = await instance.window.evaluate(() =>
         window.farolNext.bootstrap(),
       );
-      assert.equal(
+      await assertSameFixtureExecutable(
         bootstrap.configuration.settings.nativeHosts.codex.executablePath,
         instance.codexFixture,
       );
@@ -5281,11 +5284,15 @@ ordinaryStartupSegment: try {
     }),
   );
   assert.equal(
-    await ordinary.window.evaluate(() => document.documentElement.dataset.section),
+    await ordinary.window.evaluate(
+      () => document.documentElement.dataset.section,
+    ),
     "browser",
   );
   assert.equal(
-    await ordinary.window.evaluate(() => document.documentElement.dataset.browserChrome),
+    await ordinary.window.evaluate(
+      () => document.documentElement.dataset.browserChrome,
+    ),
     "false",
   );
   assert.deepEqual(emptyGeometry, [
@@ -8183,7 +8190,7 @@ demoMainSegment: try {
     restartedSettings.setup.chatgpt.verified.profile,
     "chatgpt.next-partition/1",
   );
-  assert.equal(
+  await assertSameFixtureExecutable(
     restartedSettings.nativeHosts.codex.executablePath,
     normal.codexFixture,
   );
@@ -10639,7 +10646,7 @@ n12AgentDraftSegment: {
     const selectedHost = await draft.window.evaluate(() =>
       window.farolNext.bootstrap(),
     );
-    assert.equal(
+    await assertSameFixtureExecutable(
       selectedHost.configuration.settings.nativeHosts.codex.executablePath,
       draft.codexFixture,
     );
@@ -11361,7 +11368,7 @@ n11AgentScopeSegment: {
     const selectedHost = await agentScope.window.evaluate(() =>
       window.farolNext.bootstrap(),
     );
-    assert.equal(
+    await assertSameFixtureExecutable(
       selectedHost.configuration.settings.nativeHosts.codex.executablePath,
       agentScope.codexFixture,
     );
