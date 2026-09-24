@@ -24,6 +24,31 @@ const visible = (node: Element) => node.getAttribute("hidden") === null;
 const render = (node: Element) => publicMarkdownBlock(node, visible);
 
 describe("public Markdown block conversion (synthetic DOM)", () => {
+  it.each([
+    ["strong", "**"],
+    ["b", "**"],
+    ["em", "*"],
+    ["i", "*"],
+    ["del", "~~"],
+    ["s", "~~"],
+  ])("keeps %s edge whitespace outside generated delimiters", (tag, marker) => {
+    expect(
+      render(
+        element("p", [
+          "before",
+          element(tag!, [
+            element("span", [" "]),
+            "formatted",
+            element("span", [" "]),
+          ]),
+          "after",
+        ]),
+      ),
+    ).toBe(`before ${marker}formatted${marker} after`);
+    expect(
+      render(element("p", ["before", element(tag!, ["  "]), "after"])),
+    ).toBe("before after");
+  });
   it("preserves Unicode, emphasis and a hydrated link", () => {
     expect(
       render(
@@ -38,11 +63,157 @@ describe("public Markdown block conversion (synthetic DOM)", () => {
   });
   it("preserves literal Markdown punctuation as text", () => {
     expect(render(element("p", ["[fake](x) *text* <tag>"]))).toBe(
-      "\\[fake\\](x) \\*text\\* \\<tag\\>",
+      "\\[fake\\](x\\) \\*text\\* \\<tag\\>",
     );
     expect(render(element("p", ["# title"]))).toBe("\\# title");
     expect(render(element("p", ["1. literal"]))).toBe("1\\. literal");
     expect(render(element("p", ["- literal"]))).toBe("\\- literal");
+  });
+  // No production Markdown renderer is available in this checkout. These
+  // assertions cover serialization, not a renderer or native DOM round-trip.
+  it.each([
+    ["---", "\\-\\-\\-"],
+    ["- - -", "\\- \\- \\-"],
+    ["***", "\\*\\*\\*"],
+    ["___", "\\_\\_\\_"],
+    ["===", "\\=\\=\\="],
+    ["- item", "\\- item"],
+    ["+ item", "\\+ item"],
+    ["* item", "\\* item"],
+    ["1. item", "1\\. item"],
+    ["42) item", "42\\) item"],
+    ["# title", "\\# title"],
+    ["> quote", "\\> quote"],
+    ["&copy;", "\\&copy;"],
+    ["&#169;", "\\&\\#169;"],
+    ["&#xA9;", "\\&\\#xA9;"],
+    ["&amp;copy;", "\\&amp;copy;"],
+    ["&lt;script&gt;", "\\&lt;script\\&gt;"],
+    ["\\&copy;", "\\\\\\&copy;"],
+    ["[fake](x)", "\\[fake\\](x\\)"],
+    ["© 👋", "© 👋"],
+  ])(
+    "keeps literal %s safe across adjacent text and span nodes",
+    (value, expected) => {
+      expect(render(element("p", [value]))).toBe(expected);
+      for (let split = 0; split <= value.length; split++) {
+        const left = value.slice(0, split);
+        const right = value.slice(split);
+        expect(render(element("p", [text(left), text(right)]))).toBe(expected);
+        expect(render(element("p", [left, element("span", [right])]))).toBe(
+          expected,
+        );
+        expect(render(element("p", [element("span", [left]), right]))).toBe(
+          expected,
+        );
+      }
+      expect(
+        render(
+          element(
+            "p",
+            [...value].map((character) =>
+              element("span", [element("span", [character])]),
+            ),
+          ),
+        ),
+      ).toBe(expected);
+    },
+  );
+  it("escapes literal markers after generated line and block boundaries", () => {
+    expect(
+      render(
+        element("p", [
+          "Heading",
+          element("br", []),
+          element("span", ["="]),
+          "==",
+          element("br", []),
+          "1",
+          element("span", ["."]),
+          " item",
+          element("br", []),
+          "-",
+          element("span", ["--"]),
+        ]),
+      ),
+    ).toBe("Heading  \n\\=\\=\\=  \n1\\. item  \n\\-\\-\\-");
+    expect(
+      render(
+        element("div", [element("p", ["Heading"]), element("p", ["---"])]),
+      ),
+    ).toBe("Heading\n\n\\-\\-\\-");
+  });
+  it("escapes text without escaping generated semantic syntax", () => {
+    expect(render(element("hr", []))).toBe("---");
+    expect(
+      render(
+        element("ul", [
+          element("li", ["-", element("span", [" item &copy;"])]),
+        ]),
+      ),
+    ).toBe("- \\- item \\&copy;");
+    expect(
+      render(
+        element("ol", [element("li", ["1", element("span", ["."]), " item"])], {
+          start: "2",
+        }),
+      ),
+    ).toBe("2. 1\\. item");
+    expect(render(element("blockquote", [element("p", ["---"])]))).toBe(
+      "> \\-\\-\\-",
+    );
+    expect(render(element("h2", ["--- &copy;"]))).toBe("## \\-\\-\\- \\&copy;");
+    expect(
+      render(
+        element("p", [
+          element("strong", ["---"]),
+          " ",
+          element("em", ["&copy;"]),
+          " ",
+          element("del", ["1. item"]),
+        ]),
+      ),
+    ).toBe("**\\-\\-\\-** *\\&copy;* ~~1\\. item~~");
+    expect(
+      render(
+        element("a", ["&", element("span", ["copy; ---"])], {
+          href: "https://example.test/a-b?q=1&b=2",
+        }),
+      ),
+    ).toBe("[\\&copy; \\-\\-\\-](<https://example.test/a-b?q=1&b=2>)");
+    expect(render(element("code", ["--- &copy; 1. item + ="]))).toBe(
+      "`--- &copy; 1. item + =`",
+    );
+    expect(
+      render(element("pre", [element("code", ["--- &copy;\n1. item\n+ ="])])),
+    ).toBe("```\n--- &copy;\n1. item\n+ =\n```");
+    expect(
+      render(
+        element("table", [
+          element("tr", [element("th", ["---"]), element("th", ["&copy;"])]),
+          element("tr", [
+            element("td", ["1", element("span", ["."]), " item|value"]),
+            element("td", [element("code", ["--- &copy; x|y"])]),
+          ]),
+        ]),
+      ),
+    ).toBe(
+      "| \\-\\-\\- | \\&copy; |\n| --- | --- |\n| 1\\. item\\|value | `--- &copy; x\\|y` |",
+    );
+  });
+  it("keeps a literal exclamation before a semantic link from creating an image", () => {
+    for (const prefix of ["!", element("span", ["!"])]) {
+      expect(
+        render(
+          element("p", [
+            prefix,
+            element("a", ["diagram"], {
+              href: "https://example.test/image.png",
+            }),
+          ]),
+        ),
+      ).toBe("\\![diagram](<https://example.test/image.png>)");
+    }
   });
   it("uses a longer code fence than any literal fence in the code", () => {
     expect(

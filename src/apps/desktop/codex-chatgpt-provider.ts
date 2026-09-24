@@ -807,8 +807,16 @@ class ResponseRound {
     this.textPhase = null;
   }
 
-  async completeTool(call: IssuedToolCall): Promise<void> {
+  async completeTool(
+    call: IssuedToolCall,
+    current: () => boolean,
+  ): Promise<void> {
+    const requireCurrent = () => {
+      if (!current()) throw new Error("FAROL_NEXT_HOST_DELIVERY_LOST");
+    };
+    requireCurrent();
     await this.finishText();
+    requireCurrent();
     const outputIndex = this.output.length;
     const opening = {
       id: call.itemId,
@@ -823,18 +831,21 @@ class ResponseRound {
       output_index: outputIndex,
       item: opening,
     });
+    requireCurrent();
     await writeEvent(this.response, "response.function_call_arguments.delta", {
       type: "response.function_call_arguments.delta",
       item_id: call.itemId,
       output_index: outputIndex,
       delta: call.encodedArguments,
     });
+    requireCurrent();
     await writeEvent(this.response, "response.function_call_arguments.done", {
       type: "response.function_call_arguments.done",
       item_id: call.itemId,
       output_index: outputIndex,
       arguments: call.encodedArguments,
     });
+    requireCurrent();
     const item = {
       ...opening,
       arguments: call.encodedArguments,
@@ -845,6 +856,7 @@ class ResponseRound {
       output_index: outputIndex,
       item,
     });
+    requireCurrent();
     this.output.push(item);
     await this.complete();
   }
@@ -1024,6 +1036,10 @@ class ActiveProviderTurn {
       delivery.reject(new Error(code));
     }
     this.visibleDeliveries.clear();
+    // A blocked stream may still be draining. No queued display or tool call
+    // survives cancellation; completeTool also fences already-dequeued calls
+    // after every awaited write before any further executable output.
+    this.events.length = 0;
     this.push({ kind: "final", result: null, code });
     this.onTerminal();
   }
@@ -1065,7 +1081,14 @@ class ActiveProviderTurn {
         event = await this.next();
       }
       if (event.kind === "tool") {
-        await writer.completeTool(event.call);
+        const call = event.call;
+        await writer.completeTool(
+          call,
+          () =>
+            this.state === "running" &&
+            this.streamFailure === null &&
+            this.pending === call,
+        );
         return false;
       }
       const valid = event.result !== null && this.validCompletion(event.result);
@@ -1472,6 +1495,12 @@ async function handleCompaction(
   response: ServerResponse,
   options: ProviderOptions,
 ): Promise<void> {
+  // Compaction is a new request on the selected route, even when it reads a
+  // historical checkpoint. Never relabel a stale alias as the current model.
+  if (!record(raw) || raw.model !== options.model) {
+    refusal(response, 422, "FAROL_NEXT_MODEL_UNAVAILABLE");
+    return;
+  }
   if (!options.compaction) {
     refusal(response, 501, "FAROL_NEXT_COMPACTION_UNAVAILABLE");
     return;

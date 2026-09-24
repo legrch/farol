@@ -311,7 +311,7 @@ it("correlates an app-bound reply when ChatGPT renders the selected app before t
   };
   expect(
     vm.runInNewContext(
-      taskProbeScript("Check once.", [], "Farol Dev"),
+      taskProbeScript("Check once.", [], undefined, "Farol Dev"),
       context,
     ),
   ).toMatchObject({
@@ -321,7 +321,7 @@ it("correlates an app-bound reply when ChatGPT renders the selected app before t
   });
   expect(
     vm.runInNewContext(
-      taskProbeScript("Different prompt.", [], "Farol Dev"),
+      taskProbeScript("Different prompt.", [], undefined, "Farol Dev"),
       context,
     ),
   ).toMatchObject({ turnUserId: null, turnAssistantId: null });
@@ -466,6 +466,7 @@ function streamingTaskRoute(
   executeJavaScript: ReturnType<typeof vi.fn>,
   taskTimeoutMs = 1_000,
   activity: unknown = { running: false },
+  publicOutputProfile?: "message-anchors-v1",
 ): ChatGptRoute {
   const candidate = new ChatGptRoute({
     homeUrl: "https://chatgpt.com/",
@@ -474,6 +475,7 @@ function streamingTaskRoute(
     parent: () => null,
     taskPollMs: 1,
     taskTimeoutMs,
+    ...(publicOutputProfile ? { publicOutputProfile } : {}),
   });
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
   vi.spyOn(candidate, "observe").mockResolvedValue({
@@ -649,6 +651,50 @@ describe("ChatGPT test-window presentation", () => {
 });
 
 describe("ChatGPT route submission boundary", () => {
+  it("does not Send into a replacement document at the same URL after app verification", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        // A same-URL reload advances the route's document generation while
+        // the awaited verification belongs to the document it replaced.
+        Reflect.set(candidate, "routeDocumentGeneration", 1);
+        return { state: "bound" };
+      })
+      .mockResolvedValue({ activated: true });
+    const candidate = devTaskRoute(execute);
+    expect(
+      await candidate.runReadonlyTask("stay in this document"),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(
+      execute.mock.calls.some(([script]) => script.includes("send.click()")),
+    ).toBe(false);
+  });
+
+  it("does not Send after cancellation during the last asynchronous app verification", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        await candidate.cancelActiveTask();
+        return { state: "bound" };
+      })
+      .mockResolvedValue({ activated: true });
+    const candidate = devTaskRoute(execute);
+    expect(await candidate.runReadonlyTask("cancel before Send")).toMatchObject(
+      { state: "failed_before_submit" },
+    );
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(
+      execute.mock.calls.some(([script]) => script.includes("send.click()")),
+    ).toBe(false);
+  });
+
   it("opens the rich ChatGPT app picker through native editing", async () => {
     const expectedHref = "https://chatgpt.com/c/native-picker";
     const nativeInputs: string[] = [];
@@ -4083,5 +4129,442 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
       expect(contacts.typed).toEqual([]);
       expect(contacts.clicked).toBe(0);
     }
+  });
+});
+
+describe("candidate public source route (synthetic observations)", () => {
+  const semanticProbe = (terminal: boolean, text = "**Hello** 👋") => ({
+    assistantCount: 1,
+    assistantCharacters: 0,
+    assistantText: "",
+    userCount: 1,
+    turnUserId: "u",
+    turnAssistantId: "a",
+    busy: !terminal,
+    sendVisible: terminal,
+    signInVisible: false,
+    errorVisible: false,
+    publicFrame: {
+      userId: "u",
+      terminal,
+      messages: [{ id: "a", text, channel: "answer", complete: terminal }],
+    },
+  });
+
+  for (const method of ["initial", "resumed"] as const) {
+    const invoke = (
+      candidate: ChatGptRoute,
+      observer: Parameters<ChatGptRoute["runReadonlyTask"]>[2],
+    ) =>
+      method === "initial"
+        ? candidate.runReadonlyTask("hello", [], observer)
+        : candidate.observeReadonlyTask(
+            { prompt: "hello", turnUserId: "u", turnAssistantId: "a" },
+            observer,
+          );
+    const executor = () => {
+      const execute = vi.fn();
+      if (method === "initial")
+        execute
+          .mockResolvedValueOnce(prepared)
+          .mockResolvedValueOnce({ activated: true });
+      return execute;
+    };
+    it(`${method}: sends Markdown once and never also delivers text deltas`, async () => {
+      const execute = executor()
+        .mockResolvedValueOnce(semanticProbe(false))
+        .mockResolvedValueOnce(semanticProbe(true));
+      const items: unknown[] = [];
+      const delta = vi.fn();
+      const candidate = streamingTaskRoute(
+        execute,
+        1000,
+        { running: false },
+        "message-anchors-v1",
+      );
+      expect(
+        await invoke(candidate, {
+          onVisibleItem: (item) => {
+            items.push(item);
+          },
+          onTextDelta: delta,
+        }),
+      ).toMatchObject({
+        state: "completed",
+        outputText: "**Hello** 👋",
+        deltaCount: 1,
+        turnUserId: "u",
+        turnAssistantId: "a",
+      });
+      expect(items).toEqual([
+        { id: "a", sequence: 1, channel: "answer", text: "**Hello** 👋" },
+      ]);
+      expect(delta).not.toHaveBeenCalled();
+      if (method === "resumed") {
+        expect(
+          execute.mock.calls.every(
+            ([script]) => !script.includes("send.click()"),
+          ),
+        ).toBe(true);
+        expect(execute.mock.calls[0]![0]).toContain('"userId":"u"');
+      }
+    });
+    it(`${method}: public status and commentary arrive while the answer remains pending`, async () => {
+      const pending = {
+        ...semanticProbe(false),
+        publicFrame: {
+          userId: "u",
+          terminal: false,
+          messages: [
+            { id: "a", channel: "status", text: "Searching", complete: true },
+            {
+              id: "b",
+              channel: "commentary",
+              text: "Checking",
+              complete: true,
+            },
+            { id: "c", channel: "answer", text: "Partial", complete: false },
+          ],
+        },
+      };
+      let finalRead = false;
+      const execute = executor()
+        .mockResolvedValueOnce(pending)
+        .mockImplementationOnce(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 520));
+          return pending;
+        })
+        .mockImplementationOnce(async () => {
+          finalRead = true;
+          return {
+            ...semanticProbe(true),
+            publicFrame: {
+              userId: "u",
+              terminal: true,
+              messages: [
+                ...pending.publicFrame.messages.slice(0, 2),
+                {
+                  id: "c",
+                  channel: "answer",
+                  text: "**Done** 👋",
+                  complete: true,
+                },
+              ],
+            },
+          };
+        });
+      const observations: { channel: string; finalRead: boolean }[] = [];
+      const candidate = streamingTaskRoute(
+        execute,
+        2000,
+        { running: false },
+        "message-anchors-v1",
+      );
+      expect(
+        await invoke(candidate, {
+          onVisibleItem: (item) => {
+            observations.push({ channel: item.channel, finalRead });
+          },
+        }),
+      ).toMatchObject({
+        state: "completed",
+        outputText: "**Done** 👋",
+        deltaCount: 3,
+      });
+      expect(observations).toEqual([
+        { channel: "status", finalRead: false },
+        { channel: "commentary", finalRead: false },
+        { channel: "answer", finalRead: true },
+      ]);
+    });
+    it.each(["throw", "cancel"] as const)(
+      `${method}: preserves the acknowledged answer prefix on %s during batch delivery`,
+      async (failure) => {
+        const execute = executor().mockResolvedValueOnce({
+          ...semanticProbe(true),
+          publicFrame: {
+            userId: "u",
+            terminal: true,
+            messages: [
+              { id: "a", channel: "answer", text: "A", complete: true },
+              { id: "b", channel: "answer", text: "B", complete: true },
+            ],
+          },
+        });
+        const candidate = streamingTaskRoute(
+          execute,
+          1000,
+          { running: false },
+          "message-anchors-v1",
+        );
+        let delivered = 0;
+        expect(
+          await invoke(candidate, {
+            onVisibleItem: async () => {
+              if (++delivered === 2) throw new Error("delivery refused");
+              if (failure === "cancel") await candidate.cancelActiveTask();
+            },
+          }),
+        ).toMatchObject({
+          state: "outcome_unknown",
+          deltaCount: 1,
+          outputText: "A",
+          observedCharacters: 1,
+        });
+      },
+    );
+    it(`${method}: missing qualified frame is unknown without legacy fallback`, async () => {
+      const execute = executor().mockResolvedValueOnce({
+        ...semanticProbe(true),
+        publicFrame: undefined,
+        assistantText: "legacy",
+      });
+      const onTextDelta = vi.fn();
+      const candidate = streamingTaskRoute(
+        execute,
+        1000,
+        { running: false },
+        "message-anchors-v1",
+      );
+      expect(
+        await invoke(candidate, { onVisibleItem: vi.fn(), onTextDelta }),
+      ).toMatchObject({ state: "outcome_unknown" });
+      expect(onTextDelta).not.toHaveBeenCalled();
+    });
+    it(`${method}: cancellation during delivery prevents completion`, async () => {
+      const execute = executor().mockResolvedValueOnce(semanticProbe(true));
+      const candidate = streamingTaskRoute(
+        execute,
+        1000,
+        { running: false },
+        "message-anchors-v1",
+      );
+      expect(
+        await invoke(candidate, {
+          onVisibleItem: async () => {
+            await candidate.cancelActiveTask();
+          },
+        }),
+      ).toMatchObject({ state: "outcome_unknown" });
+    });
+    it(`${method}: a broken display observer cannot complete`, async () => {
+      const execute = executor().mockResolvedValueOnce(semanticProbe(true));
+      const candidate = streamingTaskRoute(
+        execute,
+        1000,
+        { running: false },
+        "message-anchors-v1",
+      );
+      expect(
+        await invoke(candidate, {
+          onVisibleItem: () => {
+            throw new Error("display closed");
+          },
+        }),
+      ).toMatchObject({ state: "outcome_unknown" });
+    });
+  }
+});
+
+describe("serialized task probe correlation (synthetic DOM)", () => {
+  class Message {
+    readonly parentElement = null;
+    constructor(
+      readonly id: string,
+      readonly role: string,
+      readonly innerText: string,
+      readonly hidden = false,
+    ) {}
+    getAttribute(name: string) {
+      return name === "data-message-id"
+        ? this.id
+        : name === "data-message-author-role"
+          ? this.role
+          : null;
+    }
+    closest(selector: string) {
+      return selector === "[data-message-id]" ? this : null;
+    }
+    getBoundingClientRect() {
+      return { width: 100, height: 30 };
+    }
+  }
+  const probe = (
+    messages: Message[],
+    userId: string | null,
+    assistantId: string | null = null,
+    options: Readonly<{
+      baseline?: readonly string[];
+      appName?: string;
+      semantic?: boolean;
+    }> = {},
+  ) =>
+    vm.runInNewContext(
+      taskProbeScript(
+        "same prompt",
+        options.baseline ?? [],
+        {
+          semantic: options.semantic ?? false,
+          userId,
+          assistantId,
+        },
+        options.appName,
+      ),
+      {
+        HTMLElement: Message,
+        getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        document: {
+          querySelector: () => null,
+          querySelectorAll: (selector: string) =>
+            selector ===
+            '[data-message-author-role="user"],[data-message-author-role="assistant"]'
+              ? messages
+              : selector === '[data-message-author-role="user"]'
+                ? messages.filter((message) => message.role === "user")
+                : [],
+        },
+      },
+    );
+  for (const semantic of [false, true]) {
+    const options = { appName: "Farol Dev", semantic };
+    it(`keeps the exact app-prefix match with source identity, semantic=${semantic}`, () => {
+      expect(
+        probe(
+          [new Message("u1", "user", "Farol Dev\nsame prompt")],
+          null,
+          null,
+          options,
+        ),
+      ).toMatchObject({ turnUserId: "u1" });
+    });
+    it(`refuses ambiguous app-prefixed new messages, semantic=${semantic}`, () => {
+      expect(() =>
+        probe(
+          [
+            new Message("u1", "user", "Farol Dev same prompt"),
+            new Message("u2", "user", "Farol Dev same prompt"),
+          ],
+          null,
+          null,
+          options,
+        ),
+      ).toThrow("CHATGPT_PUBLIC_USER_AMBIGUOUS");
+    });
+    it(`does not mistake the baseline app-prefixed message for a new reply, semantic=${semantic}`, () => {
+      expect(
+        probe(
+          [
+            new Message("old", "user", "Farol Dev same prompt"),
+            new Message("new", "user", "Farol Dev same prompt"),
+          ],
+          null,
+          null,
+          { ...options, baseline: ["old"] },
+        ),
+      ).toMatchObject({ turnUserId: "new" });
+    });
+    it(`resumes the retained app-prefixed user instead of another text match, semantic=${semantic}`, () => {
+      expect(
+        probe(
+          [
+            new Message("old", "user", "Farol Dev same prompt"),
+            new Message("new", "user", "Farol Dev same prompt"),
+          ],
+          "old",
+          null,
+          { ...options, baseline: ["old"] },
+        ),
+      ).toMatchObject({ turnUserId: "old" });
+      expect(
+        probe(
+          [new Message("new", "user", "Farol Dev same prompt")],
+          "old",
+          null,
+          options,
+        ),
+      ).toMatchObject({ turnUserId: null });
+    });
+    it(`does not accept a different, absent or hidden app-prefix match, semantic=${semantic}`, () => {
+      for (const text of [
+        "Farol Other same prompt",
+        "Farol Dev Other same prompt",
+      ]) {
+        expect(
+          probe([new Message("u1", "user", text)], null, null, options),
+        ).toMatchObject({ turnUserId: null });
+      }
+      expect(
+        probe(
+          [new Message("u1", "user", "Farol Dev same prompt")],
+          null,
+          null,
+          { semantic },
+        ),
+      ).toMatchObject({ turnUserId: null });
+      expect(
+        probe(
+          [new Message("u1", "user", "Farol Dev same prompt", true)],
+          null,
+          null,
+          options,
+        ),
+      ).toMatchObject({ turnUserId: null });
+    });
+  }
+
+  it("refuses duplicate matching new prompts rather than choosing the newest turn", () => {
+    expect(() =>
+      probe(
+        [
+          new Message("u1", "user", "same prompt"),
+          new Message("u2", "user", "same prompt"),
+        ],
+        null,
+      ),
+    ).toThrow("CHATGPT_PUBLIC_USER_AMBIGUOUS");
+  });
+  it("resolves the exact retained user and stops at the next user", () => {
+    expect(
+      probe(
+        [
+          new Message("u1", "user", "same prompt"),
+          new Message("a1", "assistant", "owned"),
+          new Message("u2", "user", "same prompt"),
+          new Message("a2", "assistant", "other"),
+        ],
+        "u1",
+      ),
+    ).toMatchObject({
+      turnUserId: "u1",
+      turnAssistantId: "a1",
+      assistantText: "owned",
+    });
+  });
+  it("does not manufacture a retained assistant ID when the actual legacy source changed", () => {
+    expect(
+      probe(
+        [
+          new Message("u1", "user", "same prompt"),
+          new Message("replacement", "assistant", "other"),
+        ],
+        "u1",
+        "a1",
+      ),
+    ).toMatchObject({ turnAssistantId: "replacement" });
+  });
+  it("never uses a different prompt match when the retained user is virtualized", () => {
+    expect(
+      probe(
+        [
+          new Message("u2", "user", "same prompt"),
+          new Message("a2", "assistant", "other"),
+        ],
+        "u1",
+      ),
+    ).toMatchObject({
+      turnUserId: null,
+      turnAssistantId: null,
+      assistantText: "",
+    });
   });
 });

@@ -16,6 +16,13 @@ import {
 import type { StagedChatGptAttachment } from "./chatgpt-attachment-staging";
 import { uploadChatGptAttachments } from "./chatgpt-attachment-upload";
 import type { VisibleOutputItem } from "./chatgpt-visible-output";
+import { publicMarkdownBlock } from "./chatgpt-public-markdown";
+import {
+  ChatGptPublicTurn,
+  PublicTurnFrameSchema,
+  readPublicAssistantMessages,
+  publicContentVisible,
+} from "./chatgpt-public-turn";
 
 const probeSchema = z.strictObject({
   composerVisible: z.boolean(),
@@ -55,6 +62,7 @@ const activatedTaskSchema = z.union([
 ]);
 
 const taskProbeSchema = z.strictObject({
+  publicFrame: PublicTurnFrameSchema.optional(),
   assistantCount: z.number().int().nonnegative(),
   assistantCharacters: z.number().int().nonnegative(),
   assistantText: z.string().max(256 * 1_024),
@@ -1048,48 +1056,69 @@ export function activateTaskScript(
 export function taskProbeScript(
   prompt: string,
   baselineMessageIds: readonly string[],
+  output: Readonly<{
+    semantic: boolean;
+    userId: string | null;
+    assistantId: string | null;
+  }> = { semantic: false, userId: null, assistantId: null },
   requiredAppName?: string,
 ): string {
   return `(() => {
     const prompt = ${JSON.stringify(prompt)};
+    const output = ${JSON.stringify(output)};
+    const markdown = ${publicMarkdownBlock.toString()};
+    const readMessages = ${readPublicAssistantMessages.toString()};
+    const contentVisible = ${publicContentVisible.toString()};
     const baselineMessageIds = new Set(${JSON.stringify(baselineMessageIds)});
     const requiredAppName = ${JSON.stringify(requiredAppName ?? null)};
     const usageLimitPattern = new RegExp(${JSON.stringify(chatGptUsageLimitPattern.source)}, ${JSON.stringify(chatGptUsageLimitPattern.flags)});
     const visible = (element) => {
-      if (!(element instanceof HTMLElement)) return false;
-      const style = getComputedStyle(element);
+      if (!contentVisible(element)) return false;
       const box = element.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && box.width > 0 && box.height > 0;
+      return box.width > 0 && box.height > 0;
     };
     const messages = [...document.querySelectorAll('[data-message-author-role="user"],[data-message-author-role="assistant"]')];
     const assistants = messages.filter((element) => element.getAttribute('data-message-author-role') === 'assistant');
     const messageId = (element) => element?.closest('[data-message-id]')?.getAttribute('data-message-id') ?? null;
     const users = messages.filter((element) => element.getAttribute('data-message-author-role') === 'user');
-    const currentUser = [...users].reverse().find((element) => {
+    const candidates = users.filter((element) => {
       const id = messageId(element);
-      if (id === null || baselineMessageIds.has(id)) return false;
-      const rendered = (element.textContent || '').trim();
+      if (!(output.semantic ? contentVisible(element) : visible(element)) || id === null) return false;
+      // A retained identity wins over repeated text during resumed observation.
+      // Before correlation, preserve onboarding's exact app-prefixed prompt form.
+      if (output.userId !== null) return id === output.userId;
+      if (baselineMessageIds.has(id)) return false;
+      const rendered = (element.innerText || '').trim();
       if (rendered === prompt.trim()) return true;
-      return requiredAppName !== null && rendered.startsWith(requiredAppName) &&
-        rendered.slice(requiredAppName.length).trim() === prompt.trim();
-    }) ?? null;
+      // App chips may be represented differently in textContent and innerText.
+      // This extra form is scoped to the exact app required by this route.
+      const appRendered = (element.textContent || rendered).trim();
+      return requiredAppName !== null && appRendered.startsWith(requiredAppName) &&
+        appRendered.slice(requiredAppName.length).trim() === prompt.trim();
+    });
+    if (candidates.length > 1) throw new Error("CHATGPT_PUBLIC_USER_AMBIGUOUS");
+    const currentUser = candidates[0] ?? null;
     const turnUserId = messageId(currentUser);
     let currentAssistant = null;
+    const turnAssistants = [];
     if (currentUser && turnUserId !== null) {
       const userIndex = messages.indexOf(currentUser);
       for (const element of messages.slice(userIndex + 1)) {
         const role = element.getAttribute('data-message-author-role');
         if (role === 'user') break;
-        if (role !== 'assistant') continue;
+        if (role !== 'assistant' || !(output.semantic ? contentVisible(element) : visible(element))) continue;
         const id = messageId(element);
-        if (id === null) continue;
+        if (id === null) {
+          if (output.semantic) throw new Error("CHATGPT_PUBLIC_SOURCE_UNANCHORED");
+          continue;
+        }
         const parentId = element.closest('[data-parent-message-id]')?.getAttribute('data-parent-message-id') ?? null;
-        if (parentId !== null && parentId !== turnUserId) continue;
-        currentAssistant = element;
-        break;
+        if (!output.semantic && parentId !== null && parentId !== turnUserId) continue;
+        turnAssistants.push(element);
+        currentAssistant ??= element;
       }
     }
-    const turnAssistantId = messageId(currentAssistant);
+    const turnAssistantId = turnUserId === null ? null : (output.semantic ? output.assistantId ?? messageId(currentAssistant) : messageId(currentAssistant));
     const explicitSignIn = [
       document.querySelector('[data-testid="login-button"]'),
       document.querySelector('a[href*="/auth/login"]'),
@@ -1119,8 +1148,15 @@ export function taskProbeScript(
       usageLimitPattern.test((element.textContent || "").trim())
     );
     const errorVisible = errors.length > 0;
-    const assistantText = currentAssistant instanceof HTMLElement ? currentAssistant.innerText : "";
+    const publicMessages = output.semantic && currentUser ? readMessages(turnAssistants, contentVisible, markdown, visible) : null;
+    const assistantText = !output.semantic && currentAssistant instanceof HTMLElement ? currentAssistant.innerText : "";
     return {
+      ...(publicMessages ? {publicFrame: {
+        userId: turnUserId,
+        messages: publicMessages,
+        terminal: publicMessages.length > 0 && publicMessages.every((message) => message.complete) &&
+          publicMessages.at(-1).channel === "answer" && !busy && sendVisible
+      }} : {}),
       assistantCount: assistants.length,
       assistantCharacters: assistantText.length,
       assistantText,
@@ -1157,6 +1193,9 @@ export type ChatGptRouteOptions = Readonly<{
   ) => void;
   onLoadStateChanged?: (state: "loading" | "loaded" | "failed") => void;
   onDisposed?: () => void;
+  // Candidate source profile. Production composition must opt in only after
+  // native DOM qualification; callbacks alone never enable unproved selectors.
+  publicOutputProfile?: "message-anchors-v1";
   taskTimeoutMs?: number;
   taskPollMs?: number;
   // Reported exactly once per `openForSignIn` call, when its window closes
@@ -1332,6 +1371,7 @@ export class ChatGptRoute {
   private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
+  private taskObservationGeneration = 0;
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
   private displayTitle: string;
@@ -2016,6 +2056,10 @@ export class ChatGptRoute {
     }
     this.exitSignInMode();
     this.taskInFlight = true;
+    const observationGeneration = ++this.taskObservationGeneration;
+    let publicTurn: ChatGptPublicTurn | null = null;
+    const semanticOutput =
+      this.options.publicOutputProfile === "message-anchors-v1";
     let submissionPhase:
       "not_attempted" | "awaiting_acknowledgement" | "submitted" =
       "not_attempted";
@@ -2110,12 +2154,15 @@ export class ChatGptRoute {
       // acknowledged, the page is already committed and the poll loop below
       // owns tracking it from there.
       const dispatchIdentityUrl = candidate.webContents.getURL();
+      const dispatchDocumentGeneration = this.routeDocumentGeneration;
       const dispatchIdentityLost = (): boolean => {
         const active = this.routeWindow;
         return (
           !active ||
           active !== candidate ||
           active.isDestroyed() ||
+          observationGeneration !== this.taskObservationGeneration ||
+          dispatchDocumentGeneration !== this.routeDocumentGeneration ||
           active.webContents.getURL() !== dispatchIdentityUrl
         );
       };
@@ -2353,6 +2400,17 @@ export class ChatGptRoute {
             };
           }
         }
+        // App verification above awaits the browser. Recheck cancellation and
+        // identity after that final await, immediately before dispatching Send.
+        if (dispatchIdentityLost()) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
           await candidate.webContents.executeJavaScript(
@@ -2436,6 +2494,8 @@ export class ChatGptRoute {
       const pollMs = this.options.taskPollMs ?? 250;
       const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       while (Date.now() < deadline) {
+        if (observationGeneration !== this.taskObservationGeneration)
+          throw new Error("CHATGPT_TASK_CANCELLED");
         const active = this.routeWindow;
         if (!active || active !== candidate || active.isDestroyed()) {
           return {
@@ -2479,11 +2539,36 @@ export class ChatGptRoute {
             taskProbeScript(
               prompt,
               preparedTask.baselineMessageIds,
+              {
+                semantic: semanticOutput,
+                userId: correlatedUserId,
+                assistantId: correlatedAssistantId,
+              },
               this.options.requiredAppName,
             ),
             true,
           ),
         );
+        const afterProbeUrl = active.webContents.getURL();
+        const createdConversation = canonicalChatGptConversationUrl(
+          afterProbeUrl,
+          this.options.e2eOrigin,
+        );
+        const createdBySubmission =
+          pinnedConversationUrl === null &&
+          createdConversation !== null &&
+          allowedChatGptPageUrl(afterProbeUrl, this.options.e2eOrigin);
+        if (afterProbeUrl !== currentUrl && !createdBySubmission) {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_PAGE_LOST",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            ...correlation(),
+          };
+        }
+        if (createdBySubmission) pinnedConversationUrl = createdConversation;
         if (!probe.success) {
           return {
             state: "outcome_unknown",
@@ -2563,6 +2648,43 @@ export class ChatGptRoute {
           correlatedAssistantId !== null &&
           probe.data.turnUserId === correlatedUserId &&
           probe.data.turnAssistantId === correlatedAssistantId;
+        if (observationGeneration !== this.taskObservationGeneration)
+          throw new Error("CHATGPT_TASK_CANCELLED");
+        if (semanticOutput && correlated) {
+          publicTurn ??= new ChatGptPublicTurn(
+            correlatedUserId!,
+            correlatedAssistantId!,
+          );
+          const next = publicTurn.observe(
+            probe.data.publicFrame,
+            performance.now(),
+          );
+          for (const item of next.items) {
+            if (observationGeneration !== this.taskObservationGeneration)
+              throw new Error("CHATGPT_TASK_CANCELLED");
+            await observer.onVisibleItem?.(item);
+            deltaCount += 1;
+            if (item.channel === "answer") {
+              observedText += `${observedText ? "\n\n" : ""}${item.text}`;
+              observedCharacters = observedText.length;
+            }
+          }
+          if (observedText !== next.answer)
+            throw new Error("CHATGPT_TASK_OUTPUT_CHANGED");
+          if (observationGeneration !== this.taskObservationGeneration)
+            throw new Error("CHATGPT_TASK_CANCELLED");
+          if (next.completed)
+            return {
+              state: "completed",
+              code: null,
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+              ...correlation(),
+            };
+          await delay(pollMs);
+          continue;
+        }
         if (correlated && probe.data.assistantText !== observedText) {
           if (observedText.startsWith(probe.data.assistantText)) {
             stablePolls = 0;
@@ -2669,6 +2791,10 @@ export class ChatGptRoute {
     }
     this.exitSignInMode();
     this.taskInFlight = true;
+    const observationGeneration = ++this.taskObservationGeneration;
+    let publicTurn: ChatGptPublicTurn | null = null;
+    const semanticOutput =
+      this.options.publicOutputProfile === "message-anchors-v1";
     let deltaCount = 0;
     let observedCharacters = 0;
     let observedText = "";
@@ -2702,24 +2828,41 @@ export class ChatGptRoute {
       if (!candidate || candidate.isDestroyed()) {
         return result("CHATGPT_TASK_PAGE_LOST");
       }
+      const observationUrl = candidate.webContents.getURL();
       let stablePolls = 0;
       const pollMs = this.options.taskPollMs ?? 250;
       const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
       while (Date.now() < deadline) {
+        if (observationGeneration !== this.taskObservationGeneration)
+          throw new Error("CHATGPT_TASK_CANCELLED");
         const active = this.routeWindow;
         if (!active || active !== candidate || active.isDestroyed()) {
           return result("CHATGPT_TASK_PAGE_LOST");
         }
         const currentUrl = active.webContents.getURL();
-        if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
+        if (
+          currentUrl !== observationUrl ||
+          !allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)
+        ) {
           return result("CHATGPT_TASK_PAGE_LOST");
         }
         const probe = taskProbeSchema.safeParse(
           await active.webContents.executeJavaScript(
-            taskProbeScript(input.prompt, [], this.options.requiredAppName),
+            taskProbeScript(
+              input.prompt,
+              [],
+              {
+                semantic: semanticOutput,
+                userId: input.turnUserId,
+                assistantId: correlatedAssistantId,
+              },
+              this.options.requiredAppName,
+            ),
             true,
           ),
         );
+        if (active.webContents.getURL() !== currentUrl)
+          return result("CHATGPT_TASK_PAGE_LOST");
         if (!probe.success) return result("CHATGPT_TASK_ERROR");
         if (probe.data.signInVisible || probe.data.errorVisible) {
           return result(
@@ -2744,6 +2887,44 @@ export class ChatGptRoute {
           correlatedAssistantId = probe.data.turnAssistantId;
         } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
           return result("CHATGPT_TASK_OUTPUT_CHANGED");
+        }
+        if (observationGeneration !== this.taskObservationGeneration)
+          throw new Error("CHATGPT_TASK_CANCELLED");
+        if (semanticOutput) {
+          publicTurn ??= new ChatGptPublicTurn(
+            input.turnUserId,
+            correlatedAssistantId,
+          );
+          const next = publicTurn.observe(
+            probe.data.publicFrame,
+            performance.now(),
+          );
+          for (const item of next.items) {
+            if (observationGeneration !== this.taskObservationGeneration)
+              throw new Error("CHATGPT_TASK_CANCELLED");
+            await observer.onVisibleItem?.(item);
+            deltaCount += 1;
+            if (item.channel === "answer") {
+              observedText += `${observedText ? "\n\n" : ""}${item.text}`;
+              observedCharacters = observedText.length;
+            }
+          }
+          if (observedText !== next.answer)
+            throw new Error("CHATGPT_TASK_OUTPUT_CHANGED");
+          if (observationGeneration !== this.taskObservationGeneration)
+            throw new Error("CHATGPT_TASK_CANCELLED");
+          if (next.completed)
+            return {
+              state: "completed",
+              code: null,
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+              turnUserId: input.turnUserId,
+              turnAssistantId: correlatedAssistantId,
+            };
+          await delay(pollMs);
+          continue;
         }
         if (probe.data.assistantText !== observedText) {
           if (
@@ -2816,6 +2997,7 @@ export class ChatGptRoute {
   async cancelActiveTask(): Promise<
     "cancelled" | "not_running" | "outcome_unknown"
   > {
+    ++this.taskObservationGeneration;
     const candidate = this.routeWindow;
     if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
       return "not_running";

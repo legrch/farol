@@ -2,7 +2,8 @@
  * Converts one already-correlated public DOM block, never a whole page or
  * conversation. The browser source must supply qualified visibility, stable
  * range identity, channel and completion evidence before feeding the semantic
- * reducer. This converter is not yet enabled in the live text-delta producer.
+ * reducer. The candidate message-anchor source profile uses this converter; production
+ * enablement still requires native DOM qualification.
  */
 export function publicMarkdownBlock(
   root: Element,
@@ -18,14 +19,11 @@ export function publicMarkdownBlock(
     if (value.length > maximumCharacters) fail("CHATGPT_MARKDOWN_LIMIT");
     return value;
   };
+  // Escape text independently of its node boundaries: adjacent text/spans can
+  // assemble a list marker, thematic/setext line, or entity after traversal.
+  // Only text passes here; generated syntax, link destinations and code do not.
   const escape = (value: string) =>
-    value
-      .replace(/[\\`*_[\]<>#~]/gu, "\\$&")
-      .replace(
-        /^(\s*)([-+]|\d+[.)])(?=\s)/u,
-        (_match, space: string, marker: string) =>
-          `${space}${marker.slice(0, -1)}\\${marker.slice(-1)}`,
-      );
+    value.replace(/[\\`*_[\]<>#~&.!+)=\-]/gu, "\\$&");
   const omitted = new Set([
     "SCRIPT",
     "STYLE",
@@ -249,9 +247,22 @@ export function publicMarkdownBlock(
         return fail("CHATGPT_MARKDOWN_LINK_UNSUPPORTED");
       return bounded(`[${content}](<${href}>)`);
     }
-    if (tag === "STRONG" || tag === "B") return `**${content}**`;
-    if (tag === "EM" || tag === "I") return `*${content}*`;
-    if (tag === "DEL" || tag === "S") return `~~${content}~~`;
+    if (["STRONG", "B", "EM", "I", "DEL", "S"].includes(tag)) {
+      const inner = content.trim();
+      if (!inner) return content;
+      const leading = content.slice(
+        0,
+        content.length - content.trimStart().length,
+      );
+      const trailing = content.slice(content.trimEnd().length);
+      const marker =
+        tag === "STRONG" || tag === "B"
+          ? "**"
+          : tag === "EM" || tag === "I"
+            ? "*"
+            : "~~";
+      return `${leading}${marker}${inner}${marker}${trailing}`;
+    }
     if (/^H[1-6]$/u.test(tag))
       return `${"#".repeat(Number(tag[1]))} ${content.trim()}`;
     if (tag === "BLOCKQUOTE")
