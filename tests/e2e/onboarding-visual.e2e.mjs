@@ -252,15 +252,25 @@ try {
   assert.equal(await window.locator("#onboarding-primary").isEnabled(), true);
   assert.equal(
     await window.locator("#onboarding-primary").innerText(),
-    "Save credentials",
+    "Continue without local access",
   );
-  // Saving is independent; an app check still routes to missing sign-in.
+  // Without a shared folder, local Computer access remains off and the app
+  // check can be skipped without claiming that the connection was verified.
   await window.locator('[data-onboarding-step="app"]').click();
   assert.equal(
     await window.locator("#onboarding-primary").innerText(),
-    "Go to Sign in",
+    "Continue without local access",
   );
   await window.locator("#onboarding-primary").click();
+  assert.equal(
+    await window.locator('[data-onboarding-content="finish"]').isVisible(),
+    true,
+  );
+  assert.equal(
+    await window.locator('[data-onboarding-step="app"].complete').count(),
+    0,
+  );
+  await window.locator('[data-onboarding-step="chatgpt"]').click();
   assert.equal(
     await window.locator('[data-onboarding-content="chatgpt"]').isVisible(),
     true,
@@ -268,7 +278,6 @@ try {
   await window.screenshot({
     path: path.join(output, "09-activation-blocked.png"),
   });
-  await window.locator('[data-onboarding-step="chatgpt"]').click();
   await window.locator("#onboarding-primary").click();
   await window.locator("#sign-in-return").waitFor({ state: "visible" });
   await window.locator('[data-panel="browser"].active').waitFor();
@@ -902,7 +911,7 @@ try {
     ),
     1,
   );
-  await window.locator('[data-settings-category="advanced"]').click();
+  await window.locator('[data-settings-category="diagnostics"]').click();
   await window.locator("#connection-diagnostics").waitFor({
     state: "visible",
   });
@@ -910,7 +919,7 @@ try {
   await window.locator("#connections-readiness-title").waitFor({
     state: "visible",
   });
-  await window.locator('[data-settings-category="general"]').click();
+  await window.locator('[data-settings-category="preferences"]').click();
   await window.locator("#settings-general-title").waitFor({
     state: "visible",
   });
