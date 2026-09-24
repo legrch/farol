@@ -50,7 +50,7 @@ function binding(taskId: string): ContextBinding {
     hostThreadId: taskId,
     sessionId: taskId,
     providerProfileId: "profile-isolated-next",
-    modelId: "farol-next/mind",
+    modelId: "farol-next/chatgpt",
     mode: "mind",
   };
 }
@@ -72,7 +72,7 @@ const checkpointJson = JSON.stringify(checkpoint);
 
 function initialRequest(thread: string, turnId: string, text: string) {
   return {
-    model: "farol-next/mind",
+    model: "farol-next/chatgpt",
     stream: true,
     store: false,
     input: [
@@ -93,7 +93,7 @@ function initialRequest(thread: string, turnId: string, text: string) {
 }
 
 const compactionBody = {
-  model: "farol-next/mind",
+  model: "farol-next/chatgpt",
   input: [
     {
       type: "message",
@@ -549,7 +549,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       hostThreadId: "task-held",
       sessionId: "task-held",
       providerProfileId: "profile-isolated-next",
-      modelId: "farol-next/mind",
+      modelId: "farol-next/chatgpt",
       mode: "mind",
     };
     // The store still holds a possibly running summary whose record cannot

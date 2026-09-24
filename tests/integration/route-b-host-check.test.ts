@@ -74,7 +74,7 @@ describe("Route B host check", () => {
       (await fs.stat(path.join(runtime, "route-b-codex-home"))).mode & 0o777,
     ).toBe(0o700);
     expect(route).toHaveBeenCalledWith(expect.anything(), {
-      model: "farol-next/mind",
+      model: "farol-next/chatgpt",
       cwd: runtime,
       prompt: ROUTE_B_CHECK_PROMPT,
       timeoutMs: 120_000,
