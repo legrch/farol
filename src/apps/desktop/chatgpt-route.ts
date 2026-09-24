@@ -960,6 +960,9 @@ export type ChatGptRouteOptions = Readonly<{
   parent: () => BrowserWindow | null;
   partition?: "persist:farol-next-chatgpt" | "persist:farol-dev-chatgpt";
   requiredAppName?: string;
+  // Ordinary manual ChatGPT messages remain under the owner's control.
+  // Automated app-bound tasks still check requiredAppName before submission.
+  requireAppForManualMessages?: boolean;
   collapseSidebarByDefault?: boolean;
   windowPresentation?: ChatGptWindowPresentation;
   surfaceFactory?: ChatGptRouteSurfaceFactory;
@@ -2866,6 +2869,9 @@ export class ChatGptRoute {
   private async installAppSubmissionGate(
     contents: WebContents,
   ): Promise<boolean> {
+    if (this.options.requireAppForManualMessages !== true) {
+      return this.ownsRouteContents(contents);
+    }
     const appName = this.options.requiredAppName;
     if (
       appName === undefined ||
@@ -2906,6 +2912,9 @@ export class ChatGptRoute {
   private async installPopupAppSubmissionGate(
     popup: BrowserWindow,
   ): Promise<boolean> {
+    if (this.options.requireAppForManualMessages !== true) {
+      return this.popupWindows.has(popup) && !popup.isDestroyed();
+    }
     const appName = this.options.requiredAppName;
     if (
       appName === undefined ||

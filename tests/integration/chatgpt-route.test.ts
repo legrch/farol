@@ -1218,6 +1218,7 @@ describe("ChatGPT route submission boundary", () => {
       e2eOrigin: null,
       parent: () => null,
       requiredAppName: "Farol DEV",
+      requireAppForManualMessages: true,
     });
     const hardenContents = Reflect.get(candidate, "hardenContents") as (
       this: ChatGptRoute,
@@ -1271,6 +1272,7 @@ describe("ChatGPT route submission boundary", () => {
       e2eOrigin: null,
       parent: () => null,
       requiredAppName: "Farol DEV",
+      requireAppForManualMessages: true,
     });
     const hardenContents = Reflect.get(candidate, "hardenContents") as (
       this: ChatGptRoute,
@@ -1329,6 +1331,7 @@ describe("ChatGPT route submission boundary", () => {
       e2eOrigin: null,
       parent: () => null,
       requiredAppName: "Farol DEV",
+      requireAppForManualMessages: true,
     });
     Reflect.set(candidate, "routeWindow", surface);
     Reflect.set(candidate, "load", "failed");
@@ -1380,6 +1383,7 @@ describe("ChatGPT route submission boundary", () => {
       e2eOrigin: null,
       parent: () => null,
       requiredAppName: "Farol DEV",
+      requireAppForManualMessages: true,
     });
     Reflect.set(candidate, "routeWindow", surface);
     const hardenContents = Reflect.get(candidate, "hardenContents") as (
@@ -1440,6 +1444,7 @@ describe("ChatGPT route submission boundary", () => {
         e2eOrigin: null,
         parent: () => null,
         requiredAppName: "Farol DEV",
+        requireAppForManualMessages: true,
         surfaceFactory: (() =>
           surface) as unknown as ChatGptRouteSurfaceFactory,
       });
@@ -2308,6 +2313,24 @@ describe("ChatGPT embedded task surface", () => {
     candidate.dispose();
   });
 
+  it("does not gate ordinary manual ChatGPT messages when automated tasks require an app", async () => {
+    const surface = embeddedSurface();
+    const contents = Object.assign(surface.webContents, {
+      executeJavaScript: vi.fn(async () => true),
+    });
+    const candidate = new ChatGptRoute({
+      homeUrl: "https://chatgpt.com/",
+      initialUrl: "https://chatgpt.com/",
+      e2eOrigin: null,
+      parent: () => null,
+      requiredAppName: "Farol Dev",
+      surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
+    });
+    await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+    expect(contents.executeJavaScript).not.toHaveBeenCalled();
+    candidate.dispose();
+  });
+
   it("keeps a full navigation hidden until its app gate settles and reports renderer loss", async () => {
     const surface = embeddedSurface();
     const contents = Object.assign(surface.webContents, {
@@ -2320,6 +2343,7 @@ describe("ChatGPT embedded task surface", () => {
       e2eOrigin: null,
       parent: () => null,
       requiredAppName: "Farol Dev",
+      requireAppForManualMessages: true,
       surfaceFactory: (() => surface) as unknown as ChatGptRouteSurfaceFactory,
       onLoadStateChanged: (state) => changes.push(state),
     });
