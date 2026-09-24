@@ -654,7 +654,7 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("host.route-b"),
     provider: z.literal("farol_next"),
-    model: z.literal("farol-next/mind"),
+    model: z.literal("farol-next/chatgpt"),
     deltaCount: z.number().int().positive(),
     observedCharacters: z.number().int().nonnegative(),
   }),

@@ -76,6 +76,7 @@ function sameContent(a: VisibleOutputBlock, b: VisibleOutputBlock): boolean {
 export class ChatGptVisibleOutput {
   private readonly committed = new Map<string, VisibleOutputBlock>();
   private readonly pending = new Map<string, Candidate>();
+  private lastVisible = new Set<string>();
   private sequence = 0;
   private lastPosition = -1;
   private lastObservedAt = -1;
@@ -164,6 +165,7 @@ export class ChatGptVisibleOutput {
       const previous = nextPending.get(block.id);
       const unchanged =
         previous &&
+        this.lastVisible.has(block.id) &&
         sameContent(previous.block, block) &&
         previous.block.complete === block.complete;
       nextPending.set(block.id, {
@@ -179,11 +181,18 @@ export class ChatGptVisibleOutput {
       }
     }
     let characters = 0;
-    for (const block of this.committed.values())
+    let answerBlocks = 0;
+    for (const block of this.committed.values()) {
       characters += block.text.length;
+      if (block.channel === "answer") answerBlocks += 1;
+    }
     for (const candidate of nextPending.values()) {
       characters += candidate.block.text.length;
+      if (candidate.block.channel === "answer") answerBlocks += 1;
     }
+    // The normalized answer inserts separators; budget the actual retained
+    // output rather than only the fragments supplied by the page.
+    characters += Math.max(0, answerBlocks - 1) * 2;
     if (
       characters > this.maximumCharacters ||
       this.committed.size + nextPending.size > this.maximumBlocks
@@ -192,6 +201,7 @@ export class ChatGptVisibleOutput {
     }
 
     this.lastObservedAt = nowMs;
+    this.lastVisible = visible;
     this.pending.clear();
     for (const [id, candidate] of nextPending) this.pending.set(id, candidate);
     const items: VisibleOutputItem[] = [];

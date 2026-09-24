@@ -29,7 +29,7 @@ export type CodexContextControllerOptions = Readonly<{
 
 export type CodexContextRuntimeOptions = CodexContextControllerOptions &
   Readonly<{
-    model: "farol-next/mind" | "farol-next/drive";
+    model: "farol-next/chatgpt" | "farol-next/mind" | "farol-next/drive";
     token: string;
     conversation: CodexChatGptConversation;
     // Private directory for the provider's durable initial-request journal.

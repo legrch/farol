@@ -70,7 +70,9 @@ export type RouteBRuntime = Readonly<{
   close(): Promise<void>;
 }>;
 
-export const ROUTE_B_MODEL = "farol-next/mind";
+// New tasks have one execution route. Historical aliases are never rebound
+// here: the provider's exact-model check refuses an old host request.
+export const ROUTE_B_MODEL = "farol-next/chatgpt";
 
 function conversationResult(
   result: ChatGptReadonlyTaskResult,
@@ -201,6 +203,14 @@ function compactionThread(
   }
   const body = input.body as { client_metadata?: Record<string, unknown> };
   candidates.push(body?.client_metadata);
+  const embedded = body?.client_metadata?.["x-codex-turn-metadata"];
+  if (typeof embedded === "string") {
+    try {
+      candidates.push(JSON.parse(embedded));
+    } catch {
+      // The codec rejects malformed metadata before submitting a summary.
+    }
+  }
   for (const candidate of candidates) {
     const threadId = (candidate as { thread_id?: unknown } | undefined)
       ?.thread_id;

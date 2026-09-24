@@ -83,6 +83,34 @@ describe("public ChatGPT semantic output (synthetic observations only)", () => {
     expect(recovered.map((item) => item.id)).toEqual(["a", "b"]);
   });
 
+  it("restarts the stability window when an uncommitted block reappears", () => {
+    const output = tracker();
+    output.observe(snapshot([block("a", 0, "Citation")]), 0);
+    output.observe(snapshot([]), 5);
+    expect(output.observe(snapshot([block("a", 0, "Citation")]), 100)).toEqual(
+      [],
+    );
+    expect(
+      output.observe(snapshot([block("a", 0, "Citation revised")]), 105),
+    ).toEqual([]);
+    expect(
+      output.observe(snapshot([block("a", 0, "Citation revised")]), 115),
+    ).toEqual([
+      { sequence: 1, id: "a", channel: "answer", text: "Citation revised" },
+    ]);
+  });
+
+  it("counts inserted answer separators against the output budget", () => {
+    const output = new ChatGptVisibleOutput("owned-assistant-message", 0, 3, 2);
+    expect(() =>
+      output.observe(
+        snapshot([block("a", 0, "A"), block("b", 1, "B")], true),
+        0,
+      ),
+    ).toThrow("CHATGPT_VISIBLE_OUTPUT_LIMIT");
+    expect(output.answerText()).toBe("");
+  });
+
   it("fails closed if terminal evidence omits an uncommitted block", () => {
     const output = tracker();
     output.observe(snapshot([block("a", 0, "Pending", false)]), 0);

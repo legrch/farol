@@ -135,6 +135,50 @@ describe("Codex host context continuity composition", () => {
     return root;
   }
 
+  it("refuses to rebind a saved Mind checkpoint to the new neutral route", async () => {
+    const root = await stateRoot();
+    const store = new PrivateContextStore({ root });
+    const summary = driver();
+    const continuity = new CodexContextContinuity({
+      ownerId: "owner-preview",
+      providerProfileId: "profile-isolated-next",
+      store,
+      summary,
+    });
+    const handoff = await continuity.compact({
+      endpoint: "responses_compact",
+      body: unaryBody(),
+      metadataHeader: metadata(),
+    });
+    if (!handoff.ok || handoff.value.variant !== "unary_replacement_history")
+      throw new Error("EXPECTED_HANDOFF");
+    const before = await store.load(contextBinding());
+    for (const input of [history(), handoff.value.response.output]) {
+      await expect(
+        continuity.prepareTurn({
+          body: {
+            model: "farol-next/chatgpt",
+            stream: true,
+            input,
+            tools: [],
+            client_metadata: {
+              session_id: "session-context-1",
+              thread_id: "thread-context-1",
+              turn_id: "neutral-continue",
+              root_turn_id: "neutral-continue",
+            },
+          },
+        }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "HOST_COMPACTION_BINDING_MISMATCH" },
+      });
+    }
+    await expect(store.load(contextBinding())).resolves.toEqual(before);
+    expect(summary.request).toHaveBeenCalledTimes(1);
+    expect(summary.retire).not.toHaveBeenCalled();
+  });
+
   it("persists, hands off, confirms, retires and resumes one exact epoch after restart", async () => {
     const root = await stateRoot();
     const summary = driver();
@@ -1276,6 +1320,113 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
     itemId: "host-context-compaction-hr014",
     signal: "turn_completed" as const,
   };
+
+  it("carries public output, corrections and an unresolved custom call through three current-ChatGPT summary cycles", async () => {
+    // Real continuity/store/summary driver; synthetic page output. This is
+    // continuation correctness evidence, not live model or native host proof.
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "farol-next-three-cycles-"),
+    );
+    roots.push(root);
+    const { route, page } = summaryPage();
+    let retained: readonly unknown[] = [
+      ...history(),
+      {
+        type: "custom_tool_call",
+        call_id: "write-pending",
+        name: "apply_patch",
+        input: "synthetic patch with no result",
+      },
+    ];
+    for (let cycle = 1; cycle <= 3; cycle += 1) {
+      page.url = `https://chatgpt.com/c/synthetic-cycle-${cycle}`;
+      const store = new PrivateContextStore({ root });
+      const continuity = continuityFor(store, route);
+      const body = {
+        model: "farol-next/chatgpt",
+        input: [
+          ...retained,
+          {
+            type: "reasoning",
+            id: `status-${cycle}`,
+            summary: [{ type: "summary_text", text: "The write succeeded" }],
+          },
+          {
+            type: "message",
+            role: "assistant",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Checking the result." }],
+          },
+        ],
+      };
+      const metadataHeader = JSON.stringify({
+        thread_id: "thread-context-1",
+        turn_id: `compact-cycle-${cycle}`,
+      });
+      const handoff = await continuity.compact({
+        endpoint: "responses_compact",
+        body,
+        metadataHeader,
+      });
+      if (
+        !handoff.ok ||
+        handoff.value.variant !== "unary_replacement_history"
+      ) {
+        throw new Error(
+          handoff.ok ? "EXPECTED_UNARY_HANDOFF" : handoff.error.code,
+        );
+      }
+      const replayed = replayHostCheckpoint(
+        handoff.value.response.output,
+        262_144,
+      );
+      if (!replayed.ok) throw new Error(replayed.error.code);
+      const checkpoint = replayed.value.checkpoint;
+      expect(checkpoint.content).toMatchObject({
+        activeConstraints: ["Never publish this task."],
+        latestCorrections: ["Use the corrected workspace."],
+        completedWork: [],
+        unknownOutcomes: [
+          expect.objectContaining({ operationRef: "write-pending" }),
+        ],
+      });
+      expect(checkpoint.epoch).toBe(cycle);
+      // A lost handoff acknowledgement never submits a second summary.
+      await expect(
+        continuity.compact({
+          endpoint: "responses_compact",
+          body,
+          metadataHeader,
+        }),
+      ).resolves.toEqual(handoff);
+      const restartedStore = new PrivateContextStore({ root });
+      const restarted = continuityFor(restartedStore, route);
+      retained = handoff.value.response.output;
+      const resumed = await restarted.prepareTurn({
+        body: {
+          model: "farol-next/chatgpt",
+          stream: true,
+          input: retained,
+          tools: [],
+          client_metadata: {
+            session_id: "session-context-1",
+            thread_id: "thread-context-1",
+            turn_id: `continue-cycle-${cycle}`,
+            root_turn_id: `continue-cycle-${cycle}`,
+          },
+        },
+      });
+      expect(resumed).toMatchObject({
+        ok: true,
+        value: { trustedContext: expect.stringContaining("write-pending") },
+      });
+      await expect(
+        restartedStore.load(checkpoint.binding),
+      ).resolves.toMatchObject({ phase: "active", epoch: cycle + 1 });
+      expect(page.submissions).toBe(cycle);
+      expect(page.resets).toBe(cycle);
+    }
+  });
 
   for (const fault of [
     "deleteSummary",

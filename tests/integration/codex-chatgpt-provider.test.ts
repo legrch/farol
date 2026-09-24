@@ -785,6 +785,194 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(prepareTurn).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["visible", "text"] as const)(
+    "does not certify %s output when its adapter swallowed a stream error",
+    async (mode) => {
+      const conversation: CodexChatGptConversation = {
+        run: async (_input, observer) => {
+          if (mode === "visible") {
+            await observer.onVisibleItem!({
+              sequence: 1,
+              id: "a",
+              channel: "answer",
+              text: "A",
+            });
+            await Promise.resolve()
+              .then(() =>
+                observer.onVisibleItem!({
+                  sequence: 1,
+                  id: "a",
+                  channel: "answer",
+                  text: "changed",
+                }),
+              )
+              .catch(() => undefined);
+          } else {
+            await observer.onTextDelta({
+              sequence: 1,
+              delta: "A",
+              text: "A",
+              observedCharacters: 1,
+            });
+            await Promise.resolve()
+              .then(() =>
+                observer.onTextDelta({
+                  sequence: 1,
+                  delta: "changed",
+                  text: "changed",
+                  observedCharacters: 7,
+                }),
+              )
+              .catch(() => undefined);
+          }
+          return {
+            state: "completed",
+            code: null,
+            outputText: "A",
+            observedProvider: "chatgpt-web",
+            observedModel: null,
+            observedMode: null,
+          };
+        },
+      };
+      runtime = await startCodexChatGptProvider({
+        model: "farol-next/mind",
+        token: "route-b-test-token",
+        conversation,
+        turns: memoryJournal(),
+      });
+      const response = await fetch(`${runtime.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer route-b-test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(requestBody()),
+      });
+      const result = await response.text();
+      expect(result).toContain("response.failed");
+      expect(result).toContain("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+      expect(result).not.toContain("response.completed");
+      expect(runtime.diagnostics().activeTurns).toBe(0);
+    },
+  );
+
+  it.each(["completed", "failed_before_submit"] as const)(
+    "does not acknowledge context or release replay protection for an inconsistent %s result",
+    async (state) => {
+      const delivered = vi.fn();
+      const turns = memoryJournal();
+      const release = vi.spyOn(turns, "release");
+      const conversation: CodexChatGptConversation = {
+        run: vi.fn(async (_input, observer) => {
+          await observer.onTextDelta({
+            sequence: 1,
+            delta: "A",
+            text: "A",
+            observedCharacters: 1,
+          });
+          return {
+            state,
+            code: null,
+            outputText: "B",
+            observedProvider: "chatgpt-web",
+            observedModel: null,
+            observedMode: null,
+          };
+        }),
+      };
+      runtime = await startCodexChatGptProvider({
+        model: "farol-next/mind",
+        token: "route-b-test-token",
+        conversation,
+        turns,
+        compaction: {
+          compact: vi.fn(),
+          prepareTurn: vi.fn().mockResolvedValue({
+            ok: true,
+            value: { trustedContext: "Validated checkpoint", delivered },
+          }),
+        },
+      });
+      const post = () =>
+        fetch(`${runtime!.baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: {
+            authorization: "Bearer route-b-test-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(requestBody()),
+        });
+      const result = await (await post()).text();
+      expect(result).toContain("FAROL_NEXT_PROVIDER_RESULT_INVALID");
+      expect(result).not.toContain("response.completed");
+      expect(delivered).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      expect((await post()).status).toBe(409);
+      expect(conversation.run).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not acknowledge a checkpoint when the source finishes after provider cancellation", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const delivered = vi.fn();
+    let sourceReturned = false;
+    const conversation: CodexChatGptConversation = {
+      run: async (_input, observer) => {
+        await observer.onTextDelta({
+          sequence: 1,
+          delta: "A",
+          text: "A",
+          observedCharacters: 1,
+        });
+        await gate;
+        sourceReturned = true;
+        return {
+          state: "completed",
+          code: null,
+          outputText: "A",
+          observedProvider: "chatgpt-web",
+          observedModel: null,
+          observedMode: null,
+        };
+      },
+    };
+    runtime = await startCodexChatGptProvider({
+      model: "farol-next/mind",
+      token: "route-b-test-token",
+      conversation,
+      turns: memoryJournal(),
+      compaction: {
+        compact: vi.fn(),
+        prepareTurn: vi.fn().mockResolvedValue({
+          ok: true,
+          value: { trustedContext: "Validated checkpoint", delivered },
+        }),
+      },
+    });
+    const response = await fetch(`${runtime.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer route-b-test-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(requestBody()),
+    });
+    try {
+      await new SseReader(response).until("response.output_text.delta");
+      await runtime.close();
+    } finally {
+      release();
+    }
+    await vi.waitFor(() => expect(sourceReturned).toBe(true));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(delivered).not.toHaveBeenCalled();
+    expect(runtime.diagnostics().activeTurns).toBe(0);
+  });
+
   it("routes unary and streamed host compaction through the summary-only adapter", async () => {
     const conversation: CodexChatGptConversation = { run: vi.fn() };
     const compact = vi

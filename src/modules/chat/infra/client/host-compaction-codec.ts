@@ -129,11 +129,52 @@ function isCompactionTrigger(candidate: unknown): boolean {
   );
 }
 
+// Only the public summary emitted by the semantic stream is portable. Do
+// not accept hidden reasoning, an opaque payload, or extra effect fields.
+const publicStatusSchema = z.strictObject({
+  type: z.literal("reasoning"),
+  id: z.string().min(1).max(256).optional(),
+  summary: z
+    .array(
+      z.strictObject({
+        type: z.literal("summary_text"),
+        text: z.string().max(256 * 1_024),
+      }),
+    )
+    .max(512),
+  status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
+});
+
+const customToolHistorySchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("custom_tool_call"),
+    id: z.string().min(1).max(256).optional(),
+    call_id: z.string().min(1).max(160),
+    name: z.string().min(1).max(160),
+    input: z.string(),
+    status: z.enum(["in_progress", "completed", "incomplete"]).optional(),
+  }),
+  z.strictObject({
+    type: z.literal("custom_tool_call_output"),
+    id: z.string().min(1).max(256).optional(),
+    call_id: z.string().min(1).max(160),
+    output: z.string(),
+  }),
+]);
+
 function isTransparentHistoryItem(candidate: unknown): boolean {
   if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
     return false;
   }
   const item = candidate as Record<string, unknown>;
+  if (item.type === "reasoning")
+    return publicStatusSchema.safeParse(item).success;
+  if (
+    item.type === "custom_tool_call" ||
+    item.type === "custom_tool_call_output"
+  ) {
+    return customToolHistorySchema.safeParse(item).success;
+  }
   if (item.type === undefined) {
     return (
       (item.role === "user" || item.role === "assistant") && "content" in item
@@ -227,8 +268,26 @@ export function parseHostCompactionRequest(
     }
     const last = parsed.data.input.at(-1);
     const explicitTrigger = isCompactionTrigger(last);
-    const embeddedTrigger = isStreamedHostCompactionMetadata(embeddedIdentity);
-    if (!explicitTrigger && !embeddedTrigger) {
+    const metadataTrigger =
+      isStreamedHostCompactionMetadata(headerIdentity) ||
+      isStreamedHostCompactionMetadata(embeddedIdentity);
+    // Both carriers may be present, but one must not contradict the other
+    // about the operation this request represents. Unknown automatic/native
+    // forms remain unsupported; a manual declaration cannot mask one.
+    if (
+      headerIdentity &&
+      embeddedIdentity &&
+      (headerIdentity.request_kind !== undefined ||
+        headerIdentity.compaction !== undefined) &&
+      (embeddedIdentity.request_kind !== undefined ||
+        embeddedIdentity.compaction !== undefined) &&
+      (headerIdentity.request_kind !== embeddedIdentity.request_kind ||
+        isStreamedHostCompactionMetadata(headerIdentity) !==
+          isStreamedHostCompactionMetadata(embeddedIdentity))
+    ) {
+      return failure("HOST_COMPACTION_IDENTITY_MISMATCH");
+    }
+    if (!explicitTrigger && !metadataTrigger) {
       return failure("HOST_COMPACTION_TRIGGER_MISSING");
     }
     history = explicitTrigger

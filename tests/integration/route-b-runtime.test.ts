@@ -87,7 +87,7 @@ class TaskConversation implements ChatGptContextSummaryRoute {
 
 function initialRequest(turnId: string, text: string, input: unknown[] = []) {
   return {
-    model: "farol-next/mind",
+    model: "farol-next/chatgpt",
     stream: true,
     store: false,
     input: [
@@ -225,7 +225,7 @@ describe("Route B runtime composed as the product composes it", () => {
     const compacted = await post(
       route,
       "/responses/compact",
-      { model: "farol-next/mind", input: history },
+      { model: "farol-next/chatgpt", input: history },
       {
         "x-codex-turn-metadata": JSON.stringify({
           thread_id: threadId,
@@ -255,8 +255,8 @@ describe("Route B runtime composed as the product composes it", () => {
         hostThreadId: threadId,
         sessionId: threadId,
         providerProfileId: "profile-isolated-next",
-        modelId: "farol-next/mind",
-        mode: "mind",
+        modelId: "farol-next/chatgpt",
+        mode: "chatgpt",
       }),
     ).resolves.toMatchObject({ phase: "active", epoch: 2 });
   });
@@ -277,7 +277,7 @@ describe("Route B runtime composed as the product composes it", () => {
       route,
       "/responses/compact",
       {
-        model: "farol-next/mind",
+        model: "farol-next/chatgpt",
         input: [
           {
             type: "message",
@@ -305,7 +305,7 @@ describe("Route B runtime composed as the product composes it", () => {
     // itself; the next ordinary request carries only the new message.
     await expect(
       controller.continuity.confirmHostCompaction({
-        modelId: "farol-next/mind",
+        modelId: "farol-next/chatgpt",
         threadId,
         turnId: "turn-hidden-compact",
         itemId: null,
@@ -570,7 +570,7 @@ describe("Route B runtime composed as the product composes it", () => {
           route,
           "/responses/compact",
           {
-            model: "farol-next/mind",
+            model: "farol-next/chatgpt",
             input: [
               {
                 type: "message",
@@ -687,7 +687,7 @@ describe("Route B runtime composed as the product composes it", () => {
       route,
       "/responses/compact",
       {
-        model: "farol-next/mind",
+        model: "farol-next/chatgpt",
         input: [
           message("user", "First request."),
           message("assistant", "Answer 1."),

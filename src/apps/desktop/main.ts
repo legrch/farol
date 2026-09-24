@@ -421,7 +421,7 @@ const startupDelayMs = previewStartupDelay(
 const demoMode = process.argv.includes("--demo");
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-next";
-const contextModel = "farol-next/mind" as const;
+const contextModel = ROUTE_B_MODEL;
 const windowMode = parsePreviewWindowMode(process.argv);
 // Explicit-only: the owner-handed overnight run passes this itself. Its
 // absence keeps every display-selection outcome exactly as before.
@@ -1100,7 +1100,7 @@ function contextBinding(taskId: string): ContextBinding {
     sessionId: taskId,
     providerProfileId: contextProviderProfileId,
     modelId: contextModel,
-    mode: "mind",
+    mode: "chatgpt",
   };
 }
 

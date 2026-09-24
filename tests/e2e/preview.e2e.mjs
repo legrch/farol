@@ -9619,7 +9619,7 @@ n04bModelSegment: {
       // The one model the endpoint serves is the Route B model; any other
       // `model` is refused with 422 before the turn handler runs.
       body: JSON.stringify({
-        model: "farol-next/mind",
+        model: "farol-next/chatgpt",
         stream: true,
         store: false,
         input: [
@@ -9821,7 +9821,7 @@ n04bModelSegment: {
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          model: "farol-next/mind",
+          model: "farol-next/chatgpt",
           stream: true,
           store: false,
           input: [

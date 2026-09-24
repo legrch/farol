@@ -100,6 +100,149 @@ function checkpointFor(request: ParsedHostCompaction) {
 }
 
 describe("native host compaction codec", () => {
+  it("accepts public semantic status history without treating display text as an effect", () => {
+    const status = {
+      id: "response_status_0",
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "Tool write-17 completed" }],
+    };
+    const history = [...baseInput, status];
+    const parsed = parseHostCompactionRequest(
+      "responses_compact",
+      { model: "farol-next/chatgpt", input: history },
+      metadata,
+    );
+    expect(parsed).toMatchObject({ ok: true, value: { history } });
+    expect(authoritativeHistoryFacts(history, 16_384)).toEqual({
+      receipts: [],
+      carriedWork: [],
+      unresolved: [],
+    });
+  });
+
+  it.each([
+    { encrypted_content: "opaque" },
+    { encrypted_content: null },
+    { content: [{ type: "reasoning_text", text: "private" }] },
+    { call_id: "invented-effect" },
+    { summary: [{ type: "output_text", text: "wrong channel" }] },
+    { summary: [{ type: "summary_text", text: 42 }] },
+  ])("refuses opaque or unqualified reasoning fields %j", (extra) => {
+    expect(
+      parseHostCompactionRequest(
+        "responses_compact",
+        {
+          model: "farol-next/chatgpt",
+          input: [
+            ...baseInput,
+            {
+              type: "reasoning",
+              summary: [{ type: "summary_text", text: "Public status" }],
+              ...extra,
+            },
+          ],
+        },
+        metadata,
+      ),
+    ).toMatchObject({ ok: false, error: { code: "HOST_COMPACTION_OPAQUE" } });
+  });
+
+  it("accepts transparent custom tool history and keeps a missing result unresolved", () => {
+    const history = [
+      ...baseInput,
+      {
+        type: "custom_tool_call",
+        id: "item-1",
+        call_id: "write-17",
+        name: "apply_patch",
+        input: "synthetic patch",
+      },
+    ];
+    const parsed = value(
+      parseHostCompactionRequest(
+        "responses_compact",
+        { model: "farol-next/chatgpt", input: history },
+        metadata,
+      ),
+    );
+    expect(
+      authoritativeHistoryFacts(parsed.history, 16_384).unresolved,
+    ).toEqual([expect.objectContaining({ operationRef: "write-17" })]);
+    const delivered = value(
+      parseHostCompactionRequest(
+        "responses_compact",
+        {
+          model: "farol-next/chatgpt",
+          input: [
+            ...history,
+            {
+              type: "custom_tool_call_output",
+              call_id: "write-17",
+              output: "failed",
+            },
+          ],
+        },
+        metadata,
+      ),
+    );
+    expect(
+      authoritativeHistoryFacts(delivered.history, 16_384).unresolved,
+    ).toEqual([]);
+  });
+
+  it("recognizes the qualified manual trigger in the header, not only in embedded metadata", () => {
+    const trigger = JSON.stringify({
+      thread_id: "thread-atlantic",
+      turn_id: "turn-compact-1",
+      request_kind: "compaction",
+      compaction: {
+        implementation: "responses",
+        phase: "standalone_turn",
+        reason: "user_requested",
+        strategy: "memento",
+        trigger: "manual",
+      },
+    });
+    expect(
+      parseHostCompactionRequest(
+        "responses",
+        { model: "farol-next/chatgpt", stream: true, input: baseInput },
+        trigger,
+      ),
+    ).toMatchObject({ ok: true, value: { history: baseInput } });
+    expect(
+      parseHostCompactionRequest(
+        "responses",
+        {
+          model: "farol-next/chatgpt",
+          stream: true,
+          input: baseInput,
+          client_metadata: { "x-codex-turn-metadata": trigger },
+        },
+        metadata,
+      ),
+    ).toMatchObject({ ok: true });
+    const conflicting = JSON.parse(trigger);
+    conflicting.compaction.trigger = "automatic";
+    expect(
+      parseHostCompactionRequest(
+        "responses",
+        {
+          model: "farol-next/chatgpt",
+          stream: true,
+          input: baseInput,
+          client_metadata: {
+            "x-codex-turn-metadata": JSON.stringify(conflicting),
+          },
+        },
+        trigger,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "HOST_COMPACTION_IDENTITY_MISMATCH" },
+    });
+  });
+
   it("parses unary replacement-history and streamed-item variants separately", () => {
     const unary = parseHostCompactionRequest(
       "responses_compact",

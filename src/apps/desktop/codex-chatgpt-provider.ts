@@ -41,6 +41,23 @@ const visibleItemSchema = z.strictObject({
     .max(256 * 1_024),
 });
 
+const textDeltaSchema = z.strictObject({
+  sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  delta: z
+    .string()
+    .min(1)
+    .max(256 * 1_024),
+  text: z
+    .string()
+    .min(1)
+    .max(256 * 1_024),
+  observedCharacters: z
+    .number()
+    .int()
+    .positive()
+    .max(256 * 1_024),
+});
+
 const MAX_REQUEST_BYTES = 1 * 1_024 * 1_024;
 // The longest prompt a Route B turn sends into one ChatGPT message.
 export const MAX_PROMPT_CHARACTERS = 128 * 1_024;
@@ -197,12 +214,26 @@ function compactionTrigger(candidate: unknown): boolean {
   );
 }
 
-function streamedCompactionRequest(candidate: unknown): boolean {
+export function streamedCompactionRequest(
+  candidate: unknown,
+  metadataHeader?: string,
+): boolean {
+  let headerCompaction = false;
+  if (metadataHeader) {
+    try {
+      headerCompaction = isHostCompactionRequestMetadata(
+        JSON.parse(metadataHeader),
+      );
+    } catch {
+      // An unreadable header is not a recognized compaction declaration.
+    }
+  }
   return (
-    record(candidate) &&
-    Array.isArray(candidate.input) &&
-    (compactionTrigger(candidate.input.at(-1)) ||
-      embeddedCompactionRequest(candidate))
+    headerCompaction ||
+    embeddedCompactionRequest(candidate) ||
+    (record(candidate) &&
+      Array.isArray(candidate.input) &&
+      compactionTrigger(candidate.input.at(-1)))
   );
 }
 
@@ -463,14 +494,23 @@ function startStream(response: ServerResponse): void {
   response.flushHeaders();
 }
 
-function modelCatalogue(model: string): Readonly<Record<string, unknown>> {
-  const profile = model.endsWith("/drive") ? "Drive" : "Mind";
+export function modelCatalogue(
+  model: string,
+): Readonly<Record<string, unknown>> {
+  const displayName =
+    model === "farol-next/chatgpt"
+      ? "Farol Next ChatGPT"
+      : model === "farol-next/drive"
+        ? "Farol Next Drive"
+        : model === "farol-next/mind"
+          ? "Farol Next Mind"
+          : model;
   return {
     id: model,
     object: "model",
     owned_by: "farol-next",
     slug: model,
-    display_name: `Farol Next ${profile}`,
+    display_name: displayName,
     description:
       "The owner's separately authenticated ChatGPT through the isolated Farol Next provider route. Native host tools stay under the selected host task's registry and permissions.",
     supported_reasoning_levels: [
@@ -867,6 +907,7 @@ class ActiveProviderTurn {
   private readonly visibleIds = new Set<string>();
   private readonly visibleDeliveries = new Set<Deferred<void>>();
   private visibleCharacters = 0;
+  private streamFailure: Error | null = null;
   private state: "created" | "running" | "ended" = "created";
   private readonly lifetime: NodeJS.Timeout;
 
@@ -931,8 +972,20 @@ class ActiveProviderTurn {
         }),
       )
       .then(async (result) => {
-        await this.onSettled(result.state);
-        this.push({ kind: "final", result, code: null });
+        // A source adapter may accidentally catch an observer rejection.
+        // That cannot turn a damaged stream into successful durable state.
+        const invalidResult =
+          (result.state === "completed" && !this.validCompletion(result)) ||
+          (result.state === "failed_before_submit" &&
+            (this.sequence > 0 || this.issued.size > 0));
+        const code =
+          this.streamFailure?.message ??
+          (invalidResult ? "FAROL_NEXT_PROVIDER_RESULT_INVALID" : null);
+        const settled: CodexChatGptConversationResult = code
+          ? { ...result, state: "outcome_unknown", code }
+          : result;
+        await this.onSettled(settled.state);
+        this.push({ kind: "final", result: settled, code });
       })
       .catch(() =>
         this.push({
@@ -1015,17 +1068,12 @@ class ActiveProviderTurn {
         await writer.completeTool(event.call);
         return false;
       }
-      const valid =
-        event.result !== null &&
-        event.result.state === "completed" &&
-        event.result.code === null &&
-        event.result.outputText === this.text &&
-        this.text.length > 0 &&
-        this.pending === null;
+      const valid = event.result !== null && this.validCompletion(event.result);
       if (valid) await writer.completeFinal();
       else {
         await writer.fail(
-          event.code ??
+          this.streamFailure?.message ??
+            event.code ??
             event.result?.code ??
             "FAROL_NEXT_PROVIDER_RESULT_INVALID",
         );
@@ -1039,7 +1087,28 @@ class ActiveProviderTurn {
     }
   }
 
-  private async observeDelta(delta: CodexChatGptTextDelta): Promise<void> {
+  private validCompletion(result: CodexChatGptConversationResult): boolean {
+    return (
+      this.state === "running" &&
+      this.streamFailure === null &&
+      result.state === "completed" &&
+      result.code === null &&
+      result.outputText === this.text &&
+      this.text.length > 0 &&
+      this.pending === null
+    );
+  }
+
+  private failStream(): never {
+    this.streamFailure ??= new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+    throw this.streamFailure;
+  }
+
+  private async observeDelta(input: CodexChatGptTextDelta): Promise<void> {
+    if (this.streamFailure) throw this.streamFailure;
+    const parsed = textDeltaSchema.safeParse(input);
+    if (!parsed.success) this.failStream();
+    const delta = parsed.data;
     if (
       this.state !== "running" ||
       this.streamMode === "visible" ||
@@ -1048,7 +1117,7 @@ class ActiveProviderTurn {
       delta.text !== `${this.text}${delta.delta}` ||
       !this.writer
     ) {
-      throw new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+      this.failStream();
     }
     this.streamMode = "text";
     this.sequence = delta.sequence;
@@ -1057,23 +1126,25 @@ class ActiveProviderTurn {
   }
 
   private async observeVisibleItem(input: VisibleOutputItem): Promise<void> {
+    if (this.streamFailure) throw this.streamFailure;
     const parsed = visibleItemSchema.safeParse(input);
-    if (!parsed.success) throw new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+    if (!parsed.success) this.failStream();
     const item = parsed.data;
+    const separator = this.visibleIds.size > 0 ? 2 : 0;
     if (
       this.state !== "running" ||
       this.streamMode === "text" ||
       item.sequence !== this.sequence + 1 ||
       this.visibleIds.has(item.id) ||
       this.visibleIds.size >= 512 ||
-      this.visibleCharacters + item.text.length > 256 * 1_024
+      this.visibleCharacters + item.text.length + separator > 256 * 1_024
     ) {
-      throw new Error("FAROL_NEXT_PROVIDER_STREAM_INVALID");
+      this.failStream();
     }
     this.streamMode = "visible";
     this.sequence = item.sequence;
     this.visibleIds.add(item.id);
-    this.visibleCharacters += item.text.length;
+    this.visibleCharacters += item.text.length + separator;
     if (item.channel === "answer") {
       this.text += `${this.text ? "\n\n" : ""}${item.text}`;
     }
@@ -1087,6 +1158,7 @@ class ActiveProviderTurn {
   }
 
   private async requestTool(request: CodexNativeToolRequest): Promise<string> {
+    if (this.streamFailure) throw this.streamFailure;
     if (this.state !== "running" || this.pending !== null) {
       throw new Error("FAROL_NEXT_TOOL_CALL_STATE_INVALID");
     }
@@ -1550,7 +1622,10 @@ export async function startCodexChatGptProvider(
         const endpoint =
           url.pathname === "/v1/responses/compact"
             ? "responses_compact"
-            : streamedCompactionRequest(body.value)
+            : streamedCompactionRequest(
+                  body.value,
+                  compactionMetadataHeader(request),
+                )
               ? "responses"
               : null;
         if (endpoint !== null) {
