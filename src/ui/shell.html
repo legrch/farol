@@ -386,12 +386,20 @@
                 <h2 id="onboarding-title" tabindex="-1">Your setup</h2>
                 <p id="onboarding-copy"></p>
               </header>
-              <p
-                id="onboarding-status"
-                class="onboarding-status"
-                role="status"
-                aria-live="polite"
-              ></p>
+              <div class="onboarding-result">
+                <p
+                  id="onboarding-status"
+                  class="onboarding-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+                <p
+                  id="onboarding-feedback"
+                  class="settings-feedback"
+                  role="status"
+                  aria-live="polite"
+                ></p>
+              </div>
               <div class="onboarding-body">
                 <section data-onboarding-content="chatgpt">
                   <div class="onboarding-callout">
@@ -650,12 +658,6 @@
                   </button>
                 </div>
               </div>
-              <p
-                id="onboarding-feedback"
-                class="settings-feedback"
-                role="status"
-                aria-live="polite"
-              ></p>
             </div>
             <footer class="onboarding-footer">
               <button id="onboarding-back" type="button">Back</button

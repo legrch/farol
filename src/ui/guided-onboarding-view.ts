@@ -433,7 +433,9 @@ export class GuidedOnboardingView {
                     ? "Restore connection for check"
                     : "Reconnect and continue"
                   : completedAction === "continue"
-                    ? "Continue"
+                    ? this.step === 3
+                      ? "View overview"
+                      : "Continue"
                     : this.step === 0
                       ? this.signInOpened
                         ? "Check sign-in"

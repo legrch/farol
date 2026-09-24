@@ -123,6 +123,7 @@ import {
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
+  currentConnectorAttachment,
   readPendingConnectorReceipt,
   waitForConnectorAppReceipt,
 } from "./connector-app-receipt-wait";
@@ -3630,6 +3631,30 @@ async function checkSecureMcpAttachment(
     const connector = snapshot.settings.connectors.secureMcp;
     const runtime = connector.runtime;
     const challenge = connector.challenge;
+    if (
+      expectedBinding === undefined &&
+      secureMcpConnectorRuntime.isRunning()
+    ) {
+      const current = currentConnectorAttachment(
+        snapshot.settings,
+        buildIdentity.buildId,
+        expectedWorkspaceId,
+      );
+      if (current !== null) {
+        return ProductConfigurationResultSchema.parse({
+          ok: true,
+          snapshot,
+          evidence: {
+            kind: "connector.attachment",
+            runtimeGeneration: current.runtimeGeneration,
+            computerGeneration: current.computerGeneration,
+            workspaceId: current.workspaceId,
+            challengeSha256: current.challengeSha256,
+            receiptSha256: current.receiptSha256,
+          },
+        });
+      }
+    }
     if (
       expectedWorkspaceId !== undefined &&
       snapshot.settings.setup.computer.verified?.workspaceId !==

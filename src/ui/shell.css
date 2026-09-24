@@ -3449,11 +3449,18 @@ html[data-sidebar="rail"] .onboarding-nav button {
   width: min(720px, calc(100% - 48px));
   margin-inline: auto;
 }
-.onboarding-scroll > .settings-feedback:empty {
+.onboarding-result {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 0 12px;
+  background: var(--surface);
+}
+.onboarding-result > .settings-feedback:empty {
   display: none;
 }
-.onboarding-scroll > .settings-feedback:not(:empty) {
-  margin-block: 14px 18px;
+.onboarding-result > .settings-feedback:not(:empty) {
+  margin-block: 10px 0;
   padding: 11px 13px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -3461,7 +3468,7 @@ html[data-sidebar="rail"] .onboarding-nav button {
   font-size: 13px;
   line-height: 1.45;
 }
-.onboarding-scroll > .settings-feedback.error:not(:empty) {
+.onboarding-result > .settings-feedback.error:not(:empty) {
   border-color: color-mix(in srgb, var(--failed) 55%, var(--line));
 }
 .onboarding-short-guide {
@@ -3656,7 +3663,7 @@ html[data-sidebar="rail"] .onboarding-nav button {
   font-size: 12px;
 }
 .onboarding-status {
-  margin: 20px auto 0;
+  margin: 0;
   padding: 6px 0 6px 14px;
   border-left: 2px solid var(--line);
   color: var(--text-soft);

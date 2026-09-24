@@ -1,3 +1,44 @@
+import type { ProductSettings } from "../../pkg/product-settings/contract";
+
+// A successful check consumes its one-time challenge. Subsequent read-only
+// checks use the already validated attachment, scoped to the live runtime and
+// Computer authority, rather than asking for a challenge that no longer exists.
+export function currentConnectorAttachment(
+  settings: ProductSettings,
+  expectedBuildId: string,
+  expectedWorkspaceId?: string,
+): NonNullable<
+  ProductSettings["connectors"]["secureMcp"]["attachment"]
+> | null {
+  const connector = settings.connectors.secureMcp;
+  const runtime = connector.runtime;
+  const attachment = connector.attachment;
+  const verified = settings.setup.connect.verified;
+  const workspace = settings.setup.computer.verified;
+  return attachment !== null &&
+    connector.challenge === null &&
+    runtime?.state === "ready" &&
+    connector.tunnelId === attachment.tunnelId &&
+    connector.generation === attachment.connectorGeneration &&
+    runtime.runtimeGeneration === attachment.runtimeGeneration &&
+    runtime.computerGeneration === attachment.computerGeneration &&
+    runtime.buildId === attachment.buildId &&
+    runtime.buildId === expectedBuildId &&
+    settings.computer.generation === attachment.computerGeneration &&
+    workspace?.workspaceId === attachment.workspaceId &&
+    workspace.configRevision === settings.computer.generation &&
+    verified?.workspaceId === attachment.workspaceId &&
+    verified.runtimeGeneration === attachment.runtimeGeneration &&
+    !settings.setup.connect.outcomeUnknown &&
+    settings.computer.workspaces.some(
+      (item) => item.workspaceId === attachment.workspaceId,
+    ) &&
+    (expectedWorkspaceId === undefined ||
+      expectedWorkspaceId === attachment.workspaceId)
+    ? attachment
+    : null;
+}
+
 /** Waits for a matching receipt through read-only probes after one send. */
 export async function readPendingConnectorReceipt<T>(
   readReceipt: () => Promise<T | null>,
