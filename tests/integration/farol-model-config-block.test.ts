@@ -47,12 +47,12 @@ async function exists(target: string): Promise<boolean> {
   );
 }
 
-// The one model the endpoint serves; the selection region pins it.
-const MODEL = "farol-next/mind";
+// The provider-local default alias, not an exact upstream version pin.
+const MODEL = "chatgpt";
 
 const envKeySpec: FarolModelProviderSpec = {
   providerName: "farol",
-  displayName: "Farol Model",
+  displayName: "Farol",
   baseUrl: "http://127.0.0.1:54217",
   model: MODEL,
   wireApi: "responses",
@@ -104,6 +104,42 @@ function selectionFor(target: FarolModelProviderSelection): string {
 }
 
 describe("Farol Model managed provider block", () => {
+  it("previews and updates only owned route fields without relabelling foreign state", async () => {
+    const unrelated = '[unrelated]\nlabel = "farol-next/chatgpt"\n';
+    const configPath = await disposableConfig(unrelated);
+    const oldSpec = {
+      ...envKeySpec,
+      providerName: "farol_next",
+      displayName: "Farol Next",
+      model: "farol-next/chatgpt",
+    };
+    await applyFarolModelConfigBlock(configPath, oldSpec);
+    await applyFarolModelProviderSelection(configPath, oldSpec);
+    const before = await fs.readFile(configPath, "utf8");
+    const blockPreview = await previewFarolModelConfigBlock(
+      configPath,
+      envKeySpec,
+    );
+    const selectionPreview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(blockPreview.status).toBe("update");
+    expect(selectionPreview.status).toBe("update");
+    expect(await fs.readFile(configPath, "utf8")).toBe(before);
+    await applyFarolModelConfigBlock(configPath, envKeySpec);
+    await applyFarolModelProviderSelection(configPath, selection);
+    const updated = await fs.readFile(configPath, "utf8");
+    expect(updated).toContain('model_provider = "farol"');
+    expect(updated).toContain('model = "chatgpt"');
+    expect(updated).toContain("[model_providers.farol]");
+    expect(updated).not.toContain("[model_providers.farol_next]");
+    expect(updated).toContain(unrelated);
+    await rollbackFarolModelProviderSelection(configPath);
+    await rollbackFarolModelConfigBlock(configPath);
+    expect(await fs.readFile(configPath, "utf8")).toBe(unrelated);
+  });
+
   it("installs into a config file that does not exist yet, and never writes a profile", async () => {
     const configPath = path.join(await disposableRoot(), "sub", "config.toml");
 

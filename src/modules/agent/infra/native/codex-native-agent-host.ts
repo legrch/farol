@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
+import {
+  CHATGPT_MODEL_ID,
+  FAROL_PROVIDER_ID,
+} from "../../../../pkg/model-route/contract";
 
 import type {
   AgentHost,
@@ -31,7 +35,7 @@ export type CodexNativeAgentPeer = Readonly<{
   ): () => void;
 }>;
 
-// The local Next provider catalogue advertises only low effort. This is a
+// The local Farol provider catalogue currently advertises only low effort. This is a
 // transport selection, not an assertion about the model observed in ChatGPT.
 const selectedRouteSchema = z.discriminatedUnion("model", [
   z.object({
@@ -39,7 +43,7 @@ const selectedRouteSchema = z.discriminatedUnion("model", [
     effort: z.literal("low").optional(),
   }),
   z.object({
-    model: z.literal("farol-next/chatgpt"),
+    model: z.literal(CHATGPT_MODEL_ID),
     effort: z.literal("low"),
   }),
 ]);
@@ -60,7 +64,7 @@ const boundedId = z.string().min(1).max(200);
 
 const threadStartSchema = z
   .object({
-    model: z.enum(["gpt-6-astra", "farol-next/chatgpt"]),
+    model: z.enum(["gpt-6-astra", CHATGPT_MODEL_ID]),
     thread: z
       .object({
         id: boundedId,
@@ -827,8 +831,8 @@ export class CodexNativeAgentHost implements AgentHost {
       const parent = threadStartSchema.safeParse(
         await this.peer.request("thread/start", {
           model: this.options.model,
-          ...(this.options.model === "farol-next/chatgpt"
-            ? { modelProvider: "farol_next" }
+          ...(this.options.model === CHATGPT_MODEL_ID
+            ? { modelProvider: FAROL_PROVIDER_ID }
             : {}),
           allowProviderModelFallback: false,
           cwd: this.options.runtimeRoot,
@@ -848,8 +852,8 @@ export class CodexNativeAgentHost implements AgentHost {
         !parent.success ||
         parent.data.thread.parentThreadId != null ||
         parent.data.model !== this.options.model ||
-        (this.options.model === "farol-next/chatgpt" &&
-          parent.data.thread.modelProvider !== "farol_next")
+        (this.options.model === CHATGPT_MODEL_ID &&
+          parent.data.thread.modelProvider !== FAROL_PROVIDER_ID)
       ) {
         throw error("CODEX_AGENT_PROTOCOL_INVALID");
       }
@@ -940,7 +944,7 @@ export class CodexNativeAgentHost implements AgentHost {
     if (
       !this.active &&
       rejoin &&
-      this.options.model !== "farol-next/chatgpt" &&
+      this.options.model !== CHATGPT_MODEL_ID &&
       !this.attach(correlation, rejoin)
     ) {
       return {
@@ -1578,9 +1582,9 @@ export class CodexNativeAgentHost implements AgentHost {
   private matchesRetainedRoute(thread: ThreadSnapshot): boolean {
     // Legacy snapshots may omit model metadata. The neutral route has no such
     // compatibility exemption: alias and provider must both be retained.
-    return this.options.model === "farol-next/chatgpt"
+    return this.options.model === CHATGPT_MODEL_ID
       ? thread.model === this.options.model &&
-          thread.modelProvider === "farol_next"
+          thread.modelProvider === FAROL_PROVIDER_ID
       : this.matchesCollabModel(thread.model);
   }
 
@@ -1673,10 +1677,7 @@ export class CodexNativeAgentHost implements AgentHost {
         item.receiverThreadIds.length === 1 &&
         item.receiverThreadIds[0] === correlation.childId,
     );
-    if (
-      this.options.model === "farol-next/chatgpt" &&
-      spawnItems.length !== 1
-    ) {
+    if (this.options.model === CHATGPT_MODEL_ID && spawnItems.length !== 1) {
       return "invalid";
     }
     const durablePrompt = spawnItems[0]?.prompt;
@@ -1828,7 +1829,7 @@ export class CodexNativeAgentHost implements AgentHost {
   ): string {
     return [
       "Use the native collaboration tools to spawn exactly one child, then wait for that same child to finish.",
-      ...(this.options.model === "farol-next/chatgpt"
+      ...(this.options.model === CHATGPT_MODEL_ID
         ? [
             "Omit model and reasoning_effort overrides when spawning the child: inherit this parent's exact Farol provider route and effort. Native override validation uses a different model catalogue.",
             "Set fork_context=false and supply only the exact child prompt below. Never substitute a built-in model or another provider. Farol independently verifies the retained child route.",

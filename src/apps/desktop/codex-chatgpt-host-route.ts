@@ -1,5 +1,9 @@
 import path from "node:path";
 import { z } from "zod";
+import {
+  CHATGPT_MODEL_ID,
+  FAROL_PROVIDER_ID,
+} from "../../pkg/model-route/contract";
 
 const MAX_PROMPT_CHARACTERS = 128 * 1_024;
 const MAX_RESULT_CHARACTERS = 256 * 1_024;
@@ -80,6 +84,16 @@ const retainedThreadSchema = z
   })
   .passthrough();
 
+// Metadata-only preflight for a persisted thread: no prior prompt/output is
+// needed to reject a route from an older build before starting another turn.
+const retainedRouteSchema = z.object({
+  thread: z.object({
+    id: z.string().min(1),
+    model: z.string().nullable(),
+    modelProvider: z.string().min(1),
+  }),
+});
+
 const retainedMessageSchema = z
   .object({
     id: z.string().min(1),
@@ -106,7 +120,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
-type HostModel = "farol-next/chatgpt" | "farol-next/mind" | "farol-next/drive";
+type HostModel = typeof CHATGPT_MODEL_ID;
 
 type TurnObservation = {
   itemId: string | null;
@@ -139,6 +153,7 @@ export async function continueCodexChatGptHostThread(
   }>
 > {
   if (
+    input.model !== CHATGPT_MODEL_ID ||
     input.threadId.length < 1 ||
     input.threadId.length > 160 ||
     input.threadId.includes("\0") ||
@@ -148,6 +163,25 @@ export async function continueCodexChatGptHostThread(
     input.timeoutMs < 1
   ) {
     throw routeError("CODEX_CHATGPT_ROUTE_INPUT_INVALID");
+  }
+
+  const deadline = Date.now() + input.timeoutMs;
+  const beforeTurn = retainedRouteSchema.safeParse(
+    await withTimeout(
+      peer.request("thread/read", {
+        threadId: input.threadId,
+        includeTurns: false,
+      }),
+      remaining(deadline),
+    ),
+  );
+  if (
+    !beforeTurn.success ||
+    beforeTurn.data.thread.id !== input.threadId ||
+    beforeTurn.data.thread.model !== input.model ||
+    beforeTurn.data.thread.modelProvider !== FAROL_PROVIDER_ID
+  ) {
+    throw routeError("CODEX_CHATGPT_PROVIDER_IDENTITY_CHANGED");
   }
 
   const observations = new Map<string, TurnObservation>();
@@ -249,7 +283,6 @@ export async function continueCodexChatGptHostThread(
     },
   );
 
-  const deadline = Date.now() + input.timeoutMs;
   try {
     const startedTurn = turnStartSchema.safeParse(
       await withTimeout(
@@ -305,7 +338,7 @@ export async function continueCodexChatGptHostThread(
       !retained.success ||
       retained.data.thread.id !== input.threadId ||
       retained.data.thread.model !== input.model ||
-      retained.data.thread.modelProvider !== "farol_next"
+      retained.data.thread.modelProvider !== FAROL_PROVIDER_ID
     ) {
       throw routeError("CODEX_CHATGPT_RETAINED_RESULT_INVALID");
     }
@@ -356,6 +389,7 @@ export async function runCodexChatGptHostRoute(
 ) {
   const dynamicTools = input.dynamicTools ?? [];
   if (
+    input.model !== CHATGPT_MODEL_ID ||
     !path.isAbsolute(input.cwd) ||
     input.cwd.includes("\0") ||
     input.prompt.length < 1 ||
@@ -371,7 +405,7 @@ export async function runCodexChatGptHostRoute(
     await withTimeout(
       peer.request("thread/start", {
         model: input.model,
-        modelProvider: "farol_next",
+        modelProvider: FAROL_PROVIDER_ID,
         allowProviderModelFallback: false,
         cwd: input.cwd,
         sandbox: "read-only",
@@ -384,7 +418,7 @@ export async function runCodexChatGptHostRoute(
         environments: [],
         dynamicTools: structuredClone(dynamicTools),
         baseInstructions:
-          "This is an isolated Farol Next provider task. Keep every host tool under this task's native sandbox, approval policy, and exact active registry. Follow the user request without selecting another provider or model.",
+          "This is an isolated Farol provider task. Keep every host tool under this task's native sandbox, approval policy, and exact active registry. Follow the user request without selecting another provider or model.",
       }),
       input.timeoutMs,
     ),
@@ -394,7 +428,7 @@ export async function runCodexChatGptHostRoute(
   }
   if (
     startedThread.data.model !== input.model ||
-    startedThread.data.thread.modelProvider !== "farol_next"
+    startedThread.data.thread.modelProvider !== FAROL_PROVIDER_ID
   ) {
     throw routeError("CODEX_CHATGPT_PROVIDER_IDENTITY_CHANGED");
   }
@@ -408,8 +442,8 @@ export async function runCodexChatGptHostRoute(
     timeoutMs: input.timeoutMs,
   });
   return {
-    requestedProvider: "farol_next" as const,
-    observedProvider: "farol_next" as const,
+    requestedProvider: FAROL_PROVIDER_ID,
+    observedProvider: FAROL_PROVIDER_ID,
     requestedModel: input.model,
     observedModel: input.model,
     ...result,

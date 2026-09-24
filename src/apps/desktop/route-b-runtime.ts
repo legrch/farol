@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { CHATGPT_MODEL_ID as ROUTE_B_MODEL } from "../../pkg/model-route/contract";
 
 import type {
   ChatGptReadonlyTaskResult,
@@ -70,9 +71,9 @@ export type RouteBRuntime = Readonly<{
   close(): Promise<void>;
 }>;
 
-// New tasks have one execution route. Historical aliases are never rebound
-// here: the provider's exact-model check refuses an old host request.
-export const ROUTE_B_MODEL = "farol-next/chatgpt";
+// New tasks use the provider-local model ID. Historical compound IDs are
+// never rebound: the provider's exact-model check refuses an old request.
+export { CHATGPT_MODEL_ID as ROUTE_B_MODEL } from "../../pkg/model-route/contract";
 
 function conversationResult(
   result: ChatGptReadonlyTaskResult,

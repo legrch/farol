@@ -100,8 +100,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
     // Synthetic evidence for the candidate's stricter admission requirement.
     // The existing host-route consumer expects these fields, but the checked-in
     // host inspector does not attest their availability on real child reads.
-    return this.model === "farol-next/chatgpt"
-      ? { model: this.model, modelProvider: "farol_next" }
+    return this.model === "chatgpt"
+      ? { model: this.model, modelProvider: "farol" }
       : {};
   }
 
@@ -136,8 +136,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         expect.objectContaining({ name: "farol_agent_authority" }),
         expect.objectContaining({ name: "farol_agent_workspace_probe" }),
       ]);
-      if (this.model === "farol-next/chatgpt") {
-        expect(input).toMatchObject({ modelProvider: "farol_next" });
+      if (this.model === "chatgpt") {
+        expect(input).toMatchObject({ modelProvider: "farol" });
       }
       expect(input.baseInstructions).not.toContain(
         "must use exactly one native child",
@@ -430,9 +430,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
                     receiverThreadIds: ["child-thread-a"],
                     agentsStates: {},
                     prompt: this.childPrompt,
-                    ...(this.model === "farol-next/chatgpt"
-                      ? { model: this.model }
-                      : {}),
+                    ...(this.model === "chatgpt" ? { model: this.model } : {}),
                     ...this.retainedSpawnRoute,
                   },
                   ...(this.waitCompleted
@@ -500,7 +498,7 @@ function verifiedWorkspaceProbe(): AgentWorkspaceProbe {
 }
 
 const neutralOptions = {
-  model: "farol-next/chatgpt",
+  model: "chatgpt",
   effort: "low",
   runtimeRoot: "/private/tmp/farol-agent-runtime",
   spawnTimeoutMs: 100,
@@ -517,10 +515,10 @@ describe("selected native Agent route (in-process contract only)", () => {
     ["undefined", undefined],
     ["boolean", false],
     ["number", 1],
-    ["string", "farol-next/chatgpt"],
+    ["string", "chatgpt"],
     ["array", []],
     ["empty object", {}],
-    ["partial route", { model: "farol-next/chatgpt", effort: "low" }],
+    ["partial route", { model: "chatgpt", effort: "low" }],
   ] as const)(
     "classifies malformed %s options without a TypeError",
     (_name, options) => {
@@ -548,6 +546,8 @@ describe("selected native Agent route (in-process contract only)", () => {
     { model: "other-model" },
     { model: "farol-next/mind" },
     { model: "farol-next/drive" },
+    { model: "farol-next/chatgpt" },
+    { model: "farol/chatgpt" },
     { model: null },
     { effort: undefined },
     { effort: null },
@@ -888,7 +888,7 @@ describe("selected native Agent route (in-process contract only)", () => {
     await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
       status: "completed",
     });
-    peer.retainedSpawnRoute = { model: "farol-next/chatgpt" };
+    peer.retainedSpawnRoute = { model: "chatgpt" };
     await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
       status: "outcome_unknown",
       code: "AGENT_WAIT_ACK_LOST",

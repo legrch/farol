@@ -21,7 +21,7 @@ const binding = {
   hostThreadId: "thread",
   sessionId: "session",
   providerProfileId: "farol",
-  modelId: "farol-next/chatgpt",
+  modelId: "chatgpt",
   mode: "chatgpt",
 };
 const session = value(

@@ -1,4 +1,5 @@
 import type { ContextSession } from "../../modules/chat/domain/context-continuity";
+import type { CHATGPT_MODEL_ID } from "../../pkg/model-route/contract";
 import { PrivateContextStore } from "../../modules/chat/infra/repo/private-context-store";
 import {
   ChatGptContextSummaryDriver,
@@ -29,7 +30,9 @@ export type CodexContextControllerOptions = Readonly<{
 
 export type CodexContextRuntimeOptions = CodexContextControllerOptions &
   Readonly<{
-    model: "farol-next/chatgpt" | "farol-next/mind" | "farol-next/drive";
+    // Historical fixture routes remain distinct; production supplies only
+    // CHATGPT_MODEL_ID and never rewrites an old saved context binding.
+    model: typeof CHATGPT_MODEL_ID | "farol-next/mind" | "farol-next/drive";
     token: string;
     conversation: CodexChatGptConversation;
     // Private directory for the provider's durable initial-request journal.

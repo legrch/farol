@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CHATGPT_MODEL_ID, FAROL_PROVIDER_ID } from "../model-route/contract";
 
 const CanonicalTimestampSchema = z.string().refine((value) => {
   const parsed = new Date(value);
@@ -653,8 +654,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("host.route-b"),
-    provider: z.literal("farol_next"),
-    model: z.literal("farol-next/chatgpt"),
+    provider: z.literal(FAROL_PROVIDER_ID),
+    model: z.literal(CHATGPT_MODEL_ID),
     deltaCount: z.number().int().positive(),
     observedCharacters: z.number().int().nonnegative(),
   }),

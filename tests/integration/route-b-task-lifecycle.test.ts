@@ -110,14 +110,14 @@ function binding(taskId: string): ContextBinding {
     hostThreadId: taskId,
     sessionId: taskId,
     providerProfileId: "profile-isolated-next",
-    modelId: "farol-next/chatgpt",
+    modelId: "chatgpt",
     mode: "chatgpt",
   };
 }
 
 function initialRequest(threadId: string, turnId: string, text: string) {
   return {
-    model: "farol-next/chatgpt",
+    model: "chatgpt",
     stream: true,
     store: false,
     input: [

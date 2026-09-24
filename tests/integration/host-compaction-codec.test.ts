@@ -109,7 +109,7 @@ describe("native host compaction codec", () => {
     const history = [...baseInput, status];
     const parsed = parseHostCompactionRequest(
       "responses_compact",
-      { model: "farol-next/chatgpt", input: history },
+      { model: "chatgpt", input: history },
       metadata,
     );
     expect(parsed).toMatchObject({ ok: true, value: { history } });
@@ -132,7 +132,7 @@ describe("native host compaction codec", () => {
       parseHostCompactionRequest(
         "responses_compact",
         {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           input: [
             ...baseInput,
             {
@@ -161,7 +161,7 @@ describe("native host compaction codec", () => {
     const parsed = value(
       parseHostCompactionRequest(
         "responses_compact",
-        { model: "farol-next/chatgpt", input: history },
+        { model: "chatgpt", input: history },
         metadata,
       ),
     );
@@ -172,7 +172,7 @@ describe("native host compaction codec", () => {
       parseHostCompactionRequest(
         "responses_compact",
         {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           input: [
             ...history,
             {
@@ -206,7 +206,7 @@ describe("native host compaction codec", () => {
     expect(
       parseHostCompactionRequest(
         "responses",
-        { model: "farol-next/chatgpt", stream: true, input: baseInput },
+        { model: "chatgpt", stream: true, input: baseInput },
         trigger,
       ),
     ).toMatchObject({ ok: true, value: { history: baseInput } });
@@ -214,7 +214,7 @@ describe("native host compaction codec", () => {
       parseHostCompactionRequest(
         "responses",
         {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           stream: true,
           input: baseInput,
           client_metadata: { "x-codex-turn-metadata": trigger },
@@ -228,7 +228,7 @@ describe("native host compaction codec", () => {
       parseHostCompactionRequest(
         "responses",
         {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           stream: true,
           input: baseInput,
           client_metadata: {

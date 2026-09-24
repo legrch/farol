@@ -162,7 +162,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       release = resolve;
     });
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/chatgpt",
+      model: "chatgpt",
       token: "visible-output-test-token",
       turns: memoryJournal(),
       conversation: {
@@ -215,7 +215,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
         authorization: "Bearer visible-output-test-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify(requestBody("farol-next/chatgpt")),
+      body: JSON.stringify(requestBody("chatgpt")),
     });
     const stream = new SseReader(response);
     await expect(
@@ -282,7 +282,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     "refuses invalid visible output: %s",
     async (kind) => {
       runtime = await startCodexChatGptProvider({
-        model: "farol-next/chatgpt",
+        model: "chatgpt",
         token: "visible-output-test-token",
         turns: memoryJournal(),
         conversation: {
@@ -325,7 +325,7 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
           authorization: "Bearer visible-output-test-token",
           "content-type": "application/json",
         },
-        body: JSON.stringify(requestBody("farol-next/chatgpt")),
+        body: JSON.stringify(requestBody("chatgpt")),
       });
       const body = await response.text();
       expect(body).toContain("response.failed");
@@ -1353,9 +1353,43 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
     expect(conversation.run).not.toHaveBeenCalled();
   });
 
-  it("publishes only the configured Next model in the local catalogue", async () => {
+  it("rejects compound IDs and unregistered pins on the canonical HTTP route before dispatch", async () => {
+    const conversation: CodexChatGptConversation = { run: vi.fn() };
+    const admit = vi.fn(async () => "admitted" as const);
     runtime = await startCodexChatGptProvider({
-      model: "farol-next/mind",
+      model: "chatgpt",
+      token: "route-b-test-token",
+      conversation,
+      turns: { admit, release: async () => undefined },
+    });
+    for (const model of [
+      "farol/chatgpt",
+      "farol-next/chatgpt",
+      "farol-next/mind",
+      "farol-next/drive",
+      "chatgpt-gpt-5.5",
+      "deepseek",
+    ]) {
+      const response = await fetch(`${runtime.baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: {
+          authorization: "Bearer route-b-test-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(requestBody(model)),
+      });
+      expect(response.status).toBe(422);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: "FAROL_NEXT_MODEL_UNAVAILABLE" },
+      });
+    }
+    expect(conversation.run).not.toHaveBeenCalled();
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it("publishes only the provider-local ChatGPT model in the local catalogue", async () => {
+    runtime = await startCodexChatGptProvider({
+      model: "chatgpt",
       token: "route-b-test-token",
       conversation: { run: vi.fn() },
       turns: memoryJournal(),
@@ -1369,11 +1403,11 @@ describe("Farol Next Codex to ChatGPT provider transport", () => {
       object: "list",
       data: [
         expect.objectContaining({
-          id: "farol-next/mind",
+          id: "chatgpt",
           object: "model",
-          owned_by: "farol-next",
-          slug: "farol-next/mind",
-          display_name: "Farol Next Mind",
+          owned_by: "farol",
+          slug: "chatgpt",
+          display_name: "ChatGPT",
           shell_type: "unified_exec",
           supported_reasoning_levels: [
             expect.objectContaining({ effort: "low" }),

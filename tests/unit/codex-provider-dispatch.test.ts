@@ -111,7 +111,7 @@ const tool = {
   strict: true,
 };
 const body = {
-  model: "farol-next/chatgpt",
+  model: "chatgpt",
   stream: true,
   input: "Synthetic bounded task.",
   tools: [tool],
@@ -254,6 +254,10 @@ describe("provider dispatch without a listening transport", () => {
       for (const model of [
         "farol-next/mind",
         "farol-next/drive",
+        "farol-next/chatgpt",
+        "farol/chatgpt",
+        "chatgpt-release-a",
+        "deepseek",
         "other",
         null,
         undefined,

@@ -260,7 +260,7 @@ describe("CC-20 a checkpoint cannot resurrect revoked authority", () => {
         body: JSON.stringify(body),
       });
     const request = (turnId: string, text: string, input: unknown[] = []) => ({
-      model: "farol-next/chatgpt",
+      model: "chatgpt",
       stream: true,
       store: false,
       input: [
@@ -291,7 +291,7 @@ describe("CC-20 a checkpoint cannot resurrect revoked authority", () => {
       first,
       "/responses/compact",
       {
-        model: "farol-next/chatgpt",
+        model: "chatgpt",
         input: [
           {
             type: "message",

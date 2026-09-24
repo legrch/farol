@@ -14,7 +14,7 @@ import esbuild from "esbuild";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "../..");
-const model = "farol-next/chatgpt";
+const model = "chatgpt";
 const args = process.argv.slice(2);
 assert.ok(
   args.length === 0 || (args.length === 1 && args[0] === "--lineage"),
@@ -428,7 +428,7 @@ try {
   });
   const thread = await client.request("thread/start", {
     model,
-    modelProvider: "farol_next",
+    modelProvider: "farol",
     allowProviderModelFallback: false,
     cwd: dirs.workspace,
     sandbox: "read-only",
@@ -445,7 +445,7 @@ try {
       : "This is an inventory-only synthetic test. No tools, files, skills, child agents or external operations may be invoked. Return only INVENTORY_RECORDED.",
   });
   requireThat(
-    thread.model === model && thread.thread?.modelProvider === "farol_next",
+    thread.model === model && thread.thread?.modelProvider === "farol",
     "PROBE_THREAD_ROUTE_MISMATCH",
   );
   threadId = thread.thread.id;
@@ -555,7 +555,7 @@ try {
     requireThat(
       parentBinding === threadId &&
         child.model === model &&
-        child.modelProvider === "farol_next",
+        child.modelProvider === "farol",
       "PROBE_RETAINED_CHILD_ROUTE_MISMATCH",
     );
     requireThat(

@@ -4,11 +4,13 @@ import { ROUTE_B_MODEL } from "../../src/apps/desktop/route-b-runtime";
 import { ProductConfigurationEvidenceSchema } from "../../src/pkg/product-settings/contract";
 
 describe("the single new-task ChatGPT identity", () => {
-  it("advertises a neutral route without claiming an upstream model or a permission profile", () => {
+  it("advertises the provider-local ID without claiming an upstream model or permission profile", () => {
+    expect(ROUTE_B_MODEL).toBe("chatgpt");
     expect(modelCatalogue(ROUTE_B_MODEL)).toMatchObject({
-      id: "farol-next/chatgpt",
-      slug: "farol-next/chatgpt",
-      display_name: "Farol Next ChatGPT",
+      id: "chatgpt",
+      slug: "chatgpt",
+      owned_by: "farol",
+      display_name: "ChatGPT",
     });
     expect(modelCatalogue(ROUTE_B_MODEL).description).toContain("permissions");
     expect(modelCatalogue(ROUTE_B_MODEL).base_instructions).toContain(
@@ -16,11 +18,11 @@ describe("the single new-task ChatGPT identity", () => {
     );
   });
 
-  it("does not accept historical route receipts as proof of the neutral route", () => {
+  it("does not accept historical or compound route receipts as new proof", () => {
     const evidence = {
       kind: "host.route-b",
-      provider: "farol_next",
-      model: ROUTE_B_MODEL,
+      provider: "farol",
+      model: "chatgpt",
       deltaCount: 1,
       observedCharacters: 5,
     };
@@ -28,22 +30,32 @@ describe("the single new-task ChatGPT identity", () => {
       true,
     );
     for (const model of [
+      "farol-next/chatgpt",
       "farol-next/mind",
       "farol-next/drive",
+      "farol/chatgpt",
       "gpt-6-astra",
+      "chatgpt-release-a",
     ]) {
       expect(
         ProductConfigurationEvidenceSchema.safeParse({ ...evidence, model })
           .success,
       ).toBe(false);
     }
+    for (const provider of ["farol_next", "openai"]) {
+      expect(
+        ProductConfigurationEvidenceSchema.safeParse({ ...evidence, provider })
+          .success,
+      ).toBe(false);
+    }
   });
 
-  it("keeps explicitly selected historical catalogue labels distinct", () => {
-    expect(modelCatalogue("farol-next/mind").id).toBe("farol-next/mind");
-    expect(modelCatalogue("farol-next/drive").id).toBe("farol-next/drive");
-    expect(modelCatalogue("unqualified-route").display_name).toBe(
-      "unqualified-route",
-    );
+  it("never relabels a historical or unknown ID as the current default", () => {
+    for (const model of ["farol-next/mind", "farol-next/drive", "unknown"]) {
+      expect(modelCatalogue(model)).toMatchObject({
+        id: model,
+        display_name: model,
+      });
+    }
   });
 });

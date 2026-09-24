@@ -130,9 +130,9 @@ lines.on("line", (line) => {
       "app-server",
       "--stdio",
       "-c",
-      'model_provider="farol_next"',
+      'model_provider="farol"',
       "-c",
-      'model_providers.farol_next={ name = "Farol Next", base_url = "http://127.0.0.1:43123/v1", wire_api = "responses", env_key = "FAROL_NEXT_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }',
+      'model_providers.farol={ name = "Farol", base_url = "http://127.0.0.1:43123/v1", wire_api = "responses", env_key = "FAROL_NEXT_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }',
     ]);
     await client.close();
   });

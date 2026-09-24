@@ -18,6 +18,7 @@ import {
 import { PrivateProviderTurnJournal } from "../src/apps/desktop/provider-turn-journal";
 import { createCodexContextController } from "../src/apps/desktop/codex-context-runtime";
 import type { ContextBinding } from "../src/modules/chat/domain/context-continuity";
+import { CHATGPT_MODEL_ID } from "../src/pkg/model-route/contract";
 
 function argument(name: string): string | null {
   const index = process.argv.indexOf(name);
@@ -202,7 +203,7 @@ const conversation: CodexChatGptConversation = {
 
 const token = randomBytes(32).toString("base64url");
 const provider = await startCodexChatGptProvider({
-  model: "farol-next/mind",
+  model: CHATGPT_MODEL_ID,
   token,
   conversation,
   compaction: context.continuity,
@@ -235,7 +236,7 @@ try {
   let result;
   try {
     result = await runCodexChatGptHostRoute(client, {
-      model: "farol-next/mind",
+      model: CHATGPT_MODEL_ID,
       cwd: runtimeRoot,
       prompt: "Return the exact fixed marker FAROL_NEXT_ROUTE_B_OK.",
       timeoutMs: 30_000,
@@ -271,7 +272,7 @@ try {
     throw error;
   }
   const confirmed = await context.continuity.confirmHostCompaction({
-    modelId: "farol-next/mind",
+    modelId: CHATGPT_MODEL_ID,
     ...compacted,
   });
   if (!confirmed.ok) {
@@ -290,7 +291,7 @@ try {
   let continuation;
   try {
     continuation = await continueCodexChatGptHostThread(client, {
-      model: "farol-next/mind",
+      model: CHATGPT_MODEL_ID,
       threadId: result.threadId,
       prompt: "Continue after compaction and return FAROL_NEXT_ROUTE_B_OK.",
       timeoutMs: 30_000,
@@ -314,8 +315,8 @@ try {
     hostThreadId: result.threadId,
     sessionId: result.threadId,
     providerProfileId: "profile-native-route-probe",
-    modelId: "farol-next/mind",
-    mode: "mind",
+    modelId: CHATGPT_MODEL_ID,
+    mode: "chatgpt",
   };
   const contextSession = await context.store.load(contextBinding);
   if (

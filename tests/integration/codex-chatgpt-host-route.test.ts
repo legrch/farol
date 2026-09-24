@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   runCodexChatGptHostRoute,
+  continueCodexChatGptHostThread,
   type CodexChatGptHostPeer,
 } from "../../src/apps/desktop/codex-chatgpt-host-route";
 
@@ -27,11 +28,11 @@ class FakePeer implements CodexChatGptHostPeer {
     this.requests.push({ method, params });
     if (method === "thread/start") {
       return {
-        model: this.options.observedModel ?? "farol-next/mind",
+        model: this.options.observedModel ?? "chatgpt",
         thread: {
           id: "thread-route-b",
           parentThreadId: null,
-          modelProvider: this.options.observedProvider ?? "farol_next",
+          modelProvider: this.options.observedProvider ?? "farol",
         },
       };
     }
@@ -75,8 +76,8 @@ class FakePeer implements CodexChatGptHostPeer {
       return {
         thread: {
           id: "thread-route-b",
-          model: this.options.observedModel ?? "farol-next/mind",
-          modelProvider: "farol_next",
+          model: this.options.observedModel ?? "chatgpt",
+          modelProvider: this.options.observedProvider ?? "farol",
           turns: [
             {
               id: "turn-route-b",
@@ -108,21 +109,74 @@ class FakePeer implements CodexChatGptHostPeer {
 }
 
 describe("isolated Codex to ChatGPT host route", () => {
+  it.each([
+    "farol/chatgpt",
+    "farol-next/chatgpt",
+    "chatgpt-release-a",
+    "deepseek",
+  ])(
+    "rejects unregistered requested model %s before any RPC",
+    async (model) => {
+      const peer = new FakePeer();
+      const unsupported = model as "chatgpt";
+      await expect(
+        runCodexChatGptHostRoute(peer, {
+          model: unsupported,
+          cwd: "/private/tmp/farol-route-b",
+          prompt: "Synthetic request",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("CODEX_CHATGPT_ROUTE_INPUT_INVALID");
+      await expect(
+        continueCodexChatGptHostThread(peer, {
+          model: unsupported,
+          threadId: "thread-route-b",
+          prompt: "Synthetic continuation",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("CODEX_CHATGPT_ROUTE_INPUT_INVALID");
+      expect(peer.requests).toEqual([]);
+    },
+  );
+
+  it.each([
+    { observedProvider: "farol_next" },
+    { observedProvider: "openai" },
+    { observedModel: "farol-next/chatgpt" },
+    { observedModel: "farol/chatgpt" },
+  ])("refuses a retained prior route %j before resuming", async (observed) => {
+    const peer = new FakePeer(observed);
+    await expect(
+      continueCodexChatGptHostThread(peer, {
+        model: "chatgpt",
+        threadId: "thread-route-b",
+        prompt: "Continue the same task",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("CODEX_CHATGPT_PROVIDER_IDENTITY_CHANGED");
+    expect(peer.requests).toEqual([
+      {
+        method: "thread/read",
+        params: { threadId: "thread-route-b", includeTurns: false },
+      },
+    ]);
+  });
+
   it("starts the exact custom provider without relying on the built-in model list", async () => {
     const peer = new FakePeer();
 
     await expect(
       runCodexChatGptHostRoute(peer, {
-        model: "farol-next/mind",
+        model: "chatgpt",
         cwd: "/private/tmp/farol-route-b",
         prompt: "Say hello",
         timeoutMs: 1_000,
       }),
     ).resolves.toEqual({
-      requestedProvider: "farol_next",
-      observedProvider: "farol_next",
-      requestedModel: "farol-next/mind",
-      observedModel: "farol-next/mind",
+      requestedProvider: "farol",
+      observedProvider: "farol",
+      requestedModel: "chatgpt",
+      observedModel: "chatgpt",
       threadId: "thread-route-b",
       turnId: "turn-route-b",
       deltaCount: 2,
@@ -133,8 +187,8 @@ describe("isolated Codex to ChatGPT host route", () => {
       {
         method: "thread/start",
         params: expect.objectContaining({
-          model: "farol-next/mind",
-          modelProvider: "farol_next",
+          model: "chatgpt",
+          modelProvider: "farol",
           allowProviderModelFallback: false,
           cwd: "/private/tmp/farol-route-b",
           sandbox: "read-only",
@@ -142,6 +196,10 @@ describe("isolated Codex to ChatGPT host route", () => {
           ephemeral: false,
           dynamicTools: [],
         }),
+      },
+      {
+        method: "thread/read",
+        params: { threadId: "thread-route-b", includeTurns: false },
       },
       {
         method: "turn/start",
@@ -164,13 +222,13 @@ describe("isolated Codex to ChatGPT host route", () => {
       { id: "answer", text: "Done." },
     ];
     const peer = new FakePeer({
-      observedModel: "farol-next/chatgpt",
+      observedModel: "chatgpt",
       messages,
       retainedMessages: messages,
     });
     await expect(
       runCodexChatGptHostRoute(peer, {
-        model: "farol-next/chatgpt",
+        model: "chatgpt",
         cwd: "/private/tmp/farol-route-b",
         prompt: "Check the answer",
         timeoutMs: 1_000,
@@ -199,7 +257,7 @@ describe("isolated Codex to ChatGPT host route", () => {
               : [...messages].reverse();
       await expect(
         runCodexChatGptHostRoute(new FakePeer({ messages, retainedMessages }), {
-          model: "farol-next/mind",
+          model: "chatgpt",
           cwd: "/private/tmp/farol-route-b",
           prompt: "Check the answer",
           timeoutMs: 1_000,
@@ -218,7 +276,7 @@ describe("isolated Codex to ChatGPT host route", () => {
     });
     await expect(
       runCodexChatGptHostRoute(peer, {
-        model: "farol-next/mind",
+        model: "chatgpt",
         cwd: "/private/tmp/farol-route-b",
         prompt: "Check the answer",
         timeoutMs: 1_000,
@@ -226,30 +284,34 @@ describe("isolated Codex to ChatGPT host route", () => {
     ).rejects.toThrow("CODEX_CHATGPT_HOST_CORRELATION_INVALID");
   });
 
-  it("refuses an observed provider or model fallback", async () => {
-    await expect(
-      runCodexChatGptHostRoute(new FakePeer({ observedProvider: "openai" }), {
-        model: "farol-next/mind",
-        cwd: "/private/tmp/farol-route-b",
-        prompt: "Say hello",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("CODEX_CHATGPT_PROVIDER_IDENTITY_CHANGED");
-
-    await expect(
-      runCodexChatGptHostRoute(new FakePeer({ observedModel: "gpt-6-astra" }), {
-        model: "farol-next/mind",
-        cwd: "/private/tmp/farol-route-b",
-        prompt: "Say hello",
-        timeoutMs: 1_000,
-      }),
-    ).rejects.toThrow("CODEX_CHATGPT_PROVIDER_IDENTITY_CHANGED");
-  });
+  it.each([
+    { observedProvider: "openai" },
+    { observedProvider: "farol_next" },
+    { observedModel: "gpt-6-astra" },
+    { observedModel: "farol-next/chatgpt" },
+    { observedModel: "farol/chatgpt" },
+  ])(
+    "refuses provider/model substitution %j before starting a turn",
+    async (observed) => {
+      const peer = new FakePeer(observed);
+      await expect(
+        runCodexChatGptHostRoute(peer, {
+          model: "chatgpt",
+          cwd: "/private/tmp/farol-route-b",
+          prompt: "Say hello",
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toThrow("CODEX_CHATGPT_PROVIDER_IDENTITY_CHANGED");
+      expect(peer.requests.map((request) => request.method)).toEqual([
+        "thread/start",
+      ]);
+    },
+  );
 
   it("does not accept terminal completion without a prior host delta", async () => {
     await expect(
       runCodexChatGptHostRoute(new FakePeer({ terminalBeforeDelta: true }), {
-        model: "farol-next/mind",
+        model: "chatgpt",
         cwd: "/private/tmp/farol-route-b",
         prompt: "Say hello",
         timeoutMs: 1_000,
@@ -262,7 +324,7 @@ describe("isolated Codex to ChatGPT host route", () => {
       runCodexChatGptHostRoute(
         new FakePeer({ staleTerminalBeforeTurnResponse: true }),
         {
-          model: "farol-next/mind",
+          model: "chatgpt",
           cwd: "/private/tmp/farol-route-b",
           prompt: "Say hello",
           timeoutMs: 1_000,

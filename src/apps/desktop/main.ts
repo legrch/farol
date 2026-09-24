@@ -29,6 +29,10 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import {
+  CHATGPT_MODEL_ID,
+  FAROL_PROVIDER_ID,
+} from "../../pkg/model-route/contract";
 import { ClientEventSchema } from "../../modules/chat/contract/client-event";
 import type { ContextBinding } from "../../modules/chat/domain/context-continuity";
 import { buildHostCompactionHandoff } from "../../modules/chat/infra/client/host-compaction-codec";
@@ -313,6 +317,11 @@ import {
   type FarolModelProviderSpec,
 } from "./farol-model-config-block";
 import { detectCodexHostPresence } from "./farol-model-host-presence";
+import {
+  FAROL_BACKED_PRODUCT_AGENT_ENABLED,
+  FAROL_MODEL_ENABLED,
+  farolBackedProductAgentRoute,
+} from "./foundation-feature-gates";
 import { probeTunnelClient } from "./tunnel-client-probe";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { AuthorityTransitionReservation } from "./authority-transition";
@@ -682,6 +691,12 @@ type ActiveProductAgentSession = {
   host: CodexNativeAgentHost;
   expiryTimer: NodeJS.Timeout | null;
   cancellation: Promise<ProductTaskCommandResult> | null;
+};
+type ProductAgentRoute =
+  | Readonly<{ model: "gpt-6-astra"; effort?: "low" }>
+  | Readonly<{ model: typeof CHATGPT_MODEL_ID; effort: "low" }>;
+const legacyProductAgentCleanupRoute: ProductAgentRoute = {
+  model: "gpt-6-astra",
 };
 let activeProductAgentSession: ActiveProductAgentSession | null = null;
 const productAgentSessionReservation =
@@ -1558,6 +1573,7 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
 }
 
 function productAgentCapabilityAvailable(): boolean {
+  if (!FAROL_BACKED_PRODUCT_AGENT_ENABLED) return false;
   const snapshot = configuration?.snapshot();
   if (snapshot?.status !== "ready") return false;
   const workspaceId = snapshot.settings.setup.computer.verified?.workspaceId;
@@ -1608,6 +1624,7 @@ function productAgentInput(
 async function openProductAgentSession(
   input: ProductAgentInput,
   context: ProductAgentHostContext,
+  route: ProductAgentRoute,
   scheduleExpiry = true,
 ): Promise<ActiveProductAgentSession> {
   const key = productAgentSessionKey(input, scheduleExpiry);
@@ -1629,6 +1646,7 @@ async function openProductAgentSession(
       return await openAdmittedProductAgentSession(
         input,
         context,
+        route,
         key,
         scheduleExpiry,
       );
@@ -1641,6 +1659,7 @@ async function openProductAgentSession(
 async function openAdmittedProductAgentSession(
   input: ProductAgentInput,
   context: ProductAgentHostContext,
+  route: ProductAgentRoute,
   key: string,
   scheduleExpiry: boolean,
 ): Promise<ActiveProductAgentSession> {
@@ -1692,7 +1711,7 @@ async function openAdmittedProductAgentSession(
       const host = new CodexNativeAgentHost(
         client,
         {
-          model: "gpt-6-astra",
+          ...route,
           runtimeRoot,
           spawnTimeoutMs: 120_000,
           waitTimeoutMs: 250,
@@ -2104,7 +2123,15 @@ async function cancelProductAgentTask(
   if (!context) return tombstoneUnavailableProductAgent(input, assignments);
   let session: ActiveProductAgentSession;
   try {
-    session = await openProductAgentSession(input, context, false);
+    // Existing Astra-backed assignments may only use this route for bounded
+    // cancellation and cleanup; new work can use only the qualified route
+    // selected by `farolBackedProductAgentRoute` above.
+    session = await openProductAgentSession(
+      input,
+      context,
+      legacyProductAgentCleanupRoute,
+      false,
+    );
   } catch {
     return tombstoneUnavailableProductAgent(input, assignments);
   }
@@ -2117,12 +2144,14 @@ async function executeProductAgent(
   context: ProductAgentContext,
   admission: "new" | "rejoin",
 ): Promise<ProductTaskCommandResult> {
+  const route = farolBackedProductAgentRoute();
+  if (!route) return taskFailure("AGENT_NOT_READY");
   if (!productAgentInputMatchesContext(input, context, buildIdentity.buildId)) {
     return taskFailure("AGENT_NOT_READY");
   }
   let session: ActiveProductAgentSession;
   try {
-    session = await openProductAgentSession(input, context);
+    session = await openProductAgentSession(input, context, route);
   } catch (error) {
     const refusal = productAgentOpenRefusal(admission, error);
     if (refusal.record !== "none") {
@@ -2271,6 +2300,9 @@ async function runProductTaskCommand(
       command.data.kind === "task.start-agent" ||
       command.data.kind === "task.rejoin-agent"
     ) {
+      if (!FAROL_BACKED_PRODUCT_AGENT_ENABLED) {
+        return taskFailure("AGENT_NOT_READY");
+      }
       const task = liveTaskRegistry.get(command.data.taskId);
       if (!task || task.provider !== "chatgpt") {
         return taskFailure("TASK_NOT_FOUND");
@@ -2734,6 +2766,7 @@ function syntheticModelTurnHandler(
 // delivery from the N04 addendum is the only one it ever builds — the
 // env-key delivery stays reserved for a host Farol launches itself.
 async function farolModelProviderSpec(): Promise<FarolModelProviderSpec | null> {
+  if (!FAROL_MODEL_ENABLED) return null;
   if (!modelLifecycle) return null;
   const status = modelLifecycle.status();
   // S35-TA-2: a sealed endpoint must never produce a provider spec — a
@@ -2749,8 +2782,8 @@ async function farolModelProviderSpec(): Promise<FarolModelProviderSpec | null> 
   const token = await modelLifecycle.runtimeState.currentToken();
   if (!token) return null;
   return {
-    providerName: "farol",
-    displayName: "Farol Model",
+    providerName: FAROL_PROVIDER_ID,
+    displayName: "Farol",
     baseUrl: `http://127.0.0.1:${status.port}`,
     // The one model the endpoint serves is the Route B model: the same
     // constant the endpoint validates against and the provider accepts.
@@ -4744,7 +4777,7 @@ async function configureAdmittedProduct(
           snapshot: configuration.snapshot(),
           evidence: {
             kind: "host.route-b",
-            provider: "farol_next",
+            provider: FAROL_PROVIDER_ID,
             model: ROUTE_B_MODEL,
             deltaCount: checked.deltaCount,
             observedCharacters: checked.observedCharacters,
@@ -8118,23 +8151,22 @@ async function main(): Promise<void> {
     process.env.FAROL_NEXT_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
       : undefined;
-  modelLifecycle = new FarolModelLifecycle({
-    stateRoot: modelEndpointStateRoot(),
-    model: ROUTE_B_MODEL,
-    handler: modelSyntheticReply
-      ? syntheticModelTurnHandler(modelSyntheticReply)
-      : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
-    compactionHandler: routeBModelCompactionHandler(
-      () => routeBRuntime?.endpoint ?? null,
-    ),
-  });
-  try {
-    await modelLifecycle.start();
-  } catch {
-    // An unexpected failure here (anything besides a reported port
-    // conflict, which `start()` already turns into a status) must not
-    // abort the rest of Farol's own startup. `status()` still correctly
-    // reports not_running.
+  if (FAROL_MODEL_ENABLED) {
+    modelLifecycle = new FarolModelLifecycle({
+      stateRoot: modelEndpointStateRoot(),
+      model: ROUTE_B_MODEL,
+      handler: modelSyntheticReply
+        ? syntheticModelTurnHandler(modelSyntheticReply)
+        : routeBModelTurnHandler(() => routeBRuntime?.endpoint ?? null),
+      compactionHandler: routeBModelCompactionHandler(
+        () => routeBRuntime?.endpoint ?? null,
+      ),
+    });
+    try {
+      await modelLifecycle.start();
+    } catch {
+      // Model failure does not abort unrelated app startup.
+    }
   }
   try {
     const credential = await connectorCredentialStore.status();

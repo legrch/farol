@@ -135,7 +135,11 @@ describe("Codex host context continuity composition", () => {
     return root;
   }
 
-  it("refuses to rebind a saved Mind checkpoint to the new neutral route", async () => {
+  it.each([
+    ["farol-next/mind", "mind"],
+    ["farol-next/drive", "drive"],
+    ["farol-next/chatgpt", "chatgpt"],
+  ])("never rebinds a saved %s checkpoint to chatgpt", async (model, mode) => {
     const root = await stateRoot();
     const store = new PrivateContextStore({ root });
     const summary = driver();
@@ -145,19 +149,29 @@ describe("Codex host context continuity composition", () => {
       store,
       summary,
     });
+    const historicalBinding = { ...contextBinding(), modelId: model, mode };
     const handoff = await continuity.compact({
       endpoint: "responses_compact",
-      body: unaryBody(),
+      body: { ...unaryBody(), model },
       metadataHeader: metadata(),
     });
     if (!handoff.ok || handoff.value.variant !== "unary_replacement_history")
       throw new Error("EXPECTED_HANDOFF");
-    const before = await store.load(contextBinding());
+    const before = await store.load(historicalBinding);
+    expect(before?.binding.modelId).toBe(model);
     for (const input of [history(), handoff.value.response.output]) {
+      // A restarted process must not infer migration from the matching tail
+      // of an old ID; test both markerless and explicit checkpoint replay.
+      const restarted = new CodexContextContinuity({
+        ownerId: "owner-preview",
+        providerProfileId: "profile-isolated-next",
+        store: new PrivateContextStore({ root }),
+        summary,
+      });
       await expect(
-        continuity.prepareTurn({
+        restarted.prepareTurn({
           body: {
-            model: "farol-next/chatgpt",
+            model: "chatgpt",
             stream: true,
             input,
             tools: [],
@@ -174,7 +188,7 @@ describe("Codex host context continuity composition", () => {
         error: { code: "HOST_COMPACTION_BINDING_MISMATCH" },
       });
     }
-    await expect(store.load(contextBinding())).resolves.toEqual(before);
+    await expect(store.load(historicalBinding)).resolves.toEqual(before);
     expect(summary.request).toHaveBeenCalledTimes(1);
     expect(summary.retire).not.toHaveBeenCalled();
   });
@@ -1343,7 +1357,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
       const store = new PrivateContextStore({ root });
       const continuity = continuityFor(store, route);
       const body = {
-        model: "farol-next/chatgpt",
+        model: "chatgpt",
         input: [
           ...retained,
           {
@@ -1404,7 +1418,7 @@ describe("HR-014/F1 retirement recovery through the controller", () => {
       retained = handoff.value.response.output;
       const resumed = await restarted.prepareTurn({
         body: {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           stream: true,
           input: retained,
           tools: [],

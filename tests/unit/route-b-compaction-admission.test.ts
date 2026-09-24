@@ -18,7 +18,7 @@ describe("compaction identity carriers share one admission owner", () => {
         endpoint: "responses_compact",
         metadataHeader: undefined,
         body: {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           input: [{ role: "user", content: "Synthetic context" }],
           client_metadata: {
             "x-codex-turn-metadata": JSON.stringify({

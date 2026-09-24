@@ -11,6 +11,11 @@ its sign-in or Settings. `task next:package` and `task next:run` keep the existi
 **Farol Next Preview** identity (`local.farol.next.preview`). Neither lane copies
 cookies, keys, profiles or personal Codex configuration from another identity.
 
+The permanent model protocol is independent of these development identities:
+`model_provider = "farol"`, `model = "chatgpt"`. `farol/chatgpt` is display
+notation only. The default alias, future version pins, resolution lifetime and
+migration boundaries are defined in [Model routing](docs/model-routing.md).
+
 ### Dev names and profile compatibility
 
 The visible app and ChatGPT app name is **Farol Dev**. The marker `dev`, app ID

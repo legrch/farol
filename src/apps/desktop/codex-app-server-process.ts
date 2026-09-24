@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 import { CodexAppServerClient } from "./codex-app-server-client";
+import { FAROL_PROVIDER_ID } from "../../pkg/model-route/contract";
 
 const SAFE_PATH = [
   "/opt/homebrew/bin",
@@ -183,9 +184,9 @@ function providerRouteValid(
 function providerArguments(baseUrl: string): string[] {
   return [
     "-c",
-    'model_provider="farol_next"',
+    `model_provider="${FAROL_PROVIDER_ID}"`,
     "-c",
-    `model_providers.farol_next={ name = "Farol Next", base_url = "${baseUrl}", wire_api = "responses", env_key = "FAROL_NEXT_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }`,
+    `model_providers.${FAROL_PROVIDER_ID}={ name = "Farol", base_url = "${baseUrl}", wire_api = "responses", env_key = "FAROL_NEXT_PROVIDER_TOKEN", requires_openai_auth = false, request_max_retries = 0, stream_max_retries = 0, stream_idle_timeout_ms = 120000 }`,
   ];
 }
 

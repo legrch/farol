@@ -30,6 +30,11 @@ import type {
   ProviderTurnJournal,
 } from "./provider-turn-journal";
 import type { VisibleOutputItem } from "./chatgpt-visible-output";
+import {
+  CHATGPT_MODEL_ID,
+  FAROL_PROVIDER_ID,
+  findFarolModel,
+} from "../../pkg/model-route/contract";
 
 const visibleItemSchema = z.strictObject({
   sequence: z.number().int().positive(),
@@ -158,7 +163,7 @@ export type CodexChatGptCompaction = Readonly<{
 }>;
 
 export type CodexChatGptProviderRuntime = Readonly<{
-  providerId: "farol-next";
+  providerId: typeof FAROL_PROVIDER_ID;
   model: string;
   port: number;
   baseUrl: string;
@@ -497,22 +502,18 @@ function startStream(response: ServerResponse): void {
 export function modelCatalogue(
   model: string,
 ): Readonly<Record<string, unknown>> {
-  const displayName =
-    model === "farol-next/chatgpt"
-      ? "Farol Next ChatGPT"
-      : model === "farol-next/drive"
-        ? "Farol Next Drive"
-        : model === "farol-next/mind"
-          ? "Farol Next Mind"
-          : model;
+  const entry = findFarolModel({ provider: FAROL_PROVIDER_ID, model });
+  const displayName = entry?.displayName ?? model;
   return {
     id: model,
     object: "model",
-    owned_by: "farol-next",
+    owned_by: FAROL_PROVIDER_ID,
     slug: model,
     display_name: displayName,
     description:
-      "The owner's separately authenticated ChatGPT through the isolated Farol Next provider route. Native host tools stay under the selected host task's registry and permissions.",
+      model === CHATGPT_MODEL_ID
+        ? "ChatGPT through Farol. Stable default alias; the upstream selection is verified separately. Native tools retain the host task's permissions."
+        : "An explicitly selected Farol model route; native tools retain the host task's permissions.",
     supported_reasoning_levels: [
       {
         effort: "low",
@@ -529,7 +530,7 @@ export function modelCatalogue(
     truncation_policy: { mode: "tokens", limit: 8192 },
     experimental_supported_tools: [],
     base_instructions:
-      "Use the isolated Farol Next provider route selected for this task. Keep native tools under the host task's own sandbox, approvals, and exact registry. Never switch provider or model silently.",
+      "Use the isolated Farol provider route selected for this task. Keep native tools under the host task's own sandbox, approvals, and exact registry. Never switch provider or model silently.",
   };
 }
 
@@ -1589,7 +1590,12 @@ export async function startCodexChatGptProvider(
   options: ProviderOptions,
 ): Promise<CodexChatGptProviderRuntime> {
   if (
-    !/^farol-next\/[a-z][a-z0-9-]{0,31}$/u.test(options.model) ||
+    // Historical low-level context fixtures keep their exact original IDs.
+    // The production route supplies CHATGPT_MODEL_ID exclusively; its exact
+    // request-model guard never treats these strings as aliases of chatgpt.
+    (options.model !== CHATGPT_MODEL_ID &&
+      options.model !== "farol-next/mind" &&
+      options.model !== "farol-next/drive") ||
     options.token.length < 16 ||
     options.token.length > 512 ||
     /[\r\n]/u.test(options.token)
@@ -1702,7 +1708,7 @@ export async function startCodexChatGptProvider(
   }
   const port = address.port;
   return {
-    providerId: "farol-next",
+    providerId: FAROL_PROVIDER_ID,
     model: options.model,
     port,
     baseUrl: `http://127.0.0.1:${port}`,

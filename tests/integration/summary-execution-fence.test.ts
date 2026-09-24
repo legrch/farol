@@ -42,7 +42,7 @@ const checkpoint: CheckpointContent = {
 
 function initialRequest(thread: string, turnId: string, text: string) {
   return {
-    model: "farol-next/chatgpt",
+    model: "chatgpt",
     stream: true,
     store: false,
     input: [
@@ -253,7 +253,7 @@ describe("summary-only phase fences the Computer connector as the product compos
       const compacting = post(
         "/responses/compact",
         {
-          model: "farol-next/chatgpt",
+          model: "chatgpt",
           input: [
             {
               type: "message",

@@ -9500,416 +9500,132 @@ ux34SignInReturnSegment: {
   }
 }
 
-// N04b — the Farol Model Setup/Settings control (Decisions.md N04 and its
-// addendum): preview -> decline (nothing written) -> apply (writes only the
-// managed provider block, never a [profiles.<name>] table or the separate
-// model_provider selection unless consented) -> the connected indicator
-// only after a real request was served. The synthetic reply is wired
-// through the exact FAROL_MODEL_E2E_SYNTHETIC_REPLY seam `main.ts` reserves
-// for this — never the owner's Codex, never a live ChatGPT account, and the
-// request that flips the indicator is a plain loopback HTTP call this test
-// makes itself, exactly as an ordinary Codex host would.
+// N04b — unqualified model and Farol-backed Product Agent routes stay off
+// at normal startup and after a restart with an existing Farol config. The
+// public IPC is tested directly; the app window remains hidden. Rollback is
+// still admitted and must remove only Farol's managed config regions.
 n04bModelSegment: {
   if (!segmentSelected("n04b-model")) break n04bModelSegment;
-  const syntheticReply = "farol model e2e reply";
-  const modelControl = await launch([], "secondary-visible", "demo", {
-    environment: { FAROL_MODEL_E2E_SYNTHETIC_REPLY: syntheticReply },
+  const instance = await launch([], "hidden", "normal", {
+    environment: { FAROL_MODEL_E2E_SYNTHETIC_REPLY: "must not be served" },
   });
   try {
-    await finishSetupByNext(modelControl);
-    await modelControl.window.locator('[data-section="settings"]').click();
-    await modelControl.window.waitForFunction(
-      () => document.documentElement.dataset.section === "settings",
-    );
-    const configPath = path.join(
-      modelControl.isolatedHome,
-      ".codex",
-      "config.toml",
-    );
-    const stateRoot = path.join(
-      modelControl.userData,
+    const modelEndpointState = path.join(
+      instance.userData,
       "farol-next-private",
       "model-endpoint",
     );
-
-    // Not connected before anything is done.
-    await modelControl.window
-      .locator("#model-readiness")
-      .waitFor({ state: "visible" });
-    assert.equal(
-      await modelControl.window.locator("#model-readiness").innerText(),
-      "Not connected",
+    const configPath = path.join(
+      instance.isolatedHome,
+      ".codex",
+      "config.toml",
     );
-    assert.equal(
-      await fs.stat(configPath).then(
-        () => true,
-        () => false,
-      ),
-      false,
-      "config.toml does not exist before any Farol Model action",
-    );
-    cases.push("n04b-model-not-connected-before-preview");
-
-    // Preview shows the exact diff, and only declining (never previewing)
-    // is guaranteed by construction: nothing is written yet.
-    await modelControl.window.locator("#model-preview-btn").click();
-    await modelControl.window
-      .locator("#model-config-diff")
-      .waitFor({ state: "visible" });
-    const diffText = await modelControl.window
-      .locator("#model-config-diff")
-      .innerText();
-    assert.match(diffText, /\[model_providers\.farol\]/u);
-    assert.match(diffText, /experimental_bearer_token/u);
-    // The literal never reaches the renderer: a fixed placeholder does.
-    assert.match(diffText, /<redacted: Farol Model token>/u);
-    assert.doesNotMatch(
-      diffText,
-      /experimental_bearer_token = "[A-Za-z0-9_-]{43}"/u,
-    );
-    assert.doesNotMatch(diffText, /\[profiles\./u);
-    assert.equal(
-      await fs.stat(configPath).then(
-        () => true,
-        () => false,
-      ),
-      false,
-      "previewing (declining to apply) leaves config.toml untouched",
-    );
-    cases.push("n04b-model-preview-shows-diff");
-    cases.push("n04b-model-decline-changes-nothing");
-
-    // Accepting applies: the managed block lands, and — since the "set as
-    // default" checkbox was left unchecked — the separate, separately
-    // consented model_provider selection does not.
-    await modelControl.window.locator("#model-apply-btn").click();
-    await modelControl.window
-      .locator("#model-restart-note")
-      .waitFor({ state: "visible" });
-    const appliedConfig = await fs.readFile(configPath, "utf8");
-    assert.match(appliedConfig, /\[model_providers\.farol\]/u);
-    assert.match(appliedConfig, /experimental_bearer_token/u);
-    assert.doesNotMatch(appliedConfig, /\[profiles\./u);
-    assert.doesNotMatch(appliedConfig, /model_provider\s*=/u);
-    cases.push("n04b-model-apply-writes-managed-block");
-
-    // The indicator turns connected only once the endpoint has actually
-    // served a request — a written config file is not evidence, so it must
-    // still read "Listening" right after apply, before any request.
-    await modelControl.window.locator("#model-check-status-btn").click();
-    await modelControl.window.waitForFunction(
-      () =>
-        document.querySelector("#model-readiness")?.textContent === "Listening",
-    );
-
-    const token = (
-      await fs.readFile(path.join(stateRoot, "model-endpoint-token"), "utf8")
-    ).trim();
-    const port = (
-      await fs.readFile(path.join(stateRoot, "model-endpoint-port"), "utf8")
-    ).trim();
-    // The exact same loopback call an ordinary Codex host would make —
-    // this test process plays that role, with no Codex binary involved.
-    const served = await fetch(`http://127.0.0.1:${port}/responses`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      // The one model the endpoint serves is the Route B model; any other
-      // `model` is refused with 422 before the turn handler runs.
-      body: JSON.stringify({
-        model: "farol-next/chatgpt",
-        stream: true,
-        store: false,
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "say hi" }],
-          },
-        ],
-        tools: [],
-        client_metadata: {
-          session_id: "0199c0de-0000-7000-8000-00000000e2e1",
-          thread_id: "0199c0de-0000-7000-8000-00000000e2e1",
-          turn_id: "turn-e2e-model-1",
-          root_turn_id: "turn-e2e-model-1",
-        },
-      }),
-    });
-    assert.equal(served.status, 200);
-    const servedBody = await served.text();
-    assert.match(
-      servedBody,
-      new RegExp(syntheticReply.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
-    );
-
-    await modelControl.window.locator("#model-check-status-btn").click();
-    await modelControl.window.waitForFunction(
-      () =>
-        document.querySelector("#model-readiness")?.textContent === "Connected",
-    );
-    assert.match(
-      await modelControl.window.locator("#model-status-summary").innerText(),
-      /1 request served/u,
-    );
-    cases.push("n04b-model-connected-after-served-request");
-
-    // Rollback is reachable from the same place and restores the exact
-    // bytes config.toml had before Farol's own change.
-    await modelControl.window.locator("#model-rollback-btn").click();
-    await modelControl.window.waitForFunction(
-      () => document.querySelector("#model-apply-btn")?.hidden !== false,
-    );
-    assert.equal(
-      await fs.stat(configPath).then(
-        () => true,
-        () => false,
-      ),
-      false,
-      "rollback restores config.toml to not existing, exactly as it was before Farol's change",
-    );
-    cases.push("n04b-model-rollback-restores-config");
-
-    // The six cases above walk the unchecked default path once. Everything
-    // below is the rest of the card: previewing is genuinely repeatable,
-    // the separately consented default-provider selection, a rotation the
-    // running endpoint honours, and a rollback that has owner bytes to
-    // restore rather than an absent file.
-    // The model card rewrites `#settings-feedback` from its own evidence, so
-    // the sentence the owner reads is the evidence's, not the optimistic one
-    // the click sent. Matching it is therefore also an assertion about which
-    // evidence came back.
-    const modelFeedback = async (pattern) => {
-      try {
-        await modelControl.window.waitForFunction(
-          (source) =>
-            new RegExp(source, "u").test(
-              document.querySelector("#settings-feedback")?.textContent ?? "",
-            ),
-          pattern.source,
-        );
-      } catch (error) {
-        // A wait that times out names what the card actually said and what
-        // the file under it looked like, so the next run is a fix rather
-        // than another guess.
-        const shown = await modelControl.window
-          .evaluate(() => ({
-            feedback: document.querySelector("#settings-feedback")?.textContent,
-            readiness: document.querySelector("#model-readiness")?.textContent,
-            message: document.querySelector("#model-config-message")
-              ?.textContent,
-          }))
-          .catch(() => null);
-        const config = await fs
-          .stat(configPath)
-          .then(async (entry) => ({
-            mode: (entry.mode & 0o777).toString(8),
-            head: (await fs.readFile(configPath, "utf8")).slice(0, 240),
-          }))
-          .catch(() => null);
-        throw new Error(
-          `${error.message} · expected ${pattern.source} · card ${JSON.stringify(shown)} · config ${JSON.stringify(config)}`,
-          { cause: error },
+    const assertEndpointOff = async () => {
+      for (const name of ["model-endpoint-token", "model-endpoint-port"]) {
+        assert.equal(
+          await fs.stat(path.join(modelEndpointState, name)).then(
+            () => true,
+            () => false,
+          ),
+          false,
+          `disabled startup does not create ${name}`,
         );
       }
     };
+    const assertAdmissionClosed = async () => {
+      const modelActions = [
+        { kind: "model.status" },
+        { kind: "model.preview", selectAsDefault: false },
+        { kind: "model.apply", selectAsDefault: false },
+        { kind: "model.rotate-token" },
+      ];
+      for (const command of modelActions) {
+        const result = await instance.window.evaluate(
+          (value) => window.farolNext.configure(value),
+          command,
+        );
+        assert.equal(result.ok, false, `${command.kind} is closed over IPC`);
+        assert.equal(result.error, "MODEL_ENDPOINT_UNAVAILABLE");
+      }
+      const start = await instance.window.evaluate(() =>
+        window.farolNext.task({
+          kind: "task.start-agent",
+          taskId: "unqualified-agent-task",
+          workspaceId: "unqualified-agent-workspace",
+          objective: "This command must be refused before any host launches.",
+          scope: { mode: "workspace", excludedPaths: [] },
+        }),
+      );
+      assert.equal(start.ok, false);
+      assert.equal(start.error, "AGENT_NOT_READY");
+      const rejoin = await instance.window.evaluate(() =>
+        window.farolNext.task({
+          kind: "task.rejoin-agent",
+          taskId: "unqualified-agent-task",
+        }),
+      );
+      assert.equal(rejoin.ok, false);
+      assert.equal(rejoin.error, "AGENT_NOT_READY");
+    };
 
-    // Previewing is not a state change. Proving that needs a second preview
-    // that is observably a second preview, so the consent is changed and
-    // changed back: the plan must visibly gain the selection and visibly
-    // lose it again, and end byte-identical to the first plan with nothing
-    // written in between. A plain "click preview twice" would pass even if
-    // the second click had done nothing at all.
-    await modelControl.window.locator("#model-preview-btn").click();
-    await modelFeedback(/before applying it\.$/u);
-    const firstPlan = await modelControl.window
-      .locator("#model-config-diff")
-      .innerText();
-    // `[model_providers.farol]` contains the substring `model_provider`, so
-    // the selection is recognised by its own managed marker, never by that
-    // substring.
-    assert.doesNotMatch(firstPlan, /MANAGED MODEL_PROVIDER SELECTION/u);
-
-    await modelControl.window.locator("#model-select-default").click();
-    await modelControl.window.locator("#model-preview-btn").click();
-    await modelControl.window.waitForFunction(() =>
-      document
-        .querySelector("#model-config-diff")
-        ?.textContent?.includes("MANAGED MODEL_PROVIDER SELECTION"),
-    );
-    await modelControl.window.locator("#model-select-default").click();
-    assert.equal(
-      await modelControl.window.locator("#model-select-default").isChecked(),
-      false,
-    );
-    await modelControl.window.locator("#model-preview-btn").click();
-    await modelControl.window.waitForFunction(
-      () =>
-        document
-          .querySelector("#model-config-diff")
-          ?.textContent?.includes("MANAGED MODEL_PROVIDER SELECTION") === false,
-    );
-    assert.equal(
-      await modelControl.window.locator("#model-config-diff").innerText(),
-      firstPlan,
-      "withdrawing the consent returns the plan to exactly the first one",
-    );
+    await assertEndpointOff();
+    await assertAdmissionClosed();
     assert.equal(
       await fs.stat(configPath).then(
         () => true,
         () => false,
       ),
       false,
-      "three previews and three declines still write nothing",
+      "the first normal launch does not create a provider config",
     );
-    cases.push("n04b-model-preview-decline-idempotent");
+    cases.push("n04b-model-agent-default-off-at-normal-startup");
 
-    // The default-provider selection is a separate consent, and the suite
-    // has only ever exercised the unchecked path — E2E asserts above that
-    // `model_provider` is absent when the box is left alone. Check it with
-    // a real pointer click and the previewed plan must gain the selection,
-    // and applying must write it as its own managed region.
-    await modelControl.window.locator("#model-select-default").click();
-    assert.equal(
-      await modelControl.window.locator("#model-select-default").isChecked(),
-      true,
-    );
-    await modelControl.window.locator("#model-preview-btn").click();
-    await modelControl.window.waitForFunction(
-      () =>
-        document
-          .querySelector("#model-config-diff")
-          ?.textContent?.includes("MANAGED MODEL_PROVIDER SELECTION") === true,
-    );
-    await modelControl.window.locator("#model-apply-btn").click();
-    // The applied sentence names the separately consented half explicitly.
-    await modelFeedback(
-      /^Applied the Farol connection and set it as the default provider\./u,
-    );
-    const defaultedConfig = await fs.readFile(configPath, "utf8");
-    assert.match(defaultedConfig, /\[model_providers\.farol\]/u);
-    assert.match(defaultedConfig, /^model_provider = "farol"$/mu);
-    assert.doesNotMatch(defaultedConfig, /\[profiles\./u);
-    cases.push("n04b-model-default-provider-consented");
-
-    // Rotation is one transaction over a running endpoint: the new literal
-    // must authenticate, the previous one must stop authenticating, and the
-    // owner's config must carry the new literal rather than the old.
-    const tokenPath = path.join(stateRoot, "model-endpoint-token");
-    const staleToken = (await fs.readFile(tokenPath, "utf8")).trim();
-    assert.equal(defaultedConfig.includes(staleToken), true);
-    await modelControl.window.locator("#model-rotate-btn").click();
-    await modelFeedback(
-      /^Rotated the Farol Model token and rewrote it in your Codex config\.toml\. The old token no longer works;/u,
-    );
-    const rotatedToken = (await fs.readFile(tokenPath, "utf8")).trim();
-    assert.notEqual(
-      rotatedToken,
-      staleToken,
-      "rotation issues a new literal rather than reusing the old one",
-    );
-    const rotatedPort = (
-      await fs.readFile(path.join(stateRoot, "model-endpoint-port"), "utf8")
-    ).trim();
-    const modelRequest = (bearer) =>
-      fetch(`http://127.0.0.1:${rotatedPort}/responses`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${bearer}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "farol-next/chatgpt",
-          stream: true,
-          store: false,
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [{ type: "input_text", text: "say hi" }],
-            },
-          ],
-          tools: [],
-          client_metadata: {
-            session_id: "0199c0de-0000-7000-8000-00000000e2e2",
-            thread_id: "0199c0de-0000-7000-8000-00000000e2e2",
-            turn_id: "turn-e2e-model-2",
-            root_turn_id: "turn-e2e-model-2",
-          },
-        }),
-      });
-    const refused = await modelRequest(staleToken);
-    assert.equal(
-      refused.status,
-      401,
-      "the endpoint refuses the literal it issued before the rotation",
-    );
-    const accepted = await modelRequest(rotatedToken);
-    assert.equal(accepted.status, 200);
-    assert.match(
-      await accepted.text(),
-      new RegExp(syntheticReply.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"),
-    );
-    const rotatedConfig = await fs.readFile(configPath, "utf8");
-    assert.equal(
-      rotatedConfig.includes(rotatedToken),
-      true,
-      "the managed block carries the literal the endpoint now accepts",
-    );
-    assert.equal(
-      rotatedConfig.includes(staleToken),
-      false,
-      "the managed block no longer carries a literal the endpoint refuses",
-    );
-    cases.push("n04b-model-rotate-refuses-stale-bearer");
-
-    // Rollback against a config the owner already owned. The existing case
-    // restores "the file did not exist"; this one restores bytes, which is
-    // the case an owner with a real Codex config actually meets.
-    await modelControl.window.locator("#model-rollback-btn").click();
-    await modelFeedback(/^Removed Farol's managed block from config\.toml;/u);
-    // The consent goes back off: this case is about the managed block's
-    // rollback over owner bytes, and the separately consented selection
-    // would only add a second region to the same claim.
-    await modelControl.window.locator("#model-select-default").click();
-    assert.equal(
-      await modelControl.window.locator("#model-select-default").isChecked(),
-      false,
-    );
     const ownerConfig = [
-      "# the owner's own Codex configuration",
+      "# Owner-written settings stay byte-identical.",
       'model = "gpt-6-astra"',
       "",
       "[model_providers.owner_written]",
       'name = "Owner written"',
       'base_url = "http://127.0.0.1:1/v1"',
       'wire_api = "responses"',
-      "",
     ].join("\n");
-    await fs.writeFile(configPath, ownerConfig, { mode: 0o600 });
-    await modelControl.window.locator("#model-preview-btn").click();
-    await modelFeedback(/before applying it\.$/u);
-    await modelControl.window.locator("#model-apply-btn").click();
-    await modelFeedback(/^Applied the Farol connection/u);
-    const mixedConfig = await fs.readFile(configPath, "utf8");
-    assert.equal(
-      mixedConfig.includes(ownerConfig.trimEnd()),
-      true,
-      "applying leaves the owner's own bytes intact beside Farol's region",
+    const savedSelection = [
+      "# BEGIN FAROL MANAGED MODEL_PROVIDER SELECTION — do not edit by hand",
+      'model_provider = "farol"',
+      'model = "chatgpt"',
+      "# END FAROL MANAGED MODEL_PROVIDER SELECTION",
+    ].join("\n");
+    const savedProvider = [
+      "# BEGIN FAROL MANAGED BLOCK — do not edit by hand",
+      "[model_providers.farol]",
+      'name = "Farol"',
+      'base_url = "http://127.0.0.1:17999"',
+      'experimental_bearer_token = "synthetic-disabled-state"',
+      'wire_api = "responses"',
+      "# END FAROL MANAGED BLOCK",
+    ].join("\n");
+    const savedConfig = `${savedSelection}\n${ownerConfig}\n${savedProvider}\n`;
+    await fs.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
+    await fs.chmod(path.dirname(configPath), 0o700);
+    await fs.writeFile(configPath, savedConfig, { mode: 0o600 });
+
+    await restart(instance);
+    await assertEndpointOff();
+    await assertAdmissionClosed();
+    assert.equal(await fs.readFile(configPath, "utf8"), savedConfig);
+    cases.push("n04b-model-agent-stays-off-after-restart-with-saved-provider");
+
+    const rollback = await instance.window.evaluate(() =>
+      window.farolNext.configure({ kind: "model.rollback" }),
     );
-    assert.match(mixedConfig, /\[model_providers\.farol\]/u);
-    await modelControl.window.locator("#model-rollback-btn").click();
-    await modelFeedback(/^Removed Farol's managed block from config\.toml;/u);
-    assert.equal(
-      await fs.readFile(configPath, "utf8"),
-      ownerConfig,
-      "rollback restores the owner's config byte for byte",
-    );
-    cases.push("n04b-model-rollback-restores-owner-bytes");
+    assert.equal(rollback.ok, true);
+    assert.equal(rollback.evidence?.kind, "model.config-rollback");
+    assert.equal(rollback.evidence?.providerBlockRestored, true);
+    assert.equal(rollback.evidence?.providerSelectionRestored, true);
+    assert.equal(await fs.readFile(configPath, "utf8"), ownerConfig);
+    cases.push("n04b-model-default-off-preserves-explicit-managed-rollback");
   } finally {
-    await close(modelControl);
+    await close(instance);
   }
 }
 

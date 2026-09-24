@@ -3,7 +3,7 @@
 // The installed supported Codex executable is launched as an owned App
 // Server through the production launcher. Its HOME and CODEX_HOME are both
 // disposable private directories, its only model provider is the product's
-// loopback farol_next endpoint, and that endpoint is backed by a synthetic
+// loopback farol endpoint, and that endpoint is backed by a synthetic
 // Route B conversation. No personal Codex state or live model is involved.
 //
 // Run with:
@@ -397,8 +397,8 @@ async function main() {
     observedCharacters: routed?.observedCharacters,
   });
   assert.ok(routed, "the real host route must complete");
-  assert.equal(routed.requestedProvider, "farol_next");
-  assert.equal(routed.observedProvider, "farol_next");
+  assert.equal(routed.requestedProvider, "farol");
+  assert.equal(routed.observedProvider, "farol");
   assert.equal(routed.requestedModel, production.ROUTE_B_MODEL);
   assert.equal(routed.observedModel, production.ROUTE_B_MODEL);
   assert.equal(routed.retainedResult, true);
