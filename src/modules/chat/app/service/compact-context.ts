@@ -45,6 +45,7 @@ import {
 } from "../../domain/context-continuity";
 import {
   createCheckpointEnvelope,
+  attachCheckpointSummarizer,
   validateCheckpointContent,
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
@@ -443,13 +444,42 @@ export class CompactContext {
       );
     }
     const existingCheckpointId = session.operation?.checkpointId;
-    const checkpoint = createCheckpointEnvelope(session, parsed.value, {
-      checkpointId: existingCheckpointId ?? this.ids.nextCheckpointId(),
-      providerOperationId: receipt.providerOperationId,
-      parentCheckpointId: session.lastCheckpointId,
-      sourceCursor: receipt.sourceCursor,
-      createdAt: this.clock.now(),
-    });
+    let checkpoint: CheckpointEnvelope = createCheckpointEnvelope(
+      session,
+      parsed.value,
+      {
+        checkpointId: existingCheckpointId ?? this.ids.nextCheckpointId(),
+        providerOperationId: receipt.providerOperationId,
+        parentCheckpointId: session.lastCheckpointId,
+        sourceCursor: receipt.sourceCursor,
+        createdAt: this.clock.now(),
+      },
+    );
+    if (receipt.summarizer !== undefined) {
+      // The production transaction currently selects only the current ChatGPT
+      // engine. A Luna switch needs its own persisted selection before dispatch.
+      if (receipt.summarizer.engine !== "current_chatgpt") {
+        return this.persistClassified(
+          session,
+          "SUMMARY_ENGINE_NOT_SELECTED",
+          "blocked",
+          lease,
+        );
+      }
+      const withProvenance = attachCheckpointSummarizer(
+        checkpoint,
+        receipt.summarizer,
+        this.maximumCheckpointBytes,
+      );
+      if (!withProvenance.ok)
+        return this.persistClassified(
+          session,
+          withProvenance.error.code,
+          "blocked",
+          lease,
+        );
+      checkpoint = withProvenance.value;
+    }
     if (session.phase === "checkpoint_requested") {
       const validated = recordValidatedCheckpoint(session, checkpoint);
       if (!validated.ok) return failure("CONTEXT_TRANSITION_FAILED");

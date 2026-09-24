@@ -247,12 +247,23 @@ function summaryPrompt(
 
 function completedReceipt(
   summary: StoredContextSummary,
+  scope: OperationScope,
 ): ContextSummaryReceipt {
   return {
     status: "completed",
     providerOperationId: summary.providerOperationId,
     sourceCursor: summary.sourceCursor,
     content: summary.content,
+    summarizer: {
+      engine: "current_chatgpt",
+      provider: "chatgpt-web",
+      // The route alias is not observed browser model/effort evidence.
+      observedModel: null,
+      observedEffort: null,
+      providerOperationId: summary.providerOperationId,
+      sourceBoundary: scope.source.sourceBoundary,
+      sourceCursor: summary.sourceCursor,
+    },
   };
 }
 
@@ -538,7 +549,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
         // The exact received bytes and their source route remain owned in
         // memory. A later observation retries only this local publication.
       }
-      return completedReceipt(received);
+      return completedReceipt(received, scope);
     }
     let summary: StoredContextSummary | null;
     try {
@@ -549,7 +560,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     } catch {
       return { status: "blocked", code: "CONTEXT_SUMMARY_STORE_FAILED" };
     }
-    if (summary) return completedReceipt(summary);
+    if (summary) return completedReceipt(summary, scope);
 
     let pending = this.pending.get(key);
     let lease = this.routes.get(scope.operationId);
@@ -948,12 +959,12 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     try {
       await this.options.store.putSummary(summary);
     } catch {
-      return completedReceipt(summary);
+      return completedReceipt(summary, scope);
     }
     await this.options.store
       .deleteSummaryAttempt(scope.binding, scope.operationId)
       .catch(() => undefined);
-    return completedReceipt(summary);
+    return completedReceipt(summary, scope);
   }
 
   private releaseOwnedLease(operationId: string): boolean {

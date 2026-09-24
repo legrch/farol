@@ -50,7 +50,7 @@ const bindingSchema = z.strictObject({
   mode: z.string().min(1).max(160),
 });
 
-const checkpointEnvelopeSchema = z.strictObject({
+const checkpointEnvelopeV1Schema = z.strictObject({
   schemaVersion: z.literal(1),
   checkpointId: z.string().min(1).max(160),
   operationId: z.string().min(1).max(160),
@@ -71,11 +71,45 @@ const checkpointEnvelopeSchema = z.strictObject({
   content: checkpointContentSchema,
 });
 
+// The continuation provider remains bound to the destination task. The
+// summarizer is separate evidence, never a replacement execution identity.
+const summarizerSourceSchema = z.strictObject({
+  providerOperationId: z.string().min(1).max(160),
+  sourceBoundary: z.string().min(1).max(160),
+  sourceCursor: z.string().min(1).max(512),
+});
+const observedSelection = z.string().trim().min(1).max(160);
+export const CheckpointSummarizerSchema = z.discriminatedUnion("engine", [
+  summarizerSourceSchema.extend({
+    engine: z.literal("current_chatgpt"),
+    provider: z.literal("chatgpt-web"),
+    observedModel: observedSelection.nullable(),
+    observedEffort: observedSelection.nullable(),
+  }),
+  summarizerSourceSchema.extend({
+    engine: z.literal("codex_luna"),
+    provider: z.literal("codex"),
+    observedModel: observedSelection,
+    observedEffort: observedSelection,
+  }),
+]);
+export type CheckpointSummarizer = Readonly<
+  z.infer<typeof CheckpointSummarizerSchema>
+>;
+const checkpointEnvelopeV2Schema = checkpointEnvelopeV1Schema.extend({
+  schemaVersion: z.literal(2),
+  summarizer: CheckpointSummarizerSchema,
+});
+const checkpointEnvelopeSchema = z.discriminatedUnion("schemaVersion", [
+  checkpointEnvelopeV1Schema,
+  checkpointEnvelopeV2Schema,
+]);
+
 export type CheckpointContent = Readonly<
   z.infer<typeof checkpointContentSchema>
 >;
 
-export type CheckpointEnvelope = Readonly<{
+export type CheckpointEnvelopeV1 = Readonly<{
   schemaVersion: 1;
   checkpointId: string;
   operationId: string;
@@ -95,6 +129,15 @@ export type CheckpointEnvelope = Readonly<{
   validation: "validated";
   content: CheckpointContent;
 }>;
+
+export type CheckpointEnvelope =
+  | CheckpointEnvelopeV1
+  | Readonly<
+      Omit<CheckpointEnvelopeV1, "schemaVersion"> & {
+        schemaVersion: 2;
+        summarizer: CheckpointSummarizer;
+      }
+    >;
 
 // Facts the host's own record proves, independent of any model summary: the
 // receipts that may be cited, completed work an earlier validated checkpoint
@@ -116,6 +159,7 @@ export type CheckpointErrorCode =
   | "CHECKPOINT_CONTENT_OVERSIZED"
   | "CHECKPOINT_ENVELOPE_INVALID"
   | "CHECKPOINT_PROVIDER_BINDING_MISMATCH"
+  | "CHECKPOINT_SUMMARIZER_BINDING_MISMATCH"
   | "CHECKPOINT_QUESTIONS_OVERFLOW";
 
 export function validateCheckpointContent(
@@ -327,6 +371,14 @@ export function validateCheckpointEnvelope(
   ) {
     return failure("CHECKPOINT_PROVIDER_BINDING_MISMATCH");
   }
+  if (
+    parsed.data.schemaVersion === 2 &&
+    (parsed.data.summarizer.providerOperationId !==
+      parsed.data.providerOperationId ||
+      parsed.data.summarizer.sourceBoundary !== parsed.data.sourceBoundary ||
+      parsed.data.summarizer.sourceCursor !== parsed.data.sourceCursor)
+  )
+    return failure("CHECKPOINT_SUMMARIZER_BINDING_MISMATCH");
   return success(
     structuredClone({
       ...parsed.data,
@@ -345,7 +397,7 @@ export function createCheckpointEnvelope(
     sourceCursor: string;
     createdAt: number;
   }>,
-): CheckpointEnvelope {
+): CheckpointEnvelopeV1 {
   const operation = session.operation;
   if (
     (session.phase !== "checkpoint_requested" &&
@@ -374,4 +426,16 @@ export function createCheckpointEnvelope(
     validation: "validated",
     content: structuredClone(content),
   };
+}
+
+/** Opt-in v2 writer. Old envelopes are read as-is; never rewrite stored v1 evidence. */
+export function attachCheckpointSummarizer(
+  checkpoint: CheckpointEnvelopeV1,
+  summarizer: unknown,
+  maximumContentBytes: number,
+): Result<CheckpointEnvelope, CheckpointErrorCode> {
+  return validateCheckpointEnvelope(
+    { ...checkpoint, schemaVersion: 2, summarizer },
+    maximumContentBytes,
+  );
 }

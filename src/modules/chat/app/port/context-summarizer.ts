@@ -1,4 +1,7 @@
-import type { CheckpointContent } from "../../domain/checkpoint";
+import type {
+  CheckpointContent,
+  CheckpointSummarizer,
+} from "../../domain/checkpoint";
 import type {
   ContextBinding,
   ContextSource,
@@ -23,6 +26,7 @@ export type ContextSummaryReceipt =
       status: "completed";
       providerOperationId: string;
       sourceCursor: string;
+      summarizer?: CheckpointSummarizer;
       content: unknown;
     }>
   | Readonly<{ status: "not_submitted"; code: string }>

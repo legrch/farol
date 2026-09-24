@@ -1223,3 +1223,72 @@ describe("context continuity transaction", () => {
     });
   });
 });
+
+describe("summary provenance transaction", () => {
+  const receipt = {
+    ...completedSummary,
+    status: "completed" as const,
+    providerOperationId: "provider-summary-1",
+    sourceCursor: "cursor-42",
+    content,
+    summarizer: {
+      engine: "current_chatgpt" as const,
+      provider: "chatgpt-web" as const,
+      observedModel: null,
+      observedEffort: null,
+      providerOperationId: "provider-summary-1",
+      sourceBoundary: command.sourceBoundary,
+      sourceCursor: "cursor-42",
+    },
+  };
+  it("persists a current-ChatGPT v2 checkpoint through the existing transaction", async () => {
+    const test = harness({ summary: receipt });
+    const result = value(await test.service.execute(command));
+    expect(result.checkpoint).toMatchObject({
+      schemaVersion: 2,
+      binding,
+      summarizer: receipt.summarizer,
+    });
+    expect(result.checkpoint?.content.unknownOutcomes).toEqual(
+      content.unknownOutcomes,
+    );
+    expect(test.offer).toHaveBeenCalledTimes(1);
+    expect(test.retire).toHaveBeenCalledTimes(1);
+  });
+  it("does not hand off or retire a detached provenance receipt", async () => {
+    const test = harness({
+      summary: {
+        ...receipt,
+        summarizer: { ...receipt.summarizer, sourceBoundary: "other" },
+      },
+    });
+    const result = value(await test.service.execute(command));
+    expect(result.session).toMatchObject({
+      phase: "blocked",
+      blockedCode: "CHECKPOINT_SUMMARIZER_BINDING_MISMATCH",
+    });
+    expect(test.offer).not.toHaveBeenCalled();
+    expect(test.retire).not.toHaveBeenCalled();
+  });
+  it("cannot silently select Luna via a returned receipt", async () => {
+    const test = harness({
+      summary: {
+        ...receipt,
+        summarizer: {
+          ...receipt.summarizer,
+          engine: "codex_luna",
+          provider: "codex",
+          observedModel: "fixture-luna",
+          observedEffort: "fixture-effort",
+        },
+      },
+    });
+    const result = value(await test.service.execute(command));
+    expect(result.session).toMatchObject({
+      phase: "blocked",
+      blockedCode: "SUMMARY_ENGINE_NOT_SELECTED",
+    });
+    expect(test.offer).not.toHaveBeenCalled();
+    expect(test.retire).not.toHaveBeenCalled();
+  });
+});

@@ -159,6 +159,15 @@ describe("ChatGPT summary-only context driver", () => {
         providerOperationId: expect.stringMatching(/^summary-[a-f0-9]{40}$/u),
         sourceCursor: expect.stringMatching(/^conversation:[a-f0-9]{64}$/u),
         content,
+        summarizer: {
+          engine: "current_chatgpt",
+          provider: "chatgpt-web",
+          observedModel: null,
+          observedEffort: null,
+          providerOperationId: expect.stringMatching(/^summary-[a-f0-9]{40}$/u),
+          sourceBoundary: source().sourceBoundary,
+          sourceCursor: expect.stringMatching(/^conversation:[a-f0-9]{64}$/u),
+        },
       },
     );
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
@@ -178,6 +187,15 @@ describe("ChatGPT summary-only context driver", () => {
       providerOperationId: expect.stringMatching(/^summary-[a-f0-9]{40}$/u),
       sourceCursor: expect.stringMatching(/^conversation:[a-f0-9]{64}$/u),
       content,
+      summarizer: {
+        engine: "current_chatgpt",
+        provider: "chatgpt-web",
+        observedModel: null,
+        observedEffort: null,
+        providerOperationId: expect.stringMatching(/^summary-[a-f0-9]{40}$/u),
+        sourceBoundary: source().sourceBoundary,
+        sourceCursor: expect.stringMatching(/^conversation:[a-f0-9]{64}$/u),
+      },
     });
     expect(retained.runReadonlyTask).toHaveBeenCalledTimes(1);
   });
