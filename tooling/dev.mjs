@@ -464,6 +464,7 @@ export async function launchPreview(
   root,
   spawnProcess = spawn,
   acceptanceProfile = false,
+  secondaryDisplay = false,
 ) {
   const electronBin = path.join(root, "node_modules/.bin/electron");
   const { stopLabel, outcome, protocolError, resultCollector } =
@@ -473,7 +474,7 @@ export async function launchPreview(
           electronBin,
           [
             "dist/app/main.cjs",
-            ...(acceptanceProfile
+            ...(acceptanceProfile || secondaryDisplay
               ? ["--preview-window-mode=secondary-visible"]
               : []),
           ],
@@ -557,8 +558,8 @@ export async function main(argv, overrides = {}) {
       ensureDependencies(vnextRoot, "npm", log),
     runBuild = () =>
       runInherited(process.execPath, ["tooling/build.mjs"], { cwd: vnextRoot }),
-    launch = (acceptanceProfile) =>
-      launchPreview(vnextRoot, spawn, acceptanceProfile),
+    launch = (acceptanceProfile, secondaryDisplay) =>
+      launchPreview(vnextRoot, spawn, acceptanceProfile, secondaryDisplay),
     log = (line) => process.stdout.write(`${line}\n`),
     logError = (line) => process.stderr.write(`${line}\n`),
     exit = (code) => process.exit(code),
@@ -566,6 +567,7 @@ export async function main(argv, overrides = {}) {
 
   const checkOnly = argv.includes("--check");
   const acceptanceProfile = argv.includes("--acceptance-profile");
+  const secondaryDisplay = argv.includes("--secondary-display");
 
   if (!pinned) {
     const decision = resolveToolchain({
@@ -612,7 +614,7 @@ export async function main(argv, overrides = {}) {
   }
 
   log("Running Farol Dev in this terminal. Press Ctrl+C to stop.");
-  await launch(acceptanceProfile);
+  await launch(acceptanceProfile, secondaryDisplay);
 }
 
 const isMainModule =

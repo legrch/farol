@@ -451,6 +451,15 @@ describe("dev.mjs main() orchestration with an already-declared toolchain", () =
     expect(selected).toEqual([true, false]);
   });
 
+  it("keeps the owner Dev profile when placing its window on the secondary display", async () => {
+    const selected = [];
+    const { overrides } = baseOverrides({
+      launch: async (...options) => selected.push(options),
+    });
+    await main(["--secondary-display"], overrides);
+    expect(selected).toEqual([[false, true]]);
+  });
+
   it("exits with the dependency status and never builds when dependencies fail", async () => {
     const { overrides, calls } = baseOverrides({
       ensureDependencies: async () => {

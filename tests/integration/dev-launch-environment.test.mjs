@@ -193,4 +193,26 @@ describe("development launcher environment", () => {
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
     expect(received.options.env.FAROL_NEXT_E2E).toBeUndefined();
   });
+
+  it("places the ordinary Dev profile on a secondary display without switching profiles", async () => {
+    let received;
+    const stop = new Error("SPAWN_INTERCEPTED");
+    await expect(
+      launchPreview(
+        "/tmp/farol-next-dev-root",
+        (command, args, options) => {
+          received = { command, args, options };
+          throw stop;
+        },
+        false,
+        true,
+      ),
+    ).rejects.toBe(stop);
+    expect(received.args).toEqual([
+      "dist/app/main.cjs",
+      "--preview-window-mode=secondary-visible",
+    ]);
+    expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");
+    expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBeUndefined();
+  });
 });
