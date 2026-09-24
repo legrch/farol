@@ -31,26 +31,41 @@ export type CodexNativeAgentPeer = Readonly<{
   ): () => void;
 }>;
 
-export type CodexNativeAgentHostOptions = Readonly<{
-  model: "gpt-6-astra";
-  runtimeRoot: string;
-  spawnTimeoutMs: number;
-  waitTimeoutMs: number;
-  pollIntervalMs: number;
-  cancelTimeoutMs?: number;
-  nonce(): string;
-  now(): number;
-}>;
+// The local Next provider catalogue advertises only low effort. This is a
+// transport selection, not an assertion about the model observed in ChatGPT.
+const selectedRouteSchema = z.discriminatedUnion("model", [
+  z.object({
+    model: z.literal("gpt-6-astra"),
+    effort: z.literal("low").optional(),
+  }),
+  z.object({
+    model: z.literal("farol-next/chatgpt"),
+    effort: z.literal("low"),
+  }),
+]);
+
+export type CodexNativeAgentHostOptions = Readonly<
+  z.infer<typeof selectedRouteSchema> & {
+    runtimeRoot: string;
+    spawnTimeoutMs: number;
+    waitTimeoutMs: number;
+    pollIntervalMs: number;
+    cancelTimeoutMs?: number;
+    nonce(): string;
+    now(): number;
+  }
+>;
 
 const boundedId = z.string().min(1).max(200);
 
 const threadStartSchema = z
   .object({
-    model: z.literal("gpt-6-astra"),
+    model: z.enum(["gpt-6-astra", "farol-next/chatgpt"]),
     thread: z
       .object({
         id: boundedId,
         parentThreadId: boundedId.nullable().optional(),
+        modelProvider: z.unknown().optional(),
       })
       .passthrough(),
   })
@@ -274,11 +289,20 @@ const historyTurnSchema = z
   })
   .passthrough();
 
+// Candidate evidence requirement follows the existing retainedThreadSchema in
+// src/apps/desktop/codex-chatgpt-host-route.ts, not an attested host capability.
+// inspectCodexHostContract does not verify that ThreadReadResponse exposes model
+// or modelProvider, and Agent's persisted correlation has no admitted route
+// binding. Neutral recovery remains unavailable for production composition
+// until genuine host-contract evidence establishes these fields for both
+// parent and child. Missing metadata is refused; fixtures cannot close this gap.
 const threadReadSchema = z
   .object({
     thread: z
       .object({
         id: boundedId,
+        model: z.unknown().optional(),
+        modelProvider: z.unknown().optional(),
         parentThreadId: boundedId.nullable().optional(),
         agentRole: z.string().min(1).max(200).nullable().optional(),
         source: z.unknown(),
@@ -740,7 +764,11 @@ export class CodexNativeAgentHost implements AgentHost {
     private readonly computer?: AgentComputer,
   ) {
     if (
+      !selectedRouteSchema.safeParse(options).success ||
+      typeof options.runtimeRoot !== "string" ||
       !canonicalAbsolutePath(options.runtimeRoot) ||
+      typeof options.nonce !== "function" ||
+      typeof options.now !== "function" ||
       !validDuration(options.spawnTimeoutMs) ||
       !validDuration(options.waitTimeoutMs) ||
       !validDuration(options.pollIntervalMs) ||
@@ -749,6 +777,7 @@ export class CodexNativeAgentHost implements AgentHost {
     ) {
       throw error("CODEX_AGENT_OPTIONS_INVALID");
     }
+    this.options = Object.freeze({ ...options });
   }
 
   async spawn(
@@ -798,6 +827,9 @@ export class CodexNativeAgentHost implements AgentHost {
       const parent = threadStartSchema.safeParse(
         await this.peer.request("thread/start", {
           model: this.options.model,
+          ...(this.options.model === "farol-next/chatgpt"
+            ? { modelProvider: "farol_next" }
+            : {}),
           allowProviderModelFallback: false,
           cwd: this.options.runtimeRoot,
           sandbox: "read-only",
@@ -815,7 +847,9 @@ export class CodexNativeAgentHost implements AgentHost {
       if (
         !parent.success ||
         parent.data.thread.parentThreadId != null ||
-        parent.data.model !== this.options.model
+        parent.data.model !== this.options.model ||
+        (this.options.model === "farol-next/chatgpt" &&
+          parent.data.thread.modelProvider !== "farol_next")
       ) {
         throw error("CODEX_AGENT_PROTOCOL_INVALID");
       }
@@ -832,7 +866,7 @@ export class CodexNativeAgentHost implements AgentHost {
       const started = turnStartSchema.safeParse(
         await this.peer.request("turn/start", {
           threadId: operation.parentThreadId,
-          effort: "low",
+          effort: this.options.effort ?? "low",
           input: [
             {
               type: "text",
@@ -865,7 +899,11 @@ export class CodexNativeAgentHost implements AgentHost {
         })
         .catch(() => undefined);
       const child = await this.readThread(childId).catch(() => null);
-      if (child?.parentThreadId !== operation.parentThreadId) {
+      if (
+        !child ||
+        child.parentThreadId !== operation.parentThreadId ||
+        !this.matchesRetainedRoute(child)
+      ) {
         throw error("CODEX_AGENT_LINEAGE_INVALID");
       }
       if (child.turns.length !== 1) {
@@ -899,7 +937,12 @@ export class CodexNativeAgentHost implements AgentHost {
     correlation: ChildCorrelation,
     rejoin?: AgentRejoin,
   ): Promise<AgentWaitReceipt> {
-    if (!this.active && rejoin && !this.attach(correlation, rejoin)) {
+    if (
+      !this.active &&
+      rejoin &&
+      this.options.model !== "farol-next/chatgpt" &&
+      !this.attach(correlation, rejoin)
+    ) {
       return {
         status: "outcome_unknown",
         correlation,
@@ -956,6 +999,20 @@ export class CodexNativeAgentHost implements AgentHost {
         return { status: "unobserved", correlation };
       }
       const observed = this.observeCompletion(correlation, child, parent);
+      // Neutral-route recovery must validate durable route evidence before
+      // installing handlers that can serve the retained child's authority.
+      if (
+        observed !== "invalid" &&
+        !this.active &&
+        rejoin &&
+        !this.attach(correlation, rejoin)
+      ) {
+        return {
+          status: "outcome_unknown",
+          correlation,
+          code: "AGENT_WAIT_ACK_LOST",
+        };
+      }
       if (observed === "completed") {
         const completedTurn = child.turns.find(
           (turn) => turn.id === correlation.childTurnId,
@@ -1414,7 +1471,7 @@ export class CodexNativeAgentHost implements AgentHost {
       if (
         item.status !== "completed" ||
         item.receiverThreadIds.length !== 1 ||
-        (item.model != null && item.model !== this.options.model) ||
+        !this.matchesCollabModel(item.model) ||
         item.prompt !== operation.childPrompt ||
         sha256(item.prompt) !== operation.delegationDigest
       ) {
@@ -1511,6 +1568,22 @@ export class CodexNativeAgentHost implements AgentHost {
     };
   }
 
+  private matchesCollabModel(model: unknown): boolean {
+    return (
+      model === this.options.model ||
+      (this.options.model === "gpt-6-astra" && model == null)
+    );
+  }
+
+  private matchesRetainedRoute(thread: ThreadSnapshot): boolean {
+    // Legacy snapshots may omit model metadata. The neutral route has no such
+    // compatibility exemption: alias and provider must both be retained.
+    return this.options.model === "farol-next/chatgpt"
+      ? thread.model === this.options.model &&
+          thread.modelProvider === "farol_next"
+      : this.matchesCollabModel(thread.model);
+  }
+
   private observeCompletion(
     correlation: ChildCorrelation,
     child: ThreadSnapshot,
@@ -1538,6 +1611,8 @@ export class CodexNativeAgentHost implements AgentHost {
       child.parentThreadId !== correlation.parentThreadId ||
       parent.id !== correlation.parentThreadId ||
       parent.parentThreadId != null ||
+      !this.matchesRetainedRoute(child) ||
+      !this.matchesRetainedRoute(parent) ||
       !childTurn ||
       !parentTurn ||
       !source.success ||
@@ -1553,6 +1628,20 @@ export class CodexNativeAgentHost implements AgentHost {
     }
     const childItems = childTurn.items;
     const parentItems = parseHistoryItems(parentTurn);
+    const invalidSpawnRoute = parentTurn.items.some((candidate) => {
+      if (
+        candidate === null ||
+        typeof candidate !== "object" ||
+        !("type" in candidate) ||
+        candidate.type !== "collabAgentToolCall" ||
+        !("tool" in candidate) ||
+        candidate.tool !== "spawnAgent"
+      )
+        return false;
+      const parsed = collabItemSchema.safeParse(candidate);
+      return !parsed.success || !this.matchesCollabModel(parsed.data.model);
+    });
+    if (invalidSpawnRoute) return "invalid";
     const authorityCalls = parentItems.filter(
       (item) =>
         item.type === "dynamicToolCall" &&
@@ -1584,6 +1673,12 @@ export class CodexNativeAgentHost implements AgentHost {
         item.receiverThreadIds.length === 1 &&
         item.receiverThreadIds[0] === correlation.childId,
     );
+    if (
+      this.options.model === "farol-next/chatgpt" &&
+      spawnItems.length !== 1
+    ) {
+      return "invalid";
+    }
     const durablePrompt = spawnItems[0]?.prompt;
     const durableIntent =
       typeof durablePrompt === "string" &&

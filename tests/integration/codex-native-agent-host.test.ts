@@ -6,6 +6,7 @@ import type { DelegatedAgentAuthority } from "../../src/modules/agent/app/port/e
 import type { AgentWorkspaceProbe } from "../../src/modules/agent/app/port/workspace-probe";
 import {
   CodexNativeAgentHost,
+  type CodexNativeAgentHostOptions,
   type CodexNativeAgentPeer,
 } from "../../src/modules/agent/infra/native/codex-native-agent-host";
 
@@ -66,6 +67,7 @@ const request: AgentSpawnRequest = {
   intent: { kind: "compatibility" },
 };
 
+// In-process protocol fixture only: no native host, provider, or delivery UI.
 class NativeAgentPeer implements CodexNativeAgentPeer {
   readonly requests: Readonly<{ method: string; params: unknown }>[] = [];
   readonly handlers = new Map<string, RequestHandler>();
@@ -78,12 +80,30 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
   childSpawnedDescendant = false;
   extraChildTurn = false;
   childPrompt = "";
+  startRoute: Record<string, unknown> = {};
+  collabRoute: Record<string, unknown> = {};
+  retainedSpawnRoute: Record<string, unknown> = {};
+  childRoute: Record<string, unknown> = {};
+  parentRoute: Record<string, unknown> = {};
+  readonly interrupted = new Set<string>();
   // Lets a test act in the window the host is still inside `thread/read`,
   // before it has correlated the child's turn.
   onChildRead: (() => void) | null = null;
   private nonce = "";
 
-  constructor(private readonly emitSpawnOnTurnStart = true) {}
+  constructor(
+    private readonly emitSpawnOnTurnStart = true,
+    readonly model: string = "gpt-6-astra",
+  ) {}
+
+  private retainedRoute(): Record<string, unknown> {
+    // Synthetic evidence for the candidate's stricter admission requirement.
+    // The existing host-route consumer expects these fields, but the checked-in
+    // host inspector does not attest their availability on real child reads.
+    return this.model === "farol-next/chatgpt"
+      ? { model: this.model, modelProvider: "farol_next" }
+      : {};
+  }
 
   handleServerRequest(method: string, handler: RequestHandler): () => void {
     this.handlers.set(method, handler);
@@ -103,7 +123,7 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         baseInstructions?: string;
       };
       expect(input).toMatchObject({
-        model: "gpt-6-astra",
+        model: this.model,
         allowProviderModelFallback: false,
         sandbox: "read-only",
         approvalPolicy: "never",
@@ -116,12 +136,20 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         expect.objectContaining({ name: "farol_agent_authority" }),
         expect.objectContaining({ name: "farol_agent_workspace_probe" }),
       ]);
+      if (this.model === "farol-next/chatgpt") {
+        expect(input).toMatchObject({ modelProvider: "farol_next" });
+      }
       expect(input.baseInstructions).not.toContain(
         "must use exactly one native child",
       );
       return {
-        model: "gpt-6-astra",
-        thread: { id: "parent-thread-a", parentThreadId: null },
+        model: this.model,
+        thread: {
+          id: "parent-thread-a",
+          parentThreadId: null,
+          ...this.retainedRoute(),
+        },
+        ...this.startRoute,
       };
     }
     if (method === "turn/start") {
@@ -137,6 +165,16 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
       return {
         turn: { id: "parent-turn-a", status: "inProgress", items: [] },
       };
+    }
+    if (method === "turn/interrupt") {
+      const target = params as { threadId: string; turnId: string };
+      expect(target).toEqual(
+        target.threadId === "child-thread-a"
+          ? { threadId: "child-thread-a", turnId: "child-turn-a" }
+          : { threadId: "parent-thread-a", turnId: "parent-turn-a" },
+      );
+      this.interrupted.add(target.threadId);
+      return {};
     }
     if (method === "thread/read") {
       const threadId = (params as { threadId?: string }).threadId;
@@ -296,7 +334,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         senderThreadId: "parent-thread-a",
         receiverThreadIds: ["child-thread-a"],
         agentsStates: { "child-thread-a": { status: "running" } },
-        model: "gpt-6-astra",
+        model: this.model,
+        ...this.collabRoute,
         prompt: this.childPrompt,
       },
     });
@@ -306,6 +345,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
     return {
       thread: {
         id: "child-thread-a",
+        ...this.retainedRoute(),
+        ...this.childRoute,
         parentThreadId: "parent-thread-a",
         agentRole: "critic",
         source: {
@@ -321,11 +362,13 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         turns: [
           {
             id: "child-turn-a",
-            status: this.failed
-              ? "failed"
-              : this.completed
-                ? "completed"
-                : "inProgress",
+            status: this.interrupted.has("child-thread-a")
+              ? "interrupted"
+              : this.failed
+                ? "failed"
+                : this.completed
+                  ? "completed"
+                  : "inProgress",
             items: [
               ...(this.workspaceCompleted ? [this.workspaceItem()] : []),
               ...(this.childSpawnedDescendant
@@ -362,6 +405,8 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
     return {
       thread: {
         id: "parent-thread-a",
+        ...this.retainedRoute(),
+        ...this.parentRoute,
         parentThreadId: null,
         agentRole: null,
         source: "appServer",
@@ -369,7 +414,11 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
         turns: [
           {
             id: "parent-turn-a",
-            status: this.completed ? "completed" : "inProgress",
+            status: this.interrupted.has("parent-thread-a")
+              ? "interrupted"
+              : this.completed
+                ? "completed"
+                : "inProgress",
             items: this.completed
               ? [
                   {
@@ -381,6 +430,10 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
                     receiverThreadIds: ["child-thread-a"],
                     agentsStates: {},
                     prompt: this.childPrompt,
+                    ...(this.model === "farol-next/chatgpt"
+                      ? { model: this.model }
+                      : {}),
+                    ...this.retainedSpawnRoute,
                   },
                   ...(this.waitCompleted
                     ? [
@@ -397,7 +450,20 @@ class NativeAgentPeer implements CodexNativeAgentPeer {
                     : []),
                   ...(this.authorityCompleted ? [this.authorityItem()] : []),
                 ]
-              : [],
+              : [
+                  {
+                    id: "spawn-a",
+                    type: "collabAgentToolCall",
+                    tool: "spawnAgent",
+                    status: "completed",
+                    senderThreadId: "parent-thread-a",
+                    receiverThreadIds: ["child-thread-a"],
+                    agentsStates: {},
+                    model: this.model,
+                    prompt: this.childPrompt,
+                    ...this.retainedSpawnRoute,
+                  },
+                ],
           },
         ],
       },
@@ -432,6 +498,379 @@ function verifiedWorkspaceProbe(): AgentWorkspaceProbe {
     verify: async () => ({ status: "verified" }),
   };
 }
+
+const neutralOptions = {
+  model: "farol-next/chatgpt",
+  effort: "low",
+  runtimeRoot: "/private/tmp/farol-agent-runtime",
+  spawnTimeoutMs: 100,
+  waitTimeoutMs: 10,
+  pollIntervalMs: 1,
+  cancelTimeoutMs: 100,
+  nonce: () => "proof-a",
+  now: () => 1,
+} as const;
+
+describe("selected native Agent route (in-process contract only)", () => {
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["boolean", false],
+    ["number", 1],
+    ["string", "farol-next/chatgpt"],
+    ["array", []],
+    ["empty object", {}],
+    ["partial route", { model: "farol-next/chatgpt", effort: "low" }],
+  ] as const)(
+    "classifies malformed %s options without a TypeError",
+    (_name, options) => {
+      const peer = new NativeAgentPeer();
+      expect(
+        () =>
+          new CodexNativeAgentHost(
+            peer,
+            options as unknown as CodexNativeAgentHostOptions,
+            verifiedWorkspaceProbe(),
+          ),
+      ).toThrowError(
+        expect.objectContaining({
+          name: "Error",
+          message: "CODEX_AGENT_OPTIONS_INVALID",
+        }),
+      );
+      expect(peer.requests).toEqual([]);
+      expect(peer.handlers.size).toBe(0);
+      expect(peer.notifications.size).toBe(0);
+    },
+  );
+
+  it.each([
+    { model: "other-model" },
+    { model: "farol-next/mind" },
+    { model: "farol-next/drive" },
+    { model: null },
+    { effort: undefined },
+    { effort: null },
+    { effort: "high" },
+    { effort: "auto" },
+    { model: "gpt-6-astra", effort: "high" },
+    { runtimeRoot: null },
+    { spawnTimeoutMs: Number.NaN },
+    { now: undefined },
+    { nonce: "proof-a" },
+  ])("rejects unchecked constructor options %j before peer use", (override) => {
+    const peer = new NativeAgentPeer();
+    expect(
+      () =>
+        new CodexNativeAgentHost(
+          peer,
+          {
+            ...neutralOptions,
+            ...override,
+          } as unknown as CodexNativeAgentHostOptions,
+          verifiedWorkspaceProbe(),
+        ),
+    ).toThrow("CODEX_AGENT_OPTIONS_INVALID");
+    expect(peer.requests).toEqual([]);
+    expect(peer.handlers.size).toBe(0);
+    expect(peer.notifications.size).toBe(0);
+  });
+
+  it("admits the exact neutral route, forwards explicit effort, and delivers the same child receipt", async () => {
+    const peer = new NativeAgentPeer(true, neutralOptions.model);
+    const host = new CodexNativeAgentHost(
+      peer,
+      neutralOptions,
+      verifiedWorkspaceProbe(),
+    );
+    const spawned = await host.spawn(request);
+    expect(spawned.status).toBe("started");
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    expect(
+      peer.requests.find(({ method }) => method === "turn/start")?.params,
+    ).toMatchObject({ threadId: "parent-thread-a", effort: "low" });
+    await expect(host.spawn(request)).resolves.toEqual({
+      status: "failed",
+      code: "AGENT_SPAWN_REJECTED",
+    });
+    await expect(host.wait(spawned.correlation)).resolves.toEqual({
+      status: "running",
+      correlation: spawned.correlation,
+    });
+    await peer.finish();
+    const expected = {
+      status: "completed",
+      correlation: spawned.correlation,
+      resultRef: "codex-app-server://thread/child-thread-a/turn/child-turn-a",
+      workspaceEnforcement: "verified",
+    };
+    await expect(host.wait(spawned.correlation)).resolves.toEqual(expected);
+    await expect(host.cancel(spawned.correlation)).resolves.toEqual(expected);
+    expect(
+      peer.requests.filter(({ method }) => method === "thread/start"),
+    ).toHaveLength(1);
+    expect(
+      peer.requests.filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
+    expect(
+      peer.requests.filter(({ method }) => method === "turn/interrupt"),
+    ).toHaveLength(0);
+    host.dispose();
+  });
+
+  it.each(["gpt-6-astra", "other-model", null, undefined])(
+    "refuses a substituted start model %s before any turn",
+    async (model) => {
+      const peer = new NativeAgentPeer(true, neutralOptions.model);
+      peer.startRoute = { model };
+      const host = new CodexNativeAgentHost(
+        peer,
+        neutralOptions,
+        verifiedWorkspaceProbe(),
+      );
+      await expect(host.spawn(request)).resolves.toEqual({
+        status: "failed",
+        code: "AGENT_SPAWN_REJECTED",
+      });
+      expect(peer.requests.map(({ method }) => method)).toEqual([
+        "thread/start",
+      ]);
+      host.dispose();
+    },
+  );
+
+  it.each(["other-provider", null, undefined])(
+    "refuses start provider %s before any turn",
+    async (modelProvider) => {
+      const peer = new NativeAgentPeer(true, neutralOptions.model);
+      peer.startRoute = {
+        thread: { id: "parent-thread-a", parentThreadId: null, modelProvider },
+      };
+      const host = new CodexNativeAgentHost(
+        peer,
+        neutralOptions,
+        verifiedWorkspaceProbe(),
+      );
+      await expect(host.spawn(request)).resolves.toMatchObject({
+        status: "failed",
+        code: "AGENT_SPAWN_REJECTED",
+      });
+      expect(peer.requests.map(({ method }) => method)).toEqual([
+        "thread/start",
+      ]);
+      host.dispose();
+    },
+  );
+
+  it.each(["gpt-6-astra", "other-model", null, undefined])(
+    "refuses collab model %s after one submitted turn without retry",
+    async (model) => {
+      const peer = new NativeAgentPeer(true, neutralOptions.model);
+      peer.collabRoute = { model };
+      const host = new CodexNativeAgentHost(
+        peer,
+        neutralOptions,
+        verifiedWorkspaceProbe(),
+      );
+      await expect(host.spawn(request)).resolves.toEqual({
+        status: "outcome_unknown",
+        code: "AGENT_SPAWN_ACK_LOST",
+      });
+      expect(peer.requests.map(({ method }) => method)).toEqual([
+        "thread/start",
+        "turn/start",
+      ]);
+      host.dispose();
+    },
+  );
+
+  it("rejoins a running neutral child with retained authority and completes without resubmission", async () => {
+    const peer = new NativeAgentPeer(true, neutralOptions.model);
+    const first = new CodexNativeAgentHost(
+      peer,
+      neutralOptions,
+      verifiedWorkspaceProbe(),
+    );
+    const spawned = await first.spawn(request);
+    expect(spawned.status).toBe("started");
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    first.dispose();
+    const recovered = new CodexNativeAgentHost(
+      peer,
+      neutralOptions,
+      verifiedWorkspaceProbe(),
+    );
+    await expect(
+      recovered.wait(spawned.correlation, {
+        request,
+        authorityProof: spawned.authorityProof!,
+      }),
+    ).resolves.toMatchObject({
+      status: "running",
+      correlation: spawned.correlation,
+    });
+    await peer.finish();
+    await expect(recovered.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "completed",
+      correlation: spawned.correlation,
+      resultRef: "codex-app-server://thread/child-thread-a/turn/child-turn-a",
+    });
+    expect(
+      peer.requests.filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
+    expect(
+      peer.requests.filter(({ method }) => method === "thread/start"),
+    ).toHaveLength(1);
+    recovered.dispose();
+  });
+
+  it("cancels only the recovered child and its parent without spawning a replacement", async () => {
+    const peer = new NativeAgentPeer(true, neutralOptions.model);
+    const first = new CodexNativeAgentHost(
+      peer,
+      neutralOptions,
+      verifiedWorkspaceProbe(),
+    );
+    const spawned = await first.spawn(request);
+    expect(spawned.status).toBe("started");
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    first.dispose();
+    const recovered = new CodexNativeAgentHost(
+      peer,
+      neutralOptions,
+      verifiedWorkspaceProbe(),
+    );
+    await expect(recovered.cancel(spawned.correlation)).resolves.toEqual({
+      status: "cancelled",
+      correlation: spawned.correlation,
+    });
+    expect(
+      peer.requests
+        .filter(({ method }) => method === "turn/interrupt")
+        .map(({ params }) => params),
+    ).toEqual([
+      { threadId: "child-thread-a", turnId: "child-turn-a" },
+      { threadId: "parent-thread-a", turnId: "parent-turn-a" },
+    ]);
+    expect(
+      peer.requests.filter(({ method }) => method === "turn/start"),
+    ).toHaveLength(1);
+    recovered.dispose();
+  });
+
+  it.each([
+    ["childRoute", { model: "gpt-6-astra" }],
+    ["childRoute", { model: null }],
+    ["childRoute", { model: undefined }],
+    ["childRoute", { modelProvider: undefined }],
+    ["childRoute", { modelProvider: "other-provider" }],
+    ["parentRoute", { model: "gpt-6-astra" }],
+    ["parentRoute", { model: undefined }],
+    ["parentRoute", { modelProvider: undefined }],
+    ["retainedSpawnRoute", { model: "gpt-6-astra" }],
+    ["retainedSpawnRoute", { model: null }],
+    ["retainedSpawnRoute", { model: undefined }],
+    ["retainedSpawnRoute", { receiverThreadIds: ["foreign-child"] }],
+    ["retainedSpawnRoute", { prompt: "changed delegation" }],
+  ] as const)(
+    "refuses changed retained routing %s %j on wait and cancel",
+    async (target, override) => {
+      const peer = new NativeAgentPeer(true, neutralOptions.model);
+      const first = new CodexNativeAgentHost(
+        peer,
+        neutralOptions,
+        verifiedWorkspaceProbe(),
+      );
+      const spawned = await first.spawn(request);
+      expect(spawned.status).toBe("started");
+      if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+      first.dispose();
+      peer[target] = override;
+      const recovered = new CodexNativeAgentHost(
+        peer,
+        neutralOptions,
+        verifiedWorkspaceProbe(),
+      );
+      const refusal = {
+        status: "outcome_unknown",
+        correlation: spawned.correlation,
+        code: "AGENT_WAIT_ACK_LOST",
+      };
+      await expect(
+        recovered.wait(spawned.correlation, {
+          request,
+          authorityProof: spawned.authorityProof!,
+        }),
+      ).resolves.toEqual(refusal);
+      expect(peer.handlers.size).toBe(0);
+      expect(peer.notifications.size).toBe(0);
+      await expect(recovered.cancel(spawned.correlation)).resolves.toEqual(
+        refusal,
+      );
+      peer.completed = true;
+      peer.workspaceCompleted = true;
+      peer.waitCompleted = true;
+      peer.authorityCompleted = true;
+      await expect(recovered.wait(spawned.correlation)).resolves.toEqual(
+        refusal,
+      );
+      expect(
+        peer.requests.filter(({ method }) => method === "turn/interrupt"),
+      ).toHaveLength(0);
+      expect(
+        peer.requests.filter(({ method }) => method === "turn/start"),
+      ).toHaveLength(1);
+      recovered.dispose();
+    },
+  );
+
+  it.each([
+    { model: "gpt-6-astra" },
+    { model: undefined },
+    { modelProvider: undefined },
+    { modelProvider: "other-provider" },
+  ])(
+    "refuses child admission without exact retained route %j",
+    async (route) => {
+      const peer = new NativeAgentPeer(true, neutralOptions.model);
+      peer.childRoute = route;
+      const host = new CodexNativeAgentHost(
+        peer,
+        neutralOptions,
+        verifiedWorkspaceProbe(),
+      );
+      await expect(host.spawn(request)).resolves.toEqual({
+        status: "outcome_unknown",
+        code: "AGENT_SPAWN_ACK_LOST",
+      });
+      expect(
+        peer.requests.filter(({ method }) => method === "turn/start"),
+      ).toHaveLength(1);
+      host.dispose();
+    },
+  );
+
+  it("rejects a conflicting retained Astra spawn model while retaining legacy missing-model history", async () => {
+    const peer = new NativeAgentPeer();
+    const host = new CodexNativeAgentHost(
+      peer,
+      { ...neutralOptions, model: "gpt-6-astra" },
+      verifiedWorkspaceProbe(),
+    );
+    const spawned = await host.spawn(request);
+    if (spawned.status !== "started") throw new Error("SPAWN_FAILED");
+    await peer.finish();
+    await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "completed",
+    });
+    peer.retainedSpawnRoute = { model: "farol-next/chatgpt" };
+    await expect(host.wait(spawned.correlation)).resolves.toMatchObject({
+      status: "outcome_unknown",
+      code: "AGENT_WAIT_ACK_LOST",
+    });
+    host.dispose();
+  });
+});
 
 describe("native Codex Agent host", () => {
   it("rejects invalid host options before installing protocol handlers", () => {
@@ -607,6 +1046,9 @@ describe("native Codex Agent host", () => {
 
     const spawned = await host.spawn(request);
 
+    expect(
+      peer.requests.find(({ method }) => method === "turn/start")?.params,
+    ).toMatchObject({ effort: "low" });
     const carriedGrant = JSON.parse(peer.childPrompt.split("\n")[1]!) as {
       authority: typeof authority;
       focus: typeof request.focus;
