@@ -781,6 +781,90 @@ try {
   await window.screenshot({ path: path.join(output, "14-compact-task.png") });
   await window.locator("#task-tabs .task-tab-close").click();
   await window.locator("#task-tabs .task-tab").waitFor({ state: "hidden" });
+  await window.locator('.nav-item[data-section="settings"]').click();
+  await window.locator("#settings-nav").waitFor({ state: "visible" });
+  assert.equal(
+    await window.locator("#settings-computer-title").isVisible(),
+    false,
+    "SETTINGS_DUPLICATED_SETUP",
+  );
+  await window.locator('[data-settings-category="shortcuts"]').click();
+  await window.locator("#settings-shortcuts-title").waitFor({
+    state: "visible",
+  });
+  await window.locator('[data-shortcut-section="browser"]').selectOption("4");
+  await window.locator("#apply-shortcuts").click();
+  assert.equal(
+    await window.locator("#shortcut-feedback").getAttribute("data-state"),
+    "error",
+  );
+  assert.equal(
+    await window.evaluate(() =>
+      localStorage.getItem("farol.next.navigation-shortcuts.v1"),
+    ),
+    null,
+  );
+  await window.locator('[data-shortcut-section="settings"]').selectOption("1");
+  await window.locator("#apply-shortcuts").click();
+  assert.equal(
+    await window.locator("#shortcut-feedback").getAttribute("data-state"),
+    "ready",
+  );
+  assert.equal(
+    await window.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem("farol.next.navigation-shortcuts.v1"))
+          .browser,
+    ),
+    4,
+  );
+  await window.reload();
+  await window.locator('.nav-item[data-section="settings"]').click();
+  await window.locator('[data-settings-category="shortcuts"]').click();
+  assert.equal(
+    await window.locator('[data-shortcut-section="browser"]').inputValue(),
+    "4",
+  );
+  await window.screenshot({
+    path: path.join(output, "14-settings-shortcuts.png"),
+  });
+  await window.keyboard.press("Meta+4");
+  await window.locator('[data-panel="browser"].active').waitFor();
+  await window.locator('.nav-item[data-section="settings"]').click();
+  await window.locator('[data-shortcut-section="browser"]').selectOption("0");
+  await window.locator("#apply-shortcuts").click();
+  await window.locator('#shortcut-feedback[data-state="ready"]').waitFor();
+  await window.keyboard.press("Meta+4");
+  await window.locator('[data-panel="settings"].active').waitFor();
+  assert.equal(
+    await window.locator('[data-panel="browser"]').isVisible(),
+    false,
+    "UNBOUND_SHORTCUT_NAVIGATED",
+  );
+  await window.locator("#reset-shortcuts").click();
+  await window.locator('#shortcut-feedback[data-state="ready"]').waitFor();
+  assert.equal(
+    await window.evaluate(
+      () =>
+        JSON.parse(localStorage.getItem("farol.next.navigation-shortcuts.v1"))
+          .browser,
+    ),
+    1,
+  );
+  await window.locator('[data-settings-category="advanced"]').click();
+  await window.locator("#connection-diagnostics").waitFor({
+    state: "visible",
+  });
+  await window.locator("#connection-diagnostics > summary").click();
+  await window.locator("#connections-readiness-title").waitFor({
+    state: "visible",
+  });
+  await window.locator('[data-settings-category="general"]').click();
+  await window.locator("#settings-general-title").waitFor({
+    state: "visible",
+  });
+  await window.locator('.nav-item[data-section="activity"]').click();
+  await window.locator("#activity-setup-note").waitFor({ state: "visible" });
   console.log(
     JSON.stringify({
       label,

@@ -13,6 +13,11 @@ contextBridge.exposeInMainWorld("farolNext", {
       taskId,
       action,
     }) as Promise<unknown>,
+  setNavigationShortcuts: (shortcuts: unknown) =>
+    ipcRenderer.invoke(
+      channels.navigationShortcuts,
+      shortcuts,
+    ) as Promise<unknown>,
   layout: (
     section: string,
     taskId: string,

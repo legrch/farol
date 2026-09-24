@@ -899,9 +899,12 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   --dossier-height: 0px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
-  .window-identity {
+html[data-environment="dev"] .window-identity {
   display: none;
+}
+
+html[data-environment="dev"] .window-bar {
+  justify-content: flex-end;
 }
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
@@ -1239,6 +1242,14 @@ html[data-browser-chrome="false"][data-section="browser"]
   color: var(--text-soft);
 }
 
+.activity-setup-note {
+  max-width: 760px;
+  margin: -12px 0 24px;
+  color: var(--text-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .activity-list {
   max-width: 980px;
   margin: 0;
@@ -1345,6 +1356,131 @@ html[data-browser-chrome="false"][data-section="browser"]
   border-radius: var(--radius-panel);
   padding: 18px;
   background: var(--surface-raised);
+}
+
+.settings-nav {
+  position: sticky;
+  top: 16px;
+  float: left;
+  width: 170px;
+  display: grid;
+  gap: 4px;
+  margin: 16px 20px 0 0;
+}
+
+html[data-environment="dev"] [data-panel="settings"] {
+  padding: 28px 40px;
+}
+
+html[data-environment="dev"] [data-panel="settings"] .panel-heading {
+  margin-bottom: 18px;
+}
+
+html[data-environment="dev"] [data-panel="settings"] .panel-heading h1 {
+  font-size: 29px;
+}
+
+.settings-nav button {
+  min-height: 38px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav button:hover,
+.settings-nav button[aria-current="page"] {
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.settings-nav button[aria-current="page"] {
+  box-shadow: inset 3px 0 var(--iris);
+}
+
+.settings-nav button:focus-visible,
+.shortcut-controls select:focus-visible {
+  outline: 2px solid var(--iris-bright);
+  outline-offset: 2px;
+}
+
+html[data-environment="dev"] [data-panel="settings"] .settings-group,
+html[data-environment="dev"] [data-panel="settings"] #connection-diagnostics,
+html[data-environment="dev"] [data-panel="settings"] .settings-feedback {
+  margin-left: 190px;
+  max-width: min(940px, calc(100% - 190px));
+}
+
+.shortcut-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.shortcut-controls label {
+  display: grid;
+  gap: 7px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.shortcut-controls select {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+}
+
+#shortcut-feedback[data-state="error"] {
+  color: var(--failed);
+}
+
+#shortcut-feedback[data-state="ready"] {
+  color: var(--complete);
+}
+
+.settings-shortcuts .settings-group-actions {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  justify-content: stretch;
+}
+
+.settings-shortcuts .settings-group-actions > span {
+  grid-column: 1 / -1;
+}
+
+.settings-shortcuts #reset-shortcuts {
+  grid-column: 2;
+}
+
+.settings-shortcuts #apply-shortcuts {
+  grid-column: 3;
+}
+
+@media (max-width: 950px) {
+  .settings-nav {
+    position: static;
+    float: none;
+    width: auto;
+    display: flex;
+    flex-wrap: wrap;
+  }
+
+  html[data-environment="dev"] [data-panel="settings"] .settings-group,
+  html[data-environment="dev"] [data-panel="settings"] #connection-diagnostics,
+  html[data-environment="dev"] [data-panel="settings"] .settings-feedback {
+    margin-left: 0;
+    max-width: 940px;
+  }
 }
 
 .computer-access-group {

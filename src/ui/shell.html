@@ -679,6 +679,10 @@
             shown here.</span
           >
         </div>
+        <p id="activity-setup-note" class="activity-setup-note" hidden>
+          Setup connection checks appear in Setup. The verification conversation
+          stays in ChatGPT.
+        </p>
         <ol class="activity-list" id="activity-list"></ol>
       </section>
 
@@ -686,14 +690,31 @@
         <div class="panel-heading">
           <p>Product configuration</p>
           <h1>Settings</h1>
-          <span
+          <span id="settings-description"
             >Changes are saved to Farol Next state only and read back before
             they are shown as applied.</span
           >
         </div>
+        <nav
+          class="settings-nav"
+          id="settings-nav"
+          aria-label="Settings sections"
+          hidden
+        >
+          <button type="button" data-settings-category="general">
+            General
+          </button>
+          <button type="button" data-settings-category="shortcuts">
+            Keyboard shortcuts
+          </button>
+          <button type="button" data-settings-category="advanced">
+            Advanced
+          </button>
+        </nav>
         <p class="settings-feedback" id="settings-feedback" role="status"></p>
         <section
           class="settings-group"
+          data-settings-page="general"
           aria-labelledby="settings-general-title"
         >
           <header>
@@ -730,6 +751,55 @@
           <div class="settings-group-actions">
             <span>Applies now where possible and on the next launch.</span>
             <button id="apply-general-settings" type="button">Apply</button>
+          </div>
+        </section>
+
+        <section
+          class="settings-group settings-shortcuts"
+          data-settings-page="shortcuts"
+          aria-labelledby="settings-shortcuts-title"
+          hidden
+        >
+          <header>
+            <div>
+              <p>Navigation</p>
+              <h2 id="settings-shortcuts-title">Keyboard shortcuts</h2>
+            </div>
+          </header>
+          <p class="settings-link-copy">
+            Choose a ⌘ number for each Farol section. Pick Off to leave one
+            unbound. The same number cannot open two sections.
+          </p>
+          <div class="shortcut-controls">
+            <label
+              >ChatGPT
+              <select data-shortcut-section="browser"></select
+            ></label>
+            <label
+              >Setup
+              <select data-shortcut-section="computer"></select
+            ></label>
+            <label
+              >Activity
+              <select data-shortcut-section="activity"></select
+            ></label>
+            <label
+              >Settings
+              <select data-shortcut-section="settings"></select
+            ></label>
+          </div>
+          <p
+            id="shortcut-feedback"
+            class="settings-link-copy"
+            role="status"
+          ></p>
+          <div class="settings-group-actions">
+            <span
+              >⌘, still opens Settings. ⌘K opens Quick Switcher. Control-Tab
+              switches open tasks.</span
+            >
+            <button id="reset-shortcuts" type="button">Reset defaults</button>
+            <button id="apply-shortcuts" type="button">Apply shortcuts</button>
           </div>
         </section>
 
@@ -798,7 +868,11 @@
           </div>
         </section>
 
-        <section class="settings-group" aria-labelledby="settings-model-title">
+        <section
+          class="settings-group"
+          data-settings-page="advanced"
+          aria-labelledby="settings-model-title"
+        >
           <header>
             <div>
               <p>Codex connection</p>
@@ -836,6 +910,7 @@
         <details
           class="settings-group diagnostics-group"
           id="diagnostics-group"
+          data-settings-page="advanced"
         >
           <summary>About &amp; Diagnostics</summary>
           <dl class="settings-list" id="settings-list"></dl>

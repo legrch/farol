@@ -5,6 +5,7 @@ export const channels = Object.freeze({
   task: "farol-next:task",
   control: "farol-next:control",
   layout: "farol-next:layout",
+  navigationShortcuts: "farol-next:navigation-shortcuts",
   runtimeEvent: "farol-next:runtime-event",
   runtimeState: "farol-next:runtime-state",
   browserRouteState: "farol-next:browser-route-state",

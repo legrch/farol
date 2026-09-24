@@ -68,6 +68,12 @@ import {
   type CodexContextController,
 } from "./codex-context-runtime";
 import { channels } from "../../pkg/ipc/channels";
+import {
+  defaultNavigationShortcuts,
+  parseNavigationShortcuts,
+  sectionForShortcut,
+  type NavigationShortcuts,
+} from "../../pkg/ipc/navigation-shortcuts";
 import type { ShellActionSource } from "../../pkg/ipc/shell-state";
 import type { RuntimeStatus } from "../../pkg/ipc/runtime-status";
 import type { TaskSurfaceStatus } from "../../pkg/ipc/task-surface-status";
@@ -498,6 +504,9 @@ let selectedTaskId: string = expectedTasks[0]?.taskId ?? "";
 let setupOpen = true;
 let sidebarMode: SidebarMode = "full";
 let shellOverlay: ShellOverlay = "none";
+let navigationShortcuts: NavigationShortcuts = {
+  ...defaultNavigationShortcuts,
+};
 let configuration: ProductConfigurationService | null = null;
 let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
@@ -7311,10 +7320,12 @@ function handleShortcut(input: Input): boolean {
     }
     return true;
   }
-  if (input.meta && /^[1-4]$/u.test(input.key)) {
-    section = ["browser", "computer", "activity", "settings"][
-      Number(input.key) - 1
-    ] as SurfaceSection;
+  const shortcut =
+    input.meta && !input.control && !input.alt && !input.shift
+      ? sectionForShortcut(navigationShortcuts, input.key)
+      : null;
+  if (shortcut) {
+    section = shortcut;
     if (sidebarMode === "overlay") sidebarMode = "rail";
     shellOverlay = "none";
     applyLayout();
@@ -7646,6 +7657,13 @@ function installIpc(): void {
       ? runProductTaskCommand(value)
       : taskFailure("TASKS_UNAVAILABLE"),
   );
+  ipcMain.handle(channels.navigationShortcuts, (event, value: unknown) => {
+    if (!isTrustedIpcSender(event, window)) return { ok: false };
+    const parsed = parseNavigationShortcuts(value);
+    if (!parsed) return { ok: false };
+    navigationShortcuts = parsed;
+    return { ok: true };
+  });
   ipcMain.handle(channels.control, async (event, value: unknown) => {
     if (!isTrustedIpcSender(event, window))
       return { error: "IPC_SENDER_DENIED" };

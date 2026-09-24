@@ -134,6 +134,12 @@ import {
   shouldAdoptConfigurationSnapshot,
 } from "./configuration-request-order";
 import { sidebarToggleLeft } from "./window-chrome-geometry";
+import {
+  defaultNavigationShortcuts,
+  parseNavigationShortcuts,
+  sectionForShortcut,
+  type NavigationShortcuts,
+} from "../pkg/ipc/navigation-shortcuts";
 
 // Refusals that name a transition in progress or an open review finding,
 // so the owner sees why an action is unavailable instead of an error code.
@@ -318,6 +324,7 @@ declare global {
       configure(command: unknown): Promise<unknown>;
       task(command: unknown): Promise<unknown>;
       control(taskId: string, action: string): Promise<unknown>;
+      setNavigationShortcuts(shortcuts: NavigationShortcuts): Promise<unknown>;
       layout(
         section: string,
         taskId: string,
@@ -383,6 +390,22 @@ let setupFocusKey = "";
 let sidebarPreference: Exclude<SidebarMode, "overlay"> = "full";
 let sidebarOverlayOpen = false;
 let shellOverlay: ShellOverlay = "none";
+let settingsCategory: "general" | "shortcuts" | "advanced" = "general";
+const navigationShortcutStorageKey = "farol.next.navigation-shortcuts.v1";
+function storedNavigationShortcuts(): NavigationShortcuts {
+  try {
+    return (
+      parseNavigationShortcuts(
+        JSON.parse(
+          localStorage.getItem(navigationShortcutStorageKey) ?? "null",
+        ),
+      ) ?? { ...defaultNavigationShortcuts }
+    );
+  } catch {
+    return { ...defaultNavigationShortcuts };
+  }
+}
+let navigationShortcuts = storedNavigationShortcuts();
 
 /**
  * Every write to `shellOverlay` goes through here, so a run can say which
@@ -1123,8 +1146,19 @@ function renderSignals(): void {
       const signal = signals[route];
       const badge = button.querySelector<HTMLElement>(".nav-signal");
       if (!badge) return;
+      const digit = navigationShortcuts[route];
       const shortcut =
-        route === "settings" ? "⌘," : `⌘${sections.indexOf(route) + 1}`;
+        route === "settings"
+          ? digit === 0
+            ? "⌘,"
+            : `⌘, or ⌘${digit}`
+          : digit === 0
+            ? "no assigned key"
+            : `⌘${digit}`;
+      const keyHint = button.querySelector<HTMLElement>("kbd");
+      if (keyHint)
+        keyHint.textContent =
+          route === "settings" ? "⌘," : digit === 0 ? "" : `⌘${digit}`;
       const base = `${route.charAt(0).toUpperCase()}${route.slice(1)} (${shortcut})`;
       if (!signal) {
         badge.hidden = true;
@@ -1730,6 +1764,8 @@ function renderComputer(): void {
 }
 
 function renderActivity(): void {
+  required<HTMLElement>("#activity-setup-note").hidden =
+    bootstrap.environment !== "dev";
   const list = required<HTMLOListElement>("#activity-list");
   const technical =
     bootstrap.configuration.status === "ready" &&
@@ -3317,7 +3353,109 @@ function connectorChallengeCard(
   return card;
 }
 
+function renderSettingsNavigation(): void {
+  const enabled = bootstrap.environment === "dev" && !bootstrap.demoMode;
+  required<HTMLElement>("#settings-description").textContent = enabled
+    ? "Preferences are saved in this Farol Dev profile."
+    : "Changes are saved to Farol Next state only and read back before they are shown as applied.";
+  required<HTMLElement>("#settings-nav").hidden = !enabled;
+  document
+    .querySelectorAll<HTMLButtonElement>("#settings-nav button")
+    .forEach((button) => {
+      if (enabled && button.dataset.settingsCategory === settingsCategory)
+        button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    });
+  required<HTMLElement>('[data-panel="settings"]')
+    .querySelectorAll<HTMLElement>(
+      ":scope > .settings-group, :scope > #connection-diagnostics",
+    )
+    .forEach((group) => {
+      group.hidden = enabled
+        ? group.dataset.settingsPage !== settingsCategory
+        : group.dataset.settingsPage === "shortcuts";
+    });
+}
+
+function shortcutSelects(): HTMLSelectElement[] {
+  return [
+    ...document.querySelectorAll<HTMLSelectElement>(
+      ".settings-shortcuts [data-shortcut-section]",
+    ),
+  ];
+}
+
+function setShortcutDraft(shortcuts: NavigationShortcuts): void {
+  for (const select of shortcutSelects()) {
+    const section = select.dataset.shortcutSection as keyof NavigationShortcuts;
+    select.value = String(shortcuts[section]);
+  }
+}
+
+let shortcutSaveBusy = false;
+async function applyShortcutDraft(): Promise<void> {
+  if (shortcutSaveBusy) return;
+  const values = Object.fromEntries(
+    shortcutSelects().map((select) => [
+      select.dataset.shortcutSection,
+      Number(select.value),
+    ]),
+  );
+  const parsed = parseNavigationShortcuts(values);
+  const feedback = required<HTMLElement>("#shortcut-feedback");
+  if (!parsed) {
+    feedback.textContent =
+      "Give each section a different ⌘ number, or choose Off.";
+    feedback.dataset.state = "error";
+    return;
+  }
+  let previous: string | null;
+  try {
+    previous = localStorage.getItem(navigationShortcutStorageKey);
+    localStorage.setItem(navigationShortcutStorageKey, JSON.stringify(parsed));
+  } catch {
+    feedback.textContent = "Shortcuts could not be saved in this profile.";
+    feedback.dataset.state = "error";
+    return;
+  }
+  shortcutSaveBusy = true;
+  let applied: unknown;
+  try {
+    applied = await window.farolNext.setNavigationShortcuts(parsed);
+  } catch {
+    shortcutSaveBusy = false;
+    feedback.textContent =
+      "Saved for the next launch, but the active shortcut change was not confirmed. Restart Farol Dev before relying on it.";
+    feedback.dataset.state = "error";
+    return;
+  }
+  shortcutSaveBusy = false;
+  if (
+    typeof applied !== "object" ||
+    applied === null ||
+    !("ok" in applied) ||
+    applied.ok !== true
+  ) {
+    try {
+      if (previous === null)
+        localStorage.removeItem(navigationShortcutStorageKey);
+      else localStorage.setItem(navigationShortcutStorageKey, previous);
+    } catch {
+      // The next launch will re-validate the saved value before activation.
+    }
+    feedback.textContent =
+      "The shortcut change was refused. Review your choices.";
+    feedback.dataset.state = "error";
+    return;
+  }
+  navigationShortcuts = parsed;
+  feedback.textContent = "Shortcuts saved for this Farol profile.";
+  feedback.dataset.state = "ready";
+  render();
+}
+
 function renderSettings(): void {
+  renderSettingsNavigation();
   const configured = bootstrap.configuration;
   const values = [
     [
@@ -5085,6 +5223,10 @@ function selectTask(taskId: string): void {
 
 function selectSection(next: SurfaceSection): void {
   if (!sections.includes(next)) return;
+  if (next === "settings" && section !== "settings") {
+    settingsFeedback = "";
+    settingsFeedbackError = false;
+  }
   section = next;
   sidebarOverlayOpen = false;
   setShellOverlay("none");
@@ -5370,6 +5512,21 @@ async function start(): Promise<void> {
   });
 
   bootstrap = bootstrapSchema.parse(await window.farolNext.bootstrap());
+  if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
+    try {
+      const applied =
+        await window.farolNext.setNavigationShortcuts(navigationShortcuts);
+      if (
+        typeof applied !== "object" ||
+        applied === null ||
+        !("ok" in applied) ||
+        applied.ok !== true
+      )
+        navigationShortcuts = { ...defaultNavigationShortcuts };
+    } catch {
+      navigationShortcuts = { ...defaultNavigationShortcuts };
+    }
+  }
   applyProductIdentity();
   windowState = bootstrap.windowState;
   selectedTaskId = bootstrap.tasks[0]?.taskId ?? "";
@@ -5423,6 +5580,7 @@ async function start(): Promise<void> {
     },
     openSettings: () => selectSection("settings"),
     openDiagnostics: () => {
+      settingsCategory = "advanced";
       selectSection("settings");
       const diagnostics = required<HTMLDetailsElement>(
         "#connection-diagnostics",
@@ -5439,10 +5597,49 @@ async function start(): Promise<void> {
   if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
     const diagnostics = required<HTMLDetailsElement>("#connection-diagnostics");
     diagnostics.open = false;
+    diagnostics.dataset.settingsPage = "advanced";
     required('[data-panel="settings"]').append(diagnostics);
     required("#connection-diagnostics > summary").textContent =
       "Connection diagnostics";
   }
+  for (const select of shortcutSelects()) {
+    select.replaceChildren(
+      ...[
+        { value: 0, label: "Off" },
+        ...[1, 2, 3, 4].map((digit) => ({
+          value: digit,
+          label: `⌘${digit}`,
+        })),
+      ].map(({ value, label }) => {
+        const option = document.createElement("option");
+        option.value = String(value);
+        option.textContent = label;
+        return option;
+      }),
+    );
+  }
+  setShortcutDraft(navigationShortcuts);
+  document
+    .querySelectorAll<HTMLButtonElement>("#settings-nav button")
+    .forEach((button) => {
+      button.addEventListener("click", () => {
+        settingsCategory = button.dataset
+          .settingsCategory as typeof settingsCategory;
+        render();
+        required<HTMLElement>('[data-panel="settings"]').scrollTop = 0;
+      });
+    });
+  required<HTMLButtonElement>("#apply-shortcuts").addEventListener(
+    "click",
+    applyShortcutDraft,
+  );
+  required<HTMLButtonElement>("#reset-shortcuts").addEventListener(
+    "click",
+    () => {
+      setShortcutDraft(defaultNavigationShortcuts);
+      applyShortcutDraft();
+    },
+  );
 
   document
     .querySelectorAll<HTMLButtonElement>(".nav-item")
@@ -6054,10 +6251,12 @@ async function start(): Promise<void> {
       closeOverlay();
       return;
     }
-    if (event.metaKey && /^[1-4]$/u.test(event.key)) {
-      event.preventDefault();
-      const next = sections[Number(event.key) - 1];
-      if (next) selectSection(next);
+    if (event.metaKey && !event.altKey && !event.ctrlKey && !event.shiftKey) {
+      const next = sectionForShortcut(navigationShortcuts, event.key);
+      if (next) {
+        event.preventDefault();
+        selectSection(next);
+      }
     } else if (event.ctrlKey && event.key === "Tab") {
       event.preventDefault();
       if (bootstrap.tasks.length === 0) return;
