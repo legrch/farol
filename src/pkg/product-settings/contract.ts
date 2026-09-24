@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { CHATGPT_MODEL_ID, FAROL_PROVIDER_ID } from "../model-route/contract";
+import {
+  CHATGPT_MODEL_ID,
+  FAROL_PROVIDER_ID,
+} from "../model-route/contract.ts";
 
 const CanonicalTimestampSchema = z.string().refine((value) => {
   const parsed = new Date(value);

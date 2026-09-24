@@ -17,6 +17,7 @@
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "@next/*": ["./src/*"]
     },
