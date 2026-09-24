@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 //
 // What the predicate does when it runs is covered by the eight cases in
 // `tests/unit/ipc-sender.test.ts`, which call `isTrustedIpcSender` directly.
-// What no runtime test can cover is the handler nobody wrote yet: the six
+// What no runtime test can cover is the handler nobody wrote yet: the seven
 // registrations live inside `installIpc` in `main.ts`, which exports nothing
 // and which no test loads, so there is no way to enumerate them by calling
-// anything. The regression this file exists for is a SEVENTH privileged
+// anything. The regression this file exists for is another privileged
 // channel, registered next year by someone who does not notice that checking
 // the sender is part of registering one.
 //
@@ -21,9 +21,9 @@ import { describe, expect, it } from "vitest";
 // matches text rather than understanding it. It catches the one mistake that
 // is actually likely, which is forgetting.
 //
-// Note on scope: `channels` declares twelve names, and only these six are
-// renderer-to-main. The other six are main-to-renderer sends and correctly
-// have no sender check, which is why this counts registrations rather than
+// Note on scope: only these seven channels are renderer-to-main. The others
+// are main-to-renderer sends and correctly have no sender check, which is why
+// this counts registrations rather than
 // iterating the channel list — a test built on the channel list would demand
 // checks on outbound channels and be wrong.
 
@@ -65,6 +65,7 @@ describe("privileged IPC registration contract", () => {
       "snapshot",
       "configuration",
       "task",
+      "navigationShortcuts",
       "control",
       "layout",
     ]);
@@ -76,8 +77,8 @@ describe("privileged IPC registration contract", () => {
   });
 
   it("S35-TA-9 no registration compares the sender inline instead of using the predicate", async () => {
-    // The six copies this replaced were each correct; six copies is how the
-    // seventh comes to be written without one. A reviewer looking for the
+    // The existing copies were each correct; repetition is how another
+    // handler comes to be written without one. A reviewer looking for the
     // check should find one spelling of it, not a family of them.
     const source = await fs.readFile(mainSource, "utf8");
     expect(source).not.toContain("event.sender === window?.webContents");
