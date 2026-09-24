@@ -38,6 +38,18 @@ export function onboardingPrerequisite(
   return prerequisites.find((index) => progress[index] !== true) ?? null;
 }
 
+// Share the remembered-step decision between the button label and its click.
+export function completedStepAction(
+  step: number,
+  current: readonly boolean[],
+  remembered: readonly boolean[],
+): "continue" | "reconnect-and-continue" | null {
+  if (step < 0 || step >= 4) return null;
+  if (step === 2 && remembered[2] && !current[2] && !remembered[3])
+    return "reconnect-and-continue";
+  return current[step] || remembered[step] ? "continue" : null;
+}
+
 export function progressWithConnectionDraft(
   progress: readonly boolean[],
   changed: boolean,

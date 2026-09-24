@@ -27,7 +27,7 @@ const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
 const chatGptFixture = createServer((_request, response) => {
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   response.end(
-    '<!doctype html><html><head><title>ChatGPT sign-in fixture</title></head><body style="background:#f5f5f5;color:#202020;font:24px sans-serif;padding:48px"><h1>ChatGPT sign-in fixture</h1><button>Log in</button></body></html>',
+    '<!doctype html><html><head><title>ChatGPT sign-in fixture</title></head><body style="background:#f5f5f5;color:#202020;font:24px sans-serif;padding:48px"><h1>ChatGPT sign-in fixture</h1><button>Log in</button><button id="fixture-sidebar-toggle" style="pointer-events:none" aria-label="Close sidebar" aria-expanded="true" onclick="this.setAttribute(\'aria-label\', \'Open sidebar\'); this.setAttribute(\'aria-expanded\', \'false\')">Toggle sidebar</button></body></html>',
   );
 });
 await new Promise((resolve) => chatGptFixture.listen(0, "127.0.0.1", resolve));
@@ -320,6 +320,31 @@ try {
     },
   );
   assert.deepEqual(signInSurface, { windows: 1, pages: 1, pageTop: 52 });
+  assert.equal(
+    await application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+      const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.getVisible() &&
+          child.webContents.getURL().startsWith("http://127.0.0.1:"),
+      );
+      if (!page) throw new Error("CHATGPT_SIDEBAR_FIXTURE_MISSING");
+      return page.webContents.executeJavaScript(
+        `new Promise((resolve) => {
+          const timer = setInterval(() => {
+            if (document.querySelector('#fixture-sidebar-toggle')?.getAttribute('aria-label') === 'Open sidebar') {
+              clearInterval(timer);
+              resolve(true);
+            }
+          }, 50);
+          setTimeout(() => { clearInterval(timer); resolve(false); }, 3000);
+        })`,
+        true,
+      );
+    }),
+    true,
+    "CHATGPT_HOME_SIDEBAR_NOT_COLLAPSED",
+  );
   assert.equal(
     await application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
       const page = BrowserWindow.getAllWindows()[0].contentView.children.find(
@@ -624,6 +649,11 @@ try {
   await window
     .locator('#onboarding-primary:not(:disabled):text("Continue")')
     .waitFor();
+  await window.locator("#onboarding-primary").click();
+  await window
+    .locator('[data-onboarding-content="app"]')
+    .waitFor({ state: "visible" });
+  await window.locator('[data-onboarding-step="tunnel"]').click();
   const activeConfiguration = (
     await window.evaluate(() => window.farolNext.bootstrap())
   ).configuration;
@@ -814,6 +844,12 @@ try {
   await window.locator("#task-tabs .task-tab").waitFor({ state: "hidden" });
   await window.locator('.nav-item[data-section="settings"]').click();
   await window.locator("#settings-nav").waitFor({ state: "visible" });
+  assert.equal(await window.locator("#nav").isVisible(), false);
+  assert.equal(
+    await window.locator('.nav-utility [data-section="settings"]').isVisible(),
+    false,
+  );
+  assert.equal(await window.locator("#settings-return").isVisible(), true);
   assert.equal(
     await window
       .locator("#settings-nav")
@@ -923,6 +959,7 @@ try {
   await window.locator("#settings-general-title").waitFor({
     state: "visible",
   });
+  await window.locator("#settings-return").click();
   await window.locator('.nav-item[data-section="activity"]').click();
   await window.locator("#activity-setup-note").waitFor({ state: "visible" });
   console.log(

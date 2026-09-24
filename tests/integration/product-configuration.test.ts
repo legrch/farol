@@ -537,6 +537,12 @@ describe("Farol Next product configuration", () => {
                 receiptSha256: "e".repeat(64),
                 verifiedAt: "2026-09-16T10:00:00.000Z",
               },
+              lastVerifiedAttachment: {
+                workspaceId,
+                runtimeGeneration: "b".repeat(64),
+                computerGeneration,
+                buildId: "c".repeat(64),
+              },
               challenge: null,
             },
           },
@@ -574,6 +580,29 @@ describe("Farol Next product configuration", () => {
       "utf8",
     );
     expect(saved).not.toMatch(/api[-_ ]?key|secret|bearer/iu);
+
+    const previousProfile = service.snapshot();
+    if (previousProfile.status !== "ready")
+      throw new Error("FIXTURE_NOT_READY");
+    previousProfile.settings.connectors.secureMcp.lastVerifiedAttachment = null;
+    await new ProductSettingsStore({ root }).save(previousProfile.settings);
+    const migrated = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await migrated.initialize();
+    const migratedSnapshot = migrated.snapshot();
+    expect(migratedSnapshot).toMatchObject({
+      status: "ready",
+      settings: {
+        connectors: {
+          secureMcp: {
+            lastVerifiedAttachment:
+              previousProfile.settings.connectors.secureMcp.attachment,
+          },
+        },
+      },
+    });
   });
 
   it("invalidates connector runtime and attachment when Computer authority changes", async () => {
@@ -721,6 +750,12 @@ describe("Farol Next product configuration", () => {
               runtime: null,
               challenge: null,
               attachment: null,
+              lastVerifiedAttachment: {
+                workspaceId,
+                runtimeGeneration: "b".repeat(64),
+                computerGeneration,
+                buildId: "c".repeat(64),
+              },
             },
           },
           setup: {

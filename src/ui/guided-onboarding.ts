@@ -207,20 +207,32 @@ export function onboardingCompletedSteps(
         );
       }));
   const runtime = connector.runtime;
-  const connection =
+  const configuredConnection =
     folder &&
     workspaceIds.size > 0 &&
     connector.tunnelClient !== null &&
     connector.credential === "stored" &&
-    connector.tunnelId !== null &&
+    connector.tunnelId !== null;
+  const previouslyVerified = connector.lastVerifiedAttachment;
+  const priorAppCheck =
+    configuredConnection &&
+    previouslyVerified !== null &&
+    previouslyVerified.tunnelId === connector.tunnelId &&
+    previouslyVerified.connectorGeneration === connector.generation &&
+    previouslyVerified.computerGeneration === settings.computer.generation &&
+    previouslyVerified.workspaceId === witness?.workspaceId &&
+    workspaceIds.has(previouslyVerified.workspaceId);
+  const currentConnection =
+    configuredConnection &&
     runtime?.state === "ready" &&
     runtime.buildId === witness?.buildId &&
     runtime.computerGeneration === settings.computer.generation &&
     runtime.connectorGeneration === connector.generation &&
     !settings.setup.connect.outcomeUnknown;
+  const connection = currentConnection || priorAppCheck;
   const attachment = connector.attachment;
-  const app =
-    connection &&
+  const currentAppCheck =
+    currentConnection &&
     attachment !== null &&
     settings.setup.connect.verified !== null &&
     attachment.buildId === runtime?.buildId &&
@@ -229,6 +241,7 @@ export function onboardingCompletedSteps(
     attachment.computerGeneration === settings.computer.generation &&
     attachment.runtimeGeneration === runtime?.runtimeGeneration &&
     attachment.workspaceId === witness?.workspaceId;
+  const app = priorAppCheck || currentAppCheck;
   return [chat, folder, connection, app, chat && folder && connection && app];
 }
 

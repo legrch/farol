@@ -56,6 +56,27 @@ describe("guided onboarding progress", () => {
     expect(onboardingCompletedSteps(settings)[4]).toBe(false);
   });
 
+  it("remembers a successful app check after its runtime stops, without claiming live access", () => {
+    const settings = guidedSettingsFixture();
+    settings.connectors.secureMcp.lastVerifiedAttachment =
+      settings.connectors.secureMcp.attachment;
+    settings.connectors.secureMcp.runtime = null;
+    settings.connectors.secureMcp.attachment = null;
+    settings.setup.connect.verified = null;
+    expect(onboardingCompletedSteps(settings)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(
+      onboardingProgress(onboardingFacts(settings, fixtureBuildId)),
+    ).toEqual([true, true, false, false, false]);
+    settings.connectors.secureMcp.generation += 1;
+    expect(onboardingCompletedSteps(settings)[3]).toBe(false);
+  });
+
   it("does not carry a saved completion across a changed folder or attachment", () => {
     const settings = guidedSettingsFixture();
     settings.computer.workspaces[0]!.rootIdentity!.inode = "changed";

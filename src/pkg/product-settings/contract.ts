@@ -138,6 +138,9 @@ export const SecureMcpConnectorSchema = z.strictObject({
   runtime: SecureMcpRuntimeSchema.nullable(),
   challenge: SecureMcpChallengeSchema.nullable().default(null),
   attachment: SecureMcpAttachmentSchema.nullable(),
+  // A completed onboarding check survives a runtime restart. It is historical
+  // evidence only; live Computer access still requires the current attachment.
+  lastVerifiedAttachment: SecureMcpAttachmentSchema.nullable().default(null),
 });
 
 const DefaultSecureMcpConnector = {
@@ -149,6 +152,7 @@ const DefaultSecureMcpConnector = {
   runtime: null,
   challenge: null,
   attachment: null,
+  lastVerifiedAttachment: null,
 };
 
 const ProductRelativePathSchema = z.string().refine((value) => {

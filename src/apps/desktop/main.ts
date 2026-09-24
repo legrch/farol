@@ -8159,6 +8159,7 @@ async function main(): Promise<void> {
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
+    collapseSidebarByDefault: runtimeEnvironment === "dev",
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),

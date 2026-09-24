@@ -4985,6 +4985,13 @@ function render(notify = true): void {
     settingsFeedbackError,
   );
   if (guidedEnabled) {
+    // Settings and Setup each own the rail while open. Keep the product
+    // sections in the app rail, not alongside either journey's navigation.
+    required<HTMLElement>("#nav").hidden =
+      section === "computer" || section === "settings";
+    required<HTMLButtonElement>(
+      '.nav-utility .nav-item[data-section="settings"]',
+    ).hidden = section === "settings";
     const pendingApproval = pendingComputerTask() !== null;
     required<HTMLElement>("#connection-permission").hidden = !pendingApproval;
     required<HTMLElement>("#connection-scope").hidden = true;

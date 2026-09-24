@@ -9,6 +9,7 @@ import {
   onboardingSteps,
 } from "./guided-onboarding";
 import {
+  completedStepAction,
   connectionDraftChanged,
   firstIncompleteSetupStep,
   GuidedConnectionUpdate,
@@ -332,6 +333,13 @@ export class GuidedOnboardingView {
     const step = onboardingSteps[this.step]!;
     const complete = progress[this.step] === true;
     const prerequisite = onboardingPrerequisite(this.step, currentProgress);
+    const actionPrerequisite =
+      this.step === 3 && complete ? null : prerequisite;
+    const completedAction = completedStepAction(
+      this.step,
+      currentProgress,
+      completed,
+    );
     const unknown = facts.outcomeUnknown && this.step >= 2 && this.step < 4;
     if (active)
       element("#window-mode").textContent = currentProgress[4]
@@ -405,21 +413,23 @@ export class GuidedOnboardingView {
             ? "Continue without local access"
             : this.step === 2 && editing
               ? "Save credentials"
-              : prerequisite !== null
-                ? `Go to ${onboardingSteps[prerequisite]!.label}`
-                : complete
-                  ? "Continue"
-                  : this.step === 0
-                    ? this.signInOpened
-                      ? "Check sign-in"
-                      : "Sign in to ChatGPT"
-                    : this.step === 1
-                      ? "Add folder…"
-                      : this.step === 2
-                        ? facts.runtime === "stopped"
-                          ? "Activate and check"
-                          : "Reconnect and check"
-                        : "Verify app";
+              : actionPrerequisite !== null
+                ? `Go to ${onboardingSteps[actionPrerequisite]!.label}`
+                : completedAction === "reconnect-and-continue"
+                  ? "Reconnect and continue"
+                  : completedAction === "continue"
+                    ? "Continue"
+                    : this.step === 0
+                      ? this.signInOpened
+                        ? "Check sign-in"
+                        : "Sign in to ChatGPT"
+                      : this.step === 1
+                        ? "Add folder…"
+                        : this.step === 2
+                          ? facts.runtime === "stopped"
+                            ? "Activate and check"
+                            : "Reconnect and check"
+                          : "Verify app";
     const back = element<HTMLButtonElement>("#onboarding-back");
     back.disabled = this.busy;
     back.hidden = this.step === 4;
@@ -900,7 +910,11 @@ export class GuidedOnboardingView {
       } else this.message = failureMessages[result.reason];
     });
   }
-  private async applyConnection(reconnect = false): Promise<void> {
+  private async applyConnection(
+    reconnect = false,
+    continueOnReady = false,
+  ): Promise<void> {
+    let ready = false;
     await this.perform(
       reconnect ? "Reconnecting and checking…" : "Activating and checking…",
       async () => {
@@ -915,6 +929,7 @@ export class GuidedOnboardingView {
           reconnect,
         );
         if (result.ok) {
+          ready = true;
           this.failedChecks.delete(2);
           this.message =
             "✓ Tunnel connection verified. Check the ChatGPT app next.";
@@ -932,6 +947,7 @@ export class GuidedOnboardingView {
         }
       },
     );
+    if (ready && continueOnReady) this.select(3);
   }
   private async checkAttachment(): Promise<void> {
     await this.perform("Checking the previous result…", async () => {
@@ -1077,12 +1093,22 @@ export class GuidedOnboardingView {
       await this.saveCredentials();
       return;
     }
+    const completed = onboardingCompletedSteps(this.port.settings());
+    const completedAction = completedStepAction(this.step, progress, completed);
+    if (this.step === 3 && completedAction === "continue") {
+      this.select(4);
+      return;
+    }
     const prerequisite = onboardingPrerequisite(this.step, progress);
     if (prerequisite !== null) {
       this.select(prerequisite);
       return;
     }
-    if (progress[this.step]) {
+    if (completedAction === "reconnect-and-continue") {
+      await this.applyConnection(true, true);
+      return;
+    }
+    if (completedAction === "continue") {
       this.select(this.step + 1);
       return;
     }

@@ -652,6 +652,42 @@ export class ProductConfigurationService {
         this.current = invalidateUnboundComputerVerification(this.current);
       }
     }
+    // Older Dev profiles stored only the live attachment. Capture a valid
+    // saved proof before a later runtime restart clears that live field.
+    const connector = this.current.connectors.secureMcp;
+    const attachment = connector.attachment;
+    const runtime = connector.runtime;
+    const verified = this.current.setup.connect.verified;
+    if (
+      connector.lastVerifiedAttachment === null &&
+      attachment !== null &&
+      runtime?.state === "ready" &&
+      connector.tunnelId === attachment.tunnelId &&
+      connector.generation === attachment.connectorGeneration &&
+      runtime.runtimeGeneration === attachment.runtimeGeneration &&
+      runtime.buildId === attachment.buildId &&
+      runtime.computerGeneration === attachment.computerGeneration &&
+      this.current.computer.generation === attachment.computerGeneration &&
+      verified?.configRevision === attachment.connectorGeneration &&
+      verified.workspaceId === attachment.workspaceId &&
+      verified.runtimeGeneration === attachment.runtimeGeneration &&
+      verified.buildId === attachment.buildId &&
+      this.current.computer.workspaces.some(
+        (workspace) => workspace.workspaceId === attachment.workspaceId,
+      )
+    ) {
+      await this.mutate((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: {
+          ...settings.connectors,
+          secureMcp: {
+            ...settings.connectors.secureMcp,
+            lastVerifiedAttachment: attachment,
+          },
+        },
+      }));
+    }
   }
 
   snapshot(): ProductConfigurationSnapshot {
@@ -909,7 +945,12 @@ export class ProductConfigurationService {
         revision: settings.revision + 1,
         connectors: {
           ...settings.connectors,
-          secureMcp: { ...current, challenge: null, attachment },
+          secureMcp: {
+            ...current,
+            challenge: null,
+            attachment,
+            lastVerifiedAttachment: attachment,
+          },
         },
         setup: {
           ...settings.setup,

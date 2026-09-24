@@ -5,6 +5,7 @@ import {
   type OnboardingFacts,
 } from "../../src/ui/guided-onboarding";
 import {
+  completedStepAction,
   connectionDraftChanged,
   firstIncompleteSetupStep,
   GuidedConnectionUpdate,
@@ -20,6 +21,22 @@ import {
 const saved = (): OnboardingFacts =>
   onboardingFacts(guidedSettingsFixture(), fixtureBuildId);
 const replacement = "synthetic-replacement-key-not-a-secret";
+
+it("aligns Continue with remembered setup and refreshes a stale connection before app verification", () => {
+  const current = [true, true, false, false, false];
+  expect(
+    completedStepAction(2, current, [true, true, true, false, false]),
+  ).toBe("reconnect-and-continue");
+  expect(completedStepAction(3, current, [true, true, true, true, true])).toBe(
+    "continue",
+  );
+  expect(completedStepAction(2, current, [true, true, true, true, true])).toBe(
+    "continue",
+  );
+  expect(
+    completedStepAction(3, current, [true, true, true, false, false]),
+  ).toBe(null);
+});
 function harness(initial = saved()) {
   let current = { ...initial };
   const run = vi.fn(async (command: ProductConfigurationCommand) => {

@@ -333,11 +333,12 @@ function collapseChatGptSidebarScript(): string {
       const close = [...document.querySelectorAll("button[aria-label]")].find(
         (candidate) => labels.has(candidate.getAttribute("aria-label")) &&
           candidate.getAttribute("aria-expanded") !== "false" &&
-          getComputedStyle(candidate).pointerEvents !== "none"
+          candidate.getClientRects().length > 0 &&
+          !candidate.disabled
       );
       if (!close) {
         const open = document.querySelector('button[aria-label="Open sidebar"][aria-expanded="false"]');
-        if (open && getComputedStyle(open).pointerEvents !== "none") clearInterval(timer);
+        if (open) clearInterval(timer);
         return;
       }
       // The first click can happen before ChatGPT hydrates its handler. Only
