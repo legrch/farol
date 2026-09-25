@@ -196,8 +196,9 @@ export function readPublicAssistantMessages(
     // message, infer a tool execution, or use model/browser internal state.
     const declared = assistant.getAttribute("data-message-channel");
     if (
-      declared !== null &&
-      !["final", "commentary", "status"].includes(declared)
+      declared !== "final" &&
+      declared !== "commentary" &&
+      declared !== "status"
     ) {
       throw new Error("CHATGPT_PUBLIC_CHANNEL_UNSUPPORTED");
     }

@@ -113,6 +113,7 @@ const message = (
     {
       "data-message-id": "a",
       "data-message-author-role": "assistant",
+      "data-message-channel": "final",
       ...attributes,
     },
     [el("div", { class: "markdown" }, content)],
@@ -131,6 +132,7 @@ describe("candidate public assistant DOM profile", () => {
     const mounting = el("div", {
       "data-message-id": "a",
       "data-message-author-role": "assistant",
+      "data-message-channel": "final",
     });
     expect(read([mounting])[0]).toMatchObject({ text: null, complete: false });
     expect(read([message([el("table")], false)])[0]).toMatchObject({
@@ -213,6 +215,13 @@ describe("candidate public assistant DOM profile", () => {
       throw new Error("ANALYSIS_READ");
     };
     expect(() => read([analysis])).toThrow(
+      "CHATGPT_PUBLIC_CHANNEL_UNSUPPORTED",
+    );
+  });
+  it("rejects assistant messages without an explicit public channel", () => {
+    const unclassified = message([el("p", {}, ["unclassified content"])]);
+    delete unclassified.attributes["data-message-channel"];
+    expect(() => read([unclassified])).toThrow(
       "CHATGPT_PUBLIC_CHANNEL_UNSUPPORTED",
     );
   });
