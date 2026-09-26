@@ -251,15 +251,7 @@ function hasRequestMethod(
   params: string,
   standaloneParams: unknown,
 ): boolean {
-  const embeddedParams = child(schema, "definitions", params);
-  if (!record(embeddedParams) || !record(standaloneParams)) return false;
-  const {
-    $schema: _schema,
-    definitions: _definitions,
-    title: _title,
-    ...standaloneShape
-  } = standaloneParams;
-  if (!isDeepStrictEqual(embeddedParams, standaloneShape)) return false;
+  if (!matchingDefinitionGraph(schema, standaloneParams, params)) return false;
   return array(child(schema, "oneOf")).some(
     (candidate) =>
       array(child(candidate, "properties", "method", "enum")).includes(
@@ -270,6 +262,115 @@ function hasRequestMethod(
       ) &&
       child(candidate, "properties", "params", "$ref") ===
         `#/definitions/${params}`,
+  );
+}
+
+function referencedDefinitions(value: unknown): string[] | null {
+  const found: string[] = [];
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const next = pending.pop();
+    if (Array.isArray(next)) {
+      for (const item of next) pending.push(item);
+    } else if (record(next)) {
+      if ("$ref" in next) {
+        if (
+          typeof next.$ref !== "string" ||
+          !/^#\/definitions\/[A-Za-z0-9_]+$/u.test(next.$ref)
+        )
+          return null;
+        found.push(next.$ref.slice("#/definitions/".length));
+      }
+      for (const item of Object.values(next)) pending.push(item);
+    }
+  }
+  return found;
+}
+
+function matchingDefinitionGraph(
+  client: unknown,
+  standalone: unknown,
+  rootName: string,
+): boolean {
+  if (!record(standalone)) return false;
+  const clientDefinitions = child(client, "definitions");
+  const standaloneDefinitions = child(standalone, "definitions");
+  if (!record(clientDefinitions)) return false;
+  const pending = [rootName];
+  const seen = new Set<string>();
+  while (pending.length > 0) {
+    const name = pending.pop()!;
+    if (seen.has(name)) continue;
+    if (seen.size >= 512) return false;
+    seen.add(name);
+    const embedded = clientDefinitions[name];
+    const expected =
+      name === rootName
+        ? Object.fromEntries(
+            Object.entries(standalone).filter(
+              ([key]) => !["$schema", "definitions", "title"].includes(key),
+            ),
+          )
+        : record(standaloneDefinitions)
+          ? standaloneDefinitions[name]
+          : undefined;
+    if (
+      !record(embedded) ||
+      !record(expected) ||
+      !isDeepStrictEqual(embedded, expected)
+    )
+      return false;
+    const references = referencedDefinitions(embedded);
+    if (references === null) return false;
+    for (const reference of references) pending.push(reference);
+  }
+  return true;
+}
+
+function hasEnumValues(schema: unknown, ...values: string[]): boolean {
+  if (!record(schema)) return false;
+  const candidates = schema.oneOf ? array(schema.oneOf) : [schema];
+  return values.every((value) =>
+    candidates.some(
+      (candidate) =>
+        child(candidate, "type") === "string" &&
+        array(child(candidate, "enum")).includes(value),
+    ),
+  );
+}
+
+function supportsHandoffValues(
+  client: unknown,
+  turnsResponse: unknown,
+): boolean {
+  const definitions = child(client, "definitions");
+  const textInput = array(child(definitions, "UserInput", "oneOf")).some(
+    (variant) =>
+      array(child(variant, "properties", "type", "enum")).includes("text") &&
+      child(variant, "properties", "text", "type") === "string" &&
+      hasRequired(variant, "type", "text"),
+  );
+  return (
+    hasEnumValues(
+      child(definitions, "SandboxMode"),
+      "read-only",
+      "workspace-write",
+    ) &&
+    hasEnumValues(
+      child(definitions, "AskForApproval"),
+      "untrusted",
+      "on-request",
+    ) &&
+    hasEnumValues(child(definitions, "TurnItemsView"), "notLoaded") &&
+    child(definitions, "ReasoningEffort", "type") === "string" &&
+    textInput &&
+    hasEnumValues(
+      child(turnsResponse, "definitions", "TurnStatus"),
+      "completed",
+      "interrupted",
+      "failed",
+      "inProgress",
+    )
   );
 }
 
@@ -479,7 +580,11 @@ export async function inspectCodexHandoffHostContract(
     ) ||
     !hasFieldShapes(schemas, HANDOFF_FIELDS) ||
     !hasFieldShapes(schemas, HANDOFF_DEFINITION_FIELDS) ||
-    !hasRequiredFields(schemas)
+    !hasRequiredFields(schemas) ||
+    !supportsHandoffValues(
+      client,
+      schemas.get("v2/ThreadTurnsListResponse.json"),
+    )
   ) {
     contractError("CODEX_HOST_HANDOFF_UNAVAILABLE");
   }

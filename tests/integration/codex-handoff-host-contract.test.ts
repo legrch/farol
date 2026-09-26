@@ -175,6 +175,10 @@ async function schemaRoot(
       required: ["data"],
       properties: { data: list("Turn"), nextCursor: optional("string") },
       definitions: {
+        TurnStatus: {
+          type: "string",
+          enum: ["completed", "interrupted", "failed", "inProgress"],
+        },
         Turn: {
           required: ["id", "status"],
           properties: { id: typed("string"), status: ref("TurnStatus") },
@@ -183,6 +187,46 @@ async function schemaRoot(
     },
     ...overrides,
   };
+  const sharedDefinitions = {
+    SandboxMode: { type: "string", enum: ["read-only", "workspace-write"] },
+    AskForApproval: {
+      oneOf: [{ type: "string", enum: ["untrusted", "on-request"] }],
+    },
+    DynamicToolSpec: { type: "object" },
+    UserInput: {
+      oneOf: [
+        {
+          type: "object",
+          required: ["type", "text"],
+          properties: {
+            type: { type: "string", enum: ["text"] },
+            text: typed("string"),
+          },
+        },
+      ],
+    },
+    ReasoningEffort: typed("string"),
+    SandboxPolicy: { type: "object" },
+    TurnItemsView: { oneOf: [{ type: "string", enum: ["notLoaded"] }] },
+  };
+  const threadStart = files["v2/ThreadStartParams.json"] as Record<string, any>;
+  threadStart.definitions = {
+    SandboxMode: sharedDefinitions.SandboxMode,
+    AskForApproval: sharedDefinitions.AskForApproval,
+    DynamicToolSpec: sharedDefinitions.DynamicToolSpec,
+  };
+  const turnStart = files["v2/TurnStartParams.json"] as Record<string, any>;
+  turnStart.definitions = {
+    UserInput: sharedDefinitions.UserInput,
+    ReasoningEffort: sharedDefinitions.ReasoningEffort,
+    SandboxPolicy: sharedDefinitions.SandboxPolicy,
+    AskForApproval: sharedDefinitions.AskForApproval,
+  };
+  const turnsList = files["v2/ThreadTurnsListParams.json"] as Record<
+    string,
+    any
+  >;
+  turnsList.definitions = { TurnItemsView: sharedDefinitions.TurnItemsView };
   const client = files["ClientRequest.json"] as Record<string, any>;
   client.definitions = Object.fromEntries(
     [
@@ -191,8 +235,14 @@ async function schemaRoot(
       "ThreadReadParams",
       "ThreadTurnsListParams",
       "TurnStartParams",
-    ].map((name) => [name, files[`v2/${name}.json`]]),
+    ].map((name) => {
+      const { definitions: _definitions, ...shape } = files[
+        `v2/${name}.json`
+      ] as Record<string, unknown>;
+      return [name, shape];
+    }),
   );
+  Object.assign(client.definitions, sharedDefinitions);
   await Promise.all(
     Object.entries(files).map(([relativePath, value]) =>
       fs.writeFile(
@@ -356,6 +406,42 @@ describe("installed Codex saved-project handoff schema", () => {
         type: "object",
         properties: { projectId: false },
       };
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("refuses missing or incompatible nested parameter definitions", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      delete schema.definitions.SandboxMode;
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      schema.definitions.SandboxMode = false;
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      schema.definitions.SandboxMode = {
+        type: "string",
+        enum: ["read-only", "workspace-write"],
+      };
+      delete schema.definitions.UserInput;
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("refuses an unusable turn status definition", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "v2/ThreadTurnsListResponse.json", (schema) => {
+      schema.definitions.TurnStatus = false;
     });
     await expect(
       inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
