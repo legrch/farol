@@ -44,6 +44,7 @@ const skipNativeFocus = process.argv.includes("--skip-native-focus");
 // This flag is the sole way in; its absence leaves every topology outcome
 // below unchanged.
 const allowPrimaryDisplay = process.argv.includes("--allow-primary-display");
+const builtInDisplayOnly = process.argv.includes("--built-in-display-only");
 // The soak workload is seeded. The default seed reproduces the historical
 // run exactly; another seed moves the two restarts and flips the overlay
 // order, so a declared series can show the bounds hold across interleavings
@@ -449,17 +450,24 @@ function visibleWindowTopologyBlock(presentation) {
   );
   const nonPrimarySelected =
     displays.find((display) => !display.primary && display.internal) ??
-    displays.find((display) => !display.primary);
+    (builtInDisplayOnly
+      ? undefined
+      : displays.find((display) => !display.primary));
   let selected = nonPrimarySelected;
   let ownerAllowedPrimary = false;
   if (!selected) {
-    if (!allowPrimaryDisplay) {
+    const primary = displays.find((display) => display.primary);
+    if (!allowPrimaryDisplay || !primary?.internal) {
       return {
-        code: "SECONDARY_DISPLAY_UNAVAILABLE",
-        reason:
-          "no non-primary display is available for visible native evidence",
-        ownerAction:
-          "Provide one non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
+        code: builtInDisplayOnly
+          ? "BUILT_IN_DISPLAY_UNAVAILABLE"
+          : "SECONDARY_DISPLAY_UNAVAILABLE",
+        reason: builtInDisplayOnly
+          ? "no authorized built-in display is available for visible native evidence"
+          : "no non-primary display is available for visible native evidence",
+        ownerAction: builtInDisplayOnly
+          ? "Make the built-in display available with at least 1180x760 work area, then rerun this exact lane."
+          : "Provide one non-primary display with at least 1180x760 available work area, then rerun this exact lane.",
         requested,
         selectedDisplay: null,
         allowedPrimaryDisplay: false,
@@ -468,8 +476,7 @@ function visibleWindowTopologyBlock(presentation) {
     // Explicit owner allowance and no non-primary display: fall back to the
     // built-in primary display (AGENTS.md, commit 6cbe53fd). The window still
     // must never take focus; assertVisibleWindowPlacement enforces that.
-    selected = displays.find((display) => display.primary);
-    assert.ok(selected, "E2E_PRIMARY_DISPLAY_MISSING");
+    selected = primary;
     ownerAllowedPrimary = true;
   }
   if (
@@ -941,7 +948,13 @@ function assertVisibleWindowPlacement(
     (display) => !display.primary && display.internal,
   );
   const secondary = presentation.displays.filter((display) => !display.primary);
-  if (secondary.length === 0) {
+  if (builtInDisplayOnly) {
+    assert.equal(presentation.display.internal, true);
+    if (presentation.display.primary) {
+      assert.ok(allowPrimaryDisplay, "E2E_PRIMARY_DISPLAY_NOT_ALLOWED");
+      assert.equal(preferred.length, 0);
+    }
+  } else if (secondary.length === 0) {
     // Only the explicit owner allowance reaches this branch (AGENTS.md,
     // commit 6cbe53fd); visibleWindowTopologyBlock already refused the lane
     // otherwise, before any window was ever created.
@@ -1796,6 +1809,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     `--user-data-dir=${userData}`,
     `--preview-window-mode=${windowMode}`,
     ...(allowPrimaryDisplay ? ["--allow-primary-display"] : []),
+    ...(builtInDisplayOnly ? ["--built-in-display-only"] : []),
     ...extraArgs,
   ];
   const launchEnvironment = {
@@ -2198,6 +2212,87 @@ async function markActivation(application, label) {
     .catch(() => null);
   activationSamples.push({ at: Date.now(), label, active });
   return active;
+}
+
+async function closeOwnedFocusFixture(fixture) {
+  if (!fixture) return;
+  try {
+    if (fixture.application) await fixture.application.close();
+  } finally {
+    await fs.rm(fixture.home, { recursive: true, force: true });
+  }
+}
+
+async function establishOwnedInactiveBaseline(targetApplication) {
+  const home = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-inactive-reopen-focus-"),
+  );
+  const userData = path.join(home, "user-data");
+  await fs.mkdir(userData, { recursive: true, mode: 0o700 });
+  const fixture = { home, application: null };
+  try {
+    fixture.application = await electron.launch({
+      executablePath: vendorElectron,
+      args: [
+        path.join(root, "tests/e2e/inactive-reopen-focus.fixture.cjs"),
+        `--fixture-user-data=${userData}`,
+      ],
+      env: {
+        FAROL_NEXT_E2E: "1",
+        HOME: home,
+        LANG: "en_US.UTF-8",
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        TMPDIR: os.tmpdir(),
+      },
+      timeout: 15_000,
+    });
+    await fixture.application.firstWindow({ timeout: 10_000 });
+    const deadline = Date.now() + 5_000;
+    do {
+      const fixtureState = await fixture.application.evaluate(
+        ({ app, BrowserWindow, screen }) => {
+          const windows = BrowserWindow.getAllWindows();
+          const owned = windows[0];
+          return {
+            active: app.isActive(),
+            windowCount: windows.length,
+            visible: owned?.isVisible() ?? false,
+            focused: owned?.isFocused() ?? false,
+            builtIn: owned
+              ? screen.getDisplayMatching(owned.getBounds()).internal
+              : false,
+          };
+        },
+      );
+      const targetActive = await markActivation(
+        targetApplication,
+        "while the test-owned focus fixture is visible",
+      );
+      if (
+        fixtureState.active &&
+        fixtureState.windowCount === 1 &&
+        fixtureState.visible &&
+        fixtureState.focused &&
+        fixtureState.builtIn &&
+        targetActive === false
+      ) {
+        return { fixture, reason: null };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } while (Date.now() < deadline);
+    await closeOwnedFocusFixture(fixture);
+    return {
+      fixture: null,
+      reason:
+        "test-owned fixture could not establish a measured inactive application baseline",
+    };
+  } catch (error) {
+    await closeOwnedFocusFixture(fixture);
+    return {
+      fixture: null,
+      reason: `test-owned fixture unavailable: ${error?.message ?? error}`,
+    };
+  }
 }
 
 // The last second-launch's own timestamps, read by the reopen row beside
@@ -8540,57 +8635,81 @@ demoMainSegment: try {
   process.stdout.write(`E2E_ACTIVATION ${JSON.stringify(activationSamples)}\n`);
   await new Promise((resolve) => setTimeout(resolve, 100));
   await waitForWindowCount(normal.application, 0);
-  const reopenedWindow = normal.application.waitForEvent("window", {
-    timeout: 15_000,
-  });
   // Sampling starts BEFORE the second launch is spawned. Beginning after
   // it exits can only ever show the state afterwards, which cannot tell a
   // window that was focused all along from one handed activation when the
   // secondary quit — the difference that decides whether this is a harness
   // artefact or the deferring second instance entering the activation order.
-  const activeBeforeReopen = await markActivation(
+  let activeBeforeReopen = await markActivation(
+    normal.application,
+    "before establishing the inactive reopen baseline",
+  );
+  let focusFixture = null;
+  let fixtureReason = null;
+  if (activeBeforeReopen === true && macHostLockState !== "locked") {
+    const established = await establishOwnedInactiveBaseline(
+      normal.application,
+    );
+    focusFixture = established.fixture;
+    fixtureReason = established.reason;
+  }
+  activeBeforeReopen = await markActivation(
     normal.application,
     "immediately before the second launch",
   );
+  const reopenedWindow = normal.application.waitForEvent("window", {
+    timeout: 15_000,
+  });
+  // This is an observation of the actual native application state. The
+  // owned fixture may establish it, but neither a Boolean nor blur() can.
   const reopenFocus = sampleWindowFocus(normal.application, Date.now() + 6_000);
-  await repeatLaunch(normal);
-  await markActivation(normal.application, "after the second launch exited");
-  normal.window = await reopenedWindow;
-  await normal.window.locator("#sidebar").waitFor({ state: "visible" });
-  await normal.window.locator('[data-panel="settings"].active').waitFor();
-  // The proof that `showInactive()` does not take focus means something
-  // only while this application is not already the active one without any
-  // owner action. `activeBeforeReopen` was measured immediately before the
-  // second launch; when it is true the proof is unavailable on this host and
-  // the row says so, rather than the assertion being softened for everyone.
-  // Mode, visibility, bounds and display are still asserted either way.
   let reopenPresentationError = null;
   let reopenPresentation = null;
+  let reopenFocusSamples = null;
+  let activeAfterPresentation = null;
   try {
+    await repeatLaunch(normal);
+    await markActivation(normal.application, "after the second launch exited");
+    normal.window = await reopenedWindow;
+    await normal.window.locator("#sidebar").waitFor({ state: "visible" });
+    await normal.window.locator('[data-panel="settings"].active').waitFor();
     reopenPresentation = await waitForWindowPresentation(
       normal.application,
       normal.windowMode,
       2,
-      { focusProof: activeBeforeReopen !== true },
+      { focusProof: activeBeforeReopen === false },
     );
+    activeAfterPresentation = await markActivation(
+      normal.application,
+      "after the reopened window was presented with the fixture still active",
+    );
+    if (activeBeforeReopen === false) {
+      assert.equal(
+        activeAfterPresentation,
+        false,
+        "E2E_REOPEN_ACTIVATED_APPLICATION",
+      );
+    }
   } catch (error) {
     reopenPresentationError = error;
+  } finally {
+    try {
+      reopenFocusSamples = await reopenFocus;
+    } finally {
+      await closeOwnedFocusFixture(focusFixture);
+    }
   }
-  if (activeBeforeReopen === true) {
-    const activeAfterPresentation = await markActivation(
-      normal.application,
-      "after the reopened window was presented",
-    );
+  if (activeBeforeReopen !== false) {
     blockedCases.push({
       name: "reopened-window-presented-inactive",
-      reason: `application already active without owner action before the reopen (idle host); proof available only with the owner at the keyboard · isActive before ${activeBeforeReopen}, after ${activeAfterPresentation}, observed focused ${String(reopenPresentation?.focused ?? "unknown")}`,
+      reason: `no measured inactive application baseline before reopen${fixtureReason ? ` · ${fixtureReason}` : ""} · isActive before ${activeBeforeReopen}, after ${activeAfterPresentation}, observed focused ${String(reopenPresentation?.focused ?? "unknown")}`,
     });
   }
   const reopenTimeline = {
     activeBeforeReopen,
     activation: activationSamples,
     secondary: lastSecondaryLaunch,
-    samples: await reopenFocus,
+    samples: reopenFocusSamples,
   };
   process.stdout.write(`E2E_REOPEN_FOCUS ${JSON.stringify(reopenTimeline)}\n`);
   if (reopenPresentationError) {

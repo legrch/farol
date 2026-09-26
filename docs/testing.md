@@ -13,7 +13,11 @@ a renderer. Use the least visible route that preserves the evidence:
    and displayed with `showInactive()`. The window is activated only for the final
    native focus-transfer assertion, then closed immediately.
 
-The visible selector is deterministic: non-primary internal, then any non-primary.
+The default visible selector is deterministic: non-primary internal, then any
+non-primary. `--built-in-display-only` excludes external displays, including
+when the built-in display is primary and an external secondary is present.
+Selecting that primary display also requires `--allow-primary-display` and an
+explicit current owner grant. Native focus still requires its own current grant.
 The exact requested 1180x760 viewport is centered inside that display's work area.
 If no secondary can preserve it, the visible lane fails closed instead of using the
 primary display or shrinking the assertion. The harness records that condition as a
@@ -37,6 +41,13 @@ inactive-secondary evidence, records the mandatory focus rows as
 `blocked-owner-authorization`, and exits non-zero with a `BLOCKED` report. The flag is
 not acceptance evidence for native focus and never turns those rows into skips or
 passes.
+
+During an explicitly authorized unattended run on the MacBook display, pass
+`--built-in-display-only --allow-primary-display`; omit `--skip-native-focus`
+only when that same grant permits test-owned native focus. The separate
+inactive-reopen fixture activates only its own isolated window on the built-in
+display and measures both applications' real active state before and after
+the second launch. It is closed immediately after that proof.
 
 The sealed and development E2E lanes also close the macOS window, prove the exact
 `Farol Next Runtime` PID remains, invoke a second launch with the same isolated

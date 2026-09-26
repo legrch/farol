@@ -164,13 +164,14 @@ default-deny task egress, makes a second launch wait across an intentionally del
 primary startup, and exercises actual utility-process death.
 
 Both E2E lanes follow the non-interference contract in `docs/testing.md`. One
-native-visible interaction run is positioned on the non-primary built-in display
-before first show and shown without taking focus. Fault and recovery runs stay hidden
-while their renderers continue to paint for DOM and screenshot evidence. A machine
-with no suitable secondary display, or one that cannot preserve the required viewport,
-fails the native-visible lane closed; it never falls back to the primary display or
-silently shrinks the assertion. Only the final native focus-transfer assertion activates
-that secondary-display window, and teardown follows immediately.
+native-visible interaction run is positioned before first show and shown without
+taking focus. Fault and recovery runs stay hidden while their renderers continue
+to paint for DOM and screenshot evidence. The default selector requires a
+non-primary display. An explicitly authorized owner-away run may use
+`--built-in-display-only --allow-primary-display` to keep every test-owned
+window on the MacBook display, even when an external monitor is connected.
+The required viewport never shrinks. Native focus is exercised only under a
+separate current grant, and owned windows close immediately after their proof.
 If native focus is not authorized for the current run, append
 `-- --skip-native-focus`; the other evidence still runs, while the report remains
 `BLOCKED` and names the mandatory focus rows as owner-authorized work rather than

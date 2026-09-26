@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseAllowPrimaryDisplay,
+  parseBuiltInDisplayOnly,
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
   type PreviewDisplay,
@@ -225,6 +226,51 @@ describe("allow-primary-display flag", () => {
         "electron",
         "main.cjs",
         "--allow-primary-display",
+      ]),
+    ).toBe(true);
+  });
+});
+
+describe("built-in-display-only test placement", () => {
+  const builtInPrimary: PreviewDisplay = {
+    id: 1,
+    internal: true,
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    workArea: { x: 0, y: 25, width: 1512, height: 949 },
+  };
+
+  it("selects the built-in primary even when an external secondary exists", () => {
+    const externalSecondary = { ...externalPrimary, id: 7 };
+    const placement = selectPreviewWindowPlacement(
+      [externalSecondary, builtInPrimary],
+      builtInPrimary.id,
+      { width: 1180, height: 760 },
+      true,
+      true,
+    );
+    expect(placement.displayId).toBe(builtInPrimary.id);
+    expect(placement.selection).toBe("owner-allowed-primary");
+  });
+
+  it("refuses an external-only display inventory", () => {
+    expect(() =>
+      selectPreviewWindowPlacement(
+        [externalPrimary],
+        externalPrimary.id,
+        { width: 1180, height: 760 },
+        true,
+        true,
+      ),
+    ).toThrow("BUILT_IN_DISPLAY_UNAVAILABLE");
+  });
+
+  it("requires the exact flag", () => {
+    expect(parseBuiltInDisplayOnly(["electron", "main.cjs"])).toBe(false);
+    expect(
+      parseBuiltInDisplayOnly([
+        "electron",
+        "main.cjs",
+        "--built-in-display-only",
       ]),
     ).toBe(true);
   });

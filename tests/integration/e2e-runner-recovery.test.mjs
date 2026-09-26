@@ -112,15 +112,15 @@ describe("closing an application that is already gone", () => {
       (match) => match[1].trim(),
     );
     // Exactly one place decides it, and it decides it from the reading.
-    expect(disabling).toEqual(["activeBeforeReopen !== true"]);
+    expect(disabling).toEqual(["activeBeforeReopen === false"]);
   });
 
   it("records the reopen row as blocked, with the reading that blocked it", () => {
     expect(e2eSource).toMatch(
-      /if \(activeBeforeReopen === true\) \{[\s\S]{0,600}name: "reopened-window-presented-inactive"/u,
+      /if \(activeBeforeReopen !== false\) \{[\s\S]{0,600}name: "reopened-window-presented-inactive"/u,
     );
     expect(e2eSource).toContain(
-      "application already active without owner action before the reopen",
+      "no measured inactive application baseline before reopen",
     );
     // The observed focus is evidence in the reason, never the decider: the
     // branch is chosen by the pre-measurement alone.

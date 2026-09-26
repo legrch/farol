@@ -25,6 +25,7 @@ export interface PreviewWindowPlacement {
 
 const modePrefix = "--preview-window-mode=";
 const allowPrimaryDisplayFlag = "--allow-primary-display";
+const builtInDisplayOnlyFlag = "--built-in-display-only";
 
 export function parsePreviewWindowMode(
   arguments_: readonly string[],
@@ -49,6 +50,12 @@ export function parseAllowPrimaryDisplay(
   arguments_: readonly string[],
 ): boolean {
   return arguments_.includes(allowPrimaryDisplayFlag);
+}
+
+export function parseBuiltInDisplayOnly(
+  arguments_: readonly string[],
+): boolean {
+  return arguments_.includes(builtInDisplayOnlyFlag);
 }
 
 function centeredBounds(
@@ -90,6 +97,7 @@ export function selectPreviewWindowPlacement(
   primaryDisplayId: number,
   requested: Readonly<{ width: number; height: number }>,
   allowPrimaryDisplay = false,
+  builtInDisplayOnly = false,
 ): PreviewWindowPlacement {
   if (displays.length === 0) {
     throw new Error("WINDOW_DISPLAY_UNAVAILABLE");
@@ -102,19 +110,30 @@ export function selectPreviewWindowPlacement(
     (display) => display.id !== primaryDisplayId && display.internal,
   );
   const nonPrimary = ordered.find((display) => display.id !== primaryDisplayId);
-  // The owner-handed allowance reaches here only through the explicit
-  // --allow-primary-display flag (window-placement.ts's own parser). It never
-  // substitutes for a real non-primary display when one exists.
+  // The built-in-only option is a separate, explicit owner-away constraint:
+  // an external monitor must never receive one of these test-owned windows.
   const ownerAllowedPrimary =
-    allowPrimaryDisplay && !nonPrimary ? primary : undefined;
-  const selected = nonPrimaryInternal ?? nonPrimary ?? ownerAllowedPrimary;
-  if (!selected) throw new Error("SECONDARY_DISPLAY_UNAVAILABLE");
+    allowPrimaryDisplay &&
+    primary.internal &&
+    (builtInDisplayOnly || !nonPrimary)
+      ? primary
+      : undefined;
+  const selected = builtInDisplayOnly
+    ? (nonPrimaryInternal ?? ownerAllowedPrimary)
+    : (nonPrimaryInternal ?? nonPrimary ?? ownerAllowedPrimary);
+  if (!selected) {
+    throw new Error(
+      builtInDisplayOnly
+        ? "BUILT_IN_DISPLAY_UNAVAILABLE"
+        : "SECONDARY_DISPLAY_UNAVAILABLE",
+    );
+  }
   const isPrimary = selected.id === primaryDisplayId;
-  const selection = nonPrimaryInternal
-    ? "non-primary-internal"
-    : nonPrimary
-      ? "non-primary"
-      : "owner-allowed-primary";
+  const selection = isPrimary
+    ? "owner-allowed-primary"
+    : selected.internal
+      ? "non-primary-internal"
+      : "non-primary";
 
   return {
     displayId: selected.id,

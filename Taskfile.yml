@@ -70,7 +70,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/promote-preview.mjs {{.CLI_ARGS}}
 
   test:e2e:dev:
-    desc: Exercise exact clean development bytes; one inactive secondary-display window, fault runs hidden
+    desc: Exercise exact clean development bytes; explicit test display, fault runs hidden
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:dev -- {{.CLI_ARGS}}
 
@@ -90,7 +90,7 @@ tasks:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:two-generation-state -- {{.CLI_ARGS}}
 
   test:e2e:
-    desc: Exercise the packaged preview; one inactive secondary-display window, fault runs hidden
+    desc: Exercise the packaged preview; explicit test display, fault runs hidden
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e -- {{.CLI_ARGS}}
 

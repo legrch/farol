@@ -117,6 +117,7 @@ import {
 } from "./single-instance";
 import {
   parseAllowPrimaryDisplay,
+  parseBuiltInDisplayOnly,
   parsePreviewWindowMode,
   selectPreviewWindowPlacement,
 } from "./window-placement";
@@ -446,6 +447,7 @@ const windowMode = parsePreviewWindowMode(process.argv);
 // Explicit-only: the owner-handed overnight run passes this itself. Its
 // absence keeps every display-selection outcome exactly as before.
 const allowPrimaryDisplay = parseAllowPrimaryDisplay(process.argv);
+const builtInDisplayOnly = parseBuiltInDisplayOnly(process.argv);
 const initialWindowSize = { width: 1180, height: 760 } as const;
 const demoTasks = [
   {
@@ -7846,6 +7848,7 @@ async function createWindow(): Promise<void> {
           screen.getPrimaryDisplay().id,
           initialWindowSize,
           allowPrimaryDisplay,
+          builtInDisplayOnly,
         )
       : null;
   window = new BrowserWindow({
@@ -7931,6 +7934,7 @@ function selectedVisibleTestPlacement(
     screen.getPrimaryDisplay().id,
     requested,
     allowPrimaryDisplay,
+    builtInDisplayOnly,
   );
 }
 
