@@ -83,9 +83,10 @@ async function schemaRoot(
         "thread/turns/list",
         "turn/start",
       ].map((method) => ({
+        type: "object",
         required: ["id", "method", "params"],
         properties: {
-          method: { enum: [method] },
+          method: { type: "string", enum: [method] },
           params: ref(
             {
               "project/list": "ProjectListParams",
@@ -187,6 +188,16 @@ async function schemaRoot(
     },
     ...overrides,
   };
+  for (const [name, value] of Object.entries(files)) {
+    if (!name.startsWith("v2/")) continue;
+    const schema = value as Record<string, any>;
+    schema.type ??= "object";
+    for (const definition of ["Project", "ProjectRoot", "Thread", "Turn"]) {
+      if (schema.definitions?.[definition]) {
+        schema.definitions[definition].type ??= "object";
+      }
+    }
+  }
   const sharedDefinitions = {
     SandboxMode: { type: "string", enum: ["read-only", "workspace-write"] },
     AskForApproval: {
@@ -488,6 +499,30 @@ describe("installed Codex saved-project handoff schema", () => {
     });
     await changeSchema(root, "v2/TurnStartParams.json", (schema) => {
       schema.definitions.SandboxPolicy = typed("string");
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("refuses sandbox variants with string type despite object properties", async () => {
+    const root = await schemaRoot();
+    for (const file of ["ClientRequest.json", "v2/TurnStartParams.json"]) {
+      await changeSchema(root, file, (schema) => {
+        for (const variant of schema.definitions.SandboxPolicy.oneOf) {
+          variant.type = "string";
+        }
+      });
+    }
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("refuses a status response whose outer type is not an object", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "v2/ThreadReadResponse.json", (schema) => {
+      schema.type = "string";
     });
     await expect(
       inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),

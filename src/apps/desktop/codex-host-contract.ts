@@ -254,9 +254,11 @@ function hasRequestMethod(
   if (!matchingDefinitionGraph(schema, standaloneParams, params)) return false;
   return array(child(schema, "oneOf")).some(
     (candidate) =>
+      child(candidate, "type") === "object" &&
       array(child(candidate, "properties", "method", "enum")).includes(
         method,
       ) &&
+      child(candidate, "properties", "method", "type") === "string" &&
       ["id", "method", "params"].every((name) =>
         array(child(candidate, "required")).includes(name),
       ) &&
@@ -344,6 +346,7 @@ function supportsSandboxPolicy(schema: unknown): boolean {
   const variant = (type: string): unknown =>
     variants.find(
       (candidate) =>
+        child(candidate, "type") === "object" &&
         array(child(candidate, "properties", "type", "enum")).includes(type) &&
         child(candidate, "properties", "type", "type") === "string" &&
         hasRequired(candidate, "type"),
@@ -370,6 +373,7 @@ function supportsHandoffValues(
   const definitions = child(client, "definitions");
   const textInput = array(child(definitions, "UserInput", "oneOf")).some(
     (variant) =>
+      child(variant, "type") === "object" &&
       array(child(variant, "properties", "type", "enum")).includes("text") &&
       child(variant, "properties", "text", "type") === "string" &&
       hasRequired(variant, "type", "text"),
@@ -440,15 +444,13 @@ const HANDOFF_REQUIRED: readonly (readonly [
 ];
 
 function hasRequiredFields(schemas: ReadonlyMap<string, JsonRecord>): boolean {
-  return HANDOFF_REQUIRED.every(([file, definition, names]) =>
-    hasRequired(
-      child(
-        schemas.get(`v2/${file}.json`),
-        ...(definition.length ? ["definitions", ...definition] : []),
-      ),
-      ...names,
-    ),
-  );
+  return HANDOFF_REQUIRED.every(([file, definition, names]) => {
+    const schema = child(
+      schemas.get(`v2/${file}.json`),
+      ...(definition.length ? ["definitions", ...definition] : []),
+    );
+    return child(schema, "type") === "object" && hasRequired(schema, ...names);
+  });
 }
 
 async function inspectBaseHostSnapshot(
