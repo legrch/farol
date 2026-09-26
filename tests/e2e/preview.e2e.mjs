@@ -9704,6 +9704,24 @@ async function reopenSignInFixtureWindow(instance) {
   const chatGptPage = await chatGptWindow;
   await chatGptPage.waitForURL(instance.chatGptFixture.url);
   await waitForWindowCount(instance.application, 2);
+  // A window event and a loaded URL precede the main process's route gate
+  // and the renderer's open-sign-in acknowledgement. The covered-page test
+  // navigates immediately after this helper; doing so before that gate
+  // settles can make the opening attempt report no-window while a page is
+  // visibly present. Wait for the actual command acknowledgement first.
+  await instance.window.waitForFunction(
+    () =>
+      document.querySelector("#setup-live-primary")?.textContent?.trim() ===
+      "Check connection",
+  );
+  const admitted = await instance.window.evaluate(() =>
+    window.farolNext.bootstrap(),
+  );
+  assert.equal(
+    admitted.chatgptSignInOutcome,
+    null,
+    "the new sign-in route was admitted before fixture navigation",
+  );
   return chatGptPage;
 }
 
