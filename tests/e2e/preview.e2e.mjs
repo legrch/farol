@@ -6744,7 +6744,6 @@ devNewTaskAffordanceSegment: {
   segmentMark("dev-new-task-affordance", "start");
   const devNewTask = await launch([], "secondary-visible", "ordinary", {
     environment: { FAROL_NEXT_ENVIRONMENT: "dev" },
-    expectedTaskViewCount: 1,
   });
   try {
     const resolvedUserData = await devNewTask.application.evaluate(({ app }) =>
@@ -6754,25 +6753,7 @@ devNewTaskAffordanceSegment: {
       resolvedUserData,
       path.join(devNewTask.isolatedAppData, "Farol Dev"),
     );
-    const startupTaskViews = await devNewTask.application.evaluate(
-      ({ BrowserWindow }) => {
-        const shell = BrowserWindow.getAllWindows().find((candidate) => {
-          const url = candidate.webContents.getURL();
-          return url.startsWith("file:") && url.endsWith("/shell.html");
-        });
-        return (shell?.contentView.children ?? [])
-          .filter((view) => "webContents" in view)
-          .map((view) => ({
-            title: view.webContents.getTitle(),
-            url: view.webContents.getURL(),
-            visible: view.getVisible(),
-          }));
-      },
-    );
-    assert.equal(startupTaskViews.length, 1);
-    assert.equal(startupTaskViews[0].title, "");
-    assert.equal(startupTaskViews[0].visible, false);
-    assert.notEqual(startupTaskViews[0].url, devNewTask.chatGptFixture.url);
+    assert.equal(devNewTask.presentation.taskViewCount, 0);
 
     await completeSetup(devNewTask, false, false, true, false);
     const newTask = devNewTask.window.locator("#new-task");
