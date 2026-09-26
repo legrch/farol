@@ -6755,11 +6755,68 @@ devNewTaskAffordanceSegment: {
     );
     assert.equal(devNewTask.presentation.taskViewCount, 0);
 
+    assert.equal(
+      await devNewTask.window.locator("#guided-onboarding").isVisible(),
+      true,
+    );
+    await devNewTask.window.locator('[data-onboarding-step="chatgpt"]').click();
     await devNewTask.window
-      .locator('.nav-item[data-section="browser"]')
-      .click();
+      .locator("#onboarding-open-account")
+      .waitFor({ state: "visible" });
+
+    // The DEV route points only at this run's local loopback fixture. Complete
+    // its synthetic sign-in through Setup's public controls; no model turn,
+    // folder access, Agent, or fixture message is submitted.
+    const signInWindowPending = devNewTask.application.waitForEvent("window", {
+      timeout: 15_000,
+    });
+    await devNewTask.window.locator("#onboarding-open-account").click();
+    const signInPage = await signInWindowPending;
+    await signInPage.waitForURL(devNewTask.chatGptFixture.url);
+    await waitForWindowCount(devNewTask.application, 2);
+    await signInPage.locator('[data-testid="login-button"]').click();
+    await signInPage.locator("#prompt-textarea").waitFor({ state: "visible" });
+    const signInFixtureState = await signInPage.evaluate(() => ({
+      userText:
+        document.querySelector("#prompt-textarea")?.textContent?.trim() ?? "",
+      submitCount: Number(window.__farolSubmitCount ?? 0),
+    }));
+    assert.deepEqual(signInFixtureState, { userText: "", submitCount: 0 });
+    await waitForPageState(
+      signInPage,
+      () => document.querySelector("#farol-sign-in-banner button") !== null,
+    );
+    await dispatchTolerantOfWindowClose(() =>
+      signInPage.locator("#farol-sign-in-banner button").click(),
+    );
+    await waitForWindowCount(devNewTask.application, 1);
     await devNewTask.window.waitForFunction(
       () =>
+        document.documentElement.dataset.guidedOnboarding === "true" &&
+        document.querySelector("#onboarding-recheck")?.textContent ===
+          "Check sign-in" &&
+        document.querySelector("#onboarding-recheck")?.hidden === false,
+    );
+    await devNewTask.window.locator("#onboarding-recheck").click();
+    await waitForPageState(devNewTask.window, async () => {
+      const state = await window.farolNext.bootstrap();
+      return (
+        state.configuration.settings.setup.chatgpt.verified?.profile ===
+        "chatgpt.next-partition/1"
+      );
+    });
+    await devNewTask.window.locator("#onboarding-back").click();
+    await devNewTask.window.waitForFunction(
+      () =>
+        document.querySelector("#onboarding-title")?.textContent ===
+          "ChatGPT is ready" &&
+        document.querySelector("#onboarding-primary")?.textContent ===
+          "Open ChatGPT",
+    );
+    await devNewTask.window.locator("#onboarding-primary").click();
+    await devNewTask.window.waitForFunction(
+      () =>
+        document.documentElement.dataset.guidedOnboarding === "false" &&
         document.documentElement.dataset.section === "browser" &&
         document.documentElement.dataset.browserChrome === "true",
     );
@@ -6810,6 +6867,10 @@ devNewTaskAffordanceSegment: {
       );
       assert.equal(state.taskRevision, index);
       assert.equal(state.tasks.length, index);
+      assert.equal(state.liveProvider, false);
+      assert.equal(state.nativeAgent, false);
+      assert.equal(state.configuration.settings.nativeHosts.codex, null);
+      assert.equal(state.configuration.settings.setup.hosts.verified, null);
       assert.equal(await newTask.isVisible(), true);
       assert.equal(await newTask.isDisabled(), index === 5);
       assert.equal(await newTask.locator("small").innerText(), index + " / 5");

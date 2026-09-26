@@ -217,6 +217,9 @@ export const EVIDENCE_LANES = Object.freeze({
     requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "development-build-identity",
+      "dev-new-task-first-is-reachable",
+      "dev-new-task-next-is-reachable",
+      "dev-new-task-disabled-at-capacity",
       ...SHARED_PRODUCT_CASES,
     ]),
     boundary: Object.freeze({
