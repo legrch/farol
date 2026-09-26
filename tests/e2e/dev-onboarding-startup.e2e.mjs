@@ -315,13 +315,10 @@ try {
       await legacyWindow
         .locator('[data-onboarding-step="folder"].complete')
         .waitFor({ state: "visible" });
-      await legacyWindow.waitForFunction(
-        async () =>
-          (await window.farolNext.bootstrap()).configuration.settings.computer
-            .workspaces.length === 1,
-        undefined,
-        { timeout: 15_000 },
-      );
+      await legacyWindow
+        .locator("#onboarding-folder-list li")
+        .first()
+        .waitFor({ state: "visible", timeout: 15_000 });
       const value = await legacyWindow.evaluate(() =>
         window.farolNext.bootstrap(),
       );
