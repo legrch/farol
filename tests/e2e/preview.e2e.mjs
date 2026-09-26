@@ -6948,9 +6948,12 @@ devNewTaskAffordanceSegment: {
 
     for (let index = 1; index <= 5; index += 1) {
       await newTask.click();
-      await devNewTask.window.waitForFunction(
-        (count) =>
-          document.querySelectorAll("#task-tabs .task-tab").length === count,
+      await waitForPageState(
+        devNewTask.window,
+        async (count) => {
+          const state = await window.farolNext.bootstrap();
+          return state.taskRevision === count && state.tasks.length === count;
+        },
         index,
       );
       const state = await devNewTask.window.evaluate(() =>
