@@ -11401,6 +11401,26 @@ n12AgentDraftSegment: {
         path.join(subfolder, "scope.md"),
       ]);
       cases.push("n12-agent-draft-survives-to-a-single-submission");
+    } else {
+      const beforeRefusal = await draft.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      await draft.window.locator("#task-menu-agent").click({ timeout: 20_000 });
+      await waitForTaskMenuNote(
+        draft,
+        "Verify the exact native host, Agent lineage, and workspace first.",
+      );
+      assert.deepEqual(
+        await shownAgentDraft(),
+        { scope: "subtree", ...typed },
+        "a default-off Agent refusal preserves the owner's draft",
+      );
+      const afterRefusal = await draft.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(afterRefusal.taskRevision, beforeRefusal.taskRevision);
+      assert.deepEqual(await deliveredEnvelopes(), []);
+      cases.push("n12-agent-draft-survives-default-off-refusal");
     }
 
     // --- The owner's own close still clears --------------------------------

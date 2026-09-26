@@ -174,6 +174,7 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "n09-attach-challenge-answered-exactly-once",
   "n09-attach-verified-from-its-own-receipt",
   "n12-agent-draft-survives-background-auth-window-return",
+  "n12-agent-draft-survives-default-off-refusal",
   "n12-agent-draft-cleared-by-owner-close",
   "n10-computer-second-workspace-added-from-panel",
   "n10-computer-workspace-removed-from-panel-and-settings",
