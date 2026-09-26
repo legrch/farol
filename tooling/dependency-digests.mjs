@@ -181,17 +181,67 @@ export function compilerProblems(root, env = process.env) {
 // The npm that belongs to the running Node installation, by its own path: a
 // `npm` found first on PATH must not decide what the clean install contains.
 export function npmCliFor(nodeExecutable = process.execPath) {
-  const cli = path.resolve(
+  const prefix = path.resolve(
     path.dirname(fs.realpathSync(nodeExecutable)),
     "..",
-    "lib",
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
   );
-  const info = fs.lstatSync(cli);
-  if (!info.isFile()) throw new Error(`NPM_CLI_NOT_FOUND:${cli}`);
+  // Node's ordinary distribution and Homebrew's same-install libexec tree
+  // are the only reviewed layouts. Never fall back to npm from PATH or a
+  // global Homebrew link, which could belong to another Node installation.
+  const candidates = [
+    path.join(prefix, "lib/node_modules/npm/bin/npm-cli.js"),
+    path.join(prefix, "libexec/lib/node_modules/npm/bin/npm-cli.js"),
+  ];
+  const present = candidates.filter((candidate) => {
+    try {
+      fs.lstatSync(candidate);
+      return true;
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    }
+  });
+  if (present.length === 0) throw new Error(`NPM_CLI_NOT_FOUND:${prefix}`);
+  if (present.length !== 1) throw new Error(`NPM_CLI_AMBIGUOUS:${prefix}`);
+  const cli = present[0];
+  const npmRoot = path.dirname(path.dirname(cli));
+  const manifestPath = path.join(npmRoot, "package.json");
+  try {
+    for (const checked of [npmRoot, manifestPath, cli]) {
+      if (
+        fs.realpathSync(checked) !== checked ||
+        fs.lstatSync(checked).isSymbolicLink()
+      ) {
+        throw new Error("unsafe");
+      }
+    }
+    if (
+      !fs.lstatSync(npmRoot).isDirectory() ||
+      !fs.lstatSync(manifestPath).isFile() ||
+      !fs.lstatSync(cli).isFile()
+    ) {
+      throw new Error("unsafe");
+    }
+  } catch {
+    throw new Error(`NPM_CLI_UNSAFE:${cli}`);
+  }
+  const declared = JSON.parse(
+    fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ).packageManager;
+  const pinnedVersion = /^npm@(\d+\.\d+\.\d+)$/u.exec(declared)?.[1];
+  let manifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  } catch {
+    throw new Error(`NPM_CLI_IDENTITY_INVALID:${cli}`);
+  }
+  if (
+    !pinnedVersion ||
+    manifest?.name !== "npm" ||
+    manifest.version !== pinnedVersion
+  ) {
+    throw new Error(`NPM_CLI_IDENTITY_INVALID:${cli}`);
+  }
   return cli;
 }
 

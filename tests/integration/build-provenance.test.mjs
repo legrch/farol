@@ -32,6 +32,35 @@ function fixturePackage() {
   return { root, directory };
 }
 
+function fixtureNodeAndNpm(
+  layout = "standard",
+  name = "npm",
+  version = "11.19.0",
+) {
+  const prefix = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "farol-node-layout-")),
+  );
+  scratch.push(prefix);
+  const bin = path.join(prefix, "bin");
+  fs.mkdirSync(bin);
+  const node = path.join(bin, "node");
+  fs.writeFileSync(node, "synthetic node\n");
+  const npmRoot = path.join(
+    prefix,
+    ...(layout === "homebrew" ? ["libexec", "lib"] : ["lib"]),
+    "node_modules",
+    "npm",
+  );
+  fs.mkdirSync(path.join(npmRoot, "bin"), { recursive: true });
+  fs.writeFileSync(
+    path.join(npmRoot, "package.json"),
+    JSON.stringify({ name, version }),
+  );
+  const cli = path.join(npmRoot, "bin", "npm-cli.js");
+  fs.writeFileSync(cli, "// synthetic npm CLI\n");
+  return { prefix, node, npmRoot, cli };
+}
+
 afterEach(() => {
   for (const root of scratch.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
@@ -159,20 +188,56 @@ describe("F3-5 build provenance", () => {
     expect(result.stderr).not.toContain("at ");
   }, 120_000);
 
-  it("runs the npm of the running Node installation, never one found on PATH", () => {
-    const cli = npmCliFor(process.execPath);
-    const prefix = path.resolve(
-      path.dirname(fs.realpathSync(process.execPath)),
-      "..",
-    );
-    expect(cli).toBe(
-      path.join(prefix, "lib", "node_modules", "npm", "bin", "npm-cli.js"),
-    );
+  it("resolves only the npm belonging to the chosen Node installation", () => {
+    const actual = npmCliFor(process.execPath);
+    expect(actual).toContain("/npm/bin/npm-cli.js");
+    const standard = fixtureNodeAndNpm();
+    const homebrew = fixtureNodeAndNpm("homebrew");
+    expect(npmCliFor(standard.node)).toBe(standard.cli);
+    expect(npmCliFor(homebrew.node)).toBe(homebrew.cli);
     const lonely = fs.mkdtempSync(path.join(os.tmpdir(), "farol-no-npm-"));
     scratch.push(lonely);
     fs.mkdirSync(path.join(lonely, "bin"));
     fs.writeFileSync(path.join(lonely, "bin", "node"), "");
     expect(() => npmCliFor(path.join(lonely, "bin", "node"))).toThrow();
+  });
+
+  it("rejects ambiguous, foreign, symlinked and wrong-version npm layouts", () => {
+    const ambiguous = fixtureNodeAndNpm();
+    const second = path.join(ambiguous.prefix, "libexec/lib/node_modules/npm");
+    fs.mkdirSync(path.join(second, "bin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(second, "package.json"),
+      JSON.stringify({ name: "npm", version: "11.19.0" }),
+    );
+    fs.writeFileSync(path.join(second, "bin/npm-cli.js"), "// second CLI\n");
+    expect(() => npmCliFor(ambiguous.node)).toThrow("NPM_CLI_AMBIGUOUS");
+
+    for (const [name, version] of [
+      ["foreign", "11.19.0"],
+      ["npm", "0.0.0"],
+    ]) {
+      const fixture = fixtureNodeAndNpm("standard", name, version);
+      expect(() => npmCliFor(fixture.node)).toThrow("NPM_CLI_IDENTITY_INVALID");
+    }
+    const symlinked = fixtureNodeAndNpm();
+    const external = path.join(symlinked.prefix, "outside-cli.js");
+    fs.writeFileSync(external, "// outside package\n");
+    fs.rmSync(symlinked.cli);
+    fs.symlinkSync(external, symlinked.cli);
+    expect(() => npmCliFor(symlinked.node)).toThrow("NPM_CLI_UNSAFE");
+  });
+
+  it("ignores a hostile PATH when resolving npm", () => {
+    const fixture = fixtureNodeAndNpm();
+    const oldPath = process.env.PATH;
+    try {
+      process.env.PATH = "/nonexistent-hostile-npm";
+      expect(npmCliFor(fixture.node)).toBe(fixture.cli);
+    } finally {
+      if (oldPath === undefined) delete process.env.PATH;
+      else process.env.PATH = oldPath;
+    }
   });
 
   it("never marks a build exact when a Node startup hook was present", () => {
