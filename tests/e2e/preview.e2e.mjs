@@ -16,6 +16,7 @@ import { processTable } from "../../tooling/evidence-observe.mjs";
 import { createPhaseRecorder } from "./await-phases.mjs";
 import {
   blockingObservations as blockingObservationsOf,
+  laneContract,
   missingCases,
 } from "../../tooling/evidence-cases.mjs";
 import {
@@ -115,6 +116,10 @@ const evidenceLane = lifecycleSoak
       : development
         ? "development-build"
         : "sealed-package";
+// The production route is default-off. Keep the positive journey in source
+// for a separately qualified Agent build, but never run it as evidence for
+// this build or enable the route from the harness.
+const positiveProductAgentQualification = false;
 const evidenceLaneRoot = path.join(
   root,
   lifecycleSoak
@@ -510,6 +515,8 @@ async function writeWindowTopologyBlockedReport(presentation) {
     schema: 1,
     status: "BLOCKED",
     lane: development ? "development-build" : "sealed-package",
+    productAgentQualification:
+      laneContract(evidenceLane).productAgentQualification,
     artifactSha256: artifact.artifactSha256,
     sourceCommit: artifact.sourceCommit,
     sourceTreeDigest: artifact.sourceTreeDigest,
@@ -543,6 +550,7 @@ async function writeWindowTopologyBlockedReport(presentation) {
   );
   await evidenceAttempt.finish("BLOCKED", {
     cases,
+    productAgentQualification: report.productAgentQualification,
     blockedCases,
     skippedCases,
   });
@@ -1474,6 +1482,7 @@ if (args.length === 1 && args[0] === "--version") {
   process.exit(0);
 }
 if (args[0] === "app-server" && args[1] === "--stdio") {
+  fs.appendFileSync(path.join(__dirname, "codex-app-server-starts"), "start\\n");
   const readline = require("node:readline");
   const lines = readline.createInterface({ input: process.stdin });
   const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
@@ -1509,6 +1518,12 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   const agentChildTurnId = "turn-e2e-agent-child";
   lines.on("line", (line) => {
     const message = JSON.parse(line);
+    if (["thread/start", "turn/start", "thread/read", "turn/interrupt"].includes(message.method)) {
+      fs.appendFileSync(
+        path.join(__dirname, "codex-agent-requests"),
+        message.method + "\\n",
+      );
+    }
     if (message.method === "initialize") {
       send({ id: message.id, result: { userAgent: "codex-e2e/9.8.7" } });
       return;
@@ -6077,274 +6092,384 @@ liveTasksSegment: try {
     1,
   );
 
-  await ordinaryLiveTasks.window
-    .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
-    .click();
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
-  await ordinaryLiveTasks.window
-    .locator("#task-menu")
-    .waitFor({ state: "visible" });
-  const productWorkspaceId =
-    admittedState.configuration.settings.computer.workspaces[0].workspaceId;
-  assert.equal(
+  let productAgentTask;
+  let cancelledProductAgentInput;
+  let assignmentRoot;
+  if (positiveProductAgentQualification) {
     await ordinaryLiveTasks.window
-      .locator("#task-agent-workspace")
-      .inputValue(),
-    productWorkspaceId,
-  );
-  await ordinaryLiveTasks.window
-    .locator("#task-agent-scope")
-    .selectOption("exact");
-  await ordinaryLiveTasks.window.locator("#task-agent-paths").fill("README.md");
-  await ordinaryLiveTasks.window
-    .locator("#task-agent-objective")
-    .fill(
-      "Read README.md through the approved exact-path scope and report its boundary marker.",
+      .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
+      .click();
+    await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+    await ordinaryLiveTasks.window
+      .locator("#task-menu")
+      .waitFor({ state: "visible" });
+    const productWorkspaceId =
+      admittedState.configuration.settings.computer.workspaces[0].workspaceId;
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-agent-workspace")
+        .inputValue(),
+      productWorkspaceId,
     );
-  assert.equal(
-    await ordinaryLiveTasks.window.locator("#task-menu-agent").isEnabled(),
-    true,
-  );
-  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
-  assert.equal(
-    await ordinaryLiveTasks.window.locator("#task-menu-agent span").innerText(),
-    "Rejoin Agent",
-  );
-  assert.equal(
     await ordinaryLiveTasks.window
-      .locator("#task-menu-close-task")
-      .isDisabled(),
-    true,
-  );
-  await ordinaryLiveTasks.window.waitForTimeout(350);
-  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-agent-state small")?.textContent ===
+      .locator("#task-agent-scope")
+      .selectOption("exact");
+    await ordinaryLiveTasks.window
+      .locator("#task-agent-paths")
+      .fill("README.md");
+    await ordinaryLiveTasks.window
+      .locator("#task-agent-objective")
+      .fill(
+        "Read README.md through the approved exact-path scope and report its boundary marker.",
+      );
+    assert.equal(
+      await ordinaryLiveTasks.window.locator("#task-menu-agent").isEnabled(),
+      true,
+    );
+    await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+    await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-menu-agent span")
+        .innerText(),
+      "Rejoin Agent",
+    );
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-menu-close-task")
+        .isDisabled(),
+      true,
+    );
+    await ordinaryLiveTasks.window.waitForTimeout(350);
+    await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+    await ordinaryLiveTasks.window.waitForFunction(
+      () =>
+        document.querySelector("#task-agent-state small")?.textContent ===
+        "Delivered",
+    );
+    const productAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    productAgentTask = productAgentBootstrap.tasks.find(
+      (task) => task.taskId === pinnedTask.taskId,
+    );
+    assert.ok(productAgentTask);
+    assert.match(
+      productAgentTask.agent.assignmentBindingSha256,
+      /^[a-f0-9]{64}$/u,
+    );
+    assert.deepEqual(productAgentTask.agent, {
+      assignmentBindingSha256: productAgentTask.agent.assignmentBindingSha256,
+      phase: "completed",
+      workspaceId: productWorkspaceId,
+      parentDelivery: "acknowledged",
+      workspaceEnforcement: "verified",
+      resultAvailable: true,
+    });
+    assert.equal(productAgentBootstrap.nativeAgent, true);
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-agent-state small")
+        .innerText(),
       "Delivered",
-  );
-  const productAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
-  );
-  const productAgentTask = productAgentBootstrap.tasks.find(
-    (task) => task.taskId === pinnedTask.taskId,
-  );
-  assert.ok(productAgentTask);
-  assert.match(
-    productAgentTask.agent.assignmentBindingSha256,
-    /^[a-f0-9]{64}$/u,
-  );
-  assert.deepEqual(productAgentTask.agent, {
-    assignmentBindingSha256: productAgentTask.agent.assignmentBindingSha256,
-    phase: "completed",
-    workspaceId: productWorkspaceId,
-    parentDelivery: "acknowledged",
-    workspaceEnforcement: "verified",
-    resultAvailable: true,
-  });
-  assert.equal(productAgentBootstrap.nativeAgent, true);
-  assert.equal(
-    await ordinaryLiveTasks.window
-      .locator("#task-agent-state small")
-      .innerText(),
-    "Delivered",
-  );
-  assert.equal(
-    await ordinaryLiveTasks.window.locator("#task-menu-close-task").isEnabled(),
-    true,
-  );
-  await ordinaryLiveTasks.window.screenshot({
-    path: path.join(evidenceRoot, "live-task-native-agent-delivered.png"),
-  });
-  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
-
-  await ordinaryLiveTasks.window
-    .locator(
-      `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
-    )
-    .click();
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
-  await ordinaryLiveTasks.window
-    .locator("#task-menu")
-    .waitFor({ state: "visible" });
-  await ordinaryLiveTasks.window
-    .locator("#task-agent-objective")
-    .fill(
-      "Hold the approved read-only workspace while Farol proves exact native cancellation.",
     );
-  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
-  assert.equal(
-    await ordinaryLiveTasks.window.locator("#task-menu-cancel").isEnabled(),
-    true,
-  );
-  assert.equal(
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-menu-close-task")
+        .isEnabled(),
+      true,
+    );
+    await ordinaryLiveTasks.window.screenshot({
+      path: path.join(evidenceRoot, "live-task-native-agent-delivered.png"),
+    });
+    await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+
     await ordinaryLiveTasks.window
-      .locator("#task-menu-close-task")
-      .isDisabled(),
-    true,
-  );
-  await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
-  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent cancellation confirmed.");
-  await ordinaryLiveTasks.window.waitForFunction(
-    () =>
-      document.querySelector("#task-agent-state small")?.textContent ===
-      "Cancelled",
-  );
-  const cancelledAgentBootstrap = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
-  );
-  assert.deepEqual(
-    cancelledAgentBootstrap.tasks.find(
-      (task) => task.taskId === agentCancellationTask.taskId,
-    )?.agent,
-    {
-      assignmentBindingSha256: cancelledAgentBootstrap.tasks.find(
+      .locator(
+        `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
+      )
+      .click();
+    await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+    await ordinaryLiveTasks.window
+      .locator("#task-menu")
+      .waitFor({ state: "visible" });
+    await ordinaryLiveTasks.window
+      .locator("#task-agent-objective")
+      .fill(
+        "Hold the approved read-only workspace while Farol proves exact native cancellation.",
+      );
+    await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+    await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
+    assert.equal(
+      await ordinaryLiveTasks.window.locator("#task-menu-cancel").isEnabled(),
+      true,
+    );
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-menu-close-task")
+        .isDisabled(),
+      true,
+    );
+    await ordinaryLiveTasks.window.locator("#task-menu-cancel").click();
+    await waitForTaskMenuNote(
+      ordinaryLiveTasks,
+      "Agent cancellation confirmed.",
+    );
+    await ordinaryLiveTasks.window.waitForFunction(
+      () =>
+        document.querySelector("#task-agent-state small")?.textContent ===
+        "Cancelled",
+    );
+    const cancelledAgentBootstrap = await ordinaryLiveTasks.window.evaluate(
+      () => window.farolNext.bootstrap(),
+    );
+    assert.deepEqual(
+      cancelledAgentBootstrap.tasks.find(
+        (task) => task.taskId === agentCancellationTask.taskId,
+      )?.agent,
+      {
+        assignmentBindingSha256: cancelledAgentBootstrap.tasks.find(
+          (task) => task.taskId === agentCancellationTask.taskId,
+        )?.agent?.assignmentBindingSha256,
+        phase: "cancelled",
+        workspaceId: productWorkspaceId,
+        parentDelivery: "not_applicable",
+        workspaceEnforcement: "not_applicable",
+        resultAvailable: false,
+      },
+    );
+    assert.equal(
+      await ordinaryLiveTasks.window
+        .locator("#task-menu-close-task")
+        .isEnabled(),
+      true,
+    );
+    await ordinaryLiveTasks.window.screenshot({
+      path: path.join(evidenceRoot, "live-task-native-agent-cancelled.png"),
+    });
+    await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+    await ordinaryLiveTasks.window
+      .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
+      .click();
+
+    const productAgentInputRoot = path.join(
+      ordinaryLiveTasks.userData,
+      "farol-next-state",
+      "product-agent-inputs",
+    );
+    const productAgentInputFiles = (
+      await fs.readdir(productAgentInputRoot)
+    ).filter((entry) => entry.endsWith(".json"));
+    assert.equal(productAgentInputFiles.length, 2);
+    const productAgentInputs = await Promise.all(
+      productAgentInputFiles.map(async (entry) => {
+        const target = path.join(productAgentInputRoot, entry);
+        const text = await fs.readFile(target, "utf8");
+        return { target, text, envelope: JSON.parse(text) };
+      }),
+    );
+    const deliveredProductAgentInput = productAgentInputs.find(({ text }) =>
+      /Read README\.md through the approved exact-path scope/u.test(text),
+    );
+    cancelledProductAgentInput = productAgentInputs.find(({ text }) =>
+      /proves exact native cancellation/u.test(text),
+    );
+    assert.ok(deliveredProductAgentInput);
+    assert.ok(cancelledProductAgentInput);
+    assert.equal(
+      createHash("sha256")
+        .update(
+          JSON.stringify([
+            "farol-product-agent-binding-v1",
+            deliveredProductAgentInput.envelope.input.taskId,
+            deliveredProductAgentInput.envelope.input.sessionId,
+            deliveredProductAgentInput.envelope.input.assignmentId,
+          ]),
+        )
+        .digest("hex"),
+      productAgentTask.agent.assignmentBindingSha256,
+    );
+    assert.equal(
+      createHash("sha256")
+        .update(
+          JSON.stringify([
+            "farol-product-agent-binding-v1",
+            cancelledProductAgentInput.envelope.input.taskId,
+            cancelledProductAgentInput.envelope.input.sessionId,
+            cancelledProductAgentInput.envelope.input.assignmentId,
+          ]),
+        )
+        .digest("hex"),
+      cancelledAgentBootstrap.tasks.find(
         (task) => task.taskId === agentCancellationTask.taskId,
       )?.agent?.assignmentBindingSha256,
-      phase: "cancelled",
-      workspaceId: productWorkspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    },
-  );
-  assert.equal(
-    await ordinaryLiveTasks.window.locator("#task-menu-close-task").isEnabled(),
-    true,
-  );
-  await ordinaryLiveTasks.window.screenshot({
-    path: path.join(evidenceRoot, "live-task-native-agent-cancelled.png"),
-  });
-  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
-  await ordinaryLiveTasks.window
-    .locator(`#task-tabs .task-tab[data-task-id="${pinnedTask.taskId}"]`)
-    .click();
+    );
+    assert.match(
+      deliveredProductAgentInput.text,
+      /Read README\.md through the approved exact-path scope/u,
+    );
+    assert.equal(deliveredProductAgentInput.envelope.schema, 2);
+    assert.deepEqual(deliveredProductAgentInput.envelope.input.scope, {
+      mode: "exact",
+      root: ordinaryLiveTasks.workspaceRoot,
+      paths: [path.join(ordinaryLiveTasks.workspaceRoot, "README.md")],
+    });
+    assert.deepEqual(
+      deliveredProductAgentInput.envelope.input.excludedPaths,
+      [],
+    );
+    assert.equal(cancelledProductAgentInput.envelope.schema, 2);
+    assert.deepEqual(cancelledProductAgentInput.envelope.input.scope, {
+      mode: "subtree",
+      root: ordinaryLiveTasks.workspaceRoot,
+    });
+    assert.deepEqual(
+      cancelledProductAgentInput.envelope.input.excludedPaths,
+      [],
+    );
+    assert.equal((await fs.stat(productAgentInputRoot)).mode & 0o777, 0o700);
+    assert.ok(
+      (
+        await Promise.all(
+          productAgentInputs.map(async ({ target }) =>
+            fs.stat(target).then((entry) => entry.mode & 0o777),
+          ),
+        )
+      ).every((mode) => mode === 0o600),
+    );
 
-  const productAgentInputRoot = path.join(
-    ordinaryLiveTasks.userData,
-    "farol-next-state",
-    "product-agent-inputs",
-  );
-  const productAgentInputFiles = (
-    await fs.readdir(productAgentInputRoot)
-  ).filter((entry) => entry.endsWith(".json"));
-  assert.equal(productAgentInputFiles.length, 2);
-  const productAgentInputs = await Promise.all(
-    productAgentInputFiles.map(async (entry) => {
-      const target = path.join(productAgentInputRoot, entry);
-      const text = await fs.readFile(target, "utf8");
-      return { target, text, envelope: JSON.parse(text) };
-    }),
-  );
-  const deliveredProductAgentInput = productAgentInputs.find(({ text }) =>
-    /Read README\.md through the approved exact-path scope/u.test(text),
-  );
-  const cancelledProductAgentInput = productAgentInputs.find(({ text }) =>
-    /proves exact native cancellation/u.test(text),
-  );
-  assert.ok(deliveredProductAgentInput);
-  assert.ok(cancelledProductAgentInput);
-  assert.equal(
-    createHash("sha256")
-      .update(
-        JSON.stringify([
-          "farol-product-agent-binding-v1",
-          deliveredProductAgentInput.envelope.input.taskId,
-          deliveredProductAgentInput.envelope.input.sessionId,
-          deliveredProductAgentInput.envelope.input.assignmentId,
-        ]),
-      )
-      .digest("hex"),
-    productAgentTask.agent.assignmentBindingSha256,
-  );
-  assert.equal(
-    createHash("sha256")
-      .update(
-        JSON.stringify([
-          "farol-product-agent-binding-v1",
-          cancelledProductAgentInput.envelope.input.taskId,
-          cancelledProductAgentInput.envelope.input.sessionId,
-          cancelledProductAgentInput.envelope.input.assignmentId,
-        ]),
-      )
-      .digest("hex"),
-    cancelledAgentBootstrap.tasks.find(
-      (task) => task.taskId === agentCancellationTask.taskId,
-    )?.agent?.assignmentBindingSha256,
-  );
-  assert.match(
-    deliveredProductAgentInput.text,
-    /Read README\.md through the approved exact-path scope/u,
-  );
-  assert.equal(deliveredProductAgentInput.envelope.schema, 2);
-  assert.deepEqual(deliveredProductAgentInput.envelope.input.scope, {
-    mode: "exact",
-    root: ordinaryLiveTasks.workspaceRoot,
-    paths: [path.join(ordinaryLiveTasks.workspaceRoot, "README.md")],
-  });
-  assert.deepEqual(deliveredProductAgentInput.envelope.input.excludedPaths, []);
-  assert.equal(cancelledProductAgentInput.envelope.schema, 2);
-  assert.deepEqual(cancelledProductAgentInput.envelope.input.scope, {
-    mode: "subtree",
-    root: ordinaryLiveTasks.workspaceRoot,
-  });
-  assert.deepEqual(cancelledProductAgentInput.envelope.input.excludedPaths, []);
-  assert.equal((await fs.stat(productAgentInputRoot)).mode & 0o777, 0o700);
-  assert.ok(
-    (
-      await Promise.all(
-        productAgentInputs.map(async ({ target }) =>
-          fs.stat(target).then((entry) => entry.mode & 0o777),
-        ),
-      )
-    ).every((mode) => mode === 0o600),
-  );
-
-  const assignmentRoot = path.join(
-    ordinaryLiveTasks.userData,
-    "farol-next-state",
-    "native-agent-assignments",
-    "assignments",
-  );
-  const assignmentFiles = (await fs.readdir(assignmentRoot)).filter((entry) =>
-    entry.endsWith(".json"),
-  );
-  const productAssignmentRecords = await Promise.all(
-    assignmentFiles.map(async (entry) => {
-      const target = path.join(assignmentRoot, entry);
-      return {
-        target,
-        record: JSON.parse(await fs.readFile(target, "utf8")).record,
-      };
-    }),
-  );
-  const productAssignment = productAssignmentRecords.find(
-    ({ record }) => record.assignment.identity.taskId === pinnedTask.taskId,
-  );
-  assert.ok(productAssignment);
-  assert.equal(productAssignment.record.assignment.phase, "completed");
-  assert.equal(productAssignment.record.parentDelivery, "acknowledged");
-  assert.equal(productAssignment.record.workspaceEnforcement, "verified");
-  assert.match(productAssignment.record.resultRef, /^codex-app-server:\/\//u);
-  assert.equal((await fs.stat(productAssignment.target)).mode & 0o777, 0o600);
-  const cancelledProductAssignment = productAssignmentRecords.find(
-    ({ record }) =>
-      record.assignment.identity.taskId === agentCancellationTask.taskId,
-  );
-  assert.ok(cancelledProductAssignment);
-  assert.equal(cancelledProductAssignment.record.assignment.phase, "cancelled");
-  assert.equal(cancelledProductAssignment.record.assignment.terminal, true);
-  assert.equal(
-    cancelledProductAssignment.record.assignment.terminalReason.code,
-    "AGENT_CANCELLED",
-  );
-  assert.equal(cancelledProductAssignment.record.resultRef, null);
-  assert.equal(
-    (await fs.stat(cancelledProductAssignment.target)).mode & 0o777,
-    0o600,
-  );
+    assignmentRoot = path.join(
+      ordinaryLiveTasks.userData,
+      "farol-next-state",
+      "native-agent-assignments",
+      "assignments",
+    );
+    const assignmentFiles = (await fs.readdir(assignmentRoot)).filter((entry) =>
+      entry.endsWith(".json"),
+    );
+    const productAssignmentRecords = await Promise.all(
+      assignmentFiles.map(async (entry) => {
+        const target = path.join(assignmentRoot, entry);
+        return {
+          target,
+          record: JSON.parse(await fs.readFile(target, "utf8")).record,
+        };
+      }),
+    );
+    const productAssignment = productAssignmentRecords.find(
+      ({ record }) => record.assignment.identity.taskId === pinnedTask.taskId,
+    );
+    assert.ok(productAssignment);
+    assert.equal(productAssignment.record.assignment.phase, "completed");
+    assert.equal(productAssignment.record.parentDelivery, "acknowledged");
+    assert.equal(productAssignment.record.workspaceEnforcement, "verified");
+    assert.match(productAssignment.record.resultRef, /^codex-app-server:\/\//u);
+    assert.equal((await fs.stat(productAssignment.target)).mode & 0o777, 0o600);
+    const cancelledProductAssignment = productAssignmentRecords.find(
+      ({ record }) =>
+        record.assignment.identity.taskId === agentCancellationTask.taskId,
+    );
+    assert.ok(cancelledProductAssignment);
+    assert.equal(
+      cancelledProductAssignment.record.assignment.phase,
+      "cancelled",
+    );
+    assert.equal(cancelledProductAssignment.record.assignment.terminal, true);
+    assert.equal(
+      cancelledProductAssignment.record.assignment.terminalReason.code,
+      "AGENT_CANCELLED",
+    );
+    assert.equal(cancelledProductAssignment.record.resultRef, null);
+    assert.equal(
+      (await fs.stat(cancelledProductAssignment.target)).mode & 0o777,
+      0o600,
+    );
+  } else {
+    const before = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(before.nativeAgent, false);
+    const hostStartsPath = path.join(
+      ordinaryLiveTasks.isolatedHome,
+      "codex-app-server-starts",
+    );
+    const readHostStarts = () =>
+      fs.readFile(hostStartsPath, "utf8").catch((error) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      });
+    const hostRequestsPath = path.join(
+      ordinaryLiveTasks.isolatedHome,
+      "codex-agent-requests",
+    );
+    const readHostRequests = () =>
+      fs.readFile(hostRequestsPath, "utf8").catch((error) => {
+        if (error.code === "ENOENT") return "";
+        throw error;
+      });
+    const assignmentDirectory = path.join(
+      ordinaryLiveTasks.userData,
+      "farol-next-state",
+      "native-agent-assignments",
+      "assignments",
+    );
+    const listJson = (directory) =>
+      fs
+        .readdir(directory)
+        .then((entries) => entries.filter((entry) => entry.endsWith(".json")))
+        .catch((error) => {
+          if (error.code === "ENOENT") return [];
+          throw error;
+        });
+    const productInputDirectory = path.join(
+      ordinaryLiveTasks.userData,
+      "farol-next-state",
+      "product-agent-inputs",
+    );
+    const hostStartsBefore = await readHostStarts();
+    const hostRequestsBefore = await readHostRequests();
+    const assignmentsBefore = await listJson(assignmentDirectory);
+    assert.deepEqual(await listJson(productInputDirectory), []);
+    for (const kind of ["task.start-agent", "task.rejoin-agent"]) {
+      const result = await ordinaryLiveTasks.window.evaluate(
+        ({ kind, taskId, workspaceId }) =>
+          window.farolNext.task({
+            kind,
+            taskId,
+            ...(kind === "task.start-agent"
+              ? {
+                  workspaceId,
+                  objective: "Default-off admission must not contact the host.",
+                  scope: { mode: "workspace", excludedPaths: [] },
+                }
+              : {}),
+          }),
+        {
+          kind,
+          taskId: pinnedTask.taskId,
+          workspaceId:
+            admittedState.configuration.settings.computer.workspaces[0]
+              .workspaceId,
+        },
+      );
+      assert.equal(result.ok, false, kind);
+      assert.equal(result.error, "AGENT_NOT_READY", kind);
+    }
+    const after = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(after.nativeAgent, false);
+    assert.equal(after.taskRevision, before.taskRevision);
+    assert.equal(
+      after.tasks.find((task) => task.taskId === pinnedTask.taskId)?.agent,
+      null,
+    );
+    assert.equal(await readHostStarts(), hostStartsBefore);
+    assert.equal(await readHostRequests(), hostRequestsBefore);
+    assert.deepEqual(await listJson(assignmentDirectory), assignmentsBefore);
+    assert.deepEqual(await listJson(productInputDirectory), []);
+    cases.push("live-task-product-agent-disabled-no-host-child-effects");
+  }
 
   const liveTaskRoot = path.join(
     ordinaryLiveTasks.userData,
@@ -6355,13 +6480,16 @@ liveTasksSegment: try {
   const liveTaskText = await fs.readFile(liveTaskPath, "utf8");
   const liveTaskRecord = JSON.parse(liveTaskText);
   assert.equal(liveTaskRecord.schema, 1);
-  assert.ok(liveTaskRecord.revision >= 12);
+  assert.ok(liveTaskRecord.revision > admittedState.taskRevision);
   assert.equal(liveTaskRecord.tasks.length, 4);
   assert.equal(liveTaskRecord.tasks[0].taskId, pinnedTask.taskId);
   assert.equal(liveTaskRecord.tasks[0].label, "Pinned continuity task");
   assert.equal(liveTaskRecord.tasks[0].pinned, true);
   assert.equal(liveTaskRecord.tasks[0].lifecycle, "completed");
-  assert.deepEqual(liveTaskRecord.tasks[0].agent, productAgentTask.agent);
+  assert.deepEqual(
+    liveTaskRecord.tasks[0].agent,
+    positiveProductAgentQualification ? productAgentTask.agent : null,
+  );
   assert.equal(
     liveTaskRecord.tasks[0].conversationUrl,
     retainedLiveConversationUrl,
@@ -6378,8 +6506,8 @@ liveTasksSegment: try {
   assert.equal(
     liveTaskRecord.tasks.find(
       (task) => task.taskId === agentCancellationTask.taskId,
-    )?.agent?.phase,
-    "cancelled",
+    )?.agent?.phase ?? null,
+    positiveProductAgentQualification ? "cancelled" : null,
   );
   assert.deepEqual(Object.keys(liveTaskRecord.tasks[0]).sort(), [
     "agent",
@@ -6509,125 +6637,143 @@ liveTasksSegment: try {
     0o600,
   );
 
-  await ordinaryLiveTasks.window
-    .locator(
-      `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
-    )
-    .click();
-  await ordinaryLiveTasks.window.locator("#task-menu-button").click();
-  await ordinaryLiveTasks.window
-    .locator("#task-menu")
-    .waitFor({ state: "visible" });
-  await ordinaryLiveTasks.window
-    .locator("#task-agent-objective")
-    .fill(
-      "Remain active until the persisted authority expires across an application restart.",
-    );
-  await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
-  await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
-  const expiringAgentState = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
-  );
-  const expiringAgentTask = expiringAgentState.tasks.find(
-    (task) => task.taskId === agentCancellationTask.taskId,
-  );
-  assert.equal(expiringAgentTask?.agent?.phase, "running");
-  assert.match(
-    expiringAgentTask.agent.assignmentBindingSha256,
-    /^[a-f0-9]{64}$/u,
-  );
-  await ordinaryLiveTasks.window.locator("#task-menu-close").click();
-  const expiringInputEnvelope = JSON.parse(
-    await fs.readFile(cancelledProductAgentInput.target, "utf8"),
-  );
-  assert.equal(
-    expiringInputEnvelope.input.taskId,
-    agentCancellationTask.taskId,
-  );
-  assert.match(
-    expiringInputEnvelope.input.objective,
-    /persisted authority expires/u,
-  );
-  assert.equal(
-    createHash("sha256")
-      .update(
-        JSON.stringify([
-          "farol-product-agent-binding-v1",
-          expiringInputEnvelope.input.taskId,
-          expiringInputEnvelope.input.sessionId,
-          expiringInputEnvelope.input.assignmentId,
-        ]),
+  if (positiveProductAgentQualification) {
+    await ordinaryLiveTasks.window
+      .locator(
+        `#task-tabs .task-tab[data-task-id="${agentCancellationTask.taskId}"]`,
       )
-      .digest("hex"),
-    expiringAgentTask.agent.assignmentBindingSha256,
-  );
-  expiringInputEnvelope.input.expiresAt = Date.now() - 1_000;
-  await fs.writeFile(
-    cancelledProductAgentInput.target,
-    `${JSON.stringify(expiringInputEnvelope, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  assert.equal(
-    (await fs.stat(cancelledProductAgentInput.target)).mode & 0o777,
-    0o600,
-  );
-
-  await restart(ordinaryLiveTasks);
-  await ordinaryLiveTasks.window.waitForFunction(
-    () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
-  );
-  await waitForPageState(
-    ordinaryLiveTasks.window,
-    async (taskId) => {
-      const state = await window.farolNext.bootstrap();
-      return (
-        state.tasks.find((task) => task.taskId === taskId)?.agent?.phase ===
-        "cancelled"
+      .click();
+    await ordinaryLiveTasks.window.locator("#task-menu-button").click();
+    await ordinaryLiveTasks.window
+      .locator("#task-menu")
+      .waitFor({ state: "visible" });
+    await ordinaryLiveTasks.window
+      .locator("#task-agent-objective")
+      .fill(
+        "Remain active until the persisted authority expires across an application restart.",
       );
-    },
-    agentCancellationTask.taskId,
-  );
-  await waitForWindowCount(ordinaryLiveTasks.application, 1);
-  const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
-    window.farolNext.bootstrap(),
-  );
-  assert.ok(recoveredState.taskRevision > handoffLiveTaskRecord.revision);
-  assert.deepEqual(
-    recoveredState.tasks,
-    handoffLiveTaskRecord.tasks.map(
-      ({ conversationUrl: _conversationUrl, ...task }) =>
-        task.taskId === agentCancellationTask.taskId
-          ? {
-              ...task,
-              agent: {
-                ...task.agent,
-                assignmentBindingSha256:
-                  expiringAgentTask.agent.assignmentBindingSha256,
-              },
-            }
-          : task,
-    ),
-  );
-  const expiredAssignmentFiles = (await fs.readdir(assignmentRoot)).filter(
-    (entry) => entry.endsWith(".json"),
-  );
-  const expiredAssignmentRecords = await Promise.all(
-    expiredAssignmentFiles.map(async (entry) =>
-      JSON.parse(await fs.readFile(path.join(assignmentRoot, entry), "utf8")),
-    ),
-  );
-  const expiredAssignment = expiredAssignmentRecords.find(
-    ({ record }) =>
-      record.assignment.identity.assignmentId ===
-      expiringInputEnvelope.input.assignmentId,
-  );
-  assert.ok(expiredAssignment);
-  assert.equal(expiredAssignment.record.assignment.phase, "cancelled");
-  assert.equal(expiredAssignment.record.assignment.terminal, true);
-  assert.equal(
-    expiredAssignment.record.assignment.terminalReason.code,
-    "AGENT_CANCELLED",
-  );
+    await ordinaryLiveTasks.window.locator("#task-menu-agent").click();
+    await waitForTaskMenuNote(ordinaryLiveTasks, "Agent assignment admitted.");
+    const expiringAgentState = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    const expiringAgentTask = expiringAgentState.tasks.find(
+      (task) => task.taskId === agentCancellationTask.taskId,
+    );
+    assert.equal(expiringAgentTask?.agent?.phase, "running");
+    assert.match(
+      expiringAgentTask.agent.assignmentBindingSha256,
+      /^[a-f0-9]{64}$/u,
+    );
+    await ordinaryLiveTasks.window.locator("#task-menu-close").click();
+    const expiringInputEnvelope = JSON.parse(
+      await fs.readFile(cancelledProductAgentInput.target, "utf8"),
+    );
+    assert.equal(
+      expiringInputEnvelope.input.taskId,
+      agentCancellationTask.taskId,
+    );
+    assert.match(
+      expiringInputEnvelope.input.objective,
+      /persisted authority expires/u,
+    );
+    assert.equal(
+      createHash("sha256")
+        .update(
+          JSON.stringify([
+            "farol-product-agent-binding-v1",
+            expiringInputEnvelope.input.taskId,
+            expiringInputEnvelope.input.sessionId,
+            expiringInputEnvelope.input.assignmentId,
+          ]),
+        )
+        .digest("hex"),
+      expiringAgentTask.agent.assignmentBindingSha256,
+    );
+    expiringInputEnvelope.input.expiresAt = Date.now() - 1_000;
+    await fs.writeFile(
+      cancelledProductAgentInput.target,
+      `${JSON.stringify(expiringInputEnvelope, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    assert.equal(
+      (await fs.stat(cancelledProductAgentInput.target)).mode & 0o777,
+      0o600,
+    );
+
+    await restart(ordinaryLiveTasks);
+    await ordinaryLiveTasks.window.waitForFunction(
+      () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
+    );
+    await waitForPageState(
+      ordinaryLiveTasks.window,
+      async (taskId) => {
+        const state = await window.farolNext.bootstrap();
+        return (
+          state.tasks.find((task) => task.taskId === taskId)?.agent?.phase ===
+          "cancelled"
+        );
+      },
+      agentCancellationTask.taskId,
+    );
+    await waitForWindowCount(ordinaryLiveTasks.application, 1);
+    const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.ok(recoveredState.taskRevision > handoffLiveTaskRecord.revision);
+    assert.deepEqual(
+      recoveredState.tasks,
+      handoffLiveTaskRecord.tasks.map(
+        ({ conversationUrl: _conversationUrl, ...task }) =>
+          task.taskId === agentCancellationTask.taskId
+            ? {
+                ...task,
+                agent: {
+                  ...task.agent,
+                  assignmentBindingSha256:
+                    expiringAgentTask.agent.assignmentBindingSha256,
+                },
+              }
+            : task,
+      ),
+    );
+    const expiredAssignmentFiles = (await fs.readdir(assignmentRoot)).filter(
+      (entry) => entry.endsWith(".json"),
+    );
+    const expiredAssignmentRecords = await Promise.all(
+      expiredAssignmentFiles.map(async (entry) =>
+        JSON.parse(await fs.readFile(path.join(assignmentRoot, entry), "utf8")),
+      ),
+    );
+    const expiredAssignment = expiredAssignmentRecords.find(
+      ({ record }) =>
+        record.assignment.identity.assignmentId ===
+        expiringInputEnvelope.input.assignmentId,
+    );
+    assert.ok(expiredAssignment);
+    assert.equal(expiredAssignment.record.assignment.phase, "cancelled");
+    assert.equal(expiredAssignment.record.assignment.terminal, true);
+    assert.equal(
+      expiredAssignment.record.assignment.terminalReason.code,
+      "AGENT_CANCELLED",
+    );
+  } else {
+    await restart(ordinaryLiveTasks);
+    await ordinaryLiveTasks.window.waitForFunction(
+      () => document.querySelectorAll("#task-tabs .task-tab").length === 4,
+    );
+    await waitForWindowCount(ordinaryLiveTasks.application, 1);
+    const recoveredState = await ordinaryLiveTasks.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(recoveredState.nativeAgent, false);
+    assert.deepEqual(
+      recoveredState.tasks,
+      handoffLiveTaskRecord.tasks.map(
+        ({ conversationUrl: _conversationUrl, ...task }) => task,
+      ),
+    );
+  }
   const recoveredNewTask = ordinaryLiveTasks.window.locator("#new-task");
   assert.equal(await recoveredNewTask.isEnabled(), true);
   assert.equal(await recoveredNewTask.locator("small").innerText(), "4 / 5");
@@ -6732,18 +6878,22 @@ liveTasksSegment: try {
     "shared-chatgpt-session-single-download-guard",
     "idle-live-task-cancel-refused-truthfully",
     "running-live-task-cancel-confirmed-once",
-    "live-task-native-agent-product-objective",
-    "live-task-native-agent-same-child-rejoin",
-    "live-task-native-agent-result-delivery-acknowledged",
-    "live-task-native-agent-private-input",
-    "live-task-native-agent-content-free-recovery",
-    "live-task-native-agent-owner-exact-path-narrowing",
-    "live-task-native-agent-cancel-confirmed",
-    "live-task-native-agent-expiry-cancelled-after-restart",
     "live-task-context-preservation-visible",
     "live-task-context-handoff-survives-restart",
     "live-task-context-confirmation-retires-source",
   );
+  if (positiveProductAgentQualification) {
+    cases.push(
+      "live-task-native-agent-product-objective",
+      "live-task-native-agent-same-child-rejoin",
+      "live-task-native-agent-result-delivery-acknowledged",
+      "live-task-native-agent-private-input",
+      "live-task-native-agent-content-free-recovery",
+      "live-task-native-agent-owner-exact-path-narrowing",
+      "live-task-native-agent-cancel-confirmed",
+      "live-task-native-agent-expiry-cancelled-after-restart",
+    );
+  }
 } finally {
   await close(ordinaryLiveTasks);
 }
@@ -11228,26 +11378,28 @@ n12AgentDraftSegment: {
     cases.push("n12-agent-draft-survives-background-auth-window-return");
 
     // Submitted once, and the wire shape is the one N11 pinned.
-    await draft.window.locator("#task-menu-agent").click({ timeout: 20_000 });
-    await draft.window.waitForFunction(
-      () =>
-        document.querySelector("#task-menu-note")?.textContent ===
-        "Agent assignment admitted.",
-    );
-    const delivered = await deliveredEnvelopes();
-    assert.equal(delivered.length, 1, "one submission, one envelope");
-    const envelope = JSON.parse(
-      await fs.readFile(path.join(agentInputRoot, delivered[0]), "utf8"),
-    );
-    assert.equal(envelope.schema, 2);
-    assert.deepEqual(envelope.input.scope, {
-      mode: "subtree",
-      root: subfolder,
-    });
-    assert.deepEqual(envelope.input.excludedPaths, [
-      path.join(subfolder, "scope.md"),
-    ]);
-    cases.push("n12-agent-draft-survives-to-a-single-submission");
+    if (positiveProductAgentQualification) {
+      await draft.window.locator("#task-menu-agent").click({ timeout: 20_000 });
+      await draft.window.waitForFunction(
+        () =>
+          document.querySelector("#task-menu-note")?.textContent ===
+          "Agent assignment admitted.",
+      );
+      const delivered = await deliveredEnvelopes();
+      assert.equal(delivered.length, 1, "one submission, one envelope");
+      const envelope = JSON.parse(
+        await fs.readFile(path.join(agentInputRoot, delivered[0]), "utf8"),
+      );
+      assert.equal(envelope.schema, 2);
+      assert.deepEqual(envelope.input.scope, {
+        mode: "subtree",
+        root: subfolder,
+      });
+      assert.deepEqual(envelope.input.excludedPaths, [
+        path.join(subfolder, "scope.md"),
+      ]);
+      cases.push("n12-agent-draft-survives-to-a-single-submission");
+    }
 
     // --- The owner's own close still clears --------------------------------
     await draft.window.keyboard.press("Escape");
@@ -11291,7 +11443,12 @@ n12AgentDraftSegment: {
 // would push the five lineage cases that journey already proves. Nothing
 // here re-proves lineage; it asserts only what the scope controls deliver.
 n11AgentScopeSegment: {
-  if (!segmentSelected("n11-agent-scope")) break n11AgentScopeSegment;
+  if (
+    !positiveProductAgentQualification ||
+    !segmentSelected("n11-agent-scope")
+  ) {
+    break n11AgentScopeSegment;
+  }
   segmentMark("n11-agent-scope", "start");
   const agentScope = await launch([], "hidden", "ordinary");
   try {
@@ -12845,6 +13002,8 @@ if (missingRequiredCases.length > 0) {
   );
 }
 const blockingObservations = blockingObservationsOf(harnessObservations);
+const productAgentQualification =
+  laneContract(evidenceLane).productAgentQualification;
 const report = {
   schema: 1,
   status: selectionActive
@@ -12855,6 +13014,7 @@ const report = {
         ? "BLOCKED"
         : "PASS",
   selection,
+  productAgentQualification,
   harnessObservations,
   lane: development ? "development-build" : "sealed-package",
   artifactSha256: artifact.artifactSha256,
@@ -12956,6 +13116,7 @@ await fs.writeFile(
 );
 await evidenceAttempt.finish(report.status, {
   cases,
+  productAgentQualification,
   blockedCases,
   skippedCases,
 });

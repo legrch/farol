@@ -60,6 +60,12 @@ Skipped focus rows are not native focus acceptance. Native fixtures are not
 live-provider or daily-driver acceptance. Keep each run's report and cleanup
 result, including failures and blocked rows.
 
+For the intentionally default-off build, each complete lane records Product
+Agent positive cases separately as `NOT_QUALIFIED`. The lane still requires
+its active feature cases and proves `AGENT_NOT_READY` for start/rejoin without
+host or child effects. A selected run never substitutes for either complete
+lane, and a default-off lane result never qualifies Product Agent.
+
 The GitHub workflow is manual-only, has `contents: read`, retains complete history,
 and does not persist checkout credentials or publish artifacts. It uses the
 [documented macOS ARM64 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).

@@ -50,6 +50,12 @@ function passingAttempt(lane, terminalOverrides = {}, extra = {}) {
       endedAt: "2026-09-18T09:10:00.000Z",
       firstFailure: null,
       cases: { raw: cases, normalized: [...cases].sort() },
+      ...(EVIDENCE_LANES[lane].productAgentQualification
+        ? {
+            productAgentQualification:
+              EVIDENCE_LANES[lane].productAgentQualification,
+          }
+        : {}),
       blockedCases: [],
       skippedCases: [],
       byproducts,
@@ -112,6 +118,56 @@ function evaluate(overrides = {}) {
 }
 
 describe("EV-03/EV-08 evidence eligibility", () => {
+  it("refuses a default-off product lane that claims PASS without explicit Agent qualification", () => {
+    const result = evaluate({
+      attempt: passingAttempt("sealed-package", {
+        productAgentQualification: null,
+      }),
+    });
+    expect(result.acceptable).toBe(false);
+    expect(result.reasons).toContain("PRODUCT_AGENT_QUALIFICATION_MISSING");
+  });
+
+  it("refuses positive Product Agent cases in a default-off lane", () => {
+    const attempt = passingAttempt("sealed-package");
+    const positive =
+      EVIDENCE_LANES["sealed-package"].productAgentQualification.cases[0];
+    attempt.terminal.cases.raw.push(positive);
+    attempt.terminal.cases.normalized.push(positive);
+    const result = evaluate({ attempt });
+    expect(result.acceptable).toBe(false);
+    expect(result.reasons).toContain(
+      `PRODUCT_AGENT_POSITIVE_CASE_UNQUALIFIED:${positive}`,
+    );
+  });
+
+  it("refuses to hide a positive Product Agent case among skipped cases", () => {
+    const positive =
+      EVIDENCE_LANES["sealed-package"].productAgentQualification.cases[0];
+    const result = evaluate({
+      attempt: passingAttempt("sealed-package", {
+        skippedCases: [{ name: positive, reason: "Agent disabled" }],
+      }),
+    });
+    expect(result.acceptable).toBe(false);
+    expect(result.reasons).toContain(
+      `PRODUCT_AGENT_POSITIVE_CASE_UNQUALIFIED:${positive}`,
+    );
+  });
+
+  it("refuses a changed default-off qualification even when required cases pass", () => {
+    const result = evaluate({
+      attempt: passingAttempt("sealed-package", {
+        productAgentQualification: {
+          ...EVIDENCE_LANES["sealed-package"].productAgentQualification,
+          status: "PASS",
+        },
+      }),
+    });
+    expect(result.acceptable).toBe(false);
+    expect(result.reasons).toContain("PRODUCT_AGENT_QUALIFICATION_MISMATCH");
+  });
+
   it.each([
     [
       "is not an observer receipt",
@@ -553,6 +609,8 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
     );
     await opened.finish("PASS", {
       cases: [...EVIDENCE_LANES["sealed-package"].cases],
+      productAgentQualification:
+        EVIDENCE_LANES["sealed-package"].productAgentQualification,
     });
     // Mirrors the exit receipt a real runner process writes on exit, so the
     // unrelated EXIT_RECEIPT_MISSING reason never crowds out what this

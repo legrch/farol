@@ -297,6 +297,27 @@ export function evaluateEligibility({
     const blocked = new Set(
       (attempt.terminal.blockedCases ?? []).map((entry) => entry.name),
     );
+    const skipped = new Set(
+      (attempt.terminal.skippedCases ?? []).map((entry) => entry.name),
+    );
+    if (contract.productAgentQualification) {
+      const expected = contract.productAgentQualification;
+      const actual = attempt.terminal.productAgentQualification;
+      if (!actual) {
+        reasons.push("PRODUCT_AGENT_QUALIFICATION_MISSING");
+      } else if (
+        actual.status !== expected.status ||
+        actual.reason !== expected.reason ||
+        JSON.stringify(actual.cases) !== JSON.stringify(expected.cases)
+      ) {
+        reasons.push("PRODUCT_AGENT_QUALIFICATION_MISMATCH");
+      }
+      for (const name of expected.cases) {
+        if (executed.has(name) || blocked.has(name) || skipped.has(name)) {
+          reasons.push(`PRODUCT_AGENT_POSITIVE_CASE_UNQUALIFIED:${name}`);
+        }
+      }
+    }
     if (executed.size === 0) reasons.push("NO_CASES_EXECUTED");
     for (const name of contract.cases) {
       if (executed.has(name)) continue;

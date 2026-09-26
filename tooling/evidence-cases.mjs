@@ -10,6 +10,30 @@
 // can satisfy a requirement whose minimum boundary is a live provider,
 // connector or installed host.
 
+// These assertions require an admitted Farol-backed Product Agent. The
+// current production route is intentionally disabled, so they remain a
+// visible qualification gap, separate from the default-off product lanes.
+const PRODUCT_AGENT_POSITIVE_CASES = Object.freeze([
+  "live-task-native-agent-product-objective",
+  "live-task-native-agent-same-child-rejoin",
+  "live-task-native-agent-result-delivery-acknowledged",
+  "live-task-native-agent-private-input",
+  "live-task-native-agent-content-free-recovery",
+  "live-task-native-agent-owner-exact-path-narrowing",
+  "live-task-native-agent-cancel-confirmed",
+  "live-task-native-agent-expiry-cancelled-after-restart",
+  "n11-agent-denied-subfolder-refused",
+  "n11-agent-subfolder-narrows-delivered-root",
+  "n11-agent-exclusion-reaches-the-delivered-assignment",
+  "n12-agent-draft-survives-to-a-single-submission",
+]);
+
+const DEFAULT_OFF_PRODUCT_AGENT_QUALIFICATION = Object.freeze({
+  status: "NOT_QUALIFIED",
+  reason: "FAROL_BACKED_PRODUCT_AGENT_ENABLED=false",
+  cases: PRODUCT_AGENT_POSITIVE_CASES,
+});
+
 const SHARED_PRODUCT_CASES = Object.freeze([
   "ordinary-native-codex-agent-lineage-verified",
   "demo-native-codex-agent-lineage-verified",
@@ -38,14 +62,7 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "shared-chatgpt-session-single-download-guard",
   "idle-live-task-cancel-refused-truthfully",
   "running-live-task-cancel-confirmed-once",
-  "live-task-native-agent-product-objective",
-  "live-task-native-agent-same-child-rejoin",
-  "live-task-native-agent-result-delivery-acknowledged",
-  "live-task-native-agent-private-input",
-  "live-task-native-agent-content-free-recovery",
-  "live-task-native-agent-owner-exact-path-narrowing",
-  "live-task-native-agent-cancel-confirmed",
-  "live-task-native-agent-expiry-cancelled-after-restart",
+  "live-task-product-agent-disabled-no-host-child-effects",
   "live-task-context-preservation-visible",
   "live-task-context-handoff-survives-restart",
   "live-task-context-confirmation-retires-source",
@@ -156,11 +173,7 @@ const SHARED_PRODUCT_CASES = Object.freeze([
   "n09-attach-challenge-answered-by-local-peer",
   "n09-attach-challenge-answered-exactly-once",
   "n09-attach-verified-from-its-own-receipt",
-  "n11-agent-denied-subfolder-refused",
-  "n11-agent-subfolder-narrows-delivered-root",
-  "n11-agent-exclusion-reaches-the-delivered-assignment",
   "n12-agent-draft-survives-background-auth-window-return",
-  "n12-agent-draft-survives-to-a-single-submission",
   "n12-agent-draft-cleared-by-owner-close",
   "n10-computer-second-workspace-added-from-panel",
   "n10-computer-workspace-removed-from-panel-and-settings",
@@ -222,6 +235,7 @@ export const EVIDENCE_LANES = Object.freeze({
       "dev-new-task-disabled-at-capacity",
       ...SHARED_PRODUCT_CASES,
     ]),
+    productAgentQualification: DEFAULT_OFF_PRODUCT_AGENT_QUALIFICATION,
     boundary: Object.freeze({
       ...LOCAL_FIXTURE_BOUNDARY,
       build: "development-electron",
@@ -231,6 +245,7 @@ export const EVIDENCE_LANES = Object.freeze({
     root: "artifacts/e2e",
     requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([...SEALED_PACKAGE_CASES, ...SHARED_PRODUCT_CASES]),
+    productAgentQualification: DEFAULT_OFF_PRODUCT_AGENT_QUALIFICATION,
     boundary: Object.freeze({
       ...LOCAL_FIXTURE_BOUNDARY,
       build: "sealed-package",

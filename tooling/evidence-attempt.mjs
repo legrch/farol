@@ -380,6 +380,9 @@ class EvidenceAttempt {
       signal: details.signal ?? null,
       firstFailure: this.firstFailure,
       cases: { raw, normalized: [...new Set(raw)].sort() },
+      ...(details.productAgentQualification
+        ? { productAgentQualification: details.productAgentQualification }
+        : {}),
       blockedCases: details.blockedCases ?? tracked.blockedCases ?? [],
       skippedCases: details.skippedCases ?? tracked.skippedCases ?? [],
       phases: this.readPhases(),

@@ -42,6 +42,30 @@ function inlineCaseArrays(source) {
 }
 
 describe("evidence case contract", () => {
+  it("keeps development affordances and package integrity in their own lanes", () => {
+    const development = EVIDENCE_LANES["development-build"].cases;
+    const sealed = EVIDENCE_LANES["sealed-package"].cases;
+    for (const name of [
+      "dev-new-task-first-is-reachable",
+      "dev-new-task-next-is-reachable",
+      "dev-new-task-disabled-at-capacity",
+    ]) {
+      expect(development).toContain(name);
+      expect(sealed).not.toContain(name);
+    }
+    for (const name of [
+      "malformed-artifact-rejected",
+      "tampered-artifact-rejected",
+      "packaged-launcher-identity",
+    ]) {
+      expect(sealed).toContain(name);
+      expect(development).not.toContain(name);
+    }
+    expect(
+      EVIDENCE_LANES["development-build"].productAgentQualification,
+    ).toEqual(EVIDENCE_LANES["sealed-package"].productAgentQualification);
+  });
+
   it("declares exactly the cases the E2E runner can record", async () => {
     const source = await fs.readFile(
       path.join(nextRoot, "tests/e2e/preview.e2e.mjs"),
@@ -51,7 +75,18 @@ describe("evidence case contract", () => {
     const declared = new Set([
       ...EVIDENCE_LANES["development-build"].cases,
       ...EVIDENCE_LANES["sealed-package"].cases,
+      ...EVIDENCE_LANES["development-build"].productAgentQualification.cases,
+      ...EVIDENCE_LANES["sealed-package"].productAgentQualification.cases,
     ]);
+    for (const lane of ["development-build", "sealed-package"]) {
+      const contract = EVIDENCE_LANES[lane];
+      expect(contract.productAgentQualification.status).toBe("NOT_QUALIFIED");
+      expect(
+        contract.productAgentQualification.cases.filter((name) =>
+          contract.cases.includes(name),
+        ),
+      ).toEqual([]);
+    }
     expect([...literals].filter((name) => !declared.has(name))).toEqual([]);
     expect(
       [...declared].filter(

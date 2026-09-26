@@ -54,6 +54,26 @@ nonterminal wait, same-child completion, durable delivery, and invalidation afte
 Computer generation changes. Its model is synthetic; exact host selection and live
 model execution remain separately classified evidence.
 
+## Default-off Product Agent acceptance
+
+The production Model and Farol-backed Product Agent routes remain disabled. The
+complete development and sealed-package lanes require the current ChatGPT,
+Computer, task, context, Setup, and native-host verification cases, plus a
+real-task `task.start-agent` and `task.rejoin-agent` refusal. That refusal must
+return `AGENT_NOT_READY` without a Product Agent input, assignment, host
+request, or child launch. The fixture records Codex app-server starts and
+agent requests around those commands; a native Agent used by Setup's separate
+verification does not count as Product Agent admission.
+
+The positive Product Agent cases are retained in the versioned lane contract
+as `productAgentQualification.status = NOT_QUALIFIED`. They are not required
+or executed in a default-off lane, and the eligibility verifier rejects a
+default-off attempt that omits this classification or claims one of those
+positive cases. A PASS for the default-off lane proves only its declared
+active behavior. It does not qualify Product Agent, native focus when skipped,
+an installed host, or a live provider. Earlier failed attempts remain failed
+historical receipts; changing the contract does not rewrite them.
+
 `task test:soak` is the separate hidden lifecycle/performance lane. It fixes the
 seed, performs five warm-up cycles, then fifty measured create/close cycles in batches
 of five ordinary task surfaces. Task-menu and Quick Switcher overlays alternate, and
