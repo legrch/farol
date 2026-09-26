@@ -151,15 +151,8 @@ describe("setup media manifest", () => {
     expect(fromDisk).toEqual(SETUP_MEDIA_MANIFEST);
   });
 
-  it("only reuses URLs already published in this repository's docs (docs/first-install.md)", async () => {
-    const docsPath = path.join(
-      __dirname,
-      "..",
-      "..",
-      "..",
-      "docs",
-      "first-install.md",
-    );
+  it("only reuses URLs already published in this repository's docs (docs/setup-links.md)", async () => {
+    const docsPath = path.join(__dirname, "..", "..", "docs", "setup-links.md");
     const docs = await fs.readFile(docsPath, "utf8");
     const urlPattern = /https?:\/\/[^\s)"'`]+/gu;
     for (const slot of SETUP_MEDIA_MANIFEST) {

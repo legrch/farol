@@ -40,7 +40,7 @@ describe("Farol Next promotion destination", () => {
       expect(() =>
         assertPromotionDestination({
           home: trusted,
-          source: "/checkout/vnext/dist/package/Farol Next Preview.app",
+          source: "/checkout/dist/package/Farol Next Preview.app",
           destination: path.join(
             legacyHome,
             "Applications/Farol Next Preview.app",
@@ -55,7 +55,7 @@ describe("Farol Next promotion destination", () => {
 
   it("admits only the fixed app directly below the owner's Applications", () => {
     const home = "/Users/owner";
-    const source = "/checkout/vnext/dist/package/Farol Next Preview.app";
+    const source = "/checkout/dist/package/Farol Next Preview.app";
     expect(
       assertPromotionDestination({
         home,
@@ -80,7 +80,7 @@ describe("Farol Next promotion destination", () => {
       expect(() =>
         assertPromotionDestination({
           home: "/Users/owner",
-          source: "/checkout/vnext/dist/package/Farol Next Preview.app",
+          source: "/checkout/dist/package/Farol Next Preview.app",
           destination,
         }),
       ).toThrow("PROMOTION_DESTINATION_OUTSIDE_OWNER_APPLICATIONS");

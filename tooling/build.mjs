@@ -31,9 +31,9 @@ import {
 } from "./dependency-digests.mjs";
 
 const root = process.cwd();
-const repositoryRoot = path.resolve(root, "..");
+const repositoryRoot = root;
 const output = path.join(root, "dist/app");
-const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const scope = ".";
 const initial = sourceSnapshot(repositoryRoot, scope);
 const inputRecords = new Map();
 
@@ -42,7 +42,7 @@ const inputRecords = new Map();
 // trusted to leave the bytes a later check would read.
 // Node startup hooks (NODE_OPTIONS, NODE_PATH, --loader/--import/--require)
 // run before this file and could stand in for the compiler. `task
-// next:package` starts the candidate build without any; a build that still
+// package` starts the candidate build without any; a build that still
 // sees one is never exact. A preload can hide itself, so this is a second
 // line behind that clean launch, not a replacement for it.
 const startupHooks = [
@@ -65,7 +65,7 @@ if (compilerRefusals.length > 0) {
     process.stderr.write(`compiler not trusted: ${problem}\n`);
   }
   process.stderr.write(
-    "Refusing to build. Reinstall the locked dependencies with `npm ci` in vnext.\n",
+    "Refusing to build. Reinstall the locked dependencies with `npm ci` from the repository root.\n",
   );
   process.exit(1);
 }
@@ -109,7 +109,7 @@ async function readBuildInput(file) {
     return bytes;
   }
 
-  const repositoryRelative = `${scope}/${relative}`;
+  const repositoryRelative = path.posix.join(scope, relative);
   const expected = initial.entries.get(repositoryRelative);
   const exact =
     expected !== undefined &&

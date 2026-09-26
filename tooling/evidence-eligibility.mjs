@@ -412,7 +412,7 @@ export function observerFor(observers, lane) {
   return receipt && typeof receipt === "object" ? receipt : null;
 }
 
-// node tooling/evidence-eligibility.mjs [--root <vnext>] [--candidate <file>]
+// node tooling/evidence-eligibility.mjs [--root <repository>] [--candidate <file>]
 //   [--review <file>] [--observer <file>] [--findings <file>]
 //   [--requirements <file>]
 // Prints the evaluation of every lane's latest attempt; exits 0 only when

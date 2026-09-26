@@ -1,0 +1,105 @@
+version: "3"
+
+tasks:
+  ci:
+    desc: Farol Next deterministic architecture, policy, coverage, Hunt, and build gate
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
+
+  dev:
+    # The owner's one development command: pick the declared toolchain, make
+    # sure dependencies match the lock, build whatever is on disk right now
+    # (uncommitted changes included, and said so plainly), and run it in this
+    # terminal. This is not `task package` / `task run`, which build
+    # and launch only an exact, committed, verified candidate; both keep their
+    # current strict behavior unchanged. Ctrl+C stops only what this started.
+    desc: One development entrypoint - toolchain, locked deps, current dev build, run here (not a candidate)
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/dev.mjs {{.CLI_ARGS}}
+
+  package:
+    desc: Build, assemble, and verify the explicit unsigned Farol Next Preview app
+    cmds:
+      # A candidate is built from a clean environment by the declared Node
+      # itself, not through npm: no NODE_OPTIONS, NODE_PATH, npm node-options
+      # or other startup hook runs before the compiler is authenticated. The
+      # wrapper runs isolated (-I), so no user-site .pth or usercustomize runs.
+      # This is the only entrypoint that produces a candidate.
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        if ! node_path="$(PATH="$clean_path" command -v node)" || [ -z "$node_path" ]; then
+          echo "task package requires the declared Node toolchain on $clean_path" >&2
+          exit 1
+        fi
+        /usr/bin/env -i \
+          HOME="${HOME:?task package requires HOME}" \
+          LANG="${LANG:-en_US.UTF-8}" \
+          PATH="$clean_path" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
+          /bin/sh -c '"$0" tooling/build.mjs && "$0" tooling/package.mjs "$@"' \
+          "$node_path" {{.CLI_ARGS}}
+
+  run:
+    desc: Launch the exact verified Farol Next packaged candidate; never builds or installs Legacy
+    cmds:
+      - |
+        clean_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+        if ! node_path="$(PATH="$clean_path" command -v node)" || [ -z "$node_path" ]; then
+          echo "task run requires Node to verify the candidate; install the declared toolchain before launching it" >&2
+          exit 1
+        fi
+        /usr/bin/env -i \
+          FAROL_NEXT_OWNER_LAUNCH=1 \
+          HOME="${HOME:?task run requires HOME}" \
+          LANG="${LANG:-en_US.UTF-8}" \
+          LC_ALL="${LC_ALL:-}" \
+          PATH="$clean_path" \
+          TMPDIR="${TMPDIR:-/tmp}" \
+          /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- \
+          "$node_path" tooling/run-preview.mjs {{.CLI_ARGS}}
+
+  preview:
+    desc: Build and launch the development-only Farol Next preview (not the packaged candidate)
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run preview
+
+  promote:
+    desc: Plan a non-overwriting Next-only local promotion; pass --apply only as the owner action
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- node tooling/promote-preview.mjs {{.CLI_ARGS}}
+
+  test:e2e:dev:
+    desc: Exercise exact clean development bytes; one inactive secondary-display window, fault runs hidden
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:dev -- {{.CLI_ARGS}}
+
+  test:soak:
+    desc: Run the hidden deterministic 50-cycle Farol Next lifecycle and resource soak
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:soak -- {{.CLI_ARGS}}
+
+  test:persistence-fault:
+    desc: Prove live task persistence failure remains visible and fails closed
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:persistence-fault -- {{.CLI_ARGS}}
+
+  test:two-generation-state:
+    desc: Prove owner state across the predecessor and this package (pass --predecessor-artifact=<its manifest>)
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:two-generation-state -- {{.CLI_ARGS}}
+
+  test:e2e:
+    desc: Exercise the packaged preview; one inactive secondary-display window, fault runs hidden
+    cmds:
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e -- {{.CLI_ARGS}}
+
+  ci:fast:
+    desc: Complete deterministic standalone gate without native UI
+    cmds:
+      - task: ci
+      - task: scan:secrets
+
+  scan:secrets:
+    cmds:
+      - ./scripts/scan-secrets.sh

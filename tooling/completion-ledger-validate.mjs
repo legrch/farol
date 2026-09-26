@@ -28,7 +28,7 @@ export const EXPECTED_COUNT_FIELD = "catalog.expectedCount";
 // The retired npm entrypoint and the entrypoint that replaced it.
 export const RETIRED_PACKAGE_STEP = "package";
 export const RETIRED_PACKAGE_COMMAND = "npm run package";
-export const CURRENT_PACKAGE_COMMAND = "task next:package";
+export const CURRENT_PACKAGE_COMMAND = "task package";
 
 function pushViolation(violations, violation) {
   violations.push(violation);
@@ -212,7 +212,7 @@ function checkDoneRowsHaveCurrentProof(requirements, violations) {
 }
 
 // Rule 5: no row's current command evidence may name the retired
-// `npm run package` entrypoint (vnext/package.json's "package" script now
+// `npm run package` entrypoint (package.json's "package" script now
 // only prints its retirement notice and exits 1). The only candidate
 // entrypoint is CURRENT_PACKAGE_COMMAND.
 function checkNoRetiredEntrypoint(requirements, violations) {

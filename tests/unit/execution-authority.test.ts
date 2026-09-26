@@ -265,7 +265,7 @@ describe("delegated execution authority", () => {
         action({
           kind: "workspace.read",
           workspaceId: "farol",
-          path: "/workspace/farol/vnext/package.json",
+          path: "/workspace/farol/package.json",
         }),
         1_000,
       ),
@@ -631,7 +631,7 @@ describe("delegated execution authority", () => {
         action({
           kind: "workspace.read",
           workspaceId: "farol",
-          path: "/workspace/farol/vnext/package.json",
+          path: "/workspace/farol/package.json",
         }),
         1_000,
       ),

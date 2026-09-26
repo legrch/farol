@@ -230,15 +230,15 @@ describe("F3-5 build provenance", () => {
 
   it("runs the candidate wrapper in isolated Python so no user-site hook runs", () => {
     const taskfile = fs.readFileSync(
-      path.join(vnextRoot, "..", "Taskfile.yml"),
+      path.join(vnextRoot, "Taskfile.yml"),
       "utf8",
     );
     const packageTask = taskfile.slice(
-      taskfile.indexOf("  next:package:"),
-      taskfile.indexOf("  next:run:"),
+      taskfile.indexOf("  package:"),
+      taskfile.indexOf("  run:"),
     );
     expect(packageTask).toContain(
-      "/usr/bin/python3 -I ../scripts/assert-owner-untouched.py",
+      "/usr/bin/python3 -I ./scripts/assert-owner-untouched.py",
     );
     expect(packageTask).toContain("/usr/bin/env -i");
   });
@@ -266,7 +266,7 @@ describe("F3-5 build provenance", () => {
     execFileSync(
       "/usr/bin/python3",
       ["-I", "scripts/assert-owner-untouched.py", "--", "/usr/bin/true"],
-      { env, cwd: path.join(vnextRoot, "..") },
+      { env, cwd: vnextRoot },
     );
     expect(fs.existsSync(marker)).toBe(false);
   });
@@ -279,12 +279,12 @@ describe("F3-5 build provenance", () => {
       expect(`${name}: ${command}`).not.toMatch(/tooling\/package\.mjs/u);
     }
     const taskfile = fs.readFileSync(
-      path.join(vnextRoot, "..", "Taskfile.yml"),
+      path.join(vnextRoot, "Taskfile.yml"),
       "utf8",
     );
     const runTask = taskfile.slice(
-      taskfile.indexOf("  next:run:"),
-      taskfile.indexOf("  next:preview:"),
+      taskfile.indexOf("  run:"),
+      taskfile.indexOf("  preview:"),
     );
     expect(runTask).toContain(
       "/usr/bin/python3 -I ./scripts/assert-owner-untouched.py",
@@ -307,7 +307,7 @@ describe("F3-5 build provenance", () => {
         "--input-type=module",
         "-e",
         `const { sourceSnapshot } = await import(${JSON.stringify(module)});
-         process.stdout.write(sourceSnapshot(${JSON.stringify(path.resolve(vnextRoot, ".."))}, "vnext").commit);`,
+         process.stdout.write(sourceSnapshot(${JSON.stringify(vnextRoot)}).commit);`,
       ],
       {
         encoding: "utf8",

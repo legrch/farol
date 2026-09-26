@@ -152,7 +152,7 @@ owner's host. Foreign `model_providers.farol` entries remain conflicts, not targ
 for overwrite. Preserve unrelated bytes, backups, independent selection consent
 and rollback. Existing shared marker/version formats are not reinterpreted.
 
-Development coexistence is a different concern. `vnext/`, Preview/Dev application
+Development coexistence is a different concern. The standalone source, Preview/Dev application
 IDs, browser partitions, state directories, temporary process names and private
 `FAROL_NEXT_*` environment variables remain isolated from Legacy. Existing MCP
 tool names and opaque call/receipt prefixes are not model IDs; their compatibility

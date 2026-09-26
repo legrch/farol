@@ -724,15 +724,14 @@ describe("executable discovery — bounded search surface", () => {
   });
 });
 
-describe("reviewed tunnel-client digests stay pinned to the Legacy registry", () => {
-  it("matches integrations/registry.json's dependencies.tunnelClient.builds exactly", async () => {
+describe("reviewed tunnel-client digests stay pinned to the standalone dependency registry", () => {
+  it("matches tooling/external-dependencies.json's dependencies.tunnelClient.builds exactly", async () => {
     const registryPath = path.join(
       __dirname,
       "..",
       "..",
-      "..",
-      "integrations",
-      "registry.json",
+      "tooling",
+      "external-dependencies.json",
     );
     const raw = await fs.readFile(registryPath, "utf8");
     const registry = JSON.parse(raw) as {

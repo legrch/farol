@@ -34,7 +34,7 @@ const visibleOutput = process.argv.includes("--visible-output");
 const FIXTURE_COMMENTARY = "Fixture commentary.";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = path.resolve(here, "../../..");
+const repositoryRoot = path.resolve(here, "../..");
 const reportArgument = process.argv
   .slice(2)
   .find((argument) => argument.startsWith("--report="));

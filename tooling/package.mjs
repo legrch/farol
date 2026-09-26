@@ -20,8 +20,8 @@ const appPath = path.join(packageRoot, "Farol Next Preview.app");
 const electronApp = path.join(root, "node_modules/electron/dist/Electron.app");
 const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";
 const runtimeApp = path.join(appPath, runtimeRelativePath);
-const repositoryRoot = path.resolve(root, "..");
-const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const repositoryRoot = root;
+const scope = ".";
 const packageDocument = JSON.parse(
   await fs.readFile(path.join(root, "package.json"), "utf8"),
 );

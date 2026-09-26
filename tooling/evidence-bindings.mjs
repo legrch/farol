@@ -433,9 +433,9 @@ function option(arguments_, name) {
 }
 
 const USAGE =
-  "usage: evidence-bindings.mjs --ledger <file> --root <vnext> [--candidate <file>] [--dev-candidate <file>] [--observer <file>]";
+  "usage: evidence-bindings.mjs --ledger <file> --root <repository> [--candidate <file>] [--dev-candidate <file>] [--observer <file>]";
 
-// node tooling/evidence-bindings.mjs --ledger <file> --root <vnext>
+// node tooling/evidence-bindings.mjs --ledger <file> --root <repository>
 //   [--candidate <artifact.json>] [--observer <file>]
 // Loads every EVIDENCE_LANES lane's attempts under --root, evaluates every
 // requirement's bindings against them, prints the result, and exits 0 only

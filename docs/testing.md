@@ -23,7 +23,7 @@ only for boundaries that do not require native visibility or focus. The packaged
 development reports include the actual display class, display count, work area,
 bounds, and initial focus observation.
 
-Ordinary `npm --prefix vnext run preview` launches do not carry a test window mode and
+Ordinary `npm run preview` launches do not carry a test window mode and
 retain foreground product behavior. The two accepted test-only arguments are
 `--preview-window-mode=hidden` and
 `--preview-window-mode=secondary-visible`; unknown or repeated values fail closed.
@@ -54,7 +54,7 @@ nonterminal wait, same-child completion, durable delivery, and invalidation afte
 Computer generation changes. Its model is synthetic; exact host selection and live
 model execution remain separately classified evidence.
 
-`task next:test:soak` is the separate hidden lifecycle/performance lane. It fixes the
+`task test:soak` is the separate hidden lifecycle/performance lane. It fixes the
 seed, performs five warm-up cycles, then fifty measured create/close cycles in batches
 of five ordinary task surfaces. Task-menu and Quick Switcher overlays alternate, and
 two fixed batches restart the application on the same private state before the final
@@ -67,14 +67,14 @@ provider surfaces. The result is the `report.json` of its attempt under
 `artifacts/lifecycle-soak/`; it is
 deterministic `FIXTURE_APP` evidence, not authenticated-provider performance.
 
-`task next:test:persistence-fault` is a separate hidden `SIMULATED_FAULT` lane.
+`task test:persistence-fault` is a separate hidden `SIMULATED_FAULT` lane.
 It admits one task durably, then rejects every later live-task store commit while
 the provider URL and lifecycle continue changing. The task must become visibly
 outcome-unknown, a later owner mutation must fail closed, and the retained file
 must remain at the last successful snapshot. Its exact-head report is the
 `report.json` of its attempt under `artifacts/persistence-fault/`.
 
-`task next:test:two-generation-state -- --predecessor-artifact=<manifest>` is the
+`task test:two-generation-state -- --predecessor-artifact=<manifest>` is the
 hidden lane for the owner's state across two sealed generations. Generation A is the
 predecessor that manifest names: the lane runs the verifier of A's own source commit
 in the checkout the manifest names, after proving every file of that commit's
@@ -92,7 +92,7 @@ digest may change. The ChatGPT dispatch-intent journal, undelivered agent result
 bundle placement are outside it. The report is the `report.json` of its attempt under
 `artifacts/two-generation-state/`.
 
-The final owner journey is separate from automation: `task next:run` is launched with
+The final owner journey is separate from automation: `task run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector
 read is repeated around it, and the application is quit by its exact instance. This
 live observation must be recorded as blocked when the connector is unavailable; status

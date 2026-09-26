@@ -17,7 +17,7 @@ export const EXPECTED_RESOURCE_MANIFEST = Object.freeze({
     state: "contained-in-userData",
     cache: "contained-in-sessionData",
     logs: "absent",
-    packageReceipt: "vnext/dist/package/artifact.json",
+    packageReceipt: "dist/package/artifact.json",
     promotionReceipt: "sibling-of-promoted-app",
   },
   runtime: {

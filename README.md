@@ -1,13 +1,13 @@
-# Farol Next Preview
+# Farol Preview
 
-Farol Next Preview is the isolated TypeScript/Electron vertical slice under
-`vnext/`. It does not install, activate, register, update, or replace the legacy
+Farol is a standalone TypeScript/Electron product. All source, tooling, tests,
+and resources live at the repository root. It does not install, activate, register, update, or replace the legacy
 Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 
 The source has two explicit local identities. `task dev` from the repository root
 launches **Farol Dev** (`local.farol.dev`) with persistent private state, dedicated
 browser/runtime partitions and an app-owned `CODEX_HOME`; rebuilding does not clear
-its sign-in or Settings. `task next:package` and `task next:run` keep the existing
+its sign-in or Settings. `task package` and `task run` keep the existing
 **Farol Next Preview** identity (`local.farol.next.preview`). Neither lane copies
 cookies, keys, profiles or personal Codex configuration from another identity.
 
@@ -103,20 +103,20 @@ those tools from its launcher.
 From the repository root:
 
 ```bash
-npm ci --prefix vnext
+npm ci
 task dev
-task next:ci
-task next:test:e2e:dev
-npm --prefix vnext run test:e2e:computer
-task next:package
-task next:test:e2e
-npm --prefix vnext run test:e2e:computer:package
+task ci
+task test:e2e:dev
+npm run test:e2e:computer
+task package
+task test:e2e
+npm run test:e2e:computer:package
 ```
 
 The canonical owner command is:
 
 ```bash
-task next:run
+task run
 ```
 
 That command opens the packaged Preview. The exact Farol Dev onboarding command is:
@@ -129,7 +129,7 @@ It opens the ordinary product shell with zero synthetic tasks. The retained fixt
 journey is explicit:
 
 ```bash
-task next:run -- --demo
+task run -- --demo
 ```
 
 The verified packaged candidate workflow copies the existing package into a private
@@ -143,7 +143,7 @@ process emits one mandatory bounded launch result only after either the primary
 startup is complete or the existing primary has answered. The owner launcher waits
 for closed output streams and fails on a missing, malformed, or duplicate result even
 when the child exits with status zero.
-`task next:preview` is the separate development lane; it builds development bytes and
+`task preview` is the separate development lane; it builds development bytes and
 is not artifact evidence. See [`docs/owner-preview.md`](docs/owner-preview.md) for
 controls and lifecycle.
 
@@ -179,12 +179,12 @@ silently skipping or passing them.
 Launch the exact built development preview through the pinned Electron runtime:
 
 ```bash
-npm --prefix vnext run preview
+npm run preview
 ```
 
 Pass `-- --demo` only when deliberately exercising the development fixture.
 
-After `task next:package`, use only the canonical command above. Running the executable
+After `task package`, use only the canonical command above. Running the executable
 inside `dist/package` directly bypasses source, manifest, resource, and digest
 verification and is unsupported.
 
@@ -222,10 +222,10 @@ These directories are ignored because they are reproducible local evidence, not
 source inputs.
 
 `sourceTreeDigest` is the SHA-256 of the canonical recursive Git tree listing for
-the committed `vnext/` subtree. Packaging also requires every project build input
+the complete committed repository tree. Packaging also requires every project build input
 to match its HEAD blob, rejects special index flags and tracked symlinks, records a
 dependency-input ledger, and binds every built entry by SHA-256. The separate
 `sourceDirty` flag reports tracked or untracked non-ignored worktree changes.
-The portable `vnext/AGENTS.md` is tracked and contributes to this identity. `.DS_Store`,
+The portable `AGENTS.md` is tracked and contributes to this identity. `.DS_Store`,
 build output, coverage and other explicitly ignored host noise do not change the
 identity of the same clean commit.

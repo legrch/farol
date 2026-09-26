@@ -16,8 +16,8 @@ import { createOwnerLaunchResultCollector } from "./owner-launch-result.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const repositoryRoot = path.resolve(root, "..");
-const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const repositoryRoot = root;
+const scope = ".";
 const { artifactFile, appPath } = candidatePaths(root);
 
 function fail(message) {
@@ -41,16 +41,14 @@ function verify(artifactPath, candidateAppPath, environment) {
 
 async function main() {
   if (process.env.FAROL_NEXT_OWNER_LAUNCH !== "1") {
-    throw new Error("use the canonical owner command 'task next:run'");
+    throw new Error("use the canonical owner command 'task run'");
   }
   const launchArguments = process.argv.slice(2);
   if (
     launchArguments.length > 1 ||
     (launchArguments.length === 1 && launchArguments[0] !== "--demo")
   ) {
-    throw new Error(
-      "task next:run accepts only the explicit '--demo' launch flag",
-    );
+    throw new Error("task run accepts only the explicit '--demo' launch flag");
   }
 
   let artifact;
@@ -59,14 +57,14 @@ async function main() {
     artifactBytes = await fs.readFile(artifactFile);
     artifact = JSON.parse(artifactBytes.toString("utf8"));
   } catch {
-    throw new Error("package is missing; run 'task next:package' first");
+    throw new Error("package is missing; run 'task package' first");
   }
 
   try {
     assertCanonicalArtifactPath(root, artifact);
   } catch {
     throw new Error(
-      "package manifest does not identify the canonical repository candidate; run 'task next:package'",
+      "package manifest does not identify the canonical repository candidate; run 'task package'",
     );
   }
 
@@ -78,7 +76,7 @@ async function main() {
     );
   } catch {
     throw new Error(
-      "package is stale or source is not exact; commit the intended Next source and run 'task next:package'",
+      "package is stale or source is not exact; commit the intended Next source and run 'task package'",
     );
   }
 
@@ -98,7 +96,7 @@ async function main() {
     if (verified.status !== 0) {
       const detail = `${verified.stderr}${verified.stdout}`.trim();
       throw new Error(
-        `package verification failed; run 'task next:package' (${detail || "no verifier detail"})`,
+        `package verification failed; run 'task package' (${detail || "no verifier detail"})`,
       );
     }
     process.stdout.write(verified.stdout);

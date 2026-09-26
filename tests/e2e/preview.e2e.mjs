@@ -151,7 +151,7 @@ function verifyArtifact(candidateMetadataPath, candidateAppPath = null) {
   });
 }
 
-const expectedSource = sourceIdentity(path.resolve(root, ".."), "vnext");
+const expectedSource = sourceIdentity(root);
 assert.equal(expectedSource.dirty, false, "E2E_SOURCE_NOT_HEAD_EXACT");
 let artifact;
 let buildIdentity;

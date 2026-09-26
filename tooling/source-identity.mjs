@@ -42,7 +42,7 @@ function parseTree(tree) {
   return entries;
 }
 
-export function sourceSnapshot(repositoryRoot, scope = "vnext") {
+export function sourceSnapshot(repositoryRoot, scope = ".") {
   const commit = git(
     repositoryRoot,
     ["rev-parse", "--verify", "HEAD"],
@@ -157,7 +157,7 @@ export function sourceSnapshot(repositoryRoot, scope = "vnext") {
   return { ...identity, entries };
 }
 
-export function sourceIdentity(repositoryRoot, scope = "vnext") {
+export function sourceIdentity(repositoryRoot, scope = ".") {
   const { entries: _entries, ...identity } = sourceSnapshot(
     repositoryRoot,
     scope,

@@ -1,0 +1,40 @@
+title = "Farol trusted gitleaks policy"
+
+# Farol is distributed to a small private circle. The repository is private, but
+# private is not a secret store: a leaked key stays leaked once anyone with
+# access clones it, and a token committed here would reach every recipient's
+# disk. Every rule below is therefore additive to the upstream default set, not
+# a relaxation of it.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-token"
+description = "Anthropic API token"
+regex = '''\bsk-ant-api[A-Za-z0-9_-]{20,}\b'''
+keywords = ["sk-ant-api"]
+
+[[rules]]
+id = "anthropic-oauth-token"
+description = "Anthropic OAuth token"
+regex = '''\bsk-ant-oat[A-Za-z0-9_-]{20,}\b'''
+keywords = ["sk-ant-oat"]
+
+[[rules]]
+id = "openai-session-token"
+description = "OpenAI/ChatGPT session or access token"
+regex = '''\b(?:sess-[A-Za-z0-9]{32,}|sk-proj-[A-Za-z0-9_-]{20,})\b'''
+keywords = ["sess-", "sk-proj-"]
+
+[[rules]]
+id = "chatgpt-session-cookie"
+description = "ChatGPT session cookie name and value"
+regex = '''__Secure-next-auth\.session-token\s*[=:]\s*['"]?[A-Za-z0-9._-]{40,}'''
+keywords = ["__Secure-next-auth.session-token"]
+
+[[rules]]
+id = "cloudflare-tunnel-token"
+description = "Cloudflare tunnel credentials"
+regex = '''\beyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b'''
+keywords = ["eyJ"]

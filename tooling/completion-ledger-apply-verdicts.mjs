@@ -148,7 +148,7 @@ export function applyVerdicts({ ledger, bindingsResult }) {
     byVerdict,
     recordedDoneByVerdict,
     validator: {
-      tool: "vnext/tooling/evidence-bindings.mjs",
+      tool: "tooling/evidence-bindings.mjs",
       exit: blocking ? 1 : 0,
       header: bindingsResult.header.reasons,
       laneMismatches: bindingsResult.lanes
@@ -172,10 +172,10 @@ function option(arguments_, name) {
 }
 
 const USAGE =
-  "usage: completion-ledger-apply-verdicts.mjs --ledger <file> --root <vnext> " +
+  "usage: completion-ledger-apply-verdicts.mjs --ledger <file> --root <repository> " +
   "[--candidate <file>] [--dev-candidate <file>] [--observer <file>] [--write]";
 
-// node tooling/completion-ledger-apply-verdicts.mjs --ledger <file> --root <vnext>
+// node tooling/completion-ledger-apply-verdicts.mjs --ledger <file> --root <repository>
 //   [--candidate <artifact.json>] [--dev-candidate <file>] [--observer <file>] [--write]
 // Loads every EVIDENCE_LANES lane's attempts under --root, evaluates the
 // ledger's own bindings against them via evidence-bindings.mjs's

@@ -20,11 +20,11 @@ async function repositoryWithOneFile(body = "export {};\n") {
   const repository = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-source-identity-"),
   );
-  await fs.mkdir(path.join(repository, "vnext/nested"), { recursive: true });
-  await fs.writeFile(path.join(repository, "vnext/main.ts"), body);
-  await fs.writeFile(path.join(repository, "vnext/nested/deep.ts"), body);
+  await fs.mkdir(path.join(repository, "nested"), { recursive: true });
+  await fs.writeFile(path.join(repository, "main.ts"), body);
+  await fs.writeFile(path.join(repository, "nested/deep.ts"), body);
   git(repository, "init", "-q");
-  git(repository, "add", "vnext");
+  git(repository, "add", ".");
   git(
     repository,
     "-c",
@@ -47,14 +47,11 @@ describe("source identity distinguishes a difference from a failure", () => {
   it("names the file when one genuinely differs, instead of only saying dirty", async () => {
     const repository = await repositoryWithOneFile();
     try {
-      await fs.writeFile(
-        path.join(repository, "vnext/main.ts"),
-        "export {}; //\n",
-      );
+      await fs.writeFile(path.join(repository, "main.ts"), "export {}; //\n");
       const identity = sourceIdentity(repository);
       expect(identity.dirty).toBe(true);
       expect(identity.reasons).toContainEqual(
-        expect.objectContaining({ kind: "content", path: "vnext/main.ts" }),
+        expect.objectContaining({ kind: "content", path: "main.ts" }),
       );
     } finally {
       await fs.rm(repository, { recursive: true, force: true });
@@ -63,7 +60,7 @@ describe("source identity distinguishes a difference from a failure", () => {
 
   it("refuses with the file named when a tracked file cannot be read, rather than calling it dirty", async () => {
     const repository = await repositoryWithOneFile();
-    const unreadable = path.join(repository, "vnext/nested");
+    const unreadable = path.join(repository, "nested");
     try {
       await fs.chmod(unreadable, 0o000);
       let thrown = null;
@@ -77,7 +74,7 @@ describe("source identity distinguishes a difference from a failure", () => {
         "an unreadable tracked file must refuse, not return",
       ).not.toBe(null);
       expect(thrown.message).toContain("SOURCE_IDENTITY_UNREADABLE");
-      expect(thrown.message).toContain("vnext/nested/deep.ts");
+      expect(thrown.message).toContain("nested/deep.ts");
     } finally {
       await fs.chmod(unreadable, 0o700).catch(() => undefined);
       await fs.rm(repository, { recursive: true, force: true });
@@ -102,21 +99,15 @@ describe("source identity", () => {
       path.join(os.tmpdir(), "farol-next-source-identity-"),
     );
     try {
-      await fs.mkdir(path.join(repository, "vnext"));
+      // The fixture itself is the standalone repository root.
+      await fs.writeFile(path.join(repository, ".gitignore"), ".DS_Store\n");
       await fs.writeFile(
-        path.join(repository, "vnext/.gitignore"),
-        ".DS_Store\n",
-      );
-      await fs.writeFile(
-        path.join(repository, "vnext/AGENTS.md"),
+        path.join(repository, "AGENTS.md"),
         "tracked portable instructions\n",
       );
-      await fs.writeFile(
-        path.join(repository, "vnext/main.ts"),
-        "export {};\n",
-      );
+      await fs.writeFile(path.join(repository, "main.ts"), "export {};\n");
       git(repository, "init", "-q");
-      git(repository, "add", "vnext");
+      git(repository, "add", ".");
       git(
         repository,
         "-c",
@@ -128,35 +119,35 @@ describe("source identity", () => {
         "initial",
       );
 
-      const initial = sourceIdentity(repository, "vnext");
-      await fs.writeFile(path.join(repository, "vnext/.DS_Store"), "host-a");
-      const withIgnoredNoise = sourceIdentity(repository, "vnext");
+      const initial = sourceIdentity(repository, ".");
+      await fs.writeFile(path.join(repository, ".DS_Store"), "host-a");
+      const withIgnoredNoise = sourceIdentity(repository, ".");
 
       expect(withIgnoredNoise).toEqual(initial);
       expect(initial.dirty).toBe(false);
 
       await fs.writeFile(
-        path.join(repository, "vnext/AGENTS.md"),
+        path.join(repository, "AGENTS.md"),
         "changed portable instructions\n",
       );
-      expect(sourceIdentity(repository, "vnext")).toMatchObject({
+      expect(sourceIdentity(repository, ".")).toMatchObject({
         commit: initial.commit,
         treeDigest: initial.treeDigest,
         dirty: true,
       });
-      git(repository, "restore", "vnext/AGENTS.md");
+      git(repository, "restore", "AGENTS.md");
 
       await fs.writeFile(
-        path.join(repository, "vnext/main.ts"),
+        path.join(repository, "main.ts"),
         "export const changed = true;\n",
       );
-      expect(sourceIdentity(repository, "vnext")).toMatchObject({
+      expect(sourceIdentity(repository, ".")).toMatchObject({
         commit: initial.commit,
         treeDigest: initial.treeDigest,
         dirty: true,
       });
 
-      git(repository, "add", "vnext/main.ts");
+      git(repository, "add", "main.ts");
       git(
         repository,
         "-c",
@@ -167,34 +158,31 @@ describe("source identity", () => {
         "-qm",
         "change",
       );
-      const changed = sourceIdentity(repository, "vnext");
+      const changed = sourceIdentity(repository, ".");
       expect(changed.dirty).toBe(false);
       expect(changed.commit).not.toBe(initial.commit);
       expect(changed.treeDigest).not.toBe(initial.treeDigest);
 
-      git(repository, "update-index", "--assume-unchanged", "vnext/main.ts");
+      git(repository, "update-index", "--assume-unchanged", "main.ts");
       await fs.writeFile(
-        path.join(repository, "vnext/main.ts"),
+        path.join(repository, "main.ts"),
         "export const hidden = true;\n",
       );
-      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
-      git(repository, "update-index", "--no-assume-unchanged", "vnext/main.ts");
-      git(repository, "restore", "vnext/main.ts");
+      expect(sourceIdentity(repository, ".").dirty).toBe(true);
+      git(repository, "update-index", "--no-assume-unchanged", "main.ts");
+      git(repository, "restore", "main.ts");
 
-      git(repository, "update-index", "--skip-worktree", "vnext/main.ts");
+      git(repository, "update-index", "--skip-worktree", "main.ts");
       await fs.writeFile(
-        path.join(repository, "vnext/main.ts"),
+        path.join(repository, "main.ts"),
         "export const skipped = true;\n",
       );
-      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
-      git(repository, "update-index", "--no-skip-worktree", "vnext/main.ts");
-      git(repository, "restore", "vnext/main.ts");
+      expect(sourceIdentity(repository, ".").dirty).toBe(true);
+      git(repository, "update-index", "--no-skip-worktree", "main.ts");
+      git(repository, "restore", "main.ts");
 
-      await fs.symlink(
-        "../../outside.ts",
-        path.join(repository, "vnext/link.ts"),
-      );
-      git(repository, "add", "vnext/link.ts");
+      await fs.symlink("../../outside.ts", path.join(repository, "link.ts"));
+      git(repository, "add", "link.ts");
       git(
         repository,
         "-c",
@@ -205,7 +193,7 @@ describe("source identity", () => {
         "-qm",
         "tracked symlink",
       );
-      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
+      expect(sourceIdentity(repository, ".").dirty).toBe(true);
     } finally {
       await fs.rm(repository, { recursive: true, force: true });
     }
@@ -221,13 +209,13 @@ describe("source identity", () => {
       for (let index = 0; index < evidence.length; index += 1) {
         evidence[index] = (index * 7919) & 0xff;
       }
-      await fs.mkdir(path.join(repository, "vnext/evidence"), {
+      await fs.mkdir(path.join(repository, "evidence"), {
         recursive: true,
       });
-      const target = path.join(repository, "vnext/evidence/overview.bin");
+      const target = path.join(repository, "evidence/overview.bin");
       await fs.writeFile(target, evidence);
       git(repository, "init", "-q");
-      git(repository, "add", "vnext");
+      git(repository, "add", ".");
       git(
         repository,
         "-c",
@@ -239,11 +227,11 @@ describe("source identity", () => {
         "large evidence",
       );
 
-      expect(sourceIdentity(repository, "vnext").dirty).toBe(false);
+      expect(sourceIdentity(repository, ".").dirty).toBe(false);
 
       evidence[evidence.length - 1] ^= 0xff;
       await fs.writeFile(target, evidence);
-      expect(sourceIdentity(repository, "vnext").dirty).toBe(true);
+      expect(sourceIdentity(repository, ".").dirty).toBe(true);
     } finally {
       await fs.rm(repository, { recursive: true, force: true });
     }

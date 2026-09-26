@@ -27,8 +27,8 @@ import {
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const repositoryRoot = path.resolve(root, "..");
-const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const repositoryRoot = root;
+const scope = ".";
 
 // artifact.json is read like every other file this CLI trusts: a regular
 // file opened without following a symlink, owned by this user, not writable

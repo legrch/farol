@@ -112,14 +112,14 @@ function validVitestReport(root) {
   };
 }
 
-// The fixture is a real Git repository with the product under vnext/, so the
+// The fixture is a standalone Git repository inside a disposable fixture parent, so the
 // report measures the same source identity the real build attests.
 async function createFixtureRoot() {
   const created = await mkdtemp(
     path.join(os.tmpdir(), "farol-hunt-report-test-"),
   );
-  const repository = await realpath(created);
-  const root = path.join(repository, "vnext");
+  const repository = path.join(await realpath(created), "source");
+  const root = repository;
   await Promise.all([
     mkdir(path.join(root, "node_modules/vitest"), { recursive: true }),
     mkdir(path.join(root, "tooling"), { recursive: true }),
@@ -128,7 +128,7 @@ async function createFixtureRoot() {
   await Promise.all([
     writeFile(
       path.join(repository, ".gitignore"),
-      "vnext/node_modules/\nvnext/dist/\nvnext/artifacts/\n",
+      "node_modules/\ndist/\nartifacts/\n",
     ),
     writeFile(
       path.join(root, "node_modules/vitest/vitest.mjs"),
@@ -155,7 +155,7 @@ async function createFixtureRoot() {
         'import fs from "node:fs";',
         'import path from "node:path";',
         `import { sourceIdentity } from ${JSON.stringify(sourceIdentityModule)};`,
-        'const identity = sourceIdentity(path.resolve(process.cwd(), ".."), "vnext");',
+        "const identity = sourceIdentity(process.cwd());",
         'const ledger = JSON.stringify([{ kind: "source", path: "src/main.ts", objectId: "0".repeat(40), sha256: "1".repeat(64), exact: true }]);',
         'const overrides = JSON.parse(process.env.FAKE_BUILD_OVERRIDES ?? "{}");',
         'fs.mkdirSync("dist/app", { recursive: true });',

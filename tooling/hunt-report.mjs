@@ -6,8 +6,8 @@ import { openEvidenceAttempt } from "./evidence-attempt.mjs";
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
-const repositoryRoot = path.resolve(root, "..");
-const scope = path.relative(repositoryRoot, root).split(path.sep).join("/");
+const repositoryRoot = root;
+const scope = ".";
 const vitest = path.join(root, "node_modules/vitest/vitest.mjs");
 const suites = [
   {

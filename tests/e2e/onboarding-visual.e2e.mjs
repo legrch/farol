@@ -8,8 +8,8 @@ import { _electron as electron } from "playwright-core";
 
 const root = process.cwd();
 const label = "guided-owner-editable";
-const output = path.resolve(root, "../_output/onboarding-visual", label);
-const tempParent = path.resolve(root, "../_output/tmp");
+const output = path.resolve(root, "artifacts/onboarding-visual", label);
+const tempParent = path.resolve(root, "artifacts/tmp");
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
 await fs.mkdir(tempParent, { recursive: true, mode: 0o700 });
 const temporaryRoot = await fs.mkdtemp(

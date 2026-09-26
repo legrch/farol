@@ -2,7 +2,7 @@
 // Default: inventory only, no tool or child. Explicit --lineage: one new
 // synthetic child and one wait using the observed exact schemas. Skills are
 // recorded as advertised, never invoked; this is not Product Agent acceptance.
-// Run from vnext: node tests/e2e/codex-agent-inventory.e2e.mjs [--lineage]
+// Run from the repository root: node tests/e2e/codex-agent-inventory.e2e.mjs [--lineage]
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
@@ -84,7 +84,7 @@ const turns = new Map();
 const childPrompt =
   "Return only FAROL_INVENTORY_CHILD. Do not invoke any tool, skill or descendant.";
 const bundle = path.join(temp, "production.mjs");
-const reportDirectory = path.resolve(root, "../_output/evidence");
+const reportDirectory = path.resolve(root, "artifacts/evidence");
 const reportPath = path.join(reportDirectory, `${path.basename(temp)}.json`);
 
 try {

@@ -3,7 +3,7 @@
 // toolchain, make sure dependencies are the locked ones, build the current
 // development bytes, and run Farol's own local processes in this terminal.
 //
-// This is deliberately not `task next:package` / `task next:run`, which build
+// This is deliberately not `task package` / `task run`, which build
 // and verify an exact, committed candidate and refuse a stale or dirty one.
 // This command builds whatever is on disk right now, including uncommitted
 // changes, and says so plainly. Ctrl+C stops only what it started.
@@ -198,13 +198,13 @@ export function evaluateDependencies({ committedPackages, installedPackages }) {
 function readDependencyState(root) {
   const nodeModules = path.join(root, "node_modules");
   if (!fs.existsSync(nodeModules)) {
-    return { ok: false, reasons: ["vnext/node_modules is missing"] };
+    return { ok: false, reasons: ["node_modules is missing"] };
   }
   const hiddenLockPath = path.join(nodeModules, ".package-lock.json");
   if (!fs.existsSync(hiddenLockPath)) {
     return {
       ok: false,
-      reasons: ["vnext/node_modules has no npm-managed .package-lock.json"],
+      reasons: ["node_modules has no npm-managed .package-lock.json"],
     };
   }
   const committedPackages =
@@ -246,7 +246,7 @@ export async function applyDependencyPlan(
   if (plan.needsInstall) {
     log(
       `Dependencies are not the locked ones:\n${plan.reasons.map((r) => `  - ${r}`).join("\n")}\n` +
-        "Running npm ci to match vnext/package-lock.json...",
+        "Running npm ci to match package-lock.json...",
     );
     const status = await runNpmCi();
     if (status !== 0) return status;

@@ -3,8 +3,8 @@
  * provider, host/tool execution, packaged-product, or account acceptance.
  * Parent owns the native lane. No launch unless --run-native is explicit.
  * From any cwd, with Node 24.20.0:
- *   node vnext/tests/e2e/chatgpt-public-source.e2e.mjs --build-only
- *   node vnext/tests/e2e/chatgpt-public-source.e2e.mjs --run-native
+ *   node tests/e2e/chatgpt-public-source.e2e.mjs --build-only
+ *   node tests/e2e/chatgpt-public-source.e2e.mjs --run-native
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -603,7 +603,7 @@ function childMain({
 const require = createRequire(import.meta.url);
 const filename = fileURLToPath(import.meta.url);
 const vnext = path.resolve(path.dirname(filename), "../..");
-const output = path.resolve(vnext, "../_output");
+const output = path.resolve(vnext, "artifacts");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const mode = process.argv[2];
 assert.ok(

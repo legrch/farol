@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { devLaunchEnvironment, launchPreview } from "../../tooling/dev.mjs";
 
-// `task next:run` builds its child's environment from a fixed allowlist and
+// `task run` builds its child's environment from a fixed allowlist and
 // inherits nothing. `task dev` used to spawn Electron with no `env` option
 // at all, so the caller's whole environment reached the product — measured
 // by spawning a child through each launcher's own shape and asking it what

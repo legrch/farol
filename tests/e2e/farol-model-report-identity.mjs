@@ -46,7 +46,7 @@ function gitResult(repositoryRoot, args) {
  * subset git does not call untracked, which is the half that would mean a
  * real source edit rather than scratch.
  */
-export function captureWorkingTreeObservation(repositoryRoot, scope = "vnext") {
+export function captureWorkingTreeObservation(repositoryRoot, scope = ".") {
   const status = gitResult(repositoryRoot, [
     "status",
     "--porcelain=v1",

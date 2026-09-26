@@ -137,7 +137,10 @@ try {
     "computer",
   );
   const registry = JSON.parse(
-    await fs.readFile(path.join(root, "../integrations/registry.json"), "utf8"),
+    await fs.readFile(
+      path.join(root, "tooling/external-dependencies.json"),
+      "utf8",
+    ),
   );
   const expectedTunnelVersion = useInstalledTunnelClient
     ? registry.dependencies.tunnelClient.version.split(" ", 1)[0]

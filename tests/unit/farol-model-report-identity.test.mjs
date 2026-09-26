@@ -26,12 +26,12 @@ import {
 // cases are the refusals that keep an unattributable report from being
 // written at all.
 
-// Three levels up, not two: `sourceIdentity` lists the tree with
+// Standalone source lives two levels up: `sourceIdentity` lists the tree with
 // repository-root-relative paths (`vnext/...`) and resolves each one against
 // the root it is handed.  Handed `vnext/` instead, every lstat missed and
 // `git status -- vnext` matched nothing, which is the whole of the
 // `sourceDirty: true` with `entryCount: 0` this packet was chasing.
-const repositoryRoot = path.resolve(import.meta.dirname, "../../..");
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 
 function identity(overrides = {}) {
   return {
@@ -116,7 +116,7 @@ describe("real-host report identity", () => {
     "S35-TA-12 derives the identity through the same helper the ordinary lanes use",
     () => {
       const built = buildReportIdentity({
-        repositoryRoot: path.resolve(import.meta.dirname, "../../.."),
+        repositoryRoot: path.resolve(import.meta.dirname, "../.."),
         loader: LOADER,
         hosts: hostsOf(),
         hostlessPhases: ["app-host-discovery"],
@@ -209,7 +209,7 @@ describe("real-host report identity", () => {
 
   it("S35-TA-12 the builder refuses the same shapes rather than emitting them", () => {
     const base = {
-      repositoryRoot: path.resolve(import.meta.dirname, "../../.."),
+      repositoryRoot: path.resolve(import.meta.dirname, "../.."),
       hosts: hostsOf(),
       hostlessPhases: [],
       nodeVersion: SUPPORTED_NODE_VERSIONS[0],
@@ -347,15 +347,14 @@ describe("working tree observation", () => {
   // nothing, and the old tooling folded both into an unexplained dirty flag.
   it("S35-TA-15 resolves the repository root, not the product directory", () => {
     expect(
-      readFileSync(path.join(repositoryRoot, "vnext", "package.json"), "utf8")
-        .length,
+      readFileSync(path.join(repositoryRoot, "package.json"), "utf8").length,
     ).toBeGreaterThan(0);
     expect(path.basename(repositoryRoot)).not.toBe("vnext");
   });
 
   it("S35-TA-15 reports a clean tree as zero entries with a zero git exit", () => {
     const observation = captureWorkingTreeObservation(
-      path.resolve(import.meta.dirname, "../../.."),
+      path.resolve(import.meta.dirname, "../.."),
     );
     expect(observation.gitStatusExit).toBe(0);
     expect(observation.entries.every((entry) => entry.path.length > 0)).toBe(
@@ -423,7 +422,7 @@ describe("identity built from the journey's own run records", () => {
 
   function records(overrides = {}) {
     return {
-      repositoryRoot: path.resolve(import.meta.dirname, "../../.."),
+      repositoryRoot: path.resolve(import.meta.dirname, "../.."),
       loader: LOADER,
       nodeVersion: SUPPORTED_NODE_VERSIONS[0],
       hostVersions: new Map([

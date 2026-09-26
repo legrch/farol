@@ -5,25 +5,25 @@
 From the repository root:
 
 ```bash
-task next:run
+task run
 ```
 
 An ordinary launch starts with no synthetic tasks. To exercise the retained fixture
 deliberately, use:
 
 ```bash
-task next:run -- --demo
+task run -- --demo
 ```
 
-This command does not build. It verifies that the committed `vnext/` source identity
-matches `vnext/dist/package/artifact.json`, copies the candidate into a private unique
+This command does not build. It verifies that the committed repository source identity
+matches `dist/package/artifact.json`, copies the candidate into a private unique
 temporary launch snapshot, verifies that final launch path, and launches only those
-verified bytes. A concurrent `task next:package` can replace the canonical package but
+verified bytes. A concurrent `task package` can replace the canonical package but
 cannot replace the running snapshot. The snapshot and its frozen manifest are removed
 when the owner launcher observes that launch exit. An ungraceful launcher kill or host
 shutdown can leave its private temporary directory behind; it is never reused as a
 candidate or promotion source. If the candidate is absent or stale, the command says
-to commit the intended source and run `task next:package`; it never falls back to old
+to commit the intended source and run `task package`; it never falls back to old
 bytes.
 
 The Taskfile starts the owner guard and Node verifier from an allowlisted environment,
@@ -38,7 +38,7 @@ Invoking `tooling/run-preview.mjs` directly is unsupported and refused. The priv
 Taskfile marker that distinguishes the owner entrypoint is an interface guard, not an
 authentication or same-owner security boundary.
 
-`task next:preview` is the separate development command. It may rebuild `dist/app` and
+`task preview` is the separate development command. It may rebuild `dist/app` and
 is not evidence about the packaged candidate.
 
 ## What the controls do
@@ -139,14 +139,14 @@ preview's ownership.
 Preview the exact non-mutating plan:
 
 ```bash
-task next:promote
+task promote
 ```
 
 If the destination and receipt are absent and you choose to make the local preview
 durable outside the checkout, run this owner action:
 
 ```bash
-task next:promote -- --destination "$HOME/Applications/Farol Next Preview.app" --apply
+task promote -- --destination "$HOME/Applications/Farol Next Preview.app" --apply
 ```
 
 The operation derives the owner's home from the operating-system account identity,

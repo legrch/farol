@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const vnextRoot = path.resolve(import.meta.dirname, "../..");
-const repositoryRoot = path.resolve(vnextRoot, "..");
+const repositoryRoot = vnextRoot;
 
 function git(...arguments_) {
   return execFileSync("git", ["-C", repositoryRoot, ...arguments_], {
@@ -20,13 +20,11 @@ function git(...arguments_) {
 }
 
 describe("portable Farol Next repository contract", () => {
-  it("tracks the nested instructions instead of relying on writer-local bytes", async () => {
-    expect(git("ls-files", "--error-unmatch", "vnext/AGENTS.md")).toBe(
-      "vnext/AGENTS.md",
-    );
+  it("tracks self-contained instructions instead of relying on sibling repositories", async () => {
+    expect(git("ls-files", "--error-unmatch", "AGENTS.md")).toBe("AGENTS.md");
     const ignored = spawnSync(
       "git",
-      ["-C", repositoryRoot, "check-ignore", "-q", "vnext/AGENTS.md"],
+      ["-C", repositoryRoot, "check-ignore", "-q", "AGENTS.md"],
       {
         env: {
           ...process.env,
@@ -44,9 +42,9 @@ describe("portable Farol Next repository contract", () => {
       path.join(repositoryRoot, "AGENTS.md"),
       "utf8",
     );
-    expect(nested).toContain("These rules apply only under `vnext/`");
-    expect(root).toContain("`vnext/**`");
-    expect(root).toContain("Legacy product payload");
+    expect(nested).toContain("standalone Farol repository");
+    expect(root).toContain("provider = farol");
+    expect(root).toContain("model = chatgpt");
   });
 
   it("offers one verified packaged launch without hiding the development lane", async () => {
@@ -58,18 +56,18 @@ describe("portable Farol Next repository contract", () => {
     const packageDocument = JSON.parse(
       await fs.readFile(path.join(vnextRoot, "package.json"), "utf8"),
     );
-    expect(taskfile).toMatch(/^  next:run:$/mu);
-    expect(taskfile).toMatch(/^  next:preview:$/mu);
+    expect(taskfile).toMatch(/^  run:$/mu);
+    expect(taskfile).toMatch(/^  preview:$/mu);
     expect(taskfile).not.toContain("launch an already verified .app directly");
     expect(taskfile).toContain("/usr/bin/env -i");
     expect(taskfile).toContain("FAROL_NEXT_OWNER_LAUNCH=1");
     expect(taskfile).toContain('PATH="$clean_path"');
     expect(packageDocument.scripts.run).toBeUndefined();
-    expect(readme).toContain("task next:run");
+    expect(readme).toContain("task run");
     expect(readme).toContain("verified packaged candidate");
     expect(readme).toContain("isolated launch snapshot");
     expect(readme).not.toContain(
-      "./vnext/dist/package/Farol\\ Next\\ Preview.app/Contents/MacOS/Farol\\ Next\\ Preview",
+      "./dist/package/Farol\\ Next\\ Preview.app/Contents/MacOS/Farol\\ Next\\ Preview",
     );
   });
 

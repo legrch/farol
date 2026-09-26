@@ -299,7 +299,7 @@ export async function observeAttempt({
 }
 
 // node tooling/evidence-observe.mjs --lane <lane> --output <file>
-//   [--root <vnext>] [--candidate <artifact.json>] [--attempt <id>]
+//   [--root <repository>] [--candidate <artifact.json>] [--attempt <id>]
 //   [--process <regex>] [--interval-ms 500] [--timeout-ms 7200000]
 // Exits 0 when the receipt says healthy, 1 otherwise; the receipt is written
 // either way.
