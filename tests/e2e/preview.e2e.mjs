@@ -6952,7 +6952,14 @@ devNewTaskAffordanceSegment: {
         devNewTask.window,
         async (count) => {
           const state = await window.farolNext.bootstrap();
-          return state.taskRevision === count && state.tasks.length === count;
+          const button = document.querySelector("#new-task");
+          return (
+            state.taskRevision === count &&
+            state.tasks.length === count &&
+            button instanceof HTMLButtonElement &&
+            button.disabled === (count === 5) &&
+            button.querySelector("small")?.textContent === `${count} / 5`
+          );
         },
         index,
       );
