@@ -1862,7 +1862,8 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
         .waitFor({ state: "visible" }),
     );
   }
-  const expectedTaskViewCount = mode === "demo" ? 2 : 0;
+  const expectedTaskViewCount =
+    options.expectedTaskViewCount ?? (mode === "demo" ? 2 : 0);
   const presentation = await phases.step(
     `${label}.presentation`,
     LAUNCH_PHASE_BUDGET_MS,
@@ -6735,8 +6736,34 @@ devNewTaskAffordanceSegment: {
   segmentMark("dev-new-task-affordance", "start");
   const devNewTask = await launch([], "secondary-visible", "ordinary", {
     environment: { FAROL_NEXT_ENVIRONMENT: "dev" },
+    expectedTaskViewCount: 1,
   });
   try {
+    const startupTaskViews = await devNewTask.application.evaluate(
+      ({ BrowserWindow }) => {
+        const shell = BrowserWindow.getAllWindows().find((candidate) => {
+          const url = candidate.webContents.getURL();
+          return url.startsWith("file:") && url.endsWith("/shell.html");
+        });
+        return (shell?.contentView.children ?? [])
+          .filter((view) => "webContents" in view)
+          .map((view) => ({
+            title: view.webContents.getTitle(),
+            url: view.webContents.getURL(),
+            visible: view.getVisible(),
+          }));
+      },
+    );
+    assert.equal(startupTaskViews.length, 1);
+    assert.deepEqual(
+      {
+        title: startupTaskViews[0].title,
+        visible: startupTaskViews[0].visible,
+      },
+      { title: "ChatGPT readiness fixture", visible: true },
+    );
+    assert.equal(startupTaskViews[0].url, devNewTask.chatGptFixture.url);
+
     await completeSetup(devNewTask, false, false, true, false);
     const newTask = devNewTask.window.locator("#new-task");
     await newTask.waitFor({ state: "visible" });
