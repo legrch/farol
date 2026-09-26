@@ -6764,31 +6764,129 @@ devNewTaskAffordanceSegment: {
       .locator("#onboarding-open-account")
       .waitFor({ state: "visible" });
 
-    // The DEV route points only at this run's local loopback fixture. Complete
-    // its synthetic sign-in through Setup's public controls; no model turn,
-    // folder access, Agent, or fixture message is submitted.
-    const signInWindowPending = devNewTask.application.waitForEvent("window", {
-      timeout: 15_000,
-    });
+    // The DEV route points only at this run's local loopback fixture. Open
+    // it through Setup's public controls and drive only its synthetic login
+    // and Return buttons; no model turn, folder access, Agent, or message is sent.
+    const signInFixtureOrigin = new URL(devNewTask.chatGptFixture.url).origin;
+    const readSignInFixture = () =>
+      devNewTask.application.evaluate(
+        async ({ BrowserWindow }, expectedOrigin) => {
+          const host = BrowserWindow.getAllWindows().find((candidate) => {
+            const url = candidate.webContents.getURL();
+            return (
+              candidate.getTitle() === "Farol Dev · Development" &&
+              url.startsWith("file:") &&
+              url.endsWith("/shell.html")
+            );
+          });
+          const view = (host?.contentView.children ?? []).find((candidate) => {
+            if (!("webContents" in candidate)) return false;
+            try {
+              return (
+                new URL(candidate.webContents.getURL()).origin ===
+                expectedOrigin
+              );
+            } catch {
+              return false;
+            }
+          });
+          if (!view || !("webContents" in view)) return null;
+          const state = await view.webContents.executeJavaScript(`(() => {
+            const login = document.querySelector('[data-testid="login-button"]');
+            const composer = document.querySelector('#prompt-textarea');
+            return {
+              url: location.href,
+              loginVisible: login instanceof HTMLButtonElement && !login.hidden,
+              composerVisible: composer instanceof HTMLElement && !composer.hidden,
+              returnVisible: document.querySelector('#farol-sign-in-banner button') !== null,
+              userText: [...document.querySelectorAll('[data-message-author-role="user"]')].at(-1)?.textContent ?? "",
+              submitCount: Number(window.__farolSubmitCount ?? 0)
+            };
+          })()`);
+          return {
+            url: view.webContents.getURL(),
+            visible: view.getVisible(),
+            state,
+          };
+        },
+        signInFixtureOrigin,
+      );
+    const waitForSignInFixture = async (predicate) => {
+      let last = null;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        last = await readSignInFixture();
+        if (last && predicate(last)) return last;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error(
+        `E2E_DEV_SIGN_IN_FIXTURE_TIMEOUT:${JSON.stringify(last)}`,
+      );
+    };
+    const clickSignInFixtureControl = async (control) =>
+      devNewTask.application.evaluate(
+        async ({ BrowserWindow }, input) => {
+          const host = BrowserWindow.getAllWindows().find((candidate) => {
+            const url = candidate.webContents.getURL();
+            return (
+              candidate.getTitle() === "Farol Dev · Development" &&
+              url.startsWith("file:") &&
+              url.endsWith("/shell.html")
+            );
+          });
+          const view = (host?.contentView.children ?? []).find((candidate) => {
+            if (!("webContents" in candidate)) return false;
+            try {
+              return (
+                new URL(candidate.webContents.getURL()).origin ===
+                input.expectedOrigin
+              );
+            } catch {
+              return false;
+            }
+          });
+          if (!view || !("webContents" in view)) return false;
+          const selector =
+            input.control === "login"
+              ? '[data-testid="login-button"]'
+              : "#farol-sign-in-banner button";
+          const source = `(() => {
+            const button = document.querySelector(${JSON.stringify(selector)});
+            if (!(button instanceof HTMLButtonElement) || button.hidden || button.disabled) return false;
+            button.click();
+            return true;
+          })()`;
+          return view.webContents.executeJavaScript(source);
+        },
+        { expectedOrigin: signInFixtureOrigin, control },
+      );
+
     await devNewTask.window.locator("#onboarding-open-account").click();
-    const signInPage = await signInWindowPending;
-    await signInPage.waitForURL(devNewTask.chatGptFixture.url);
-    await waitForWindowCount(devNewTask.application, 2);
-    await signInPage.locator('[data-testid="login-button"]').click();
-    await signInPage.locator("#prompt-textarea").waitFor({ state: "visible" });
-    const signInFixtureState = await signInPage.evaluate(() => ({
-      userText:
-        document.querySelector("#prompt-textarea")?.textContent?.trim() ?? "",
-      submitCount: Number(window.__farolSubmitCount ?? 0),
-    }));
-    assert.deepEqual(signInFixtureState, { userText: "", submitCount: 0 });
-    await waitForPageState(
-      signInPage,
-      () => document.querySelector("#farol-sign-in-banner button") !== null,
+    const signInSurface = await waitForSignInFixture(
+      (surface) => surface.visible && surface.state.loginVisible,
     );
-    await dispatchTolerantOfWindowClose(() =>
-      signInPage.locator("#farol-sign-in-banner button").click(),
+    assert.equal(new URL(signInSurface.url).origin, signInFixtureOrigin);
+    assert.equal(
+      await clickSignInFixtureControl("login"),
+      true,
+      "the local fixture's visible login control is enabled",
     );
+    const signedInFixture = await waitForSignInFixture(
+      (surface) => surface.state.composerVisible,
+    );
+    assert.deepEqual(
+      {
+        userText: signedInFixture.state.userText,
+        submitCount: signedInFixture.state.submitCount,
+      },
+      { userText: "", submitCount: 0 },
+    );
+    assert.equal(signedInFixture.state.returnVisible, true);
+    assert.equal(
+      await clickSignInFixtureControl("return"),
+      true,
+      "the visible Return to Farol fixture control is enabled",
+    );
+    await waitForSignInFixture((surface) => !surface.visible);
     await waitForWindowCount(devNewTask.application, 1);
     await devNewTask.window.waitForFunction(
       () =>
