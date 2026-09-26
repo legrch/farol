@@ -8646,7 +8646,16 @@ demoMainSegment: try {
   );
   let focusFixture = null;
   let fixtureReason = null;
-  if (activeBeforeReopen === true && macHostLockState !== "locked") {
+  // The fixture deliberately takes native focus. It may run only in the
+  // explicitly authorized built-in-display focus lane; a skip-focus run or
+  // the ordinary secondary-display lane must retain a blocked reopen row.
+  if (
+    activeBeforeReopen === true &&
+    !skipNativeFocus &&
+    builtInDisplayOnly &&
+    allowPrimaryDisplay &&
+    macHostLockState !== "locked"
+  ) {
     const established = await establishOwnedInactiveBaseline(
       normal.application,
     );

@@ -67,7 +67,8 @@ authorized unattended run on the built-in display, use
 `task test:e2e -- --built-in-display-only --allow-primary-display --skip-native-focus`.
 The built-in-only flag excludes external monitors even when they are connected.
 Omit `--skip-native-focus` only when the current owner grant explicitly permits
-native focus of isolated test-owned windows. Skipped
+native focus of isolated test-owned windows. The inactive-reopen focus fixture
+runs only with that grant and the explicit built-in-display flags. Skipped
 focus rows are not native focus acceptance. Native fixtures are not
 live-provider or daily-driver acceptance. Keep each run's report and cleanup
 result, including failures and blocked rows.
