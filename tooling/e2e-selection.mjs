@@ -34,6 +34,14 @@ export const SELECTABLE_SEGMENTS = Object.freeze([
     ],
   }),
   Object.freeze({
+    name: "dev-new-task-affordance",
+    cases: [
+      "dev-new-task-disabled-at-capacity",
+      "dev-new-task-first-is-reachable",
+      "dev-new-task-next-is-reachable",
+    ],
+  }),
+  Object.freeze({
     name: "chatgpt-recovery",
     cases: ["chatgpt-dispatch", "chatgpt-recovered"],
   }),

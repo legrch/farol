@@ -5309,21 +5309,6 @@ liveTasksSegment: try {
   await newTask.waitFor({ state: "visible" });
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "0 / 5");
-  const emptyNewTaskState = await newTask.evaluate((button) => {
-    const style = getComputedStyle(button);
-    return {
-      environment: document.documentElement.dataset.environment,
-      hasTasks: document.documentElement.dataset.hasTasks,
-      display: style.display,
-      appRegion: style.getPropertyValue("-webkit-app-region"),
-    };
-  });
-  assert.equal(emptyNewTaskState.hasTasks, "false");
-  if (development) {
-    assert.equal(emptyNewTaskState.environment, "dev");
-    assert.notEqual(emptyNewTaskState.display, "none");
-    assert.equal(emptyNewTaskState.appRegion, "no-drag");
-  }
 
   const taskSurfaceIds = new Map();
   for (let index = 1; index <= 5; index += 1) {
@@ -5338,23 +5323,7 @@ liveTasksSegment: try {
     );
     assert.equal(state.taskRevision, index);
     assert.equal(state.tasks.length, index);
-    assert.equal(
-      await newTask.isVisible(),
-      true,
-      `New task remains visible with ${index} admitted task(s)`,
-    );
-    assert.equal(
-      await newTask.isDisabled(),
-      index === 5,
-      `New task is disabled only at capacity after ${index} task(s)`,
-    );
-    const activeNewTaskState = await newTask.evaluate((button) => ({
-      hasTasks: document.documentElement.dataset.hasTasks,
-      appRegion:
-        getComputedStyle(button).getPropertyValue("-webkit-app-region"),
-    }));
-    assert.equal(activeNewTaskState.hasTasks, "true");
-    if (development) assert.equal(activeNewTaskState.appRegion, "no-drag");
+
     const task = state.tasks[index - 1];
     assert.match(task.taskId, /^[0-9a-f-]{36}$/u);
     assert.match(task.sessionId, /^[0-9a-f-]{36}$/u);
@@ -6730,6 +6699,90 @@ liveTasksSegment: try {
   );
 } finally {
   await close(ordinaryLiveTasks);
+}
+
+devNewTaskAffordanceSegment: {
+  if (!selectionActive || !segmentSelected("dev-new-task-affordance")) {
+    break devNewTaskAffordanceSegment;
+  }
+  segmentMark("dev-new-task-affordance", "start");
+  const devNewTask = await launch([], "secondary-visible", "ordinary", {
+    environment: { FAROL_NEXT_ENVIRONMENT: "dev" },
+  });
+  try {
+    await completeSetup(devNewTask, false, false, true, false);
+    const newTask = devNewTask.window.locator("#new-task");
+    await newTask.waitFor({ state: "visible" });
+
+    const initial = await devNewTask.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.deepEqual(initial.tasks, []);
+    assert.equal(initial.liveProvider, false);
+    assert.equal(initial.nativeAgent, false);
+    assert.equal(initial.configuration.settings.nativeHosts.codex, null);
+    assert.equal(initial.configuration.settings.setup.hosts.verified, null);
+    assert.equal(initial.configuration.settings.setup.computer.verified, null);
+
+    const readNewTaskState = () =>
+      newTask.evaluate((button) => ({
+        environment: document.documentElement.dataset.environment,
+        hasTasks: document.documentElement.dataset.hasTasks,
+        display: getComputedStyle(button).display,
+        appRegion:
+          getComputedStyle(button).getPropertyValue("-webkit-app-region"),
+      }));
+
+    assert.equal(await newTask.isEnabled(), true);
+    assert.equal(await newTask.locator("small").innerText(), "0 / 5");
+    const emptyState = await readNewTaskState();
+    assert.equal(emptyState.environment, "dev");
+    assert.equal(emptyState.hasTasks, "false");
+    assert.notEqual(emptyState.display, "none");
+    assert.equal(emptyState.appRegion, "no-drag");
+    cases.push("dev-new-task-first-is-reachable");
+
+    for (let index = 1; index <= 5; index += 1) {
+      await newTask.click();
+      await devNewTask.window.waitForFunction(
+        (count) =>
+          document.querySelectorAll("#task-tabs .task-tab").length === count,
+        index,
+      );
+      const state = await devNewTask.window.evaluate(() =>
+        window.farolNext.bootstrap(),
+      );
+      assert.equal(state.taskRevision, index);
+      assert.equal(state.tasks.length, index);
+      assert.equal(await newTask.isVisible(), true);
+      assert.equal(await newTask.isDisabled(), index === 5);
+      assert.equal(await newTask.locator("small").innerText(), index + " / 5");
+      const activeState = await readNewTaskState();
+      assert.equal(activeState.environment, "dev");
+      assert.equal(activeState.hasTasks, "true");
+      assert.notEqual(activeState.display, "none");
+      assert.equal(activeState.appRegion, "no-drag");
+
+      const task = state.tasks[index - 1];
+      assert.equal(task.provider, "chatgpt");
+      assert.equal(task.requestedModel, "Account default");
+      assert.equal(task.observedModel, null);
+      await waitForLiveChatGptSurface(
+        devNewTask,
+        task.taskId,
+        (surface) =>
+          surface.state.composerVisible &&
+          new URL(surface.url).searchParams.get("farol-e2e-task") ===
+            task.taskId,
+        "dev New task " + index + " local fixture surface",
+      );
+      if (index === 2) cases.push("dev-new-task-next-is-reachable");
+    }
+    cases.push("dev-new-task-disabled-at-capacity");
+    segmentMark("dev-new-task-affordance", "pass");
+  } finally {
+    await close(devNewTask);
+  }
 }
 
 const interruptedChatGptTask = await launch([], "hidden", "ordinary", {
