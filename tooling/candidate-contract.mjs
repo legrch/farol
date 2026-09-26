@@ -3,8 +3,8 @@ import path from "node:path";
 export function candidatePaths(root) {
   const resolvedRoot = path.resolve(root);
   return {
-    artifactFile: path.join(resolvedRoot, "dist/package/artifact.json"),
-    appPath: path.join(resolvedRoot, "dist/package/Farol Next Preview.app"),
+    artifactFile: path.join(resolvedRoot, "_output/package/artifact.json"),
+    appPath: path.join(resolvedRoot, "_output/package/Farol Next Preview.app"),
   };
 }
 

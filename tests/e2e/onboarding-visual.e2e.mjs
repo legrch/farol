@@ -10,7 +10,7 @@ import { _electron as electron } from "playwright-core";
 
 const root = process.cwd();
 const label = "guided-owner-editable";
-const output = path.resolve(root, "artifacts/onboarding-visual", label);
+const output = path.resolve(root, "_output/evidence/onboarding-visual", label);
 const tempParent = os.tmpdir();
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
 const temporaryRoot = await fs.mkdtemp(
@@ -53,7 +53,7 @@ try {
       "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
     ),
     args: [
-      path.join(root, "dist/app/main.cjs"),
+      path.join(root, "_output/build/app/main.cjs"),
       "--preview-window-mode=secondary-visible",
     ],
     env: {
@@ -1050,7 +1050,7 @@ try {
       "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
     ),
     args: [
-      path.join(root, "dist/app/main.cjs"),
+      path.join(root, "_output/build/app/main.cjs"),
       "--preview-window-mode=secondary-visible",
     ],
     env: {

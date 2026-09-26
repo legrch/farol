@@ -101,7 +101,7 @@ async function fixture() {
   });
   await fs.chmod(home, 0o700);
   const candidateRoot = path.join(root, "candidate");
-  const packageRoot = path.join(candidateRoot, "dist", "package");
+  const packageRoot = path.join(candidateRoot, "_output", "package");
   const app = path.join(packageRoot, "Farol Next Preview.app");
   await fs.mkdir(path.join(app, "Contents"), { recursive: true });
   await fs.writeFile(

@@ -2,7 +2,7 @@ version: "3"
 
 tasks:
   ci:
-    desc: Farol Next deterministic architecture, policy, coverage, Hunt, and build gate
+    desc: Farol Next deterministic architecture, policy, coverage, Hunt, and _output build gate
     cmds:
       - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run ci
 
@@ -98,7 +98,21 @@ tasks:
     desc: Complete deterministic standalone gate without native UI
     cmds:
       - task: ci
+      - task: output:check
       - task: scan:secrets
+
+  output:check:
+    desc: Check the generated build, coverage, Hunt, logs and scratch layout
+    cmds:
+      - test -f _output/build/app/build-manifest.json
+      - test -f _output/evidence/hunt/latest.json
+      - test -d _output/coverage
+      - test -d _output/logs
+      - test -d _output/tmp
+      - |
+        for item in _output/build/app _output/package _output/evidence/hunt _output/coverage _output/logs _output/tmp; do
+          git check-ignore -q "$item" || exit 1
+        done
 
   scan:secrets:
     cmds:

@@ -32,7 +32,7 @@ import {
 
 const root = process.cwd();
 const repositoryRoot = root;
-const output = path.join(root, "dist/app");
+const output = path.join(root, "_output/build/app");
 const scope = ".";
 const initial = sourceSnapshot(repositoryRoot, scope);
 const inputRecords = new Map();
@@ -142,6 +142,10 @@ const attestInputs = {
 
 await fs.rm(output, { recursive: true, force: true });
 await fs.mkdir(output, { recursive: true });
+await Promise.all([
+  fs.mkdir(path.join(root, "_output/logs"), { recursive: true }),
+  fs.mkdir(path.join(root, "_output/tmp"), { recursive: true }),
+]);
 await verifyGeistSources(root);
 const packageDocument = JSON.parse(
   (await readBuildInput("package.json")).toString("utf8"),
@@ -159,7 +163,7 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/apps/desktop/desktop-entry.ts"],
-    outfile: "dist/app/main.cjs",
+    outfile: "_output/build/app/main.cjs",
     platform: "node",
     format: "cjs",
     external: ["electron"],
@@ -167,7 +171,7 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/apps/runtime/main.ts"],
-    outfile: "dist/app/runtime.cjs",
+    outfile: "_output/build/app/runtime.cjs",
     platform: "node",
     format: "cjs",
     external: ["electron"],
@@ -175,14 +179,14 @@ await Promise.all([
   build({
     ...common,
     entryPoints: ["src/apps/computer-mcp/main.ts"],
-    outfile: "dist/app/computer-mcp.cjs",
+    outfile: "_output/build/app/computer-mcp.cjs",
     platform: "node",
     format: "cjs",
   }),
   build({
     ...common,
     entryPoints: ["src/apps/desktop/preload.ts"],
-    outfile: "dist/app/preload.cjs",
+    outfile: "_output/build/app/preload.cjs",
     platform: "node",
     format: "cjs",
     external: ["electron"],
@@ -190,7 +194,7 @@ await Promise.all([
   build({
     bundle: true,
     entryPoints: ["src/ui/shell.ts"],
-    outfile: "dist/app/shell.js",
+    outfile: "_output/build/app/shell.js",
     platform: "browser",
     format: "iife",
     logLevel: "warning",
@@ -202,14 +206,14 @@ await Promise.all([
 ]);
 await Promise.all([
   readBuildInput("src/ui/shell.html").then((bytes) =>
-    fs.writeFile("dist/app/shell.html", bytes),
+    fs.writeFile("_output/build/app/shell.html", bytes),
   ),
   readBuildInput("src/ui/shell.css").then((bytes) =>
-    fs.writeFile("dist/app/shell.css", bytes),
+    fs.writeFile("_output/build/app/shell.css", bytes),
   ),
   readBuildInput("resources.json").then((bytes) => {
     assertResourceManifest(JSON.parse(bytes.toString("utf8")));
-    return fs.writeFile("dist/app/resource-manifest.json", bytes);
+    return fs.writeFile("_output/build/app/resource-manifest.json", bytes);
   }),
   readBuildInput(NATIVE_SAFE_OPEN_HELPER.source).then(async (bytes) => {
     assertNativeHelperBytes(bytes);
@@ -313,12 +317,12 @@ const manifest = {
   entrySha256: await snapshotBuildEntries(output),
 };
 await fs.writeFile(
-  "dist/app/build-manifest.json",
+  "_output/build/app/build-manifest.json",
   `${JSON.stringify(manifest, null, 2)}\n`,
   {
     mode: 0o600,
   },
 );
 process.stdout.write(
-  `built dist/app for ${manifest.sourceCommit.slice(0, 12)} (${manifest.dirty ? "dirty" : "clean"}) ${manifest.sourceTreeDigest}\n`,
+  `built _output/build/app for ${manifest.sourceCommit.slice(0, 12)} (${manifest.dirty ? "dirty" : "clean"}) ${manifest.sourceTreeDigest}\n`,
 );

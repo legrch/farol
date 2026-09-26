@@ -79,7 +79,7 @@ Keeper's Slate and Watch Rail reuse the same fixture, scenes, viewports, and evi
 earlier directions are preserved unchanged as the comparison baseline.
 
 The visual baseline was read from the existing sealed Next evidence set at source commit
-`a5e253426fe487ce8732dfec94fdf993c87a3228`. Its saved `vnext/artifacts/e2e/report.json` records
+`a5e253426fe487ce8732dfec94fdf993c87a3228`. Its saved `vnext/_output/evidence/e2e/report.json` records
 `sourceDirty: false`, source tree digest
 `650df9c58546094e0fa75c982b06c3d72ce763d3c9c9ddaf60ad75b574802a67`, and screenshots for
 Browser, Computer wait, compact Settings, Setup, failure, and runtime-death states. The design-lab

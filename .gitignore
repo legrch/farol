@@ -1,4 +1,7 @@
 node_modules/
+# Current generated build, package, coverage, evidence, logs and scratch.
+_output/
+# Preserved pre-migration local evidence; no current producer writes here.
 dist/
 coverage/
 artifacts/

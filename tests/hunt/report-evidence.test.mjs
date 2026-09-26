@@ -126,10 +126,7 @@ async function createFixtureRoot() {
     mkdir(path.join(root, "tests/hunt/fixtures"), { recursive: true }),
   ]);
   await Promise.all([
-    writeFile(
-      path.join(repository, ".gitignore"),
-      "node_modules/\ndist/\nartifacts/\n",
-    ),
+    writeFile(path.join(repository, ".gitignore"), "node_modules/\n_output/\n"),
     writeFile(
       path.join(root, "node_modules/vitest/vitest.mjs"),
       [
@@ -158,9 +155,9 @@ async function createFixtureRoot() {
         "const identity = sourceIdentity(process.cwd());",
         'const ledger = JSON.stringify([{ kind: "source", path: "src/main.ts", objectId: "0".repeat(40), sha256: "1".repeat(64), exact: true }]);',
         'const overrides = JSON.parse(process.env.FAKE_BUILD_OVERRIDES ?? "{}");',
-        'fs.mkdirSync("dist/app", { recursive: true });',
+        'fs.mkdirSync("_output/build/app", { recursive: true });',
         'if (process.env.FAKE_INPUT_MANIFEST !== "absent") {',
-        '  fs.writeFileSync("dist/app/input-manifest.json", process.env.FAKE_INPUT_MANIFEST === "tampered" ? ledger.replace("src/main.ts", "src/other.ts") : ledger);',
+        '  fs.writeFileSync("_output/build/app/input-manifest.json", process.env.FAKE_INPUT_MANIFEST === "tampered" ? ledger.replace("src/main.ts", "src/other.ts") : ledger);',
         "}",
         "const manifest = {",
         `  ...${JSON.stringify(validBuildManifest())},`,
@@ -172,7 +169,7 @@ async function createFixtureRoot() {
         "  dependencyInputCount: 0,",
         "  ...overrides,",
         "};",
-        'fs.writeFileSync("dist/app/build-manifest.json", JSON.stringify(manifest) + "\\n");',
+        'fs.writeFileSync("_output/build/app/build-manifest.json", JSON.stringify(manifest) + "\\n");',
         "",
       ].join("\n"),
     ),

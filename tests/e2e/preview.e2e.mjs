@@ -124,20 +124,20 @@ const evidenceLaneRoot = path.join(
   root,
   lifecycleSoak
     ? development
-      ? "artifacts/lifecycle-soak"
-      : "artifacts/lifecycle-soak-packaged"
+      ? "_output/evidence/lifecycle-soak"
+      : "_output/evidence/lifecycle-soak-packaged"
     : persistenceFault
-      ? "artifacts/persistence-fault"
+      ? "_output/evidence/persistence-fault"
       : twoGenerationState
-        ? "artifacts/two-generation-state"
+        ? "_output/evidence/two-generation-state"
         : development
-          ? "artifacts/e2e-dev"
-          : "artifacts/e2e",
+          ? "_output/evidence/e2e-dev"
+          : "_output/evidence/e2e",
 );
-const metadataPath = path.join(root, "dist/package/artifact.json");
+const metadataPath = path.join(root, "_output/package/artifact.json");
 const canonicalPackagePath = path.join(
   root,
-  "dist/package/Farol Next Preview.app",
+  "_output/package/Farol Next Preview.app",
 );
 const vendorElectron = path.join(
   root,
@@ -165,7 +165,7 @@ let appPath;
 let executable;
 let launchPrefix = [];
 if (development) {
-  const buildRoot = path.join(root, "dist/app");
+  const buildRoot = path.join(root, "_output/build/app");
   const build = JSON.parse(
     await fs.readFile(path.join(buildRoot, "build-manifest.json"), "utf8"),
   );
@@ -2128,7 +2128,7 @@ async function rejectMismatchedBuildLaunch(instance) {
     let manifestPath;
     if (development) {
       const copiedBuild = path.join(temporary, "app");
-      await fs.cp(path.join(root, "dist/app"), copiedBuild, {
+      await fs.cp(path.join(root, "_output/build/app"), copiedBuild, {
         recursive: true,
         verbatimSymlinks: true,
       });
@@ -10535,7 +10535,7 @@ n09ConnectorAttachmentSegment: {
     const peerCommand = development
       ? {
           command: process.execPath,
-          args: [path.join(root, "dist/app/computer-mcp.cjs")],
+          args: [path.join(root, "_output/build/app/computer-mcp.cjs")],
           env: undefined,
         }
       : {

@@ -149,7 +149,7 @@ describe("development launcher environment", () => {
     expect(received.command).toBe(
       path.join(root, "node_modules/.bin/electron"),
     );
-    expect(received.args).toEqual(["dist/app/main.cjs"]);
+    expect(received.args).toEqual(["_output/build/app/main.cjs"]);
     expect(received.options.cwd).toBe(root);
     // Named before the key set, so removing the option again fails with
     // this sentence rather than a TypeError from reading `undefined`.
@@ -187,7 +187,7 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "dist/app/main.cjs",
+      "_output/build/app/main.cjs",
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_NEXT_ACCEPTANCE_PROFILE).toBe("1");
@@ -209,7 +209,7 @@ describe("development launcher environment", () => {
       ),
     ).rejects.toBe(stop);
     expect(received.args).toEqual([
-      "dist/app/main.cjs",
+      "_output/build/app/main.cjs",
       "--preview-window-mode=secondary-visible",
     ]);
     expect(received.options.env.FAROL_NEXT_ENVIRONMENT).toBe("dev");

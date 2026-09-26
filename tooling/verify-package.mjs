@@ -69,7 +69,7 @@ for (let index = 0; index < arguments_.length; index += 1) {
   index += 1;
 }
 const artifactFile = path.resolve(
-  artifactOption ?? path.join(root, "dist/package/artifact.json"),
+  artifactOption ?? path.join(root, "_output/package/artifact.json"),
 );
 const artifact = JSON.parse(await fs.readFile(artifactFile, "utf8"));
 const packageDocument = JSON.parse(

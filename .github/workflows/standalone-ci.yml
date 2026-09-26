@@ -45,6 +45,12 @@ jobs:
           test "$(/usr/bin/xcrun --find git)" = /Library/Developer/CommandLineTools/usr/bin/git
       - name: Run protected standalone checks
         run: task ci:fast
+      - name: Require generated output in its declared root
+        run: |
+          task output:check
+          test ! -e dist/app
+          test ! -e artifacts/hunt
+          test ! -e coverage
       - name: Record Apple attestation inputs on failure
         if: failure()
         run: |

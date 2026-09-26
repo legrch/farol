@@ -265,7 +265,7 @@ describe("F3-5 build provenance", () => {
     );
     const manifest = JSON.parse(
       fs.readFileSync(
-        path.join(vnextRoot, "dist/app/build-manifest.json"),
+        path.join(vnextRoot, "_output/build/app/build-manifest.json"),
         "utf8",
       ),
     );

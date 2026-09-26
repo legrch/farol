@@ -603,7 +603,7 @@ function childMain({
 const require = createRequire(import.meta.url);
 const filename = fileURLToPath(import.meta.url);
 const vnext = path.resolve(path.dirname(filename), "../..");
-const output = path.resolve(vnext, "artifacts");
+const output = path.resolve(vnext, "_output");
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const mode = process.argv[2];
 assert.ok(
@@ -612,7 +612,10 @@ assert.ok(
 );
 assert.equal(process.versions.node, "24.20.0", "Use pinned Node 24.20.0");
 await fs.mkdir(path.join(output, "evidence"), { recursive: true });
-const temporary = await fs.mkdtemp(path.join(output, "chatgpt-public-source-"));
+await fs.mkdir(path.join(output, "tmp"), { recursive: true });
+const temporary = await fs.mkdtemp(
+  path.join(output, "tmp", "chatgpt-public-source-"),
+);
 const receiptPath = path.join(
   output,
   "evidence",

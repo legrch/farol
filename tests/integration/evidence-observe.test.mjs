@@ -110,7 +110,7 @@ describe("EV-03/EV-08 effect observer", () => {
       path.join(os.tmpdir(), "farol-next-observe-"),
     );
     roots.push(root);
-    const laneRoot = path.join(root, "artifacts", "e2e");
+    const laneRoot = path.join(root, "_output", "evidence", "e2e");
     await fs.mkdir(laneRoot, { recursive: true });
     // A marker only the owned process carries.
     const marker = `farol-observer-marker-${process.pid}`;
@@ -217,7 +217,7 @@ describe("EV-03/EV-08 effect observer", () => {
       path.join(os.tmpdir(), "farol-next-observe-"),
     );
     roots.push(root);
-    const laneRoot = path.join(root, "artifacts", "e2e");
+    const laneRoot = path.join(root, "_output", "evidence", "e2e");
     await fs.mkdir(laneRoot, { recursive: true });
     // The runner does start a process, but not one the pattern names: the
     // observer watched the files and never the product.
@@ -268,7 +268,7 @@ describe("EV-03/EV-08 effect observer", () => {
       path.join(os.tmpdir(), "farol-next-observe-"),
     );
     roots.push(root);
-    const laneRoot = path.join(root, "artifacts", "e2e");
+    const laneRoot = path.join(root, "_output", "evidence", "e2e");
     await fs.mkdir(laneRoot, { recursive: true });
     const marker = `farol-observer-leftover-${process.pid}`;
     const kernel = watchedTable(marker);
@@ -325,7 +325,7 @@ describe("EV-03/EV-08 effect observer", () => {
     roots.push(root);
     // The lane's pointer names an earlier, already finished attempt.
     const earlier = await openEvidenceAttempt(
-      path.join(root, "artifacts", "e2e"),
+      path.join(root, "_output", "evidence", "e2e"),
       { lane: "sealed-package", input: { ...candidate } },
     );
     await fs.writeFile(path.join(earlier.directory, "report.json"), "{}");
@@ -334,7 +334,7 @@ describe("EV-03/EV-08 effect observer", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 5));
     const receipt = await observeAttempt({
-      laneRoot: path.join(root, "artifacts", "e2e"),
+      laneRoot: path.join(root, "_output", "evidence", "e2e"),
       lane: "sealed-package",
       attemptId: null,
       subject: candidate,

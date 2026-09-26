@@ -12,7 +12,7 @@ const root = process.cwd();
 const useInstalledTunnelClient = process.argv.includes(
   "--installed-tunnel-client",
 );
-const buildRoot = path.join(root, "dist/app");
+const buildRoot = path.join(root, "_output/build/app");
 const executable = path.join(
   root,
   "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",

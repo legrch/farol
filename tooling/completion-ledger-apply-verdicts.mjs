@@ -199,7 +199,7 @@ async function main(arguments_) {
   const ledgerPath = path.resolve(ledgerFile);
   const candidateFile =
     option(arguments_, "--candidate") ??
-    path.join(root, "dist/package/artifact.json");
+    path.join(root, "_output/package/artifact.json");
   const developmentCandidateFile = option(arguments_, "--dev-candidate");
   const observerFile = option(arguments_, "--observer");
   const write = arguments_.includes("--write");

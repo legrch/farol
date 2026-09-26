@@ -86,7 +86,7 @@ contents, the shared download listener, exact runtime process, main/runtime file
 descriptors, Electron working set, and main-process active resources. Its budgets are
 declared in the driver before measurement. Every batch must return to zero tasks and
 provider surfaces. The result is the `report.json` of its attempt under
-`artifacts/lifecycle-soak/`; it is
+`_output/evidence/lifecycle-soak/`; it is
 deterministic `FIXTURE_APP` evidence, not authenticated-provider performance.
 
 `task test:persistence-fault` is a separate hidden `SIMULATED_FAULT` lane.
@@ -94,7 +94,7 @@ It admits one task durably, then rejects every later live-task store commit whil
 the provider URL and lifecycle continue changing. The task must become visibly
 outcome-unknown, a later owner mutation must fail closed, and the retained file
 must remain at the last successful snapshot. Its exact-head report is the
-`report.json` of its attempt under `artifacts/persistence-fault/`.
+`report.json` of its attempt under `_output/evidence/persistence-fault/`.
 
 `task test:two-generation-state -- --predecessor-artifact=<manifest>` is the
 hidden lane for the owner's state across two sealed generations. Generation A is the
@@ -112,7 +112,7 @@ handoff A offered and retire its source, and keep its own change across a restar
 rollback to A must read B's state without rewriting it, and neither bundle's tree
 digest may change. The ChatGPT dispatch-intent journal, undelivered agent results and
 bundle placement are outside it. The report is the `report.json` of its attempt under
-`artifacts/two-generation-state/`.
+`_output/evidence/two-generation-state/`.
 
 The final owner journey is separate from automation: `task run` is launched with
 the normal home and no test-only application arguments, the harmless Legacy connector

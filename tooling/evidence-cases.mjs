@@ -227,7 +227,7 @@ const PRODUCT_REPORT = Object.freeze(["report.json"]);
 
 export const EVIDENCE_LANES = Object.freeze({
   "development-build": Object.freeze({
-    root: "artifacts/e2e-dev",
+    root: "_output/evidence/e2e-dev",
     requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "development-build-identity",
@@ -243,7 +243,7 @@ export const EVIDENCE_LANES = Object.freeze({
     }),
   }),
   "sealed-package": Object.freeze({
-    root: "artifacts/e2e",
+    root: "_output/evidence/e2e",
     requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([...SEALED_PACKAGE_CASES, ...SHARED_PRODUCT_CASES]),
     productAgentQualification: DEFAULT_OFF_PRODUCT_AGENT_QUALIFICATION,
@@ -253,7 +253,7 @@ export const EVIDENCE_LANES = Object.freeze({
     }),
   }),
   "lifecycle-soak": Object.freeze({
-    root: "artifacts/lifecycle-soak",
+    root: "_output/evidence/lifecycle-soak",
     requiredByproducts: PRODUCT_REPORT,
     cases: LIFECYCLE_SOAK_CASES,
     boundary: Object.freeze({
@@ -265,7 +265,7 @@ export const EVIDENCE_LANES = Object.freeze({
   // The same workload, seed, budgets and cases driven through the sealed
   // package's own launcher: what the owner would run, measured as such.
   "lifecycle-soak-packaged": Object.freeze({
-    root: "artifacts/lifecycle-soak-packaged",
+    root: "_output/evidence/lifecycle-soak-packaged",
     requiredByproducts: PRODUCT_REPORT,
     cases: LIFECYCLE_SOAK_CASES,
     boundary: Object.freeze({
@@ -275,7 +275,7 @@ export const EVIDENCE_LANES = Object.freeze({
     }),
   }),
   "persistence-fault": Object.freeze({
-    root: "artifacts/persistence-fault",
+    root: "_output/evidence/persistence-fault",
     requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "conversation-url-save-failure-is-visible",
@@ -294,7 +294,7 @@ export const EVIDENCE_LANES = Object.freeze({
   // manifest names, qualified by its own pinned verifier, and the candidate.
   // The crashes are real process kills, not simulated faults.
   "two-generation-state": Object.freeze({
-    root: "artifacts/two-generation-state",
+    root: "_output/evidence/two-generation-state",
     requiredByproducts: PRODUCT_REPORT,
     cases: Object.freeze([
       "predecessor-qualified-by-own-pinned-verifier",
@@ -319,7 +319,7 @@ export const EVIDENCE_LANES = Object.freeze({
     }),
   }),
   hunt: Object.freeze({
-    root: "artifacts/hunt",
+    root: "_output/evidence/hunt",
     requiredByproducts: Object.freeze(["path.json"]),
     cases: Object.freeze([
       "tests/hunt/selftest.test.ts",

@@ -151,7 +151,7 @@ The deterministic gate includes strict typecheck, architecture fixtures, policy 
 integration coverage, Hunt selftest/proof/model, and a build-bound sanitized replay.
 The development E2E lane runs those exact clean built files through Electron's
 bundled runtime without modifying its signed vendor bundle; it writes evidence to
-`artifacts/e2e-dev/`. The separately sealed package lane remains the artifact gate.
+`_output/evidence/e2e-dev/`. The separately sealed package lane remains the artifact gate.
 Packaging verifies the app identity, embedded source manifest, runtime closure,
 the immutable nested Electron runtime and helper identities, contained symlinks,
 type-bound tree digest, plist, fixed launcher and explicit unsigned status. The
@@ -185,7 +185,7 @@ npm run preview
 Pass `-- --demo` only when deliberately exercising the development fixture.
 
 After `task package`, use only the canonical command above. Running the executable
-inside `dist/package` directly bypasses source, manifest, resource, and digest
+inside `_output/package` directly bypasses source, manifest, resource, and digest
 verification and is unsupported.
 
 The outer `.app` and its fixed launcher are explicitly unsigned. The launcher uses
@@ -196,12 +196,12 @@ independent-recipient, update/rollback, live-provider or release-readiness evide
 
 ## Evidence
 
-- `dist/package/artifact.json` — exact source and packaged-tree identity;
+- `_output/package/artifact.json` — exact source and packaged-tree identity;
 - packaged `Contents/Resources/app/resource-manifest.json` — app, process, state,
   transport, receipt, and intentionally absent integration ownership;
-- `artifacts/e2e-dev/` — exact development-build interaction evidence;
-- `artifacts/e2e/` with its recorded PNG set — packaged interaction evidence;
-- `artifacts/hunt/` — `path.json` with the semantic path, model/command-table
+- `_output/evidence/e2e-dev/` — exact development-build interaction evidence;
+- `_output/evidence/e2e/` with its recorded PNG set — packaged interaction evidence;
+- `_output/evidence/hunt/` — `path.json` with the semantic path, model/command-table
   version, controlled schedule, mutation proof and exact build identity, next to
   the raw Vitest report it summarizes.
 

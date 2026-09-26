@@ -14,8 +14,8 @@ import {
 import { sourceIdentity } from "./source-identity.mjs";
 
 const root = process.cwd();
-const builtRoot = path.join(root, "dist/app");
-const packageRoot = path.join(root, "dist/package");
+const builtRoot = path.join(root, "_output/build/app");
+const packageRoot = path.join(root, "_output/package");
 const appPath = path.join(packageRoot, "Farol Next Preview.app");
 const electronApp = path.join(root, "node_modules/electron/dist/Electron.app");
 const runtimeRelativePath = "Contents/Frameworks/Electron Runtime.app";

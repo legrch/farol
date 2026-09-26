@@ -879,7 +879,7 @@ describe("evidence-bindings: loader-verified integrity and the CLI", () => {
     const rootDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-bindings-"),
     );
-    const laneRoot = path.join(rootDir, "artifacts", "e2e");
+    const laneRoot = path.join(rootDir, "_output", "evidence", "e2e");
     const opened = await openEvidenceAttempt(laneRoot, {
       lane: "sealed-package",
       input: candidateInput,

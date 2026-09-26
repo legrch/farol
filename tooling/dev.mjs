@@ -473,7 +473,7 @@ export async function launchPreview(
         spawnProcess(
           electronBin,
           [
-            "dist/app/main.cjs",
+            "_output/build/app/main.cjs",
             ...(acceptanceProfile || secondaryDisplay
               ? ["--preview-window-mode=secondary-visible"]
               : []),

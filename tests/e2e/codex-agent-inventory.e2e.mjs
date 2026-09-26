@@ -84,7 +84,7 @@ const turns = new Map();
 const childPrompt =
   "Return only FAROL_INVENTORY_CHILD. Do not invoke any tool, skill or descendant.";
 const bundle = path.join(temp, "production.mjs");
-const reportDirectory = path.resolve(root, "artifacts/evidence");
+const reportDirectory = path.resolve(root, "_output/evidence/evidence");
 const reportPath = path.join(reportDirectory, `${path.basename(temp)}.json`);
 
 try {

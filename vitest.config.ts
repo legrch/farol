@@ -11,6 +11,7 @@ export default defineConfig({
     testTimeout: 30_000,
     coverage: {
       provider: "v8",
+      reportsDirectory: "_output/coverage",
       include: ["src/modules/**/*.ts", "src/pkg/**/*.ts"],
       exclude: [
         "src/**/*.d.ts",

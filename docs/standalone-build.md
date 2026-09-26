@@ -5,6 +5,15 @@ private Brain files, an installed Farol, a signed-in browser, or a live provider
 to run its deterministic checks. The supported package target remains macOS
 ARM64; the source split does not introduce a new runtime or state identity.
 
+All repository-generated output lives under `_output/`: `build/app` holds the
+development bundle, `package` holds the sealed candidate, `coverage` holds
+Vitest reports, `evidence/<lane>` holds immutable attempts, `logs` is for
+non-receipt logs, and `tmp` is for repository scratch. Evidence-bound phase
+logs stay with their attempts. Isolated homes and browser profiles remain in
+OS temporary storage. `_output/` is ignored by Git; old `dist/`, `coverage/`,
+and `artifacts/` directories remain ignored solely to preserve historical
+local bytes. Current tooling never writes new output there.
+
 Use Node 24.20.0 or 26.7.0 with npm 11.19.0. The Node installation must contain its
 matching npm CLI under `lib/node_modules/npm/bin/npm-cli.js`; the dependency
 provenance test refuses an incomplete toolchain installation. Select that
@@ -37,7 +46,7 @@ Packaging starts with an empty environment and isolated Python guard. Its fixed
 system/Homebrew PATH must resolve a declared Node version. It accepts only exact
 committed inputs, authenticated compiler/dependencies, the reviewed Electron
 runtime, and matching resource/receipt contracts. The artifact is a local
-unsigned `dist/package/Farol Next Preview.app`; creating it does not install or
+unsigned `_output/package/Farol Next Preview.app`; creating it does not install or
 activate anything. `task run` is a separate owner action.
 
 The owner guard preserves the frozen V0 installation boundary using standalone
@@ -53,10 +62,10 @@ task test:e2e -- --skip-native-focus
 npm run test:e2e:computer:package
 ```
 
-The first command requires an eligible secondary display. For an explicitly
-owner-authorized unattended run only, `--allow-primary-display` permits inactive
-presentation on the built-in primary display; retain `--skip-native-focus`.
-Skipped focus rows are not native focus acceptance. Native fixtures are not
+The first command requires an eligible secondary display. A separately
+authorized unattended run can select the built-in display; native focus is
+attempted only when the current owner grant explicitly permits it. Skipped
+focus rows are not native focus acceptance. Native fixtures are not
 live-provider or daily-driver acceptance. Keep each run's report and cleanup
 result, including failures and blocked rows.
 
@@ -69,9 +78,8 @@ lane, and a default-off lane result never qualifies Product Agent.
 The GitHub workflow is manual-only, has `contents: read`, retains complete history,
 and does not persist checkout credentials or publish artifacts. It uses the
 [documented macOS ARM64 runner](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
-Its hosted execution remains unqualified until the owner creates the destination
-repository and explicitly runs it. Enabling automatic CI or releases is a separate
-cutover decision.
+The workflow runs only on explicit manual dispatch; its result belongs to the
+exact dispatched SHA. Enabling automatic CI or releases is a separate decision.
 
 Enable the local push gate in each new clone with:
 

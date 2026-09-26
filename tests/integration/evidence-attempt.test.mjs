@@ -24,7 +24,7 @@ afterEach(async () => {
 async function laneRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-evidence-"));
   roots.push(root);
-  return path.join(root, "artifacts", "e2e-dev");
+  return path.join(root, "_output", "evidence", "e2e-dev");
 }
 
 const input = Object.freeze({

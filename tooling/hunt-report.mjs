@@ -372,7 +372,7 @@ async function collectVitestEvidence() {
 // measured again after it.
 const testedSource = sourceIdentity(repositoryRoot, scope);
 const huntAttempt = await openEvidenceAttempt(
-  path.join(root, "artifacts/hunt"),
+  path.join(root, "_output/evidence/hunt"),
   {
     lane: "hunt",
     input: {
@@ -396,7 +396,10 @@ const fixture = JSON.parse(
   ),
 );
 const build = JSON.parse(
-  await fs.readFile(path.join(root, "dist/app/build-manifest.json"), "utf8"),
+  await fs.readFile(
+    path.join(root, "_output/build/app/build-manifest.json"),
+    "utf8",
+  ),
 );
 if (
   fixture.buildIdentity !== "<build-identity-recorded-by-final-runner>" ||
@@ -435,7 +438,7 @@ if (
   throw new Error("HUNT_INPUT_CHANGED");
 }
 try {
-  await verifyInputManifest(path.join(root, "dist/app"), build);
+  await verifyInputManifest(path.join(root, "_output/build/app"), build);
 } catch (error) {
   fail(
     "HUNT_BUILD_INPUT_MANIFEST_INVALID",

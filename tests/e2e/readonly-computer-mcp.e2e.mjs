@@ -25,10 +25,10 @@ if (
   throw new Error("READONLY_COMPUTER_MCP_E2E_ARGUMENTS_INVALID");
 }
 const packaged = arguments_[0] === "--packaged";
-const packageRoot = path.resolve("dist/package/Farol Next Preview.app");
+const packageRoot = path.resolve("_output/package/Farol Next Preview.app");
 const entry = packaged
   ? path.join(packageRoot, "Contents/Resources/app/computer-mcp.cjs")
-  : path.resolve("dist/app/computer-mcp.cjs");
+  : path.resolve("_output/build/app/computer-mcp.cjs");
 const command = packaged
   ? path.join(
       packageRoot,

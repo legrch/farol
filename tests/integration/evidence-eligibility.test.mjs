@@ -598,7 +598,7 @@ describe("P2 observer inventory binds byproducts and the terminal receipt", () =
       path.join(os.tmpdir(), "farol-next-eligibility-"),
     );
     roots.push(root);
-    const laneRoot = path.join(root, "artifacts", "e2e");
+    const laneRoot = path.join(root, "_output", "evidence", "e2e");
     const opened = await openEvidenceAttempt(laneRoot, {
       lane: "sealed-package",
       input: { ...candidate },

@@ -28,7 +28,7 @@
     "package": "node -e \"console.error('A candidate is built only by: task package (clean environment, isolated wrapper).'); process.exit(1)\"",
     "verify:package": "node tooling/verify-package.mjs",
     "promote": "node tooling/promote-preview.mjs",
-    "preview": "electron dist/app/main.cjs",
+    "preview": "electron _output/build/app/main.cjs",
     "test:e2e:dev": "npm run build && node tests/e2e/preview.e2e.mjs --development",
     "test:e2e:dev-onboarding-startup": "npm run build && node tests/e2e/dev-onboarding-startup.e2e.mjs",
     "test:e2e:dev-route-b-host": "node tests/e2e/dev-route-b-host.e2e.mjs",

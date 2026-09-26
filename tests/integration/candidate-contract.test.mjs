@@ -13,7 +13,7 @@ const exactIdentity = {
   dirty: false,
 };
 const exactArtifact = {
-  artifactPath: path.join(root, "dist/package/Farol Next Preview.app"),
+  artifactPath: path.join(root, "_output/package/Farol Next Preview.app"),
   sourceCommit: exactIdentity.commit,
   sourceTreeDigest: exactIdentity.treeDigest,
   sourceDirty: false,
@@ -22,8 +22,8 @@ const exactArtifact = {
 describe("owner preview candidate contract", () => {
   it("pins the manifest and launch to the repository package path", () => {
     expect(candidatePaths(root)).toEqual({
-      artifactFile: path.join(root, "dist/package/artifact.json"),
-      appPath: path.join(root, "dist/package/Farol Next Preview.app"),
+      artifactFile: path.join(root, "_output/package/artifact.json"),
+      appPath: path.join(root, "_output/package/Farol Next Preview.app"),
     });
     expect(() =>
       assertCanonicalArtifactPath(root, exactArtifact),
@@ -37,7 +37,7 @@ describe("owner preview candidate contract", () => {
     expect(() =>
       assertCanonicalArtifactPath(root, {
         ...exactArtifact,
-        artifactPath: "dist/package/Farol Next Preview.app",
+        artifactPath: "_output/package/Farol Next Preview.app",
       }),
     ).toThrow("PACKAGE_ARTIFACT_PATH_INVALID");
   });

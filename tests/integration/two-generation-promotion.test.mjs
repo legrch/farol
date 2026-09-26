@@ -7,7 +7,7 @@ import { runPromotionApply } from "../../tooling/promotion-apply.mjs";
 import { assertPromotionDestination } from "../../tooling/promotion-destination.mjs";
 
 // Q-07/Q-08 with two really identified local builds: the sealed predecessor
-// kept under artifacts/predecessors and the current sealed package. Both are
+// kept under _output/evidence/predecessors and the current sealed package. Both are
 // hundreds of megabytes and git-ignored, so this runs only when asked for
 // and both exist; it is then recorded as its own attempt.
 //
@@ -42,7 +42,7 @@ async function generation(directory) {
 }
 
 async function predecessorDirectory() {
-  const root = path.join(nextRoot, "artifacts", "predecessors");
+  const root = path.join(nextRoot, "_output", "evidence", "predecessors");
   let names;
   try {
     names = await fs.readdir(root);
@@ -78,9 +78,9 @@ describe("Q-07/Q-08 two identified generations", () => {
       const predecessor = await predecessorDirectory();
       expect(
         predecessor,
-        "a sealed predecessor under artifacts/predecessors",
+        "a sealed predecessor under _output/evidence/predecessors",
       ).not.toBeNull();
-      const current = path.join(nextRoot, "dist", "package");
+      const current = path.join(nextRoot, "_output", "package");
       const a = await generation(predecessor);
       const b = await generation(current);
       expect(a.artifactSha256).not.toBe(b.artifactSha256);

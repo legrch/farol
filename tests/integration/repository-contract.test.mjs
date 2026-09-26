@@ -67,7 +67,7 @@ describe("portable Farol Next repository contract", () => {
     expect(readme).toContain("verified packaged candidate");
     expect(readme).toContain("isolated launch snapshot");
     expect(readme).not.toContain(
-      "./dist/package/Farol\\ Next\\ Preview.app/Contents/MacOS/Farol\\ Next\\ Preview",
+      "./_output/package/Farol\\ Next\\ Preview.app/Contents/MacOS/Farol\\ Next\\ Preview",
     );
   });
 

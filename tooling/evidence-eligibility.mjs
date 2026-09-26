@@ -442,7 +442,7 @@ async function main(arguments_) {
   const root = path.resolve(option(arguments_, "--root") ?? process.cwd());
   const candidateFile =
     option(arguments_, "--candidate") ??
-    path.join(root, "dist/package/artifact.json");
+    path.join(root, "_output/package/artifact.json");
   const candidate = await readJson(candidateFile);
   const review = option(arguments_, "--review");
   const observer = option(arguments_, "--observer");

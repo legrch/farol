@@ -310,7 +310,7 @@ async function main(arguments_) {
   if (!lane || !output) throw new Error("EVIDENCE_OBSERVE_ARGUMENTS_INVALID");
   const candidateFile =
     option(arguments_, "--candidate") ??
-    path.join(root, "dist/package/artifact.json");
+    path.join(root, "_output/package/artifact.json");
   const subject = JSON.parse(await fs.readFile(candidateFile, "utf8"));
   const receipt = await observeAttempt({
     laneRoot: path.join(root, laneContract(lane).root),

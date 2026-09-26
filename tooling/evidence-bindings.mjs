@@ -455,7 +455,7 @@ async function main(arguments_) {
   const root = path.resolve(rootArgument);
   const candidateFile =
     option(arguments_, "--candidate") ??
-    path.join(root, "dist/package/artifact.json");
+    path.join(root, "_output/package/artifact.json");
   const observerFile = option(arguments_, "--observer");
   const developmentCandidateFile = option(arguments_, "--dev-candidate");
 

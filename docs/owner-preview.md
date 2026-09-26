@@ -16,7 +16,7 @@ task run -- --demo
 ```
 
 This command does not build. It verifies that the committed repository source identity
-matches `dist/package/artifact.json`, copies the candidate into a private unique
+matches `_output/package/artifact.json`, copies the candidate into a private unique
 temporary launch snapshot, verifies that final launch path, and launches only those
 verified bytes. A concurrent `task package` can replace the canonical package but
 cannot replace the running snapshot. The snapshot and its frozen manifest are removed
@@ -38,7 +38,7 @@ Invoking `tooling/run-preview.mjs` directly is unsupported and refused. The priv
 Taskfile marker that distinguishes the owner entrypoint is an interface guard, not an
 authentication or same-owner security boundary.
 
-`task preview` is the separate development command. It may rebuild `dist/app` and
+`task preview` is the separate development command. It may rebuild `_output/build/app` and
 is not evidence about the packaged candidate.
 
 ## What the controls do
