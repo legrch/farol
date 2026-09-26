@@ -10689,10 +10689,10 @@ function segmentMark(name, phase) {
 // publishes an `open-settings` shell action when a managed sign-in window
 // reports its outcome (main.ts), and the renderer's handler navigates the
 // shell for it — which is what used to take the task menu away from under
-// an owner mid-draft. So the case opens a real sign-in window through the
-// real control, goes back and types, and then closes that window: the
-// action that arrives is published by production code on a real window
-// close, not synthesised here and not sent over a test IPC.
+// an owner mid-draft. The Settings button deliberately hides task chrome
+// while sign-in is open, so this case opens the same managed window through
+// the product's configure API. Separate UI cases cover that button. Closing
+// the real window publishes the production action; no shell event is faked.
 //
 // LIMIT, stated because it is the part this case cannot yet prove: until
 // `ShellActionSchema` carries `source` and `authWindowGeneration`, the run
@@ -11128,15 +11128,15 @@ n12AgentDraftSegment: {
         .catch(() => []);
 
     // --- A background return must not take the editor away -----------------
-    // A real sign-in window, opened through the real control and left open.
+    // Open the real managed sign-in window without entering the Settings
+    // button's foreground mode, so a task draft can remain on screen.
     const signInWindow = draft.application.waitForEvent("window", {
       timeout: 20_000,
     });
-    await draft.window
-      .locator("#connection-readiness .connection-row")
-      .filter({ hasText: "ChatGPT · " })
-      .getByRole("button", { name: "Open sign-in…", exact: true })
-      .click({ timeout: 20_000 });
+    const signInRequest = await draft.window.evaluate(() =>
+      window.farolNext.configure({ kind: "chatgpt.open-sign-in" }),
+    );
+    assert.equal(signInRequest.ok, true);
     const signInPage = await signInWindow;
     await signInPage.waitForURL(draft.chatGptFixture.url);
     // A sequence baseline only. There is deliberately no console baseline:
