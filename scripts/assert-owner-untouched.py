@@ -48,7 +48,25 @@ def _environment_paths():
         ".config/tunnel-client", ".local/libexec/agent-commons/secure-mcp-tunnel",
         ".local/state/agent-commons/secure-mcp-tunnel",
     ))
-    presence = (HOME / ".farol/runtime/browser/browser-profile",)
+    # New-product profile identities are observed without walking cookies,
+    # sessions, settings or authentication data. Startup markers are the only
+    # content-hashed files: a test touching an owner generation must fail.
+    new_profiles = (
+        "Library/Application Support/Farol Dev",
+        "Library/Application Support/Farol DEV",
+        "Library/Application Support/Farol Next Preview",
+        "Library/Application Support/Farol Dev Acceptance",
+        "Library/Application Support/Farol Dev Acceptance/Farol Dev",
+        "Library/Application Support/Farol Dev Acceptance/Farol DEV",
+    )
+    watched += tuple(
+        HOME / profile / "farol-next-state" / marker
+        for profile in new_profiles
+        for marker in ("running.json", "last-quit.json")
+    )
+    presence = (HOME / ".farol/runtime/browser/browser-profile",) + tuple(
+        HOME / profile for profile in new_profiles
+    )
     churn = frozenset((
         "health.url", "tunnel-client.pid", "lifecycle.json", "lifecycle.jsonl",
         "hub-lifecycle.jsonl", "supervisor.lock", "supervisor.log",

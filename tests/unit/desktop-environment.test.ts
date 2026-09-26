@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   codexChildHomePath,
@@ -7,6 +10,24 @@ import {
   desktopEnvironment,
   desktopIdentity,
 } from "../../src/apps/desktop/desktop-environment";
+
+const isolatedHomes: string[] = [];
+function isolatedAppData() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-next-e2e-home-"));
+  const appData = path.join(home, "farol-e2e-app-data");
+  fs.mkdirSync(appData, { mode: 0o700 });
+  const proof = randomUUID();
+  fs.writeFileSync(path.join(home, ".farol-next-e2e-root"), proof, {
+    mode: 0o600,
+  });
+  isolatedHomes.push(home);
+  return { home, appData, proof };
+}
+afterEach(() => {
+  for (const home of isolatedHomes.splice(0)) {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
 
 describe("desktop environment identity", () => {
   const appData = "/Users/example/Library/Application Support";
@@ -68,30 +89,58 @@ describe("desktop environment identity", () => {
     );
   });
 
-  it("allows an isolated DEV app-data root only behind the explicit E2E gate", () => {
-    const isolated = "/private/tmp/farol-dev-e2e-app-data";
+  it("allows only the exact fresh DEV E2E app-data root", () => {
+    const isolated = isolatedAppData();
     expect(
       desktopAppDataPath("dev", appData, {
         enabled: true,
-        override: isolated,
+        override: isolated.appData,
+        testHome: isolated.home,
+        testRoot: isolated.home,
+        testProof: isolated.proof,
       }),
-    ).toBe(isolated);
+    ).toBe(isolated.appData);
     expect(
       desktopAppDataPath("dev", appData, {
         enabled: false,
-        override: isolated,
+        override: isolated.appData,
       }),
     ).toBe(appData);
     expect(
       desktopAppDataPath("preview", appData, {
         enabled: true,
-        override: isolated,
+        override: isolated.appData,
       }),
     ).toBe(appData);
+  });
+
+  it("rejects missing, outside-root, and symlinked DEV E2E paths before startup", () => {
+    const isolated = isolatedAppData();
+    const outside = isolatedAppData();
+    const options = {
+      enabled: true,
+      testHome: isolated.home,
+      testRoot: isolated.home,
+      testProof: isolated.proof,
+    };
+    for (const override of [undefined, "relative/e2e-state", outside.appData]) {
+      expect(() =>
+        desktopAppDataPath("dev", appData, { ...options, override }),
+      ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    }
     expect(() =>
       desktopAppDataPath("dev", appData, {
-        enabled: true,
-        override: "relative/e2e-state",
+        ...options,
+        override: isolated.appData,
+        testProof: outside.proof,
+      }),
+    ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
+    fs.rmSync(isolated.appData, { recursive: true });
+    fs.symlinkSync(outside.appData, isolated.appData);
+    expect(() =>
+      desktopAppDataPath("dev", appData, {
+        ...options,
+        override: isolated.appData,
       }),
     ).toThrow("DESKTOP_E2E_APP_DATA_INVALID");
   });

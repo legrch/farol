@@ -1,19 +1,26 @@
 // Real Electron, isolated synthetic home, no account or model traffic.
 // Captures only this owned window, never the desktop or another application's UI.
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
 
 const root = process.cwd();
 const label = "guided-owner-editable";
 const output = path.resolve(root, "artifacts/onboarding-visual", label);
-const tempParent = path.resolve(root, "artifacts/tmp");
+const tempParent = os.tmpdir();
 await fs.mkdir(output, { recursive: true, mode: 0o700 });
-await fs.mkdir(tempParent, { recursive: true, mode: 0o700 });
 const temporaryRoot = await fs.mkdtemp(
   path.join(tempParent, "onboarding-visual-"),
+);
+const e2eRootProof = randomUUID();
+await fs.writeFile(
+  path.join(temporaryRoot, ".farol-next-e2e-root"),
+  e2eRootProof,
+  { mode: 0o600 },
 );
 const home = path.join(temporaryRoot, "home");
 const appData = path.join(temporaryRoot, "app-data");
@@ -58,6 +65,8 @@ try {
       FAROL_NEXT_ENVIRONMENT: "dev",
       FAROL_NEXT_E2E: "1",
       FAROL_NEXT_E2E_APP_DATA: appData,
+      FAROL_NEXT_E2E_TEST_ROOT: temporaryRoot,
+      FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
       FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
       FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture,
       FAROL_NEXT_E2E_CHATGPT_URL: `http://127.0.0.1:${chatGptAddress.port}/`,
@@ -1053,6 +1062,8 @@ try {
       FAROL_NEXT_ENVIRONMENT: "dev",
       FAROL_NEXT_E2E: "1",
       FAROL_NEXT_E2E_APP_DATA: failedAppData,
+      FAROL_NEXT_E2E_TEST_ROOT: temporaryRoot,
+      FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
       FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
       FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture,
       FAROL_NEXT_E2E_CHATGPT_URL: failedUrl,

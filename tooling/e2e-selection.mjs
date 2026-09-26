@@ -188,6 +188,12 @@ export function createSelection(argv, segments = SELECTABLE_SEGMENTS) {
 
 // Every gate in the runner names a segment declared above, so a typo in a gate
 // is a startup failure rather than a silently skipped journey.
+// Development-only journeys may be required by a full development lane, but
+// must never run implicitly against sealed package bytes.
+export function shouldRunDevelopmentSegment(selection, development, name) {
+  return development && isSegmentSelected(selection, name);
+}
+
 export function isSegmentSelected(
   selection,
   name,

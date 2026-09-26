@@ -21,6 +21,7 @@ import {
 import {
   createSelection,
   isSegmentSelected,
+  shouldRunDevelopmentSegment,
 } from "../../tooling/e2e-selection.mjs";
 import { retentionDiagnostics } from "../../tooling/soak-retention.mjs";
 import {
@@ -1347,6 +1348,12 @@ async function launch(
   );
   const isolatedAppData = path.join(isolatedHome, "farol-e2e-app-data");
   await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
+  const e2eRootProof = randomUUID();
+  await fs.writeFile(
+    path.join(isolatedHome, ".farol-next-e2e-root"),
+    e2eRootProof,
+    { mode: 0o600 },
+  );
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   let seededChatGptOperationId = null;
   if (options.seedChatGptDispatchIntent === true) {
@@ -1789,7 +1796,11 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   const launchEnvironment = {
     ...(options.environment ?? {}),
     ...(options.environment?.FAROL_NEXT_ENVIRONMENT === "dev"
-      ? { FAROL_NEXT_E2E_APP_DATA: isolatedAppData }
+      ? {
+          FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
+          FAROL_NEXT_E2E_TEST_ROOT: isolatedHome,
+          FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
+        }
       : {}),
     FAROL_NEXT_E2E: "1",
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
@@ -6738,7 +6749,13 @@ liveTasksSegment: try {
 }
 
 devNewTaskAffordanceSegment: {
-  if (!selectionActive || !segmentSelected("dev-new-task-affordance")) {
+  if (
+    !shouldRunDevelopmentSegment(
+      selection,
+      development,
+      "dev-new-task-affordance",
+    )
+  ) {
     break devNewTaskAffordanceSegment;
   }
   segmentMark("dev-new-task-affordance", "start");
@@ -6746,13 +6763,16 @@ devNewTaskAffordanceSegment: {
     environment: { FAROL_NEXT_ENVIRONMENT: "dev" },
   });
   try {
-    const resolvedUserData = await devNewTask.application.evaluate(({ app }) =>
-      app.getPath("userData"),
+    const resolvedProfile = await devNewTask.application.evaluate(
+      ({ app }) => ({
+        userData: app.getPath("userData"),
+        sessionData: app.getPath("sessionData"),
+      }),
     );
-    assert.equal(
-      resolvedUserData,
-      path.join(devNewTask.isolatedAppData, "Farol Dev"),
-    );
+    assert.deepEqual(resolvedProfile, {
+      userData: path.join(devNewTask.isolatedAppData, "Farol Dev"),
+      sessionData: path.join(devNewTask.isolatedAppData, "Farol Dev"),
+    });
     assert.equal(devNewTask.presentation.taskViewCount, 0);
 
     assert.equal(
@@ -12910,7 +12930,9 @@ const report = {
 // A selected run only produces the captures of the segments it ran, so the
 // completeness check belongs to a full lane.  A capture that does exist must
 // still be non-empty in either case.
-for (const filename of report.screenshots) {
+const expectedScreenshots = report.screenshots;
+const capturedScreenshots = [];
+for (const filename of expectedScreenshots) {
   const capture = await fs
     .stat(path.join(evidenceRoot, filename))
     .catch(() => null);
@@ -12919,6 +12941,14 @@ for (const filename of report.screenshots) {
     continue;
   }
   assert.ok(capture.size > 1_000, `E2E_SCREENSHOT_EMPTY:${filename}`);
+  capturedScreenshots.push(filename);
+}
+// Partial selected runs report only files actually captured. Keep the full
+// expectation visible separately so a missing screenshot cannot be mistaken
+// for an observed one or used as full-lane evidence.
+if (selectionActive) {
+  report.expectedScreenshots = expectedScreenshots;
+  report.screenshots = capturedScreenshots;
 }
 await fs.writeFile(
   path.join(evidenceRoot, "report.json"),

@@ -78,6 +78,28 @@ describe("standalone owner protection", () => {
     );
     expect(result.status).toBe(1);
   });
+  it("catches new-product startup markers without scanning profile content", () => {
+    const home = fixture();
+    const result = run(
+      home,
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')",
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Farol Dev/farol-next-state/running.json");
+  });
+  it("catches replacement of a new-product profile directory by identity", () => {
+    const home = fixture();
+    const profile = path.join(
+      home,
+      "Library/Application Support/Farol Next Preview",
+    );
+    fs.mkdirSync(profile, { recursive: true });
+    const result = run(
+      home,
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Next Preview'; p.rename(p.with_name('old')); p.mkdir()",
+    );
+    expect(result.status).toBe(1);
+  });
   it("preserves a failing child exit code", () => {
     expect(run(fixture(), "raise SystemExit(17)").status).toBe(17);
   });

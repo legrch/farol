@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -23,6 +24,12 @@ const isolatedHome = path.join(temporaryRoot, "home");
 const isolatedAppData = path.join(temporaryRoot, "app-data");
 await fs.mkdir(isolatedHome, { recursive: true, mode: 0o700 });
 await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
+const e2eRootProof = randomUUID();
+await fs.writeFile(
+  path.join(temporaryRoot, ".farol-next-e2e-root"),
+  e2eRootProof,
+  { mode: 0o600 },
+);
 const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
 const tunnelFixtureSource = await fs.readFile(
   new URL("./tunnel-client.fixture.cjs", import.meta.url),
@@ -37,6 +44,8 @@ await fs.writeFile(
 const environment = {
   FAROL_NEXT_E2E: "1",
   FAROL_NEXT_E2E_APP_DATA: isolatedAppData,
+  FAROL_NEXT_E2E_TEST_ROOT: temporaryRoot,
+  FAROL_NEXT_E2E_TEST_PROOF: e2eRootProof,
   ...(useInstalledTunnelClient
     ? {}
     : { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture }),
@@ -91,6 +100,42 @@ async function stopApplicationWithOwnerSignal(application) {
 
 let application;
 try {
+  // A missing override must fail before the first app-ready boundary and
+  // leave even a synthetic ordinary-Dev startup marker untouched.
+  const ordinaryMarker = path.join(
+    isolatedHome,
+    "Library/Application Support/Farol Dev/farol-next-state/running.json",
+  );
+  await fs.mkdir(path.dirname(ordinaryMarker), {
+    recursive: true,
+    mode: 0o700,
+  });
+  await fs.writeFile(ordinaryMarker, "synthetic owner marker\n", {
+    mode: 0o600,
+  });
+  const missingOverrideEnv = { ...environment };
+  delete missingOverrideEnv.FAROL_NEXT_E2E_APP_DATA;
+  const refusedProfile = await runBoundedProcess(
+    executable,
+    [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],
+    { cwd: root, env: missingOverrideEnv, timeoutMs: 5_000 },
+  );
+  assert.equal(
+    refusedProfile.status,
+    1,
+    `${refusedProfile.stdout}${refusedProfile.stderr}`,
+  );
+  assert.equal(refusedProfile.signal, null);
+  assert.equal(
+    parseOwnerLaunchResult(`${refusedProfile.stdout}${refusedProfile.stderr}`),
+    "startup-failed",
+  );
+  assert.match(refusedProfile.stderr, /DESKTOP_E2E_APP_DATA_INVALID/u);
+  assert.equal(
+    await fs.readFile(ordinaryMarker, "utf8"),
+    "synthetic owner marker\n",
+  );
+
   application = await electron.launch({
     executablePath: executable,
     args: [path.join(buildRoot, "main.cjs"), "--preview-window-mode=hidden"],

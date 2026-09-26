@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import {
   DEV_DATA_DIRECTORY_NAME,
@@ -37,6 +38,100 @@ export function desktopEnvironment(
   throw new Error("DESKTOP_ENVIRONMENT_INVALID");
 }
 
+const E2E_ROOT_MARKER = ".farol-next-e2e-root";
+const E2E_ROOT_NAME =
+  /^(?:farol-next-e2e-home|farol-dev-onboarding-startup|onboarding-visual)-[A-Za-z0-9]{6,}$/u;
+const E2E_APP_DATA_NAMES = new Set([
+  "farol-e2e-app-data",
+  "app-data",
+  "legacy-app-data",
+  "failed-app-data",
+]);
+const E2E_HOME_NAMES = new Set(["home", "failed-home"]);
+
+function isolatedDevE2EAppData(
+  override: string | undefined,
+  testRoot: string | undefined,
+  testHome: string | undefined,
+  testProof: string | undefined,
+): string {
+  const invalid = () => new Error("DESKTOP_E2E_APP_DATA_INVALID");
+  if (
+    override === undefined ||
+    testRoot === undefined ||
+    testHome === undefined ||
+    testProof === undefined ||
+    ![override, testRoot, testHome].every(
+      (value) => path.isAbsolute(value) && !value.includes("\0"),
+    ) ||
+    !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(testProof) ||
+    !E2E_ROOT_NAME.test(path.basename(testRoot)) ||
+    path.dirname(override) !== testRoot ||
+    !E2E_APP_DATA_NAMES.has(path.basename(override)) ||
+    !(
+      testHome === testRoot ||
+      (path.dirname(testHome) === testRoot &&
+        E2E_HOME_NAMES.has(path.basename(testHome)))
+    )
+  ) {
+    throw invalid();
+  }
+  try {
+    const parent = fs.realpathSync(path.dirname(testRoot));
+    // Test homes are minted beneath the OS temporary directory, never beneath
+    // an owner profile or a repository. TMPDIR itself may point at testRoot.
+    if (
+      parent !== "/tmp" &&
+      parent !== "/private/tmp" &&
+      !/^\/private\/var\/folders\/[^/]+\/[^/]+\/T$/u.test(parent)
+    )
+      throw invalid();
+    const rootInfo = fs.lstatSync(testRoot);
+    const homeInfo = fs.lstatSync(testHome);
+    const appDataInfo = fs.lstatSync(override);
+    for (const info of [rootInfo, homeInfo, appDataInfo]) {
+      if (
+        !info.isDirectory() ||
+        info.isSymbolicLink() ||
+        (info.mode & 0o077) !== 0
+      ) {
+        throw invalid();
+      }
+    }
+    const realRoot = fs.realpathSync(testRoot);
+    if (realRoot !== path.join(parent, path.basename(testRoot)))
+      throw invalid();
+    const realHome = fs.realpathSync(testHome);
+    if (
+      realHome !==
+      (testHome === testRoot
+        ? realRoot
+        : path.join(realRoot, path.basename(testHome)))
+    ) {
+      throw invalid();
+    }
+    if (
+      fs.realpathSync(override) !== path.join(realRoot, path.basename(override))
+    ) {
+      throw invalid();
+    }
+    const marker = path.join(realRoot, E2E_ROOT_MARKER);
+    const markerInfo = fs.lstatSync(marker);
+    if (
+      !markerInfo.isFile() ||
+      markerInfo.isSymbolicLink() ||
+      (markerInfo.mode & 0o077) !== 0 ||
+      markerInfo.size > 64 ||
+      fs.readFileSync(marker, "utf8") !== testProof
+    ) {
+      throw invalid();
+    }
+  } catch {
+    throw invalid();
+  }
+  return override;
+}
+
 export function desktopAppDataPath(
   environment: DesktopEnvironment,
   nativeAppData: string,
@@ -44,6 +139,9 @@ export function desktopAppDataPath(
     enabled: boolean;
     override: string | undefined;
     acceptanceProfile?: string | undefined;
+    testRoot?: string | undefined;
+    testHome?: string | undefined;
+    testProof?: string | undefined;
   }>,
 ): string {
   if (
@@ -60,17 +158,15 @@ export function desktopAppDataPath(
     // the ordinary DEV directory. The launcher owns the marker.
     return path.join(nativeAppData, "Farol Dev Acceptance");
   }
-  if (
-    environment !== "dev" ||
-    !options.enabled ||
-    options.override === undefined
-  ) {
-    return nativeAppData;
-  }
-  if (!path.isAbsolute(options.override) || options.override.includes("\0")) {
-    throw new Error("DESKTOP_E2E_APP_DATA_INVALID");
-  }
-  return options.override;
+  if (environment !== "dev" || !options.enabled) return nativeAppData;
+  // Validate before Electron selects userData/sessionData or opens a lock. A
+  // missing override must never fall back to the ordinary owner's DEV profile.
+  return isolatedDevE2EAppData(
+    options.override,
+    options.testRoot,
+    options.testHome,
+    options.testProof,
+  );
 }
 
 export function desktopIdentity(

@@ -8,6 +8,7 @@ import {
   createSelection,
   isSegmentSelected,
   resolveSelection,
+  shouldRunDevelopmentSegment,
 } from "../../tooling/e2e-selection.mjs";
 
 const e2eSource = fs.readFileSync(
@@ -85,6 +86,31 @@ describe("the E2E lane selector", () => {
   });
 });
 
+describe("development-only E2E admission", () => {
+  it("runs the required affordance journey in full and selected development runs", () => {
+    const admitted = (argv, development) =>
+      shouldRunDevelopmentSegment(
+        createSelection(argv),
+        development,
+        "dev-new-task-affordance",
+      );
+    expect(admitted(["--development"], true)).toBe(true);
+    expect(
+      admitted(["--development", "--only=dev-new-task-affordance"], true),
+    ).toBe(true);
+    expect(admitted(["--development", "--only=live-tasks"], true)).toBe(false);
+    expect(admitted([], false)).toBe(false);
+    expect(admitted(["--only=dev-new-task-affordance"], false)).toBe(false);
+    const gate = e2eSource.slice(
+      e2eSource.indexOf("devNewTaskAffordanceSegment: {"),
+      e2eSource.indexOf("devNewTaskAffordanceSegment: {") + 320,
+    );
+    expect(gate).toMatch(
+      /if\s*\(\s*!shouldRunDevelopmentSegment\(\s*selection,\s*development,\s*"dev-new-task-affordance",?\s*\)\s*\)\s*\{\s*break devNewTaskAffordanceSegment;/u,
+    );
+  });
+});
+
 describe("the runner's selection gates", () => {
   const gated = [
     ...e2eSource.matchAll(/segmentSelected\("([a-z0-9-]+)"\)/gu),
@@ -94,13 +120,14 @@ describe("the runner's selection gates", () => {
   // launches, and the startup-death stages that follow it outside that
   // instance's try.  Both are gated, so selecting the segment runs the whole
   // family and skipping it leaves neither half behind.
-  const expectedGateCount = new Map(declared.map((name) => [name, 1])).set(
-    "process-death",
-    2,
-  );
+  const expectedGateCount = new Map(declared.map((name) => [name, 1]))
+    .set("process-death", 2)
+    .set("dev-new-task-affordance", 0);
 
   it("gates every declared segment, and nothing it has not declared", () => {
-    expect([...new Set(gated)].sort()).toEqual([...declared].sort());
+    expect([...new Set(gated)].sort()).toEqual(
+      declared.filter((name) => name !== "dev-new-task-affordance").sort(),
+    );
     for (const [name, count] of expectedGateCount) {
       expect(gated.filter((entry) => entry === name)).toHaveLength(count);
     }

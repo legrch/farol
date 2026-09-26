@@ -363,15 +363,26 @@ const bundleId = buildIdentity.bundleId;
 const runtimeEnvironment = desktopEnvironment(
   process.env.FAROL_NEXT_ENVIRONMENT,
 );
-const desktopAppData = desktopAppDataPath(
-  runtimeEnvironment,
-  app.getPath("appData"),
-  {
-    enabled: process.env.FAROL_NEXT_E2E === "1",
-    override: process.env.FAROL_NEXT_E2E_APP_DATA,
-    acceptanceProfile: process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
-  },
-);
+const desktopAppData = (() => {
+  try {
+    return desktopAppDataPath(runtimeEnvironment, app.getPath("appData"), {
+      enabled: process.env.FAROL_NEXT_E2E === "1",
+      override: process.env.FAROL_NEXT_E2E_APP_DATA,
+      acceptanceProfile: process.env.FAROL_NEXT_ACCEPTANCE_PROFILE,
+      testRoot: process.env.FAROL_NEXT_E2E_TEST_ROOT,
+      testHome: process.env.HOME,
+      testProof: process.env.FAROL_NEXT_E2E_TEST_PROOF,
+    });
+  } catch (error) {
+    // An invalid E2E profile must fail before Electron selects any owner path
+    // or shows an uncaught-exception dialog.
+    terminateDesktopStartup(error, runtimeEnvironment, {
+      write: (message) => process.stderr.write(message),
+      exit: (code) => process.exit(code),
+    });
+    throw error;
+  }
+})();
 const declaredDesktopIdentity = desktopIdentity(
   runtimeEnvironment,
   desktopAppData,
