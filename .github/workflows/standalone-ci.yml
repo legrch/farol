@@ -33,6 +33,15 @@ jobs:
           git diff --exit-code -- package-lock.json
       - name: Install local gate tools
         run: brew install go-task gitleaks
+      - name: Select reviewed Apple developer tools
+        run: |
+          # Hosted images default to versioned Xcode roots. The production
+          # attestation accepts the canonical Command Line Tools location.
+          test -d /Library/Developer/CommandLineTools
+          sudo /usr/bin/xcode-select --switch /Library/Developer/CommandLineTools
+          test "$(/usr/bin/xcode-select -p)" = /Library/Developer/CommandLineTools
+          test "$(/usr/bin/xcrun --find python3)" = /Library/Developer/CommandLineTools/usr/bin/python3
+          test "$(/usr/bin/xcrun --find git)" = /Library/Developer/CommandLineTools/usr/bin/git
       - name: Run protected standalone checks
         run: task ci:fast
       - name: Require unchanged source
