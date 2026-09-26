@@ -874,7 +874,9 @@ async function inspectWindowPresentation(application) {
     const targetWindow = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol · Developer Preview" &&
+        ["Farol · Developer Preview", "Farol · Development"].includes(
+          candidate.getTitle(),
+        ) &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
@@ -2602,7 +2604,9 @@ async function liveChatGptSurfaces(application, expectedOrigin) {
     const host = BrowserWindow.getAllWindows().find((candidate) => {
       const url = candidate.webContents.getURL();
       return (
-        candidate.getTitle() === "Farol · Developer Preview" &&
+        ["Farol · Developer Preview", "Farol · Development"].includes(
+          candidate.getTitle(),
+        ) &&
         url.startsWith("file:") &&
         url.endsWith("/shell.html")
       );
