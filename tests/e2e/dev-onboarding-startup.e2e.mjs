@@ -239,14 +239,13 @@ try {
 
   await settingsNav.click();
   await window.locator('[data-panel="settings"].active').waitFor();
-  assert.match(
-    await window.locator("#settings-connections-summary").innerText(),
-    new RegExp(
-      `^\\d+ of ${connectionRows} independent readiness checks currently have valid evidence\\.`,
-      "u",
-    ),
-  );
-  await window.locator("#open-connections").click();
+  await window
+    .locator('#settings-nav [data-settings-category="diagnostics"]')
+    .click();
+  await window.locator("#connection-diagnostics:visible").waitFor();
+  await window.locator("#settings-return").click();
+  await window.locator('[data-panel="browser"].active').waitFor();
+  await window.keyboard.press("Meta+2");
   await window.locator('[data-panel="computer"].active').waitFor();
 
   const returnToChatGpt = window.locator("#onboarding-return");
@@ -312,10 +311,17 @@ try {
     );
     if (launch === 0) {
       await legacyWindow.locator('[data-onboarding-step="folder"]').click();
-      await legacyWindow.locator("#onboarding-primary").click();
+      await legacyWindow.locator("#onboarding-add-folder").click();
       await legacyWindow
         .locator('[data-onboarding-step="folder"].complete')
         .waitFor({ state: "visible" });
+      await legacyWindow.waitForFunction(
+        async () =>
+          (await window.farolNext.bootstrap()).configuration.settings.computer
+            .workspaces.length === 1,
+        undefined,
+        { timeout: 15_000 },
+      );
       const value = await legacyWindow.evaluate(() =>
         window.farolNext.bootstrap(),
       );
@@ -323,7 +329,17 @@ try {
         workspaces: value.configuration.settings.computer.workspaces,
         verified: value.configuration.settings.setup.computer.verified,
       };
-      assert.equal(savedWorkspace.workspaces.length, 1);
+      assert.equal(
+        savedWorkspace.workspaces.length,
+        1,
+        JSON.stringify({
+          status: value.configuration.status,
+          feedback: await legacyWindow
+            .locator("#onboarding-feedback")
+            .innerText(),
+          step: await legacyWindow.locator("#onboarding-title").innerText(),
+        }),
+      );
     } else {
       const value = await legacyWindow.evaluate(() =>
         window.farolNext.bootstrap(),
