@@ -210,16 +210,28 @@ try {
     "DEV_CONNECTIONS_SETTINGS_NOT_AT_BOTTOM",
   );
 
-  const connectionsLayout = await window
-    .locator('[data-panel="computer"].active')
-    .evaluate((panel) => ({
-      clientHeight: panel.clientHeight,
-      scrollHeight: panel.scrollHeight,
-      overflowY: getComputedStyle(panel).overflowY,
-    }));
+  const guidedConnections = await window
+    .locator("#guided-onboarding")
+    .isVisible();
+  const scrollTarget = guidedConnections
+    ? window.locator("#onboarding-scroll")
+    : window.locator('[data-panel="computer"].active');
+  const connectionsLayout = await scrollTarget.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    overflowY: getComputedStyle(element).overflowY,
+  }));
   assert.ok(connectionsLayout.clientHeight > 0);
   assert.ok(connectionsLayout.scrollHeight >= connectionsLayout.clientHeight);
   assert.match(connectionsLayout.overflowY, /^(?:auto|scroll)$/u);
+  if (guidedConnections) {
+    assert.equal(
+      await window
+        .locator('[data-panel="computer"].active')
+        .evaluate((panel) => getComputedStyle(panel).overflowY),
+      "hidden",
+    );
+  }
   const connectionRows = await window
     .locator("#connection-readiness .connection-row")
     .count();
