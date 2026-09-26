@@ -6755,14 +6755,9 @@ devNewTaskAffordanceSegment: {
       },
     );
     assert.equal(startupTaskViews.length, 1);
-    assert.deepEqual(
-      {
-        title: startupTaskViews[0].title,
-        visible: startupTaskViews[0].visible,
-      },
-      { title: "ChatGPT readiness fixture", visible: true },
-    );
-    assert.equal(startupTaskViews[0].url, devNewTask.chatGptFixture.url);
+    assert.equal(startupTaskViews[0].title, "");
+    assert.equal(startupTaskViews[0].visible, false);
+    assert.notEqual(startupTaskViews[0].url, devNewTask.chatGptFixture.url);
 
     await completeSetup(devNewTask, false, false, true, false);
     const newTask = devNewTask.window.locator("#new-task");
@@ -6821,15 +6816,18 @@ devNewTaskAffordanceSegment: {
       assert.equal(task.provider, "chatgpt");
       assert.equal(task.requestedModel, "Account default");
       assert.equal(task.observedModel, null);
-      await waitForLiveChatGptSurface(
+      const providerSurface = await waitForLiveChatGptSurface(
         devNewTask,
         task.taskId,
         (surface) =>
+          surface.hostVisible &&
           surface.state.composerVisible &&
           new URL(surface.url).searchParams.get("farol-e2e-task") ===
             task.taskId,
         "dev New task " + index + " local fixture surface",
       );
+      assert.equal(providerSurface.state.userText, "");
+      assert.equal(providerSurface.state.submitCount, 0);
       if (index === 2) cases.push("dev-new-task-next-is-reachable");
     }
     cases.push("dev-new-task-disabled-at-capacity");
