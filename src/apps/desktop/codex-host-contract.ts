@@ -339,9 +339,33 @@ function hasEnumValues(schema: unknown, ...values: string[]): boolean {
   );
 }
 
+function supportsSandboxPolicy(schema: unknown): boolean {
+  const variants = array(child(schema, "oneOf"));
+  const variant = (type: string): unknown =>
+    variants.find(
+      (candidate) =>
+        array(child(candidate, "properties", "type", "enum")).includes(type) &&
+        child(candidate, "properties", "type", "type") === "string" &&
+        hasRequired(candidate, "type"),
+    );
+  const readOnly = variant("readOnly");
+  const workspaceWrite = variant("workspaceWrite");
+  return (
+    hasShape(child(readOnly, "properties", "networkAccess"), "boolean") &&
+    hasShape(child(workspaceWrite, "properties", "networkAccess"), "boolean") &&
+    hasShape(
+      child(workspaceWrite, "properties", "writableRoots"),
+      "array:AbsolutePathBuf",
+    )
+  );
+}
+
 function supportsHandoffValues(
   client: unknown,
   turnsResponse: unknown,
+  threadStartResponse: unknown,
+  projectListResponse: unknown,
+  threadReadResponse: unknown,
 ): boolean {
   const definitions = child(client, "definitions");
   const textInput = array(child(definitions, "UserInput", "oneOf")).some(
@@ -364,6 +388,18 @@ function supportsHandoffValues(
     hasEnumValues(child(definitions, "TurnItemsView"), "notLoaded") &&
     child(definitions, "ReasoningEffort", "type") === "string" &&
     textInput &&
+    supportsSandboxPolicy(child(definitions, "SandboxPolicy")) &&
+    supportsSandboxPolicy(
+      child(threadStartResponse, "definitions", "SandboxPolicy"),
+    ) &&
+    [
+      definitions,
+      child(threadStartResponse, "definitions"),
+      child(projectListResponse, "definitions"),
+      child(threadReadResponse, "definitions"),
+    ].every(
+      (source) => child(source, "AbsolutePathBuf", "type") === "string",
+    ) &&
     hasEnumValues(
       child(turnsResponse, "definitions", "TurnStatus"),
       "completed",
@@ -584,6 +620,9 @@ export async function inspectCodexHandoffHostContract(
     !supportsHandoffValues(
       client,
       schemas.get("v2/ThreadTurnsListResponse.json"),
+      schemas.get("v2/ThreadStartResponse.json"),
+      schemas.get("v2/ProjectListResponse.json"),
+      schemas.get("v2/ThreadReadResponse.json"),
     )
   ) {
     contractError("CODEX_HOST_HANDOFF_UNAVAILABLE");
