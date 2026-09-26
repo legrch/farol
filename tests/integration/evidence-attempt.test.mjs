@@ -300,12 +300,15 @@ describe("HR-010 acceptance re-reads what the receipts claim", () => {
   async function completeAttempt() {
     const lane = await laneRoot();
     const cases = JSON.stringify([...EVIDENCE_LANES["sealed-package"].cases]);
+    const productAgentQualification = JSON.stringify(
+      EVIDENCE_LANES["sealed-package"].productAgentQualification,
+    );
     const result = runnerInChild(
       lane,
       `
 const fs = await import("node:fs/promises");
 await fs.writeFile(attempt.directory + "/report.json", JSON.stringify({ status: "PASS" }));
-await attempt.finish("PASS", { cases: ${cases} });
+await attempt.finish("PASS", { cases: ${cases}, productAgentQualification: ${productAgentQualification} });
 process.exitCode = 0;
 `,
     );

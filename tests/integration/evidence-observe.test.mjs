@@ -152,6 +152,8 @@ describe("EV-03/EV-08 effect observer", () => {
     await exited;
     await attempt.finish("PASS", {
       cases: [...EVIDENCE_LANES["sealed-package"].cases],
+      productAgentQualification:
+        EVIDENCE_LANES["sealed-package"].productAgentQualification,
     });
     await fs.writeFile(
       path.join(attempt.directory, "exit.json"),
