@@ -6460,10 +6460,11 @@ liveTasksSegment: try {
     );
     assert.equal(after.nativeAgent, false);
     assert.equal(after.taskRevision, before.taskRevision);
-    assert.equal(
-      after.tasks.find((task) => task.taskId === pinnedTask.taskId)?.agent,
-      null,
+    const refusedTask = after.tasks.find(
+      (task) => task.taskId === pinnedTask.taskId,
     );
+    assert.ok(refusedTask);
+    assert.equal(Object.hasOwn(refusedTask, "agent"), false);
     assert.equal(await readHostStarts(), hostStartsBefore);
     assert.equal(await readHostRequests(), hostRequestsBefore);
     assert.deepEqual(await listJson(assignmentDirectory), assignmentsBefore);
@@ -6486,10 +6487,11 @@ liveTasksSegment: try {
   assert.equal(liveTaskRecord.tasks[0].label, "Pinned continuity task");
   assert.equal(liveTaskRecord.tasks[0].pinned, true);
   assert.equal(liveTaskRecord.tasks[0].lifecycle, "completed");
-  assert.deepEqual(
-    liveTaskRecord.tasks[0].agent,
-    positiveProductAgentQualification ? productAgentTask.agent : null,
-  );
+  if (positiveProductAgentQualification) {
+    assert.deepEqual(liveTaskRecord.tasks[0].agent, productAgentTask.agent);
+  } else {
+    assert.equal(Object.hasOwn(liveTaskRecord.tasks[0], "agent"), false);
+  }
   assert.equal(
     liveTaskRecord.tasks[0].conversationUrl,
     retainedLiveConversationUrl,
@@ -6510,7 +6512,7 @@ liveTasksSegment: try {
     positiveProductAgentQualification ? "cancelled" : null,
   );
   assert.deepEqual(Object.keys(liveTaskRecord.tasks[0]).sort(), [
-    "agent",
+    ...(positiveProductAgentQualification ? ["agent"] : []),
     "conversationUrl",
     "hasComputer",
     "label",
