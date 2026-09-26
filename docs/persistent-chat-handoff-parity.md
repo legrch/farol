@@ -40,6 +40,10 @@ dispatch handle, not internal thread/turn IDs.
 The next source slice must add explicit host-task creation admission, a trusted
 Computer workspace adapter, an App Server adapter against the **installed**
 host's current schema, and a typed desktop/Computer MCP create/status route.
+The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
+installed-host schema methods and response fields; it is not yet attached to
+that route. It was checked against the locally installed Codex CLI's generated
+schema without launching a task.
 The adapter must preserve the owner-selected host execution policy and refuse
 an ambiguous or unavailable saved project; it must not silently fall back to a
 projectless task. Qualify malformed inputs, stale/symlinked roots, ambiguous

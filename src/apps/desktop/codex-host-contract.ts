@@ -15,6 +15,18 @@ const SCHEMA_FILES = [
   "v2/ThreadListParams.json",
   "v2/ThreadReadResponse.json",
 ] as const;
+const HANDOFF_SCHEMA_FILES = [
+  "v2/ProjectListParams.json",
+  "v2/ProjectListResponse.json",
+  "v2/ThreadStartParams.json",
+  "v2/ThreadStartResponse.json",
+  "v2/TurnStartParams.json",
+  "v2/TurnStartResponse.json",
+  "v2/ThreadReadParams.json",
+  "v2/ThreadReadResponse.json",
+  "v2/ThreadTurnsListParams.json",
+  "v2/ThreadTurnsListResponse.json",
+] as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -67,7 +79,7 @@ function hasThreadItem(schema: unknown, type: string): boolean {
 
 async function readSchemaFile(
   root: string,
-  relativePath: (typeof SCHEMA_FILES)[number],
+  relativePath: string,
 ): Promise<Readonly<{ bytes: Buffer; value: JsonRecord }>> {
   const target = path.join(root, relativePath);
   let handle;
@@ -103,6 +115,22 @@ async function readSchemaFile(
   } finally {
     await handle.close();
   }
+}
+
+function hasProperties(schema: unknown, ...names: string[]): boolean {
+  return names.every((name) => child(schema, "properties", name) !== undefined);
+}
+
+function hasDefinitionProperties(
+  schema: unknown,
+  definition: string,
+  ...names: string[]
+): boolean {
+  return names.every(
+    (name) =>
+      child(schema, "definitions", definition, "properties", name) !==
+      undefined,
+  );
 }
 
 export async function inspectCodexHostContract(
@@ -208,5 +236,151 @@ export async function inspectCodexHostContract(
       collabObservation: true,
       compaction: true,
     },
+  };
+}
+
+export type CodexHandoffHostContract = Readonly<{
+  version: string;
+  protocol: "codex-app-server/v2";
+  schemaSha256: string;
+  projectBoundCreateStatus: true;
+}>;
+
+// The ordinary host probe validates binary identity and the base App Server
+// contract. This additional source-only gate proves the experimental methods
+// and response fields needed before a saved-project handoff can be wired.
+// It never starts a task or reads a project from the owner's live profile.
+export async function inspectCodexHandoffHostContract(
+  root: string,
+  versionOutput: string,
+): Promise<CodexHandoffHostContract> {
+  const base = await inspectCodexHostContract(root, versionOutput);
+  const entries = await Promise.all(
+    HANDOFF_SCHEMA_FILES.map(async (relativePath) => ({
+      relativePath,
+      ...(await readSchemaFile(root, relativePath)),
+    })),
+  );
+  const schemas = new Map(
+    entries.map((entry) => [entry.relativePath, entry.value] as const),
+  );
+  const client = (await readSchemaFile(root, "ClientRequest.json")).value;
+  if (
+    ![
+      "project/list",
+      "thread/start",
+      "thread/read",
+      "thread/turns/list",
+      "turn/start",
+    ].every((method) => hasMethod(client, method)) ||
+    !hasProperties(
+      schemas.get("v2/ProjectListParams.json"),
+      "cursor",
+      "limit",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/ProjectListResponse.json"),
+      "data",
+      "nextCursor",
+    ) ||
+    !hasDefinitionProperties(
+      schemas.get("v2/ProjectListResponse.json"),
+      "Project",
+      "id",
+      "roots",
+    ) ||
+    !hasDefinitionProperties(
+      schemas.get("v2/ProjectListResponse.json"),
+      "ProjectRoot",
+      "path",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/ThreadStartParams.json"),
+      "projectId",
+      "cwd",
+      "ephemeral",
+      "model",
+      "allowProviderModelFallback",
+      "sandbox",
+      "approvalPolicy",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/ThreadStartResponse.json"),
+      "thread",
+      "cwd",
+      "model",
+      "sandbox",
+      "approvalPolicy",
+    ) ||
+    !hasDefinitionProperties(
+      schemas.get("v2/ThreadStartResponse.json"),
+      "Thread",
+      "id",
+      "projectId",
+      "cwd",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/TurnStartParams.json"),
+      "threadId",
+      "input",
+      "cwd",
+      "model",
+      "effort",
+      "sandboxPolicy",
+      "approvalPolicy",
+    ) ||
+    !hasProperties(schemas.get("v2/TurnStartResponse.json"), "turn") ||
+    !hasDefinitionProperties(
+      schemas.get("v2/TurnStartResponse.json"),
+      "Turn",
+      "id",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/ThreadReadParams.json"),
+      "threadId",
+      "includeTurns",
+    ) ||
+    !hasDefinitionProperties(
+      schemas.get("v2/ThreadReadResponse.json"),
+      "Thread",
+      "id",
+      "projectId",
+      "cwd",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/ThreadTurnsListParams.json"),
+      "threadId",
+      "cursor",
+      "limit",
+      "itemsView",
+    ) ||
+    !hasProperties(
+      schemas.get("v2/ThreadTurnsListResponse.json"),
+      "data",
+      "nextCursor",
+    ) ||
+    !hasDefinitionProperties(
+      schemas.get("v2/ThreadTurnsListResponse.json"),
+      "Turn",
+      "id",
+      "status",
+    )
+  ) {
+    contractError("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  }
+  const digest = createHash("sha256");
+  digest.update(base.schemaSha256);
+  digest.update("\0");
+  for (const entry of entries) {
+    digest.update(entry.relativePath);
+    digest.update("\0");
+    digest.update(entry.bytes);
+    digest.update("\0");
+  }
+  return {
+    version: base.version,
+    protocol: base.protocol,
+    schemaSha256: digest.digest("hex"),
+    projectBoundCreateStatus: true,
   };
 }
