@@ -6755,7 +6755,14 @@ devNewTaskAffordanceSegment: {
     );
     assert.equal(devNewTask.presentation.taskViewCount, 0);
 
-    await completeSetup(devNewTask, false, false, true, false);
+    await devNewTask.window
+      .locator('.nav-item[data-section="browser"]')
+      .click();
+    await devNewTask.window.waitForFunction(
+      () =>
+        document.documentElement.dataset.section === "browser" &&
+        document.documentElement.dataset.browserChrome === "true",
+    );
     const newTask = devNewTask.window.locator("#new-task");
     await newTask.waitFor({ state: "visible" });
 
@@ -6772,6 +6779,8 @@ devNewTaskAffordanceSegment: {
     const readNewTaskState = () =>
       newTask.evaluate((button) => ({
         environment: document.documentElement.dataset.environment,
+        section: document.documentElement.dataset.section,
+        browserChrome: document.documentElement.dataset.browserChrome,
         hasTasks: document.documentElement.dataset.hasTasks,
         display: getComputedStyle(button).display,
         appRegion:
@@ -6782,6 +6791,8 @@ devNewTaskAffordanceSegment: {
     assert.equal(await newTask.locator("small").innerText(), "0 / 5");
     const emptyState = await readNewTaskState();
     assert.equal(emptyState.environment, "dev");
+    assert.equal(emptyState.section, "browser");
+    assert.equal(emptyState.browserChrome, "true");
     assert.equal(emptyState.hasTasks, "false");
     assert.notEqual(emptyState.display, "none");
     assert.equal(emptyState.appRegion, "no-drag");
@@ -6804,6 +6815,8 @@ devNewTaskAffordanceSegment: {
       assert.equal(await newTask.locator("small").innerText(), index + " / 5");
       const activeState = await readNewTaskState();
       assert.equal(activeState.environment, "dev");
+      assert.equal(activeState.section, "browser");
+      assert.equal(activeState.browserChrome, "true");
       assert.equal(activeState.hasTasks, "true");
       assert.notEqual(activeState.display, "none");
       assert.equal(activeState.appRegion, "no-drag");
@@ -6817,11 +6830,13 @@ devNewTaskAffordanceSegment: {
         task.taskId,
         (surface) =>
           surface.hostVisible &&
-          surface.state.composerVisible &&
+          new URL(surface.url).origin ===
+            new URL(devNewTask.chatGptFixture.url).origin &&
           new URL(surface.url).searchParams.get("farol-e2e-task") ===
             task.taskId,
         "dev New task " + index + " local fixture surface",
       );
+      assert.equal(providerSurface.state.composerVisible, false);
       assert.equal(providerSurface.state.userText, "");
       assert.equal(providerSurface.state.submitCount, 0);
       if (index === 2) cases.push("dev-new-task-next-is-reachable");
