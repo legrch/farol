@@ -82,6 +82,22 @@ async function readSchemaFile(
   relativePath: string,
 ): Promise<Readonly<{ bytes: Buffer; value: JsonRecord }>> {
   const target = path.join(root, relativePath);
+  // O_NOFOLLOW protects the leaf; reject redirects through a parent directory too.
+  for (const parent of [root, path.dirname(target)]) {
+    let info;
+    try {
+      info = await fs.lstat(parent);
+    } catch {
+      contractError("CODEX_HOST_SCHEMA_UNSAFE");
+    }
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (process.geteuid?.() !== undefined && info.uid !== process.geteuid())
+    ) {
+      contractError("CODEX_HOST_SCHEMA_UNSAFE");
+    }
+  }
   let handle;
   try {
     handle = await fs.open(
@@ -117,26 +133,141 @@ async function readSchemaFile(
   }
 }
 
-function hasProperties(schema: unknown, ...names: string[]): boolean {
-  return names.every((name) => child(schema, "properties", name) !== undefined);
-}
+type SchemaField = Readonly<{
+  schema: string;
+  path: readonly string[];
+  shape: string;
+}>;
 
-function hasDefinitionProperties(
-  schema: unknown,
-  definition: string,
-  ...names: string[]
-): boolean {
-  return names.every(
-    (name) =>
-      child(schema, "definitions", definition, "properties", name) !==
-      undefined,
+function hasShape(schema: unknown, shape: string): boolean {
+  if (!record(schema)) return false;
+  if (shape.startsWith("ref:")) {
+    const ref = `#/definitions/${shape.slice(4)}`;
+    return (
+      schema.$ref === ref ||
+      array(schema.allOf).some((part) => child(part, "$ref") === ref)
+    );
+  }
+  if (shape.startsWith("nullable-ref:")) {
+    const ref = `#/definitions/${shape.slice(13)}`;
+    return (
+      array(schema.anyOf).some((part) => child(part, "$ref") === ref) &&
+      array(schema.anyOf).some((part) => child(part, "type") === "null")
+    );
+  }
+  if (shape.startsWith("array:")) {
+    return (
+      schema.type === "array" &&
+      child(schema, "items", "$ref") === `#/definitions/${shape.slice(6)}`
+    );
+  }
+  const expected = shape.split("|");
+  const actual =
+    typeof schema.type === "string" ? [schema.type] : array(schema.type);
+  return (
+    expected.length === actual.length &&
+    expected.every((type) => actual.includes(type))
   );
 }
 
-export async function inspectCodexHostContract(
+function hasFieldShapes(
+  schemas: ReadonlyMap<string, JsonRecord>,
+  fields: readonly SchemaField[],
+): boolean {
+  return fields.every(({ schema, path: fieldPath, shape }) =>
+    hasShape(child(schemas.get(schema), ...fieldPath), shape),
+  );
+}
+
+const HANDOFF_FIELDS: readonly SchemaField[] = (
+  [
+    ["ProjectListParams", "cursor", "string|null"],
+    ["ProjectListParams", "limit", "integer|null"],
+    ["ProjectListResponse", "data", "array:Project"],
+    ["ProjectListResponse", "nextCursor", "string|null"],
+    ["ThreadStartParams", "projectId", "string|null"],
+    ["ThreadStartParams", "cwd", "string|null"],
+    ["ThreadStartParams", "ephemeral", "boolean|null"],
+    ["ThreadStartParams", "model", "string|null"],
+    ["ThreadStartParams", "allowProviderModelFallback", "boolean"],
+    ["ThreadStartParams", "sandbox", "nullable-ref:SandboxMode"],
+    ["ThreadStartParams", "approvalPolicy", "nullable-ref:AskForApproval"],
+    ["ThreadStartResponse", "thread", "ref:Thread"],
+    ["ThreadStartResponse", "cwd", "ref:AbsolutePathBuf"],
+    ["ThreadStartResponse", "model", "string"],
+    ["ThreadStartResponse", "sandbox", "ref:SandboxPolicy"],
+    ["ThreadStartResponse", "approvalPolicy", "ref:AskForApproval"],
+    ["TurnStartParams", "threadId", "string"],
+    ["TurnStartParams", "input", "array:UserInput"],
+    ["TurnStartParams", "cwd", "string|null"],
+    ["TurnStartParams", "model", "string|null"],
+    ["TurnStartParams", "effort", "nullable-ref:ReasoningEffort"],
+    ["TurnStartParams", "sandboxPolicy", "nullable-ref:SandboxPolicy"],
+    ["TurnStartParams", "approvalPolicy", "nullable-ref:AskForApproval"],
+    ["TurnStartResponse", "turn", "ref:Turn"],
+    ["ThreadReadParams", "threadId", "string"],
+    ["ThreadReadParams", "includeTurns", "boolean"],
+    ["ThreadReadResponse", "thread", "ref:Thread"],
+    ["ThreadTurnsListParams", "threadId", "string"],
+    ["ThreadTurnsListParams", "cursor", "string|null"],
+    ["ThreadTurnsListParams", "limit", "integer|null"],
+    ["ThreadTurnsListParams", "itemsView", "nullable-ref:TurnItemsView"],
+    ["ThreadTurnsListResponse", "data", "array:Turn"],
+    ["ThreadTurnsListResponse", "nextCursor", "string|null"],
+  ] as readonly (readonly [string, string, string])[]
+).map(([schema, name, shape]) => ({
+  schema: `v2/${schema}.json`,
+  path: ["properties", name],
+  shape,
+}));
+
+const HANDOFF_DEFINITION_FIELDS: readonly SchemaField[] = (
+  [
+    ["ProjectListResponse", "Project", "id", "string"],
+    ["ProjectListResponse", "Project", "roots", "array:ProjectRoot"],
+    ["ProjectListResponse", "ProjectRoot", "path", "ref:AbsolutePathBuf"],
+    ["ThreadStartResponse", "Thread", "id", "string"],
+    ["ThreadStartResponse", "Thread", "projectId", "string|null"],
+    ["ThreadStartResponse", "Thread", "cwd", "ref:AbsolutePathBuf"],
+    ["ThreadStartResponse", "Thread", "model", "string|null"],
+    ["TurnStartResponse", "Turn", "id", "string"],
+    ["ThreadReadResponse", "Thread", "id", "string"],
+    ["ThreadReadResponse", "Thread", "projectId", "string|null"],
+    ["ThreadReadResponse", "Thread", "cwd", "ref:AbsolutePathBuf"],
+    ["ThreadReadResponse", "Thread", "model", "string|null"],
+    ["ThreadTurnsListResponse", "Turn", "id", "string"],
+    ["ThreadTurnsListResponse", "Turn", "status", "ref:TurnStatus"],
+  ] as readonly (readonly [string, string, string, string])[]
+).map(([schema, definition, name, shape]) => ({
+  schema: `v2/${schema}.json`,
+  path: ["definitions", definition, "properties", name],
+  shape,
+}));
+
+function hasRequestMethod(
+  schema: unknown,
+  method: string,
+  params: string,
+): boolean {
+  return array(child(schema, "oneOf")).some(
+    (candidate) =>
+      array(child(candidate, "properties", "method", "enum")).includes(
+        method,
+      ) &&
+      ["id", "method", "params"].every((name) =>
+        array(child(candidate, "required")).includes(name),
+      ) &&
+      child(candidate, "properties", "params", "$ref") ===
+        `#/definitions/${params}`,
+  );
+}
+
+async function inspectBaseHostSnapshot(
   root: string,
   versionOutput: string,
-): Promise<CodexHostContract> {
+): Promise<
+  Readonly<{ contract: CodexHostContract; clientRequest: JsonRecord }>
+> {
   if (!path.isAbsolute(root) || root.includes("\0")) {
     contractError("CODEX_HOST_SCHEMA_UNSAFE");
   }
@@ -225,7 +356,7 @@ export async function inspectCodexHostContract(
     digest.update(entry.bytes);
     digest.update("\0");
   }
-  return {
+  const contract: CodexHostContract = {
     version: versionMatch[1],
     protocol: "codex-app-server/v2",
     schemaSha256: digest.digest("hex"),
@@ -237,6 +368,17 @@ export async function inspectCodexHostContract(
       compaction: true,
     },
   };
+  return {
+    contract,
+    clientRequest: clientRequest ?? contractError("CODEX_HOST_SCHEMA_INVALID"),
+  };
+}
+
+export async function inspectCodexHostContract(
+  root: string,
+  versionOutput: string,
+): Promise<CodexHostContract> {
+  return (await inspectBaseHostSnapshot(root, versionOutput)).contract;
 }
 
 export type CodexHandoffHostContract = Readonly<{
@@ -254,7 +396,8 @@ export async function inspectCodexHandoffHostContract(
   root: string,
   versionOutput: string,
 ): Promise<CodexHandoffHostContract> {
-  const base = await inspectCodexHostContract(root, versionOutput);
+  const snapshot = await inspectBaseHostSnapshot(root, versionOutput);
+  const base = snapshot.contract;
   const entries = await Promise.all(
     HANDOFF_SCHEMA_FILES.map(async (relativePath) => ({
       relativePath,
@@ -264,107 +407,19 @@ export async function inspectCodexHandoffHostContract(
   const schemas = new Map(
     entries.map((entry) => [entry.relativePath, entry.value] as const),
   );
-  const client = (await readSchemaFile(root, "ClientRequest.json")).value;
+  const client = snapshot.clientRequest;
   if (
-    ![
-      "project/list",
-      "thread/start",
-      "thread/read",
-      "thread/turns/list",
-      "turn/start",
-    ].every((method) => hasMethod(client, method)) ||
-    !hasProperties(
-      schemas.get("v2/ProjectListParams.json"),
-      "cursor",
-      "limit",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/ProjectListResponse.json"),
-      "data",
-      "nextCursor",
-    ) ||
-    !hasDefinitionProperties(
-      schemas.get("v2/ProjectListResponse.json"),
-      "Project",
-      "id",
-      "roots",
-    ) ||
-    !hasDefinitionProperties(
-      schemas.get("v2/ProjectListResponse.json"),
-      "ProjectRoot",
-      "path",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/ThreadStartParams.json"),
-      "projectId",
-      "cwd",
-      "ephemeral",
-      "model",
-      "allowProviderModelFallback",
-      "sandbox",
-      "approvalPolicy",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/ThreadStartResponse.json"),
-      "thread",
-      "cwd",
-      "model",
-      "sandbox",
-      "approvalPolicy",
-    ) ||
-    !hasDefinitionProperties(
-      schemas.get("v2/ThreadStartResponse.json"),
-      "Thread",
-      "id",
-      "projectId",
-      "cwd",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/TurnStartParams.json"),
-      "threadId",
-      "input",
-      "cwd",
-      "model",
-      "effort",
-      "sandboxPolicy",
-      "approvalPolicy",
-    ) ||
-    !hasProperties(schemas.get("v2/TurnStartResponse.json"), "turn") ||
-    !hasDefinitionProperties(
-      schemas.get("v2/TurnStartResponse.json"),
-      "Turn",
-      "id",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/ThreadReadParams.json"),
-      "threadId",
-      "includeTurns",
-    ) ||
-    !hasDefinitionProperties(
-      schemas.get("v2/ThreadReadResponse.json"),
-      "Thread",
-      "id",
-      "projectId",
-      "cwd",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/ThreadTurnsListParams.json"),
-      "threadId",
-      "cursor",
-      "limit",
-      "itemsView",
-    ) ||
-    !hasProperties(
-      schemas.get("v2/ThreadTurnsListResponse.json"),
-      "data",
-      "nextCursor",
-    ) ||
-    !hasDefinitionProperties(
-      schemas.get("v2/ThreadTurnsListResponse.json"),
-      "Turn",
-      "id",
-      "status",
-    )
+    !(
+      [
+        ["project/list", "ProjectListParams"],
+        ["thread/start", "ThreadStartParams"],
+        ["thread/read", "ThreadReadParams"],
+        ["thread/turns/list", "ThreadTurnsListParams"],
+        ["turn/start", "TurnStartParams"],
+      ] as readonly (readonly [string, string])[]
+    ).every(([method, params]) => hasRequestMethod(client, method, params)) ||
+    !hasFieldShapes(schemas, HANDOFF_FIELDS) ||
+    !hasFieldShapes(schemas, HANDOFF_DEFINITION_FIELDS)
   ) {
     contractError("CODEX_HOST_HANDOFF_UNAVAILABLE");
   }
