@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
@@ -248,7 +249,17 @@ function hasRequestMethod(
   schema: unknown,
   method: string,
   params: string,
+  standaloneParams: unknown,
 ): boolean {
+  const embeddedParams = child(schema, "definitions", params);
+  if (!record(embeddedParams) || !record(standaloneParams)) return false;
+  const {
+    $schema: _schema,
+    definitions: _definitions,
+    title: _title,
+    ...standaloneShape
+  } = standaloneParams;
+  if (!isDeepStrictEqual(embeddedParams, standaloneShape)) return false;
   return array(child(schema, "oneOf")).some(
     (candidate) =>
       array(child(candidate, "properties", "method", "enum")).includes(
@@ -259,6 +270,47 @@ function hasRequestMethod(
       ) &&
       child(candidate, "properties", "params", "$ref") ===
         `#/definitions/${params}`,
+  );
+}
+
+function hasRequired(schema: unknown, ...names: string[]): boolean {
+  return names.every((name) => array(child(schema, "required")).includes(name));
+}
+
+const HANDOFF_REQUIRED: readonly (readonly [
+  string,
+  readonly string[],
+  readonly string[],
+])[] = [
+  ["ProjectListResponse", [], ["data"]],
+  ["ProjectListResponse", ["Project"], ["id", "roots"]],
+  ["ProjectListResponse", ["ProjectRoot"], ["path"]],
+  [
+    "ThreadStartResponse",
+    [],
+    ["thread", "cwd", "model", "sandbox", "approvalPolicy"],
+  ],
+  ["ThreadStartResponse", ["Thread"], ["id", "projectId", "cwd"]],
+  ["TurnStartParams", [], ["threadId", "input"]],
+  ["TurnStartResponse", [], ["turn"]],
+  ["TurnStartResponse", ["Turn"], ["id"]],
+  ["ThreadReadParams", [], ["threadId"]],
+  ["ThreadReadResponse", [], ["thread"]],
+  ["ThreadReadResponse", ["Thread"], ["id", "projectId", "cwd"]],
+  ["ThreadTurnsListParams", [], ["threadId"]],
+  ["ThreadTurnsListResponse", [], ["data"]],
+  ["ThreadTurnsListResponse", ["Turn"], ["id", "status"]],
+];
+
+function hasRequiredFields(schemas: ReadonlyMap<string, JsonRecord>): boolean {
+  return HANDOFF_REQUIRED.every(([file, definition, names]) =>
+    hasRequired(
+      child(
+        schemas.get(`v2/${file}.json`),
+        ...(definition.length ? ["definitions", ...definition] : []),
+      ),
+      ...names,
+    ),
   );
 }
 
@@ -298,7 +350,7 @@ async function inspectBaseHostSnapshot(
       ...(await readSchemaFile(root, relativePath)),
     })),
   );
-  const schemas = new Map(
+  const schemas: Map<string, JsonRecord> = new Map(
     entries.map((entry) => [entry.relativePath, entry.value] as const),
   );
   const threadStart = schemas.get("v2/ThreadStartParams.json");
@@ -404,7 +456,7 @@ export async function inspectCodexHandoffHostContract(
       ...(await readSchemaFile(root, relativePath)),
     })),
   );
-  const schemas = new Map(
+  const schemas: Map<string, JsonRecord> = new Map(
     entries.map((entry) => [entry.relativePath, entry.value] as const),
   );
   const client = snapshot.clientRequest;
@@ -417,9 +469,17 @@ export async function inspectCodexHandoffHostContract(
         ["thread/turns/list", "ThreadTurnsListParams"],
         ["turn/start", "TurnStartParams"],
       ] as readonly (readonly [string, string])[]
-    ).every(([method, params]) => hasRequestMethod(client, method, params)) ||
+    ).every(([method, params]) =>
+      hasRequestMethod(
+        client,
+        method,
+        params,
+        schemas.get(`v2/${params}.json`),
+      ),
+    ) ||
     !hasFieldShapes(schemas, HANDOFF_FIELDS) ||
-    !hasFieldShapes(schemas, HANDOFF_DEFINITION_FIELDS)
+    !hasFieldShapes(schemas, HANDOFF_DEFINITION_FIELDS) ||
+    !hasRequiredFields(schemas)
   ) {
     contractError("CODEX_HOST_HANDOFF_UNAVAILABLE");
   }

@@ -23,6 +23,7 @@ const ref = (name: string) => ({ $ref: `#/definitions/${name}` });
 const nullableRef = (name: string) => ({ anyOf: [ref(name), typed("null")] });
 const list = (name: string) => ({ type: "array", items: ref(name) });
 const thread = () => ({
+  required: ["id", "projectId", "cwd"],
   properties: {
     id: typed("string"),
     projectId: optional("string"),
@@ -101,18 +102,24 @@ async function schemaRoot(
       properties: fields("parentThreadId", "ancestorThreadId"),
     },
     "v2/ProjectListResponse.json": {
+      required: ["data"],
       properties: { data: list("Project"), nextCursor: optional("string") },
       definitions: {
         Project: {
+          required: ["id", "roots"],
           properties: { id: typed("string"), roots: list("ProjectRoot") },
         },
-        ProjectRoot: { properties: { path: ref("AbsolutePathBuf") } },
+        ProjectRoot: {
+          required: ["path"],
+          properties: { path: ref("AbsolutePathBuf") },
+        },
       },
     },
     "v2/ProjectListParams.json": {
       properties: { cursor: optional("string"), limit: optional("integer") },
     },
     "v2/ThreadStartResponse.json": {
+      required: ["thread", "cwd", "model", "sandbox", "approvalPolicy"],
       properties: {
         thread: ref("Thread"),
         cwd: ref("AbsolutePathBuf"),
@@ -123,6 +130,7 @@ async function schemaRoot(
       definitions: { Thread: thread() },
     },
     "v2/TurnStartParams.json": {
+      required: ["threadId", "input"],
       properties: {
         threadId: typed("string"),
         input: list("UserInput"),
@@ -134,13 +142,18 @@ async function schemaRoot(
       },
     },
     "v2/TurnStartResponse.json": {
+      required: ["turn"],
       properties: { turn: ref("Turn") },
-      definitions: { Turn: { properties: { id: typed("string") } } },
+      definitions: {
+        Turn: { required: ["id"], properties: { id: typed("string") } },
+      },
     },
     "v2/ThreadReadParams.json": {
+      required: ["threadId"],
       properties: { threadId: typed("string"), includeTurns: typed("boolean") },
     },
     "v2/ThreadReadResponse.json": {
+      required: ["thread"],
       properties: { thread: ref("Thread") },
       definitions: {
         Thread: thread(),
@@ -150,6 +163,7 @@ async function schemaRoot(
       },
     },
     "v2/ThreadTurnsListParams.json": {
+      required: ["threadId"],
       properties: {
         threadId: typed("string"),
         cursor: optional("string"),
@@ -158,15 +172,27 @@ async function schemaRoot(
       },
     },
     "v2/ThreadTurnsListResponse.json": {
+      required: ["data"],
       properties: { data: list("Turn"), nextCursor: optional("string") },
       definitions: {
         Turn: {
+          required: ["id", "status"],
           properties: { id: typed("string"), status: ref("TurnStatus") },
         },
       },
     },
     ...overrides,
   };
+  const client = files["ClientRequest.json"] as Record<string, any>;
+  client.definitions = Object.fromEntries(
+    [
+      "ProjectListParams",
+      "ThreadStartParams",
+      "ThreadReadParams",
+      "ThreadTurnsListParams",
+      "TurnStartParams",
+    ].map((name) => [name, files[`v2/${name}.json`]]),
+  );
   await Promise.all(
     Object.entries(files).map(([relativePath, value]) =>
       fs.writeFile(
@@ -311,6 +337,51 @@ describe("installed Codex saved-project handoff schema", () => {
         entry.properties.method.enum.includes("thread/start"),
       );
       method.required = ["id", "method"];
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("refuses a missing or mismatched embedded parameter definition", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      delete schema.definitions.ThreadStartParams;
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      schema.definitions.ThreadStartParams = {
+        type: "object",
+        properties: { projectId: false },
+      };
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+  });
+
+  it("refuses optional status and turn payloads", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "v2/ThreadReadResponse.json", (schema) => {
+      schema.required = [];
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    await changeSchema(root, "v2/ThreadReadResponse.json", (schema) => {
+      schema.required = ["thread"];
+      schema.definitions.Thread.required = ["id", "cwd"];
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    await changeSchema(root, "v2/ThreadReadResponse.json", (schema) => {
+      schema.definitions.Thread.required = ["id", "projectId", "cwd"];
+    });
+    await changeSchema(root, "v2/ThreadTurnsListResponse.json", (schema) => {
+      schema.definitions.Turn.required = ["id"];
     });
     await expect(
       inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
