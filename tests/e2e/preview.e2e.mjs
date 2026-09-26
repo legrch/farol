@@ -6985,13 +6985,14 @@ devNewTaskAffordanceSegment: {
         task.taskId,
         (surface) =>
           surface.hostVisible &&
+          surface.state.composerVisible &&
           new URL(surface.url).origin ===
             new URL(devNewTask.chatGptFixture.url).origin &&
           new URL(surface.url).searchParams.get("farol-e2e-task") ===
             task.taskId,
         "dev New task " + index + " local fixture surface",
       );
-      assert.equal(providerSurface.state.composerVisible, false);
+      assert.equal(providerSurface.state.composerVisible, true);
       assert.equal(providerSurface.state.userText, "");
       assert.equal(providerSurface.state.submitCount, 0);
       if (index === 2) cases.push("dev-new-task-next-is-reachable");
