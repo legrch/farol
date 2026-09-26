@@ -881,7 +881,13 @@ async function inspectWindowPresentation(application) {
         url.endsWith("/shell.html")
       );
     });
-    if (!targetWindow) throw new Error("E2E_WINDOW_MISSING");
+    if (!targetWindow) {
+      const windows = BrowserWindow.getAllWindows().map((candidate) => ({
+        title: candidate.getTitle(),
+        url: candidate.webContents.getURL(),
+      }));
+      throw new Error("E2E_WINDOW_MISSING:" + JSON.stringify(windows));
+    }
     const bounds = targetWindow.getBounds();
     const primary = screen.getPrimaryDisplay();
     const selected = screen.getDisplayMatching(bounds);
