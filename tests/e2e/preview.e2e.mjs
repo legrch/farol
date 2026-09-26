@@ -994,8 +994,25 @@ async function waitForWindowPresentation(
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
+  const taskViews = await application.evaluate(({ BrowserWindow }) => {
+    const shell = BrowserWindow.getAllWindows().find((candidate) => {
+      const url = candidate.webContents.getURL();
+      return url.startsWith("file:") && url.endsWith("/shell.html");
+    });
+    return (shell?.contentView.children ?? [])
+      .filter((view) => "webContents" in view)
+      .map((view) => ({
+        title: view.webContents.getTitle(),
+        url: view.webContents.getURL(),
+        visible: view.getVisible(),
+        bounds: view.getBounds(),
+      }));
+  });
   throw new Error(
-    `E2E_WINDOW_PRESENTATION_TIMEOUT:${windowMode}:${JSON.stringify(last)}`,
+    "E2E_WINDOW_PRESENTATION_TIMEOUT:" +
+      windowMode +
+      ":" +
+      JSON.stringify({ last, taskViews }),
   );
 }
 
