@@ -13,7 +13,8 @@ paths = subprocess.check_output(
 ).split(b"\0")
 private_name = re.compile(
     r"(^|/)(\.env(\..*)?|id_rsa[^/]*|id_ed25519[^/]*|[^/]*\.(pem|p12|pfx))$"
-    r"|(^|/)(cookies?|credentials?|auth-state|session-token|transcripts?|browser-profile)(/|\.(json|jsonl|sqlite|db)$)",
+    r"|(^|/)\.?(cookies?|credentials?|auth-state|session-token|transcripts?|browser-profile)"
+    r"(/|$|\.(jsonl?|sqlite3?|db|txt|md|csv|ya?ml|html?|log|zip)(\.[^/]+)?$)",
     re.I,
 )
 with tempfile.TemporaryDirectory(prefix="farol-secret-scan-") as temporary:

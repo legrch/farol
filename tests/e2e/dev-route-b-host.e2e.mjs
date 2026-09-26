@@ -42,7 +42,7 @@ const reportPath = reportArgument
   ? path.resolve(reportArgument.slice("--report=".length))
   : path.join(
       repositoryRoot,
-      "_output",
+      "artifacts",
       "evidence",
       visibleOutput ? "dev-route-b-visible-host.json" : "dev-route-b-host.json",
     );
