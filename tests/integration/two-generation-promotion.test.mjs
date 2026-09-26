@@ -5,9 +5,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
 import { runPromotionApply } from "../../tooling/promotion-apply.mjs";
 import { assertPromotionDestination } from "../../tooling/promotion-destination.mjs";
+import { latestPredecessorDirectory } from "../e2e/predecessor-package-path.mjs";
 
 // Q-07/Q-08 with two really identified local builds: the sealed predecessor
-// kept under _output/evidence/predecessors and the current sealed package. Both are
+// kept under _output/evidence/predecessors (or the historical
+// artifacts/predecessors) and the current sealed package. Both are
 // hundreds of megabytes and git-ignored, so this runs only when asked for
 // and both exist; it is then recorded as its own attempt.
 //
@@ -41,44 +43,14 @@ async function generation(directory) {
   };
 }
 
-async function predecessorDirectory() {
-  const root = path.join(nextRoot, "_output", "evidence", "predecessors");
-  let names;
-  try {
-    names = await fs.readdir(root);
-  } catch {
-    return null;
-  }
-  const candidates = [];
-  for (const name of names) {
-    try {
-      const manifest = JSON.parse(
-        await fs.readFile(path.join(root, name, "artifact.json"), "utf8"),
-      );
-      // Only a manifest whose tree digest is the unambiguous v2 encoding
-      // identifies its bytes; an older schema is kept for history only.
-      if (manifest.schema === 5) {
-        candidates.push({
-          directory: path.join(root, name),
-          builtAt: manifest.builtAt,
-        });
-      }
-    } catch {
-      // A predecessor without a readable manifest is not identified.
-    }
-  }
-  candidates.sort((left, right) => (left.builtAt < right.builtAt ? -1 : 1));
-  return candidates.at(-1)?.directory ?? null;
-}
-
 describe("Q-07/Q-08 two identified generations", () => {
   it.skipIf(!enabled)(
     "promotes A, refuses B over A leaving A intact, promotes B after the owner removes A, and restores A again from the untouched predecessor",
     async () => {
-      const predecessor = await predecessorDirectory();
+      const predecessor = await latestPredecessorDirectory(nextRoot);
       expect(
         predecessor,
-        "a sealed predecessor under _output/evidence/predecessors",
+        "a sealed predecessor under _output/evidence/predecessors or historical artifacts/predecessors",
       ).not.toBeNull();
       const current = path.join(nextRoot, "_output", "package");
       const a = await generation(predecessor);

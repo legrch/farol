@@ -10,7 +10,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { _electron as electron } from "playwright-core";
 import { treeDigest } from "../../tooling/artifact-digest.mjs";
-import { candidatePaths } from "../../tooling/candidate-contract.mjs";
 import { openEvidenceAttempt } from "../../tooling/evidence-attempt.mjs";
 import { processTable } from "../../tooling/evidence-observe.mjs";
 import { createPhaseRecorder } from "./await-phases.mjs";
@@ -32,6 +31,7 @@ import {
 import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
 import { runBoundedProcess } from "./bounded-process.mjs";
+import { predecessorPackagePaths } from "./predecessor-package-path.mjs";
 
 const root = process.cwd();
 const development = process.argv.includes("--development");
@@ -230,19 +230,9 @@ async function resolvePredecessor(artifactFile) {
       path.isAbsolute(manifest.artifactPath),
     "E2E_PREDECESSOR_PATH_INVALID",
   );
-  const predecessorRoot = path.dirname(
-    path.dirname(path.dirname(manifest.artifactPath)),
-  );
-  const canonical = candidatePaths(predecessorRoot);
-  assert.equal(
-    canonical.appPath,
+  const { checkoutRoot: predecessorRoot } = predecessorPackagePaths(
+    artifactFile,
     manifest.artifactPath,
-    "E2E_PREDECESSOR_PATH_NOT_CANONICAL",
-  );
-  assert.equal(
-    canonical.artifactFile,
-    path.resolve(artifactFile),
-    "E2E_PREDECESSOR_MANIFEST_NOT_CANONICAL",
   );
   assert.notEqual(manifest.sourceCommit, artifact.sourceCommit);
   assert.notEqual(manifest.buildId, artifact.buildId);

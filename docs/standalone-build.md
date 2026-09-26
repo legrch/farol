@@ -62,8 +62,9 @@ task test:e2e -- --skip-native-focus
 npm run test:e2e:computer:package
 ```
 
-The first command requires an eligible secondary display. A separately
-authorized unattended run can select the built-in display; native focus is
+The first command requires an eligible secondary display. For an explicitly
+authorized unattended run with only the built-in display, use
+`task test:e2e -- --allow-primary-display --skip-native-focus`. Native focus is
 attempted only when the current owner grant explicitly permits it. Skipped
 focus rows are not native focus acceptance. Native fixtures are not
 live-provider or daily-driver acceptance. Keep each run's report and cleanup
