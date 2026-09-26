@@ -64,6 +64,8 @@ return `AGENT_NOT_READY` without a Product Agent input, assignment, host
 request, or child launch. The fixture records Codex app-server starts and
 agent requests around those commands; a native Agent used by Setup's separate
 verification does not count as Product Agent admission.
+The task-menu draft also survives the default-off refusal; it is cleared only
+after a successful assignment or the owner's own menu dismissal.
 
 The positive Product Agent cases are retained in the versioned lane contract
 as `productAgentQualification.status = NOT_QUALIFIED`. They are not required

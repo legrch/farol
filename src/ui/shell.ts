@@ -5309,6 +5309,7 @@ async function runTaskMenuCommand(
   command: ProductTaskCommand,
   successMessage: string,
   closeAfterSuccess = false,
+  onSuccess?: () => void,
 ): Promise<void> {
   if (taskMenuBusy) return;
   taskMenuBusy = true;
@@ -5335,6 +5336,7 @@ async function runTaskMenuCommand(
     }
     taskMenuTrace.settle("ok");
     selectedTaskId = parsed.data.selectedTaskId ?? "";
+    onSuccess?.();
     taskMenuFeedback = successMessage;
     if (closeAfterSuccess) {
       setShellOverlay("none");
@@ -6058,16 +6060,15 @@ async function start(): Promise<void> {
           scope,
         },
         "Agent assignment admitted.",
+        false,
+        () => {
+          // A refusal leaves the owner's text and its authority snapshot in
+          // place. After admission, clear both so another press cannot send
+          // the old assignment under a changed grant.
+          taskAgentDraft.clear();
+          writeAgentDraftFields(EMPTY_AGENT_DRAFT);
+        },
       );
-      // The store and the fields are one thing. Clearing only the store
-      // left the text in place with `held()` false, and the authority check
-      // is gated on `held()` — so a second press skipped it and would send
-      // on a grant that may have moved. With the fields cleared too, the
-      // objective is empty, which the prerequisite already refuses by name
-      // and disables the control for.
-      taskAgentDraft.clear();
-      writeAgentDraftFields(EMPTY_AGENT_DRAFT);
-      renderTaskMenu();
     },
   );
   required<HTMLButtonElement>("#task-menu-pin").addEventListener(
