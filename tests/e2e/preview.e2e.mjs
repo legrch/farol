@@ -1345,6 +1345,8 @@ async function launch(
   const isolatedHome = await fs.mkdtemp(
     path.join(os.tmpdir(), "farol-next-e2e-home-"),
   );
+  const isolatedAppData = path.join(isolatedHome, "farol-e2e-app-data");
+  await fs.mkdir(isolatedAppData, { recursive: true, mode: 0o700 });
   const userData = path.join(isolatedHome, "Farol Next Preview user-data");
   let seededChatGptOperationId = null;
   if (options.seedChatGptDispatchIntent === true) {
@@ -1786,6 +1788,9 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   ];
   const launchEnvironment = {
     ...(options.environment ?? {}),
+    ...(options.environment?.FAROL_NEXT_ENVIRONMENT === "dev"
+      ? { FAROL_NEXT_E2E_APP_DATA: isolatedAppData }
+      : {}),
     FAROL_NEXT_E2E: "1",
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
@@ -1874,6 +1879,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
     application,
     window,
     isolatedHome,
+    isolatedAppData,
     userData,
     workspaceFile,
     workspaceRoot,
@@ -2381,7 +2387,9 @@ async function close(instance, options = {}) {
             .filter(
               (metric) =>
                 metric.type === "Utility" &&
-                metric.name === "Farol Next Runtime",
+                ["Farol Next Runtime", "Farol Dev Runtime"].includes(
+                  metric.name,
+                ),
             )
             .map((metric) => metric.pid),
         ),
@@ -6739,6 +6747,13 @@ devNewTaskAffordanceSegment: {
     expectedTaskViewCount: 1,
   });
   try {
+    const resolvedUserData = await devNewTask.application.evaluate(({ app }) =>
+      app.getPath("userData"),
+    );
+    assert.equal(
+      resolvedUserData,
+      path.join(devNewTask.isolatedAppData, "Farol Dev"),
+    );
     const startupTaskViews = await devNewTask.application.evaluate(
       ({ BrowserWindow }) => {
         const shell = BrowserWindow.getAllWindows().find((candidate) => {
