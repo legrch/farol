@@ -11408,7 +11408,7 @@ n12AgentDraftSegment: {
       await draft.window.locator("#task-menu-agent").click({ timeout: 20_000 });
       await waitForTaskMenuNote(
         draft,
-        "Verify the exact native host, Agent lineage, and workspace first.",
+        "Product Agent is unavailable in this build. No Agent operation was started.",
       );
       assert.deepEqual(
         await shownAgentDraft(),

@@ -5276,7 +5276,7 @@ function taskMenuErrorMessage(
     return "Enter a task name between 1 and 80 characters.";
   }
   if (error === "AGENT_NOT_READY") {
-    return "Verify the exact native host, Agent lineage, and workspace first.";
+    return "Product Agent is unavailable in this build. No Agent operation was started.";
   }
   if (error === "AGENT_SCOPE_INVALID") {
     return "The requested Agent scope is outside the verified workspace or conflicts with an existing exclusion.";
