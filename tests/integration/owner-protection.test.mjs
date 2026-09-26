@@ -190,6 +190,17 @@ describe("standalone owner protection", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Farol Dev");
   });
+  it("keeps the full guard for check-only Dev commands that never launch", () => {
+    const home = fixture();
+    const result = runOwnerLaunch(
+      home,
+      "tooling/dev.mjs",
+      ["--check"],
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')",
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Farol Dev/farol-next-state/running.json");
+  });
   it("preserves a failing child exit code", () => {
     expect(run(fixture(), "raise SystemExit(17)").status).toBe(17);
   });

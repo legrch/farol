@@ -50,6 +50,8 @@ def _owner_launch_profiles(command: list[str]) -> frozenset[str]:
 
     if len(command) >= 2 and Path(command[0]).name == "node":
         if command[1] == "tooling/dev.mjs":
+            if "--check" in command[2:]:
+                return frozenset()
             if "--acceptance-profile" in command[2:]:
                 parent = "Library/Application Support/Farol Dev Acceptance"
                 return frozenset((parent, selected_dev_profile(parent)))

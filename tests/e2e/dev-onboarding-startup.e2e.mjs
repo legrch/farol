@@ -319,6 +319,9 @@ try {
         .locator("#onboarding-folder-list li")
         .first()
         .waitFor({ state: "visible", timeout: 15_000 });
+      await legacyWindow
+        .locator('#onboarding-form[aria-busy="false"]')
+        .waitFor({ state: "visible", timeout: 15_000 });
       const value = await legacyWindow.evaluate(() =>
         window.farolNext.bootstrap(),
       );
@@ -336,6 +339,11 @@ try {
             .innerText(),
           step: await legacyWindow.locator("#onboarding-title").innerText(),
         }),
+      );
+      assert.equal(
+        savedWorkspace.verified?.workspaceId,
+        savedWorkspace.workspaces[0].workspaceId,
+        "DEV_STARTUP_SMOKE_WORKSPACE_VERIFICATION_MISSING",
       );
     } else {
       const value = await legacyWindow.evaluate(() =>
