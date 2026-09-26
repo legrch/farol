@@ -6798,7 +6798,6 @@ devNewTaskAffordanceSegment: {
               url: location.href,
               loginVisible: login instanceof HTMLButtonElement && !login.hidden,
               composerVisible: composer instanceof HTMLElement && !composer.hidden,
-              returnVisible: document.querySelector('#farol-sign-in-banner button') !== null,
               userText: [...document.querySelectorAll('[data-message-author-role="user"]')].at(-1)?.textContent ?? "",
               submitCount: Number(window.__farolSubmitCount ?? 0)
             };
@@ -6822,9 +6821,9 @@ devNewTaskAffordanceSegment: {
         `E2E_DEV_SIGN_IN_FIXTURE_TIMEOUT:${JSON.stringify(last)}`,
       );
     };
-    const clickSignInFixtureControl = async (control) =>
+    const clickSignInFixtureLogin = () =>
       devNewTask.application.evaluate(
-        async ({ BrowserWindow }, input) => {
+        async ({ BrowserWindow }, expectedOrigin) => {
           const host = BrowserWindow.getAllWindows().find((candidate) => {
             const url = candidate.webContents.getURL();
             return (
@@ -6838,26 +6837,22 @@ devNewTaskAffordanceSegment: {
             try {
               return (
                 new URL(candidate.webContents.getURL()).origin ===
-                input.expectedOrigin
+                expectedOrigin
               );
             } catch {
               return false;
             }
           });
           if (!view || !("webContents" in view)) return false;
-          const selector =
-            input.control === "login"
-              ? '[data-testid="login-button"]'
-              : "#farol-sign-in-banner button";
           const source = `(() => {
-            const button = document.querySelector(${JSON.stringify(selector)});
+            const button = document.querySelector('[data-testid="login-button"]');
             if (!(button instanceof HTMLButtonElement) || button.hidden || button.disabled) return false;
             button.click();
             return true;
           })()`;
           return view.webContents.executeJavaScript(source);
         },
-        { expectedOrigin: signInFixtureOrigin, control },
+        signInFixtureOrigin,
       );
 
     await devNewTask.window.locator("#onboarding-open-account").click();
@@ -6866,7 +6861,7 @@ devNewTaskAffordanceSegment: {
     );
     assert.equal(new URL(signInSurface.url).origin, signInFixtureOrigin);
     assert.equal(
-      await clickSignInFixtureControl("login"),
+      await clickSignInFixtureLogin(),
       true,
       "the local fixture's visible login control is enabled",
     );
@@ -6880,12 +6875,10 @@ devNewTaskAffordanceSegment: {
       },
       { userText: "", submitCount: 0 },
     );
-    assert.equal(signedInFixture.state.returnVisible, true);
-    assert.equal(
-      await clickSignInFixtureControl("return"),
-      true,
-      "the visible Return to Farol fixture control is enabled",
-    );
+    await devNewTask.window
+      .locator("#sign-in-return")
+      .waitFor({ state: "visible" });
+    await devNewTask.window.locator("#sign-in-return").click();
     await waitForSignInFixture((surface) => !surface.visible);
     await waitForWindowCount(devNewTask.application, 1);
     await devNewTask.window.waitForFunction(
