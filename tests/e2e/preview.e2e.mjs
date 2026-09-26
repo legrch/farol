@@ -10703,7 +10703,7 @@ function segmentMark(name, phase) {
 n12AgentDraftSegment: {
   if (!segmentSelected("n12-agent-draft")) break n12AgentDraftSegment;
   segmentMark("n12-agent-draft", "start");
-  const draft = await launch([], "hidden", "ordinary");
+  const draft = await launch([], "secondary-visible", "ordinary");
   try {
     // B's diagnostic prints one line per shell action; capture it here so
     // its decision lands in the same report, in arrival order, on the same
