@@ -1,7 +1,7 @@
 # Persistent private conversation handoff parity
 
-Status: planned parity item for the existing Next writer. No Next implementation,
-DEV onboarding, browser partition, port or runtime configuration is changed here.
+Status: the first fail-closed, fixture-only Codex handoff core is implemented.
+It is not exposed as a Farol tool or qualified against a live Codex host.
 
 Legacy's implementation candidate is described in `../../docs/persistent-chat-handoff.md`.
 Its fixture results must not be presented as Next implementation or live-provider evidence.
@@ -33,6 +33,21 @@ it must not gain browser access by pretending to be a read-only assignment.
 | Live qualification   | Correct signed-in account, intended message once, actual private reopen URL, history after restart, unchanged temporary Consult defaults.                        |
 
 ## Integration seam
+
+The first source slice is `PersistentCodexHandoff` with a private append-only
+dispatch journal. It accepts only a trusted owner-approved workspace resolver,
+requires exactly one existing saved project at that root, records a durable
+intent before `thread/start` and `turn/start`, and returns only an issued
+dispatch handle and internal thread/turn IDs for later metadata-only status.
+The future MCP adapter must expose only the dispatch handle. A lost acknowledgement stays
+outcome-unknown after restart; repeating the same key never creates another
+thread or turn. Hermetic fixtures cover the no-duplicate and refusal paths.
+
+The desktop/Computer MCP route and explicit host-task admission still need a
+separate reviewed wiring change. A Computer folder grant alone does not grant
+permission to create a Codex task. Until that wiring and a separately authorized
+live smoke exist, `codex_task_create` and `codex_task_status` remain unavailable
+in standalone Farol. No Product Agent or Model route is enabled by this slice.
 
 Keep pure contracts and closed state policy in Chat domain/app; inject the browser and
 receipt-store ports in boot. Peer access must go through the owning module's published
