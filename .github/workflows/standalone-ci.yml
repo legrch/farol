@@ -44,6 +44,31 @@ jobs:
           test "$(/usr/bin/xcrun --find git)" = /Library/Developer/CommandLineTools/usr/bin/git
       - name: Run protected standalone checks
         run: task ci:fast
+      - name: Record Apple attestation inputs on failure
+        if: failure()
+        run: |
+          /usr/bin/python3 - <<'PYTHON'
+          import json, os, stat, subprocess
+          environment = {"LANG": "C", "LC_ALL": "C"}
+          def command(*args):
+              result = subprocess.run(args, env=environment, text=True, capture_output=True)
+              print(json.dumps({"command": args, "exitCode": result.returncode, "stdout": result.stdout, "stderr": result.stderr}))
+              return result.stdout.strip()
+          command("/usr/bin/xcode-select", "-p")
+          python = command("/usr/bin/xcrun", "--find", "python3")
+          git = command("/usr/bin/xcrun", "--find", "git")
+          for executable in ("/usr/bin/python3", python, git):
+              if not executable or not os.path.lexists(executable):
+                  continue
+              paths = [executable, os.path.realpath(executable)]
+              if os.path.islink(executable):
+                  paths.append(os.path.normpath(os.path.join(os.path.dirname(executable), os.readlink(executable))))
+              for path in dict.fromkeys(paths):
+                  info = os.lstat(path)
+                  print(json.dumps({"path": path, "uid": info.st_uid, "mode": oct(stat.S_IMODE(info.st_mode)), "link": os.readlink(path) if stat.S_ISLNK(info.st_mode) else None}))
+              command("/usr/bin/codesign", "-dv", "--verbose=4", os.path.realpath(executable))
+          command("/usr/bin/python3", "--version")
+          PYTHON
       - name: Require unchanged source
         run: |
           git diff --check
