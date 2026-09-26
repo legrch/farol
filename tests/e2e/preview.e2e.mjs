@@ -5309,6 +5309,21 @@ liveTasksSegment: try {
   await newTask.waitFor({ state: "visible" });
   assert.equal(await newTask.isEnabled(), true);
   assert.equal(await newTask.locator("small").innerText(), "0 / 5");
+  const emptyNewTaskState = await newTask.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return {
+      environment: document.documentElement.dataset.environment,
+      hasTasks: document.documentElement.dataset.hasTasks,
+      display: style.display,
+      appRegion: style.getPropertyValue("-webkit-app-region"),
+    };
+  });
+  assert.equal(emptyNewTaskState.hasTasks, "false");
+  if (development) {
+    assert.equal(emptyNewTaskState.environment, "dev");
+    assert.notEqual(emptyNewTaskState.display, "none");
+    assert.equal(emptyNewTaskState.appRegion, "no-drag");
+  }
 
   const taskSurfaceIds = new Map();
   for (let index = 1; index <= 5; index += 1) {
@@ -5323,6 +5338,23 @@ liveTasksSegment: try {
     );
     assert.equal(state.taskRevision, index);
     assert.equal(state.tasks.length, index);
+    assert.equal(
+      await newTask.isVisible(),
+      true,
+      `New task remains visible with ${index} admitted task(s)`,
+    );
+    assert.equal(
+      await newTask.isDisabled(),
+      index === 5,
+      `New task is disabled only at capacity after ${index} task(s)`,
+    );
+    const activeNewTaskState = await newTask.evaluate((button) => ({
+      hasTasks: document.documentElement.dataset.hasTasks,
+      appRegion:
+        getComputedStyle(button).getPropertyValue("-webkit-app-region"),
+    }));
+    assert.equal(activeNewTaskState.hasTasks, "true");
+    if (development) assert.equal(activeNewTaskState.appRegion, "no-drag");
     const task = state.tasks[index - 1];
     assert.match(task.taskId, /^[0-9a-f-]{36}$/u);
     assert.match(task.sessionId, /^[0-9a-f-]{36}$/u);

@@ -997,6 +997,11 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
 }
 
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  .new-task {
+  -webkit-app-region: no-drag;
+}
+
+html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   .task-tab-item {
   flex: 0 1 176px;
   max-width: 200px;
@@ -1059,8 +1064,6 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   display: none;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
-  .new-task,
 html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   .dossier {
   display: none;
