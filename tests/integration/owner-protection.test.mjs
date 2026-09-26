@@ -30,6 +30,38 @@ function run(home, code) {
     },
   );
 }
+function runOwnerLaunch(home, script, args, code, extraEnvironment = {}) {
+  const bin = path.join(home, "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  const fakeNode = path.join(bin, "node");
+  fs.writeFileSync(
+    fakeNode,
+    '#!/bin/sh\nexec /usr/bin/python3 -I -c "$FAKE_NODE_CODE"\n',
+    { mode: 0o700 },
+  );
+  return spawnSync(
+    "/usr/bin/python3",
+    [
+      "-I",
+      "scripts/assert-owner-untouched.py",
+      "--",
+      fakeNode,
+      script,
+      ...args,
+    ],
+    {
+      cwd: root,
+      env: {
+        HOME: home,
+        PATH: "/usr/bin:/bin",
+        LANG: "en_US.UTF-8",
+        FAKE_NODE_CODE: code,
+        ...extraEnvironment,
+      },
+      encoding: "utf8",
+    },
+  );
+}
 afterEach(() => {
   for (const home of homes.splice(0))
     fs.rmSync(home, { recursive: true, force: true });
@@ -99,6 +131,64 @@ describe("standalone owner protection", () => {
       "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Next Preview'; p.rename(p.with_name('old')); p.mkdir()",
     );
     expect(result.status).toBe(1);
+  });
+  it.each([
+    ["Dev", "tooling/dev.mjs", [], "Farol Dev", "Farol Next Preview", {}],
+    [
+      "Dev acceptance",
+      "tooling/dev.mjs",
+      ["--acceptance-profile"],
+      "Farol Dev Acceptance/Farol Dev",
+      "Farol Dev",
+      {},
+    ],
+    [
+      "packaged preview",
+      "tooling/run-preview.mjs",
+      [],
+      "Farol Next Preview",
+      "Farol Dev",
+      { FAROL_NEXT_OWNER_LAUNCH: "1" },
+    ],
+  ])(
+    "allows %s startup markers but still catches another profile",
+    (_label, script, args, allowed, denied, environment) => {
+      const home = fixture();
+      const writeMarker = (profile) =>
+        `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-next-state/running.json'; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('synthetic marker')`;
+      const allowedResult = runOwnerLaunch(
+        home,
+        script,
+        args,
+        writeMarker(allowed),
+        environment,
+      );
+      expect(allowedResult.status, allowedResult.stderr).toBe(0);
+      const deniedResult = runOwnerLaunch(
+        home,
+        script,
+        args,
+        writeMarker(denied),
+        environment,
+      );
+      expect(deniedResult.status).toBe(1);
+      expect(deniedResult.stderr).toContain(
+        `${denied}/farol-next-state/running.json`,
+      );
+    },
+  );
+  it("still catches replacement of the selected owner-launch profile", () => {
+    const home = fixture();
+    const profile = path.join(home, "Library/Application Support/Farol Dev");
+    fs.mkdirSync(profile, { recursive: true });
+    const result = runOwnerLaunch(
+      home,
+      "tooling/dev.mjs",
+      [],
+      "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev'; p.rename(p.with_name('old')); p.mkdir()",
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Farol Dev");
   });
   it("preserves a failing child exit code", () => {
     expect(run(fixture(), "raise SystemExit(17)").status).toBe(17);

@@ -31,6 +31,34 @@ import sys
 from pathlib import Path
 
 HOME = Path(os.path.expanduser("~"))
+NEW_PROFILES = (
+    "Library/Application Support/Farol Dev",
+    "Library/Application Support/Farol DEV",
+    "Library/Application Support/Farol Next Preview",
+    "Library/Application Support/Farol Dev Acceptance",
+    "Library/Application Support/Farol Dev Acceptance/Farol Dev",
+    "Library/Application Support/Farol Dev Acceptance/Farol DEV",
+)
+
+
+def _owner_launch_profiles(command: list[str]) -> frozenset[str]:
+    """Allow only the exact profile a supported owner launch will update."""
+    def selected_dev_profile(parent: str) -> str:
+        preferred = f"{parent}/Farol Dev"
+        legacy = f"{parent}/Farol DEV"
+        return legacy if not (HOME / preferred).exists() and (HOME / legacy).exists() else preferred
+
+    if len(command) >= 2 and Path(command[0]).name == "node":
+        if command[1] == "tooling/dev.mjs":
+            if "--acceptance-profile" in command[2:]:
+                parent = "Library/Application Support/Farol Dev Acceptance"
+                return frozenset((parent, selected_dev_profile(parent)))
+            return frozenset((selected_dev_profile("Library/Application Support"),))
+        if command[1] == "tooling/run-preview.mjs" and os.environ.get("FAROL_NEXT_OWNER_LAUNCH") == "1":
+            return frozenset(("Library/Application Support/Farol Next Preview",))
+    if command == ["npm", "run", "preview"]:
+        return frozenset(("Library/Application Support/Farol Next Preview",))
+    return frozenset()
 
 def _environment_paths():
     """Frozen V0 protection boundary at the standalone split.
@@ -51,21 +79,13 @@ def _environment_paths():
     # New-product profile identities are observed without walking cookies,
     # sessions, settings or authentication data. Startup markers are the only
     # content-hashed files: a test touching an owner generation must fail.
-    new_profiles = (
-        "Library/Application Support/Farol Dev",
-        "Library/Application Support/Farol DEV",
-        "Library/Application Support/Farol Next Preview",
-        "Library/Application Support/Farol Dev Acceptance",
-        "Library/Application Support/Farol Dev Acceptance/Farol Dev",
-        "Library/Application Support/Farol Dev Acceptance/Farol DEV",
-    )
     watched += tuple(
         HOME / profile / "farol-next-state" / marker
-        for profile in new_profiles
+        for profile in NEW_PROFILES
         for marker in ("running.json", "last-quit.json")
     )
     presence = (HOME / ".farol/runtime/browser/browser-profile",) + tuple(
-        HOME / profile for profile in new_profiles
+        HOME / profile for profile in NEW_PROFILES
     )
     churn = frozenset((
         "health.url", "tunnel-client.pid", "lifecycle.json", "lifecycle.jsonl",
@@ -175,9 +195,26 @@ def _interesting(path: Path) -> bool:
     return not path.name.endswith(IGNORED_SUFFIXES)
 
 
-def fingerprint() -> dict[str, str]:
+def _equivalent_profiles(selected: frozenset[str]) -> frozenset[str]:
+    """Include only same-inode spelling aliases on case-insensitive volumes."""
+    equivalent = set(selected)
+    for candidate in NEW_PROFILES:
+        if candidate in equivalent:
+            continue
+        try:
+            if any(os.path.samefile(HOME / candidate, HOME / chosen) for chosen in selected):
+                equivalent.add(candidate)
+        except OSError:
+            continue
+    return frozenset(equivalent)
+
+
+def fingerprint(allowed_profiles: frozenset[str] = frozenset()) -> dict[str, str]:
     seen: dict[str, str] = {}
+    allowed_roots = tuple(HOME / profile for profile in _equivalent_profiles(allowed_profiles))
     for target in WATCHED:
+        if any(target == root or root in target.parents for root in allowed_roots):
+            continue
         try:
             relative = target.relative_to(HOME)
         except ValueError:
@@ -221,11 +258,18 @@ def _presence(path: Path) -> str:
     return "present:{}:{}".format(info.st_dev, info.st_ino)
 
 
-def report(before: dict[str, str], after: dict[str, str]) -> list[str]:
+def report(before: dict[str, str], after: dict[str, str], allowed_profiles: frozenset[str] = frozenset()) -> list[str]:
     changed = []
+    allowed_creation = _equivalent_profiles(allowed_profiles)
     for key in sorted(set(before) | set(after)):
         old, new = before.get(key), after.get(key)
         if old == new:
+            continue
+        # A first owner launch may create its selected profile. Replacement of
+        # an existing profile remains a guard failure.
+        if (key in allowed_creation and old == "absent" and new is not None
+                and new.startswith("present:") and (HOME / key).is_dir()
+                and not (HOME / key).is_symlink()):
             continue
         if old is None:
             changed.append(f"  created  ~/{key}")
@@ -269,6 +313,7 @@ def main(argv: list[str]) -> int:
         sys.stderr.write("usage: assert-owner-untouched.py -- <command> [arguments...]\n")
         return 2
     command = argv[1:]
+    allowed_profiles = _owner_launch_profiles(command)
 
     # Installed for the whole of this function, not just around the child's
     # wait: an owner Ctrl+C can land while this is still walking the watched
@@ -279,11 +324,11 @@ def main(argv: list[str]) -> int:
     previous_sigint = signal.signal(signal.SIGINT, _ignore_sigint)
     previous_sigterm = signal.signal(signal.SIGTERM, _forward_sigterm)
     try:
-        before = fingerprint()
+        before = fingerprint(allowed_profiles)
         _CHILD = subprocess.Popen(command)
         returncode = _CHILD.wait()
         completed_returncode = returncode
-        changed = report(before, fingerprint())
+        changed = report(before, fingerprint(allowed_profiles), allowed_profiles)
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
