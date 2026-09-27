@@ -54,7 +54,12 @@ policy changes, provided both physical roots still match.
 
 The next source slice must add explicit host-task creation admission, a trusted
 Computer workspace adapter and a typed desktop/Computer MCP
-create/status/result route. A branch-only `SharedCodexProxyHost` adapter now
+create/status/result route. A branch-only `PhysicalCodexHandoffAuthority`
+re-measures the approved writer and saved-project root device/inode and
+requires their current Git common directory to match the explicitly selected
+repository. It refuses symlinked, replaced or foreign roots. This adapter
+still needs a separately issued task-creation grant from desktop; a Computer
+folder grant alone never creates a task. A branch-only `SharedCodexProxyHost` adapter now
 connects through the supported `codex app-server proxy --sock` command to an
 **already running, explicitly selected** Unix socket. It checks executable
 digest, socket ownership/canonical path and serving Codex home; it never starts
