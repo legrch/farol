@@ -10894,10 +10894,19 @@ n09ConnectorSegment: {
     await connector.window.locator('[data-section="settings"]').click();
     await connector.window.locator('[data-panel="settings"].active').waitFor();
     await connector.window.locator("#add-workspace").click();
-    await connector.window
-      .locator("#settings-feedback")
-      .getByText("Read-only workspace saved and read back.", { exact: true })
-      .waitFor();
+    const workspaceFeedback = connector.window.locator("#settings-feedback");
+    try {
+      await workspaceFeedback
+        .getByText("Read-only workspace saved and read back.", { exact: true })
+        .waitFor();
+    } catch (error) {
+      const actual = await workspaceFeedback.textContent();
+      assert.equal(
+        actual,
+        "Read-only workspace saved and read back.",
+        `unexpected workspace feedback after native selection: ${error}`,
+      );
+    }
     await connector.window.locator('[data-section="computer"]').click();
     await connector.window.waitForFunction(
       () => document.documentElement.dataset.section === "computer",
