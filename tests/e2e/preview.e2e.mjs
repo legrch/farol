@@ -30,6 +30,7 @@ import {
 } from "../../tooling/build-identity-contract.mjs";
 import { parseOwnerLaunchResult } from "../../tooling/owner-launch-result.mjs";
 import { sourceIdentity } from "../../tooling/source-identity.mjs";
+import { parseQuitReceipt } from "../../src/apps/desktop/quit-receipt.ts";
 import { runBoundedProcess } from "./bounded-process.mjs";
 import { predecessorPackagePaths } from "./predecessor-package-path.mjs";
 
@@ -2710,7 +2711,12 @@ async function stopProfileBoundHelpers(instance, label) {
   return helpers.length;
 }
 
-async function stopOwnedTestGroup(instance, label, knownPid = null) {
+async function stopOwnedTestGroup(
+  instance,
+  label,
+  knownPid = null,
+  knownMainState = "alive",
+) {
   const pid = knownPid ?? instance.application.process().pid;
   instance.ownedProcessGroup ??= captureOwnedProcessGroup(pid);
   const groupId = instance.ownedProcessGroup;
@@ -2719,9 +2725,14 @@ async function stopOwnedTestGroup(instance, label, knownPid = null) {
       "cleanup",
       `E2E_OWNED_GROUP_UNVERIFIED:${label}`,
     );
-    // The main PID is still ours; stop it without touching a guessed group.
-    instance.application.process().kill("SIGKILL");
-    if (Number.isSafeInteger(pid) && pid > 1) {
+    // Only a confirmed live main is safe to signal by PID here. Never
+    // mistake a stale PID after quit for a surviving owned process.
+    if (knownMainState === "alive") {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
       assert.equal(
         await waitOwnedPidGone(pid),
         true,
@@ -2797,20 +2808,21 @@ async function requestProductQuit(instance, expectedUnconfirmed = null) {
     );
   }
   const stateRoot = path.join(instance.userData, "farol-next-state");
-  let receipt;
+  let receiptText;
   try {
-    receipt = JSON.parse(
-      await fs.readFile(path.join(stateRoot, "last-quit.json"), "utf8"),
+    receiptText = await fs.readFile(
+      path.join(stateRoot, "last-quit.json"),
+      "utf8",
     );
   } catch {
     throw new Error("E2E_PRODUCT_QUIT_RECEIPT_MISSING");
   }
+  const parsed = parseQuitReceipt(receiptText);
+  if (!parsed.ok) throw new Error(`E2E_PRODUCT_QUIT_RECEIPT_${parsed.reason}`);
+  const receipt = parsed.receipt;
   if (
-    receipt?.schema !== 1 ||
-    typeof receipt.at !== "string" ||
-    !Number.isFinite(Date.parse(receipt.at)) ||
     Date.parse(receipt.at) < instance.quitRequestAt ||
-    !Array.isArray(receipt.unconfirmed)
+    !Number.isFinite(Date.parse(receipt.at))
   ) {
     throw new Error("E2E_PRODUCT_QUIT_DRAIN_UNVERIFIED");
   }
@@ -2960,16 +2972,46 @@ async function close(instance, options = {}) {
             ),
         }),
       );
-      if (mainState === "gone" && groupState === "gone") {
-        phases.note(
-          `${label}.abort-stalled-close`,
-          "owned-processes-already-gone",
-        );
-      } else {
-        await stopOwnedTestGroup(
-          instance,
-          `${label}.abort-stalled-close`,
-          mainPid,
+      const cleanupFailures = [];
+      try {
+        if (mainState === "gone" && groupState === "gone") {
+          phases.note(`${label}.abort-stalled-close`, "main-and-group-gone");
+        } else {
+          await stopOwnedTestGroup(
+            instance,
+            `${label}.abort-stalled-close`,
+            mainPid,
+            mainState,
+          );
+        }
+      } catch (cleanupError) {
+        cleanupFailures.push(cleanupError);
+      }
+      try {
+        const escaped = await stopProfileBoundHelpers(instance, label);
+        if (escaped > 0) {
+          throw new Error(
+            `E2E_PROFILE_HELPER_ESCAPED_GROUP:${label}:${escaped}`,
+          );
+        }
+        for (const pid of utilityPids) {
+          if (!(await waitOwnedPidGone(pid))) {
+            throw new Error(`E2E_OWNED_UTILITY_SURVIVED_ABORT:${pid}`);
+          }
+        }
+      } catch (cleanupError) {
+        cleanupFailures.push(cleanupError);
+      }
+      if (cleanupFailures.length > 0) {
+        for (const failure of cleanupFailures) {
+          evidenceAttempt.recordFailure(
+            "cleanup",
+            String(failure?.message ?? failure),
+          );
+        }
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          `E2E_CLOSE_AND_CLEANUP_FAILED:${String(error?.message ?? error)}`,
         );
       }
       throw error;
@@ -9707,12 +9749,15 @@ function ownedProcessFingerprint(application) {
 const heldFalseFence = await launch([], "hidden", "ordinary", {
   seedUnheldExecutionFence: true,
 });
+let unheldFenceConfirmed = false;
+let unheldFenceFailure = null;
 fenceUnheldSegment: try {
   if (!segmentSelected("fence-unheld")) break fenceUnheldSegment;
   const recovery = await readSummaryFenceRecovery(heldFalseFence.userData);
   assert.equal(recovery.status, "kept");
   assert.equal(recovery.code, "EXECUTION_FENCE_UNRECONCILED");
   assert.equal(recovery.held, false);
+  unheldFenceConfirmed = true;
 
   const processesBeforeStart = await ownedProcessFingerprint(
     heldFalseFence.application,
@@ -9753,8 +9798,23 @@ fenceUnheldSegment: try {
   );
 
   cases.push("connector-refuses-unheld-summary-fence");
+} catch (error) {
+  unheldFenceFailure = error;
+  throw error;
 } finally {
-  await close(heldFalseFence, { expectedUnconfirmed: ["connector"] });
+  try {
+    await close(heldFalseFence, {
+      expectedUnconfirmed: unheldFenceConfirmed ? ["connector"] : null,
+    });
+  } catch (cleanupError) {
+    if (unheldFenceFailure) {
+      throw new AggregateError(
+        [unheldFenceFailure, cleanupError],
+        `E2E_UNHELD_FENCE_AND_CLEANUP_FAILED:${String(unheldFenceFailure.message ?? unheldFenceFailure)}`,
+      );
+    }
+    throw cleanupError;
+  }
 }
 
 const reconciledFence = await launch([], "hidden", "ordinary");
