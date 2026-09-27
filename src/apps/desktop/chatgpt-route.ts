@@ -23,6 +23,12 @@ import {
   readPublicAssistantMessages,
   publicContentVisible,
 } from "./chatgpt-public-turn";
+import {
+  savedChatInsertScript,
+  savedChatProofScript,
+  savedChatReadinessScript,
+  savedChatSubmitScript,
+} from "./saved-chat-page-scripts";
 
 const probeSchema = z.strictObject({
   composerVisible: z.boolean(),
@@ -3089,6 +3095,104 @@ export class ChatGptRoute {
     this.load = "failed";
     this.disposing = false;
     this.options.onConversationChanged?.(null);
+  }
+
+  /** Restricted saved-chat probes on this route's own isolated page only. */
+  async savedChatReady(homeUrl: string): Promise<unknown> {
+    return this.savedChatScript(savedChatReadinessScript(homeUrl), homeUrl);
+  }
+
+  async savedChatInsert(homeUrl: string, message: string): Promise<unknown> {
+    return this.savedChatScript(
+      savedChatInsertScript(homeUrl, message),
+      homeUrl,
+    );
+  }
+
+  async savedChatSubmit(homeUrl: string, digest: string): Promise<unknown> {
+    return this.savedChatScript(
+      savedChatSubmitScript(homeUrl, digest),
+      homeUrl,
+      true,
+    );
+  }
+
+  async savedChatProof(
+    conversationUrl: string,
+    firstMessageDigest: string,
+    titleDigest: string,
+    requireHistory: boolean,
+  ): Promise<unknown> {
+    return this.savedChatScript(
+      savedChatProofScript(
+        conversationUrl,
+        firstMessageDigest,
+        titleDigest,
+        requireHistory,
+      ),
+      conversationUrl,
+    );
+  }
+
+  async savedChatLoad(conversationUrl: string): Promise<boolean> {
+    if (
+      canonicalChatGptConversationUrl(
+        conversationUrl,
+        this.options.e2eOrigin,
+      ) !== conversationUrl
+    )
+      return false;
+    const candidate = this.routeWindow;
+    if (!candidate || candidate.isDestroyed() || this.load !== "loaded")
+      return false;
+    try {
+      await candidate.loadURL(conversationUrl);
+      return (
+        this.routeWindow === candidate &&
+        !candidate.isDestroyed() &&
+        this.load === "loaded" &&
+        candidate.webContents.getURL() === conversationUrl
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  currentSavedChatUrl(): string | null {
+    const candidate = this.routeWindow;
+    if (!candidate || candidate.isDestroyed()) return null;
+    return canonicalChatGptConversationUrl(
+      candidate.webContents.getURL(),
+      this.options.e2eOrigin,
+    );
+  }
+
+  private async savedChatScript(
+    script: string,
+    expectedUrl: string,
+    allowNavigation = false,
+  ): Promise<unknown> {
+    const candidate = this.routeWindow;
+    if (
+      !candidate ||
+      candidate.isDestroyed() ||
+      this.load !== "loaded" ||
+      candidate.webContents.getURL() !== expectedUrl
+    )
+      return null;
+    try {
+      const result: unknown = await candidate.webContents.executeJavaScript(
+        script,
+        true,
+      );
+      if (this.routeWindow !== candidate || candidate.isDestroyed())
+        return null;
+      if (!allowNavigation && candidate.webContents.getURL() !== expectedUrl)
+        return null;
+      return result;
+    } catch {
+      return null;
+    }
   }
 
   dispose(): void {

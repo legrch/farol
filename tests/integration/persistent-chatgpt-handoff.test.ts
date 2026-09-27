@@ -44,6 +44,7 @@ async function fixture() {
   let sentMessage: string | null = null;
   let sendDigest: string | null = null;
   let beforeSend: (() => Promise<void>) | undefined;
+  let closeThrows = false;
   let throwAt: "prepare" | "send" | "reopen" | null = null;
   const browser: SavedChatBrowser = {
     async prepare() {
@@ -58,6 +59,10 @@ async function fixture() {
       sentMessage = message;
       sendDigest = digest;
       return send;
+    },
+    async closePrepared() {
+      calls.push("closePrepared");
+      if (closeThrows) throw new Error("CLOSE_UNVERIFIED");
     },
     async reopen(candidate, firstDigest, titleDigest) {
       calls.push(`reopen:${candidate}`);
@@ -99,6 +104,9 @@ async function fixture() {
     },
     onBeforeSend(value: () => Promise<void>) {
       beforeSend = value;
+    },
+    setCloseThrows() {
+      closeThrows = true;
     },
     throwAt(value: typeof throwAt) {
       throwAt = value;
@@ -270,7 +278,7 @@ describe("saved ChatGPT handoff intent and replay", () => {
       expect(await state.service(journal).create(state.request)).toMatchObject({
         status: "outcome_unknown",
       });
-      expect(state.calls).toEqual(["prepare"]);
+      expect(state.calls).toEqual(["prepare", "closePrepared"]);
     }
     {
       const state = await fixture();
@@ -347,6 +355,29 @@ describe("saved ChatGPT handoff intent and replay", () => {
     });
     expect(state.calls.filter((call) => call === "send")).toHaveLength(1);
   });
+
+  it.each(["false", "throw"] as const)(
+    "closes the prepared helper when durable send intent returns %s",
+    async (mode) => {
+      const state = await fixture();
+      if (mode === "throw") state.setCloseThrows();
+      const journal = withJournalFault(state.journal, {
+        markSendIntent: async () => {
+          if (mode === "throw") throw new Error("JOURNAL_UNAVAILABLE");
+          return false;
+        },
+      });
+      expect(await state.service(journal).create(state.request)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: state.request.key,
+      });
+      expect(state.calls).toEqual(["prepare", "closePrepared"]);
+      expect(await state.service(journal).create(state.request)).toMatchObject({
+        status: "outcome_unknown",
+      });
+      expect(state.calls).toEqual(["prepare", "closePrepared"]);
+    },
+  );
 
   it("keeps a candidate URL unknown until read-only history/reopen proof succeeds", async () => {
     const { journal, service, request, calls, setReopen } = await fixture();

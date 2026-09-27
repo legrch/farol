@@ -60,6 +60,8 @@ export interface SavedChatBrowser {
   prepare(): Promise<
     "ready" | "sign_in_required" | "not_normal_empty" | "unavailable"
   >;
+  /** Dispose a prepared surface if durable send admission cannot be recorded. */
+  closePrepared?(): Promise<void>;
   /** Checks inserted bytes and crosses at most one Send boundary. */
   sendOnce(
     message: string,
@@ -169,9 +171,20 @@ export class PersistentChatGptHandoff {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
     try {
-      if (!(await this.journal.markSendIntent(request.key, requestDigest)))
+      if (!(await this.journal.markSendIntent(request.key, requestDigest))) {
+        try {
+          await this.browser.closePrepared?.();
+        } catch {
+          // The durable intent did not publish; cleanup cannot authorize Send.
+        }
         return { status: "outcome_unknown", dispatchId: request.key };
+      }
     } catch {
+      try {
+        await this.browser.closePrepared?.();
+      } catch {
+        // A failed disposal does not make an uncertain receipt retryable.
+      }
       return { status: "outcome_unknown", dispatchId: request.key };
     }
     let sent: Awaited<ReturnType<SavedChatBrowser["sendOnce"]>>;
