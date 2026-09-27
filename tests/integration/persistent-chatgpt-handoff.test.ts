@@ -187,6 +187,40 @@ describe("saved ChatGPT handoff intent and replay", () => {
     });
   });
 
+  it("keeps owner-decision and disposal faults fail-closed before Send", async () => {
+    const uncertain = await fixture();
+    uncertain.setCloseThrows();
+    expect(
+      await uncertain
+        .service(uncertain.journal, async () => {
+          throw new Error("OWNER_DECISION_UNAVAILABLE");
+        })
+        .create(uncertain.request),
+    ).toEqual({
+      status: "outcome_unknown",
+      dispatchId: uncertain.request.key,
+    });
+    expect(uncertain.calls).toEqual(["prepare", "closePrepared"]);
+    expect(await uncertain.journal.read(uncertain.request.key)).toMatchObject({
+      phase: "reserved",
+    });
+
+    const denied = await fixture();
+    denied.setCloseThrows();
+    expect(
+      await denied
+        .service(denied.journal, async () => false)
+        .create(denied.request),
+    ).toMatchObject({
+      status: "refused",
+      code: "SAVED_CHAT_OWNER_APPROVAL_DENIED",
+    });
+    expect(denied.calls).toEqual(["prepare", "closePrepared"]);
+    expect(await denied.journal.read(denied.request.key)).toMatchObject({
+      phase: "refused",
+    });
+  });
+
   it("records a durable send intent before one normal-chat send and proves a separate reopen", async () => {
     const { journal, service, request, calls, sent, onBeforeSend } =
       await fixture();

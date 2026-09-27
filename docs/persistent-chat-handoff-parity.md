@@ -40,11 +40,16 @@ current, unambiguous Next-partition readiness receipt for the exact build.
 Before durable Send intent, Farol shows the exact key, requested title,
 request digest and first message in a native owner confirmation dialog. Denial
 is recorded without a Send; missing owner window refuses. Immediately before
-the click it rechecks the same build/profile admission. An account-writing
+the submit call it rechecks the same build/profile admission. The readiness
+receipt proves a signed-in partition, **not the account ID**; the owner must
+inspect the intended account in the same Farol Next Browser partition before
+the one-send confirmation. An account-writing
 operation retains its desktop execution-fence lease until its Browser work
-finishes, even after the MCP caller disconnects. A disconnect observed before
-the click prevents Send; one after the click leaves an outcome-unknown receipt
-without retry. A fixture endpoint proves
+finishes, even after the MCP caller disconnects. Connector stop drains the
+bridge and revokes its socket before reporting a confirmed stop. A disconnect
+observed before the page submit call prevents Send; one during or after the
+asynchronous page script leaves an outcome-unknown receipt without retry. A
+fixture endpoint proves
 transport only; current selectors, owner account selection, connector schema
 refresh and persistence still need one bounded live canary. A Computer folder
 grant alone never authorizes the external send, and an outcome-unknown response

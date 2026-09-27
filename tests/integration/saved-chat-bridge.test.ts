@@ -230,4 +230,60 @@ describe("app-owned saved-chat bridge", () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   });
+
+  it("does not confirm bridge stop until admitted account work finishes", async () => {
+    const key = randomUUID();
+    let entered: (() => void) | undefined;
+    let finish: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const bridge = await startSavedChatBridge(
+      {
+        async create(request) {
+          entered?.();
+          await pending;
+          return { status: "outcome_unknown", dispatchId: request.key };
+        },
+        async status() {
+          return { status: "unknown" };
+        },
+      },
+      admit,
+    );
+    try {
+      const client = new SavedChatBridgeClient(bridge.endpoint);
+      const create = client.request({
+        operation: "create",
+        request: { key, title: "One", firstMessage: "One" },
+      });
+      await started;
+      let stopped = false;
+      const closing = bridge.close().then(() => {
+        stopped = true;
+      });
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      finish?.();
+      expect(await create).toEqual({
+        status: "outcome_unknown",
+        dispatchId: key,
+      });
+      await closing;
+      expect(stopped).toBe(true);
+      await expect(
+        client.request({
+          operation: "status",
+          dispatchId: key,
+          recheck: false,
+        }),
+      ).rejects.toThrow("SAVED_CHAT_BRIDGE_UNAVAILABLE");
+    } finally {
+      finish?.();
+      await bridge.close();
+    }
+  });
 });

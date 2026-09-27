@@ -1530,12 +1530,11 @@ async function initializeSavedChatBridge(): Promise<void> {
           if (!owner || owner.isDestroyed()) return false;
           const { response } = await dialog.showMessageBox(owner, {
             type: "warning",
-            buttons: ["Do not send", "Send once"],
+            buttons: ["Do not send", "Account checked — send once"],
             defaultId: 0,
             cancelId: 0,
-            message:
-              "Send this first message to your signed-in ChatGPT account?",
-            detail: `Title: ${request.title}\nKey: ${request.key}\nDigest: ${requestDigest}\n\n${request.firstMessage}`,
+            message: "Send this first message through Farol Next Browser?",
+            detail: `Check the signed-in account in Farol Next Browser before approving. Farol cannot identify that account from this receipt.\n\nTitle: ${request.title}\nKey: ${request.key}\nDigest: ${requestDigest}\n\n${request.firstMessage}`,
           });
           return response === 1 && qualified();
         },
@@ -3024,6 +3023,13 @@ async function stopAndConfirmComputerMcp(
   await lifecycle.beginStop();
   await inFlightStart;
   await connector.stop();
+  // A stopped connector must not leave an admitted account operation or a
+  // still-reachable Browser endpoint behind. `close` waits for admitted work.
+  const savedChat = savedChatBridgeRuntime;
+  if (savedChat) {
+    await savedChat.close();
+    if (savedChatBridgeRuntime === savedChat) savedChatBridgeRuntime = null;
+  }
   await lifecycle.confirmStop();
 }
 
@@ -3652,6 +3658,9 @@ async function startSecureMcpConnector(
       const stopped = await configuration.recordSecureMcpStopped();
       if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
     }
+    // Repair may have drained the previous bridge. Publish a new endpoint
+    // only if this launch still has an exact owner opt-in and current receipt.
+    await initializeSavedChatBridge();
     const snapshot = configuration.snapshot();
     if (snapshot.status !== "ready") {
       return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -8782,7 +8791,18 @@ async function main(): Promise<void> {
         const inFlightStart = connectorStartInFlight;
         closers.push({
           name: "connector",
-          close: () => stopAndConfirmComputerMcp(connector, inFlightStart),
+          close: async () => {
+            try {
+              await stopAndConfirmComputerMcp(connector, inFlightStart);
+            } finally {
+              const savedChat = savedChatBridgeRuntime;
+              if (savedChat) {
+                await savedChat.close();
+                if (savedChatBridgeRuntime === savedChat)
+                  savedChatBridgeRuntime = null;
+              }
+            }
+          },
         });
       }
       const model = modelLifecycle;
@@ -8798,13 +8818,14 @@ async function main(): Promise<void> {
       callerRelayRuntime = null;
       if (relay)
         closers.push({ name: "caller-relay", close: () => relay.close() });
-      const savedChat = savedChatBridgeRuntime;
-      savedChatBridgeRuntime = null;
-      if (savedChat)
+      const savedChat = connector ? null : savedChatBridgeRuntime;
+      if (savedChat) {
+        savedChatBridgeRuntime = null;
         closers.push({
           name: "saved-chat-bridge",
           close: () => savedChat.close(),
         });
+      }
       disposeChatGptRoutes();
       disposeTaskViews("runtime");
       stopRuntime();
