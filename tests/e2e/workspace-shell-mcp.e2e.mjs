@@ -313,9 +313,172 @@ try {
     );
     assert.equal(observed.exitCode, 0, observed.stderr);
     assert.equal(observed.stdout, "HISTORY_SECRET_CANARY\n");
+
+    // The sealed Computer route must run ordinary Git against approved
+    // metadata. A path-scoped commit may not consume another task's index.
+    await fs.writeFile(path.join(workspaceRoot, "foreign.txt"), "foreign\n");
+    await fs.writeFile(path.join(workspaceRoot, "own.txt"), "own\n");
+    execFileSync("git", ["-C", workspaceRoot, "add", "--", "foreign.txt"]);
+    const workflow = await approved.client.callTool({
+      name: "computer_shell_start",
+      arguments: {
+        operationId: "packaged-ordinary-git-workflow",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command:
+          "git status --short && git add -- own.txt && git -c user.name=Test -c user.email=test@example.invalid commit -qm own -- own.txt && git status --short",
+        timeoutMs: 10_000,
+        write: true,
+      },
+    });
+    assert.equal(workflow.isError, undefined);
+    const gitResult = await complete(
+      approved.client,
+      workflow.structuredContent.value.handle,
+    );
+    assert.equal(gitResult.exitCode, 0, gitResult.stderr);
+    assert.equal(gitResult.groupCleanup, "confirmed");
+    assert.equal(
+      execFileSync("git", ["-C", workspaceRoot, "show", "HEAD:own.txt"], {
+        encoding: "utf8",
+      }),
+      "own\n",
+    );
+    assert.equal(
+      execFileSync(
+        "git",
+        ["-C", workspaceRoot, "diff", "--cached", "--name-only"],
+        {
+          encoding: "utf8",
+        },
+      ),
+      "foreign.txt\n",
+    );
+    assert.equal(
+      execFileSync(
+        "git",
+        ["-C", workspaceRoot, "status", "--porcelain", "--", "own.txt"],
+        {
+          encoding: "utf8",
+        },
+      ),
+      "",
+    );
   } finally {
     await approved.client.close();
     assert.equal(approved.stderr(), "");
+  }
+
+  // A linked writer needs both its own Git directory and the common object
+  // directory. The grant is explicit for this physical worktree identity.
+  const linkedRoot = path.join(root, "linked-writer");
+  execFileSync("git", [
+    "-C",
+    workspaceRoot,
+    "worktree",
+    "add",
+    "-qb",
+    "package-linked",
+    linkedRoot,
+  ]);
+  const linkedInfo = await fs.lstat(linkedRoot, { bigint: true });
+  const gitMetadata = {
+    gitDirectory: execFileSync(
+      "git",
+      ["-C", linkedRoot, "rev-parse", "--path-format=absolute", "--git-dir"],
+      { encoding: "utf8" },
+    ).trim(),
+    commonDirectory: execFileSync(
+      "git",
+      [
+        "-C",
+        linkedRoot,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ],
+      { encoding: "utf8" },
+    ).trim(),
+  };
+  const linkedWorkspace = {
+    workspaceId: "linked",
+    root: linkedRoot,
+    access: "write",
+    rootIdentity: {
+      device: String(linkedInfo.dev),
+      inode: String(linkedInfo.ino),
+    },
+    shellVerified: true,
+    gitHistoryApproved: true,
+    gitMetadata,
+  };
+  const linkedLaunch = {
+    ...launch,
+    approval: {
+      ...approval,
+      computerId: "computer-linked-e2e",
+      workspaces: [linkedWorkspace],
+    },
+    admission: {
+      ...launch.admission,
+      computerId: "computer-linked-e2e",
+      workspaces: [
+        {
+          workspaceId: "linked",
+          mode: "subtree",
+          root: linkedRoot,
+          access: "write",
+        },
+      ],
+    },
+  };
+  const linkedLaunchRoot = path.join(root, "linked-launch");
+  await fs.mkdir(linkedLaunchRoot, { mode: 0o700 });
+  const linkedLaunchFile = path.join(linkedLaunchRoot, "computer-launch.json");
+  await fs.writeFile(linkedLaunchFile, `${canonical(linkedLaunch)}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
+  const linked = await connect(linkedLaunchFile);
+  try {
+    const started = await linked.client.callTool({
+      name: "computer_shell_start",
+      arguments: {
+        operationId: "packaged-linked-git-workflow",
+        workspaceId: "linked",
+        relativeCwd: ".",
+        command:
+          "printf linked > linked.txt && git add -- linked.txt && git -c user.name=Test -c user.email=test@example.invalid commit -qm linked -- linked.txt && git rev-parse --short HEAD",
+        timeoutMs: 10_000,
+        write: true,
+      },
+    });
+    assert.equal(started.isError, undefined);
+    const result = await complete(
+      linked.client,
+      started.structuredContent.value.handle,
+    );
+    assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.groupCleanup, "confirmed");
+    assert.equal(
+      execFileSync("git", ["-C", linkedRoot, "show", "HEAD:linked.txt"], {
+        encoding: "utf8",
+      }),
+      "linked",
+    );
+    assert.equal(
+      execFileSync(
+        "git",
+        ["-C", workspaceRoot, "diff", "--cached", "--name-only"],
+        {
+          encoding: "utf8",
+        },
+      ),
+      "foreign.txt\n",
+    );
+  } finally {
+    await linked.client.close();
+    assert.equal(linked.stderr(), "");
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });
