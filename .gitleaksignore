@@ -1,0 +1,6 @@
+# Exact generic-api-key false positives for synthetic UUID operation keys in
+# the preserved codex/task-active-message fixture commit. Keep the all-ref
+# scan and every detection rule enabled; any changed line or commit is scanned.
+973dad807de31c26e3d850c07bd162fdd431c980:tests/integration/admitted-codex-task-route.test.ts:generic-api-key:64
+973dad807de31c26e3d850c07bd162fdd431c980:tests/e2e/codex-task-mcp.e2e.mjs:generic-api-key:324
+973dad807de31c26e3d850c07bd162fdd431c980:tests/integration/codex-task-mcp.test.ts:generic-api-key:73
