@@ -35,7 +35,15 @@ const CodexTaskCreateInputSchema = z.strictObject({
   key: DispatchIdSchema,
   workspaceId: IdentifierSchema,
   projectId: IdentifierSchema,
-  message: z.string().min(1).max(8_192),
+  message: z
+    .string()
+    .min(1)
+    .max(8_192)
+    .refine(
+      (value) =>
+        !value.includes("\0") &&
+        new TextEncoder().encode(value).byteLength <= 8_192,
+    ),
   model: z.string().min(1).max(120),
   reasoningEffort: z.string().min(1).max(40),
 });
@@ -612,7 +620,7 @@ export function createReadonlyComputerMcpServer(
       {
         title: "Create one persistent Codex task",
         description:
-          "Start one task in an explicitly approved existing saved project. Supply a new UUID key once; an outcome_unknown result must never trigger a new key or blind retry.",
+          "Start one task in an explicitly approved existing saved project. Message limit: 8,192 UTF-8 bytes, without NUL. Supply a new UUID key once; an outcome_unknown result must never trigger a new key or blind retry.",
         inputSchema: CodexTaskCreateInputSchema,
         annotations: CODEX_TASK_CREATE_ANNOTATIONS,
       },
