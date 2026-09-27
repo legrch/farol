@@ -621,6 +621,8 @@ let connectorStartInFlight: Promise<void> | null = null;
 // admission hold it from reading the settings until they run, so neither can
 // start with authority that a concurrent change is about to replace.
 const authorityTransitions = new AuthorityTransitionReservation();
+let activeAuthorityChangeKind: ProductConfigurationCommand["kind"] | null =
+  null;
 
 // Whichever of an authority change, a connector start or an Agent admission
 // holds the reservation, the loser is told that a transition is in progress
@@ -4524,16 +4526,31 @@ async function configureProduct(
   const reserved = await authorityTransitions.withReservation(
     "authority-change",
     async () => {
+      activeAuthorityChangeKind = command.kind;
       try {
-        const lifecycle = computerMcpLifecycle();
-        await lifecycle.beginStop();
-        await lifecycle.confirmStop();
-      } catch {
-        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+        try {
+          const lifecycle = computerMcpLifecycle();
+          await lifecycle.beginStop();
+          await lifecycle.confirmStop();
+        } catch {
+          return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+        }
+        return configureAdmittedProduct(command);
+      } finally {
+        activeAuthorityChangeKind = null;
       }
-      return configureAdmittedProduct(command);
     },
   );
+  if (!reserved.admitted) {
+    console.warn(
+      "farol.authority-transition-refused",
+      JSON.stringify({
+        requested: command.kind,
+        heldBy: reserved.heldBy,
+        activeCommand: activeAuthorityChangeKind,
+      }),
+    );
+  }
   return deliverConfigurationReply(
     command.kind,
     reserved.admitted ? reserved.value : transitionRefusal(),

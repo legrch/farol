@@ -10746,6 +10746,14 @@ n09ConnectorSegment: {
   const connector = await launch([], "hidden", "demo", {
     environment: { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture.executable },
   });
+  let authorityTransitionDiagnostic = "";
+  connector.application.process().stderr?.on("data", (chunk) => {
+    const lines = String(chunk)
+      .split("\n")
+      .filter((line) => line.includes("farol.authority-transition-refused"));
+    authorityTransitionDiagnostic =
+      `${authorityTransitionDiagnostic}${lines.join("\n")}`.slice(-2048);
+  });
   try {
     // Setup is finished WITHOUT approving a folder, because the prerequisite
     // this journey exists for is the one an owner cannot see from here: the
@@ -10904,7 +10912,7 @@ n09ConnectorSegment: {
       assert.equal(
         actual,
         "Read-only workspace saved and read back.",
-        `unexpected workspace feedback after native selection: ${error}`,
+        `unexpected workspace feedback after native selection: ${error}; transition ${authorityTransitionDiagnostic}`,
       );
     }
     await connector.window.locator('[data-section="computer"]').click();
