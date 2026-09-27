@@ -848,4 +848,26 @@ export class SandboxedWorkspaceShell {
       if (record.state === "running") stopWatchdog(record.child);
     }
   }
+
+  // A graceful connector shutdown must wait for its owned groups to leave.
+  // This cannot prove a process that deliberately detached from a group;
+  // callers must continue to report that limit separately.
+  async closeAndWait(): Promise<"confirmed" | "unverified"> {
+    this.close();
+    const deadline = Date.now() + 4_000;
+    while (
+      [...this.byHandle.values()].some(
+        (record) => record.state === "running",
+      ) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return [...this.byHandle.values()].every(
+      (record) =>
+        record.state === "exited" && record.groupCleanup === "confirmed",
+    )
+      ? "confirmed"
+      : "unverified";
+  }
 }

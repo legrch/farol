@@ -815,6 +815,33 @@ describe.skipIf(process.platform !== "darwin")(
       expect(result.detachedCleanup).toBe("unverified");
     });
 
+    it("waits for its owned process group during graceful connector shutdown", async () => {
+      const { shell } = await fixture();
+      const started = await shell.start({
+        operationId: "graceful-shutdown",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: "sleep 20 & wait",
+        timeoutMs: 30_000,
+        write: false,
+      });
+      if (!started.ok) throw new Error(started.error.code);
+      expect(await shell.closeAndWait()).toBe("confirmed");
+      const outcome = shell.read({
+        handle: started.value.handle,
+        stdoutOffset: 0,
+        stderrOffset: 0,
+      });
+      expect(outcome).toMatchObject({
+        ok: true,
+        value: {
+          state: "exited",
+          groupCleanup: "confirmed",
+          detachedCleanup: "unverified",
+        },
+      });
+    });
+
     it("stops its running command when the initiating call is aborted", async () => {
       const { shell } = await fixture();
       const controller = new AbortController();

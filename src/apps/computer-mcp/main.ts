@@ -160,9 +160,19 @@ async function main(): Promise<void> {
   const close = () => {
     if (closing) return;
     closing = true;
-    shell?.close();
+    const shellDrain = shell?.closeAndWait() ?? Promise.resolve("confirmed");
     sharedHost?.close();
-    void handle.close().finally(() => process.exit(0));
+    void Promise.allSettled([shellDrain, handle.close()]).then((results) => {
+      if (
+        results[0]?.status !== "fulfilled" ||
+        results[0].value !== "confirmed" ||
+        results[1]?.status !== "fulfilled"
+      ) {
+        process.stderr.write("Farol Next Computer MCP shutdown unverified.\n");
+        process.exit(1);
+      }
+      process.exit(0);
+    });
   };
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
