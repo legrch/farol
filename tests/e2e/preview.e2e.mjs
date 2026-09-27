@@ -2847,6 +2847,28 @@ async function close(instance, options = {}) {
         "close",
         String(error?.message ?? error).split("\n", 1)[0],
       );
+      // Capture the exact owned main process before forced cleanup. A late
+      // Playwright close result alone cannot tell whether the app remained
+      // alive or the protocol wait stalled after an early process exit.
+      let mainState;
+      try {
+        process.kill(mainPid, 0);
+        mainState = "alive";
+      } catch (probeError) {
+        mainState = probeError?.code === "ESRCH" ? "gone" : "unverified";
+      }
+      let groupState = "unverified";
+      if (instance.ownedProcessGroup === mainPid) {
+        try {
+          groupState = ownedGroupAlive(mainPid) ? "alive" : "gone";
+        } catch {
+          // Keep the original close failure as the first failure.
+        }
+      }
+      phases.note(
+        `${label}.preAbortState`,
+        JSON.stringify({ mainPid, mainState, groupState }),
+      );
       await stopOwnedTestGroup(instance, `${label}.abort-stalled-close`);
       throw error;
     }
