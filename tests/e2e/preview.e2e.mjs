@@ -2495,8 +2495,9 @@ async function close(instance, options = {}) {
   const removeHome = options.removeHome ?? true;
   const label = `close[${instance.windowMode ?? "unknown"}]`;
   let provedQuit = true;
+  let inspected;
   if (instance.windowMode) {
-    const inspected = await phases.step(
+    inspected = await phases.step(
       `${label}.windowPresentation`,
       CLOSE_PHASE_BUDGET_MS,
       () =>
