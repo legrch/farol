@@ -2567,6 +2567,56 @@ async function waitOwnedPidGone(pid) {
   }
 }
 
+async function stopProfileBoundHelpers(instance, label) {
+  const profile = instance.userData;
+  if (
+    typeof profile !== "string" ||
+    !path
+      .resolve(profile)
+      .startsWith(`${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`)
+  ) {
+    throw new Error(`E2E_HELPER_PROFILE_UNVERIFIED:${label}`);
+  }
+  const table = spawnSync("/bin/ps", ["-axo", "uid=,pid=,command="], {
+    encoding: "utf8",
+    timeout: 3_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (table.status !== 0) {
+    throw new Error(`E2E_HELPER_PROCESS_TABLE_UNAVAILABLE:${label}`);
+  }
+  const marker = `--user-data-dir=${profile}`;
+  const helpers = table.stdout
+    .split("\n")
+    .map((line) => /^\s*(\d+)\s+(\d+)\s+(.*)$/u.exec(line))
+    .filter(
+      (match) =>
+        match &&
+        Number(match[1]) === process.getuid() &&
+        match[3].includes(marker) &&
+        Number(match[2]) !== process.pid,
+    )
+    .map((match) => Number(match[2]));
+  phases.note(`${label}.profileHelpers`, `count=${helpers.length}`);
+  for (const pid of helpers) {
+    if (await waitOwnedPidGone(pid)) continue;
+    for (const signal of ["SIGTERM", "SIGKILL"]) {
+      try {
+        process.kill(pid, signal);
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+      if (await waitOwnedPidGone(pid)) break;
+    }
+    assert.equal(
+      await waitOwnedPidGone(pid),
+      true,
+      `E2E_PROFILE_HELPER_SURVIVED_ABORT:${pid}`,
+    );
+  }
+  return helpers.length;
+}
+
 async function stopOwnedTestGroup(instance, label) {
   const pid = instance.application.process().pid;
   instance.ownedProcessGroup ??= captureOwnedProcessGroup(pid);
@@ -2578,6 +2628,14 @@ async function stopOwnedTestGroup(instance, label) {
     );
     // The main PID is still ours; stop it without touching a guessed group.
     instance.application.process().kill("SIGKILL");
+    if (Number.isSafeInteger(pid) && pid > 1) {
+      assert.equal(
+        await waitOwnedPidGone(pid),
+        true,
+        `E2E_OWNED_MAIN_SURVIVED_ABORT:${label}`,
+      );
+    }
+    await stopProfileBoundHelpers(instance, label);
     throw new Error(`E2E_OWNED_GROUP_UNVERIFIED:${label}`);
   }
   phases.note(label, `group=${groupId}`);
@@ -2595,6 +2653,7 @@ async function stopOwnedTestGroup(instance, label) {
     false,
     `E2E_OWNED_GROUP_SURVIVED_ABORT:${label}`,
   );
+  const escapedHelpers = await stopProfileBoundHelpers(instance, label);
   // phase.log survives a failing lane; the in-memory observation below is
   // only included if the runner reaches its final report.
   phases.note(`${label}.groupGone`, "detached=unverified");
@@ -2604,6 +2663,13 @@ async function stopOwnedTestGroup(instance, label) {
     groupCleanup: "confirmed",
     detachedCleanup: "unverified",
   });
+  if (escapedHelpers > 0) {
+    evidenceAttempt.recordFailure(
+      "cleanup",
+      `E2E_PROFILE_HELPER_ESCAPED_GROUP:${label}:${escapedHelpers}`,
+    );
+    throw new Error(`E2E_PROFILE_HELPER_ESCAPED_GROUP:${label}`);
+  }
 }
 
 async function close(instance, options = {}) {
@@ -2654,6 +2720,7 @@ async function close(instance, options = {}) {
   );
   if (metrics === null) provedQuit = false;
   const utilityPids = metrics?.value ?? [];
+  let closeReturnedAfterEarlyExit = false;
   // Playwright's application.close() can wait forever after the child has
   // already exited. Confirm the exact owned PID first; an early exit stays a
   // recorded failure and never counts as a successful quit proof.
@@ -2670,7 +2737,7 @@ async function close(instance, options = {}) {
     phases.note(`${label}.applicationAlreadyExited`, `pid=${mainPid}`);
   } else {
     try {
-      await phases.step(
+      const closed = await phases.step(
         `${label}.applicationClose`,
         CLOSE_PHASE_BUDGET_MS,
         () =>
@@ -2678,6 +2745,10 @@ async function close(instance, options = {}) {
             instance.application.close(),
           ),
       );
+      if (closed === null) {
+        provedQuit = false;
+        closeReturnedAfterEarlyExit = true;
+      }
     } catch (error) {
       evidenceAttempt.recordFailure(
         "close",
@@ -2744,19 +2815,24 @@ async function close(instance, options = {}) {
     );
     throw new Error(`E2E_UTILITY_IDENTITIES_UNAVAILABLE:${label}`);
   }
+  if (closeReturnedAfterEarlyExit) {
+    phases.note(`${label}.profileRetained`, "early-exit-during-close");
+  }
   // An application that had already exited leaves no processes behind either,
   // so its dead pids are not proof that quitting terminated them.
   if (provedQuit) quitProofs += 1;
   if (removeHome) {
     await stopChatGptFixture(instance.chatGptFixture);
     instance.chatGptFixture = null;
-    const real = path.resolve(instance.isolatedHome);
-    assert.ok(
-      real.startsWith(
-        `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
-      ),
-    );
-    await fs.rm(real, { recursive: true, force: true });
+    if (provedQuit) {
+      const real = path.resolve(instance.isolatedHome);
+      assert.ok(
+        real.startsWith(
+          `${path.resolve(os.tmpdir())}${path.sep}farol-next-e2e-home-`,
+        ),
+      );
+      await fs.rm(real, { recursive: true, force: true });
+    }
   }
 }
 
