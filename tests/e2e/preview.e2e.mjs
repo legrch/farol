@@ -9684,17 +9684,35 @@ ux34SettingsWidthsSegment: {
     await settingsWidths.window.waitForFunction(
       () => document.documentElement.dataset.section === "settings",
     );
-    await settingsWidths.window.locator("#computer-name").fill(unbreakableName);
-    await settingsWidths.window.locator("#save-computer-name").click();
-    await settingsWidths.window.waitForFunction(() => {
-      const feedback =
-        document.querySelector("#settings-feedback")?.textContent;
-      return Boolean(feedback && feedback !== "Saving and reading back…");
-    });
-    assert.equal(
-      await settingsWidths.window.locator("#settings-feedback").textContent(),
-      "Computer name saved.",
-    );
+    const busyFeedback =
+      "Another change to Computer access, a connector start or an Agent start is in progress. Try again when it has finished.";
+    let saveFeedback = "";
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      // A refused configuration reply can refresh the field from its saved
+      // snapshot; re-enter the same intended name before each admitted try.
+      await settingsWidths.window
+        .locator("#computer-name")
+        .fill(unbreakableName);
+      assert.equal(
+        await settingsWidths.window.locator("#computer-name").inputValue(),
+        unbreakableName,
+      );
+      await settingsWidths.window.locator("#save-computer-name").click();
+      await settingsWidths.window.waitForFunction(() => {
+        const feedback =
+          document.querySelector("#settings-feedback")?.textContent;
+        return Boolean(feedback && feedback !== "Saving and reading back…");
+      });
+      saveFeedback =
+        (await settingsWidths.window
+          .locator("#settings-feedback")
+          .textContent()) ?? "";
+      if (saveFeedback !== busyFeedback) break;
+      // This classified reservation refusal occurred before any mutation.
+      // Only then may the same owner action be tried again.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.equal(saveFeedback, "Computer name saved.");
     const renamedComputer = await settingsWidths.window.evaluate(() =>
       window.farolNext.bootstrap(),
     );
