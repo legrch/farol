@@ -12604,11 +12604,24 @@ n10ComputerPanelSegment: {
       return app.isReady();
     }, secondRoot);
 
-    await panel.window.locator("#add-workspace").click();
-    await panel.window
-      .locator("#settings-feedback")
-      .getByText("Read-only workspace saved and read back.", { exact: true })
-      .waitFor();
+    const busyFeedback =
+      "Another change to Computer access, a connector start or an Agent start is in progress. Try again when it has finished.";
+    let workspaceFeedback = "";
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await panel.window.locator("#add-workspace").click();
+      await panel.window.waitForFunction(() => {
+        const feedback =
+          document.querySelector("#settings-feedback")?.textContent;
+        return Boolean(feedback && feedback !== "Saving and reading back…");
+      });
+      workspaceFeedback =
+        (await panel.window.locator("#settings-feedback").textContent()) ?? "";
+      if (workspaceFeedback !== busyFeedback) break;
+      // The authority reservation refused before opening the picker or
+      // saving a folder. Unknown outcomes and other errors never retry.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    assert.equal(workspaceFeedback, "Read-only workspace saved and read back.");
     await workspaceList
       .locator(".workspace-card")
       .filter({ hasText: secondLabel })
