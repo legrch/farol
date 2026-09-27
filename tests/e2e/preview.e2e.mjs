@@ -2595,6 +2595,9 @@ async function stopOwnedTestGroup(instance, label) {
     false,
     `E2E_OWNED_GROUP_SURVIVED_ABORT:${label}`,
   );
+  // phase.log survives a failing lane; the in-memory observation below is
+  // only included if the runner reaches its final report.
+  phases.note(`${label}.groupGone`, "detached=unverified");
   harnessObservations.push({
     kind: "test-process-cleanup",
     stage: label,
