@@ -34,6 +34,23 @@ function canonical(value) {
 
 const ownedConnectorPids = new Set();
 
+class TrackedStdioClientTransport extends StdioClientTransport {
+  constructor(parameters, onSpawn) {
+    super(parameters);
+    this.onSpawn = onSpawn;
+  }
+
+  async start() {
+    await super.start();
+    const pid = this.pid;
+    assert.ok(
+      Number.isSafeInteger(pid) && pid > 1,
+      "MCP_PROCESS_ID_UNVERIFIED",
+    );
+    this.onSpawn(pid);
+  }
+}
+
 async function waitPidGone(pid) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -47,23 +64,31 @@ async function waitPidGone(pid) {
   return false;
 }
 
-async function connect(launchFile) {
-  const transport = new StdioClientTransport({
-    command: executable,
-    args: [entry, "--launch-contract", launchFile],
-    cwd: process.cwd(),
-    stderr: "pipe",
-    ...(packaged
-      ? {
-          env: {
-            ELECTRON_RUN_AS_NODE: "1",
-            HOME: process.env.HOME ?? os.homedir(),
-            PATH: process.env.PATH ?? "/usr/bin:/bin",
-            TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
-          },
-        }
-      : {}),
-  });
+async function connect(launchFile, onSpawn = () => {}) {
+  let launchedPid = null;
+  const transport = new TrackedStdioClientTransport(
+    {
+      command: executable,
+      args: [entry, "--launch-contract", launchFile],
+      cwd: process.cwd(),
+      stderr: "pipe",
+      ...(packaged
+        ? {
+            env: {
+              ELECTRON_RUN_AS_NODE: "1",
+              HOME: process.env.HOME ?? os.homedir(),
+              PATH: process.env.PATH ?? "/usr/bin:/bin",
+              TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
+            },
+          }
+        : {}),
+    },
+    (pid) => {
+      launchedPid = pid;
+      ownedConnectorPids.add(pid);
+      onSpawn(pid);
+    },
+  );
   let stderr = "";
   transport.stderr?.on("data", (chunk) => {
     stderr += String(chunk);
@@ -72,20 +97,17 @@ async function connect(launchFile) {
   try {
     await client.connect(transport);
   } catch (error) {
-    const pid = transport.pid;
-    if (pid !== null) ownedConnectorPids.add(pid);
     await client.close().catch(() => undefined);
-    if (pid !== null && (await waitPidGone(pid)))
-      ownedConnectorPids.delete(pid);
+    if (launchedPid !== null && (await waitPidGone(launchedPid))) {
+      ownedConnectorPids.delete(launchedPid);
+    }
     throw error;
   }
-  const pid = transport.pid;
-  if (!Number.isSafeInteger(pid) || pid <= 1) {
+  if (launchedPid === null) {
     await client.close().catch(() => undefined);
     throw new Error("MCP_PROCESS_ID_UNVERIFIED");
   }
-  ownedConnectorPids.add(pid);
-  return { client, pid, stderr: () => stderr };
+  return { client, pid: launchedPid, stderr: () => stderr };
 }
 
 async function disconnect(connection) {
@@ -204,7 +226,14 @@ try {
 
   const failedLaunchFile = path.join(launchRoot, "invalid-launch.json");
   await fs.writeFile(failedLaunchFile, "{invalid", { mode: 0o600, flag: "wx" });
-  await assert.rejects(connect(failedLaunchFile));
+  let failedLaunchPid = null;
+  await assert.rejects(
+    connect(failedLaunchFile, (pid) => {
+      failedLaunchPid = pid;
+    }),
+  );
+  assert.ok(Number.isSafeInteger(failedLaunchPid) && failedLaunchPid > 1);
+  assert.equal(await waitPidGone(failedLaunchPid), true);
   assert.equal(ownedConnectorPids.size, 0);
 
   const first = await connect(launchFile);
