@@ -11,7 +11,7 @@ handoff tool.
 | Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                            |
 | -------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Separate backlog; the V0 implementation and its private-alpha evidence are historical references, not standalone code or acceptance |
-| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Private `PersistentCodexHandoff` core and hermetic fixtures only; no tool, host adapter or live task                                |
+| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Private core, branch-only proxy adapter and fixtures; no connector tool or live task                                                |
 | Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                                   |
 
 The V0 browser route is documented in the V0 repository's
@@ -53,8 +53,18 @@ status for a current-format dispatch remains available when the execution
 policy changes, provided both physical roots still match.
 
 The next source slice must add explicit host-task creation admission, a trusted
-Computer workspace adapter, an App Server adapter against the **installed**
-host's current schema, and a typed desktop/Computer MCP create/status route.
+Computer workspace adapter and a typed desktop/Computer MCP
+create/status/result route. A branch-only `SharedCodexProxyHost` adapter now
+connects through the supported `codex app-server proxy --sock` command to an
+**already running, explicitly selected** Unix socket. It checks executable
+digest, socket ownership/canonical path and serving Codex home; it never starts
+or stops the daemon. The proxy child gets a private disposable `HOME` and a
+fixed executable search path; the selected socket determines which serving
+profile it reaches. A dropped proxy rejects pending calls and cannot silently
+reconnect/replay them. Provider approval requests are refused until an explicit
+owner-facing approval path exists. Its local fixture uses the installed CLI
+against a disposable fake socket; this is not a connection to the owner's
+running daemon or proof that native Desktop shares that runtime.
 The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
 installed-host schema methods and response fields, including
 `thread/items/list`, its turn filter, and the typed final-answer phase. It is not yet attached to
