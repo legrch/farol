@@ -2771,6 +2771,7 @@ async function requestProductQuit(instance) {
     throw new Error("E2E_PRODUCT_EXITED_BEFORE_QUIT_REQUEST");
   }
   const exited = once(owned, "exit");
+  instance.quitRequestAt = Date.now();
   instance.quitRequestStatus = "pending";
   // Playwright's application.close() can leave a live Electron main without
   // reaching before-quit (and without a quit receipt). Request the same
@@ -2789,7 +2790,38 @@ async function requestProductQuit(instance) {
         instance.quitRequestStatus = `rejected:${name.replace(/[^A-Za-z]/gu, "").slice(0, 48)}`;
       },
     );
-  await exited;
+  const [code, signal] = await exited;
+  if (code !== 0 || signal !== null) {
+    throw new Error(
+      `E2E_PRODUCT_QUIT_NONZERO_EXIT:${code ?? "null"}:${signal ?? "null"}`,
+    );
+  }
+  const stateRoot = path.join(instance.userData, "farol-next-state");
+  let receipt;
+  try {
+    receipt = JSON.parse(
+      await fs.readFile(path.join(stateRoot, "last-quit.json"), "utf8"),
+    );
+  } catch {
+    throw new Error("E2E_PRODUCT_QUIT_RECEIPT_MISSING");
+  }
+  if (
+    receipt?.schema !== 1 ||
+    typeof receipt.at !== "string" ||
+    !Number.isFinite(Date.parse(receipt.at)) ||
+    Date.parse(receipt.at) < instance.quitRequestAt ||
+    receipt.drained !== true ||
+    !Array.isArray(receipt.unconfirmed) ||
+    receipt.unconfirmed.length !== 0
+  ) {
+    throw new Error("E2E_PRODUCT_QUIT_DRAIN_UNVERIFIED");
+  }
+  const marker = await fs.lstat(path.join(stateRoot, "running.json")).then(
+    () => "retained",
+    (error) => (error?.code === "ENOENT" ? "absent" : "unverified"),
+  );
+  if (marker !== "absent")
+    throw new Error(`E2E_PRODUCT_QUIT_MARKER_${marker.toUpperCase()}`);
 }
 
 async function close(instance, options = {}) {
@@ -2907,7 +2939,7 @@ async function close(instance, options = {}) {
               ),
             )
             .then(
-              () => "present",
+              () => "present-unverified",
               (error) => (error?.code === "ENOENT" ? "absent" : "unverified"),
             ),
         }),
