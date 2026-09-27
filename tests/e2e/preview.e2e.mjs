@@ -1977,6 +1977,13 @@ async function proveSecondLaunchDuringStartup() {
     env: launchEnvironment,
     timeout: 15_000,
   });
+  // Keep only fixed, content-free startup tokens from the primary. A missing
+  // second-instance acknowledgement otherwise hides whether the primary
+  // failed before ready or stayed alive without handling the event.
+  let primaryOutput = "";
+  application.process().stderr?.on("data", (chunk) => {
+    primaryOutput = `${primaryOutput}${String(chunk)}`.slice(-8_192);
+  });
   const instance = {
     application,
     ownedProcessGroup: captureOwnedProcessGroup(application.process().pid),
@@ -2013,8 +2020,28 @@ async function proveSecondLaunchDuringStartup() {
         /FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
           secondLaunchOutput,
         )?.[1] ?? "none";
+      const startupFailure =
+        /FAROL_NEXT_STARTUP_FAILURE:([A-Z][A-Z0-9_]{2,63})/u.exec(
+          primaryOutput,
+        )?.[1] ?? "none";
+      const primaryResult =
+        /FAROL_NEXT_SECOND_INSTANCE_RESULT:([a-z-]+)/u.exec(
+          primaryOutput,
+        )?.[1] ?? "none";
+      const primaryAckFailure =
+        /FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
+          primaryOutput,
+        )?.[1] ?? "none";
+      const runMarker = await fs
+        .stat(path.join(userData, "farol-next-state", "running.json"))
+        .then(() => "present")
+        .catch((error) => (error?.code === "ENOENT" ? "absent" : "unreadable"));
+      phases.note(
+        "startup-second-launch.primary",
+        `pid=${application.process().pid} exit=${application.process().exitCode ?? "running"} marker=${runMarker} result=${primaryResult} startup=${startupFailure} ack=${primaryAckFailure}`,
+      );
       throw new Error(
-        `E2E_STARTUP_SECOND_LAUNCH_RESULT:${secondLaunchResult ?? "missing"}:ack=${acknowledgementCode}`,
+        `E2E_STARTUP_SECOND_LAUNCH_RESULT:${secondLaunchResult ?? "missing"}:ack=${acknowledgementCode}:primary=${primaryResult}:startup=${startupFailure}:marker=${runMarker}`,
       );
     }
     assert.ok(Date.now() - startedAt >= 500, "E2E_STARTUP_REOPEN_DID_NOT_WAIT");
