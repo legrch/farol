@@ -1907,6 +1907,7 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
   );
   return {
     application,
+    ownedProcessGroup: captureOwnedProcessGroup(application.process().pid),
     window,
     isolatedHome,
     isolatedAppData,
@@ -1978,6 +1979,7 @@ async function proveSecondLaunchDuringStartup() {
   });
   const instance = {
     application,
+    ownedProcessGroup: captureOwnedProcessGroup(application.process().pid),
     window: null,
     isolatedHome,
     userData,
@@ -2063,37 +2065,13 @@ async function proveSecondLaunchDuringStartup() {
       await close(instance);
     } else {
       // A failed second-launch acknowledgement can leave the primary alive
-      // before Playwright has a window handle. This is failed-test cleanup,
-      // never a quit proof, and targets only the app this test launched.
-      const child = application.process();
-      const pid = child.pid;
-      assert.ok(Number.isSafeInteger(pid) && pid > 1);
-      phases.note("startup-second-launch.abort-unready", `pid=${pid}`);
-      for (const signal of ["SIGTERM", "SIGKILL"]) {
-        if (child.exitCode !== null || child.signalCode !== null) break;
-        try {
-          process.kill(pid, signal);
-        } catch (signalError) {
-          if (signalError?.code !== "ESRCH") throw signalError;
-        }
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          try {
-            process.kill(pid, 0);
-          } catch (probeError) {
-            if (probeError?.code !== "ESRCH") throw probeError;
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
-        try {
-          process.kill(pid, 0);
-        } catch (probeError) {
-          if (probeError?.code !== "ESRCH") throw probeError;
-          break;
-        }
-      }
-      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
-      await fs.rm(isolatedHome, { recursive: true, force: true });
+      // before Playwright has a window handle. The saved, exact process group
+      // includes its ordinary Electron helpers; losing the primary PID alone
+      // would not prove that they stopped. This is failed-test cleanup, never
+      // a graceful quit proof.
+      await stopOwnedTestGroup(instance, "startup-second-launch.abort-unready");
+      // Keep the disposable profile for diagnosis: a child that deliberately
+      // detached from the group is not proved absent by group disappearance.
     }
   }
 }
@@ -2541,6 +2519,90 @@ async function ifApplicationLive(instance, stage, read) {
   }
 }
 
+function captureOwnedProcessGroup(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 1) return null;
+  const probe = spawnSync("/bin/ps", ["-o", "pgid=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 3_000,
+  });
+  // Never signal an unverified group: it might contain the test runner or an
+  // unrelated process. Electron is expected to be its own group leader.
+  return probe.status === 0 && probe.stdout.trim() === String(pid) ? pid : null;
+}
+
+function ownedGroupAlive(groupId) {
+  try {
+    process.kill(-groupId, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitOwnedGroupGone(groupId) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (!ownedGroupAlive(groupId)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return !ownedGroupAlive(groupId);
+}
+
+async function waitOwnedPidGone(pid) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if (error?.code === "ESRCH") return true;
+    throw error;
+  }
+}
+
+async function stopOwnedTestGroup(instance, label) {
+  const pid = instance.application.process().pid;
+  instance.ownedProcessGroup ??= captureOwnedProcessGroup(pid);
+  const groupId = instance.ownedProcessGroup;
+  if (groupId !== pid || !Number.isSafeInteger(groupId) || groupId <= 1) {
+    evidenceAttempt.recordFailure(
+      "cleanup",
+      `E2E_OWNED_GROUP_UNVERIFIED:${label}`,
+    );
+    // The main PID is still ours; stop it without touching a guessed group.
+    instance.application.process().kill("SIGKILL");
+    throw new Error(`E2E_OWNED_GROUP_UNVERIFIED:${label}`);
+  }
+  phases.note(label, `group=${groupId}`);
+  for (const signal of ["SIGTERM", "SIGKILL"]) {
+    if (!ownedGroupAlive(groupId)) break;
+    try {
+      process.kill(-groupId, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+    }
+    if (await waitOwnedGroupGone(groupId)) break;
+  }
+  assert.equal(
+    ownedGroupAlive(groupId),
+    false,
+    `E2E_OWNED_GROUP_SURVIVED_ABORT:${label}`,
+  );
+  harnessObservations.push({
+    kind: "test-process-cleanup",
+    stage: label,
+    groupCleanup: "confirmed",
+    detachedCleanup: "unverified",
+  });
+}
+
 async function close(instance, options = {}) {
   const removeHome = options.removeHome ?? true;
   const label = `close[${instance.windowMode ?? "unknown"}]`;
@@ -2567,6 +2629,7 @@ async function close(instance, options = {}) {
     }
   }
   const mainPid = instance.application.process().pid;
+  instance.ownedProcessGroup ??= captureOwnedProcessGroup(mainPid);
   const metrics = await phases.step(
     `${label}.utilityMetrics`,
     CLOSE_PHASE_BUDGET_MS,
@@ -2603,11 +2666,35 @@ async function close(instance, options = {}) {
   if (alreadyExited) {
     phases.note(`${label}.applicationAlreadyExited`, `pid=${mainPid}`);
   } else {
-    await phases.step(`${label}.applicationClose`, CLOSE_PHASE_BUDGET_MS, () =>
-      ifApplicationLive(instance, "application-close", () =>
-        instance.application.close(),
-      ),
+    try {
+      await phases.step(
+        `${label}.applicationClose`,
+        CLOSE_PHASE_BUDGET_MS,
+        () =>
+          ifApplicationLive(instance, "application-close", () =>
+            instance.application.close(),
+          ),
+      );
+    } catch (error) {
+      evidenceAttempt.recordFailure(
+        "close",
+        String(error?.message ?? error).split("\n", 1)[0],
+      );
+      await stopOwnedTestGroup(instance, `${label}.abort-stalled-close`);
+      throw error;
+    }
+  }
+  const groupId = instance.ownedProcessGroup;
+  if (groupId !== mainPid || !Number.isSafeInteger(groupId)) {
+    evidenceAttempt.recordFailure(
+      "cleanup",
+      `E2E_OWNED_GROUP_UNVERIFIED:${label}`,
     );
+    throw new Error(`E2E_OWNED_GROUP_UNVERIFIED:${label}`);
+  }
+  const groupSurvivedQuit = !(await waitOwnedGroupGone(groupId));
+  if (groupSurvivedQuit) {
+    await stopOwnedTestGroup(instance, `${label}.abort-surviving-group`);
   }
   const exactPids = [mainPid, ...utilityPids].filter(
     (pid) => Number.isSafeInteger(pid) && pid > 0,
@@ -2626,7 +2713,33 @@ async function close(instance, options = {}) {
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.equal(alive, false, `E2E_OWNED_PROCESS_SURVIVED_QUIT:${pid}`);
+    if (alive) {
+      evidenceAttempt.recordFailure(
+        "cleanup",
+        `E2E_OWNED_PROCESS_SURVIVED_QUIT:${pid}`,
+      );
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+      assert.equal(
+        await waitOwnedPidGone(pid),
+        true,
+        `E2E_OWNED_PROCESS_SURVIVED_ABORT:${pid}`,
+      );
+      throw new Error(`E2E_OWNED_PROCESS_SURVIVED_QUIT:${pid}`);
+    }
+  }
+  if (groupSurvivedQuit) {
+    throw new Error(`E2E_OWNED_GROUP_SURVIVED_QUIT:${groupId}`);
+  }
+  if (metrics === null) {
+    evidenceAttempt.recordFailure(
+      "cleanup",
+      `E2E_UTILITY_IDENTITIES_UNAVAILABLE:${label}`,
+    );
+    throw new Error(`E2E_UTILITY_IDENTITIES_UNAVAILABLE:${label}`);
   }
   // An application that had already exited leaves no processes behind either,
   // so its dead pids are not proof that quitting terminated them.
@@ -2658,6 +2771,9 @@ async function restart(instance) {
         timeout: 15_000,
       }),
     { dispose: (late) => late.close() },
+  );
+  instance.ownedProcessGroup = captureOwnedProcessGroup(
+    instance.application.process().pid,
   );
   instance.window = await phases.step(
     `${label}.firstWindow`,
