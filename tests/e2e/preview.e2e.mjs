@@ -9296,16 +9296,14 @@ ux34SettingsWidthsSegment: {
     const unbreakableTunnel = `tunnel_${"0".repeat(153)}`;
     assert.equal(unbreakableName.length, 80);
     assert.equal(unbreakableTunnel.length, 160);
+    const renamedComputer = await settingsWidths.window.evaluate(
+      (name) => window.farolNext.configure({ kind: "computer.rename", name }),
+      unbreakableName,
+    );
     assert.equal(
-      await settingsWidths.window
-        .evaluate(
-          (name) =>
-            window.farolNext.configure({ kind: "computer.rename", name }),
-          unbreakableName,
-        )
-        .then((result) => result.ok),
+      renamedComputer.ok,
       true,
-      "the contract's longest computer name is accepted",
+      `the contract's longest computer name is accepted: ${renamedComputer.ok ? "ok" : renamedComputer.error}`,
     );
     await settingsWidths.window.locator('[data-section="settings"]').click();
     await settingsWidths.window.waitForFunction(
