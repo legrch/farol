@@ -69,8 +69,16 @@ returns an owned handle. `computer_shell_read` pages stdout/stderr by byte
 offset, includes exact base64 bytes, and reports real exit code or signal.
 `computer_shell_cancel` asks the command's watchdog to send TERM then KILL to
 its process group. The watchdog also enforces the deadline and stops its group
-when its MCP control channel disappears. Output over 4 MiB terminates the
-command. A private fsynced pre-effect reservation
+when its MCP control channel disappears. The handle does not become terminal
+when the watchdog merely sends a signal: `groupCleanup` remains `pending` until
+the watchdog exits and its group is observed absent, or becomes `unverified`
+if that cannot be proved (`SHELL_GROUP_CLEANUP_UNVERIFIED`). `exitCode` and
+`exitSignal` describe the root command.
+`detachedCleanup` remains `unverified` even when the group is gone: a child can
+call `setsid()`, leave the group, and outlive cancellation. The native
+`fork`/`setsid` regression proves this gap without pretending the group check
+is full tree cleanup. Output over 4 MiB terminates the command. A private
+fsynced pre-effect reservation
 means a duplicate operation ID after MCP process loss returns
 `SHELL_OUTCOME_UNKNOWN`; it does not re-run the command. A same-process
 duplicate returns the original handle. Completed output retention is bounded;

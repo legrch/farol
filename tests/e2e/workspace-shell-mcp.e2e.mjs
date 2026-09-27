@@ -182,6 +182,8 @@ try {
       started.structuredContent.value.handle,
     );
     assert.equal(result.exitCode, 0, result.stderr);
+    assert.equal(result.groupCleanup, "confirmed");
+    assert.equal(result.detachedCleanup, "unverified");
     assert.equal(result.stdout, "source\n");
     assert.equal(
       await fs.readFile(path.join(workspaceRoot, "created.txt"), "utf8"),

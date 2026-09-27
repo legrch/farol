@@ -41,6 +41,8 @@ export type ShellRead = Readonly<{
 export type ShellOutcome = Readonly<{
   handle: string;
   state: "running" | "exited";
+  groupCleanup: "pending" | "confirmed" | "unverified";
+  detachedCleanup: "unverified";
   exitCode: number | null;
   exitSignal: NodeJS.Signals | null;
   stdout: string;
@@ -59,6 +61,7 @@ export type ShellOutcome = Readonly<{
     | "SHELL_SPAWN_FAILED"
     | "SHELL_SANDBOX_UNAVAILABLE"
     | "SHELL_WATCHDOG_LOST"
+    | "SHELL_GROUP_CLEANUP_UNVERIFIED"
     | null;
 }>;
 
@@ -73,6 +76,8 @@ type RunningCommand = {
   stdoutBytes: number;
   stderrBytes: number;
   state: "running" | "exited";
+  rootExitReported: boolean;
+  groupCleanup: "pending" | "confirmed" | "unverified";
   exitCode: number | null;
   exitSignal: NodeJS.Signals | null;
   outputLimitReached: boolean;
@@ -83,6 +88,7 @@ type RunningCommand = {
     | "SHELL_SPAWN_FAILED"
     | "SHELL_SANDBOX_UNAVAILABLE"
     | "SHELL_WATCHDOG_LOST"
+    | "SHELL_GROUP_CLEANUP_UNVERIFIED"
     | null;
   scratch: string;
 };
@@ -376,8 +382,13 @@ export class SandboxedWorkspaceShell {
     return {
       handle: record.handle,
       state: record.state,
-      exitCode: record.exitCode,
-      exitSignal: record.exitSignal,
+      groupCleanup: record.groupCleanup,
+      // A child can call setsid(), leave the watchdog's process group and
+      // close its inherited pipes. Group disappearance cannot prove that such
+      // a descendant has exited.
+      detachedCleanup: "unverified",
+      exitCode: record.state === "exited" ? record.exitCode : null,
+      exitSignal: record.state === "exited" ? record.exitSignal : null,
       stdout: stdout.toString("utf8"),
       stderr: stderr.toString("utf8"),
       stdoutBase64: stdout.toString("base64"),
@@ -572,6 +583,8 @@ export class SandboxedWorkspaceShell {
       stdoutBytes: 0,
       stderrBytes: 0,
       state: "running",
+      rootExitReported: false,
+      groupCleanup: "pending",
       exitCode: null,
       exitSignal: null,
       outputLimitReached: false,
@@ -626,7 +639,7 @@ export class SandboxedWorkspaceShell {
       } else if (event.type === "output-limit") {
         record.outputLimitReached = true;
       } else if (event.type === "close") {
-        record.state = "exited";
+        record.rootExitReported = true;
         record.exitCode = event.code ?? null;
         record.exitSignal = event.signal ?? null;
         if (event.reason === "backpressure" || event.reason === "output-limit")
@@ -642,23 +655,50 @@ export class SandboxedWorkspaceShell {
     });
     child.once("error", () => {
       record.state = "exited";
+      record.groupCleanup = "unverified";
       record.exitSignal = null;
       record.errorCode = "SHELL_SPAWN_FAILED";
     });
     child.once("exit", () => {
-      if (record.state === "running") {
+      if (!record.rootExitReported && record.state === "running") {
         try {
           process.kill(-child.pid!, "SIGKILL");
         } catch {
           // The detached watchdog's group is already gone.
         }
-        record.state = "exited";
         record.errorCode = "SHELL_WATCHDOG_LOST";
       }
-      this.completed(record);
-      void fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
+      void (async () => {
+        // An exit notification for the watchdog proves only that the leader
+        // exited. Do not report a terminal handle until the owned group is
+        // gone, or its cleanup has been classified as unverified.
+        if (child.pid) {
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            try {
+              process.kill(-child.pid, 0);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+                record.groupCleanup = "confirmed";
+              }
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+        if (record.groupCleanup === "pending") {
+          record.groupCleanup = "unverified";
+        }
+        if (record.groupCleanup === "unverified") {
+          record.errorCode ??= "SHELL_GROUP_CLEANUP_UNVERIFIED";
+        }
+        record.state = "exited";
+        this.completed(record);
+        if (record.groupCleanup === "confirmed") {
+          await fs
+            .rm(scratch, { recursive: true, force: true })
+            .catch(() => undefined);
+        }
+      })();
     });
     const authorityRemaining =
       Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) -

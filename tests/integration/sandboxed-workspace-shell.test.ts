@@ -532,6 +532,134 @@ describe.skipIf(process.platform !== "darwin")(
       const result = await complete(shell, started.value.handle);
       expect(result.cancelRequested).toBe(true);
       expect(result.exitSignal).toBe("SIGTERM");
+      expect(result.groupCleanup).toBe("confirmed");
+      expect(result.detachedCleanup).toBe("unverified");
+    });
+
+    it("does not report cleanup while a detached descendant still runs", async () => {
+      const { workspace, shell } = await fixture();
+      const source = path.join(workspace, "detach-helper.c");
+      const binary = path.join(workspace, "detach-helper");
+      await fs.writeFile(
+        source,
+        [
+          "#include <unistd.h>",
+          "#include <fcntl.h>",
+          "#include <stdio.h>",
+          "#include <sys/types.h>",
+          "int main(void) {",
+          "  int gate[2]; if (pipe(gate) != 0) return 2;",
+          "  pid_t child = fork(); if (child < 0) return 3;",
+          "  if (child > 0) {",
+          "    close(gate[0]);",
+          '    FILE *file = fopen("detached.pid", "w");',
+          "    if (!file) return 4;",
+          '    fprintf(file, "%d", child);',
+          "    if (fclose(file) != 0) return 5;",
+          '    if (write(gate[1], "1", 1) != 1) return 6;',
+          "    close(gate[1]); sleep(20); return 0;",
+          "  }",
+          "  close(gate[1]); char ready = 0;",
+          "  if (read(gate[0], &ready, 1) != 1 || ready != '1') _exit(7);",
+          "  close(gate[0]); if (setsid() < 0) _exit(8);",
+          '  int nullfd = open("/dev/null", O_RDWR);',
+          "  if (nullfd < 0) _exit(9);",
+          "  for (int fd = 0; fd < 3; fd++) dup2(nullfd, fd);",
+          "  close(nullfd); sleep(20); _exit(0);",
+          "}",
+        ].join("\n"),
+      );
+      execFileSync("/usr/bin/clang", ["-O0", "-o", binary, source]);
+      let escapedPid: number | null = null;
+      try {
+        const started = await shell.start({
+          operationId: "detached-cleanup",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "./detach-helper",
+          timeoutMs: 30_000,
+          write: true,
+        });
+        if (!started.ok) throw new Error(started.error.code);
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          const value = await fs
+            .readFile(path.join(workspace, "detached.pid"), "utf8")
+            .catch(() => null);
+          if (value && /^[0-9]+$/u.test(value)) {
+            escapedPid = Number(value);
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (escapedPid === null) {
+          throw new Error(
+            `DETACHED_CHILD_NOT_STARTED:${JSON.stringify(
+              shell.read({
+                handle: started.value.handle,
+                stdoutOffset: 0,
+                stderrOffset: 0,
+              }),
+            )}`,
+          );
+        }
+        shell.cancel(started.value.handle);
+        const pending = shell.read({
+          handle: started.value.handle,
+          stdoutOffset: 0,
+          stderrOffset: 0,
+        });
+        expect(pending).toMatchObject({
+          ok: true,
+          value: { groupCleanup: "pending", detachedCleanup: "unverified" },
+        });
+        let outcome;
+        try {
+          outcome = await complete(shell, started.value.handle);
+        } catch {
+          let childAlive = false;
+          try {
+            process.kill(escapedPid, 0);
+            childAlive = true;
+          } catch {
+            // Child has exited.
+          }
+          throw new Error(
+            `DETACHED_CANCEL_UNCONFIRMED:${childAlive}:${JSON.stringify(
+              shell.read({
+                handle: started.value.handle,
+                stdoutOffset: 0,
+                stderrOffset: 0,
+              }),
+            )}`,
+          );
+        }
+        expect(outcome.groupCleanup).toBe("confirmed");
+        expect(outcome.detachedCleanup).toBe("unverified");
+        expect(() => process.kill(escapedPid!, 0)).not.toThrow();
+      } finally {
+        if (escapedPid !== null) {
+          try {
+            process.kill(escapedPid, "SIGKILL");
+          } catch {
+            // The child has already exited.
+          }
+          let stopped = false;
+          for (let attempt = 0; attempt < 250; attempt += 1) {
+            try {
+              process.kill(escapedPid, 0);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+                stopped = true;
+                break;
+              }
+              throw error;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+          if (!stopped)
+            throw new Error("DETACHED_TEST_CHILD_CLEANUP_UNCONFIRMED");
+        }
+      }
     });
 
     it("can inspect its own shell process with lsof", async () => {
@@ -550,7 +678,7 @@ describe.skipIf(process.platform !== "darwin")(
       expect(result.stdout).toMatch(/^p[0-9]+/u);
     });
 
-    it("enforces the deadline from the watchdog and limits concurrent starts", async () => {
+    it("limits concurrent starts while four commands are still active", async () => {
       const { shell } = await fixture();
       const handles: string[] = [];
       for (let index = 0; index < 4; index += 1) {
@@ -559,7 +687,7 @@ describe.skipIf(process.platform !== "darwin")(
           workspaceId: "fixture",
           relativeCwd: ".",
           command: "sleep 20",
-          timeoutMs: index === 0 ? 100 : 30_000,
+          timeoutMs: 30_000,
           write: false,
         });
         if (!started.ok) throw new Error(started.error.code);
@@ -575,13 +703,55 @@ describe.skipIf(process.platform !== "darwin")(
           write: false,
         }),
       ).toMatchObject({ ok: false, error: { code: "SHELL_BUSY" } });
-      const timed = await complete(shell, handles[0]!);
-      expect(timed.timedOut).toBe(true);
-      expect(timed.exitSignal).toBe("SIGTERM");
-      for (const handle of handles.slice(1)) shell.cancel(handle);
-      for (const handle of handles.slice(1)) {
-        expect((await complete(shell, handle)).cancelRequested).toBe(true);
+      for (const handle of handles) shell.cancel(handle);
+      for (const handle of handles) {
+        const outcome = await complete(shell, handle);
+        expect(outcome.cancelRequested).toBe(true);
+        expect(outcome.groupCleanup).toBe("confirmed");
       }
+    });
+
+    it("enforces a command deadline and reports the actual signal", async () => {
+      const { shell } = await fixture();
+      const started = await shell.start({
+        operationId: "command-deadline",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: "sleep 20",
+        timeoutMs: 100,
+        write: false,
+      });
+      if (!started.ok) throw new Error(started.error.code);
+      const timed = await complete(shell, started.value.handle);
+      expect(timed.timedOut).toBe(true);
+      expect(timed.authorityExpired).toBe(false);
+      expect(timed.exitSignal).toBe("SIGTERM");
+      expect(timed.groupCleanup).toBe("confirmed");
+    });
+
+    it("classifies an authority deadline separately from a command timeout", async () => {
+      const { root, approval, participant } = await fixture();
+      const almostExpired = new SandboxedWorkspaceShell(
+        approval,
+        participant,
+        binding,
+        path.join(root, "authority-deadline-private"),
+        () => Date.now() + 59_800,
+      );
+      shells.push(almostExpired);
+      const started = await almostExpired.start({
+        operationId: "authority-deadline",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: "sleep 20",
+        timeoutMs: 30_000,
+        write: false,
+      });
+      if (!started.ok) throw new Error(started.error.code);
+      const outcome = await complete(almostExpired, started.value.handle);
+      expect(outcome.authorityExpired).toBe(true);
+      expect(outcome.timedOut).toBe(false);
+      expect(outcome.groupCleanup).toBe("confirmed");
     });
 
     it("bounds a fast producer before IPC output can grow without limit", async () => {

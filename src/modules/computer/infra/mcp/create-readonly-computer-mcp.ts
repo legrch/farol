@@ -867,7 +867,7 @@ export function createReadonlyComputerMcpServer(
       {
         title: "Read a workspace command result",
         description:
-          "Read bounded stdout/stderr from one owned handle using byte offsets; includes actual exit code or signal when the process is finished.",
+          "Read bounded stdout/stderr and the root command's actual exit code or signal. groupCleanup confirms only the owned process group; detachedCleanup remains unverified.",
         inputSchema: ShellReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
@@ -878,7 +878,7 @@ export function createReadonlyComputerMcpServer(
       {
         title: "Cancel an owned workspace command",
         description:
-          "Signal only the process group belonging to the supplied command handle.",
+          "Request TERM then KILL for the supplied command's process group. Read the handle for actual exit and group-cleanup status; detached descendants are not covered.",
         inputSchema: ShellCancelInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
