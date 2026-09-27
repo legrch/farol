@@ -9753,7 +9753,6 @@ function ownedProcessFingerprint(application) {
 const heldFalseFence = await launch([], "hidden", "ordinary", {
   seedUnheldExecutionFence: true,
 });
-let unheldFenceConfirmed = false;
 let unheldFenceFailure = null;
 fenceUnheldSegment: try {
   if (!segmentSelected("fence-unheld")) break fenceUnheldSegment;
@@ -9761,7 +9760,6 @@ fenceUnheldSegment: try {
   assert.equal(recovery.status, "kept");
   assert.equal(recovery.code, "EXECUTION_FENCE_UNRECONCILED");
   assert.equal(recovery.held, false);
-  unheldFenceConfirmed = true;
 
   const processesBeforeStart = await ownedProcessFingerprint(
     heldFalseFence.application,
@@ -9808,7 +9806,10 @@ fenceUnheldSegment: try {
 } finally {
   try {
     await close(heldFalseFence, {
-      expectedUnconfirmed: unheldFenceConfirmed ? ["connector"] : null,
+      // The fixture seeds a malformed execution fence even when a selected
+      // lane skips its assertions. Teardown still expects the fail-closed
+      // connector result and preserves any earlier assertion failure.
+      expectedUnconfirmed: ["connector"],
     });
   } catch (cleanupError) {
     if (unheldFenceFailure) {

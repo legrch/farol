@@ -339,6 +339,76 @@ describe("workspace shell authority", () => {
       fs.stat(path.join(workspace, "late.txt")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it.each(["abort", "close", "expire"] as const)(
+    "rechecks %s after asynchronous dispatch reservation before spawning",
+    async (change) => {
+      const { root, workspace, approval, participant } = await fixture();
+      const privateRoot = path.join(root, `reservation-${change}-private`);
+      let now = Date.now();
+      const guarded = new SandboxedWorkspaceShell(
+        approval,
+        participant,
+        binding,
+        privateRoot,
+        () => now,
+      );
+      shells.push(guarded);
+      const controller = new AbortController();
+      let releaseReservation!: () => void;
+      let reachedReservation!: () => void;
+      const reservation = new Promise<void>((resolve) => {
+        releaseReservation = resolve;
+      });
+      const reached = new Promise<void>((resolve) => {
+        reachedReservation = resolve;
+      });
+      const input = {
+        operationId: `reservation-${change}`,
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: `printf forbidden > reservation-${change}.txt`,
+        timeoutMs: 5_000,
+        write: true,
+      };
+      const starting = guarded.start(
+        input,
+        controller.signal,
+        undefined,
+        undefined,
+        async () => {
+          reachedReservation();
+          await reservation;
+        },
+      );
+      await reached;
+      if (change === "abort") controller.abort();
+      if (change === "close") guarded.close();
+      if (change === "expire") now = approval.expiresAt + 1;
+      releaseReservation();
+      expect(await starting).toMatchObject({
+        ok: false,
+        error: {
+          code:
+            change === "expire" ? "AUTHORITY_EXPIRED" : "SHELL_OUTCOME_UNKNOWN",
+        },
+      });
+      const reopened = new SandboxedWorkspaceShell(
+        approval,
+        participant,
+        binding,
+        privateRoot,
+      );
+      shells.push(reopened);
+      expect(await reopened.start(input)).toMatchObject({
+        ok: false,
+        error: { code: "SHELL_OUTCOME_UNKNOWN" },
+      });
+      await expect(
+        fs.stat(path.join(workspace, `reservation-${change}.txt`)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
   it("refuses commands when command authority is off", async () => {
     const { shell } = await fixture("none");
     const result = await shell.start({

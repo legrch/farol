@@ -652,6 +652,23 @@ export class SandboxedWorkspaceShell {
         return abandonReserved("SHELL_DISPATCH_FENCED");
       }
     }
+    // The reservation can wait while the caller aborts, the connector closes,
+    // or authority expires. No await may separate this final check and spawn.
+    if (this.closing || signal?.aborted) {
+      return abandonReserved("SHELL_OUTCOME_UNKNOWN");
+    }
+    const finalAuthority = this.authorize(
+      input.workspaceId,
+      verified.cwd,
+      input.write,
+    );
+    if (finalAuthority) return abandonReserved(finalAuthority);
+    if (
+      Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) <=
+      this.now()
+    ) {
+      return abandonReserved("SHELL_AUTHORITY_EXPIRED");
+    }
     const child = spawn(process.execPath, ["-e", SHELL_WATCHDOG_SOURCE], {
       cwd: verified.cwd,
       env: { ELECTRON_RUN_AS_NODE: "1" },
