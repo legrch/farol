@@ -248,6 +248,68 @@ describe("saved ChatGPT handoff intent and replay", () => {
     }
   });
 
+  it("keeps failed or thrown local publication unknown at every pre-effect boundary", async () => {
+    {
+      const state = await fixture();
+      state.setReadiness("sign_in_required");
+      const journal = withJournalFault(state.journal, {
+        recordRefused: async () => false,
+      });
+      expect(await state.service(journal).create(state.request)).toMatchObject({
+        status: "outcome_unknown",
+      });
+      expect(state.calls).toEqual(["prepare"]);
+    }
+    {
+      const state = await fixture();
+      const journal = withJournalFault(state.journal, {
+        markSendIntent: async () => {
+          throw new Error("LOCAL_ACK_LOST");
+        },
+      });
+      expect(await state.service(journal).create(state.request)).toMatchObject({
+        status: "outcome_unknown",
+      });
+      expect(state.calls).toEqual(["prepare"]);
+    }
+    {
+      const state = await fixture();
+      const journal = withJournalFault(state.journal, {
+        recordCandidate: async () => {
+          throw new Error("LOCAL_ACK_LOST");
+        },
+      });
+      expect(await state.service(journal).create(state.request)).toMatchObject({
+        status: "outcome_unknown",
+      });
+      expect(state.calls).toEqual(["prepare", "send"]);
+    }
+  });
+
+  it("refuses to reopen an untrusted recorded URL without browser navigation", async () => {
+    const state = await fixture();
+    const digest = digester.requestDigest({
+      ...state.request,
+      firstMessage: "Hello\nworld",
+    });
+    const journal = withJournalFault(state.journal, {
+      read: async () => ({
+        requestDigest: digest,
+        firstMessageDigest: digester.digest("Hello\nworld"),
+        requestedTitleDigest: digester.digest(state.request.title),
+        phase: "candidate",
+        conversationUrl: `${url}?share=1`,
+      }),
+    });
+    expect(
+      await state.service(journal).status(state.request.key, true),
+    ).toEqual({
+      status: "outcome_unknown",
+      dispatchId: state.request.key,
+    });
+    expect(state.calls).toEqual([]);
+  });
+
   it("rejects an invalid digest before any browser or journal effect", async () => {
     const state = await fixture();
     const invalid = new (class extends Sha256SavedChatDigester {
