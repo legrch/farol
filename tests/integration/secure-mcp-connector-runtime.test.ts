@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   SecureMcpConnectorRuntime,
+  observedConnectorChild,
   type ConnectorChild,
   type ConnectorCommand,
   type ConnectorCommandRunner,
@@ -73,6 +76,43 @@ function option(command: ConnectorCommand, name: string): string {
 }
 
 describe("secure MCP connector runtime", () => {
+  it("does not mistake a child error for process exit", async () => {
+    const events = new EventEmitter();
+    const child = Object.assign(events, {
+      pid: 4325,
+      exitCode: null,
+      signalCode: null,
+      kill: () => false,
+    }) as unknown as ChildProcess;
+    const observed = observedConnectorChild(child);
+    const waiting = observed.waitForExit(1_000);
+    events.emit("error", new Error("signal delivery failed"));
+    expect(await waiting).toBe(false);
+    expect(observed.exitCode).toBeNull();
+  });
+
+  it("classifies asynchronous spawn failure without crashing desktop", async () => {
+    const selected = await fixture();
+    const runtime = new SecureMcpConnectorRuntime({
+      root: selected.runtimeRoot,
+      homePath: selected.root,
+      tempPath: selected.root,
+    });
+    const result = await runtime.start({
+      executablePath: path.join(selected.root, "not-installed"),
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    });
+    expect(result).toMatchObject({
+      state: "unreachable",
+      code: "CONNECTOR_START_FAILED",
+    });
+    expect(runtime.isRunning()).toBe(false);
+  });
+
   it("configures, diagnoses, starts, proves ready, and stops one owned daemon", async () => {
     const selected = await fixture();
     const run = vi.fn<ConnectorCommandRunner>(async () => ({

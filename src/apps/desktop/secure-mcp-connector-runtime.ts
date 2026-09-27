@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -146,13 +146,10 @@ const runCommand: ConnectorCommandRunner = async (command) =>
     );
   });
 
-const startProcess: ConnectorProcessStarter = async (command) => {
-  const child = spawn(command.executablePath, [...command.arguments], {
-    cwd: command.cwd,
-    env: { ...command.environment },
-    stdio: "ignore",
-    windowsHide: true,
-  });
+export function observedConnectorChild(child: ChildProcess): ConnectorChild {
+  // A failed signal can emit `error` without `exit`. Keep a listener for the
+  // entire process lifetime, but never classify that event as confirmed exit.
+  child.on("error", () => undefined);
   return {
     pid: child.pid,
     get exitCode() {
@@ -172,13 +169,36 @@ const startProcess: ConnectorProcessStarter = async (command) => {
           resolve(value);
         };
         const exited = () => finish(true);
-        const failed = () => finish(true);
+        const failed = () => finish(false);
         const timer = setTimeout(() => finish(false), timeoutMs);
         child.once("exit", exited);
         child.once("error", failed);
       });
     },
   };
+}
+
+const startProcess: ConnectorProcessStarter = async (command) => {
+  const child = spawn(command.executablePath, [...command.arguments], {
+    cwd: command.cwd,
+    env: { ...command.environment },
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  const observed = observedConnectorChild(child);
+  await new Promise<void>((resolve, reject) => {
+    const spawned = () => {
+      child.off("error", failed);
+      resolve();
+    };
+    const failed = (error: Error) => {
+      child.off("spawn", spawned);
+      reject(error);
+    };
+    child.once("spawn", spawned);
+    child.once("error", failed);
+  });
+  return observed;
 };
 
 const getReady = async (url: string): Promise<boolean> => {
