@@ -10,6 +10,7 @@ import {
   type HandoffAuthority,
   type HandoffHost,
   type HandoffJournal,
+  type HandoffRecord,
   type HandoffRequest,
   type HandoffWorkspace,
 } from "../../src/modules/chat/app/service/persistent-codex-handoff";
@@ -227,7 +228,137 @@ async function fixture(host = new FixtureHost()) {
   };
 }
 
+function byteBudgetFixture() {
+  let authorityCalls = 0;
+  let journalCalls = 0;
+  let record: HandoffRecord | null = null;
+  const hostCalls: string[] = [];
+  let forwardedMessage: string | null = null;
+  const journal: HandoffJournal = {
+    async read() {
+      journalCalls += 1;
+      return record;
+    },
+    async reserve(_key, value) {
+      journalCalls += 1;
+      record ??= value;
+      return record;
+    },
+    async claimThread() {
+      journalCalls += 1;
+      if (!record || record.threadIntent) return false;
+      record = { ...record, threadIntent: true };
+      return true;
+    },
+    async recordThread(_key, threadId) {
+      journalCalls += 1;
+      if (!record) throw new Error("MISSING_RECORD");
+      record = { ...record, threadId };
+    },
+    async claimTurn() {
+      journalCalls += 1;
+      if (!record || record.turnIntent) return false;
+      record = { ...record, turnIntent: true };
+      return true;
+    },
+    async recordTurn(_key, turnId) {
+      journalCalls += 1;
+      if (!record) throw new Error("MISSING_RECORD");
+      record = { ...record, turnId };
+    },
+  };
+  const host: HandoffHost = {
+    async request(method, params) {
+      hostCalls.push(method);
+      if (method === "project/list")
+        return {
+          data: [
+            {
+              id: request.projectId,
+              roots: [{ path: workspace.project.root }],
+            },
+          ],
+          nextCursor: null,
+        };
+      if (method === "thread/start")
+        return {
+          cwd: workspace.root,
+          model: request.model,
+          approvalPolicy: workspace.execution.approvalPolicy,
+          sandbox: { type: "workspaceWrite" },
+          thread: { id: "issued-thread", projectId: request.projectId },
+        };
+      if (method === "turn/start") {
+        forwardedMessage = (params as { input: [{ text: string }] }).input[0]
+          .text;
+        return { turn: { id: "issued-turn", status: "inProgress" } };
+      }
+      throw new Error(`UNEXPECTED_METHOD:${method}`);
+    },
+  };
+  const service = new PersistentCodexHandoff(
+    {
+      async resolve() {
+        authorityCalls += 1;
+        return workspace;
+      },
+    },
+    host,
+    journal,
+    new Sha256HandoffRequestDigester(),
+  );
+  return {
+    service,
+    counts: () => ({ authorityCalls, journalCalls, hostCalls }),
+    forwarded: () => forwardedMessage,
+  };
+}
+
 describe("persistent Codex handoff core", () => {
+  it("refuses invalid UTF-8 byte budgets before authority, journal or host access", async () => {
+    for (const message of [
+      "",
+      "with\0nul",
+      "a".repeat(8_193),
+      "я".repeat(4_097),
+      "😀".repeat(2_049),
+    ]) {
+      const fixture = byteBudgetFixture();
+      expect(await fixture.service.create({ ...request, message })).toEqual({
+        status: "refused",
+        code: "HANDOFF_INPUT_INVALID",
+      });
+      expect(fixture.counts()).toEqual({
+        authorityCalls: 0,
+        journalCalls: 0,
+        hostCalls: [],
+      });
+      expect(fixture.forwarded()).toBeNull();
+    }
+  });
+
+  it("forwards exact at-budget ASCII, Cyrillic, emoji and formatted messages", async () => {
+    for (const message of [
+      "a".repeat(8_192),
+      "я".repeat(4_096),
+      "😀".repeat(2_048),
+      "  line one\r\nline two  ",
+    ]) {
+      const fixture = byteBudgetFixture();
+      expect(
+        await fixture.service.create({ ...request, message }),
+      ).toMatchObject({
+        status: "dispatched",
+        dispatchId: request.key,
+      });
+      expect(fixture.counts().hostCalls).toEqual([
+        "project/list",
+        "thread/start",
+        "turn/start",
+      ]);
+      expect(fixture.forwarded()).toBe(message);
+    }
+  });
   it("reads only the issued turn's exact terminal answer without starting work", async () => {
     const { host, service } = await fixture();
     await service().create(request);

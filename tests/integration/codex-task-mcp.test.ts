@@ -44,6 +44,82 @@ async function connected(route?: CodexTaskRoute) {
 }
 
 describe("Codex task Computer MCP surface", () => {
+  it("validates UTF-8 bytes and NUL before dispatching through the real MCP route", async () => {
+    const forwarded: string[] = [];
+    const route: CodexTaskRoute = {
+      async create(input) {
+        forwarded.push(input.message);
+        return {
+          status: "dispatched",
+          dispatchId: input.key,
+          threadId: "private-thread",
+          turnId: "private-turn",
+        };
+      },
+      async status() {
+        throw new Error("unexpected status");
+      },
+      async result() {
+        throw new Error("unexpected result");
+      },
+    };
+    const { client, server } = await connected(route);
+    const create = (message: string) =>
+      client.callTool({
+        name: "codex_task_create",
+        arguments: {
+          key,
+          workspaceId: "writer",
+          projectId: "saved-project",
+          message,
+          model: "gpt-6-luna",
+          reasoningEffort: "medium",
+        },
+      });
+    try {
+      const advertised = (await client.listTools()).tools.find(
+        (tool) => tool.name === "codex_task_create",
+      );
+      expect(advertised?.inputSchema).toMatchObject({
+        properties: { message: { minLength: 1, maxLength: 8_192 } },
+      });
+      expect(advertised?.description).toContain("8,192 UTF-8 bytes");
+      for (const message of [
+        "",
+        "with\0nul",
+        "a".repeat(8_193),
+        "я".repeat(4_097),
+        "😀".repeat(2_049),
+      ]) {
+        const rejected = await create(message);
+        expect(rejected.isError).toBe(true);
+        expect(forwarded).toEqual([]);
+      }
+      for (const message of [
+        "a".repeat(8_192),
+        "я".repeat(4_096),
+        "😀".repeat(2_048),
+        "  line one\r\nline two  ",
+      ]) {
+        const accepted = await create(message);
+        expect(accepted.isError).not.toBe(true);
+        expect(accepted.structuredContent).toEqual({
+          status: "dispatched",
+          dispatchId: key,
+        });
+      }
+      expect(forwarded).toEqual([
+        "a".repeat(8_192),
+        "я".repeat(4_096),
+        "😀".repeat(2_048),
+        "  line one\r\nline two  ",
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("does not advertise tasks with only a Computer folder grant", async () => {
     const { client, server } = await connected();
     try {

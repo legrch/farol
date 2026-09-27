@@ -115,7 +115,7 @@ function validRequest(request: HandoffRequest): boolean {
     identifier(request.workspaceId) &&
     identifier(request.projectId) &&
     request.message.length > 0 &&
-    request.message.length <= 8_192 &&
+    new TextEncoder().encode(request.message).byteLength <= 8_192 &&
     !request.message.includes("\0") &&
     /^[A-Za-z0-9_.\/-]{1,120}$/u.test(request.model) &&
     /^[A-Za-z0-9_-]{1,40}$/u.test(request.reasoningEffort)
