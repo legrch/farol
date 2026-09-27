@@ -541,6 +541,7 @@ export class PersistentCodexHandoff {
         record.turnId !== request.turnId
       )
         return unknown;
+      if (!(await this.adoptedReadStillAllowed(record))) return unknown;
       return { status: "adopted" as const, dispatchId: request.turnId };
     } catch {
       // The operation is local and read-only to the provider. An uncertain
@@ -1254,7 +1255,7 @@ export class PersistentCodexHandoff {
           .map(object)
           .find((item) => item?.id === record.turnId);
         if (match && typeof match.status === "string") {
-          if (record.adopted && this.now() >= this.mutationExpiresAt)
+          if (record.adopted && !(await this.adoptedReadStillAllowed(record)))
             return { status: "outcome_unknown", dispatchId };
           return {
             status: "known",
@@ -1282,6 +1283,17 @@ export class PersistentCodexHandoff {
   async result(dispatchId: string): Promise<HandoffResult> {
     const status = await this.status(dispatchId);
     if (status.status !== "known") return status;
+    let record: HandoffRecord | null;
+    try {
+      record = await this.journal.read(dispatchId);
+      if (
+        !record ||
+        (record.adopted && !(await this.adoptedReadStillAllowed(record)))
+      )
+        return { status: "outcome_unknown", dispatchId };
+    } catch {
+      return { status: "outcome_unknown", dispatchId };
+    }
     const identity = {
       dispatchId,
       threadId: status.threadId,
@@ -1341,11 +1353,8 @@ export class PersistentCodexHandoff {
           }
         }
         if (response.nextCursor === null) {
-          if (this.now() >= this.mutationExpiresAt) {
-            const record = await this.journal.read(dispatchId);
-            if (record?.adopted)
-              return { status: "outcome_unknown", dispatchId };
-          }
+          if (record.adopted && !(await this.adoptedReadStillAllowed(record)))
+            return { status: "outcome_unknown", dispatchId };
           return final
             ? {
                 status: "completed",
@@ -1369,6 +1378,23 @@ export class PersistentCodexHandoff {
       // Result reads never create a replacement task or a model turn.
     }
     return { status: "outcome_unknown", dispatchId };
+  }
+
+  private async adoptedReadStillAllowed(
+    record: HandoffRecord,
+  ): Promise<boolean> {
+    if (
+      record.adopted !== true ||
+      record.threadId !== this.selectedOwnerThreadId ||
+      this.now() >= this.mutationExpiresAt
+    )
+      return false;
+    const current = await this.authority.resolve(record.workspaceId);
+    return (
+      this.now() < this.mutationExpiresAt &&
+      validWorkspace(current) &&
+      samePhysicalWorkspace(current, record.workspace)
+    );
   }
 
   private async knownOrUnknown(

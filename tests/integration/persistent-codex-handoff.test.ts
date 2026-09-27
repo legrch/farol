@@ -67,6 +67,7 @@ class FixtureHost implements HandoffHost {
   onProjectList?: (() => void) | undefined;
   onTurnStart?: (() => void) | undefined;
   onTurnsList?: (() => unknown) | undefined;
+  onItemsList?: (() => void) | undefined;
   threadResponse?: unknown;
   turnResponse?: unknown;
   readResponse?: unknown;
@@ -171,6 +172,7 @@ class FixtureHost implements HandoffHost {
       };
     }
     if (method === "thread/items/list") {
+      this.onItemsList?.();
       if (this.failItems) throw new Error("ITEMS_UNAVAILABLE");
       if (this.itemsResponse !== undefined) return this.itemsResponse;
       expect(params).toMatchObject({
@@ -237,18 +239,25 @@ async function fixture(host = new FixtureHost()) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-handoff-"));
   roots.push(root);
   let current: HandoffWorkspace | null = workspace;
-  const authority: HandoffAuthority = { resolve: async () => current };
+  let onResolve: (() => void) | undefined;
+  const authority: HandoffAuthority = {
+    resolve: async () => {
+      onResolve?.();
+      return current;
+    },
+  };
   const journalRoot = path.join(root, "journal");
   const service = (
     selectedOwnerThreadId?: string,
     now: () => number = Date.now,
     expiresAt = Date.now() + 60_000,
+    digester: HandoffRequestDigester = new Sha256HandoffRequestDigester(),
   ) =>
     new PersistentCodexHandoff(
       authority,
       host,
       new PrivateCodexHandoffJournal(journalRoot),
-      new Sha256HandoffRequestDigester(),
+      digester,
       expiresAt,
       mutationGate,
       now,
@@ -261,6 +270,9 @@ async function fixture(host = new FixtureHost()) {
     journalRoot,
     setWorkspace(value: HandoffWorkspace | null) {
       current = value;
+    },
+    setResolveHook(hook: () => void) {
+      onResolve = hook;
     },
   };
 }
@@ -551,6 +563,272 @@ describe("persistent Codex handoff core", () => {
       status: "outcome_unknown",
       dispatchId: turnId,
     });
+  });
+
+  it("keeps a recorded adoption unknown if the physical binding changes during journal writes", async () => {
+    const { service, host, journalRoot, setWorkspace, setResolveHook } =
+      await fixture();
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = {
+      data: [{ id: turnId, status: "completed" }],
+      nextCursor: null,
+    };
+    let resolves = 0;
+    setResolveHook(() => {
+      resolves += 1;
+      if (resolves === 5) setWorkspace(null);
+    });
+    expect(
+      await service(threadId).adopt({
+        threadId,
+        turnId,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+      }),
+    ).toEqual({ status: "outcome_unknown", dispatchId: turnId });
+    expect(resolves).toBe(5);
+    expect(
+      await new PrivateCodexHandoffJournal(journalRoot).read(turnId),
+    ).toMatchObject({ adopted: true, threadId, turnId });
+    expect(await service(threadId).status(turnId)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: turnId,
+    });
+  });
+
+  it("does not publish adopted status or final text after a mid-read physical revoke", async () => {
+    for (const phase of ["status", "result"] as const) {
+      const { service, host, setWorkspace } = await fixture();
+      const threadId = randomUUID();
+      const turnId = randomUUID();
+      host.readResponse = {
+        thread: {
+          id: threadId,
+          projectId: request.projectId,
+          cwd: workspace.root,
+        },
+      };
+      host.turnsResponse = {
+        data: [{ id: turnId, status: "completed" }],
+        nextCursor: null,
+      };
+      host.itemsResponse = {
+        data: [
+          {
+            turnId,
+            item: {
+              id: "private-answer",
+              type: "agentMessage",
+              phase: "final_answer",
+              text: "Must not escape",
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+      const bound = service(threadId);
+      expect(
+        await bound.adopt({
+          threadId,
+          turnId,
+          workspaceId: request.workspaceId,
+          projectId: request.projectId,
+        }),
+      ).toEqual({ status: "adopted", dispatchId: turnId });
+      if (phase === "status")
+        host.onTurnsList = () => {
+          setWorkspace(null);
+          return host.turnsResponse;
+        };
+      else host.onItemsList = () => setWorkspace(null);
+      expect(await bound[phase](turnId)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: turnId,
+      });
+    }
+  });
+
+  it("does not publish an adopted status when the grant expires inside final authority read", async () => {
+    const { service, host, setResolveHook } = await fixture();
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    let now = 1_000;
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = {
+      data: [{ id: turnId, status: "completed" }],
+      nextCursor: null,
+    };
+    const bound = service(threadId, () => now, 2_000);
+    expect(
+      await bound.adopt({
+        threadId,
+        turnId,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+      }),
+    ).toEqual({ status: "adopted", dispatchId: turnId });
+    let resolves = 0;
+    setResolveHook(() => {
+      resolves += 1;
+      if (resolves === 2) now = 2_000;
+    });
+    expect(await bound.status(turnId)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: turnId,
+    });
+    expect(resolves).toBe(2);
+  });
+
+  it("fails closed on adoption admission, host ambiguity, and a conflicting local handle", async () => {
+    const newCase = async () => {
+      const state = await fixture();
+      const threadId = randomUUID();
+      const turnId = randomUUID();
+      state.host.readResponse = {
+        thread: {
+          id: threadId,
+          projectId: request.projectId,
+          cwd: workspace.root,
+        },
+      };
+      state.host.turnsResponse = {
+        data: [{ id: turnId, status: "completed" }],
+        nextCursor: null,
+      };
+      return {
+        ...state,
+        threadId,
+        turnId,
+        selection: {
+          threadId,
+          turnId,
+          workspaceId: request.workspaceId,
+          projectId: request.projectId,
+        },
+      };
+    };
+    {
+      const { service, threadId, selection, host } = await newCase();
+      expect(
+        await service(threadId, () => 2_000, 2_000).adopt(selection),
+      ).toEqual({
+        status: "refused",
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      });
+      expect(host.calls).toEqual([]);
+    }
+    {
+      const { service, threadId, selection, setWorkspace, host } =
+        await newCase();
+      setWorkspace(null);
+      expect(await service(threadId).adopt(selection)).toEqual({
+        status: "refused",
+        code: "HANDOFF_WORKSPACE_UNVERIFIED",
+      });
+      expect(host.calls).toEqual([]);
+    }
+    {
+      const { service, threadId, selection, host } = await newCase();
+      host.readResponse = {
+        thread: { id: threadId, projectId: request.projectId, cwd: "/wrong" },
+      };
+      expect(await service(threadId).adopt(selection)).toEqual({
+        status: "refused",
+        code: "HANDOFF_OBSERVE_THREAD_BINDING_CHANGED",
+      });
+    }
+    {
+      const { service, threadId, selection, host } = await newCase();
+      host.failStatus = true;
+      expect(await service(threadId).adopt(selection)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: selection.turnId,
+      });
+    }
+    {
+      const { service, threadId, selection, host } = await newCase();
+      host.turnsResponse = {
+        data: [
+          { id: selection.turnId, status: "completed" },
+          { id: selection.turnId, status: "completed" },
+        ],
+        nextCursor: null,
+      };
+      expect(await service(threadId).adopt(selection)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: selection.turnId,
+      });
+    }
+    {
+      const { service, threadId, selection, setWorkspace, setResolveHook } =
+        await newCase();
+      let resolves = 0;
+      setResolveHook(() => {
+        resolves += 1;
+        if (resolves === 4) setWorkspace(null);
+      });
+      expect(await service(threadId).adopt(selection)).toEqual({
+        status: "refused",
+        code: "HANDOFF_WORKSPACE_CHANGED",
+      });
+    }
+    {
+      const { service, threadId, selection, turnId, journalRoot } =
+        await newCase();
+      await new PrivateCodexHandoffJournal(journalRoot).reserve(turnId, {
+        requestDigest: "0".repeat(64),
+        adopted: true,
+        workspaceId: request.workspaceId,
+        workspace,
+        projectId: request.projectId,
+        threadIntent: false,
+        turnIntent: false,
+      });
+      expect(await service(threadId).adopt(selection)).toEqual({
+        status: "refused",
+        code: "HANDOFF_ADOPT_CONFLICT",
+      });
+    }
+    {
+      const { service, threadId, selection } = await newCase();
+      const badDigest = new (class extends Sha256HandoffRequestDigester {
+        override digestAdopt() {
+          return "invalid";
+        }
+      })();
+      expect(
+        await service(threadId, Date.now, Date.now() + 60_000, badDigest).adopt(
+          selection,
+        ),
+      ).toEqual({ status: "refused", code: "HANDOFF_DIGEST_INVALID" });
+    }
+    {
+      const { service, threadId, selection, turnId, host } = await newCase();
+      const bound = service(threadId);
+      expect(await bound.adopt(selection)).toEqual({
+        status: "adopted",
+        dispatchId: turnId,
+      });
+      host.turnsResponse = { data: "malformed", nextCursor: null };
+      expect(await bound.status(turnId)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: turnId,
+      });
+    }
   });
 
   it("observes only the exact selected native thread without starting work", async () => {
