@@ -335,6 +335,89 @@ describe.skipIf(process.platform !== "darwin")(
       expect(deniedResult.stdout).not.toContain("DENIED_SECRET_CANARY");
     });
 
+    it("keeps a foreign staged file while committing only an owned path", async () => {
+      const { workspace, shell } = await fixture(
+        "workspace",
+        false,
+        "workspace",
+        true,
+      );
+      execFileSync("git", ["init", "-q", workspace]);
+      await fs.writeFile(path.join(workspace, "foreign.txt"), "foreign-base\n");
+      await fs.writeFile(path.join(workspace, "owned.txt"), "owned-base\n");
+      execFileSync("git", [
+        "-C",
+        workspace,
+        "add",
+        "--",
+        "foreign.txt",
+        "owned.txt",
+      ]);
+      execFileSync("git", [
+        "-C",
+        workspace,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "base",
+      ]);
+      await fs.writeFile(
+        path.join(workspace, "foreign.txt"),
+        "foreign-staged\n",
+      );
+      execFileSync("git", ["-C", workspace, "add", "--", "foreign.txt"]);
+      await fs.writeFile(path.join(workspace, "owned.txt"), "owned-next\n");
+      const stagedForeign = execFileSync(
+        "git",
+        ["-C", workspace, "diff", "--cached", "--binary", "--", "foreign.txt"],
+        { encoding: "utf8" },
+      );
+      const started = await shell.start({
+        operationId: "path-scoped-commit",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command:
+          'git diff -- owned.txt && git add -- owned.txt && git restore --staged -- owned.txt && test "$(cat owned.txt)" = owned-next && git add -- owned.txt && git -c user.name=Test -c user.email=test@example.invalid commit --only -qm own -- owned.txt && git status --short',
+        timeoutMs: 10_000,
+        write: true,
+      });
+      if (!started.ok) throw new Error(started.error.code);
+      const result = await complete(shell, started.value.handle);
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).toContain("M  foreign.txt");
+      expect(
+        execFileSync("git", ["-C", workspace, "show", "HEAD:owned.txt"], {
+          encoding: "utf8",
+        }),
+      ).toBe("owned-next\n");
+      expect(
+        execFileSync("git", ["-C", workspace, "show", "HEAD:foreign.txt"], {
+          encoding: "utf8",
+        }),
+      ).toBe("foreign-base\n");
+      expect(
+        execFileSync(
+          "git",
+          [
+            "-C",
+            workspace,
+            "diff",
+            "--cached",
+            "--binary",
+            "--",
+            "foreign.txt",
+          ],
+          { encoding: "utf8" },
+        ),
+      ).toBe(stagedForeign);
+      expect(
+        await fs.readFile(path.join(workspace, "foreign.txt"), "utf8"),
+      ).toBe("foreign-staged\n");
+    });
+
     it("applies the delegated subtree and exclusion to the whole shell profile", async () => {
       const { root, workspace, approval, participant } = await fixture();
       const narrowedRoot = path.join(workspace, "allowed");
