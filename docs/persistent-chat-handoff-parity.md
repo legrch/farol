@@ -166,7 +166,21 @@ turn. A failure on this fixture blocks any later live task canary.
 
 ## Separate saved ChatGPT conversation backlog
 
-A standalone browser conversation route, if selected later, requires its own
+The first saved-chat source slice has a private write-once journal and an app
+service, but no desktop Browser or Computer MCP composition yet. It reserves a
+lowercase UUID before opening a browser, writes a durable send intent before
+the one Send boundary, and cannot retry that key after an unknown outcome.
+Only a canonical private conversation URL with a separately verified
+first-message/reopen/history proof may become `verified`; title verification is
+a separate boolean. The journal stores digests and status only, never prompt
+or answer text. Fault fixtures cover concurrent same-key calls, crash-like
+acknowledgement loss, bad URLs, corrupt private state and malformed browser
+proof. This does not establish account identity, real DOM selectors, helper
+lifetime, packaged route or live saved-chat delivery. The next slice must wire
+the existing Next browser partition through a dedicated read-only reopen
+adapter and expose create/status only when that route is qualified.
+
+The standalone browser conversation route requires its own
 owner admission, account identity, exact first-message digest and one-send
 proof, canonical private URL, fresh-navigation/history reopen, title readback,
 durable reservation, process-restart recovery and no duplicate send after an
