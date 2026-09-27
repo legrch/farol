@@ -2002,10 +2002,19 @@ async function proveSecondLaunchDuringStartup() {
       0,
       `E2E_STARTUP_SECOND_LAUNCH_FAILED:${repeated.stdout}${repeated.stderr}`,
     );
-    assert.equal(
-      parseOwnerLaunchResult(`${repeated.stdout}${repeated.stderr}`),
-      "reopened",
-    );
+    const secondLaunchOutput = `${repeated.stdout}${repeated.stderr}`;
+    const secondLaunchResult = parseOwnerLaunchResult(secondLaunchOutput);
+    if (secondLaunchResult !== "reopened") {
+      // Only the product's fixed, content-free acknowledgement code is
+      // retained. Full child output may include private filesystem paths.
+      const acknowledgementCode =
+        /FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
+          secondLaunchOutput,
+        )?.[1] ?? "none";
+      throw new Error(
+        `E2E_STARTUP_SECOND_LAUNCH_RESULT:${secondLaunchResult ?? "missing"}:ack=${acknowledgementCode}`,
+      );
+    }
     assert.ok(Date.now() - startedAt >= 500, "E2E_STARTUP_REOPEN_DID_NOT_WAIT");
     instance.window = await phases.step(
       "startup-second-launch.firstWindow",
