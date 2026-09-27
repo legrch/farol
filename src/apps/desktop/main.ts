@@ -128,8 +128,10 @@ import {
 } from "./window-placement";
 import {
   PrimaryStartup,
+  emitStartupStage,
   primaryStartupReady,
   previewStartupDelay,
+  type StartupStage,
 } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
@@ -439,6 +441,10 @@ const instanceRequest = createInstanceRequest(launchIdentity);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
 const secondInstanceAcknowledgementPrefix =
   "FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:";
+const startupStage = (stage: StartupStage) =>
+  emitStartupStage(stage, process.env.FAROL_NEXT_E2E === "1", (line) =>
+    process.stderr.write(line),
+  );
 const primaryStartup = new PrimaryStartup();
 const startupDelayMs = previewStartupDelay(
   process.argv,
@@ -8235,7 +8241,9 @@ async function main(): Promise<void> {
       void handleSecondInstance(candidate);
     },
   );
+  startupStage("before-ready");
   await app.whenReady();
+  startupStage("ready");
   // N03/D2: the run marker is the first thing this generation writes and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that
@@ -8251,6 +8259,7 @@ async function main(): Promise<void> {
     bootTime: currentBootTimeMs(),
     processStart: readProcessStart(process.pid),
   });
+  startupStage("run-marker");
   try {
     await cleanupChatGptAttachmentStaging(chatGptAttachmentStagingRoot());
   } catch {
@@ -8550,7 +8559,9 @@ async function main(): Promise<void> {
   });
 }
 
-if (!app.requestSingleInstanceLock(instanceRequest)) {
+const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
+startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
+if (!primaryInstanceLock) {
   void waitForInstanceAcknowledgement(app.getPath("userData"), instanceRequest)
     .then(async (acknowledgement) => {
       const accepted =
@@ -8599,6 +8610,7 @@ if (!app.requestSingleInstanceLock(instanceRequest)) {
   primaryStartup.begin(readiness);
   void initialization
     .then(() => {
+      startupStage("startup-complete");
       process.stderr.write(
         `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
       );

@@ -18,6 +18,24 @@ export class PrimaryStartup {
   }
 }
 
+export type StartupStage =
+  | "lock-primary"
+  | "lock-secondary"
+  | "before-ready"
+  | "ready"
+  | "run-marker"
+  | "startup-complete";
+
+// E2E-only, fixed tokens. No profile path, command line or browser content is
+// ever included in this diagnostic stream.
+export function emitStartupStage(
+  stage: StartupStage,
+  enabled: boolean,
+  write: (line: string) => void,
+): void {
+  if (enabled) write(`FAROL_NEXT_STARTUP_STAGE:${stage}\n`);
+}
+
 export function primaryStartupReady(state: {
   runtimeState: "starting" | "ready" | "offline" | "failed";
   windowReady: boolean;

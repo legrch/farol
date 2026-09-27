@@ -1,11 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   PrimaryStartup,
+  emitStartupStage,
   primaryStartupReady,
   previewStartupDelay,
 } from "../../src/apps/desktop/primary-startup";
 
 describe("primary startup coordination", () => {
+  it("emits only fixed E2E startup stages and stays silent in normal launches", () => {
+    const lines: string[] = [];
+    emitStartupStage("before-ready", false, (line) => lines.push(line));
+    expect(lines).toEqual([]);
+    emitStartupStage("lock-primary", true, (line) => lines.push(line));
+    emitStartupStage("run-marker", true, (line) => lines.push(line));
+    expect(lines).toEqual([
+      "FAROL_NEXT_STARTUP_STAGE:lock-primary\n",
+      "FAROL_NEXT_STARTUP_STAGE:run-marker\n",
+    ]);
+  });
+
   it("does not admit a second-instance reopen before initialization completes", async () => {
     const startup = new PrimaryStartup();
     let finish: (() => void) | undefined;

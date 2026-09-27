@@ -2032,16 +2032,26 @@ async function proveSecondLaunchDuringStartup() {
         /FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:([A-Za-z0-9:-]+)/u.exec(
           primaryOutput,
         )?.[1] ?? "none";
+      const primaryStage =
+        [...primaryOutput.matchAll(/FAROL_NEXT_STARTUP_STAGE:([a-z-]+)/gu)].at(
+          -1,
+        )?.[1] ?? "none";
+      const secondaryStage =
+        [
+          ...secondLaunchOutput.matchAll(
+            /FAROL_NEXT_STARTUP_STAGE:([a-z-]+)/gu,
+          ),
+        ].at(-1)?.[1] ?? "none";
       const runMarker = await fs
         .stat(path.join(userData, "farol-next-state", "running.json"))
         .then(() => "present")
         .catch((error) => (error?.code === "ENOENT" ? "absent" : "unreadable"));
       phases.note(
         "startup-second-launch.primary",
-        `pid=${application.process().pid} exit=${application.process().exitCode ?? "running"} marker=${runMarker} result=${primaryResult} startup=${startupFailure} ack=${primaryAckFailure}`,
+        `pid=${application.process().pid} exit=${application.process().exitCode ?? "running"} marker=${runMarker} result=${primaryResult} startup=${startupFailure} ack=${primaryAckFailure} stage=${primaryStage} secondaryStage=${secondaryStage}`,
       );
       throw new Error(
-        `E2E_STARTUP_SECOND_LAUNCH_RESULT:${secondLaunchResult ?? "missing"}:ack=${acknowledgementCode}:primary=${primaryResult}:startup=${startupFailure}:marker=${runMarker}`,
+        `E2E_STARTUP_SECOND_LAUNCH_RESULT:${secondLaunchResult ?? "missing"}:ack=${acknowledgementCode}:primary=${primaryResult}:startup=${startupFailure}:marker=${runMarker}:stage=${primaryStage}:secondaryStage=${secondaryStage}`,
       );
     }
     assert.ok(Date.now() - startedAt >= 500, "E2E_STARTUP_REOPEN_DID_NOT_WAIT");
