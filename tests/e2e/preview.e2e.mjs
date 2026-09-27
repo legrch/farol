@@ -9686,10 +9686,14 @@ ux34SettingsWidthsSegment: {
     );
     await settingsWidths.window.locator("#computer-name").fill(unbreakableName);
     await settingsWidths.window.locator("#save-computer-name").click();
-    await settingsWidths.window.waitForFunction(
-      () =>
-        document.querySelector("#settings-feedback")?.textContent ===
-        "Computer name saved.",
+    await settingsWidths.window.waitForFunction(() => {
+      const feedback =
+        document.querySelector("#settings-feedback")?.textContent;
+      return Boolean(feedback && feedback !== "Saving and reading back…");
+    });
+    assert.equal(
+      await settingsWidths.window.locator("#settings-feedback").textContent(),
+      "Computer name saved.",
     );
     const renamedComputer = await settingsWidths.window.evaluate(() =>
       window.farolNext.bootstrap(),
