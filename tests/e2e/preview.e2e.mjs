@@ -8119,12 +8119,15 @@ demoMainSegment: try {
     true,
   );
   await commandPolicy
-    .getByRole("button", { name: "Enable", exact: true })
+    .getByLabel("Computer command authority", { exact: true })
+    .selectOption("verification");
+  await commandPolicy
+    .getByRole("button", { name: "Apply", exact: true })
     .click();
   await normal.window
     .locator("#settings-feedback")
     .getByText(
-      "Fixed no-network Git status and HEAD enabled. Verify the workspace again before use.",
+      "Command authority changed. Verify the workspace again before use.",
       { exact: true },
     )
     .waitFor();
