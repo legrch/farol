@@ -2043,8 +2043,49 @@ async function proveSecondLaunchDuringStartup() {
       ).length,
       2,
     );
+  } catch (error) {
+    evidenceAttempt.recordFailure(
+      "second-launch-startup",
+      String(error?.message ?? error).split("\n", 1)[0],
+    );
+    throw error;
   } finally {
-    await close(instance);
+    if (instance.window) {
+      await close(instance);
+    } else {
+      // A failed second-launch acknowledgement can leave the primary alive
+      // before Playwright has a window handle. This is failed-test cleanup,
+      // never a quit proof, and targets only the app this test launched.
+      const child = application.process();
+      const pid = child.pid;
+      assert.ok(Number.isSafeInteger(pid) && pid > 1);
+      phases.note("startup-second-launch.abort-unready", `pid=${pid}`);
+      for (const signal of ["SIGTERM", "SIGKILL"]) {
+        if (child.exitCode !== null || child.signalCode !== null) break;
+        try {
+          process.kill(pid, signal);
+        } catch (signalError) {
+          if (signalError?.code !== "ESRCH") throw signalError;
+        }
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          try {
+            process.kill(pid, 0);
+          } catch (probeError) {
+            if (probeError?.code !== "ESRCH") throw probeError;
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        try {
+          process.kill(pid, 0);
+        } catch (probeError) {
+          if (probeError?.code !== "ESRCH") throw probeError;
+          break;
+        }
+      }
+      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+      await fs.rm(isolatedHome, { recursive: true, force: true });
+    }
   }
 }
 
