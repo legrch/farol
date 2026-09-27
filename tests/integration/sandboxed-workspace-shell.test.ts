@@ -819,6 +819,51 @@ describe.skipIf(process.platform !== "darwin")(
       expect(result.exitCode).not.toBe(0);
     });
 
+    it("uses an explicitly approved account Git config and refuses an outside symlink before shell dispatch", async () => {
+      const { root, workspace, shell } = await fixture(
+        "workspace",
+        false,
+        "workspace",
+        true,
+      );
+      execFileSync("git", ["init", "-q", workspace]);
+      const home = path.join(root, "account-home");
+      const config = path.join(home, ".gitconfig");
+      await fs.writeFile(config, "[user]\n  name = Fixture Author\n", {
+        mode: 0o600,
+      });
+      const started = await shell.start({
+        operationId: "approved-account-git-settings",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: "git config --global --get user.name",
+        timeoutMs: 5_000,
+        write: false,
+      });
+      if (!started.ok) throw new Error(started.error.code);
+      const result = await complete(shell, started.value.handle);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("Fixture Author\n");
+
+      const outside = path.join(root, "outside-config");
+      await fs.writeFile(outside, "OUTSIDE_SECRET_CANARY\n");
+      await fs.rm(config);
+      await fs.symlink(outside, config);
+      expect(
+        await shell.start({
+          operationId: "outside-account-git-symlink",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "git config --global --get user.name",
+          timeoutMs: 5_000,
+          write: false,
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "SHELL_GIT_SETTINGS_UNSAFE" },
+      });
+    });
+
     it("keeps home credential files closed when their parent is the selected workspace", async () => {
       const { root, workspace, approval, participant } = await fixture(
         "workspace",
