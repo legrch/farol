@@ -3111,50 +3111,56 @@ async function configureProduct(
                                                                 "WORKSPACE_GIT_METADATA_NOT_APPROVED"
                                                               ? "This worktree's Git metadata lives outside the workspace and has not been approved. Verify the workspace again to approve it."
                                                               : parsed.error ===
-                                                                  "CODEX_HOST_TASK_IN_PROGRESS"
-                                                                ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
+                                                                  "CODEX_TASK_ROUTE_REFUSED"
+                                                                ? "The saved project, verified workspace, and Git identity did not match exactly. No task route was saved."
                                                                 : parsed.error ===
-                                                                    "WORKSPACE_ROOT_CHANGED"
-                                                                  ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
+                                                                    "CODEX_TASK_ROUTE_UNAVAILABLE"
+                                                                  ? "The selected shared Codex socket could not be verified. Computer remains available; no model turn was started."
                                                                   : parsed.error ===
-                                                                      "MODEL_ENDPOINT_UNAVAILABLE"
-                                                                    ? "Farol Model is not running. Nothing was read or changed."
+                                                                      "CODEX_HOST_TASK_IN_PROGRESS"
+                                                                    ? "A native Agent task is still running. Stop it from its task, or let it finish, then change Computer access or the Codex host."
                                                                     : parsed.error ===
-                                                                        "MODEL_CONFIG_INSECURE_PERMISSIONS"
-                                                                      ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
+                                                                        "WORKSPACE_ROOT_CHANGED"
+                                                                      ? "A different folder now has this workspace's path. Nothing was read or changed. Remove the workspace and add the folder again to approve it."
                                                                       : parsed.error ===
-                                                                          "MODEL_CONFIG_CONFLICT"
-                                                                        ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
+                                                                          "MODEL_ENDPOINT_UNAVAILABLE"
+                                                                        ? "Farol Model is not running. Nothing was read or changed."
                                                                         : parsed.error ===
-                                                                            "MODEL_CONFIG_SYMLINK"
-                                                                          ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
+                                                                            "MODEL_CONFIG_INSECURE_PERMISSIONS"
+                                                                          ? "Refusing to write the connection because config.toml is readable by group or other. Fix its permissions and try again."
                                                                           : parsed.error ===
-                                                                              "MODEL_CONFIG_MALFORMED"
-                                                                            ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
+                                                                              "MODEL_CONFIG_CONFLICT"
+                                                                            ? "config.toml already has a hand-written entry with the same name. Nothing was overwritten."
                                                                             : parsed.error ===
-                                                                                "MODEL_TOKEN_ROTATE_FAILED"
-                                                                              ? "Token rotation did not complete. Check status and preview the connection before trying again."
+                                                                                "MODEL_CONFIG_SYMLINK"
+                                                                              ? "config.toml is a symbolic link. Farol only writes a regular file; nothing was changed."
                                                                               : parsed.error ===
-                                                                                  "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
-                                                                                ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
+                                                                                  "MODEL_CONFIG_MALFORMED"
+                                                                                ? "config.toml has a damaged Farol marker. Repair or remove the marked block by hand; nothing was changed."
                                                                                 : parsed.error ===
-                                                                                    "FAROL_MODEL_ROTATE_RESTORE_FAILED"
-                                                                                  ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                                    "MODEL_TOKEN_ROTATE_FAILED"
+                                                                                  ? "Token rotation did not complete. Check status and preview the connection before trying again."
                                                                                   : parsed.error ===
-                                                                                        "MODEL_CONFIG_APPLY_FAILED" ||
-                                                                                      parsed.error ===
-                                                                                        "MODEL_CONFIG_ROLLBACK_FAILED"
-                                                                                    ? "config.toml could not be changed. Nothing was left half-written."
-                                                                                    : (devMcpProofFailureMessage(
-                                                                                        parsed.error,
-                                                                                      ) ??
-                                                                                      transitionRefusalMessage(
-                                                                                        parsed.error,
-                                                                                      ) ??
-                                                                                      workspaceEditRefusalMessage(
-                                                                                        parsed.error,
-                                                                                      ) ??
-                                                                                      `Not applied · ${parsed.error}`);
+                                                                                      "FAROL_MODEL_ROTATE_BLOCK_NOT_UPDATED"
+                                                                                    ? "The Farol block in config.toml could not be rewritten, so the token was left as it is and Codex still connects. Repair the marked block, then rotate again."
+                                                                                    : parsed.error ===
+                                                                                        "FAROL_MODEL_ROTATE_RESTORE_FAILED"
+                                                                                      ? "The Farol block in config.toml could not be rewritten and the previous token could not be put back, so Farol Model now accepts no token at all. Preview and Apply the connection again to reconnect Codex."
+                                                                                      : parsed.error ===
+                                                                                            "MODEL_CONFIG_APPLY_FAILED" ||
+                                                                                          parsed.error ===
+                                                                                            "MODEL_CONFIG_ROLLBACK_FAILED"
+                                                                                        ? "config.toml could not be changed. Nothing was left half-written."
+                                                                                        : (devMcpProofFailureMessage(
+                                                                                            parsed.error,
+                                                                                          ) ??
+                                                                                          transitionRefusalMessage(
+                                                                                            parsed.error,
+                                                                                          ) ??
+                                                                                          workspaceEditRefusalMessage(
+                                                                                            parsed.error,
+                                                                                          ) ??
+                                                                                          `Not applied · ${parsed.error}`);
     settingsFeedbackError =
       !cancellation && parsed.error !== "CODEX_AGENT_STILL_RUNNING";
     if (command.kind === "connector.verify-app") {
@@ -4229,6 +4235,164 @@ function renderSettings(): void {
         });
         actions.append(choose, verify, live, agent, routeB, remove);
         row.append(actions);
+        const taskRoute = settings.nativeHosts.taskRoute;
+        const taskNote = document.createElement("p");
+        taskNote.textContent = taskRoute
+          ? `Saved task route: ${taskRoute.projectRoot} · expires ${new Date(taskRoute.expiresAt).toLocaleString()}`
+          : "Persistent task route is off. Select an existing shared Codex socket and saved project; this check does not run a model turn. The selection takes effect when the connector next starts.";
+        row.append(taskNote);
+        const taskForm = document.createElement("form");
+        taskForm.className = "connector-form";
+        const taskText = (
+          field: string,
+          title: string,
+          saved: string,
+          placeholder: string,
+        ): HTMLInputElement => {
+          const previous = captureInputDraft(
+            document.querySelector<HTMLInputElement>(
+              `#settings-codex-task-${field}`,
+            ),
+            document.activeElement,
+          );
+          const label = document.createElement("label");
+          label.textContent = title;
+          const input = document.createElement("input");
+          input.id = `settings-codex-task-${field}`;
+          input.type = "text";
+          input.autocomplete = "off";
+          input.spellcheck = false;
+          input.placeholder = placeholder;
+          input.value = saved;
+          label.append(input);
+          taskForm.append(label);
+          queueMicrotask(() => restoreInputDraft(input, previous));
+          return input;
+        };
+        const socket = taskText(
+          "socket",
+          "Existing Codex socket",
+          taskRoute?.socketPath ?? "",
+          "/absolute/path/to/codex.sock",
+        );
+        const codexHome = taskText(
+          "home",
+          "Expected Codex home",
+          taskRoute?.expectedCodexHome ?? "",
+          "/absolute/path/to/codex-home",
+        );
+        const projectId = taskText(
+          "project-id",
+          "Saved project ID",
+          taskRoute?.projectId ?? "",
+          "Project UUID",
+        );
+        const projectRoot = taskText(
+          "project-root",
+          "Saved project root",
+          taskRoute?.projectRoot ?? "",
+          "/absolute/path/to/repository",
+        );
+        const model = taskText(
+          "model",
+          "Codex model",
+          taskRoute?.model ?? "gpt-6-luna",
+          "gpt-6-luna",
+        );
+        const effort = taskText(
+          "effort",
+          "Reasoning effort",
+          taskRoute?.reasoningEffort ?? "medium",
+          "medium",
+        );
+        const workspaceLabel = document.createElement("label");
+        workspaceLabel.textContent = "Verified Computer workspace";
+        const workspaceSelect = document.createElement("select");
+        for (const workspace of settings.computer.workspaces) {
+          if (!workspace.rootIdentity || !workspace.gitMetadata) continue;
+          const option = document.createElement("option");
+          option.value = workspace.workspaceId;
+          option.textContent = `${workspace.label} · ${workspace.root}`;
+          workspaceSelect.append(option);
+        }
+        workspaceSelect.value =
+          taskRoute?.workspaceId ??
+          settings.setup.computer.verified?.workspaceId ??
+          "";
+        workspaceLabel.append(workspaceSelect);
+        taskForm.append(workspaceLabel);
+        const sandboxLabel = document.createElement("label");
+        sandboxLabel.textContent = "Task sandbox";
+        const sandboxSelect = document.createElement("select");
+        for (const value of ["read-only", "workspace-write"] as const) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          sandboxSelect.append(option);
+        }
+        sandboxSelect.value = taskRoute?.execution.sandbox ?? "read-only";
+        sandboxLabel.append(sandboxSelect);
+        taskForm.append(sandboxLabel);
+        const approvalLabel = document.createElement("label");
+        approvalLabel.textContent = "Task approvals";
+        const approvalSelect = document.createElement("select");
+        for (const value of ["untrusted", "on-request"] as const) {
+          const option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          approvalSelect.append(option);
+        }
+        approvalSelect.value =
+          taskRoute?.execution.approvalPolicy ?? "on-request";
+        approvalLabel.append(approvalSelect);
+        taskForm.append(approvalLabel);
+        const taskSave = document.createElement("button");
+        taskSave.type = "submit";
+        taskSave.textContent = "Verify and save task route";
+        taskSave.disabled =
+          selected?.localVerification == null ||
+          workspaceSelect.options.length === 0;
+        taskForm.append(taskSave);
+        taskForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+          const parsed = ProductConfigurationCommandSchema.safeParse({
+            kind: "host.configure-codex-tasks",
+            socketPath: socket.value.trim(),
+            expectedCodexHome: codexHome.value.trim(),
+            workspaceId: workspaceSelect.value,
+            projectId: projectId.value.trim(),
+            projectRoot: projectRoot.value.trim(),
+            model: model.value.trim(),
+            reasoningEffort: effort.value.trim(),
+            sandbox: sandboxSelect.value,
+            approvalPolicy: approvalSelect.value,
+          });
+          if (!parsed.success) {
+            settingsFeedbackSurface = "settings";
+            settingsFeedback =
+              "Enter exact absolute paths and a saved project UUID.";
+            settingsFeedbackError = true;
+            render();
+            return;
+          }
+          void configureProduct(
+            parsed.data,
+            "Persistent task route verified and saved.",
+          );
+        });
+        row.append(taskForm);
+        if (taskRoute) {
+          const taskClear = document.createElement("button");
+          taskClear.type = "button";
+          taskClear.textContent = "Revoke task route";
+          taskClear.addEventListener("click", () => {
+            void configureProduct(
+              { kind: "host.clear-codex-tasks" },
+              "Persistent task route revoked.",
+            );
+          });
+          row.append(taskClear);
+        }
       }
       return row;
     }),

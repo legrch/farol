@@ -40,6 +40,106 @@ function dependencies() {
 }
 
 describe("Farol Next product configuration", () => {
+  it("keeps Codex task admission separate, revocable and generation-bound", async () => {
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const seed = new ProductConfigurationService(store, dependencies());
+    await seed.initialize();
+    const snapshot = seed.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    const base = snapshot.settings;
+    const workspaceId = "00000000-0000-4000-8000-000000000002";
+    const verifiedAt = "2026-09-16T10:00:00.000Z";
+    await store.save({
+      ...base,
+      revision: base.revision + 1,
+      computer: {
+        ...base.computer,
+        workspaces: [
+          {
+            workspaceId,
+            root: "/Users/example/writer",
+            label: "Writer",
+            access: "read",
+            excludedPaths: [],
+            rootIdentity: { device: "5", inode: "11" },
+            gitMetadata: {
+              gitDirectory: "/Users/example/project/.git/worktrees/writer",
+              commonDirectory: "/Users/example/project/.git",
+            },
+          },
+        ],
+      },
+      nativeHosts: {
+        generation: 2,
+        codex: {
+          executablePath: "/Users/example/bin/codex",
+          executableSha256: "a".repeat(64),
+          version: "0.153.4",
+          protocol: "codex-app-server/v2",
+          schemaSha256: "b".repeat(64),
+          verifiedAt,
+          localVerification: {
+            executableSha256: "a".repeat(64),
+            schemaSha256: "b".repeat(64),
+            buildId: "c".repeat(64),
+            verifiedAt,
+          },
+          liveVerification: null,
+          agentVerification: null,
+        },
+        taskRoute: null,
+      },
+      setup: {
+        ...base.setup,
+        computer: {
+          ...base.setup.computer,
+          verified: {
+            profile: "fixture",
+            configRevision: base.computer.generation,
+            workspaceId,
+            runtimeGeneration: "fixture",
+            buildId: "d".repeat(64),
+            protocol: "fixture",
+            verifiedAt,
+          },
+        },
+      },
+    });
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    const selection = {
+      transport: "codex-shared-proxy/v1",
+      socketPath: "/Users/example/private/codex.sock",
+      expectedCodexHome: "/Users/example/.codex",
+      workspaceId,
+      projectId: "00000000-0000-4000-8000-000000000003",
+      projectRoot: "/Users/example/project",
+      projectIdentity: { device: "5", inode: "10" },
+      gitCommonDirectory: "/Users/example/project/.git",
+      execution: { sandbox: "read-only", approvalPolicy: "on-request" },
+      model: "gpt-6-luna",
+      reasoningEffort: "medium",
+      computerGeneration: base.computer.generation,
+      hostGeneration: 2,
+      approvedAt: verifiedAt,
+      expiresAt: Date.parse(verifiedAt) + 60_000,
+    };
+    await expect(
+      service.recordCodexTaskRoute(selection),
+    ).resolves.toMatchObject({
+      ok: true,
+      snapshot: { settings: { nativeHosts: { taskRoute: selection } } },
+    });
+    await expect(
+      service.recordCodexTaskRoute({ ...selection, hostGeneration: 1 }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(service.clearCodexTaskRoute()).resolves.toMatchObject({
+      ok: true,
+      snapshot: { settings: { nativeHosts: { taskRoute: null } } },
+    });
+  });
+
   it("AUTH-06 refuses to approve a root inside a home credential store", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(

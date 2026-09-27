@@ -1,17 +1,18 @@
 # Persistent handoff parity
 
-Status: a fail-closed, fixture-only **Codex saved-project task** create/status core
-is integrated through `83774aa`. A read-only exact-result extension is under
-review on `codex/standalone-task-route`. It has no desktop/Computer MCP route and no live
-Codex-host qualification. Standalone Farol does not yet expose a persistent
-handoff tool.
+Status: the fail-closed saved-project create/status core is integrated through
+`83774aa`. The branch `codex/standalone-task-route` adds exact result, a
+separately admitted Computer MCP route and an owner-facing desktop selection
+for an existing shared Codex socket and saved project. Built and packaged
+fixtures use a disposable fake socket. No native shared-runtime or live-model
+qualification has been completed, and the branch is not integrated.
 
 ## Two different destinations
 
 | Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                            |
 | -------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Separate backlog; the V0 implementation and its private-alpha evidence are historical references, not standalone code or acceptance |
-| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Private core, branch-only proxy adapter and fixtures; no connector tool or live task                                                |
+| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Branch-only connector tools and disposable fixtures; no live task                                                                   |
 | Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                                   |
 
 The V0 browser route is documented in the V0 repository's
@@ -41,10 +42,10 @@ have hermetic tests for conflicting keys, restart, lost acknowledgement and
 exact status/result readback. The caller supplies a workspace ID, not an arbitrary root;
 the trusted adapter must resolve the approved writer and canonical project
 roots, both device/inode identities, their shared Git common directory, and
-the selected sandbox/approval policy. This is a fixture contract; no production
-resolver or native shared-runtime attachment is claimed. The caller-facing
-connector must expose only the
-dispatch handle, not internal thread/turn IDs.
+the selected sandbox/approval policy. The branch includes the physical
+resolver and a host adapter, but native shared-runtime compatibility remains
+unqualified. The caller-facing connector exposes only the dispatch handle,
+not internal thread/turn IDs.
 
 The earlier fixture-only journal format has no saved-project identity. It is
 intentionally read as outcome-unknown after this contract change and never
@@ -52,14 +53,14 @@ replayed. No production handoff journal existed for that format. Read-only
 status for a current-format dispatch remains available when the execution
 policy changes, provided both physical roots still match.
 
-The next source slice must add explicit host-task creation admission, a trusted
+The current branch adds explicit host-task creation admission, a trusted
 Computer workspace adapter and a typed desktop/Computer MCP
-create/status/result route. A branch-only `PhysicalCodexHandoffAuthority`
+create/status/result route. `PhysicalCodexHandoffAuthority`
 re-measures the approved writer and saved-project root device/inode and
 requires their current Git common directory to match the explicitly selected
 repository. It refuses symlinked, replaced or foreign roots. This adapter
-still needs a separately issued task-creation grant from desktop; a Computer
-folder grant alone never creates a task. A branch-only `SharedCodexProxyHost` adapter now
+requires a separately issued task-creation grant from desktop; a Computer
+folder grant alone never creates a task. `SharedCodexProxyHost`
 connects through the supported `codex app-server proxy --sock` command to an
 **already running, explicitly selected** Unix socket. It checks executable
 digest, socket ownership/canonical path and serving Codex home; it never starts
@@ -93,10 +94,15 @@ model, effort or expired grant before starting a task. An in-memory MCP test
 and a built-byte test with the installed CLI proxy against a disposable fake
 socket prove create/status/result. They expose only the dispatch handle and
 exact final text, not internal thread, turn or item IDs, and consume no model
-turn. Desktop does not yet issue this task grant from an owner-facing setting,
-so these tools remain unavailable in the normal product connector. Fixture
-PASS is not proof of a native shared host task, paid model result or provider
-delivery. Project creation, project-root rebind, title/message/continue,
+turn. The owner-facing Native hosts setting selects an exact existing socket,
+serving Codex home, saved project ID/root, verified Computer workspace,
+execution policy, model and effort. Desktop checks the saved project through
+`project/list` and re-measures the physical Git roots before saving a 12-hour
+route selection. The next connector launch includes the separate task grant;
+an unavailable task socket leaves Computer running without task tools. No
+daemon is started or repaired. Fixture PASS is not proof of a native shared
+host task, paid model result or provider delivery. Project creation,
+project-root rebind, title/message/continue,
 live terminal result retrieval and archive/delete remain open.
 
 With a selected installed Codex CLI path, the content-free local route proof is

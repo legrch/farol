@@ -258,6 +258,28 @@ export const WorkspaceGitMetadataSchema = z.strictObject({
 
 export type WorkspaceGitMetadata = z.infer<typeof WorkspaceGitMetadataSchema>;
 
+export const CodexTaskSelectionSchema = z.strictObject({
+  transport: z.literal("codex-shared-proxy/v1"),
+  socketPath: CanonicalAbsolutePathSchema,
+  expectedCodexHome: CanonicalAbsolutePathSchema,
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+  projectRoot: CanonicalAbsolutePathSchema,
+  projectIdentity: WorkspaceRootIdentitySchema,
+  gitCommonDirectory: CanonicalAbsolutePathSchema,
+  execution: z.strictObject({
+    sandbox: z.enum(["read-only", "workspace-write"]),
+    approvalPolicy: z.enum(["untrusted", "on-request"]),
+  }),
+  model: z.string().regex(/^[A-Za-z0-9_.\/-]{1,120}$/u),
+  reasoningEffort: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/u),
+  computerGeneration: z.number().int().positive(),
+  hostGeneration: z.number().int().positive(),
+  approvedAt: CanonicalTimestampSchema,
+  expiresAt: z.number().int().positive().safe(),
+});
+export type CodexTaskSelection = z.infer<typeof CodexTaskSelectionSchema>;
+
 export const ApprovedProductWorkspaceSchema = z
   .strictObject({
     workspaceId: IdentifierSchema,
@@ -364,8 +386,9 @@ export const ProductSettingsSchema = z.strictObject({
     .strictObject({
       generation: z.number().int().positive(),
       codex: CodexHostSelectionSchema.nullable(),
+      taskRoute: CodexTaskSelectionSchema.nullable().default(null),
     })
-    .default({ generation: 1, codex: null }),
+    .default({ generation: 1, codex: null, taskRoute: null }),
   connectors: z
     .strictObject({
       secureMcp: SecureMcpConnectorSchema,
@@ -435,6 +458,20 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     path: CanonicalAbsolutePathSchema,
   }),
   z.strictObject({ kind: z.literal("host.verify-codex") }),
+  z.strictObject({
+    kind: z.literal("host.configure-codex-tasks"),
+    socketPath: CanonicalAbsolutePathSchema,
+    expectedCodexHome: CanonicalAbsolutePathSchema,
+    workspaceId: IdentifierSchema,
+    projectId: IdentifierSchema,
+    projectRoot: CanonicalAbsolutePathSchema,
+    model: CodexTaskSelectionSchema.shape.model,
+    reasoningEffort: CodexTaskSelectionSchema.shape.reasoningEffort,
+    sandbox: CodexTaskSelectionSchema.shape.execution.shape.sandbox,
+    approvalPolicy:
+      CodexTaskSelectionSchema.shape.execution.shape.approvalPolicy,
+  }),
+  z.strictObject({ kind: z.literal("host.clear-codex-tasks") }),
   z.strictObject({ kind: z.literal("host.remove-codex") }),
   z.strictObject({ kind: z.literal("host.run-codex-smoke") }),
   z.strictObject({ kind: z.literal("host.run-codex-agent-check") }),
@@ -1164,6 +1201,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "SUPPORT_EXPORT_FAILED",
       "CODEX_HOST_PICKER_CANCELLED",
       "CODEX_HOST_NOT_CONFIGURED",
+      "CODEX_TASK_ROUTE_REFUSED",
+      "CODEX_TASK_ROUTE_UNAVAILABLE",
       "CODEX_HOST_SELECTION_INVALID",
       "CODEX_HOST_EXECUTABLE_UNSAFE",
       "CODEX_HOST_INCOMPATIBLE",

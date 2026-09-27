@@ -131,7 +131,7 @@ describe("secure MCP Computer launch contract", () => {
         workspaceId: "00000000-0000-4000-8000-000000000003",
         writerRoot: "/Users/example/write",
         writerIdentity: { device: "5", inode: "97" },
-        projectId: "saved-project",
+        projectId: "00000000-0000-4000-8000-000000000004",
         projectRoot: "/Users/example/write",
         projectIdentity: { device: "5", inode: "97" },
         gitCommonDirectory: "/Users/example/write/.git",
@@ -175,6 +175,71 @@ describe("secure MCP Computer launch contract", () => {
         },
       }),
     ).toThrow("SECURE_MCP_CODEX_TASK_ADMISSION_INVALID");
+
+    const approved = ProductSettingsSchema.parse({
+      ...selected,
+      nativeHosts: {
+        ...selected.nativeHosts,
+        codex: {
+          ...selected.nativeHosts.codex,
+          localVerification: {
+            executableSha256: "a".repeat(64),
+            schemaSha256: "b".repeat(64),
+            buildId: "d".repeat(64),
+            verifiedAt: new Date(1_789_516_700_000).toISOString(),
+          },
+        },
+        taskRoute: {
+          transport: codexTasks.transport,
+          socketPath: codexTasks.host.socketPath,
+          expectedCodexHome: codexTasks.host.expectedCodexHome,
+          workspaceId: codexTasks.grant.workspaceId,
+          projectId: codexTasks.grant.projectId,
+          projectRoot: codexTasks.grant.projectRoot,
+          projectIdentity: codexTasks.grant.projectIdentity,
+          gitCommonDirectory: codexTasks.grant.gitCommonDirectory,
+          execution: codexTasks.grant.execution,
+          model: codexTasks.grant.model,
+          reasoningEffort: codexTasks.grant.reasoningEffort,
+          computerGeneration: selected.computer.generation,
+          hostGeneration: selected.nativeHosts.generation,
+          approvedAt: new Date(input.now).toISOString(),
+          expiresAt: codexTasks.grant.expiresAt,
+        },
+      },
+      setup: {
+        ...selected.setup,
+        computer: {
+          ...selected.setup.computer,
+          verified: {
+            profile: "fixture",
+            configRevision: selected.computer.generation,
+            workspaceId: codexTasks.grant.workspaceId,
+            runtimeGeneration: "fixture",
+            buildId: "e".repeat(64),
+            protocol: "fixture",
+            verifiedAt: new Date(input.now).toISOString(),
+          },
+        },
+      },
+    });
+    const automatic = createSecureMcpLaunchContract(approved, {
+      now: input.now,
+      runtimeId: "runtime-with-owner-selection",
+      challengeSha256: "f".repeat(64),
+    });
+    expect(automatic.codexTasks).toEqual(codexTasks);
+    const stale = ProductSettingsSchema.parse({
+      ...approved,
+      computer: { ...approved.computer, generation: 8 },
+    });
+    expect(
+      createSecureMcpLaunchContract(stale, {
+        now: input.now,
+        runtimeId: "runtime-stale-owner-selection",
+        challengeSha256: "f".repeat(64),
+      }).codexTasks,
+    ).toBeUndefined();
   });
 
   it("carries only a generation-bound Farol DEV proof into the production launch", () => {

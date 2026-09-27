@@ -333,8 +333,60 @@ try {
   });
   assert.equal(calls.filter((method) => method === "thread/start").length, 1);
   assert.equal(calls.filter((method) => method === "turn/start").length, 1);
+  await client.close();
+  await transport.close();
+  client = undefined;
+  transport = undefined;
+
+  const unavailableLaunch = structuredClone(launch);
+  unavailableLaunch.codexTasks.host.socketPath = path.join(
+    root,
+    "missing.sock",
+  );
+  const unavailableLaunchRoot = path.join(root, "launch-without-task-host");
+  await fs.mkdir(unavailableLaunchRoot, { mode: 0o700 });
+  const unavailableLaunchFile = path.join(
+    unavailableLaunchRoot,
+    "computer-launch.json",
+  );
+  await fs.writeFile(
+    unavailableLaunchFile,
+    `${canonical(unavailableLaunch)}\n`,
+    {
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
+  transport = new StdioClientTransport({
+    command,
+    args: [entry, "--launch-contract", unavailableLaunchFile],
+    cwd: process.cwd(),
+    stderr: "pipe",
+    ...(packaged
+      ? {
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+            HOME: process.env.HOME ?? root,
+            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          },
+        }
+      : {}),
+  });
+  client = new Client({ name: "built-task-host-down", version: "1" });
+  await client.connect(transport);
+  const remainingTools = (await client.listTools()).tools.map(
+    (tool) => tool.name,
+  );
+  assert(remainingTools.includes("computer_workspace_list"));
+  assert(!remainingTools.some((tool) => tool.startsWith("codex_task_")));
+  const listed = await client.callTool({
+    name: "computer_workspace_list",
+    arguments: { workspaceId: "approved-writer", relativePath: "." },
+  });
+  assert.notEqual(listed.isError, true);
   process.stdout.write(
-    `PASS: ${packaged ? "packaged" : "built"} Computer MCP task route used one disposable proxy socket and no model turn.\n`,
+    `PASS: ${packaged ? "packaged" : "built"} Computer MCP task route used one disposable proxy socket; unavailable task host left Computer working; no model turn.\n`,
   );
 } finally {
   await client?.close().catch(() => undefined);

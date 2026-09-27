@@ -88,6 +88,11 @@ async function main(): Promise<void> {
     ? await SharedCodexProxyHost.attach({
         ...taskLaunch.host,
         cwd: path.dirname(launchFile),
+      }).catch(() => {
+        process.stderr.write(
+          "Codex task route unavailable; Computer remains ready.\n",
+        );
+        return undefined;
       })
     : undefined;
   const codexTasks =

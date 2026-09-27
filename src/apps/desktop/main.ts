@@ -17,9 +17,11 @@ import {
 import {
   chmod,
   lstat,
+  mkdtemp,
   mkdir,
   readFile,
   realpath,
+  rm,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -29,6 +31,9 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
+import { exactProject } from "../../modules/chat/app/service/persistent-codex-handoff";
+import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
+import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-codex-proxy-host";
 import {
   CHATGPT_MODEL_ID,
   FAROL_PROVIDER_ID,
@@ -4716,6 +4721,120 @@ async function configureAdmittedProduct(
         snapshot.settings.nativeHosts.codex.executablePath,
       );
     }
+    case "host.configure-codex-tasks": {
+      if (codexHostTaskAdmission || codexAgentOperationActive()) {
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      }
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready") {
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      }
+      const settings = snapshot.settings;
+      const selected = settings.nativeHosts.codex;
+      const workspace = settings.computer.workspaces.find(
+        (entry) => entry.workspaceId === command.workspaceId,
+      );
+      if (!selected?.localVerification) {
+        return configurationFailure("CODEX_HOST_NOT_CONFIGURED");
+      }
+      if (
+        !workspace?.rootIdentity ||
+        !workspace.gitMetadata ||
+        settings.setup.computer.verified?.workspaceId !== command.workspaceId ||
+        settings.setup.computer.verified.configRevision !==
+          settings.computer.generation ||
+        (command.sandbox === "workspace-write" && workspace.access !== "write")
+      ) {
+        return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+      }
+      codexHostTaskAdmission = true;
+      let proxy: SharedCodexProxyHost | null = null;
+      let scratch: string | null = null;
+      try {
+        const projectStat = await lstat(command.projectRoot, { bigint: true });
+        if (
+          !projectStat.isDirectory() ||
+          projectStat.isSymbolicLink() ||
+          (await realpath(command.projectRoot)) !== command.projectRoot
+        ) {
+          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+        }
+        const authority = new PhysicalCodexHandoffAuthority({
+          workspaceId: command.workspaceId,
+          writerRoot: workspace.root,
+          writerIdentity: workspace.rootIdentity,
+          projectRoot: command.projectRoot,
+          projectIdentity: {
+            device: String(projectStat.dev),
+            inode: String(projectStat.ino),
+          },
+          gitCommonDirectory: workspace.gitMetadata.commonDirectory,
+          execution: {
+            sandbox: command.sandbox,
+            approvalPolicy: command.approvalPolicy,
+          },
+        });
+        if (!(await authority.resolve(command.workspaceId))) {
+          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+        }
+        scratch = await realpath(
+          await mkdtemp(path.join(os.tmpdir(), "farol-codex-task-selection-")),
+        );
+        await chmod(scratch, 0o700);
+        proxy = await SharedCodexProxyHost.attach({
+          executablePath: selected.executablePath,
+          executableSha256: selected.executableSha256,
+          socketPath: command.socketPath,
+          cwd: scratch,
+          expectedCodexHome: command.expectedCodexHome,
+        });
+        if (
+          !(await exactProject(proxy, command.projectId, command.projectRoot))
+        ) {
+          return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+        }
+        const approvedAt = new Date().toISOString();
+        return ProductConfigurationResultSchema.parse(
+          await configuration.recordCodexTaskRoute({
+            transport: "codex-shared-proxy/v1",
+            socketPath: command.socketPath,
+            expectedCodexHome: command.expectedCodexHome,
+            workspaceId: command.workspaceId,
+            projectId: command.projectId,
+            projectRoot: command.projectRoot,
+            projectIdentity: {
+              device: String(projectStat.dev),
+              inode: String(projectStat.ino),
+            },
+            gitCommonDirectory: workspace.gitMetadata.commonDirectory,
+            execution: {
+              sandbox: command.sandbox,
+              approvalPolicy: command.approvalPolicy,
+            },
+            model: command.model,
+            reasoningEffort: command.reasoningEffort,
+            computerGeneration: settings.computer.generation,
+            hostGeneration: settings.nativeHosts.generation,
+            approvedAt,
+            expiresAt: Date.parse(approvedAt) + 12 * 60 * 60 * 1_000,
+          }),
+        );
+      } catch {
+        return configurationFailure("CODEX_TASK_ROUTE_UNAVAILABLE");
+      } finally {
+        proxy?.close();
+        if (scratch) {
+          await rm(scratch, { recursive: true, force: true }).catch(
+            () => undefined,
+          );
+        }
+        codexHostTaskAdmission = false;
+      }
+    }
+    case "host.clear-codex-tasks":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.clearCodexTaskRoute(),
+      );
     case "host.run-route-b-check": {
       if (codexHostTaskAdmission || codexAgentOperationActive()) {
         return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");

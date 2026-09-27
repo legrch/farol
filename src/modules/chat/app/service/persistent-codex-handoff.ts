@@ -174,7 +174,7 @@ function sameWorkspace(
   );
 }
 
-async function exactProject(
+export async function exactProject(
   host: HandoffHost,
   projectId: string,
   root: string,
