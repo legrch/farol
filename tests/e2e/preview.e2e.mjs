@@ -10747,12 +10747,15 @@ n09ConnectorSegment: {
     environment: { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture.executable },
   });
   let authorityTransitionDiagnostic = "";
+  let authorityTransitionLine = "";
   connector.application.process().stderr?.on("data", (chunk) => {
-    const lines = String(chunk)
-      .split("\n")
-      .filter((line) => line.includes("farol.authority-transition-refused"));
+    const lines = `${authorityTransitionLine}${String(chunk)}`.split("\n");
+    authorityTransitionLine = (lines.pop() ?? "").slice(-2048);
+    const matching = lines.filter((line) =>
+      line.includes("farol.authority-transition-refused"),
+    );
     authorityTransitionDiagnostic =
-      `${authorityTransitionDiagnostic}${lines.join("\n")}`.slice(-2048);
+      `${authorityTransitionDiagnostic}${matching.join("\n")}`.slice(-2048);
   });
   try {
     // Setup is finished WITHOUT approving a folder, because the prerequisite
@@ -10912,7 +10915,7 @@ n09ConnectorSegment: {
       assert.equal(
         actual,
         "Read-only workspace saved and read back.",
-        `unexpected workspace feedback after native selection: ${error}; transition ${authorityTransitionDiagnostic}`,
+        `unexpected workspace feedback after native selection: ${error}; transition ${authorityTransitionDiagnostic}${authorityTransitionLine.includes("farol.authority-transition-refused") ? authorityTransitionLine : ""}`,
       );
     }
     await connector.window.locator('[data-section="computer"]').click();

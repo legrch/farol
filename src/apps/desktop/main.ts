@@ -4523,7 +4523,7 @@ async function configureProduct(
       await configureAdmittedProduct(command),
     );
   }
-  const reserved = await authorityTransitions.withReservation(
+  const reservation = authorityTransitions.withReservation(
     "authority-change",
     async () => {
       activeAuthorityChangeKind = command.kind;
@@ -4541,13 +4541,18 @@ async function configureProduct(
       }
     },
   );
+  // withReservation tries to acquire synchronously before its first await.
+  // Capture the holder now: reading it after awaiting a refusal could name
+  // a later transition, or none at all.
+  const activeCommandAtAdmission = activeAuthorityChangeKind;
+  const reserved = await reservation;
   if (!reserved.admitted) {
     console.warn(
       "farol.authority-transition-refused",
       JSON.stringify({
         requested: command.kind,
         heldBy: reserved.heldBy,
-        activeCommand: activeAuthorityChangeKind,
+        activeCommand: activeCommandAtAdmission,
       }),
     );
   }
