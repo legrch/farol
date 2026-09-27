@@ -2785,6 +2785,17 @@ async function requestProductQuit(instance, expectedUnconfirmed = null) {
   // transport rejection during a successful quit is not itself an outcome.
   void instance.application
     .evaluate(({ app }) => {
+      const trace = { beforeQuit: 0, willQuit: 0, windowAllClosed: 0 };
+      globalThis.__farolE2eQuitTrace = trace;
+      app.on("before-quit", () => {
+        trace.beforeQuit += 1;
+      });
+      app.on("will-quit", () => {
+        trace.willQuit += 1;
+      });
+      app.on("window-all-closed", () => {
+        trace.windowAllClosed += 1;
+      });
       app.quit();
     })
     .then(
@@ -2945,6 +2956,20 @@ async function close(instance, options = {}) {
           // Keep the original close failure as the first failure.
         }
       }
+      const quitEvents =
+        mainState === "alive"
+          ? await Promise.race([
+              instance.application
+                .evaluate(({ BrowserWindow }) => ({
+                  trace: globalThis.__farolE2eQuitTrace ?? null,
+                  windowCount: BrowserWindow.getAllWindows().length,
+                }))
+                .catch(() => "unavailable"),
+              new Promise((resolve) =>
+                setTimeout(() => resolve("timeout"), 1_000),
+              ),
+            ])
+          : "main-gone";
       phases.note(
         `${label}.preAbortState`,
         JSON.stringify({
@@ -2952,6 +2977,7 @@ async function close(instance, options = {}) {
           mainState,
           groupState,
           quitRequestStatus: instance.quitRequestStatus ?? "not-requested",
+          quitEvents,
           quitReceipt: await fs
             .access(
               path.join(
