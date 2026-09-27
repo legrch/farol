@@ -99,11 +99,13 @@ effect. At 10,000 retained intents, new commands fail closed until a reviewed
 retention/migration policy exists.
 
 A summary-only execution fence denies new shell starts and output reads. Owned
-cancel remains available so a running command can be stopped. Start checks the
-fence once at MCP admission and again after the durable reservation, before
-dispatch; a late refusal is terminal for that operation ID. This does not
-serialize the last fence check with another process raising the fence or stop
-commands admitted before the fence. Those concurrency cases remain unqualified.
+cancel remains available so a running command can be stopped. Computer effects
+hold a shared macOS admission lock; summary raise takes the exclusive lock and
+refuses while an owned shell marker is unresolved. A dispatched command passes
+its lease to the watchdog, and the marker is cleared only after its process
+group is observed absent. A lost or unverified group leaves the marker in place
+and later admission fails closed. This serialization still does not contain or
+prove cleanup of a descendant that deliberately leaves the process group.
 
 This source checkpoint does not yet preserve output or live process identity
 across a Computer MCP process restart. Reconnection to the same MCP process
