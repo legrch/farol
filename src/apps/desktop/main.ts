@@ -4535,7 +4535,7 @@ async function configureProduct(
         } catch {
           return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
         }
-        return configureAdmittedProduct(command);
+        return await configureAdmittedProduct(command);
       } finally {
         activeAuthorityChangeKind = null;
       }
