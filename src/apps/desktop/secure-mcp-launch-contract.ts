@@ -8,6 +8,7 @@ import {
   ReadonlyComputerLaunchContractSchema,
   serializeReadonlyComputerLaunchContract,
   type ReadonlyComputerLaunchContract,
+  type CodexTaskRouteLaunch,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
@@ -31,6 +32,7 @@ export function createSecureMcpLaunchContract(
     challengeSha256: string;
     devMcpProof?: DevMcpProofPreparation;
     callerRelay?: CodexCallerRelayEndpoint;
+    codexTasks?: CodexTaskRouteLaunch;
   }>,
 ): ReadonlyComputerLaunchContract {
   if (
@@ -56,6 +58,18 @@ export function createSecureMcpLaunchContract(
       ))
   ) {
     launchError("SECURE_MCP_DEV_PROOF_STALE");
+  }
+  if (input.codexTasks) {
+    const selected = settings.nativeHosts.codex;
+    if (
+      !selected ||
+      selected.executablePath !== input.codexTasks.host.executablePath ||
+      selected.executableSha256 !== input.codexTasks.host.executableSha256 ||
+      input.codexTasks.grant.expiresAt <= input.now ||
+      input.codexTasks.grant.expiresAt > input.now + AUTHORITY_LIFETIME_MS
+    ) {
+      launchError("SECURE_MCP_CODEX_TASK_ADMISSION_INVALID");
+    }
   }
 
   const writeEnabled = workspaces.some(
@@ -142,6 +156,7 @@ export function createSecureMcpLaunchContract(
     ...(input.callerRelay === undefined
       ? {}
       : { callerRelay: input.callerRelay }),
+    ...(input.codexTasks === undefined ? {} : { codexTasks: input.codexTasks }),
   });
 }
 

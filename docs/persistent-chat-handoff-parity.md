@@ -82,15 +82,29 @@ projects, process restart and both lost-start boundaries with local fixtures
 before any live smoke. A Computer folder grant alone is not task-creation
 authority.
 
-The Computer MCP composition now accepts an optional published Chat task port.
+The Computer MCP composition accepts an optional published Chat task port.
 When no distinct task port is supplied, none of the `codex_task_*` tools is
-advertised. An injected in-memory fixture proves create/status/result calls
-through MCP and exposes only the dispatch handle and exact final text, not the
-internal thread, turn or item IDs. Desktop does not yet issue task admission or
-attach that port, so these tools remain unavailable in the product connector.
-Fixture PASS is not proof of a native host task, paid model result, or provider
+advertised. A private canonical launch contract can carry a separate exact
+task grant, selected Codex executable digest and an explicit existing proxy
+socket. It must match a verified Computer Git workspace and the desktop's
+selected Codex executable. The built Computer MCP entrypoint attaches once,
+constructs a durable journal and refuses a different project, workspace,
+model, effort or expired grant before starting a task. An in-memory MCP test
+and a built-byte test with the installed CLI proxy against a disposable fake
+socket prove create/status/result. They expose only the dispatch handle and
+exact final text, not internal thread, turn or item IDs, and consume no model
+turn. Desktop does not yet issue this task grant from an owner-facing setting,
+so these tools remain unavailable in the normal product connector. Fixture
+PASS is not proof of a native shared host task, paid model result or provider
 delivery. Project creation, project-root rebind, title/message/continue,
 live terminal result retrieval and archive/delete remain open.
+
+With a selected installed Codex CLI path, the content-free local route proof is
+`FAROL_CODEX_PROXY_BINARY=/absolute/path/to/codex npm run test:e2e:codex-task-fixture`
+after `npm run build`, or `npm run test:e2e:codex-task-fixture:package` after a
+clean `task package`. Both commands create only disposable Git roots and a fake
+Unix socket; they never attach to the owner's Codex daemon or start a model
+turn. A failure on this fixture blocks any later live task canary.
 
 ## Separate saved ChatGPT conversation backlog
 

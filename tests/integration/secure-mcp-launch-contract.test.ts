@@ -89,6 +89,94 @@ function readiness() {
 }
 
 describe("secure MCP Computer launch contract", () => {
+  it("requires a separately selected Codex host and exact approved Git workspace for tasks", () => {
+    const base = settings();
+    const selected = ProductSettingsSchema.parse({
+      ...base,
+      nativeHosts: {
+        generation: 2,
+        codex: {
+          executablePath: "/Users/example/bin/codex",
+          executableSha256: "a".repeat(64),
+          version: "0.153.4",
+          protocol: "codex-app-server/v2",
+          schemaSha256: "b".repeat(64),
+          verifiedAt: new Date(1_789_516_700_000).toISOString(),
+        },
+      },
+      computer: {
+        ...base.computer,
+        workspaces: base.computer.workspaces.map((workspace) =>
+          workspace.access === "write"
+            ? {
+                ...workspace,
+                gitMetadata: {
+                  gitDirectory: "/Users/example/write/.git",
+                  commonDirectory: "/Users/example/write/.git",
+                },
+              }
+            : workspace,
+        ),
+      },
+    });
+    const codexTasks = {
+      transport: "codex-shared-proxy/v1" as const,
+      host: {
+        executablePath: "/Users/example/bin/codex",
+        executableSha256: "a".repeat(64),
+        socketPath: "/Users/example/private/codex.sock",
+        expectedCodexHome: "/Users/example/.codex",
+      },
+      grant: {
+        workspaceId: "00000000-0000-4000-8000-000000000003",
+        writerRoot: "/Users/example/write",
+        writerIdentity: { device: "5", inode: "97" },
+        projectId: "saved-project",
+        projectRoot: "/Users/example/write",
+        projectIdentity: { device: "5", inode: "97" },
+        gitCommonDirectory: "/Users/example/write/.git",
+        execution: {
+          sandbox: "workspace-write" as const,
+          approvalPolicy: "on-request" as const,
+        },
+        model: "gpt-6-luna",
+        reasoningEffort: "medium",
+        expiresAt: 1_789_517_000_000,
+      },
+    };
+    const input = {
+      now: 1_789_516_800_000,
+      runtimeId: "runtime-with-tasks",
+      challengeSha256: "c".repeat(64),
+      codexTasks,
+    };
+    const launch = createSecureMcpLaunchContract(selected, input);
+    expect(
+      materializeReadonlyComputerLaunch(launch, input.now).codexTasks,
+    ).toEqual(codexTasks);
+    expect(() => createSecureMcpLaunchContract(base, input)).toThrow(
+      "SECURE_MCP_CODEX_TASK_ADMISSION_INVALID",
+    );
+    expect(() =>
+      createSecureMcpLaunchContract(selected, {
+        ...input,
+        codexTasks: {
+          ...codexTasks,
+          grant: { ...codexTasks.grant, writerRoot: "/Users/example/read" },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      createSecureMcpLaunchContract(selected, {
+        ...input,
+        codexTasks: {
+          ...codexTasks,
+          grant: { ...codexTasks.grant, expiresAt: input.now - 1 },
+        },
+      }),
+    ).toThrow("SECURE_MCP_CODEX_TASK_ADMISSION_INVALID");
+  });
+
   it("carries only a generation-bound Farol DEV proof into the production launch", () => {
     const devMcpProof = {
       schema: 1 as const,

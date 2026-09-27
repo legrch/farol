@@ -213,6 +213,32 @@ const ConnectorVerificationSchema = z.strictObject({
 const CallerRelayEndpointSchema = CodexCallerRelayEndpointSchema.refine(
   (value) => canonicalAbsolutePath(value.socketPath),
 );
+export const CodexTaskRouteLaunchSchema = z.strictObject({
+  transport: z.literal("codex-shared-proxy/v1"),
+  host: z.strictObject({
+    executablePath: AbsolutePathSchema,
+    executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    socketPath: AbsolutePathSchema,
+    expectedCodexHome: AbsolutePathSchema,
+  }),
+  grant: z.strictObject({
+    workspaceId: IdentifierSchema,
+    writerRoot: AbsolutePathSchema,
+    writerIdentity: RootIdentitySchema,
+    projectId: IdentifierSchema,
+    projectRoot: AbsolutePathSchema,
+    projectIdentity: RootIdentitySchema,
+    gitCommonDirectory: AbsolutePathSchema,
+    execution: z.strictObject({
+      sandbox: z.enum(["read-only", "workspace-write"]),
+      approvalPolicy: z.enum(["untrusted", "on-request"]),
+    }),
+    model: z.string().regex(/^[A-Za-z0-9_.\/-]{1,120}$/u),
+    reasoningEffort: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/u),
+    expiresAt: z.number().int().positive().safe(),
+  }),
+});
+export type CodexTaskRouteLaunch = z.infer<typeof CodexTaskRouteLaunchSchema>;
 
 function validateChain(
   value: Readonly<{
@@ -222,6 +248,17 @@ function validateChain(
       narrowing?: unknown;
     }>[];
     binding: Readonly<{ participantId: string }>;
+    codexTasks?: z.infer<typeof CodexTaskRouteLaunchSchema> | undefined;
+    approval: Readonly<{
+      expiresAt: number;
+      workspaces: readonly Readonly<{
+        workspaceId: string;
+        root: string;
+        access: "read" | "write";
+        rootIdentity: Readonly<{ device: string; inode: string }>;
+        gitMetadata?: Readonly<{ commonDirectory: string }> | undefined;
+      }>[];
+    }>;
   }>,
   context: z.RefinementCtx,
 ): void {
@@ -252,6 +289,28 @@ function validateChain(
       message: "Participant identifiers must be unique.",
     });
   }
+  const task = value.codexTasks?.grant;
+  if (task) {
+    const workspace = value.approval.workspaces.find(
+      (entry) => entry.workspaceId === task.workspaceId,
+    );
+    if (
+      !workspace ||
+      workspace.root !== task.writerRoot ||
+      workspace.rootIdentity.device !== task.writerIdentity.device ||
+      workspace.rootIdentity.inode !== task.writerIdentity.inode ||
+      workspace.gitMetadata?.commonDirectory !== task.gitCommonDirectory ||
+      (task.execution.sandbox === "workspace-write" &&
+        workspace.access !== "write") ||
+      task.expiresAt > value.approval.expiresAt
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["codexTasks", "grant"],
+        message: "Codex task admission must match one approved Git workspace.",
+      });
+    }
+  }
 }
 
 const ReadonlyLaunchContractSchema = z
@@ -264,6 +323,7 @@ const ReadonlyLaunchContractSchema = z
     connectorVerification: ConnectorVerificationSchema.optional(),
     devMcpProof: DevMcpProofPreparationSchema.optional(),
     callerRelay: CallerRelayEndpointSchema.optional(),
+    codexTasks: CodexTaskRouteLaunchSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -277,6 +337,7 @@ const MutableLaunchContractSchema = z
     connectorVerification: ConnectorVerificationSchema.optional(),
     devMcpProof: DevMcpProofPreparationSchema.optional(),
     callerRelay: CallerRelayEndpointSchema.optional(),
+    codexTasks: CodexTaskRouteLaunchSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -416,6 +477,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   connectorVerification: Readonly<{ challengeSha256: string }> | null;
   devMcpProof: DevMcpProofPreparation | null;
   callerRelay: CodexCallerRelayEndpoint | null;
+  codexTasks: z.infer<typeof CodexTaskRouteLaunchSchema> | null;
 }>;
 
 export function materializeReadonlyComputerLaunch(
@@ -477,5 +539,6 @@ export function materializeReadonlyComputerLaunch(
     connectorVerification: launch.connectorVerification ?? null,
     devMcpProof: launch.devMcpProof ?? null,
     callerRelay: launch.callerRelay ?? null,
+    codexTasks: launch.codexTasks ?? null,
   };
 }

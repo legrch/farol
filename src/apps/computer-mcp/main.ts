@@ -23,6 +23,12 @@ import { PrivateConnectorVerificationRecorder } from "../../modules/computer/inf
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateDevMcpProofRecorder } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
+import { PersistentCodexHandoff } from "../../modules/chat/app/service/persistent-codex-handoff";
+import { AdmittedCodexTaskRoute } from "../../modules/chat/infra/native/admitted-codex-task-route";
+import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
+import { Sha256HandoffRequestDigester } from "../../modules/chat/infra/native/sha256-handoff-request-digester";
+import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-codex-proxy-host";
+import { PrivateCodexHandoffJournal } from "../../modules/chat/infra/repo/private-codex-handoff-journal";
 
 function launchContractArgument(arguments_: readonly string[]): string {
   if (
@@ -77,6 +83,35 @@ async function main(): Promise<void> {
   const callerRelay = launch.callerRelay
     ? new CodexCallerRelayClient(launch.callerRelay)
     : undefined;
+  const taskLaunch = launch.codexTasks;
+  const sharedHost = taskLaunch
+    ? await SharedCodexProxyHost.attach({
+        ...taskLaunch.host,
+        cwd: path.dirname(launchFile),
+      })
+    : undefined;
+  const codexTasks =
+    taskLaunch && sharedHost
+      ? new AdmittedCodexTaskRoute(
+          new PersistentCodexHandoff(
+            new PhysicalCodexHandoffAuthority({
+              workspaceId: taskLaunch.grant.workspaceId,
+              writerRoot: taskLaunch.grant.writerRoot,
+              writerIdentity: taskLaunch.grant.writerIdentity,
+              projectRoot: taskLaunch.grant.projectRoot,
+              projectIdentity: taskLaunch.grant.projectIdentity,
+              gitCommonDirectory: taskLaunch.grant.gitCommonDirectory,
+              execution: taskLaunch.grant.execution,
+            }),
+            sharedHost,
+            new PrivateCodexHandoffJournal(
+              path.join(path.dirname(launchFile), "codex-task-journal"),
+            ),
+            new Sha256HandoffRequestDigester(),
+          ),
+          taskLaunch.grant,
+        )
+      : undefined;
   const devMcpProof = launch.devMcpProof
     ? new PrivateDevMcpProofRecorder(
         path.dirname(path.dirname(launch.devMcpProof.workspaceRoot)),
@@ -96,6 +131,7 @@ async function main(): Promise<void> {
         callerRelay,
         fence,
         devMcpProof,
+        codexTasks,
       ),
     {
       legacy: "serve",
@@ -108,6 +144,7 @@ async function main(): Promise<void> {
   const close = () => {
     if (closing) return;
     closing = true;
+    sharedHost?.close();
     void handle.close().finally(() => process.exit(0));
   };
   process.once("SIGINT", close);
