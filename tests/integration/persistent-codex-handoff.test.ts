@@ -355,6 +355,452 @@ function byteBudgetFixture() {
 }
 
 describe("persistent Codex handoff core", () => {
+  it("fails closed on unavailable digest, unknown parent, malformed digest, and unavailable host read", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const child = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue",
+    };
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    const sha = new Sha256HandoffRequestDigester();
+    const withoutDigest = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      {
+        digest: (value) => sha.digest(value),
+        digestMessage: (value) => sha.digestMessage(value),
+      },
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await withoutDigest.continue(child)).toEqual({
+      status: "refused",
+      code: "HANDOFF_CONTINUE_UNAVAILABLE",
+    });
+    const invalidDigest = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      {
+        digest: (value) => sha.digest(value),
+        digestMessage: (value) => sha.digestMessage(value),
+        digestContinue: () => "invalid",
+      },
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await invalidDigest.continue(child)).toEqual({
+      status: "refused",
+      code: "HANDOFF_DIGEST_INVALID",
+    });
+    const absent = { ...child, dispatchId: randomUUID() };
+    expect(await service().continue(absent)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    const originalCheck = journal.hasUnconfirmedMessage.bind(journal);
+    journal.hasUnconfirmedMessage = async () => {
+      throw new Error("JOURNAL_UNREADABLE");
+    };
+    const journalFault = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      sha,
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await journalFault.continue(child)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    journal.hasUnconfirmedMessage = originalCheck;
+    host.failStatus = true;
+    expect(await service().continue(child)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("refuses continuation when an old task lacks an exact model and effort binding", async () => {
+    const host = new FixtureHost();
+    host.turnResponse = { turn: { id: "issued-turn" } };
+    const { service } = await fixture(host);
+    const original = {
+      ...request,
+      key: randomUUID(),
+      reasoningEffort: undefined,
+    };
+    expect((await service().create(original)).status).toBe("dispatched");
+    expect(
+      await service().continue({
+        key: randomUUID(),
+        dispatchId: original.key,
+        message: "No guessed effort",
+      }),
+    ).toEqual({
+      status: "refused",
+      code: "HANDOFF_CONTINUE_MODEL_BINDING_MISSING",
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("recovers known pre-effect journal refusals with the same key and no duplicate send", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const child = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue",
+    };
+    let started = false;
+    host.turnResponse = { turn: { id: "continued-turn" } };
+    host.onTurnStart = () => {
+      started = true;
+    };
+    host.onTurnsList = () => ({
+      data: started
+        ? [
+            { id: "continued-turn", status: "completed" },
+            { id: "issued-turn", status: "completed" },
+          ]
+        : [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    const originalReserve = journal.reserve.bind(journal);
+    const originalClaimThread = journal.claimThread.bind(journal);
+    const originalClaimContinuation = journal.claimContinuation.bind(journal);
+    const current = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    journal.reserve = async () => {
+      throw new Error("RESERVATION_IO_FAILED");
+    };
+    expect((await current.continue(child)).status).toBe("outcome_unknown");
+    journal.reserve = originalReserve;
+    journal.claimThread = async () => false;
+    expect((await current.continue(child)).status).toBe("outcome_unknown");
+    journal.claimThread = originalClaimThread;
+    journal.claimContinuation = async () => {
+      throw new Error("PARENT_RESERVATION_IO_FAILED");
+    };
+    expect((await current.continue(child)).status).toBe("outcome_unknown");
+    journal.claimContinuation = originalClaimContinuation;
+    expect((await current.continue(child)).status).toBe("dispatched");
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      2,
+    );
+  });
+
+  it("rechecks latest parent and deadline inside the mutation gate before any turn/start", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const child = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue",
+    };
+    let reads = 0;
+    host.onTurnsList = () => ({
+      data: [
+        {
+          id: ++reads === 1 ? "issued-turn" : "native-turn",
+          status: "completed",
+        },
+      ],
+      nextCursor: null,
+    });
+    expect((await service().continue(child)).status).toBe("outcome_unknown");
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    expect((await journal.read(child.key))?.turnIntent).toBe(false);
+    host.onTurnsList = () => ({
+      data: [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    let now = 0;
+    const expiresDuringGate: HandoffMutationGate = {
+      async run(preflight, effect) {
+        await preflight();
+        now = 3;
+        return effect();
+      },
+    };
+    const timeBound = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      2,
+      expiresDuringGate,
+      () => now,
+    );
+    expect((await timeBound.continue(child)).status).toBe("outcome_unknown");
+    expect((await journal.read(child.key))?.turnIntent).toBe(false);
+    journal.claimTurn = async () => false;
+    const claimedElsewhere = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect((await claimedElsewhere.continue(child)).status).toBe(
+      "outcome_unknown",
+    );
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("rechecks the physical writer after durable claim and before turn/start", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot, setWorkspace } =
+      await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    host.onTurnsList = () => ({
+      data: [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    const originalClaim = journal.claimTurn.bind(journal);
+    journal.claimTurn = async (key) => {
+      const claimed = await originalClaim(key);
+      setWorkspace({ ...workspace, inode: "replaced-after-intent" });
+      return claimed;
+    };
+    const child = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Do not send",
+    };
+    const contested = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await contested.continue(child)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    expect(await journal.read(child.key)).toMatchObject({
+      turnIntent: true,
+      continuationVerified: false,
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("rejects a changed key and a second child of the same parent even with stale host history", async () => {
+    const host = new FixtureHost();
+    const { service } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const first = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "First child",
+    };
+    let started = false;
+    host.turnResponse = { turn: { id: "continued-turn" } };
+    host.onTurnStart = () => {
+      started = true;
+    };
+    host.onTurnsList = () => ({
+      data: started
+        ? [
+            { id: "continued-turn", status: "completed" },
+            { id: "issued-turn", status: "completed" },
+          ]
+        : [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    expect((await service().continue(first)).status).toBe("dispatched");
+    expect(
+      await service().continue({ ...first, message: "Changed child" }),
+    ).toEqual({
+      status: "refused",
+      code: "HANDOFF_CONTINUE_KEY_CONFLICT",
+    });
+    host.onTurnsList = () => ({
+      data: [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    expect(
+      await service().continue({
+        key: randomUUID(),
+        dispatchId: request.key,
+        message: "Second child",
+      }),
+    ).toEqual({ status: "refused", code: "HANDOFF_CONTINUE_PARENT_RESERVED" });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      2,
+    );
+  });
+
+  it("keeps an unreadable latest-turn check and malformed start response outcome-unknown", async () => {
+    const host = new FixtureHost();
+    const { service } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const first = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue",
+    };
+    host.onTurnsList = () => {
+      throw new Error("HISTORY_UNAVAILABLE");
+    };
+    expect(await service().continue(first)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: first.key,
+    });
+    host.onTurnsList = () => ({
+      data: [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    host.turnResponse = { turn: { id: "" } };
+    expect(await service().continue(first)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: first.key,
+    });
+    const sends = host.calls.filter((method) => method === "turn/start").length;
+    expect(await service().continue(first)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: first.key,
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      sends,
+    );
+  });
+
+  it("refuses invalid, expired, unbound and stale continuation inputs before host effects", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const child = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue",
+    };
+    expect(await service().continue({ ...child, message: "\0" })).toEqual({
+      status: "refused",
+      code: "HANDOFF_CONTINUE_INPUT_INVALID",
+    });
+    const expired = new PersistentCodexHandoff(
+      authority,
+      host,
+      new PrivateCodexHandoffJournal(journalRoot),
+      new Sha256HandoffRequestDigester(),
+      Date.now() - 1,
+      mutationGate,
+    );
+    expect(await expired.continue(child)).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    host.projects = [];
+    expect(await service().continue(child)).toEqual({
+      status: "refused",
+      code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+    });
+    host.projects = [
+      { id: request.projectId, roots: [{ path: workspace.project.root }] },
+    ];
+    host.readResponse = { thread: { id: "other-thread" } };
+    expect(await service().continue(child)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    host.readResponse = undefined;
+    host.onTurnsList = () => ({
+      data: [{ id: "issued-turn", status: "inProgress" }],
+      nextCursor: null,
+    });
+    expect(await service().continue(child)).toEqual({
+      status: "refused",
+      code: "HANDOFF_CONTINUE_PARENT_NOT_LATEST",
+    });
+    expect(
+      await new PrivateCodexHandoffJournal(journalRoot).read(child.key),
+    ).toBeNull();
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("retains an unknown send-intent after turn/start failure and never sends on replay", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    host.onTurnsList = () => ({
+      data: [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    host.failTurn = true;
+    const child = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue",
+    };
+    let safeToRelease: boolean | null = null;
+    const gate: HandoffMutationGate = {
+      async run(preflight, effect, classify) {
+        await preflight();
+        try {
+          return await effect();
+        } catch (error) {
+          safeToRelease = classify(error);
+          throw error;
+        }
+      },
+    };
+    const failing = new PersistentCodexHandoff(
+      authority,
+      host,
+      new PrivateCodexHandoffJournal(journalRoot),
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      gate,
+    );
+    expect(await failing.continue(child)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    expect(safeToRelease).toBe(false);
+    host.failTurn = false;
+    const sends = host.calls.filter((method) => method === "turn/start").length;
+    expect(await service().continue(child)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: child.key,
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      sends,
+    );
+  });
+
   it("will not continue a parent with an unconfirmed active-steer intent", async () => {
     const host = new FixtureHost();
     const { service, journalRoot } = await fixture(host);

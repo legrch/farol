@@ -698,6 +698,15 @@ export class PersistentCodexHandoff {
             throw new HandoffNotSubmittedError(
               "HANDOFF_CONTINUE_ALREADY_CLAIMED",
             );
+          const atSend = await this.authority.resolve(parent.workspaceId);
+          if (
+            this.now() >= this.mutationExpiresAt ||
+            !validWorkspace(atSend) ||
+            !sameWorkspace(atSend, workspace)
+          )
+            throw new HandoffNotSubmittedError(
+              "HANDOFF_CONTINUE_AUTHORITY_CHANGED",
+            );
           const started = object(
             await this.host.request(
               "turn/start",
