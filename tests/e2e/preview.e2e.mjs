@@ -2765,6 +2765,24 @@ async function stopOwnedTestGroup(instance, label) {
   }
 }
 
+async function requestProductQuit(instance) {
+  const owned = instance.application.process();
+  if (owned.exitCode !== null || owned.signalCode !== null) {
+    throw new Error("E2E_PRODUCT_EXITED_BEFORE_QUIT_REQUEST");
+  }
+  const exited = once(owned, "exit");
+  // Playwright's application.close() can leave a live Electron main without
+  // reaching before-quit (and without a quit receipt). Request the same
+  // app.quit() an owner uses, then require the exact owned PID to exit. A
+  // transport rejection during a successful quit is not itself an outcome.
+  void instance.application
+    .evaluate(({ app }) => {
+      app.quit();
+    })
+    .catch(() => undefined);
+  await exited;
+}
+
 async function close(instance, options = {}) {
   const removeHome = options.removeHome ?? true;
   const label = `close[${instance.windowMode ?? "unknown"}]`;
@@ -2814,9 +2832,8 @@ async function close(instance, options = {}) {
   if (metrics === null) provedQuit = false;
   const utilityPids = metrics?.value ?? [];
   let closeReturnedAfterEarlyExit = false;
-  // Playwright's application.close() can wait forever after the child has
-  // already exited. Confirm the exact owned PID first; an early exit stays a
-  // recorded failure and never counts as a successful quit proof.
+  // Confirm the exact owned PID first; an early exit stays a recorded
+  // failure and never counts as a successful quit proof.
   let alreadyExited = false;
   if (inspected === null || metrics === null) {
     try {
@@ -2835,7 +2852,7 @@ async function close(instance, options = {}) {
         CLOSE_PHASE_BUDGET_MS,
         () =>
           ifApplicationLive(instance, "application-close", () =>
-            instance.application.close(),
+            requestProductQuit(instance),
           ),
       );
       if (closed === null) {
