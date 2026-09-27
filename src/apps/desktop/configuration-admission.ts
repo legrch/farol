@@ -28,7 +28,6 @@ const connectorGuardedCommands = new Set<string>([
   "computer.verify-workspace",
   "dev-proof.prepare",
   "host.select-codex",
-  "host.discover-codex",
   "host.select-discovered-codex",
   "host.verify-codex",
   "host.remove-codex",

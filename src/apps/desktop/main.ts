@@ -4800,30 +4800,18 @@ async function configureAdmittedProduct(
       return verifyCodexExecutable(selected);
     }
     case "host.discover-codex": {
-      if (codexAgentOperationActive()) {
-        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
-      }
       try {
-        // Keep the real Detect host action in the E2E lane while ensuring it
-        // probes only the synthetic App Server fixture, never a Codex binary
-        // or model configuration belonging to the owner.
+        // Discovery is read-only. The owner selects a candidate explicitly
+        // before verification can change the host or Computer authority.
+        // E2E discovery never scans the owner's installed Codex binaries.
         const testExecutable = e2eCodexExecutable();
         if (testExecutable === "invalid") {
           return configurationFailure("CODEX_HOST_SELECTION_INVALID");
         }
-        if (testExecutable !== undefined) {
-          return verifyCodexExecutable(testExecutable);
-        }
-        const discovered = await discoverExecutables("codex");
-        for (const candidate of discovered.candidates) {
-          if (candidate.verdict !== "offer") continue;
-          if (!candidate.sha256) continue;
-          const verified = await verifyCodexExecutable(candidate.path, {
-            canonicalPath: candidate.path,
-            sha256: candidate.sha256,
-          });
-          if (verified.ok) return verified;
-        }
+        const discovered =
+          testExecutable === undefined
+            ? await discoverExecutables("codex")
+            : { candidates: [], searched: [] };
         return ProductConfigurationResultSchema.parse({
           ok: true,
           snapshot: configuration.snapshot(),

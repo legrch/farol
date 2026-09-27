@@ -2103,7 +2103,10 @@ function buildDiscoveryPanel(
   if (offered.length > 0) {
     const automatic = document.createElement("p");
     automatic.className = "discovery-empty";
-    automatic.textContent = `Farol found ${offered.length === 1 ? "a trusted local candidate" : `${offered.length} trusted local candidates`}, but none passed the full compatibility probe automatically. Open Advanced only if you need to inspect or override discovery.`;
+    automatic.textContent =
+      advancedKey === "hosts"
+        ? `Farol found ${offered.length === 1 ? "a trusted local Codex candidate" : `${offered.length} trusted local Codex candidates`}. Open Advanced to select and verify one.`
+        : `Farol found ${offered.length === 1 ? "a trusted local candidate" : `${offered.length} trusted local candidates`}, but none passed the full compatibility probe automatically. Open Advanced only if you need to inspect or override discovery.`;
     panel.append(automatic);
   } else {
     const empty = document.createElement("p");

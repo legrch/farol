@@ -78,7 +78,6 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
     ).toBe("CONNECTOR_STOP_REQUIRED");
     for (const kind of [
       "host.select-codex",
-      "host.discover-codex",
       "host.select-discovered-codex",
       "host.verify-codex",
       "host.remove-codex",
@@ -91,5 +90,12 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
       ).toBe("CONNECTOR_STOP_REQUIRED");
       expect(changesComputerAuthority(kind)).toBe(true);
     }
+    expect(
+      configurationAdmission("host.discover-codex", {
+        agentActive: false,
+        connectorRunning: true,
+      }),
+    ).toBe("admitted");
+    expect(changesComputerAuthority("host.discover-codex")).toBe(false);
   });
 });
