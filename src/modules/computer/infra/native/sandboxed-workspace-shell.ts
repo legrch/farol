@@ -246,6 +246,8 @@ export class SandboxedWorkspaceShell {
   private readonly pendingOperations = new Set<string>();
   private readonly completedOrder: string[] = [];
   private closing = false;
+  private groupCleanupUnverified = false;
+  private scratchCleanupUnverified = false;
 
   constructor(
     private readonly approval: ComputerApproval,
@@ -407,6 +409,9 @@ export class SandboxedWorkspaceShell {
   }
 
   private completed(record: RunningCommand): void {
+    if (record.groupCleanup !== "confirmed") {
+      this.groupCleanupUnverified = true;
+    }
     this.completedOrder.push(record.handle);
     while (this.completedOrder.length > MAX_COMPLETED) {
       const handle = this.completedOrder.shift();
@@ -425,6 +430,14 @@ export class SandboxedWorkspaceShell {
       .update(JSON.stringify([this.approval.ownerId, this.approval.computerId]))
       .digest("hex");
     return path.join(this.privateRoot, "shell-v2", identity);
+  }
+
+  private async removeScratch(scratch: string): Promise<void> {
+    try {
+      await fs.rm(scratch, { recursive: true, force: true });
+    } catch {
+      this.scratchCleanupUnverified = true;
+    }
   }
 
   async start(
@@ -570,33 +583,22 @@ export class SandboxedWorkspaceShell {
     }
     // The fsynced reservation already exists. Never reissue it after a lost
     // acknowledgement, even when no command was dispatched.
-    if (this.closing) {
+    const abandonReserved = async (code: string): Promise<ShellResponse> => {
+      await this.removeScratch(scratch);
       this.pendingOperations.delete(input.operationId);
-      await fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
-      return refusal("SHELL_OUTCOME_UNKNOWN");
+      return refusal(code);
+    };
+    if (this.closing) {
+      return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
     if (signal?.aborted) {
-      this.pendingOperations.delete(input.operationId);
-      await fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
-      return refusal("SHELL_OUTCOME_UNKNOWN");
+      return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
     if (dispatchAllowed && !(await dispatchAllowed().catch(() => false))) {
-      this.pendingOperations.delete(input.operationId);
-      await fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
-      return refusal("SHELL_DISPATCH_FENCED");
+      return abandonReserved("SHELL_DISPATCH_FENCED");
     }
     if (this.closing) {
-      this.pendingOperations.delete(input.operationId);
-      await fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
-      return refusal("SHELL_OUTCOME_UNKNOWN");
+      return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
     const dispatchAuthority = this.authorize(
       input.workspaceId,
@@ -604,25 +606,16 @@ export class SandboxedWorkspaceShell {
       input.write,
     );
     if (dispatchAuthority) {
-      this.pendingOperations.delete(input.operationId);
-      await fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
-      return refusal(dispatchAuthority);
+      return abandonReserved(dispatchAuthority);
     }
     const authorityRemaining =
       Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) -
       this.now();
     if (authorityRemaining <= 0) {
-      this.pendingOperations.delete(input.operationId);
-      return refusal("SHELL_AUTHORITY_EXPIRED");
+      return abandonReserved("SHELL_AUTHORITY_EXPIRED");
     }
     if (signal?.aborted) {
-      this.pendingOperations.delete(input.operationId);
-      await fs
-        .rm(scratch, { recursive: true, force: true })
-        .catch(() => undefined);
-      return refusal("SHELL_OUTCOME_UNKNOWN");
+      return abandonReserved("SHELL_OUTCOME_UNKNOWN");
     }
     const sandbox = profile(
       verified.effective,
@@ -739,6 +732,7 @@ export class SandboxedWorkspaceShell {
       signal?.removeEventListener("abort", onAbort);
       record.state = "exited";
       record.groupCleanup = "unverified";
+      this.groupCleanupUnverified = true;
       record.exitSignal = null;
       record.errorCode = "SHELL_SPAWN_FAILED";
     });
@@ -774,14 +768,13 @@ export class SandboxedWorkspaceShell {
         }
         if (record.groupCleanup === "unverified") {
           record.errorCode ??= "SHELL_GROUP_CLEANUP_UNVERIFIED";
+          this.groupCleanupUnverified = true;
+        }
+        if (record.groupCleanup === "confirmed") {
+          await this.removeScratch(scratch);
         }
         record.state = "exited";
         this.completed(record);
-        if (record.groupCleanup === "confirmed") {
-          await fs
-            .rm(scratch, { recursive: true, force: true })
-            .catch(() => undefined);
-        }
       })();
     });
     // The watchdog checks absolute host deadlines before spawning the command.
@@ -886,6 +879,8 @@ export class SandboxedWorkspaceShell {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     return this.pendingOperations.size === 0 &&
+      !this.groupCleanupUnverified &&
+      !this.scratchCleanupUnverified &&
       [...this.byHandle.values()].every(
         (record) =>
           record.state === "exited" && record.groupCleanup === "confirmed",

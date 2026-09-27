@@ -843,7 +843,7 @@ describe.skipIf(process.platform !== "darwin")(
     });
 
     it("cannot dispatch a reserved start after connector shutdown begins", async () => {
-      const { shell, workspace } = await fixture();
+      const { shell, workspace, root } = await fixture();
       const input = {
         operationId: "shutdown-during-dispatch",
         workspaceId: "fixture",
@@ -852,15 +852,45 @@ describe.skipIf(process.platform !== "darwin")(
         timeoutMs: 5_000,
         write: true,
       };
-      const result = await shell.start(input, undefined, async () => {
+      let entered!: () => void;
+      let release!: () => void;
+      const atDispatch = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const dispatchGate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const starting = shell.start(input, undefined, async () => {
         shell.close();
+        entered();
+        await dispatchGate;
         return true;
       });
+      await atDispatch;
+      let drained = false;
+      const drain = shell.closeAndWait().then((result) => {
+        drained = true;
+        return result;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(drained).toBe(false);
+      release();
+      const result = await starting;
       expect(result).toMatchObject({
         ok: false,
         error: { code: "SHELL_OUTCOME_UNKNOWN" },
       });
-      expect(await shell.closeAndWait()).toBe("confirmed");
+      expect(await drain).toBe("confirmed");
+      const privateEntries = await fs.readdir(
+        path.join(root, "private", "shell-v2"),
+      );
+      expect(privateEntries).toHaveLength(1);
+      const shellEntries = await fs.readdir(
+        path.join(root, "private", "shell-v2", privateEntries[0]!),
+      );
+      expect(shellEntries.some((name) => name.startsWith("shell-tmp-"))).toBe(
+        false,
+      );
       expect(
         await shell.start({ ...input, operationId: "after-close" }),
       ).toMatchObject({
