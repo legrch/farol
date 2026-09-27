@@ -238,6 +238,7 @@ function runExact(
     const stderr: Buffer[] = [];
     let bytes = 0;
     let finished = false;
+    let spawnError: Error | undefined;
     const timer = setTimeout(() => child.kill("SIGKILL"), COMMAND_TIMEOUT_MS);
     const finish = (action: () => void): void => {
       if (finished) return;
@@ -254,9 +255,15 @@ function runExact(
       };
     child.stdout.on("data", collect(stdout));
     child.stderr.on("data", collect(stderr));
-    child.once("error", (error) => finish(() => reject(error)));
+    child.once("error", (error) => {
+      spawnError = error;
+    });
     child.once("close", (code, signal) =>
       finish(() => {
+        if (spawnError) {
+          reject(spawnError);
+          return;
+        }
         if (code !== 0 || signal !== null || bytes > 16 * 1_024) {
           reject(new Error("reviewed executable failed"));
           return;
@@ -802,8 +809,11 @@ function runSandboxedGit(
       stdio: ["ignore", "pipe", "pipe"],
     });
     if (child.stdout === null || child.stderr === null) {
+      child.once("error", () => {});
+      child.once("close", () =>
+        resolve({ failure: "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE" }),
+      );
       killProcessGroup(child);
-      resolve({ failure: "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE" });
       return;
     }
     const stdout: Buffer[] = [];
@@ -814,6 +824,7 @@ function runSandboxedGit(
     let stdoutTooLarge = false;
     let stderrTooLarge = false;
     let cancelled = false;
+    let spawnFailed = false;
     let finished = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -851,14 +862,18 @@ function runSandboxedGit(
         stderr.push(chunk);
       }
     });
-    child.once("error", () =>
-      finish({
-        failure: cancelled
-          ? "WORKSPACE_COMMAND_CANCELLED"
-          : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
-      }),
-    );
+    child.once("error", () => {
+      spawnFailed = true;
+    });
     child.once("close", (code, exitSignal) => {
+      if (spawnFailed) {
+        finish({
+          failure: cancelled
+            ? "WORKSPACE_COMMAND_CANCELLED"
+            : "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE",
+        });
+        return;
+      }
       if (cancelled) {
         finish({ failure: "WORKSPACE_COMMAND_CANCELLED" });
         return;

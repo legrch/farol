@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 
 const arguments_ = process.argv.slice(2);
 if (
@@ -52,6 +53,7 @@ function packagedEnvironment() {
 }
 
 async function connect(entryFile, launchFile) {
+  await prepareMcpLifecycle(launchFile);
   const transport = new StdioClientTransport({
     command,
     args: [entryFile, "--launch-contract", launchFile],

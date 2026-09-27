@@ -356,6 +356,7 @@ import {
   type ConnectorVerificationReceipt,
 } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
+import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import {
   DEV_MCP_PROOF_ALLOWED_PATH,
   DEV_MCP_PROOF_DENIED_PATH,
@@ -614,6 +615,7 @@ let connectorCredentialStore: PrivateConnectorKeyStore | null = null;
 let secureMcpConnectorRuntime: SecureMcpConnectorRuntime | null = null;
 let modelLifecycle: FarolModelLifecycle | null = null;
 let connectorTaskAdmission = false;
+let connectorStartInFlight: Promise<void> | null = null;
 // F3-1b: one authority transition at a time. A command that changes Computer
 // authority holds it through its commit; a connector start and an Agent
 // admission hold it from reading the settings until they run, so neither can
@@ -2916,6 +2918,22 @@ function secureMcpLaunchRoot(): string {
   return path.join(secureMcpConnectorRoot(), "computer-authority");
 }
 
+function computerMcpLifecycle(): PrivateMcpLifecycle {
+  return new PrivateMcpLifecycle(secureMcpLaunchRoot());
+}
+
+async function stopAndConfirmComputerMcp(
+  connector = secureMcpConnectorRuntime,
+  inFlightStart: Promise<void> | null = null,
+): Promise<void> {
+  if (!connector) throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+  const lifecycle = computerMcpLifecycle();
+  await lifecycle.beginStop();
+  await inFlightStart;
+  await connector.stop();
+  await lifecycle.confirmStop();
+}
+
 function devMcpProofRoot(): string {
   return path.join(
     activeDesktopIdentity.userData,
@@ -3503,6 +3521,7 @@ async function recordConnectorRuntime(
 async function startSecureMcpConnector(
   repair: boolean,
 ): Promise<ProductConfigurationResult> {
+  if (quitInProgress) return configurationFailure("CONNECTOR_START_FAILED");
   if (
     !configuration ||
     !connectorCredentialStore ||
@@ -3526,10 +3545,14 @@ async function startSecureMcpConnector(
   const transition = authorityTransitions.tryReserve("connector-start");
   if (!transition) return transitionRefusal();
   connectorTaskAdmission = true;
+  let finishStart!: () => void;
+  connectorStartInFlight = new Promise<void>((resolve) => {
+    finishStart = resolve;
+  });
   try {
     if (repair) {
       try {
-        await secureMcpConnectorRuntime.stop();
+        await stopAndConfirmComputerMcp();
       } catch {
         return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
       }
@@ -3597,8 +3620,12 @@ async function startSecureMcpConnector(
       launchContractSha256 = createHash("sha256")
         .update(await readFile(launchFile))
         .digest("hex");
+      await computerMcpLifecycle().prepare(launchContractSha256);
     } catch (error) {
       const code = error instanceof Error ? error.message : "";
+      if (code.startsWith("COMPUTER_MCP_")) {
+        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+      }
       if (code === "SECURE_MCP_WORKSPACE_REQUIRED") {
         return configurationFailure("CONNECTOR_WORKSPACE_REQUIRED");
       }
@@ -3650,6 +3677,9 @@ async function startSecureMcpConnector(
     }
 
     let started;
+    // Quit closes new admission first. If it arrived while configure or
+    // doctor was pending, do not launch a tunnel after its drain began.
+    if (quitInProgress) return configurationFailure("CONNECTOR_START_FAILED");
     try {
       started = await secureMcpConnectorRuntime.start({
         executablePath: connector.tunnelClient.executablePath,
@@ -3688,7 +3718,7 @@ async function startSecureMcpConnector(
     });
     if (!challenged.ok) {
       try {
-        await secureMcpConnectorRuntime.stop();
+        await stopAndConfirmComputerMcp();
       } catch {
         return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
       }
@@ -3709,6 +3739,8 @@ async function startSecureMcpConnector(
   } finally {
     connectorTaskAdmission = false;
     transition.release();
+    finishStart();
+    connectorStartInFlight = null;
   }
 }
 
@@ -4491,7 +4523,16 @@ async function configureProduct(
   }
   const reserved = await authorityTransitions.withReservation(
     "authority-change",
-    () => configureAdmittedProduct(command),
+    async () => {
+      try {
+        const lifecycle = computerMcpLifecycle();
+        await lifecycle.beginStop();
+        await lifecycle.confirmStop();
+      } catch {
+        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+      }
+      return configureAdmittedProduct(command);
+    },
   );
   return deliverConfigurationReply(
     command.kind,
@@ -4707,7 +4748,7 @@ async function configureAdmittedProduct(
       connectorTaskAdmission = true;
       try {
         try {
-          await secureMcpConnectorRuntime.stop();
+          await stopAndConfirmComputerMcp();
         } catch {
           return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
         }
@@ -8600,7 +8641,11 @@ async function main(): Promise<void> {
       }
       const connector = secureMcpConnectorRuntime;
       if (connector) {
-        closers.push({ name: "connector", close: () => connector.stop() });
+        const inFlightStart = connectorStartInFlight;
+        closers.push({
+          name: "connector",
+          close: () => stopAndConfirmComputerMcp(connector, inFlightStart),
+        });
       }
       const model = modelLifecycle;
       modelLifecycle = null;

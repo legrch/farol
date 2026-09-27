@@ -772,6 +772,7 @@ function runExact(
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     let bytes = 0;
+    let spawnError: Error | undefined;
     let complete = false;
     const timer = setTimeout(() => child.kill("SIGKILL"), DEFAULT_TIMEOUT_MS);
     const finish = (action: () => void): void => {
@@ -789,9 +790,15 @@ function runExact(
       };
     child.stdout.on("data", collect(stdout));
     child.stderr.on("data", collect(stderr));
-    child.once("error", (error) => finish(() => reject(error)));
+    child.once("error", (error) => {
+      spawnError = error;
+    });
     child.once("close", (code, signal) =>
       finish(() => {
+        if (spawnError) {
+          reject(spawnError);
+          return;
+        }
         if (code !== 0 || signal !== null || bytes > 16 * 1024) {
           reject(new Error("reviewed dependency command failed"));
           return;
@@ -1019,8 +1026,11 @@ function runHelper(
       requestPipe == null ||
       (withHook && (hookSignal == null || hookContinue == null))
     ) {
+      child.once("error", () => {});
+      child.once("close", () =>
+        reject(new WorkspaceRefusal("WORKSPACE_HELPER_FAILED")),
+      );
       child.kill("SIGKILL");
-      reject(new WorkspaceRefusal("WORKSPACE_HELPER_FAILED"));
       return;
     }
     const requestInput = requestPipe;
@@ -1030,6 +1040,7 @@ function runHelper(
     let stderrBytes = 0;
     let timedOut = false;
     let interrupted = false;
+    let channelFailed = false;
     let complete = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -1047,11 +1058,10 @@ function runHelper(
       options.signal?.removeEventListener("abort", interrupt);
       action();
     };
-    const failChannel = (): void =>
-      finish(() => {
-        child.kill("SIGKILL");
-        reject(new WorkspaceRefusal("WORKSPACE_HELPER_FAILED"));
-      });
+    const failChannel = (): void => {
+      channelFailed = true;
+      child.kill("SIGKILL");
+    };
     for (const pipe of pipes) pipe?.on("error", failChannel);
 
     responsePipe.on("data", (chunk: Buffer) => {
@@ -1066,11 +1076,13 @@ function runHelper(
       stderrBytes += chunk.length;
       if (stderrBytes > MAX_STDERR_BYTES) child.kill("SIGKILL");
     });
-    child.once("error", () =>
-      finish(() => reject(new WorkspaceRefusal("WORKSPACE_HELPER_FAILED"))),
-    );
+    child.once("error", failChannel);
     child.once("close", (code, signal) =>
       finish(() => {
+        if (channelFailed) {
+          reject(new WorkspaceRefusal("WORKSPACE_HELPER_FAILED"));
+          return;
+        }
         if (interrupted) {
           // The process has exited and its pipes are closed.
           reject(new WorkspaceRefusal("WORKSPACE_REQUEST_INTERRUPTED"));

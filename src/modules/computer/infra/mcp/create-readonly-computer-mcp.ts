@@ -619,6 +619,10 @@ export function createReadonlyComputerMcpServer(
   devMcpProof?: DevMcpProofRecorder,
   codexTasks?: CodexTaskRoutePeer,
   shell?: SandboxedWorkspaceShell,
+  lifecycle?: Readonly<{
+    isStopping(): Promise<boolean>;
+    enterHandler(): (() => void) | null;
+  }>,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -635,11 +639,25 @@ export function createReadonlyComputerMcpServer(
   const leasedShellHandles = new Set<string>();
   // Every tool holds the shared admission lock through its contract. A
   // summary's exclusive raise either follows completed work or refuses.
-  const guarded =
+  const tracked =
     <Arguments extends unknown[]>(
       run: (...arguments_: Arguments) => Promise<CallToolResult>,
     ) =>
     async (...arguments_: Arguments): Promise<CallToolResult> => {
+      const release = lifecycle?.enterHandler();
+      if (lifecycle && !release) return fenced("COMPUTER_MCP_STOPPING");
+      try {
+        return await run(...arguments_);
+      } finally {
+        release?.();
+      }
+    };
+  const guarded = <Arguments extends unknown[]>(
+    run: (...arguments_: Arguments) => Promise<CallToolResult>,
+  ) =>
+    tracked(async (...arguments_: Arguments): Promise<CallToolResult> => {
+      if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
+        return fenced("COMPUTER_MCP_STOPPING");
       if (!fence) return run(...arguments_);
       let admission;
       try {
@@ -649,11 +667,13 @@ export function createReadonlyComputerMcpServer(
       }
       if (!admission.admitted) return fenced(admission.code);
       try {
+        if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
+          return fenced("COMPUTER_MCP_STOPPING");
         return await run(...arguments_);
       } finally {
         await admission.release();
       }
-    };
+    });
 
   if (codexTasks) {
     const taskResponse = (value: object, isError = false): CallToolResult => ({
@@ -988,7 +1008,9 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellStartInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      async (input, context) => {
+      tracked(async (input, context) => {
+        if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
+          return fenced("COMPUTER_MCP_STOPPING");
         let admission;
         try {
           admission = await fence?.acquireAdmission();
@@ -998,6 +1020,8 @@ export function createReadonlyComputerMcpServer(
         if (admission && !admission.admitted) return fenced(admission.code);
         let transferred = false;
         try {
+          if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
+            return fenced("COMPUTER_MCP_STOPPING");
           const result = await shell.start(
             {
               ...input,
@@ -1005,6 +1029,8 @@ export function createReadonlyComputerMcpServer(
             },
             context.mcpReq.signal,
             async () => {
+              if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
+                return false;
               if (!fence) return true;
               try {
                 return (await fence.admits()).admitted;
@@ -1047,7 +1073,7 @@ export function createReadonlyComputerMcpServer(
         } finally {
           if (!transferred && admission?.admitted) await admission.release();
         }
-      },
+      }),
     );
     server.registerTool(
       "computer_shell_read",
@@ -1069,7 +1095,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellCancelInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      async ({ handle }) => shellResult(shell.cancel(handle)),
+      tracked(async ({ handle }) => shellResult(shell.cancel(handle))),
     );
   }
 

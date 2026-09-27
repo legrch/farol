@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 
 const executeFile = promisify(execFile);
 const binary = process.env.FAROL_CODEX_PROXY_BINARY;
@@ -272,6 +273,7 @@ try {
     mode: 0o600,
     flag: "wx",
   });
+  await prepareMcpLifecycle(launchFile);
   transport = new StdioClientTransport({
     command,
     args: [entry, "--launch-contract", launchFile],
@@ -357,6 +359,7 @@ try {
       flag: "wx",
     },
   );
+  await prepareMcpLifecycle(unavailableLaunchFile);
   transport = new StdioClientTransport({
     command,
     args: [entry, "--launch-contract", unavailableLaunchFile],

@@ -107,6 +107,18 @@ group is observed absent. A lost or unverified group leaves the marker in place
 and later admission fails closed. This serialization still does not contain or
 prove cleanup of a descendant that deliberately leaves the process group.
 
+Connector stop first writes a private durable stopping barrier for its launch
+generation. Every Computer MCP instance holds a kernel lifetime lease from
+before stdio serving through verified transport and shell-group drain. New
+instances refuse a stopped or revoked launch digest; existing instances close
+admission and drain when they observe the barrier. Desktop records the
+connector as stopped, or permits a Computer authority change after an already
+exited tunnel client, only when no MCP lease, unacknowledged instance marker or
+unresolved shell-group marker remains. A crash keeps the instance marker and
+leaves stop unverified. A later connector
+generation gets a new prepared digest; old digests stay revoked. This proves
+the known MCP and process-group boundary, not arbitrary detached descendants.
+
 This source checkpoint does not yet preserve output or live process identity
 across a Computer MCP process restart. Reconnection to the same MCP process
 retains the handle; replacing that process stops the owned process group and

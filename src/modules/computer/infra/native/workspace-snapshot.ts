@@ -305,8 +305,9 @@ function spawnSnapshotHelper(
       requestPipe == null ||
       (withHook && (hookSignal == null || hookContinue == null))
     ) {
+      child.once("error", () => {});
+      child.once("close", () => reject(new Error("SNAPSHOT_HELPER_FAILED")));
       child.kill("SIGKILL");
-      reject(new Error("SNAPSHOT_HELPER_FAILED"));
       return;
     }
 
@@ -314,6 +315,7 @@ function spawnSnapshotHelper(
     let responseBytes = 0;
     let stderrBytes = 0;
     let timedOut = false;
+    let channelFailed = false;
     let complete = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -325,11 +327,10 @@ function spawnSnapshotHelper(
       clearTimeout(timer);
       action();
     };
-    const failChannel = (): void =>
-      finish(() => {
-        child.kill("SIGKILL");
-        reject(new Error("SNAPSHOT_HELPER_FAILED"));
-      });
+    const failChannel = (): void => {
+      channelFailed = true;
+      child.kill("SIGKILL");
+    };
     for (const pipe of pipes) pipe?.on("error", failChannel);
 
     responsePipe.on("data", (chunk: Buffer) => {
@@ -344,11 +345,13 @@ function spawnSnapshotHelper(
       stderrBytes += chunk.length;
       if (stderrBytes > MAX_STDERR_BYTES) child.kill("SIGKILL");
     });
-    child.once("error", () =>
-      finish(() => reject(new Error("SNAPSHOT_HELPER_FAILED"))),
-    );
+    child.once("error", failChannel);
     child.once("close", (code, signal) =>
       finish(() => {
+        if (channelFailed) {
+          reject(new Error("SNAPSHOT_HELPER_FAILED"));
+          return;
+        }
         if (
           timedOut ||
           signal !== null ||

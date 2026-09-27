@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
@@ -12,6 +12,10 @@ const EXPECTED_HOME = "/fixture/codex-home";
 const PROXY_FIXTURE = String.raw`
 let pending = "";
 let approvalBlockedRequest = null;
+if (process.env.FIXTURE_MODE === "ignore-term") {
+  process.on("SIGTERM", () => {});
+  setInterval(() => {}, 1_000);
+}
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
   pending += chunk;
@@ -152,7 +156,7 @@ describe("shared Codex proxy transport fixture", () => {
           data: [{ id: "saved-project", roots: [] }],
           nextCursor: null,
         });
-        host.close();
+        expect(await host.closeAndWait()).toBe(true);
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
         await fs.rm(root, { recursive: true, force: true });
@@ -175,6 +179,36 @@ describe("shared Codex proxy transport fixture", () => {
     await expect(host.request("thread/delete", {})).rejects.toThrow(
       "CODEX_SHARED_METHOD_DENIED",
     );
+  });
+
+  it("waits for its exact proxy process to exit before confirming shutdown", async () => {
+    let ownedChild: ChildProcessWithoutNullStreams | undefined;
+    const host = new SharedCodexProxyHost(() => {
+      ownedChild = spawn(process.execPath, ["-e", PROXY_FIXTURE], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { FIXTURE_MODE: "normal" },
+      });
+      return ownedChild;
+    }, EXPECTED_HOME);
+    hosts.push(host);
+    await host.connect();
+    expect(ownedChild?.pid).toBeDefined();
+    expect(await host.closeAndWait()).toBe(true);
+    expect(
+      ownedChild?.exitCode !== null || ownedChild?.signalCode !== null,
+    ).toBe(true);
+    expect(await host.closeAndWait()).toBe(true);
+  });
+
+  it("escalates only its own unresponsive proxy and waits for exit", async () => {
+    const host = fixture("ignore-term");
+    await host.connect();
+    expect(await host.closeAndWait()).toBe(true);
+  });
+
+  it("confirms shutdown when no proxy was ever launched", async () => {
+    const host = fixture();
+    expect(await host.closeAndWait()).toBe(true);
   });
 
   it("refuses a different serving profile before a task request", async () => {

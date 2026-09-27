@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 
 const executeFile = promisify(execFile);
 
@@ -178,6 +179,7 @@ await fs.writeFile(launchFile, `${canonical(launch)}\n`, {
   mode: 0o600,
   flag: "wx",
 });
+await prepareMcpLifecycle(launchFile);
 
 const transport = new StdioClientTransport({
   command,

@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 
 const packaged = process.argv[2] === "--packaged";
 if (process.argv.length > (packaged ? 3 : 2)) {
@@ -101,6 +102,7 @@ async function waitPidGone(pid) {
 }
 
 async function connect(launchFile, onSpawn = () => {}) {
+  await prepareMcpLifecycle(launchFile);
   let launchedPid = null;
   const transport = new TrackedStdioClientTransport(
     {
@@ -707,6 +709,26 @@ try {
     );
   } finally {
     await disconnect(linked);
+  }
+  const stopping = await connect(linkedLaunchFile);
+  try {
+    await fs.writeFile(
+      path.join(linkedLaunchRoot, "mcp-lifecycle", "stopping"),
+      "1\n",
+      { mode: 0o600, flag: "wx" },
+    );
+    assert.deepEqual(await connectorExit(stopping.pid), {
+      code: 0,
+      signal: null,
+    });
+    assert.equal(await waitPidGone(stopping.pid), true);
+    ownedConnectorPids.delete(stopping.pid);
+    unverifiedConnectorShutdowns.delete(stopping.pid);
+    await stopping.client.close().catch(() => undefined);
+    await assert.rejects(connect(linkedLaunchFile));
+  } finally {
+    if (ownedConnectorPids.has(stopping.pid))
+      await disconnect(stopping).catch(() => undefined);
   }
   allCasesPassed = true;
 } finally {

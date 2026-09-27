@@ -94,7 +94,10 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       } catch {
         // Collection may already have disposed some handles before throwing.
         // Their exit is unproved, so keep the run marker and still quit.
-        draining = Promise.resolve({ drained: false, unconfirmed: ["collection"] });
+        draining = Promise.resolve({
+          drained: false,
+          unconfirmed: ["collection"],
+        });
       }
       let recordTimer: NodeJS.Timeout | undefined;
       void draining

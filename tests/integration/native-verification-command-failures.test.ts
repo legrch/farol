@@ -536,11 +536,19 @@ describe("native verification command process failures", () => {
   });
 
   it("classifies a sandbox process that came up without stdio as unavailable", async () => {
-    processMock.spawn.mockImplementationOnce(() => new HeadlessChild());
-
-    await expect(
-      execute(async () => "/usr/bin/git", "git.head"),
-    ).resolves.toMatchObject({
+    const child = new HeadlessChild();
+    processMock.spawn.mockImplementationOnce(() => child);
+    let settled = false;
+    const pending = execute(async () => "/usr/bin/git", "git.head").then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+    );
+    await vi.waitFor(() => expect(child.kill).toHaveBeenCalledOnce());
+    expect(settled).toBe(false);
+    child.emit("close", null, "SIGKILL");
+    await expect(pending).resolves.toMatchObject({
       ok: false,
       error: { code: "WORKSPACE_COMMAND_SANDBOX_UNAVAILABLE", retry: "never" },
     });

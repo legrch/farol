@@ -1,4 +1,5 @@
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 
@@ -18,9 +19,11 @@ import { PrivateWorkspaceMutationStore } from "../../modules/computer/infra/repo
 import {
   loadReadonlyComputerLaunchContract,
   materializeReadonlyComputerLaunch,
+  serializeReadonlyComputerLaunchContract,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import { PrivateConnectorVerificationRecorder } from "../../modules/computer/infra/mcp/connector-verification-receipt";
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
+import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import { PrivateDevMcpProofRecorder } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
 import { SandboxedWorkspaceShell } from "../../modules/computer/infra/native/sandboxed-workspace-shell";
@@ -52,10 +55,17 @@ async function main(): Promise<void> {
     helperPath: path.join(path.dirname(entryFile), "computer-safe-open.py"),
     helper: NEXT_SAFE_OPEN_HELPER,
   });
-  const launch = materializeReadonlyComputerLaunch(
-    await loadReadonlyComputerLaunchContract(launchFile, workspace),
-    Date.now(),
+  const loaded = await loadReadonlyComputerLaunchContract(
+    launchFile,
+    workspace,
   );
+  const launch = materializeReadonlyComputerLaunch(loaded, Date.now());
+  const launchDigest = createHash("sha256")
+    .update(serializeReadonlyComputerLaunchContract(loaded))
+    .digest("hex");
+  const lifecycle = new PrivateMcpLifecycle(path.dirname(launchFile));
+  // Registration precedes every optional host process and stdio serving.
+  const lifecycleLease = await lifecycle.join(launchDigest);
   const authorities = new InMemoryAuthorityRepository(launch.participants);
   const approvals = new InMemoryComputerApprovalRepository([launch.approval]);
   const contract = new ReadonlyComputerContractHandler(
@@ -89,7 +99,12 @@ async function main(): Promise<void> {
     ? await SharedCodexProxyHost.attach({
         ...taskLaunch.host,
         cwd: path.dirname(launchFile),
-      }).catch(() => {
+      }).catch((error: unknown) => {
+        if (
+          error instanceof Error &&
+          error.message === "CODEX_PROXY_CLEANUP_UNVERIFIED"
+        )
+          throw error;
         process.stderr.write(
           "Codex task route unavailable; Computer remains ready.\n",
         );
@@ -148,6 +163,7 @@ async function main(): Promise<void> {
         devMcpProof,
         codexTasks,
         shell,
+        lifecycle,
       ),
     {
       legacy: "serve",
@@ -157,25 +173,47 @@ async function main(): Promise<void> {
     },
   );
   let closing = false;
+  let poll: NodeJS.Timeout | undefined;
   const close = () => {
     if (closing) return;
     closing = true;
+    if (poll) clearInterval(poll);
+    lifecycle.closeHandlers();
     const shellDrain = shell?.closeAndWait() ?? Promise.resolve("confirmed");
-    sharedHost?.close();
-    void Promise.allSettled([shellDrain, handle.close()]).then((results) => {
+    const handlerDrain = lifecycle.waitForHandlers();
+    const proxyDrain = sharedHost?.closeAndWait() ?? Promise.resolve(true);
+    void Promise.allSettled([
+      shellDrain,
+      handle.close(),
+      handlerDrain,
+      proxyDrain,
+    ]).then(async (results) => {
       if (
         results[0]?.status !== "fulfilled" ||
         results[0].value !== "confirmed" ||
-        results[1]?.status !== "fulfilled"
+        results[1]?.status !== "fulfilled" ||
+        results[2]?.status !== "fulfilled" ||
+        results[3]?.status !== "fulfilled" ||
+        results[3].value !== true
       ) {
         process.stderr.write("Farol Next Computer MCP shutdown unverified.\n");
         process.exit(1);
       }
+      await lifecycleLease.release();
       process.exit(0);
     });
   };
+  poll = setInterval(() => {
+    void lifecycle
+      .isStopping()
+      .then((stopping) => {
+        if (stopping) close();
+      })
+      .catch(close);
+  }, 50);
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
+  process.stdin.once("end", close);
   process.once("exit", () => shell?.close());
 }
 

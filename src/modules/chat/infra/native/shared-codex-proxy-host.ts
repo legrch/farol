@@ -163,7 +163,13 @@ export class SharedCodexProxyHost implements HandoffHost {
         ),
       input.expectedCodexHome,
     );
-    await host.connect();
+    try {
+      await host.connect();
+    } catch (error) {
+      if (!(await host.closeAndWait()))
+        throw new Error("CODEX_PROXY_CLEANUP_UNVERIFIED");
+      throw error;
+    }
     return host;
   }
 
@@ -217,6 +223,40 @@ export class SharedCodexProxyHost implements HandoffHost {
 
   close(): void {
     this.fail();
+  }
+
+  async closeAndWait(): Promise<boolean> {
+    const child = this.child;
+    if (!child) {
+      this.fail();
+      return true;
+    }
+    const exited = (timeoutMs: number): Promise<boolean> => {
+      if (child.exitCode !== null || child.signalCode !== null)
+        return Promise.resolve(true);
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value: boolean) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          child.off("exit", onExit);
+          child.off("error", onError);
+          resolve(value);
+        };
+        const onExit = () => finish(true);
+        const onError = () => finish(false);
+        const timer = setTimeout(() => finish(false), timeoutMs);
+        child.once("exit", onExit);
+        child.once("error", onError);
+      });
+    };
+    const first = exited(1_500);
+    this.fail();
+    if (await first) return true;
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill("SIGKILL");
+    return exited(1_000);
   }
 
   private fail(): void {
