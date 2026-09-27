@@ -1,5 +1,6 @@
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import type { CodexTaskRoute } from "../../src/modules/chat/contract/codex-task-route";
@@ -66,11 +67,12 @@ describe("Codex task Computer MCP surface", () => {
       },
     };
     const { client, server } = await connected(route);
+    const steerKey = randomUUID();
     const send = (message: string) =>
       client.callTool({
         name: "codex_task_message",
         arguments: {
-          key: "18ff8059-8246-4b8d-9c68-4aa17c2f8421",
+          key: steerKey,
           dispatchId: key,
           workspaceId: "writer",
           projectId: "saved-project",

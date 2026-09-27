@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import type { CodexTaskRoute } from "../../src/modules/chat/contract/codex-task-route";
@@ -61,7 +62,7 @@ describe("separate Codex task admission", () => {
     });
     expect(calls).toBe(1);
     const message = {
-      key: "18ff8059-8246-4b8d-9c68-4aa17c2f8421",
+      key: randomUUID(),
       dispatchId: request.key,
       workspaceId: request.workspaceId,
       projectId: request.projectId,

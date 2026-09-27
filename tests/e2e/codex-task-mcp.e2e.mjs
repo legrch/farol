@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -323,7 +323,7 @@ try {
     status: "dispatched",
     dispatchId: key,
   });
-  const steerKey = "18ff8059-8246-4b8d-9c68-4aa17c2f8421";
+  const steerKey = randomUUID();
   const invalidMessage = await client.callTool({
     name: "codex_task_message",
     arguments: {
