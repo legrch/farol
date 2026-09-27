@@ -13369,7 +13369,24 @@ n10ComputerPanelSegment: {
       await heldCard
         .getByRole("button", { name: "Enable edits", exact: true })
         .click();
-      await heldCard.getByText(/guarded edits · not verified/u).waitFor();
+      try {
+        await heldCard.getByText(/guarded edits · not verified/u).waitFor();
+      } catch (error) {
+        const actual = await heldAck.window.evaluate(() => ({
+          feedback: document.querySelector("#settings-feedback")?.textContent,
+          card: [
+            ...document.querySelectorAll(
+              "#computer-workspaces .workspace-card",
+            ),
+          ].find((candidate) =>
+            candidate.textContent?.includes("approved-workspace"),
+          )?.textContent,
+        }));
+        throw new Error(
+          `unexpected workspace state after Enable edits: ${error}; ${JSON.stringify(actual)}`,
+          { cause: error },
+        );
+      }
       await heldCard
         .getByRole("button", { name: "Verify folder", exact: true })
         .click();
