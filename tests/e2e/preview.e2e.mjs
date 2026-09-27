@@ -1987,11 +1987,16 @@ async function proveSecondLaunchDuringStartup() {
   };
   try {
     const startedAt = Date.now();
-    const repeated = await runBoundedProcess(executable, launchArgs, {
-      cwd: root,
-      env: launchEnvironment,
-      timeoutMs: 15_000,
-    });
+    const repeated = await phases.step(
+      "startup-second-launch.repeatLaunch",
+      LAUNCH_PHASE_BUDGET_MS,
+      () =>
+        runBoundedProcess(executable, launchArgs, {
+          cwd: root,
+          env: launchEnvironment,
+          timeoutMs: 15_000,
+        }),
+    );
     assert.equal(
       repeated.status,
       0,
@@ -2002,18 +2007,42 @@ async function proveSecondLaunchDuringStartup() {
       "reopened",
     );
     assert.ok(Date.now() - startedAt >= 500, "E2E_STARTUP_REOPEN_DID_NOT_WAIT");
-    instance.window = await application.firstWindow({ timeout: 15_000 });
-    await instance.window
-      .locator("#task-tabs .task-tab")
-      .first()
-      .waitFor({ state: "visible" });
-    await waitForWindowPresentation(application, windowMode);
-    const bootstrap = await instance.window.evaluate(() =>
-      window.farolNext.bootstrap(),
+    instance.window = await phases.step(
+      "startup-second-launch.firstWindow",
+      LAUNCH_PHASE_BUDGET_MS,
+      () => application.firstWindow({ timeout: 15_000 }),
+    );
+    await phases.step(
+      "startup-second-launch.firstTaskTab",
+      LAUNCH_PHASE_BUDGET_MS,
+      () =>
+        instance.window
+          .locator("#task-tabs .task-tab")
+          .first()
+          .waitFor({ state: "visible" }),
+    );
+    await phases.step(
+      "startup-second-launch.presentation",
+      LAUNCH_PHASE_BUDGET_MS,
+      () => waitForWindowPresentation(application, windowMode),
+    );
+    const bootstrap = await phases.step(
+      "startup-second-launch.bootstrap",
+      LAUNCH_PHASE_BUDGET_MS,
+      () => instance.window.evaluate(() => window.farolNext.bootstrap()),
     );
     assert.equal(bootstrap.runtimeState, "ready");
     assert.equal(bootstrap.runtimeIdentity, "farol-next-preview-runtime");
-    assert.equal((await taskSurfaces(application)).length, 2);
+    assert.equal(
+      (
+        await phases.step(
+          "startup-second-launch.taskSurfaces",
+          LAUNCH_PHASE_BUDGET_MS,
+          () => taskSurfaces(application),
+        )
+      ).length,
+      2,
+    );
   } finally {
     await close(instance);
   }
@@ -2508,11 +2537,27 @@ async function close(instance, options = {}) {
   );
   if (metrics === null) provedQuit = false;
   const utilityPids = metrics?.value ?? [];
-  await phases.step(`${label}.applicationClose`, CLOSE_PHASE_BUDGET_MS, () =>
-    ifApplicationLive(instance, "application-close", () =>
-      instance.application.close(),
-    ),
-  );
+  // Playwright's application.close() can wait forever after the child has
+  // already exited. Confirm the exact owned PID first; an early exit stays a
+  // recorded failure and never counts as a successful quit proof.
+  let alreadyExited = false;
+  if (inspected === null || metrics === null) {
+    try {
+      process.kill(mainPid, 0);
+    } catch (error) {
+      if (error?.code !== "ESRCH") throw error;
+      alreadyExited = true;
+    }
+  }
+  if (alreadyExited) {
+    phases.note(`${label}.applicationAlreadyExited`, `pid=${mainPid}`);
+  } else {
+    await phases.step(`${label}.applicationClose`, CLOSE_PHASE_BUDGET_MS, () =>
+      ifApplicationLive(instance, "application-close", () =>
+        instance.application.close(),
+      ),
+    );
+  }
   const exactPids = [mainPid, ...utilityPids].filter(
     (pid) => Number.isSafeInteger(pid) && pid > 0,
   );
