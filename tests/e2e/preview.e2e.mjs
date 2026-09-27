@@ -2771,6 +2771,7 @@ async function requestProductQuit(instance) {
     throw new Error("E2E_PRODUCT_EXITED_BEFORE_QUIT_REQUEST");
   }
   const exited = once(owned, "exit");
+  instance.quitRequestStatus = "pending";
   // Playwright's application.close() can leave a live Electron main without
   // reaching before-quit (and without a quit receipt). Request the same
   // app.quit() an owner uses, then require the exact owned PID to exit. A
@@ -2779,7 +2780,15 @@ async function requestProductQuit(instance) {
     .evaluate(({ app }) => {
       app.quit();
     })
-    .catch(() => undefined);
+    .then(
+      () => {
+        instance.quitRequestStatus = "accepted";
+      },
+      (error) => {
+        const name = error instanceof Error ? error.name : "unknown";
+        instance.quitRequestStatus = `rejected:${name.replace(/[^A-Za-z]/gu, "").slice(0, 48)}`;
+      },
+    );
   await exited;
 }
 
@@ -2884,7 +2893,24 @@ async function close(instance, options = {}) {
       }
       phases.note(
         `${label}.preAbortState`,
-        JSON.stringify({ mainPid, mainState, groupState }),
+        JSON.stringify({
+          mainPid,
+          mainState,
+          groupState,
+          quitRequestStatus: instance.quitRequestStatus ?? "not-requested",
+          quitReceipt: await fs
+            .access(
+              path.join(
+                instance.userData,
+                "farol-next-state",
+                "last-quit.json",
+              ),
+            )
+            .then(
+              () => "present",
+              (error) => (error?.code === "ENOENT" ? "absent" : "unverified"),
+            ),
+        }),
       );
       await stopOwnedTestGroup(instance, `${label}.abort-stalled-close`);
       throw error;
