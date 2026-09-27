@@ -1019,6 +1019,7 @@ export function createReadonlyComputerMcpServer(
         }
         if (admission && !admission.admitted) return fenced(admission.code);
         let transferred = false;
+        let reservedShell = false;
         try {
           if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
             return fenced("COMPUTER_MCP_STOPPING");
@@ -1039,8 +1040,20 @@ export function createReadonlyComputerMcpServer(
               }
             },
             admission?.admitted ? admission.fd : undefined,
-            fence ? () => fence.reserveShell(input.operationId) : undefined,
+            fence
+              ? async () => {
+                  await fence.reserveShell(input.operationId);
+                  reservedShell = true;
+                }
+              : undefined,
           );
+          // A refusal returned by start() is known to precede spawn. Clear
+          // its durable fence marker while still holding admission; a thrown
+          // or unknown outcome must retain both marker and lease instead.
+          if (!result.ok && reservedShell && fence) {
+            await fence.clearShell(input.operationId);
+            reservedShell = false;
+          }
           if (
             result.ok &&
             result.value.state === "running" &&
@@ -1071,6 +1084,11 @@ export function createReadonlyComputerMcpServer(
           }
           return shellResult(result);
         } finally {
+          if (reservedShell && !transferred && admission?.admitted) {
+            fence?.quarantineShell(input.operationId);
+            unverifiedShellLeases.add(admission);
+            transferred = true;
+          }
           if (!transferred && admission?.admitted) await admission.release();
         }
       }),

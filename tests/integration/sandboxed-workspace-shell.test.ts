@@ -1564,6 +1564,92 @@ describe.skipIf(process.platform !== "darwin")(
       }
     });
 
+    it("clears a reserved real MCP shell marker when dispatch is refused before spawn", async () => {
+      const { root, workspace, shell } = await fixture();
+      const launchRoot = path.join(root, "launch-reservation-refusal");
+      const connectorFence = new PrivateExecutionFence({ root: launchRoot });
+      const desktopFence = new PrivateExecutionFence({ root: launchRoot });
+      const reserveShell = connectorFence.reserveShell.bind(connectorFence);
+      let releaseReservation!: () => void;
+      let reachedReservation!: () => void;
+      const reservation = new Promise<void>((resolve) => {
+        releaseReservation = resolve;
+      });
+      const reached = new Promise<void>((resolve) => {
+        reachedReservation = resolve;
+      });
+      connectorFence.reserveShell = async (operationId) => {
+        await reserveShell(operationId);
+        reachedReservation();
+        await reservation;
+      };
+      const server = createReadonlyComputerMcpServer(
+        {
+          async execute(): Promise<never> {
+            throw new Error("unused");
+          },
+        },
+        {
+          ...binding,
+          participantId: "main-test",
+          turnId: "turn-test",
+          generation: 1,
+        },
+        undefined,
+        undefined,
+        undefined,
+        connectorFence,
+        undefined,
+        undefined,
+        shell,
+      );
+      const client = new Client({
+        name: "shell-reservation-fixture",
+        version: "1.0.0",
+      });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        client.connect(clientTransport),
+        server.connect(serverTransport),
+      ]);
+      try {
+        const starting = client.callTool({
+          name: "computer_shell_start",
+          arguments: {
+            operationId: "reserved-then-closed",
+            workspaceId: "fixture",
+            relativeCwd: ".",
+            command: "printf forbidden > reserved-then-closed.txt",
+            timeoutMs: 5_000,
+            write: true,
+          },
+        });
+        await reached;
+        await expect(
+          desktopFence.raise({ operationId: "summary", taskId: "task-a" }),
+        ).rejects.toThrow("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+        shell.close();
+        releaseReservation();
+        expect((await starting).structuredContent).toMatchObject({
+          ok: false,
+          error: { code: "SHELL_OUTCOME_UNKNOWN" },
+        });
+        await expect(
+          fs.stat(path.join(workspace, "reserved-then-closed.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await desktopFence.raise({ operationId: "summary", taskId: "task-a" });
+        await desktopFence.lower("summary");
+        const reopened = new PrivateExecutionFence({ root: launchRoot });
+        const admission = await reopened.acquireAdmission();
+        expect(admission.admitted).toBe(true);
+        if (admission.admitted) await admission.release();
+      } finally {
+        releaseReservation();
+        await Promise.all([client.close(), server.close()]);
+      }
+    });
+
     it("holds summary admission until an MCP shell command's group has exited", async () => {
       const { root, shell } = await fixture();
       const launchRoot = path.join(root, "launch");
