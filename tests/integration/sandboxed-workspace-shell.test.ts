@@ -1490,6 +1490,9 @@ describe.skipIf(process.platform !== "darwin")(
         expect(JSON.stringify(cancelled.structuredContent)).not.toContain(
           "secret-before-fence",
         );
+        expect(JSON.stringify(cancelled.content)).not.toContain(
+          "secret-before-fence",
+        );
         await complete(shell, handle);
         phase = "unreadable";
         const read = await client.callTool({
