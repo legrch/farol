@@ -33,6 +33,12 @@ function canonical(value) {
 }
 
 const ownedConnectorPids = new Set();
+const unverifiedConnectorShutdowns = new Set();
+const connectorExits = new Map();
+const ownedShellPids = new Set();
+const unverifiedShellHandles = new Set();
+const unknownShellStarts = new Set();
+let allCasesPassed = false;
 
 class TrackedStdioClientTransport extends StdioClientTransport {
   constructor(parameters, onSpawn) {
@@ -47,7 +53,37 @@ class TrackedStdioClientTransport extends StdioClientTransport {
       Number.isSafeInteger(pid) && pid > 1,
       "MCP_PROCESS_ID_UNVERIFIED",
     );
+    // The installed stdio transport owns this exact child. Observe its exit
+    // event directly; PID disappearance alone cannot distinguish graceful
+    // shutdown from the transport's TERM/KILL escalation.
+    const child = this._process;
+    assert.equal(child?.pid, pid, "MCP_OWNED_CHILD_HANDLE_UNVERIFIED");
+    connectorExits.set(
+      pid,
+      new Promise((resolve) => {
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+        if (child.exitCode !== null || child.signalCode !== null) {
+          resolve({ code: child.exitCode, signal: child.signalCode });
+        }
+      }),
+    );
     this.onSpawn(pid);
+  }
+}
+
+async function connectorExit(pid) {
+  const observed = connectorExits.get(pid);
+  if (!observed) return null;
+  let timer;
+  try {
+    return await Promise.race([
+      observed,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(null), 2_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -86,6 +122,7 @@ async function connect(launchFile, onSpawn = () => {}) {
     (pid) => {
       launchedPid = pid;
       ownedConnectorPids.add(pid);
+      unverifiedConnectorShutdowns.add(pid);
       onSpawn(pid);
     },
   );
@@ -97,9 +134,19 @@ async function connect(launchFile, onSpawn = () => {}) {
   try {
     await client.connect(transport);
   } catch (error) {
-    await client.close().catch(() => undefined);
+    let closed = false;
+    try {
+      await client.close();
+      closed = true;
+    } catch {
+      // Keep shutdown unverified when the transport close also fails.
+    }
     if (launchedPid !== null && (await waitPidGone(launchedPid))) {
       ownedConnectorPids.delete(launchedPid);
+      const exit = await connectorExit(launchedPid);
+      if (closed && exit?.signal === null) {
+        unverifiedConnectorShutdowns.delete(launchedPid);
+      }
     }
     throw error;
   }
@@ -125,6 +172,26 @@ async function disconnect(connection) {
   ownedConnectorPids.delete(connection.pid);
   if (closeError) throw closeError;
   assert.equal(connection.stderr(), "");
+  assert.deepEqual(await connectorExit(connection.pid), {
+    code: 0,
+    signal: null,
+  });
+  unverifiedConnectorShutdowns.delete(connection.pid);
+}
+
+async function startShell(client, arguments_) {
+  const operationId = arguments_.operationId;
+  unknownShellStarts.add(operationId);
+  const result = await client.callTool({
+    name: "computer_shell_start",
+    arguments: arguments_,
+  });
+  const handle = result.structuredContent?.value?.handle;
+  if (typeof handle === "string" && handle.length > 0) {
+    unknownShellStarts.delete(operationId);
+    unverifiedShellHandles.add(handle);
+  }
+  return result;
 }
 
 async function complete(client, handle) {
@@ -134,7 +201,11 @@ async function complete(client, handle) {
       arguments: { handle, stdoutOffset: 0, stderrOffset: 0 },
     });
     if (result.structuredContent?.value?.state === "exited") {
-      return result.structuredContent.value;
+      const outcome = result.structuredContent.value;
+      if (outcome.groupCleanup === "confirmed") {
+        unverifiedShellHandles.delete(handle);
+      }
+      return outcome;
     }
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -235,6 +306,7 @@ try {
   assert.ok(Number.isSafeInteger(failedLaunchPid) && failedLaunchPid > 1);
   assert.equal(await waitPidGone(failedLaunchPid), true);
   assert.equal(ownedConnectorPids.size, 0);
+  assert.equal(unverifiedConnectorShutdowns.size, 0);
 
   const first = await connect(launchFile);
   try {
@@ -245,17 +317,14 @@ try {
         .map((tool) => tool.name),
       ["computer_shell_start", "computer_shell_read", "computer_shell_cancel"],
     );
-    const started = await first.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-shell-once",
-        workspaceId: "fixture",
-        relativeCwd: ".",
-        command:
-          "cat input.txt && mv input.txt moved.txt && printf created > created.txt && rm moved.txt",
-        timeoutMs: 5_000,
-        write: true,
-      },
+    const started = await startShell(first.client, {
+      operationId: "packaged-shell-once",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command:
+        "cat input.txt && mv input.txt moved.txt && printf created > created.txt && rm moved.txt",
+      timeoutMs: 5_000,
+      write: true,
     });
     assert.equal(started.isError, undefined);
     const result = await complete(
@@ -274,16 +343,112 @@ try {
       code: "ENOENT",
     });
 
-    const denied = await first.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-shell-deny",
-        workspaceId: "fixture",
-        relativeCwd: ".",
-        command: "cat ../outside.txt",
-        timeoutMs: 5_000,
-        write: false,
-      },
+    const longStarted = await startShell(first.client, {
+      operationId: "packaged-shell-long-result",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command:
+        'printf "owned-long=%s early\\n" "$$"; sleep 2; printf "late\\n"',
+      timeoutMs: 5_000,
+      write: false,
+    });
+    assert.equal(longStarted.isError, undefined);
+    const longHandle = longStarted.structuredContent.value.handle;
+    let early = null;
+    let longPid = null;
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+      const read = await first.client.callTool({
+        name: "computer_shell_read",
+        arguments: { handle: longHandle, stdoutOffset: 0, stderrOffset: 0 },
+      });
+      const value = read.structuredContent?.value;
+      const marker = /^owned-long=(\d+) early\n/u.exec(value?.stdout ?? "");
+      if (marker) {
+        longPid = Number(marker[1]);
+        assert.ok(Number.isSafeInteger(longPid) && longPid > 1);
+        ownedShellPids.add(longPid);
+        early = value;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.ok(early, "SHELL_EARLY_OUTPUT_MISSING");
+    assert.equal(early.state, "running");
+    const longResult = await complete(first.client, longHandle);
+    assert.equal(longResult.exitCode, 0, longResult.stderr);
+    assert.equal(longResult.exitSignal, null);
+    assert.equal(longResult.groupCleanup, "confirmed");
+    assert.equal(longResult.stdout, `owned-long=${longPid} early\nlate\n`);
+    assert.equal(await waitPidGone(longPid), true);
+
+    const cancellable = await startShell(first.client, {
+      operationId: "packaged-shell-cancel-child",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command:
+        'sleep 20 & child=$!; printf "owned-shell=%s owned-child=%s\\n" "$$" "$child"; wait',
+      timeoutMs: 30_000,
+      write: false,
+    });
+    assert.equal(cancellable.isError, undefined);
+    const cancelHandle = cancellable.structuredContent.value.handle;
+    let cancellationSent = false;
+    try {
+      let owned = null;
+      for (let attempt = 0; attempt < 150; attempt += 1) {
+        const read = await first.client.callTool({
+          name: "computer_shell_read",
+          arguments: {
+            handle: cancelHandle,
+            stdoutOffset: 0,
+            stderrOffset: 0,
+          },
+        });
+        owned = /^owned-shell=(\d+) owned-child=(\d+)\n/u.exec(
+          read.structuredContent?.value?.stdout ?? "",
+        );
+        if (owned) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.ok(owned, "SHELL_OWNED_PIDS_MISSING");
+      const shellPid = Number(owned[1]);
+      const childPid = Number(owned[2]);
+      assert.ok(shellPid > 1 && childPid > 1 && shellPid !== childPid);
+      ownedShellPids.add(shellPid);
+      ownedShellPids.add(childPid);
+      assert.doesNotThrow(() => process.kill(shellPid, 0));
+      assert.doesNotThrow(() => process.kill(childPid, 0));
+      const cancelled = await first.client.callTool({
+        name: "computer_shell_cancel",
+        arguments: { handle: cancelHandle },
+      });
+      cancellationSent = true;
+      assert.equal(cancelled.isError, undefined);
+      const stopped = await complete(first.client, cancelHandle);
+      assert.equal(stopped.cancelRequested, true);
+      assert.equal(stopped.exitSignal, "SIGTERM");
+      assert.equal(stopped.groupCleanup, "confirmed");
+      assert.equal(stopped.detachedCleanup, "unverified");
+      assert.equal(await waitPidGone(shellPid), true);
+      assert.equal(await waitPidGone(childPid), true);
+    } finally {
+      if (!cancellationSent) {
+        await first.client
+          .callTool({
+            name: "computer_shell_cancel",
+            arguments: { handle: cancelHandle },
+          })
+          .catch(() => undefined);
+      }
+    }
+
+    const denied = await startShell(first.client, {
+      operationId: "packaged-shell-deny",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "cat ../outside.txt",
+      timeoutMs: 5_000,
+      write: false,
     });
     assert.equal(denied.isError, undefined);
     const denial = await complete(
@@ -293,16 +458,13 @@ try {
     assert.notEqual(denial.exitCode, 0);
     assert.equal(denial.stdout.includes("OUTSIDE_SECRET_CANARY"), false);
 
-    const history = await first.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-history-deny",
-        workspaceId: "fixture",
-        relativeCwd: ".",
-        command: "git show HEAD:history.txt",
-        timeoutMs: 5_000,
-        write: false,
-      },
+    const history = await startShell(first.client, {
+      operationId: "packaged-history-deny",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "git show HEAD:history.txt",
+      timeoutMs: 5_000,
+      write: false,
     });
     assert.equal(history.isError, undefined);
     const historyDenied = await complete(
@@ -331,23 +493,21 @@ try {
   });
   const restarted = await connect(launchFile);
   try {
-    const repeated = await restarted.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-shell-once",
-        workspaceId: "fixture",
-        relativeCwd: ".",
-        command:
-          "cat input.txt && mv input.txt moved.txt && printf created > created.txt && rm moved.txt",
-        timeoutMs: 5_000,
-        write: true,
-      },
+    const repeated = await startShell(restarted.client, {
+      operationId: "packaged-shell-once",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command:
+        "cat input.txt && mv input.txt moved.txt && printf created > created.txt && rm moved.txt",
+      timeoutMs: 5_000,
+      write: true,
     });
     assert.equal(repeated.isError, true);
     assert.equal(
       repeated.structuredContent?.error?.code,
       "SHELL_OUTCOME_UNKNOWN",
     );
+    unknownShellStarts.delete("packaged-shell-once");
   } finally {
     await disconnect(restarted);
   }
@@ -374,16 +534,13 @@ try {
   });
   const approved = await connect(historyLaunchFile);
   try {
-    const history = await approved.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-history-approved",
-        workspaceId: "fixture",
-        relativeCwd: ".",
-        command: "git show HEAD:history.txt",
-        timeoutMs: 5_000,
-        write: false,
-      },
+    const history = await startShell(approved.client, {
+      operationId: "packaged-history-approved",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "git show HEAD:history.txt",
+      timeoutMs: 5_000,
+      write: false,
     });
     assert.equal(history.isError, undefined);
     const observed = await complete(
@@ -398,17 +555,14 @@ try {
     await fs.writeFile(path.join(workspaceRoot, "foreign.txt"), "foreign\n");
     await fs.writeFile(path.join(workspaceRoot, "own.txt"), "own\n");
     execFileSync("git", ["-C", workspaceRoot, "add", "--", "foreign.txt"]);
-    const workflow = await approved.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-ordinary-git-workflow",
-        workspaceId: "fixture",
-        relativeCwd: ".",
-        command:
-          "git status --short && git add -- own.txt && git -c user.name=Test -c user.email=test@example.invalid commit -qm own -- own.txt && git status --short",
-        timeoutMs: 10_000,
-        write: true,
-      },
+    const workflow = await startShell(approved.client, {
+      operationId: "packaged-ordinary-git-workflow",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command:
+        "git status --short && git add -- own.txt && git -c user.name=Test -c user.email=test@example.invalid commit -qm own -- own.txt && git status --short",
+      timeoutMs: 10_000,
+      write: true,
     });
     assert.equal(workflow.isError, undefined);
     const gitResult = await complete(
@@ -519,17 +673,14 @@ try {
   });
   const linked = await connect(linkedLaunchFile);
   try {
-    const started = await linked.client.callTool({
-      name: "computer_shell_start",
-      arguments: {
-        operationId: "packaged-linked-git-workflow",
-        workspaceId: "linked",
-        relativeCwd: ".",
-        command:
-          "printf linked > linked.txt && git add -- linked.txt && git -c user.name=Test -c user.email=test@example.invalid commit -qm linked -- linked.txt && git rev-parse --short HEAD",
-        timeoutMs: 10_000,
-        write: true,
-      },
+    const started = await startShell(linked.client, {
+      operationId: "packaged-linked-git-workflow",
+      workspaceId: "linked",
+      relativeCwd: ".",
+      command:
+        "printf linked > linked.txt && git add -- linked.txt && git -c user.name=Test -c user.email=test@example.invalid commit -qm linked -- linked.txt && git rev-parse --short HEAD",
+      timeoutMs: 10_000,
+      write: true,
     });
     assert.equal(started.isError, undefined);
     const result = await complete(
@@ -557,11 +708,38 @@ try {
   } finally {
     await disconnect(linked);
   }
+  allCasesPassed = true;
 } finally {
-  assert.equal(
-    ownedConnectorPids.size,
-    0,
-    `MCP_OWNED_PROCESS_CLEANUP_UNVERIFIED:${[...ownedConnectorPids].join(",")}`,
-  );
-  await fs.rm(root, { recursive: true, force: true });
+  const unverifiedPids = [];
+  for (const pid of ownedShellPids) {
+    let gone = false;
+    try {
+      gone = await waitPidGone(pid);
+    } catch {
+      // A failed process probe is not evidence of cleanup.
+    }
+    if (!gone) unverifiedPids.push(pid);
+  }
+  const cleanupUnverified =
+    ownedConnectorPids.size > 0 ||
+    unverifiedConnectorShutdowns.size > 0 ||
+    unverifiedPids.length > 0 ||
+    unverifiedShellHandles.size > 0 ||
+    unknownShellStarts.size > 0;
+  if (cleanupUnverified) {
+    const details = {
+      root,
+      connectorPids: [...ownedConnectorPids],
+      unverifiedConnectorShutdowns: [...unverifiedConnectorShutdowns],
+      unverifiedPids,
+      unverifiedHandles: [...unverifiedShellHandles],
+      unknownStarts: [...unknownShellStarts],
+    };
+    process.stderr.write(
+      `MCP_OWNED_CLEANUP_UNVERIFIED:${JSON.stringify(details)}\n`,
+    );
+    if (allCasesPassed) throw new Error("MCP_OWNED_CLEANUP_UNVERIFIED");
+  } else {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }
