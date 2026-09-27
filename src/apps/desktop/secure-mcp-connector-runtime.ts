@@ -156,11 +156,11 @@ const startProcess: ConnectorProcessStarter = async (command) => {
   return {
     pid: child.pid,
     get exitCode() {
-      return child.exitCode;
+      return child.exitCode ?? (child.signalCode === null ? null : -1);
     },
     kill: (signal) => child.kill(signal),
     waitForExit: async (timeoutMs) => {
-      if (child.exitCode !== null) return true;
+      if (child.exitCode !== null || child.signalCode !== null) return true;
       return new Promise<boolean>((resolve) => {
         let settled = false;
         const finish = (value: boolean) => {
@@ -373,8 +373,19 @@ export class SecureMcpConnectorRuntime {
     }
     if (!healthObserved) {
       child.kill("SIGTERM");
-      if (!(await child.waitForExit(1_000))) child.kill("SIGKILL");
-      this.child = null;
+      let exited = await child.waitForExit(1_000);
+      if (!exited) {
+        child.kill("SIGKILL");
+        exited = await child.waitForExit(1_000);
+      }
+      if (exited) this.child = null;
+      else {
+        return {
+          state: "outcome_unknown",
+          runtimeGeneration,
+          code: "CONNECTOR_READINESS_TIMEOUT",
+        };
+      }
     }
     return {
       state: healthObserved ? "outcome_unknown" : "unreachable",
@@ -404,14 +415,18 @@ export class SecureMcpConnectorRuntime {
 
   async stop(): Promise<void> {
     const child = this.child;
-    this.child = null;
     this.healthBaseUrl = null;
-    if (!child || child.exitCode !== null) return;
-    child.kill("SIGTERM");
-    if (!(await child.waitForExit(5_000))) {
-      child.kill("SIGKILL");
-      await child.waitForExit(1_000);
+    if (!child) return;
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      if (!(await child.waitForExit(5_000))) {
+        child.kill("SIGKILL");
+        if (!(await child.waitForExit(1_000))) {
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        }
+      }
     }
+    if (this.child === child) this.child = null;
   }
 
   isRunning(): boolean {

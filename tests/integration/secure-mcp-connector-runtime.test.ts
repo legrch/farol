@@ -185,6 +185,101 @@ describe("secure MCP connector runtime", () => {
     expect(child.signals).toEqual(["SIGTERM"]);
   });
 
+  it("retains the active child until stop has confirmed exit", async () => {
+    const selected = await fixture();
+    let exitCode: number | null = null;
+    let finishExit!: (exited: boolean) => void;
+    const child: ConnectorChild = {
+      pid: 4322,
+      get exitCode() {
+        return exitCode;
+      },
+      kill: () => true,
+      waitForExit: () =>
+        new Promise<boolean>((resolve) => {
+          finishExit = (exited) => {
+            if (exited) exitCode = 0;
+            resolve(exited);
+          };
+        }),
+    };
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      {
+        start: async (command) => {
+          await fs.writeFile(
+            option(command, "--health.url-file"),
+            "http://127.0.0.1:43126\n",
+            { mode: 0o600 },
+          );
+          return child;
+        },
+        get: async () => true,
+      },
+    );
+    await runtime.start({
+      executablePath: selected.executablePath,
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    });
+    const stopping = runtime.stop();
+    await Promise.resolve();
+    expect(runtime.isRunning()).toBe(true);
+    finishExit(true);
+    await stopping;
+    expect(runtime.isRunning()).toBe(false);
+  });
+
+  it("refuses to confirm stop when the owned child survives both signals", async () => {
+    const selected = await fixture();
+    const signals: NodeJS.Signals[] = [];
+    const child: ConnectorChild = {
+      pid: 4323,
+      exitCode: null,
+      kill: (signal) => {
+        signals.push(signal);
+        return true;
+      },
+      waitForExit: async () => false,
+    };
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+      },
+      {
+        start: async (command) => {
+          await fs.writeFile(
+            option(command, "--health.url-file"),
+            "http://127.0.0.1:43127\n",
+            { mode: 0o600 },
+          );
+          return child;
+        },
+        get: async () => true,
+      },
+    );
+    await runtime.start({
+      executablePath: selected.executablePath,
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    });
+    await expect(runtime.stop()).rejects.toThrow("CONNECTOR_STOP_UNCONFIRMED");
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(runtime.isRunning()).toBe(true);
+  });
+
   it("checks the owned ready endpoint without restarting and refuses stale in-flight health", async () => {
     const selected = await fixture();
     const child = new FakeChild();
@@ -287,5 +382,46 @@ describe("secure MCP connector runtime", () => {
     });
     expect(start).toHaveBeenCalledTimes(1);
     await runtime.stop();
+  });
+
+  it("keeps an unconfirmed child after readiness timeout fail closed", async () => {
+    const selected = await fixture();
+    const signals: NodeJS.Signals[] = [];
+    const child: ConnectorChild = {
+      pid: 4324,
+      exitCode: null,
+      kill: (signal) => {
+        signals.push(signal);
+        return true;
+      },
+      waitForExit: async () => false,
+    };
+    let now = 0;
+    const runtime = new SecureMcpConnectorRuntime(
+      {
+        root: selected.runtimeRoot,
+        homePath: selected.root,
+        tempPath: selected.root,
+        readinessTimeoutMs: 100,
+      },
+      {
+        start: async () => child,
+        wait: async (milliseconds) => {
+          now += milliseconds;
+        },
+        now: () => now,
+      },
+    );
+    const result = await runtime.start({
+      executablePath: selected.executablePath,
+      executableSha256: "a".repeat(64),
+      connectorGeneration: 1,
+      computerGeneration: 1,
+      buildId: "b".repeat(64),
+      launchContractSha256: "c".repeat(64),
+    });
+    expect(result.state).toBe("outcome_unknown");
+    expect(runtime.isRunning()).toBe(true);
+    expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
   });
 });

@@ -3455,7 +3455,11 @@ async function startSecureMcpConnector(
   connectorTaskAdmission = true;
   try {
     if (repair) {
-      await secureMcpConnectorRuntime.stop();
+      try {
+        await secureMcpConnectorRuntime.stop();
+      } catch {
+        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+      }
       const stopped = await configuration.recordSecureMcpStopped();
       if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
     }
@@ -3610,7 +3614,11 @@ async function startSecureMcpConnector(
       buildId: buildIdentity.buildId,
     });
     if (!challenged.ok) {
-      await secureMcpConnectorRuntime.stop().catch(() => undefined);
+      try {
+        await secureMcpConnectorRuntime.stop();
+      } catch {
+        return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+      }
       await configuration.recordSecureMcpStopped().catch(() => undefined);
       return ProductConfigurationResultSchema.parse(challenged);
     }
@@ -4001,7 +4009,8 @@ async function prepareDevMcpProof(): Promise<ProductConfigurationResult> {
   // that won the race cannot have its carried grant replaced underneath it.
   const readmitted = configurationAdmission("dev-proof.prepare", {
     agentActive: codexAgentOperationActive(),
-    connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
+    connectorRunning:
+      connectorTaskAdmission || secureMcpConnectorRuntime?.isRunning() === true,
   });
   if (readmitted !== "admitted") {
     return configurationFailure(
@@ -4397,7 +4406,8 @@ async function configureProduct(
   const command = parsed.data;
   const admission = configurationAdmission(command.kind, {
     agentActive: codexAgentOperationActive(),
-    connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
+    connectorRunning:
+      connectorTaskAdmission || secureMcpConnectorRuntime?.isRunning() === true,
   });
   if (admission !== "admitted") return configurationFailure(admission);
   if (!changesComputerAuthority(command.kind)) {
@@ -4623,7 +4633,11 @@ async function configureAdmittedProduct(
       }
       connectorTaskAdmission = true;
       try {
-        await secureMcpConnectorRuntime.stop();
+        try {
+          await secureMcpConnectorRuntime.stop();
+        } catch {
+          return configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
+        }
         const stopped = await configuration.recordSecureMcpStopped();
         if (!stopped.ok) return ProductConfigurationResultSchema.parse(stopped);
         try {
@@ -6434,7 +6448,9 @@ async function configureAdmittedProduct(
       // so it is admitted again right before it commits.
       const readmitted = configurationAdmission(command.kind, {
         agentActive: codexAgentOperationActive(),
-        connectorRunning: secureMcpConnectorRuntime?.isRunning() === true,
+        connectorRunning:
+          connectorTaskAdmission ||
+          secureMcpConnectorRuntime?.isRunning() === true,
       });
       if (readmitted !== "admitted") return configurationFailure(readmitted);
       const recorded = await configuration.recordComputerVerification(
