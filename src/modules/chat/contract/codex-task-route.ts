@@ -1,7 +1,10 @@
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
   /** Control is advertised only after the serving host is qualified. */
-  readonly controlCapabilities?: Readonly<{ message: boolean }>;
+  readonly controlCapabilities?: Readonly<{
+    message: boolean;
+    continue?: boolean;
+  }>;
   message(
     request: Readonly<{
       key: string;
@@ -17,6 +20,14 @@ export interface CodexTaskRoute {
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
     | Readonly<{ status: "refused"; code: string }>
   >;
+  /** A new dispatch in the same verified thread; not a second task. */
+  continue?(
+    request: Readonly<{
+      key: string;
+      dispatchId: string;
+      message: string;
+    }>,
+  ): ReturnType<CodexTaskRoute["create"]>;
   create(
     request: Readonly<{
       key: string;

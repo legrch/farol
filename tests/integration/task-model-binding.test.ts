@@ -143,7 +143,7 @@ describe("settings edit through MCP to the resolved task model", () => {
             },
           },
         );
-        async function connect() {
+        async function connect(continueQualified = false) {
           const loaded = (await store.load())!;
           const resolved = resolveOwnerTaskModel(loaded, { harness: "codex" });
           if (resolved.status !== "ready")
@@ -159,6 +159,7 @@ describe("settings edit through MCP to the resolved task model", () => {
               expiresAt: 2000,
             },
             () => 1000,
+            { message: false, continue: continueQualified },
           );
           const server = createReadonlyComputerMcpServer(
             {
@@ -229,7 +230,7 @@ describe("settings edit through MCP to the resolved task model", () => {
           defaultEffort: "xhigh",
         };
         await store.save({ ...snapshot.settings, tasks });
-        const secondClient = await connect();
+        const secondClient = await connect(true);
         const secondKey = randomUUID();
         const createdNext = await secondClient.callTool({
           name: "codex_task_create",
@@ -266,10 +267,58 @@ describe("settings edit through MCP to the resolved task model", () => {
           first?.modelBinding,
         );
         expect(
+          (await firstClient.listTools()).tools.map((tool) => tool.name),
+        ).not.toContain("codex_task_continue");
+        expect(
+          (await secondClient.listTools()).tools.map((tool) => tool.name),
+        ).toContain("codex_task_continue");
+        const continuationKey = randomUUID();
+        const continued = await secondClient.callTool({
+          name: "codex_task_continue",
+          arguments: {
+            key: continuationKey,
+            dispatchId: firstKey,
+            message: "Continue original fixture task",
+          },
+        });
+        expect(continued.structuredContent).toEqual({
+          status: "dispatched",
+          dispatchId: continuationKey,
+        });
+        expect(
+          (
+            await secondClient.callTool({
+              name: "codex_task_continue",
+              arguments: {
+                key: continuationKey,
+                dispatchId: firstKey,
+                message: "Continue original fixture task",
+              },
+            })
+          ).structuredContent,
+        ).toEqual(continued.structuredContent);
+        const continuation = await journal.read(continuationKey);
+        expect(continuation?.continuedFrom).toBe(firstKey);
+        expect(continuation?.continuationVerified).toBe(true);
+        expect(continuation?.threadId).toBe(first?.threadId);
+        expect(continuation?.modelBinding).toEqual(first?.modelBinding);
+        expect(
+          (
+            await secondClient.callTool({
+              name: "codex_task_status",
+              arguments: { dispatchId: continuationKey },
+            })
+          ).structuredContent,
+        ).toMatchObject({
+          status: "known",
+          dispatchId: continuationKey,
+          turnStatus: "completed",
+        });
+        expect(
           (await secondClient.listTools()).tools.map((tool) => tool.name),
         ).not.toContain("codex_task_message");
         const turns = calls.filter((call) => call.method === "turn/start");
-        expect(turns).toHaveLength(2);
+        expect(turns).toHaveLength(3);
         expect(turns[0]?.params.model).toBe(originalModel);
         expect(turns[1]?.params.model).toBe("replacement-from-json");
         if (originalEffort === undefined) {
@@ -278,6 +327,13 @@ describe("settings edit through MCP to the resolved task model", () => {
           expect(turns[0]?.params.effort).toBe(originalEffort);
         }
         expect(turns[1]?.params.effort).toBe("xhigh");
+        expect(turns[2]?.params.threadId).toBe(first?.threadId);
+        expect(turns[2]?.params.model).toBe(originalModel);
+        if (originalEffort === undefined) {
+          expect(turns[2]?.params).not.toHaveProperty("effort");
+        } else {
+          expect(turns[2]?.params.effort).toBe(originalEffort);
+        }
         expect(
           calls.filter((call) => call.method === "thread/start"),
         ).toHaveLength(2);

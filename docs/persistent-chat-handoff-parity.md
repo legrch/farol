@@ -122,13 +122,20 @@ and a parsed task-policy snapshot. The issued journal record retains the
 resolved model, optional effort, alias and policy digest. A config-only edit
 affects a later launch and new task, not a previous dispatch. The three-case
 settings-store → MCP regression checks that difference, including a model
-without an effort override; continuation of the old task is still unqualified.
+without an effort override. A qualified-route fixture also continues the old
+dispatch in its original thread with its original model and optional effort;
+production does not advertise `codex_task_continue` until the serving host is
+qualified. A continuation retains a turn-bound confirmation only after the
+post-start history check passes. A turn ID without that confirmation remains
+outcome-unknown on replay, status, result and further parent selection, even if
+later provider history looks healthy. This is a local fail-closed journal rule,
+not an atomic cross-client `turn/start` contract.
 The config file must be edited while the new app is stopped; concurrent raw
 JSON edits are not supported by this slice. An unavailable task socket
 leaves Computer running without task tools; no daemon is started or repaired.
 Fixture PASS is not proof of a native shared
 host task, paid model result or provider delivery. Project creation,
-project-root rebind, title/continue/additional messages,
+project-root rebind, title/additional messages, live control qualification,
 live terminal result retrieval and archive/delete remain open.
 
 With a selected installed Codex CLI path, the content-free local route proof is

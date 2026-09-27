@@ -65,6 +65,8 @@ class FixtureHost implements HandoffHost {
   failItems = false;
   turnStatus = "inProgress";
   onProjectList?: (() => void) | undefined;
+  onTurnStart?: (() => void) | undefined;
+  onTurnsList?: (() => unknown) | undefined;
   threadResponse?: unknown;
   turnResponse?: unknown;
   readResponse?: unknown;
@@ -108,6 +110,7 @@ class FixtureHost implements HandoffHost {
       };
     }
     if (method === "turn/start") {
+      this.onTurnStart?.();
       if (this.failTurn) throw new Error("ACK_LOST");
       if (this.turnResponse !== undefined) return this.turnResponse;
       expect(params).toMatchObject({
@@ -149,6 +152,7 @@ class FixtureHost implements HandoffHost {
       };
     }
     if (method === "thread/turns/list") {
+      if (this.onTurnsList) return this.onTurnsList();
       if (this.turnsResponse !== undefined) return this.turnsResponse;
       if (this.pagedTurns) {
         return (params as { cursor: string | null }).cursor === null
@@ -351,6 +355,289 @@ function byteBudgetFixture() {
 }
 
 describe("persistent Codex handoff core", () => {
+  it("will not continue a parent with an unconfirmed active-steer intent", async () => {
+    const host = new FixtureHost();
+    const { service, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    expect(
+      await journal.claimMessage(request.key, randomUUID(), "a".repeat(64)),
+    ).toBe("claimed");
+    const continuation = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Do not continue",
+    };
+    expect(await service().continue(continuation)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: continuation.key,
+    });
+    expect(await journal.read(continuation.key)).toBeNull();
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+  it("does not strand a known pre-effect continuation when the mutation gate refuses", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const continuation = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue once",
+    };
+    let started = false;
+    host.turnResponse = { turn: { id: "continued-turn" } };
+    host.onTurnStart = () => {
+      started = true;
+    };
+    host.onTurnsList = () => ({
+      data: started
+        ? [
+            { id: "continued-turn", status: "completed" },
+            { id: "issued-turn", status: "completed" },
+          ]
+        : [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    const fenced = new PersistentCodexHandoff(
+      authority,
+      host,
+      new PrivateCodexHandoffJournal(journalRoot),
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      {
+        run: async () => {
+          throw new Error("SUMMARY_FENCE_ACTIVE");
+        },
+      },
+    );
+    expect(await fenced.continue(continuation)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: continuation.key,
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+    expect(
+      (await new PrivateCodexHandoffJournal(journalRoot).read(continuation.key))
+        ?.turnIntent,
+    ).toBe(false);
+    expect(await service().continue(continuation)).toMatchObject({
+      status: "dispatched",
+      threadId: "issued-thread",
+      turnId: "continued-turn",
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      2,
+    );
+  });
+
+  it("refuses continuation after physical workspace revocation before reserving a child", async () => {
+    const host = new FixtureHost();
+    const { service, setWorkspace, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const continuation = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue once",
+    };
+    setWorkspace({ ...workspace, inode: "changed" });
+    expect(await service().continue(continuation)).toEqual({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_CHANGED",
+    });
+    expect(
+      await new PrivateCodexHandoffJournal(journalRoot).read(continuation.key),
+    ).toBeNull();
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("continues the same thread once and replays only a turn-bound confirmed receipt", async () => {
+    const host = new FixtureHost();
+    const { service, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const continuation = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue once",
+    };
+    let started = false;
+    host.turnResponse = { turn: { id: "continued-turn" } };
+    host.onTurnStart = () => {
+      started = true;
+    };
+    host.onTurnsList = () => ({
+      data: started
+        ? [
+            { id: "continued-turn", status: "inProgress" },
+            { id: "issued-turn", status: "completed" },
+          ]
+        : [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    expect(await service().continue(continuation)).toEqual({
+      status: "dispatched",
+      dispatchId: continuation.key,
+      threadId: "issued-thread",
+      turnId: "continued-turn",
+    });
+    const confirmation = await fs.readFile(
+      path.join(journalRoot, continuation.key, "continuation-verified.json"),
+      "utf8",
+    );
+    expect(JSON.parse(confirmation)).toBe("continued-turn");
+    const sends = host.calls.filter((method) => method === "turn/start").length;
+    expect(await service().continue(continuation)).toMatchObject({
+      status: "dispatched",
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      sends,
+    );
+    expect(await service().status(continuation.key)).toMatchObject({
+      status: "known",
+      threadId: "issued-thread",
+      turnId: "continued-turn",
+    });
+  });
+
+  it.each(["interleaved-native-turn", "post-start-read-failed"])(
+    "keeps an unverified continuation unknown after %s even when later history looks healthy",
+    async (failure) => {
+      const host = new FixtureHost();
+      const { service } = await fixture(host);
+      expect((await service().create(request)).status).toBe("dispatched");
+      const continuation = {
+        key: randomUUID(),
+        dispatchId: request.key,
+        message: "Continue once",
+      };
+      let started = false;
+      let recovered = false;
+      host.turnResponse = { turn: { id: "continued-turn" } };
+      host.onTurnStart = () => {
+        started = true;
+      };
+      host.onTurnsList = () => {
+        if (started && !recovered && failure === "post-start-read-failed")
+          throw new Error("POST_START_READ_LOST");
+        return {
+          data:
+            started && !recovered && failure === "interleaved-native-turn"
+              ? [
+                  { id: "native-turn", status: "inProgress" },
+                  { id: "continued-turn", status: "inProgress" },
+                ]
+              : started
+                ? [
+                    { id: "continued-turn", status: "inProgress" },
+                    { id: "issued-turn", status: "completed" },
+                  ]
+                : [{ id: "issued-turn", status: "completed" }],
+          nextCursor: null,
+        };
+      };
+      expect(await service().continue(continuation)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: continuation.key,
+      });
+      recovered = true;
+      const sends = host.calls.filter(
+        (method) => method === "turn/start",
+      ).length;
+      expect(await service().continue(continuation)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: continuation.key,
+      });
+      expect(await service().status(continuation.key)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: continuation.key,
+      });
+      expect(await service().result(continuation.key)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: continuation.key,
+      });
+      expect(
+        await service().continue({
+          key: randomUUID(),
+          dispatchId: continuation.key,
+          message: "Do not chain",
+        }),
+      ).toEqual({ status: "outcome_unknown", dispatchId: expect.any(String) });
+      expect(
+        host.calls.filter((method) => method === "turn/start"),
+      ).toHaveLength(sends);
+    },
+  );
+
+  it("keeps a failed verification publication unknown without a second send", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    expect((await service().create(request)).status).toBe("dispatched");
+    const continuation = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      message: "Continue once",
+    };
+    let started = false;
+    host.turnResponse = { turn: { id: "continued-turn" } };
+    host.onTurnStart = () => {
+      started = true;
+    };
+    host.onTurnsList = () => ({
+      data: started
+        ? [
+            { id: "continued-turn", status: "inProgress" },
+            { id: "issued-turn", status: "completed" },
+          ]
+        : [{ id: "issued-turn", status: "completed" }],
+      nextCursor: null,
+    });
+    const durable = new PrivateCodexHandoffJournal(journalRoot);
+    const failingJournal: HandoffJournal = {
+      reserve: (key, record) => durable.reserve(key, record),
+      claimThread: (key) => durable.claimThread(key),
+      recordThread: (key, id) => durable.recordThread(key, id),
+      claimTurn: (key) => durable.claimTurn(key),
+      recordTurn: (key, id) => durable.recordTurn(key, id),
+      claimContinuation: (parent, turn, key) =>
+        durable.claimContinuation(parent, turn, key),
+      confirmContinuation: async () => {
+        throw new Error("RECEIPT_PUBLICATION_FAILED");
+      },
+      hasUnconfirmedMessage: (dispatch) =>
+        durable.hasUnconfirmedMessage(dispatch),
+      read: (key) => durable.read(key),
+      claimMessage: (dispatch, key, digest) =>
+        durable.claimMessage(dispatch, key, digest),
+      readMessage: (dispatch, key) => durable.readMessage(dispatch, key),
+      recordMessage: (dispatch, key, turn) =>
+        durable.recordMessage(dispatch, key, turn),
+    };
+    const failing = new PersistentCodexHandoff(
+      authority,
+      host,
+      failingJournal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await failing.continue(continuation)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: continuation.key,
+    });
+    const sends = host.calls.filter((method) => method === "turn/start").length;
+    expect(await service().continue(continuation)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: continuation.key,
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      sends,
+    );
+  });
+
   it("fails closed at each message preflight boundary without sending a steer", async () => {
     const { service, host, authority, journalRoot, setWorkspace } =
       await fixture();

@@ -180,6 +180,70 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     }
   }
 
+  async claimContinuation(
+    parentKey: string,
+    parentTurnId: string,
+    key: string,
+  ): Promise<boolean> {
+    if (!validKey(key)) throw new Error("HANDOFF_CONTINUATION_KEY_INVALID");
+    const parent = await this.read(parentKey);
+    if (!parent?.turnId || parent.turnId !== stringRecord(parentTurnId)) {
+      throw new Error("HANDOFF_CONTINUATION_PARENT_INVALID");
+    }
+    const file = path.join(
+      this.directory(parentKey),
+      "continuation-child.json",
+    );
+    const binding = { key: key.toLowerCase(), turnId: parentTurnId };
+    if (await writeOnce(file, binding)) return true;
+    const previous = await readPrivate(file);
+    return (
+      previous !== null &&
+      typeof previous === "object" &&
+      !Array.isArray(previous) &&
+      (previous as { key?: unknown }).key === binding.key &&
+      (previous as { turnId?: unknown }).turnId === binding.turnId
+    );
+  }
+
+  async confirmContinuation(key: string, turnId: string): Promise<void> {
+    const record = await this.read(key);
+    if (!record?.continuedFrom || record.turnId !== stringRecord(turnId)) {
+      throw new Error("HANDOFF_CONTINUATION_BINDING_INVALID");
+    }
+    if (
+      !(await writeOnce(
+        path.join(this.directory(key), "continuation-verified.json"),
+        turnId,
+      ))
+    ) {
+      throw new Error("HANDOFF_CONTINUATION_CONFIRMATION_CONFLICT");
+    }
+  }
+
+  async hasUnconfirmedMessage(dispatchId: string): Promise<boolean> {
+    const directory = this.directory(dispatchId);
+    const intent = await readPrivate(
+      path.join(directory, "message-intent.json"),
+    );
+    if (intent === null) return false;
+    if (!intent || typeof intent !== "object" || Array.isArray(intent))
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    const value = intent as Record<string, unknown>;
+    if (
+      !validKey(String(value.key)) ||
+      typeof value.digest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.digest)
+    )
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    const receipt = await readPrivate(path.join(directory, "message.json"));
+    if (receipt === null) return true;
+    const parent = await this.read(dispatchId);
+    if (!parent?.turnId || stringRecord(receipt) !== parent.turnId)
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    return false;
+  }
+
   async claimMessage(
     dispatchId: string,
     key: string,
@@ -254,6 +318,10 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       (record.model !== undefined &&
         (typeof record.model !== "string" ||
           !/^[A-Za-z0-9_.\/-]{1,120}$/u.test(record.model))) ||
+      (record.continuedFrom !== undefined &&
+        (typeof record.continuedFrom !== "string" ||
+          !validKey(record.continuedFrom))) ||
+      record.continuationVerified !== undefined ||
       (record.reasoningEffort !== undefined &&
         (typeof record.reasoningEffort !== "string" ||
           !/^[A-Za-z0-9_-]{1,40}$/u.test(record.reasoningEffort))) ||
@@ -319,6 +387,17 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       throw new Error("HANDOFF_JOURNAL_INVALID");
     if (turn !== null && turnIntent === null)
       throw new Error("HANDOFF_JOURNAL_INVALID");
+    const continuation = await readPrivate(
+      path.join(directory, "continuation-verified.json"),
+    );
+    if (
+      continuation !== null &&
+      (record.continuedFrom === undefined ||
+        turn === null ||
+        continuation !== turn)
+    ) {
+      throw new Error("HANDOFF_CONTINUATION_BINDING_INVALID");
+    }
     return {
       requestDigest: record.requestDigest,
       ...(record.model === undefined ? {} : { model: record.model }),
@@ -335,6 +414,12 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       ...(record.modelBinding === undefined
         ? {}
         : { modelBinding: record.modelBinding }),
+      ...(record.continuedFrom === undefined
+        ? {}
+        : {
+            continuedFrom: record.continuedFrom,
+            continuationVerified: continuation !== null,
+          }),
       threadIntent: threadIntent !== null,
       turnIntent: turnIntent !== null,
       ...(thread === null ? {} : { threadId: stringRecord(thread) }),

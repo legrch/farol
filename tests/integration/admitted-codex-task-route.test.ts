@@ -118,6 +118,7 @@ describe("separate Codex task admission", () => {
       },
     );
     expect(route.controlCapabilities.message).toBe(false);
+    expect(route.controlCapabilities.continue).toBe(false);
     expect(
       await route.message({
         key: randomUUID(),
@@ -127,6 +128,13 @@ describe("separate Codex task admission", () => {
         message: "One steer",
         model: "gpt-6-luna",
         reasoningEffort: "medium",
+      }),
+    ).toEqual({ status: "refused", code: "TASK_CONTROL_NOT_QUALIFIED" });
+    expect(
+      await route.continue({
+        key: randomUUID(),
+        dispatchId: request.key,
+        message: "No control",
       }),
     ).toEqual({ status: "refused", code: "TASK_CONTROL_NOT_QUALIFIED" });
   });

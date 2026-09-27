@@ -20,7 +20,7 @@ export type CodexTaskAdmission = Readonly<{
 
 type ResolvedTaskRoute = Pick<
   CodexTaskRoute,
-  "status" | "result" | "message"
+  "status" | "result" | "message" | "continue"
 > & {
   create(request: HandoffRequest): ReturnType<CodexTaskRoute["create"]>;
 };
@@ -33,8 +33,12 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     private readonly delegate: ResolvedTaskRoute,
     admission: CodexTaskAdmission,
     private readonly now: () => number = Date.now,
-    readonly controlCapabilities: Readonly<{ message: boolean }> = {
+    readonly controlCapabilities: Readonly<{
+      message: boolean;
+      continue?: boolean;
+    }> = {
       message: false,
+      continue: false,
     },
   ) {
     const tasks = TaskExecutionSettingsSchema.parse(admission.tasks);
@@ -44,6 +48,8 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     if (admission.harness !== "codex" || digest !== admission.configSha256) {
       throw new Error("HANDOFF_TASK_POLICY_INVALID");
     }
+    if (controlCapabilities.continue && !delegate.continue)
+      throw new Error("HANDOFF_CONTINUE_UNAVAILABLE");
     this.admission = { ...admission, tasks };
   }
 
@@ -105,6 +111,21 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     // The persistent delegate checks the original dispatch binding. A later
     // policy edit cannot reinterpret the model of an already-issued task.
     return this.delegate.message(request);
+  }
+
+  async continue(request: {
+    key: string;
+    dispatchId: string;
+    message: string;
+  }) {
+    if (!this.controlCapabilities.continue || !this.delegate.continue)
+      return { status: "refused" as const, code: "TASK_CONTROL_NOT_QUALIFIED" };
+    if (this.now() >= this.admission.expiresAt)
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      };
+    return this.delegate.continue(request);
   }
 
   status(dispatchId: string) {

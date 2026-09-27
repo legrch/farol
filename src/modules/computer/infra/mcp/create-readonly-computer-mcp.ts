@@ -57,6 +57,11 @@ const CodexTaskCreateInputSchema = z.strictObject({
 const CodexTaskReadInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
 });
+const CodexTaskContinueInputSchema = z.strictObject({
+  key: DispatchIdSchema,
+  dispatchId: DispatchIdSchema,
+  message: CodexTaskTextSchema,
+});
 const CodexTaskMessageInputSchema = z.strictObject({
   key: DispatchIdSchema,
   dispatchId: DispatchIdSchema,
@@ -744,6 +749,37 @@ export function createReadonlyComputerMcpServer(
           } catch {
             return taskResponse(
               { status: "outcome_unknown", dispatchId: request.dispatchId },
+              true,
+            );
+          }
+        }),
+      );
+    if (
+      codexTasks.controlCapabilities?.continue === true &&
+      codexTasks.continue
+    )
+      server.registerTool(
+        "codex_task_continue",
+        {
+          title: "Continue the exact persistent Codex task",
+          description:
+            "Start one new turn in the issued thread only after its parent is verified as the latest completed turn. Supply a fresh UUID key once; never retry an unknown outcome with a different key.",
+          inputSchema: CodexTaskContinueInputSchema,
+          annotations: CODEX_TASK_CREATE_ANNOTATIONS,
+        },
+        guarded(async (request) => {
+          try {
+            const result = await codexTasks.continue!(request);
+            return taskResponse(
+              result.status === "dispatched"
+                ? { status: "dispatched", dispatchId: result.dispatchId }
+                : result,
+              result.status === "refused" ||
+                result.status === "outcome_unknown",
+            );
+          } catch {
+            return taskResponse(
+              { status: "outcome_unknown", dispatchId: request.key },
               true,
             );
           }

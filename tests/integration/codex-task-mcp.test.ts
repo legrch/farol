@@ -259,6 +259,7 @@ describe("Codex task Computer MCP surface", () => {
       expect(tools).toContain("codex_task_status");
       expect(tools).toContain("codex_task_result");
       expect(tools).not.toContain("codex_task_message");
+      expect(tools).not.toContain("codex_task_continue");
       const created = await client.callTool({
         name: "codex_task_create",
         arguments: {
