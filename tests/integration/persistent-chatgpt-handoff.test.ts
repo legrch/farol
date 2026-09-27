@@ -78,8 +78,15 @@ async function fixture() {
       root,
       canonical,
     ),
+    authorizeSend: () => Promise<boolean> = async () => true,
   ) =>
-    new PersistentChatGptHandoff(customJournal, browser, digester, canonical);
+    new PersistentChatGptHandoff(
+      customJournal,
+      browser,
+      digester,
+      canonical,
+      authorizeSend,
+    );
   const request: SavedChatRequest = {
     key: randomUUID(),
     title: "Intended title",
@@ -132,6 +139,54 @@ function withJournalFault(
 }
 
 describe("saved ChatGPT handoff intent and replay", () => {
+  it("defaults to no external Send and makes an owner denial durable", async () => {
+    const state = await fixture();
+    const denied = await state
+      .service(state.journal, async () => false)
+      .create(state.request);
+    expect(denied).toEqual({
+      status: "refused",
+      code: "SAVED_CHAT_OWNER_APPROVAL_DENIED",
+      dispatchId: state.request.key,
+    });
+    expect(state.calls).toEqual(["prepare", "closePrepared"]);
+    expect(await state.journal.read(state.request.key)).toMatchObject({
+      phase: "refused",
+    });
+    expect(await state.service().create(state.request)).toEqual(denied);
+    expect(state.calls).toEqual(["prepare", "closePrepared"]);
+    const ungranted = new PersistentChatGptHandoff(
+      state.journal,
+      state.browser,
+      digester,
+      canonical,
+    );
+    expect(
+      await ungranted.create({ ...state.request, key: randomUUID() }),
+    ).toMatchObject({
+      status: "refused",
+      code: "SAVED_CHAT_OWNER_APPROVAL_DENIED",
+    });
+  });
+
+  it("never records send intent when the caller disconnects during owner confirmation", async () => {
+    const state = await fixture();
+    let connected = true;
+    const service = state.service(state.journal, async () => {
+      connected = false;
+      return true;
+    });
+    expect(await service.create(state.request, () => connected)).toEqual({
+      status: "refused",
+      code: "SAVED_CHAT_OWNER_APPROVAL_DENIED",
+      dispatchId: state.request.key,
+    });
+    expect(state.calls).toEqual(["prepare", "closePrepared"]);
+    expect(await state.journal.read(state.request.key)).toMatchObject({
+      phase: "refused",
+    });
+  });
+
   it("records a durable send intent before one normal-chat send and proves a separate reopen", async () => {
     const { journal, service, request, calls, sent, onBeforeSend } =
       await fixture();
@@ -472,6 +527,15 @@ describe("saved ChatGPT handoff intent and replay", () => {
       await state
         .service()
         .create({ ...state.request, firstMessage: "🙂".repeat(2049) }),
+    ).toMatchObject({
+      status: "refused",
+      code: "SAVED_CHAT_INPUT_INVALID",
+    });
+    expect(
+      await state.service().create({
+        ...state.request,
+        firstMessage: "no\0send",
+      }),
     ).toMatchObject({
       status: "refused",
       code: "SAVED_CHAT_INPUT_INVALID",

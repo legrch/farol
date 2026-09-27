@@ -23,6 +23,10 @@ import {
   CodexCallerRelayEndpointSchema,
   type CodexCallerRelayEndpoint,
 } from "../../../../pkg/caller-relay/protocol";
+import {
+  SavedChatBridgeEndpointSchema,
+  type SavedChatBridgeEndpoint,
+} from "../../../../pkg/saved-chat-bridge/protocol";
 
 export const READONLY_COMPUTER_LAUNCH_BASENAME = "computer-launch.json";
 
@@ -220,6 +224,9 @@ const ConnectorVerificationSchema = z.strictObject({
 const CallerRelayEndpointSchema = CodexCallerRelayEndpointSchema.refine(
   (value) => canonicalAbsolutePath(value.socketPath),
 );
+const SavedChatEndpointSchema = SavedChatBridgeEndpointSchema.refine((value) =>
+  canonicalAbsolutePath(value.socketPath),
+);
 export const CodexTaskRouteLaunchSchema = z.strictObject({
   transport: z.literal("codex-shared-proxy/v1"),
   host: z.strictObject({
@@ -333,6 +340,7 @@ const ReadonlyLaunchContractSchema = z
     connectorVerification: ConnectorVerificationSchema.optional(),
     devMcpProof: DevMcpProofPreparationSchema.optional(),
     callerRelay: CallerRelayEndpointSchema.optional(),
+    savedChat: SavedChatEndpointSchema.optional(),
     codexTasks: CodexTaskRouteLaunchSchema.optional(),
   })
   .superRefine(validateChain);
@@ -350,6 +358,7 @@ const MutableLaunchContractSchema = z
     connectorVerification: ConnectorVerificationSchema.optional(),
     devMcpProof: DevMcpProofPreparationSchema.optional(),
     callerRelay: CallerRelayEndpointSchema.optional(),
+    savedChat: SavedChatEndpointSchema.optional(),
     codexTasks: CodexTaskRouteLaunchSchema.optional(),
   })
   .superRefine(validateChain);
@@ -490,6 +499,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   connectorVerification: Readonly<{ challengeSha256: string }> | null;
   devMcpProof: DevMcpProofPreparation | null;
   callerRelay: CodexCallerRelayEndpoint | null;
+  savedChat: SavedChatBridgeEndpoint | null;
   codexTasks: z.infer<typeof CodexTaskRouteLaunchSchema> | null;
   gitSettingsHome: string | null;
 }>;
@@ -560,6 +570,7 @@ export function materializeReadonlyComputerLaunch(
     connectorVerification: launch.connectorVerification ?? null,
     devMcpProof: launch.devMcpProof ?? null,
     callerRelay: launch.callerRelay ?? null,
+    savedChat: launch.savedChat ?? null,
     codexTasks: launch.codexTasks ?? null,
     gitSettingsHome: launch.gitSettingsHome ?? null,
   };

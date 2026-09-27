@@ -26,6 +26,7 @@ import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/executio
 import { PrivateMcpLifecycle } from "../../modules/computer/infra/mcp/private-mcp-lifecycle";
 import { PrivateDevMcpProofRecorder } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
+import { SavedChatBridgeClient } from "./saved-chat-bridge-client";
 import { SandboxedWorkspaceShell } from "../../modules/computer/infra/native/sandboxed-workspace-shell";
 import { PersistentCodexHandoff } from "../../modules/chat/app/service/persistent-codex-handoff";
 import { AdmittedCodexTaskRoute } from "../../modules/chat/infra/native/admitted-codex-task-route";
@@ -93,6 +94,9 @@ async function main(): Promise<void> {
     : undefined;
   const callerRelay = launch.callerRelay
     ? new CodexCallerRelayClient(launch.callerRelay)
+    : undefined;
+  const savedChat = launch.savedChat
+    ? new SavedChatBridgeClient(launch.savedChat)
     : undefined;
   const fence = new PrivateExecutionFence({ root: path.dirname(launchFile) });
   const taskLaunch = launch.codexTasks;
@@ -170,6 +174,7 @@ async function main(): Promise<void> {
         codexTasks,
         shell,
         lifecycle,
+        savedChat,
       ),
     {
       legacy: "serve",

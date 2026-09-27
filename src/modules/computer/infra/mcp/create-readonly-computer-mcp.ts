@@ -26,6 +26,10 @@ import type {
   ShellResponse,
 } from "../native/sandboxed-workspace-shell";
 import type { CodexTaskRoutePeer } from "../peer/codex-task-route-peer";
+import type {
+  SavedChatBridgeOperation,
+  SavedChatBridgeResponse,
+} from "../../../../pkg/saved-chat-bridge/protocol";
 
 export type ReadonlyComputerMcpBinding = Readonly<{
   ownerId: string;
@@ -78,6 +82,20 @@ const CodexTaskMessageInputSchema = z.strictObject({
   message: CodexTaskTextSchema,
   model: z.string().min(1).max(120),
   reasoningEffort: z.string().min(1).max(40).optional(),
+});
+const SavedChatCreateInputSchema = z.strictObject({
+  key: DispatchIdSchema,
+  title: z.string().min(1).max(80),
+  firstMessage: z
+    .string()
+    .min(1)
+    .max(8192)
+    .refine((value) => !value.includes("\0"))
+    .refine((value) => new TextEncoder().encode(value).byteLength <= 8192),
+});
+const SavedChatStatusInputSchema = z.strictObject({
+  dispatchId: DispatchIdSchema,
+  recheck: z.boolean().optional(),
 });
 
 function relativePath(value: string, root: boolean): boolean {
@@ -655,6 +673,11 @@ export function createReadonlyComputerMcpServer(
     isStopping(): Promise<boolean>;
     enterHandler(): (() => void) | null;
   }>,
+  savedChat?: Readonly<{
+    request(
+      operation: SavedChatBridgeOperation,
+    ): Promise<SavedChatBridgeResponse>;
+  }>,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -706,6 +729,69 @@ export function createReadonlyComputerMcpServer(
         await admission.release();
       }
     });
+
+  if (savedChat) {
+    const result = (value: object, isError: boolean): CallToolResult => ({
+      content: [{ type: "text", text: JSON.stringify(value) }],
+      structuredContent: value,
+      ...(isError ? { isError: true } : {}),
+    });
+    server.registerTool(
+      "chatgpt_chat_create",
+      {
+        title: "Create one saved ChatGPT chat",
+        description:
+          "Send exactly one first message in a normal saved ChatGPT chat through the isolated Farol Browser. Use one UUID key. Unknown outcomes must be checked by status, never retried with another key. A verified URL requires a fresh reopen and history proof; title verification is separate.",
+        inputSchema: SavedChatCreateInputSchema,
+        annotations: CALLER_RELAY_ANNOTATIONS,
+      },
+      guarded(async (request) => {
+        try {
+          const response = await savedChat.request({
+            operation: "create",
+            request,
+          });
+          const safe =
+            response.status === "unknown" || response.dispatchId !== request.key
+              ? { status: "outcome_unknown", dispatchId: request.key }
+              : response;
+          return result(safe, safe.status !== "verified");
+        } catch {
+          return result(
+            { status: "outcome_unknown", dispatchId: request.key },
+            true,
+          );
+        }
+      }),
+    );
+    server.registerTool(
+      "chatgpt_chat_status",
+      {
+        title: "Read one saved ChatGPT handoff",
+        description:
+          "Read the exact dispatch. Optional recheck uses a fresh read-only Browser surface for a previously recorded candidate URL; it never sends again.",
+        inputSchema: SavedChatStatusInputSchema,
+        annotations: READONLY_ANNOTATIONS,
+      },
+      guarded(async ({ dispatchId, recheck }) => {
+        try {
+          const response = await savedChat.request({
+            operation: "status",
+            dispatchId,
+            recheck: recheck === true,
+          });
+          if (
+            response.status !== "unknown" &&
+            response.dispatchId !== dispatchId
+          )
+            return result({ status: "outcome_unknown", dispatchId }, true);
+          return result(response, response.status === "outcome_unknown");
+        } catch {
+          return result({ status: "outcome_unknown", dispatchId }, true);
+        }
+      }),
+    );
+  }
 
   if (codexTasks) {
     const taskResponse = (value: object, isError = false): CallToolResult => ({

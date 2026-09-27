@@ -12,6 +12,7 @@ import {
 } from "../../modules/computer/infra/mcp/launch-contract";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
+import type { SavedChatBridgeEndpoint } from "../../pkg/saved-chat-bridge/protocol";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
 import { resolveOwnerTaskModel } from "./owner-config";
 import type { DevMcpProofPreparation } from "../../modules/computer/infra/mcp/dev-mcp-proof";
@@ -95,6 +96,7 @@ export function createSecureMcpLaunchContract(
     gitSettingsHome?: string;
     devMcpProof?: DevMcpProofPreparation;
     callerRelay?: CodexCallerRelayEndpoint;
+    savedChat?: SavedChatBridgeEndpoint;
     codexTasks?: CodexTaskRouteLaunch;
   }>,
 ): ReadonlyComputerLaunchContract {
@@ -245,6 +247,7 @@ export function createSecureMcpLaunchContract(
     ...(input.callerRelay === undefined
       ? {}
       : { callerRelay: input.callerRelay }),
+    ...(input.savedChat === undefined ? {} : { savedChat: input.savedChat }),
     ...(codexTasks === null || codexTasks === undefined ? {} : { codexTasks }),
   });
 }

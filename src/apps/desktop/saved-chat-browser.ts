@@ -35,6 +35,7 @@ export class NextSavedChatBrowser implements SavedChatBrowser {
     }>,
     private readonly now: () => number = Date.now,
     private readonly wait: (ms: number) => Promise<void> = (ms) => delay(ms),
+    private readonly maySubmit: () => boolean = () => false,
   ) {}
 
   private route(): SavedChatRoute {
@@ -86,6 +87,7 @@ export class NextSavedChatBrowser implements SavedChatBrowser {
   async sendOnce(
     message: string,
     expectedDigest: string,
+    stillConnected: () => boolean = () => true,
   ): ReturnType<SavedChatBrowser["sendOnce"]> {
     const sender = this.sender;
     if (sender === null)
@@ -102,6 +104,8 @@ export class NextSavedChatBrowser implements SavedChatBrowser {
         inserted.inserted !== true
       )
         return { status: "not_sent", code: "SAVED_CHAT_INSERT_UNVERIFIED" };
+      if (!stillConnected() || !this.maySubmit())
+        return { status: "not_sent", code: "SAVED_CHAT_ADMISSION_REVOKED" };
       // One submit call only. An unknown script response never triggers a retry.
       const submitted: unknown = await sender.savedChatSubmit(
         this.homeUrl,

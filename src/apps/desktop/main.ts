@@ -46,6 +46,9 @@ import { z } from "zod";
 import { exactProject } from "../../modules/chat/app/service/persistent-codex-handoff";
 import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
 import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-codex-proxy-host";
+import { PersistentChatGptHandoff } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
+import { PrivateSavedChatJournal } from "../../modules/chat/infra/repo/private-saved-chat-journal";
+import { Sha256SavedChatDigester } from "../../modules/chat/infra/native/sha256-saved-chat-digester";
 import {
   CHATGPT_MODEL_ID,
   FAROL_PROVIDER_ID,
@@ -180,6 +183,9 @@ import {
   type ChatGptSignInOutcomeDiagnostic,
   type ChatGptSignInStatus,
 } from "./chatgpt-route";
+import { NextSavedChatBrowser } from "./saved-chat-browser";
+import { startSavedChatBridge } from "./saved-chat-bridge";
+import { savedChatPreviewQualified } from "./saved-chat-preview-admission";
 import {
   PrivateLiveTaskStore,
   type LiveTaskStoreRecord,
@@ -670,6 +676,9 @@ let taskCountsBeforeRuntimeExit: Readonly<{
   failed: number;
 }> | null = null;
 let callerRelayRuntime: CodexCallerRelayRuntime | null = null;
+let savedChatBridgeRuntime: Awaited<
+  ReturnType<typeof startSavedChatBridge>
+> | null = null;
 // S35-03/2: takes the SAME cross-process lease a promotion holds from
 // before its drain check through placement, for the whole durable admission
 // — not merely a synchronous check of it (see `live-task-registry.ts`'s
@@ -1455,6 +1464,87 @@ async function initializeCallerRelay(): Promise<void> {
   } catch {
     // Without the relay, Route B turns that offer host tools are refused.
     callerRelayRuntime = null;
+  }
+}
+
+async function initializeSavedChatBridge(): Promise<void> {
+  if (savedChatBridgeRuntime) return;
+  // This opt-in is set by the owner when launching the disposable Dev preview.
+  // Normal builds never advertise an account-writing MCP tool by default.
+  const fence = summaryExecutionFence;
+  if (!fence) return;
+  const qualified = () => {
+    const snapshot = configuration?.snapshot();
+    if (snapshot?.status !== "ready") return false;
+    return savedChatPreviewQualified({
+      environment: runtimeEnvironment,
+      ownerOptIn: process.env.FAROL_NEXT_SAVED_CHAT_PREVIEW,
+      outcomeUnknown: snapshot.settings.setup.chatgpt.outcomeUnknown,
+      verification: snapshot.settings.setup.chatgpt.verified,
+      partition: activeDesktopIdentity.chatGptPartition,
+      buildId: buildIdentity.buildId,
+    });
+  };
+  if (!qualified()) return;
+  const root = path.join(
+    app.getPath("userData"),
+    "farol-next-state",
+    "saved-chat-handoff",
+  );
+  try {
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const info = await lstat(root);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      info.uid !== process.getuid?.() ||
+      (info.mode & 0o077) !== 0 ||
+      (await realpath(root)) !== path.resolve(root)
+    )
+      return;
+    const canonical = (url: string) =>
+      canonicalChatGptConversationUrl(url, chatGptE2eOrigin);
+    const browser = new NextSavedChatBrowser(
+      chatGptHomeUrl,
+      chatGptE2eOrigin,
+      createManagedChatGptRoute,
+      {
+        partition: activeDesktopIdentity.chatGptPartition,
+        ...(runtimeEnvironment === "dev"
+          ? { requiredAppName: activeDesktopIdentity.displayName }
+          : {}),
+      },
+      Date.now,
+      undefined,
+      qualified,
+    );
+    savedChatBridgeRuntime = await startSavedChatBridge(
+      new PersistentChatGptHandoff(
+        new PrivateSavedChatJournal(root, canonical),
+        browser,
+        new Sha256SavedChatDigester(),
+        canonical,
+        async (request, requestDigest) => {
+          if (!qualified()) return false;
+          const owner = window;
+          if (!owner || owner.isDestroyed()) return false;
+          const { response } = await dialog.showMessageBox(owner, {
+            type: "warning",
+            buttons: ["Do not send", "Send once"],
+            defaultId: 0,
+            cancelId: 0,
+            message:
+              "Send this first message to your signed-in ChatGPT account?",
+            detail: `Title: ${request.title}\nKey: ${request.key}\nDigest: ${requestDigest}\n\n${request.firstMessage}`,
+          });
+          return response === 1 && qualified();
+        },
+      ),
+      () => fence.acquireAdmission(),
+    );
+  } catch {
+    // The connector remains usable for Computer without Browser handoff.
+    savedChatBridgeRuntime = null;
   }
 }
 
@@ -3619,6 +3709,9 @@ async function startSecureMcpConnector(
         ...(devMcpProof === undefined ? {} : { devMcpProof }),
         ...(callerRelayRuntime
           ? { callerRelay: callerRelayRuntime.endpoint }
+          : {}),
+        ...(savedChatBridgeRuntime
+          ? { savedChat: savedChatBridgeRuntime.endpoint }
           : {}),
       });
       launchFile = await new PrivateSecureMcpLaunchStore({
@@ -8602,6 +8695,7 @@ async function main(): Promise<void> {
   await initializeCodexContextController();
   await reconcileContextAfterRestart();
   await initializeCallerRelay();
+  await initializeSavedChatBridge();
   await initializeRouteBRuntime();
   const configured = configuration.snapshot();
   if (configured.status === "ready") {
@@ -8704,6 +8798,13 @@ async function main(): Promise<void> {
       callerRelayRuntime = null;
       if (relay)
         closers.push({ name: "caller-relay", close: () => relay.close() });
+      const savedChat = savedChatBridgeRuntime;
+      savedChatBridgeRuntime = null;
+      if (savedChat)
+        closers.push({
+          name: "saved-chat-bridge",
+          close: () => savedChat.close(),
+        });
       disposeChatGptRoutes();
       disposeTaskViews("runtime");
       stopRuntime();

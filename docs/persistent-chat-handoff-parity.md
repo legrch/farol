@@ -1,24 +1,54 @@
 # Persistent handoff parity
 
-Status: saved-project create/status/exact-result and the Computer MCP route are
-integrated on standalone main. The neutral task-model policy and internal
-active-turn steer are separate source candidates. Built and packaged fixtures
-use a disposable fake socket. No native shared-runtime or live-model
-qualification has been completed.
+Status: saved-project create/status/exact-result, active-turn message,
+same-thread continuation, neutral task-model policy and read-only adopted-turn
+status are integrated on standalone main. Their control tools remain gated by
+serving-host qualification. The saved ChatGPT Browser create/status route is a
+separate source candidate with synthetic page, IPC and MCP fixtures; packaged
+and live account proof are still required. No native shared-runtime or
+live-model qualification has been completed.
 
 ## Two different destinations
 
-| Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                            |
-| -------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Separate backlog; the V0 implementation and its private-alpha evidence are historical references, not standalone code or acceptance |
-| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Integrated create/status/result; disposable connector fixtures; no live task                                                        |
-| Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                                   |
+| Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Standalone Browser create/status source candidate; synthetic page and local IPC/MCP fixtures only; no packaged or live proof |
+| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Integrated create/status/result; disposable connector fixtures; no live task                                                 |
+| Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                            |
 
 The V0 browser route is documented in the V0 repository's
 `docs/persistent-chat-handoff.md`. Its Legacy browser partition, Hub bridge,
 receipts and fixture results do not transfer into this standalone repository.
 Neither route changes temporary Consult defaults or grants Product Agent
 admission.
+
+The saved-chat candidate uses the active new-product Browser partition, a
+private write-once journal and a hidden sending surface. A UUID reservation and
+durable send-intent precede the only Send click. A candidate URL is not success:
+the sending helper exits, a new helper reloads the exact canonical private URL,
+and the first user message plus a link inside a visible history container must
+match. Title verification is reported separately. Unknown transport, click,
+navigation or journal outcomes never cause another Send. The desktop owns the
+Browser route and a short-lived authenticated local socket; the Computer MCP
+process receives its endpoint only in the sealed launch contract. A missing
+endpoint means neither `chatgpt_chat_create` nor `chatgpt_chat_status` is
+advertised. Normal launches are default-off. For a disposable packaged preview,
+the owner can set `FAROL_NEXT_SAVED_CHAT_PREVIEW=1` on the `task run`
+process after the new build's ChatGPT Setup connection has been verified, then
+restart and refresh the new connector. Publication requires that opt-in and a
+current, unambiguous Next-partition readiness receipt for the exact build.
+Before durable Send intent, Farol shows the exact key, requested title,
+request digest and first message in a native owner confirmation dialog. Denial
+is recorded without a Send; missing owner window refuses. Immediately before
+the click it rechecks the same build/profile admission. An account-writing
+operation retains its desktop execution-fence lease until its Browser work
+finishes, even after the MCP caller disconnects. A disconnect observed before
+the click prevents Send; one after the click leaves an outcome-unknown receipt
+without retry. A fixture endpoint proves
+transport only; current selectors, owner account selection, connector schema
+refresh and persistence still need one bounded live canary. A Computer folder
+grant alone never authorizes the external send, and an outcome-unknown response
+must not be retried under another key.
 
 ## First Codex saved-project task slice
 

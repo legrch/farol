@@ -66,6 +66,7 @@ export interface SavedChatBrowser {
   sendOnce(
     message: string,
     digest: string,
+    stillConnected?: () => boolean,
   ): Promise<
     | Readonly<{ status: "candidate"; conversationUrl: string }>
     | Readonly<{ status: "not_sent"; code: string }>
@@ -93,9 +94,16 @@ export class PersistentChatGptHandoff {
     private readonly browser: SavedChatBrowser,
     private readonly digester: SavedChatDigester,
     private readonly canonicalUrl: (url: string) => string | null,
+    private readonly authorizeSend: (
+      request: SavedChatRequest,
+      requestDigest: string,
+    ) => Promise<boolean> = async () => false,
   ) {}
 
-  async create(request: SavedChatRequest): Promise<SavedChatResult> {
+  async create(
+    request: SavedChatRequest,
+    stillConnected: () => boolean = () => true,
+  ): Promise<SavedChatResult> {
     const firstMessage = request.firstMessage.replace(/\r\n?/gu, "\n");
     if (
       !UUID.test(request.key) ||
@@ -103,6 +111,7 @@ export class PersistentChatGptHandoff {
       request.title.length > 80 ||
       /[\r\n\x00-\x1f\x7f]/u.test(request.title) ||
       firstMessage.length === 0 ||
+      firstMessage.includes("\0") ||
       this.digester.utf8Length(firstMessage) > 8192
     )
       return {
@@ -170,6 +179,33 @@ export class PersistentChatGptHandoff {
       }
       return { status: "outcome_unknown", dispatchId: request.key };
     }
+    // A Computer workspace grant never authorizes an external account Send.
+    // This decision is for the exact key and normalized first message, after
+    // the own-account Browser preflight and before durable send intent.
+    let approved = false;
+    try {
+      approved =
+        stillConnected() &&
+        (await this.authorizeSend(
+          { ...request, firstMessage },
+          requestDigest,
+        )) &&
+        stillConnected();
+    } catch {
+      await this.browser.closePrepared?.().catch(() => undefined);
+      return { status: "outcome_unknown", dispatchId: request.key };
+    }
+    if (!approved) {
+      await this.browser.closePrepared?.().catch(() => undefined);
+      const code = "SAVED_CHAT_OWNER_APPROVAL_DENIED";
+      try {
+        if (await this.journal.recordRefused(request.key, requestDigest, code))
+          return { status: "refused", code, dispatchId: request.key };
+      } catch {
+        // A lost refusal receipt never permits a second send.
+      }
+      return { status: "outcome_unknown", dispatchId: request.key };
+    }
     try {
       if (!(await this.journal.markSendIntent(request.key, requestDigest))) {
         try {
@@ -189,7 +225,11 @@ export class PersistentChatGptHandoff {
     }
     let sent: Awaited<ReturnType<SavedChatBrowser["sendOnce"]>>;
     try {
-      sent = await this.browser.sendOnce(firstMessage, firstMessageDigest);
+      sent = await this.browser.sendOnce(
+        firstMessage,
+        firstMessageDigest,
+        stillConnected,
+      );
     } catch {
       return { status: "outcome_unknown", dispatchId: request.key };
     }

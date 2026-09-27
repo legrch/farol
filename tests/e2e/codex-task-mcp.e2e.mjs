@@ -33,6 +33,8 @@ const projectRoot = path.join(root, "project");
 const writerRoot = path.join(root, "writer");
 const launchRoot = path.join(root, "launch");
 const socketPath = path.join(root, "control.sock");
+const savedChatSocketPath = path.join(root, "saved-chat.sock");
+const savedChatToken = "a".repeat(64);
 const key = "41949674-c1e4-4a73-9098-4d31da6e7aaa";
 const projectId = "saved-fixture-project";
 const threadId = "issued-fixture-thread";
@@ -42,6 +44,7 @@ const turnId = "issued-fixture-turn";
 const calls = [];
 let turnStatus = "inProgress";
 const sockets = new Set();
+const savedChatCalls = [];
 
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -204,6 +207,36 @@ const server = createServer((socket) => {
   });
 });
 
+// A local fake Browser endpoint proves built MCP routing only. It never
+// opens ChatGPT or claims a saved conversation was verified.
+const savedChatServer = createServer((socket) => {
+  sockets.add(socket);
+  socket.once("close", () => sockets.delete(socket));
+  let input = "";
+  socket.on("data", (chunk) => {
+    input += String(chunk);
+    const newline = input.indexOf("\n");
+    if (newline < 0) return;
+    const request = JSON.parse(input.slice(0, newline));
+    if (request.token !== savedChatToken) {
+      socket.end(`${JSON.stringify({ status: "unknown" })}\n`);
+      return;
+    }
+    savedChatCalls.push(request.operation);
+    socket.end(
+      `${JSON.stringify(
+        request.operation === "create"
+          ? {
+              status: "refused",
+              code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
+              dispatchId: request.request.key,
+            }
+          : { status: "unknown" },
+      )}\n`,
+    );
+  });
+});
+
 let client;
 let transport;
 try {
@@ -223,6 +256,10 @@ try {
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(socketPath, resolve);
+  });
+  await new Promise((resolve, reject) => {
+    savedChatServer.once("error", reject);
+    savedChatServer.listen(savedChatSocketPath, resolve);
   });
   const now = Date.now();
   const writerIdentity = await identity(writerRoot);
@@ -283,6 +320,11 @@ try {
       participantId: "fixture-main",
       turnId: "fixture-turn",
       generation: 1,
+    },
+    savedChat: {
+      protocol: "farol-next-saved-chat/v1",
+      socketPath: savedChatSocketPath,
+      token: savedChatToken,
     },
     codexTasks: {
       transport: "codex-shared-proxy/v1",
@@ -363,7 +405,28 @@ try {
   assert(tools.includes("codex_task_result"), stderr);
   assert(tools.includes("codex_task_observe"), stderr);
   assert(tools.includes("codex_task_adopt"), stderr);
+  assert(tools.includes("chatgpt_chat_create"), stderr);
+  assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
+  const savedChatCreate = await client.callTool({
+    name: "chatgpt_chat_create",
+    arguments: {
+      key,
+      title: "Harmless fixture title",
+      firstMessage: "No live account message",
+    },
+  });
+  assert.deepEqual(savedChatCreate.structuredContent, {
+    status: "refused",
+    code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
+    dispatchId: key,
+  });
+  const savedChatStatus = await client.callTool({
+    name: "chatgpt_chat_status",
+    arguments: { dispatchId: key },
+  });
+  assert.deepEqual(savedChatStatus.structuredContent, { status: "unknown" });
+  assert.deepEqual(savedChatCalls, ["create", "status"]);
   const observed = await client.callTool({
     name: "codex_task_observe",
     arguments: {
@@ -542,13 +605,14 @@ try {
   );
   assert(remainingTools.includes("computer_workspace_list"));
   assert(!remainingTools.some((tool) => tool.startsWith("codex_task_")));
+  assert(remainingTools.includes("chatgpt_chat_status"));
   const listed = await client.callTool({
     name: "computer_workspace_list",
     arguments: { workspaceId: "approved-writer", relativePath: "." },
   });
   assert.notEqual(listed.isError, true);
   process.stdout.write(
-    `PASS: ${packaged ? "packaged" : "built"} Computer MCP task route used one disposable proxy socket; unavailable task host left Computer working; no model turn.\n`,
+    `PASS: ${packaged ? "packaged" : "built"} Computer MCP task route and fake saved-chat Browser endpoint used disposable sockets; unavailable task host left Computer working; no model or live ChatGPT turn.\n`,
   );
 } finally {
   await client?.close().catch(() => undefined);
@@ -556,6 +620,9 @@ try {
   for (const socket of sockets) socket.destroy();
   if (server.listening) {
     await new Promise((resolve) => server.close(() => resolve()));
+  }
+  if (savedChatServer.listening) {
+    await new Promise((resolve) => savedChatServer.close(() => resolve()));
   }
   await fs.rm(root, { recursive: true, force: true });
 }

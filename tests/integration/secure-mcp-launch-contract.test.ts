@@ -430,6 +430,11 @@ describe("secure MCP Computer launch contract", () => {
         socketPath: "/private/tmp/farol-next-caller/relay.sock",
         token: "a-private-relay-token-that-is-long-enough",
       },
+      savedChat: {
+        protocol: "farol-next-saved-chat/v1",
+        socketPath: "/private/tmp/farol-next-chat/chat.sock",
+        token: "a".repeat(64),
+      },
     });
 
     expect(launch).toMatchObject({
@@ -498,6 +503,10 @@ describe("secure MCP Computer launch contract", () => {
         protocol: "farol-next-caller-relay/v1",
         socketPath: "/private/tmp/farol-next-caller/relay.sock",
       },
+      savedChat: {
+        protocol: "farol-next-saved-chat/v1",
+        socketPath: "/private/tmp/farol-next-chat/chat.sock",
+      },
     });
 
     const materialized = materializeReadonlyComputerLaunch(
@@ -512,6 +521,11 @@ describe("secure MCP Computer launch contract", () => {
       protocol: "farol-next-caller-relay/v1",
       socketPath: "/private/tmp/farol-next-caller/relay.sock",
       token: "a-private-relay-token-that-is-long-enough",
+    });
+    expect(materialized.savedChat).toEqual({
+      protocol: "farol-next-saved-chat/v1",
+      socketPath: "/private/tmp/farol-next-chat/chat.sock",
+      token: "a".repeat(64),
     });
     expect(materialized.participants[0]?.grant.workspaces).toMatchObject(
       launch.admission.workspaces,

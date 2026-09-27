@@ -25,6 +25,11 @@ export function ownerLaunchEnvironment(environment = process.env) {
   ) {
     launchEnvironment.LC_ALL = environment.LC_ALL;
   }
+  // Deliberate per-launch owner opt-in for the account-writing saved-chat
+  // preview. No other inherited Farol/E2E seam crosses this allowlist.
+  if (environment.FAROL_NEXT_SAVED_CHAT_PREVIEW === "1") {
+    launchEnvironment.FAROL_NEXT_SAVED_CHAT_PREVIEW = "1";
+  }
   return launchEnvironment;
 }
 

@@ -104,6 +104,9 @@ describe("hidden Next saved-chat browser adapter", () => {
       {
         partition: "persist:farol-next-chatgpt",
       },
+      Date.now,
+      undefined,
+      () => true,
     );
     expect(await browser.prepare()).toBe("ready");
     expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
@@ -144,6 +147,9 @@ describe("hidden Next saved-chat browser adapter", () => {
       {
         partition: "persist:farol-next-chatgpt",
       },
+      Date.now,
+      undefined,
+      () => true,
     );
     expect(await browser.prepare()).toBe("ready");
     expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
@@ -174,6 +180,49 @@ describe("hidden Next saved-chat browser adapter", () => {
       status: "unverified",
     });
     expect(state.created).toHaveLength(1);
+  });
+
+  it("does not click Send when account admission is revoked after insertion", async () => {
+    const state = routes();
+    const browser = new NextSavedChatBrowser(
+      "https://chatgpt.com/",
+      null,
+      state.factory,
+      { partition: "persist:farol-next-chatgpt" },
+      Date.now,
+      undefined,
+      () => false,
+    );
+    expect(await browser.prepare()).toBe("ready");
+    expect(await browser.sendOnce("One", "0".repeat(64))).toEqual({
+      status: "not_sent",
+      code: "SAVED_CHAT_ADMISSION_REVOKED",
+    });
+    expect(state.created[0]?.calls).toEqual([
+      "open",
+      "observe",
+      "ready",
+      "insert",
+      "dispose",
+    ]);
+  });
+
+  it("does not click Send after the MCP caller disconnects before submission", async () => {
+    const state = routes();
+    const browser = new NextSavedChatBrowser(
+      "https://chatgpt.com/",
+      null,
+      state.factory,
+      { partition: "persist:farol-next-chatgpt" },
+      Date.now,
+      undefined,
+      () => true,
+    );
+    expect(await browser.prepare()).toBe("ready");
+    expect(
+      await browser.sendOnce("One", "0".repeat(64), () => false),
+    ).toMatchObject({ status: "not_sent" });
+    expect(state.created[0]?.calls).not.toContain("submit");
   });
 
   it("does not promote a malformed fresh helper proof", async () => {

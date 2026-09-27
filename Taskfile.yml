@@ -51,6 +51,7 @@ tasks:
         fi
         /usr/bin/env -i \
           FAROL_NEXT_OWNER_LAUNCH=1 \
+          FAROL_NEXT_SAVED_CHAT_PREVIEW="${FAROL_NEXT_SAVED_CHAT_PREVIEW:-0}" \
           HOME="${HOME:?task run requires HOME}" \
           LANG="${LANG:-en_US.UTF-8}" \
           LC_ALL="${LC_ALL:-}" \

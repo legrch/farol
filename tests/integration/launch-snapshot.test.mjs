@@ -74,6 +74,17 @@ describe("isolated owner launch snapshot", () => {
     });
   });
 
+  it("passes only an exact saved-chat owner opt-in, never a malformed value", () => {
+    expect(
+      ownerLaunchEnvironment({ FAROL_NEXT_SAVED_CHAT_PREVIEW: "1" }),
+    ).toHaveProperty("FAROL_NEXT_SAVED_CHAT_PREVIEW", "1");
+    for (const value of ["0", "true", "1\nFAROL_NEXT_E2E=1"]) {
+      expect(
+        ownerLaunchEnvironment({ FAROL_NEXT_SAVED_CHAT_PREVIEW: value }),
+      ).not.toHaveProperty("FAROL_NEXT_SAVED_CHAT_PREVIEW");
+    }
+  });
+
   it("refuses cleanup descriptors that do not name an owned snapshot", async () => {
     const unrelated = await fs.mkdtemp(
       path.join(os.tmpdir(), "farol-next-launch-unrelated-"),
