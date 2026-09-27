@@ -13352,6 +13352,17 @@ n10ComputerPanelSegment: {
     const heldAck = await launch([], "hidden", "demo", {
       environment: { FAROL_NEXT_E2E_HOLD_WORKSPACE_EDIT_ACK: "0" },
     });
+    let heldAuthorityDiagnostic = "";
+    let heldAuthorityLine = "";
+    heldAck.application.process().stderr?.on("data", (chunk) => {
+      const lines = `${heldAuthorityLine}${String(chunk)}`.split("\n");
+      heldAuthorityLine = (lines.pop() ?? "").slice(-2048);
+      const matching = lines.filter((line) =>
+        line.includes("farol.authority-transition-refused"),
+      );
+      heldAuthorityDiagnostic =
+        `${heldAuthorityDiagnostic}${matching.join("\n")}`.slice(-2048);
+    });
     try {
       const ackDiagnostics = [];
       const watchAckDiagnostics = (instance) => {
@@ -13386,7 +13397,7 @@ n10ComputerPanelSegment: {
           )?.textContent,
         }));
         throw new Error(
-          `unexpected workspace state after Enable edits: ${error}; ${JSON.stringify(actual)}`,
+          `unexpected workspace state after Enable edits: ${error}; transition ${heldAuthorityDiagnostic}${heldAuthorityLine.includes("farol.authority-transition-refused") ? heldAuthorityLine : ""}; ${JSON.stringify(actual)}`,
           { cause: error },
         );
       }
