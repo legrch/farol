@@ -28,11 +28,12 @@ import {
 import {
   closeSync,
   constants as fsConstants,
-  ftruncateSync,
   fsyncSync,
   lstatSync,
   openSync,
   realpathSync,
+  renameSync,
+  unlinkSync,
   writeSync,
 } from "node:fs";
 import os from "node:os";
@@ -454,9 +455,9 @@ const secondInstanceAcknowledgementPrefix =
 const startupStage = (stage: StartupStage) => {
   const enabled = process.env.FAROL_NEXT_E2E === "1";
   emitStartupStage(stage, enabled, (line) => process.stderr.write(line));
-  // Playwright can attach after early stderr tokens have passed. Persist one
-  // fixed last-stage marker in this run's private disposable E2E home.
-  if (!enabled || stage === "lock-secondary") return;
+  // Playwright can attach after early stderr tokens have passed. Persist only
+  // fixed stage tokens in this run's private disposable E2E home.
+  if (!enabled) return;
   try {
     const home = process.env.HOME;
     if (
@@ -473,17 +474,39 @@ const startupStage = (stage: StartupStage) => {
       info.uid !== process.getuid?.()
     )
       return;
+    const marker =
+      stage === "lock-secondary"
+        ? ".farol-next-secondary-lock-stage"
+        : stage === "delay-complete"
+          ? ".farol-next-delay-complete-stage"
+          : ".farol-next-startup-stage";
+    const target = path.join(home, marker);
+    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
     const file = openSync(
-      path.join(home, ".farol-next-startup-stage"),
-      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
+      temporary,
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_NONBLOCK,
       0o600,
     );
     try {
-      ftruncateSync(file, 0);
-      writeSync(file, `${stage}\n`);
+      writeSync(
+        file,
+        stage === "lock-secondary" || stage === "delay-complete"
+          ? `${stage}:${process.hrtime.bigint()}\n`
+          : `${stage}\n`,
+      );
       fsyncSync(file);
     } finally {
       closeSync(file);
+    }
+    try {
+      renameSync(temporary, target);
+    } catch (error) {
+      unlinkSync(temporary);
+      throw error;
     }
   } catch {
     // Missing diagnostic evidence must not change startup behavior.
@@ -8507,7 +8530,11 @@ async function main(): Promise<void> {
     sidebarMode = configured.settings.general.sidebarDefault;
     setupOpen = initialSetup.setupOpen;
   }
-  if (startupDelayMs > 0) await delay(startupDelayMs);
+  if (startupDelayMs > 0) {
+    startupStage("before-delay");
+    await delay(startupDelayMs);
+    startupStage("delay-complete");
+  }
   installIpc();
   installApplicationMenu();
   await startRuntime();

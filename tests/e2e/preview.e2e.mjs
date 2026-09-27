@@ -1962,7 +1962,7 @@ async function proveSecondLaunchDuringStartup() {
     "--demo",
     `--user-data-dir=${userData}`,
     `--preview-window-mode=${windowMode}`,
-    "--preview-startup-delay-ms=1500",
+    "--preview-startup-delay-ms=5000",
   ];
   const launchEnvironment = {
     FAROL_NEXT_E2E: "1",
@@ -1995,6 +1995,35 @@ async function proveSecondLaunchDuringStartup() {
     launchEnvironment,
   };
   try {
+    await phases.step(
+      "startup-second-launch.awaitPrimaryDelay",
+      60_000,
+      async () => {
+        const deadline = Date.now() + 55_000;
+        let lastStage = "absent";
+        while (Date.now() < deadline) {
+          lastStage = await fs
+            .readFile(
+              path.join(isolatedHome, ".farol-next-startup-stage"),
+              "utf8",
+            )
+            .then(
+              (value) =>
+                /^(lock-primary|before-ready|ready|run-marker|before-delay|startup-complete)\n$/u.exec(
+                  value,
+                )?.[1] ?? "invalid",
+            )
+            .catch((error) =>
+              error?.code === "ENOENT" ? "absent" : "unreadable",
+            );
+          if (lastStage === "before-delay") return;
+          if (lastStage === "startup-complete")
+            throw new Error("E2E_PRIMARY_DELAY_MISSED");
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(`E2E_PRIMARY_DELAY_NOT_REACHED:${lastStage}`);
+      },
+    );
     const startedAt = Date.now();
     const repeated = await phases.step(
       "startup-second-launch.repeatLaunch",
@@ -2046,7 +2075,7 @@ async function proveSecondLaunchDuringStartup() {
         .readFile(path.join(isolatedHome, ".farol-next-startup-stage"), "utf8")
         .then(
           (value) =>
-            /^(lock-primary|before-ready|ready|run-marker|startup-complete)\n$/u.exec(
+            /^(lock-primary|before-ready|ready|run-marker|before-delay|startup-complete)\n$/u.exec(
               value,
             )?.[1] ?? "invalid",
         )
@@ -2063,6 +2092,24 @@ async function proveSecondLaunchDuringStartup() {
         `E2E_STARTUP_SECOND_LAUNCH_RESULT:${secondLaunchResult ?? "missing"}:ack=${acknowledgementCode}:primary=${primaryResult}:startup=${startupFailure}:marker=${runMarker}:stage=${primaryStage}:persistedStage=${persistedStage}:secondaryStage=${secondaryStage}`,
       );
     }
+    const readOrderStage = async (file, expected) => {
+      const value = await fs.readFile(path.join(isolatedHome, file), "utf8");
+      const match = new RegExp(`^${expected}:([0-9]+)\\n$`, "u").exec(value);
+      assert.ok(match, `E2E_STARTUP_ORDER_STAGE_INVALID:${expected}`);
+      return BigInt(match[1]);
+    };
+    const secondaryLockAt = await readOrderStage(
+      ".farol-next-secondary-lock-stage",
+      "lock-secondary",
+    );
+    const delayCompleteAt = await readOrderStage(
+      ".farol-next-delay-complete-stage",
+      "delay-complete",
+    );
+    assert.ok(
+      secondaryLockAt < delayCompleteAt,
+      "E2E_SECONDARY_LAUNCHED_AFTER_PRIMARY_DELAY",
+    );
     assert.ok(Date.now() - startedAt >= 500, "E2E_STARTUP_REOPEN_DID_NOT_WAIT");
     instance.window = await phases.step(
       "startup-second-launch.firstWindow",

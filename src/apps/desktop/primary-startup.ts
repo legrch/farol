@@ -24,6 +24,8 @@ export type StartupStage =
   | "before-ready"
   | "ready"
   | "run-marker"
+  | "before-delay"
+  | "delay-complete"
   | "startup-complete";
 
 // E2E-only, fixed tokens. No profile path, command line or browser content is
