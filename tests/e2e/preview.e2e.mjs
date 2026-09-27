@@ -9680,32 +9680,31 @@ ux34SettingsWidthsSegment: {
     const unbreakableTunnel = `tunnel_${"0".repeat(153)}`;
     assert.equal(unbreakableName.length, 80);
     assert.equal(unbreakableTunnel.length, 160);
-    let renamedComputer;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      renamedComputer = await settingsWidths.window.evaluate(
-        (name) => window.farolNext.configure({ kind: "computer.rename", name }),
-        unbreakableName,
-      );
-      if (
-        renamedComputer.ok ||
-        renamedComputer.error !== "AUTHORITY_CHANGE_IN_PROGRESS"
-      )
-        break;
-      // The authority reservation refused before any mutation. Only this
-      // known no-effect result may be retried, with the same exact name.
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    assert.equal(
-      renamedComputer?.ok,
-      true,
-      `the contract's longest computer name is accepted: ${renamedComputer?.ok ? "ok" : renamedComputer?.error}`,
-    );
     await settingsWidths.window.locator('[data-section="settings"]').click();
     await settingsWidths.window.waitForFunction(
       () => document.documentElement.dataset.section === "settings",
     );
+    await settingsWidths.window.locator("#computer-name").fill(unbreakableName);
+    await settingsWidths.window.locator("#save-computer-name").click();
     await settingsWidths.window.waitForFunction(
-      (name) => document.body.innerText.includes(name),
+      () =>
+        document.querySelector("#settings-feedback")?.textContent ===
+        "Computer name saved.",
+    );
+    const renamedComputer = await settingsWidths.window.evaluate(() =>
+      window.farolNext.bootstrap(),
+    );
+    assert.equal(renamedComputer.configuration?.status, "ready");
+    assert.equal(
+      renamedComputer.configuration.settings.computer.name,
+      unbreakableName,
+    );
+    assert.equal(
+      await settingsWidths.window.locator("#settings-feedback").isVisible(),
+      true,
+    );
+    assert.equal(
+      await settingsWidths.window.locator("#computer-name").inputValue(),
       unbreakableName,
     );
     const measureSettingsLayout = () => {
