@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { execFileSync, spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -29,11 +30,21 @@ const binding = {
 
 const roots: string[] = [];
 const shells: SandboxedWorkspaceShell[] = [];
+const rootsWithUnconfirmedChildren = new Set<string>();
 
 afterEach(async () => {
-  for (const shell of shells.splice(0)) shell.close();
+  const settled = await Promise.all(
+    shells
+      .splice(0)
+      .map((shell) => shell.closeAndWait().catch(() => "unverified")),
+  );
   for (const root of roots.splice(0)) {
-    await fs.rm(root, { recursive: true, force: true });
+    if (
+      settled.every((result) => result === "confirmed") &&
+      !rootsWithUnconfirmedChildren.has(root)
+    )
+      await fs.rm(root, { recursive: true, force: true });
+    rootsWithUnconfirmedChildren.delete(root);
   }
 });
 
@@ -926,7 +937,8 @@ describe.skipIf(process.platform !== "darwin")(
     });
 
     it("does not report cleanup while a detached descendant still runs", async () => {
-      const { workspace, shell } = await fixture();
+      const { root, workspace, shell } = await fixture();
+      rootsWithUnconfirmedChildren.add(root);
       const source = path.join(workspace, "detach-helper.c");
       const binary = path.join(workspace, "detach-helper");
       await fs.writeFile(
@@ -941,10 +953,6 @@ describe.skipIf(process.platform !== "darwin")(
           "  pid_t child = fork(); if (child < 0) return 3;",
           "  if (child > 0) {",
           "    close(gate[0]);",
-          '    FILE *file = fopen("detached.pid", "w");',
-          "    if (!file) return 4;",
-          '    fprintf(file, "%d", child);',
-          "    if (fclose(file) != 0) return 5;",
           '    if (write(gate[1], "1", 1) != 1) return 6;',
           "    close(gate[1]); sleep(20); return 0;",
           "  }",
@@ -954,12 +962,39 @@ describe.skipIf(process.platform !== "darwin")(
           '  int nullfd = open("/dev/null", O_RDWR);',
           "  if (nullfd < 0) _exit(9);",
           "  for (int fd = 0; fd < 3; fd++) dup2(nullfd, fd);",
-          "  close(nullfd); sleep(20); _exit(0);",
+          "  close(nullfd); alarm(20);",
+          '  int proof = open("proof.fifo", O_WRONLY);',
+          '  if (proof < 0 || write(proof, "R", 1) != 1) _exit(10);',
+          '  int control = open("control.fifo", O_RDONLY);',
+          "  if (control < 0) _exit(11);",
+          "  char release = 0;",
+          "  if (read(control, &release, 1) != 1 || release != 'q') _exit(12);",
+          "  _exit(0);",
           "}",
         ].join("\n"),
       );
       execFileSync("/usr/bin/clang", ["-O0", "-o", binary, source]);
-      let escapedPid: number | null = null;
+      const proofPath = path.join(workspace, "proof.fifo");
+      const controlPath = path.join(workspace, "control.fifo");
+      execFileSync("/usr/bin/mkfifo", [proofPath, controlPath]);
+      const proof = await fs.open(
+        proofPath,
+        fsConstants.O_RDONLY | fsConstants.O_NONBLOCK,
+      );
+      let control: fs.FileHandle | null = null;
+      let proofClosed = false;
+      const readProof = async (): Promise<"ready" | "alive" | "exited"> => {
+        try {
+          const byte = Buffer.alloc(1);
+          const result = await proof.read(byte, 0, 1, null);
+          if (result.bytesRead === 0) return "exited";
+          return byte[0] === 82 ? "ready" : "alive";
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EAGAIN")
+            return "alive";
+          throw error;
+        }
+      };
       try {
         const started = await shell.start({
           operationId: "detached-cleanup",
@@ -970,17 +1005,15 @@ describe.skipIf(process.platform !== "darwin")(
           write: true,
         });
         if (!started.ok) throw new Error(started.error.code);
+        let ready = false;
         for (let attempt = 0; attempt < 200; attempt += 1) {
-          const value = await fs
-            .readFile(path.join(workspace, "detached.pid"), "utf8")
-            .catch(() => null);
-          if (value && /^[0-9]+$/u.test(value)) {
-            escapedPid = Number(value);
+          if ((await readProof()) === "ready") {
+            ready = true;
             break;
           }
           await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        if (escapedPid === null) {
+        if (!ready) {
           throw new Error(
             `DETACHED_CHILD_NOT_STARTED:${JSON.stringify(
               shell.read({
@@ -991,6 +1024,17 @@ describe.skipIf(process.platform !== "darwin")(
             )}`,
           );
         }
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+          control = await fs
+            .open(controlPath, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK)
+            .catch((error: NodeJS.ErrnoException) => {
+              if (error.code === "ENXIO") return null;
+              throw error;
+            });
+          if (control) break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        if (!control) throw new Error("DETACHED_CHILD_CONTROL_UNAVAILABLE");
         shell.cancel(started.value.handle);
         const pending = shell.read({
           handle: started.value.handle,
@@ -1001,53 +1045,26 @@ describe.skipIf(process.platform !== "darwin")(
           ok: true,
           value: { groupCleanup: "pending", detachedCleanup: "unverified" },
         });
-        let outcome;
-        try {
-          outcome = await complete(shell, started.value.handle);
-        } catch {
-          let childAlive = false;
-          try {
-            process.kill(escapedPid, 0);
-            childAlive = true;
-          } catch {
-            // Child has exited.
-          }
-          throw new Error(
-            `DETACHED_CANCEL_UNCONFIRMED:${childAlive}:${JSON.stringify(
-              shell.read({
-                handle: started.value.handle,
-                stdoutOffset: 0,
-                stderrOffset: 0,
-              }),
-            )}`,
-          );
-        }
+        const outcome = await complete(shell, started.value.handle);
         expect(outcome.groupCleanup).toBe("confirmed");
         expect(outcome.detachedCleanup).toBe("unverified");
-        expect(() => process.kill(escapedPid!, 0)).not.toThrow();
+        expect(await readProof()).toBe("alive");
       } finally {
-        if (escapedPid !== null) {
-          try {
-            process.kill(escapedPid, "SIGKILL");
-          } catch {
-            // The child has already exited.
-          }
-          let stopped = false;
-          for (let attempt = 0; attempt < 250; attempt += 1) {
-            try {
-              process.kill(escapedPid, 0);
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-                stopped = true;
-                break;
-              }
-              throw error;
+        if (control) {
+          await control.write("q");
+          await control.close();
+          for (let attempt = 0; attempt < 500; attempt += 1) {
+            if ((await readProof()) === "exited") {
+              proofClosed = true;
+              break;
             }
-            await new Promise((resolve) => setTimeout(resolve, 20));
+            await new Promise((resolve) => setTimeout(resolve, 10));
           }
-          if (!stopped)
-            throw new Error("DETACHED_TEST_CHILD_CLEANUP_UNCONFIRMED");
         }
+        await proof.close();
+        if (!proofClosed)
+          throw new Error("DETACHED_TEST_CHILD_CLEANUP_UNCONFIRMED");
+        rootsWithUnconfirmedChildren.delete(root);
       }
     });
 
