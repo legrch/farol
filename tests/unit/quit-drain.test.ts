@@ -186,5 +186,39 @@ describe("LIF-09 quit drains owned children before claiming they stopped", () =>
       await vi.waitFor(() => expect(drain.state()).toBe("done"));
       expect(quits).toBe(1);
     });
+
+    it("records an unconfirmed drain and quits when collecting owned children throws", async () => {
+      const receipts: unknown[] = [];
+      let collects = 0;
+      let quits = 0;
+      const drain = createQuitDrain({
+        deadlineMs: 1_000,
+        collect: () => {
+          collects += 1;
+          throw new Error("OWNED_CHILD_DISPOSAL_FAILED");
+        },
+        record: async (receipt) => {
+          receipts.push(receipt);
+        },
+        quit: () => {
+          quits += 1;
+        },
+      });
+      const first = event();
+      expect(() => drain.onBeforeQuit(first)).not.toThrow();
+      expect(first.prevented()).toBe(1);
+      const second = event();
+      drain.onBeforeQuit(second);
+      expect(second.prevented()).toBe(1);
+      await vi.waitFor(() => expect(drain.state()).toBe("done"));
+      expect(collects).toBe(1);
+      expect(receipts).toEqual([
+        { drained: false, unconfirmed: ["collection"] },
+      ]);
+      expect(quits).toBe(1);
+      const final = event();
+      drain.onBeforeQuit(final);
+      expect(final.prevented()).toBe(0);
+    });
   });
 });

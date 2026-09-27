@@ -87,10 +87,17 @@ export function createQuitDrain(ports: QuitDrainPorts): QuitDrain {
       event.preventDefault();
       if (state === "draining") return;
       state = "draining";
-      const closers = [...ports.collect()];
       const startedAt = Date.now();
+      let draining: Promise<QuitDrainReceipt>;
+      try {
+        draining = drainOwnedChildren([...ports.collect()], ports.deadlineMs);
+      } catch {
+        // Collection may already have disposed some handles before throwing.
+        // Their exit is unproved, so keep the run marker and still quit.
+        draining = Promise.resolve({ drained: false, unconfirmed: ["collection"] });
+      }
       let recordTimer: NodeJS.Timeout | undefined;
-      void drainOwnedChildren(closers, ports.deadlineMs)
+      void draining
         .then((receipt) => {
           // Recording is bounded by the same absolute deadline that bounds
           // the drain (the elapsed drain time counts against it): a
