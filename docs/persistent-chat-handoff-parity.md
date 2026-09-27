@@ -22,7 +22,8 @@ admission.
 ## First Codex saved-project task slice
 
 The selected first path is: explicit owner request → approved Computer workspace
-and current physical root → exactly one **existing** saved project at that root →
+and current physical writer root → exactly one **existing** saved project at its
+canonical project root in the same Git common directory →
 durable one-key reservation → one persistent `thread/start` → one `turn/start` →
 issued dispatch handle → exact metadata-only status. Zero or multiple project
 matches, root drift and policy drift refuse before a new side effect. A lost
@@ -30,12 +31,21 @@ acknowledgement remains outcome-unknown; replay never creates a second task or
 turn.
 
 `PersistentCodexHandoff` in Chat app code owns the closed create/status
-policy. Its private append-only journal and request digester have 21 hermetic
+policy. Its private append-only journal and request digester have 25 hermetic
 tests, including conflicting keys, restart, lost acknowledgement and exact
 status readback. The caller supplies a workspace ID, not an arbitrary root;
-the trusted adapter must resolve the approved root, device/inode and selected
-sandbox/approval policy. The caller-facing connector must expose only the
+the trusted adapter must resolve the approved writer and canonical project
+roots, both device/inode identities, their shared Git common directory, and
+the selected sandbox/approval policy. This is a fixture contract; no production
+resolver or native shared-runtime attachment is claimed. The caller-facing
+connector must expose only the
 dispatch handle, not internal thread/turn IDs.
+
+The earlier fixture-only journal format has no saved-project identity. It is
+intentionally read as outcome-unknown after this contract change and never
+replayed. No production handoff journal existed for that format. Read-only
+status for a current-format dispatch remains available when the execution
+policy changes, provided both physical roots still match.
 
 The next source slice must add explicit host-task creation admission, a trusted
 Computer workspace adapter, an App Server adapter against the **installed**

@@ -18,9 +18,16 @@ import { PrivateCodexHandoffJournal } from "../../src/modules/chat/infra/repo/pr
 
 const key = randomUUID();
 const workspace: HandoffWorkspace = {
-  root: "/approved/project",
+  root: "/approved/writer",
   device: "4",
   inode: "57",
+  gitCommonDirectory: "/approved/project/.git",
+  project: {
+    root: "/approved/project",
+    device: "4",
+    inode: "12",
+    gitCommonDirectory: "/approved/project/.git",
+  },
   execution: { sandbox: "workspace-write", approvalPolicy: "on-request" },
 };
 const request: HandoffRequest = {
@@ -35,7 +42,7 @@ const request: HandoffRequest = {
 class FixtureHost implements HandoffHost {
   readonly calls: string[] = [];
   projects: unknown[] = [
-    { id: "saved-project", roots: [{ path: workspace.root }] },
+    { id: "saved-project", roots: [{ path: workspace.project.root }] },
   ];
   failThread = false;
   failTurn = false;
@@ -197,14 +204,21 @@ describe("persistent Codex handoff core", () => {
 
   it("refuses missing, ambiguous and stale project roots before a side effect", async () => {
     const { host, service, setWorkspace } = await fixture();
+    host.projects = [
+      { id: "saved-project", roots: [{ path: workspace.root }] },
+    ];
+    expect(await service().create(request)).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+    });
     host.projects = [];
     expect(await service().create(request)).toMatchObject({
       status: "refused",
       code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
     });
     host.projects = [
-      { id: "saved-project", roots: [{ path: workspace.root }] },
-      { id: "other-project", roots: [{ path: workspace.root }] },
+      { id: "saved-project", roots: [{ path: workspace.project.root }] },
+      { id: "other-project", roots: [{ path: workspace.project.root }] },
     ];
     expect(await service().create(request)).toMatchObject({
       status: "refused",
@@ -216,6 +230,26 @@ describe("persistent Codex handoff core", () => {
       code: "HANDOFF_WORKSPACE_UNVERIFIED",
     });
     expect(host.calls).not.toContain("thread/start");
+  });
+
+  it("refuses a writer from another repository before starting a thread", async () => {
+    const { host, service, setWorkspace } = await fixture();
+    setWorkspace({ ...workspace, gitCommonDirectory: "/other/.git" });
+    expect(await service().create(request)).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_UNVERIFIED",
+    });
+    expect(host.calls).toEqual([]);
+  });
+
+  it("refuses an incomplete authority response without throwing or starting a thread", async () => {
+    const { host, service, setWorkspace } = await fixture();
+    setWorkspace({ root: workspace.root } as HandoffWorkspace);
+    expect(await service().create(request)).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_UNVERIFIED",
+    });
+    expect(host.calls).toEqual([]);
   });
 
   it("fails closed on malformed or unavailable saved-project inventory", async () => {
@@ -469,6 +503,41 @@ describe("persistent Codex handoff core", () => {
     expect(host.calls).toEqual([]);
   });
 
+  it("never replays a pre-project-identity journal reservation", async () => {
+    const { service, host, journalRoot } = await fixture();
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    await journal.reserve(key, {
+      requestDigest: new Sha256HandoffRequestDigester().digest(request),
+      workspaceId: request.workspaceId,
+      workspace,
+      projectId: request.projectId,
+      threadIntent: false,
+      turnIntent: false,
+    });
+    const {
+      gitCommonDirectory: _common,
+      project: _project,
+      ...legacy
+    } = workspace;
+    await fs.writeFile(
+      path.join(journalRoot, key, "reservation.json"),
+      JSON.stringify({
+        requestDigest: new Sha256HandoffRequestDigester().digest(request),
+        workspaceId: request.workspaceId,
+        workspace: legacy,
+        projectId: request.projectId,
+      }),
+      { mode: 0o600 },
+    );
+    expect(await service().create(request)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(await service().status(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls).toEqual([]);
+  });
+
   it("never retries a lost thread/start acknowledgement after service restart", async () => {
     const host = new FixtureHost();
     host.failThread = true;
@@ -593,6 +662,36 @@ describe("persistent Codex handoff core", () => {
       status: "outcome_unknown",
     });
     expect(host.calls).toHaveLength(calls);
+    setWorkspace(workspace);
+    setWorkspace({
+      ...workspace,
+      project: { ...workspace.project, inode: "replaced-project" },
+    });
+    expect(await service().status(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls).toHaveLength(calls);
+  });
+
+  it("keeps exact read-only status available after execution policy changes", async () => {
+    const { host, service, setWorkspace } = await fixture();
+    expect(await service().create(request)).toMatchObject({
+      status: "dispatched",
+    });
+    setWorkspace({
+      ...workspace,
+      execution: { sandbox: "read-only", approvalPolicy: "untrusted" },
+    });
+    host.turnStatus = "completed";
+    expect(await service().status(key)).toMatchObject({
+      status: "known",
+      threadId: "issued-thread",
+      turnId: "issued-turn",
+      turnStatus: "completed",
+    });
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
   });
 
   it("refuses malformed input before host calls", async () => {

@@ -196,6 +196,14 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       typeof record.workspace.root !== "string" ||
       typeof record.workspace.device !== "string" ||
       typeof record.workspace.inode !== "string" ||
+      typeof record.workspace.gitCommonDirectory !== "string" ||
+      !record.workspace.project ||
+      typeof record.workspace.project.root !== "string" ||
+      typeof record.workspace.project.device !== "string" ||
+      typeof record.workspace.project.inode !== "string" ||
+      typeof record.workspace.project.gitCommonDirectory !== "string" ||
+      record.workspace.project.gitCommonDirectory !==
+        record.workspace.gitCommonDirectory ||
       !record.workspace.execution ||
       !["read-only", "workspace-write"].includes(
         record.workspace.execution.sandbox,

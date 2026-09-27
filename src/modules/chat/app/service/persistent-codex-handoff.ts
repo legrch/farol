@@ -11,6 +11,13 @@ export type HandoffWorkspace = Readonly<{
   root: string;
   device: string;
   inode: string;
+  gitCommonDirectory: string;
+  project: Readonly<{
+    root: string;
+    device: string;
+    inode: string;
+    gitCommonDirectory: string;
+  }>;
   execution: Readonly<{
     sandbox: "read-only" | "workspace-write";
     approvalPolicy: "untrusted" | "on-request";
@@ -97,6 +104,58 @@ function validRequest(request: HandoffRequest): boolean {
   );
 }
 
+function validWorkspace(value: unknown): value is HandoffWorkspace {
+  const workspace = object(value);
+  const project = object(workspace?.project);
+  const execution = object(workspace?.execution);
+  return (
+    typeof workspace?.root === "string" &&
+    workspace.root.startsWith("/") &&
+    typeof workspace.device === "string" &&
+    workspace.device.length > 0 &&
+    typeof workspace.inode === "string" &&
+    workspace.inode.length > 0 &&
+    typeof workspace.gitCommonDirectory === "string" &&
+    workspace.gitCommonDirectory.startsWith("/") &&
+    typeof project?.root === "string" &&
+    project.root.startsWith("/") &&
+    typeof project.device === "string" &&
+    project.device.length > 0 &&
+    typeof project.inode === "string" &&
+    project.inode.length > 0 &&
+    project.gitCommonDirectory === workspace.gitCommonDirectory &&
+    ["read-only", "workspace-write"].includes(execution?.sandbox as string) &&
+    ["untrusted", "on-request"].includes(execution?.approvalPolicy as string)
+  );
+}
+
+function samePhysicalWorkspace(
+  left: HandoffWorkspace,
+  right: HandoffWorkspace,
+): boolean {
+  return (
+    left.root === right.root &&
+    left.device === right.device &&
+    left.inode === right.inode &&
+    left.gitCommonDirectory === right.gitCommonDirectory &&
+    left.project.root === right.project.root &&
+    left.project.device === right.project.device &&
+    left.project.inode === right.project.inode &&
+    left.project.gitCommonDirectory === right.project.gitCommonDirectory
+  );
+}
+
+function sameWorkspace(
+  left: HandoffWorkspace,
+  right: HandoffWorkspace,
+): boolean {
+  return (
+    samePhysicalWorkspace(left, right) &&
+    left.execution.sandbox === right.execution.sandbox &&
+    left.execution.approvalPolicy === right.execution.approvalPolicy
+  );
+}
+
 async function exactProject(
   host: HandoffHost,
   projectId: string,
@@ -151,14 +210,7 @@ export class PersistentCodexHandoff {
     if (!validRequest(request))
       return { status: "refused", code: "HANDOFF_INPUT_INVALID" };
     const workspace = await this.authority.resolve(request.workspaceId);
-    if (
-      !workspace ||
-      !workspace.root.startsWith("/") ||
-      !workspace.device ||
-      !workspace.inode ||
-      !["read-only", "workspace-write"].includes(workspace.execution.sandbox) ||
-      !["untrusted", "on-request"].includes(workspace.execution.approvalPolicy)
-    ) {
+    if (!validWorkspace(workspace)) {
       return { status: "refused", code: "HANDOFF_WORKSPACE_UNVERIFIED" };
     }
     const requestDigest = this.digester.digest(request);
@@ -174,15 +226,7 @@ export class PersistentCodexHandoff {
     if (current && current.requestDigest !== requestDigest) {
       return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
     }
-    if (
-      current &&
-      (current.workspace.root !== workspace.root ||
-        current.workspace.device !== workspace.device ||
-        current.workspace.inode !== workspace.inode ||
-        current.workspace.execution.sandbox !== workspace.execution.sandbox ||
-        current.workspace.execution.approvalPolicy !==
-          workspace.execution.approvalPolicy)
-    ) {
+    if (current && !sameWorkspace(current.workspace, workspace)) {
       return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
     }
     if (current?.threadIntent) {
@@ -212,7 +256,13 @@ export class PersistentCodexHandoff {
     }
 
     try {
-      if (!(await exactProject(this.host, request.projectId, workspace.root))) {
+      if (
+        !(await exactProject(
+          this.host,
+          request.projectId,
+          workspace.project.root,
+        ))
+      ) {
         return {
           status: "refused",
           code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
@@ -223,13 +273,8 @@ export class PersistentCodexHandoff {
     }
     const stillApproved = await this.authority.resolve(request.workspaceId);
     if (
-      !stillApproved ||
-      stillApproved.root !== workspace.root ||
-      stillApproved.device !== workspace.device ||
-      stillApproved.inode !== workspace.inode ||
-      stillApproved.execution.sandbox !== workspace.execution.sandbox ||
-      stillApproved.execution.approvalPolicy !==
-        workspace.execution.approvalPolicy
+      !validWorkspace(stillApproved) ||
+      !sameWorkspace(stillApproved, workspace)
     ) {
       return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
     }
@@ -252,12 +297,7 @@ export class PersistentCodexHandoff {
       reserved.requestDigest !== requestDigest ||
       reserved.workspaceId !== request.workspaceId ||
       reserved.projectId !== request.projectId ||
-      reserved.workspace.root !== workspace.root ||
-      reserved.workspace.device !== workspace.device ||
-      reserved.workspace.inode !== workspace.inode ||
-      reserved.workspace.execution.sandbox !== workspace.execution.sandbox ||
-      reserved.workspace.execution.approvalPolicy !==
-        workspace.execution.approvalPolicy
+      !sameWorkspace(reserved.workspace, workspace)
     ) {
       return { status: "refused", code: "HANDOFF_RESERVATION_CONFLICT" };
     }
@@ -314,14 +354,7 @@ export class PersistentCodexHandoff {
     workspace: HandoffWorkspace,
   ): Promise<HandoffCreateResult> {
     const current = await this.authority.resolve(request.workspaceId);
-    if (
-      !current ||
-      current.root !== workspace.root ||
-      current.device !== workspace.device ||
-      current.inode !== workspace.inode ||
-      current.execution.sandbox !== workspace.execution.sandbox ||
-      current.execution.approvalPolicy !== workspace.execution.approvalPolicy
-    ) {
+    if (!validWorkspace(current) || !sameWorkspace(current, workspace)) {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
     let claimedTurn: boolean;
@@ -377,10 +410,8 @@ export class PersistentCodexHandoff {
     if (!record) return { status: "unknown" };
     const workspace = await this.authority.resolve(record.workspaceId);
     if (
-      !workspace ||
-      workspace.root !== record.workspace.root ||
-      workspace.device !== record.workspace.device ||
-      workspace.inode !== record.workspace.inode
+      !validWorkspace(workspace) ||
+      !samePhysicalWorkspace(workspace, record.workspace)
     ) {
       return { status: "outcome_unknown", dispatchId };
     }
