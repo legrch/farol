@@ -17,6 +17,7 @@ import {
 } from "../../../../pkg/caller-relay/protocol";
 import type { CodexCallerRelayPort } from "./codex-caller-relay-port";
 import type { ExecutionFenceReader } from "./execution-fence";
+import type { CodexTaskRoutePeer } from "../peer/codex-task-route-peer";
 
 export type ReadonlyComputerMcpBinding = Readonly<{
   ownerId: string;
@@ -29,6 +30,18 @@ export type ReadonlyComputerMcpBinding = Readonly<{
 }>;
 
 const IdentifierSchema = z.string().min(1).max(120);
+const DispatchIdSchema = z.string().uuid();
+const CodexTaskCreateInputSchema = z.strictObject({
+  key: DispatchIdSchema,
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+  message: z.string().min(1).max(8_192),
+  model: z.string().min(1).max(120),
+  reasoningEffort: z.string().min(1).max(40),
+});
+const CodexTaskReadInputSchema = z.strictObject({
+  dispatchId: DispatchIdSchema,
+});
 
 function relativePath(value: string, root: boolean): boolean {
   if (root && value === ".") return true;
@@ -161,6 +174,13 @@ const CALLER_RELAY_ANNOTATIONS = {
   readOnlyHint: false,
   destructiveHint: true,
   idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+const CODEX_TASK_CREATE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
   openWorldHint: true,
 } as const;
 
@@ -556,6 +576,7 @@ export function createReadonlyComputerMcpServer(
   callerRelay?: CodexCallerRelayPort,
   fence?: ExecutionFenceReader,
   devMcpProof?: DevMcpProofRecorder,
+  codexTasks?: CodexTaskRoutePeer,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -579,6 +600,100 @@ export function createReadonlyComputerMcpServer(
       }
       return run(...arguments_);
     };
+
+  if (codexTasks) {
+    const taskResponse = (value: object, isError = false): CallToolResult => ({
+      content: [{ type: "text", text: JSON.stringify(value) }],
+      structuredContent: value,
+      ...(isError ? { isError: true } : {}),
+    });
+    server.registerTool(
+      "codex_task_create",
+      {
+        title: "Create one persistent Codex task",
+        description:
+          "Start one task in an explicitly approved existing saved project. Supply a new UUID key once; an outcome_unknown result must never trigger a new key or blind retry.",
+        inputSchema: CodexTaskCreateInputSchema,
+        annotations: CODEX_TASK_CREATE_ANNOTATIONS,
+      },
+      guarded(async (request) => {
+        try {
+          const result = await codexTasks.create(request);
+          const publicResult =
+            result.status === "dispatched"
+              ? { status: "dispatched", dispatchId: result.dispatchId }
+              : result;
+          return taskResponse(
+            publicResult,
+            result.status === "refused" || result.status === "outcome_unknown",
+          );
+        } catch {
+          return taskResponse(
+            { status: "outcome_unknown", dispatchId: request.key },
+            true,
+          );
+        }
+      }),
+    );
+    server.registerTool(
+      "codex_task_status",
+      {
+        title: "Read persistent Codex task status",
+        description:
+          "Read the issued task's current turn without starting, resuming or cloning work.",
+        inputSchema: CodexTaskReadInputSchema,
+        annotations: READONLY_ANNOTATIONS,
+      },
+      guarded(async ({ dispatchId }) => {
+        try {
+          const result = await codexTasks.status(dispatchId);
+          const publicResult =
+            result.status === "known"
+              ? {
+                  status: "known",
+                  dispatchId,
+                  turnStatus: result.turnStatus,
+                }
+              : result;
+          return taskResponse(
+            publicResult,
+            result.status === "outcome_unknown",
+          );
+        } catch {
+          return taskResponse({ status: "outcome_unknown", dispatchId }, true);
+        }
+      }),
+    );
+    server.registerTool(
+      "codex_task_result",
+      {
+        title: "Read exact Codex task result",
+        description:
+          "Read the issued turn's exact final answer after completion; this never creates another turn.",
+        inputSchema: CodexTaskReadInputSchema,
+        annotations: READONLY_ANNOTATIONS,
+      },
+      guarded(async ({ dispatchId }) => {
+        try {
+          const result = await codexTasks.result(dispatchId);
+          const publicResult =
+            result.status === "completed"
+              ? { status: "completed", dispatchId, text: result.text }
+              : result.status === "running" ||
+                  result.status === "failed" ||
+                  result.status === "interrupted"
+                ? { status: result.status, dispatchId }
+                : result;
+          return taskResponse(
+            publicResult,
+            result.status === "outcome_unknown",
+          );
+        } catch {
+          return taskResponse({ status: "outcome_unknown", dispatchId }, true);
+        }
+      }),
+    );
+  }
 
   server.registerTool(
     "computer_workspace_list",

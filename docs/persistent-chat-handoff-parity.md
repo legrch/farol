@@ -82,9 +82,13 @@ projects, process restart and both lost-start boundaries with local fixtures
 before any live smoke. A Computer folder grant alone is not task-creation
 authority.
 
-Until that outer route and a separately authorized live test pass,
-`codex_task_create`, `codex_task_status` and `codex_task_result` remain unavailable. Fixture
-PASS is not proof of a native host task, paid model result, or provider
+The Computer MCP composition now accepts an optional published Chat task port.
+When no distinct task port is supplied, none of the `codex_task_*` tools is
+advertised. An injected in-memory fixture proves create/status/result calls
+through MCP and exposes only the dispatch handle and exact final text, not the
+internal thread, turn or item IDs. Desktop does not yet issue task admission or
+attach that port, so these tools remain unavailable in the product connector.
+Fixture PASS is not proof of a native host task, paid model result, or provider
 delivery. Project creation, project-root rebind, title/message/continue,
 live terminal result retrieval and archive/delete remain open.
 
