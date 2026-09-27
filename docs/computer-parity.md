@@ -80,9 +80,15 @@ if that cannot be proved (`SHELL_GROUP_CLEANUP_UNVERIFIED`). `exitCode` and
 `detachedCleanup` remains `unverified` even when the group is gone: a child can
 call `setsid()`, leave the group, and outlive cancellation. The native
 `fork`/`setsid` regression proves this gap without pretending the group check
-is full tree cleanup. Output over 4 MiB terminates the command. A private
-fsynced pre-effect reservation
-means a duplicate operation ID after MCP process loss returns
+is full tree cleanup. Output over 4 MiB terminates the command. On SIGINT or
+SIGTERM, Computer MCP closes admission, waits up to four seconds for
+pending starts and owned process groups to settle, and exits nonzero if group
+cleanup is unverified. A start that was durably reserved before shutdown but
+not dispatched remains outcome-unknown and cannot be replayed under its ID.
+This still does not establish cleanup of detached descendants.
+
+A private fsynced pre-effect reservation means a duplicate operation ID after
+MCP process loss returns
 `SHELL_OUTCOME_UNKNOWN`; it does not re-run the command. A same-process
 duplicate returns the original handle. Completed output retention is bounded;
 an expired handle never causes a command to be re-run.

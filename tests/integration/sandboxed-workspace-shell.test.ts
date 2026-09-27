@@ -842,6 +842,36 @@ describe.skipIf(process.platform !== "darwin")(
       });
     });
 
+    it("cannot dispatch a reserved start after connector shutdown begins", async () => {
+      const { shell, workspace } = await fixture();
+      const input = {
+        operationId: "shutdown-during-dispatch",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: "printf forbidden > after-close.txt",
+        timeoutMs: 5_000,
+        write: true,
+      };
+      const result = await shell.start(input, undefined, async () => {
+        shell.close();
+        return true;
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "SHELL_OUTCOME_UNKNOWN" },
+      });
+      expect(await shell.closeAndWait()).toBe("confirmed");
+      expect(
+        await shell.start({ ...input, operationId: "after-close" }),
+      ).toMatchObject({
+        ok: false,
+        error: { code: "SHELL_CLOSED" },
+      });
+      await expect(
+        fs.stat(path.join(workspace, "after-close.txt")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
     it("stops its running command when the initiating call is aborted", async () => {
       const { shell } = await fixture();
       const controller = new AbortController();

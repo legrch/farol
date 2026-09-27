@@ -245,6 +245,7 @@ export class SandboxedWorkspaceShell {
   private readonly byHandle = new Map<string, RunningCommand>();
   private readonly pendingOperations = new Set<string>();
   private readonly completedOrder: string[] = [];
+  private closing = false;
 
   constructor(
     private readonly approval: ComputerApproval,
@@ -431,6 +432,7 @@ export class SandboxedWorkspaceShell {
     signal?: AbortSignal,
     dispatchAllowed?: () => Promise<boolean>,
   ): Promise<ShellResponse> {
+    if (this.closing) return refusal("SHELL_CLOSED");
     if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
     if (
       !/^[A-Za-z0-9._:-]{1,160}$/u.test(input.operationId) ||
@@ -473,6 +475,10 @@ export class SandboxedWorkspaceShell {
     }
     this.pendingOperations.add(input.operationId);
     const verified = await this.verifiedWorkspace(input);
+    if (this.closing) {
+      this.pendingOperations.delete(input.operationId);
+      return refusal("SHELL_CLOSED");
+    }
     if (signal?.aborted) {
       this.pendingOperations.delete(input.operationId);
       return refusal("SHELL_CALL_ABORTED");
@@ -564,6 +570,13 @@ export class SandboxedWorkspaceShell {
     }
     // The fsynced reservation already exists. Never reissue it after a lost
     // acknowledgement, even when no command was dispatched.
+    if (this.closing) {
+      this.pendingOperations.delete(input.operationId);
+      await fs
+        .rm(scratch, { recursive: true, force: true })
+        .catch(() => undefined);
+      return refusal("SHELL_OUTCOME_UNKNOWN");
+    }
     if (signal?.aborted) {
       this.pendingOperations.delete(input.operationId);
       await fs
@@ -577,6 +590,13 @@ export class SandboxedWorkspaceShell {
         .rm(scratch, { recursive: true, force: true })
         .catch(() => undefined);
       return refusal("SHELL_DISPATCH_FENCED");
+    }
+    if (this.closing) {
+      this.pendingOperations.delete(input.operationId);
+      await fs
+        .rm(scratch, { recursive: true, force: true })
+        .catch(() => undefined);
+      return refusal("SHELL_OUTCOME_UNKNOWN");
     }
     const dispatchAuthority = this.authorize(
       input.workspaceId,
@@ -844,6 +864,7 @@ export class SandboxedWorkspaceShell {
   }
 
   close(): void {
+    this.closing = true;
     for (const record of this.byHandle.values()) {
       if (record.state === "running") stopWatchdog(record.child);
     }
@@ -856,17 +877,19 @@ export class SandboxedWorkspaceShell {
     this.close();
     const deadline = Date.now() + 4_000;
     while (
-      [...this.byHandle.values()].some(
-        (record) => record.state === "running",
-      ) &&
+      (this.pendingOperations.size > 0 ||
+        [...this.byHandle.values()].some(
+          (record) => record.state === "running",
+        )) &&
       Date.now() < deadline
     ) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    return [...this.byHandle.values()].every(
-      (record) =>
-        record.state === "exited" && record.groupCleanup === "confirmed",
-    )
+    return this.pendingOperations.size === 0 &&
+      [...this.byHandle.values()].every(
+        (record) =>
+          record.state === "exited" && record.groupCleanup === "confirmed",
+      )
       ? "confirmed"
       : "unverified";
   }
