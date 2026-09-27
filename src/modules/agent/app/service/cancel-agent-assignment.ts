@@ -14,6 +14,7 @@ import {
   failChildAssignment,
   markChildOutcomeUnknown,
   markSpawnOutcomeUnknown,
+  matchesChildCorrelation,
   type Assignment,
   type AssignmentErrorCode,
   type AssignmentIdentity,
@@ -100,6 +101,47 @@ export class CancelAgentAssignment {
       if (!uncertain.ok) return failure(uncertain.error.code);
       return this.persist(record(uncertain.value));
     }
+
+    if (!this.assignments.claimCancellation)
+      return failure("AGENT_CANCELLATION_UNAVAILABLE");
+    let claimed: boolean;
+    try {
+      claimed = await this.assignments.claimCancellation(
+        identity,
+        exactCorrelation,
+      );
+    } catch {
+      return failure("AGENT_CANCELLATION_UNAVAILABLE");
+    }
+    // A follower cannot distinguish an in-flight cancellation from a crash
+    // after submitting it. Never send again or overwrite the active owner's
+    // eventual terminal receipt. A later durable terminal read still replays.
+    if (!claimed) {
+      const latest = await this.assignments.load(identity).catch(() => null);
+      if (latest?.assignment.terminal)
+        return success({ ...latest, assignmentRetention: "durable" });
+      const uncertain = markChildOutcomeUnknown(
+        stored.assignment,
+        exactCorrelation,
+        {
+          code: "AGENT_CANCEL_OUTCOME_UNCONFIRMED",
+          source: "recovery",
+          retry: "never",
+        },
+      );
+      return uncertain.ok
+        ? success({
+            ...record(uncertain.value),
+            assignmentRetention: "memory_only",
+          })
+        : failure(uncertain.error.code);
+    }
+    const atSend = await this.assignments.load(identity).catch(() => null);
+    if (!atSend) return failure("AGENT_CANCELLATION_UNAVAILABLE");
+    if (atSend.assignment.terminal)
+      return success({ ...atSend, assignmentRetention: "durable" });
+    if (!matchesChildCorrelation(atSend.assignment, exactCorrelation))
+      return failure("AGENT_CORRELATION");
 
     let cancelled: Awaited<ReturnType<AgentHost["cancel"]>>;
     try {

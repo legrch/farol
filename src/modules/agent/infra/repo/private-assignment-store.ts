@@ -8,7 +8,11 @@ import type {
   AssignmentRepository,
   StoredAssignment,
 } from "../../app/port/assignment-repository";
-import type { AssignmentIdentity } from "../../domain/assignment";
+import {
+  matchesChildCorrelation,
+  type AssignmentIdentity,
+  type ChildCorrelation,
+} from "../../domain/assignment";
 
 const boundedId = z.string().min(1).max(160);
 const sha256Digest = z.string().regex(/^[a-f0-9]{64}$/u);
@@ -91,6 +95,7 @@ export type PrivateAssignmentStoreOptions = Readonly<{
 
 export type AssignmentAtomicWriteHooks = Readonly<{
   beforeAdmissionCommit?: (target: string) => Promise<void>;
+  afterSaveValidation?: (target: string) => Promise<void>;
   beforeCommit?: (target: string) => Promise<void>;
 }>;
 
@@ -184,17 +189,21 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     return withAssignmentOperation(target, async () => {
       const directory = await this.ensureRoot();
       await this.cleanupTemporaryFiles(target);
-      const existing = await this.readRecord(
+      const existing = await this.readCurrentRecord(
         target,
         validated.assignment.identity,
       );
       if (existing) return { status: "existing", record: existing };
 
       try {
-        await this.createExclusive(target, validated);
+        await this.publishExclusive(
+          target,
+          this.serialize(validated),
+          this.hooks.beforeAdmissionCommit,
+        );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        const raced = await this.readRecord(
+        const raced = await this.readCurrentRecord(
           target,
           validated.assignment.identity,
         );
@@ -215,13 +224,39 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     await withAssignmentOperation(target, async () => {
       await this.ensureRoot();
       await this.cleanupTemporaryFiles(target);
-      const existing = await this.readRecord(
+      const existing = await this.readCurrentRecord(
         target,
         validated.assignment.identity,
       );
       if (!existing) throw new Error("AGENT_ASSIGNMENT_STATE_MISSING");
       if (sameValue(existing, validated)) return;
       this.assertMonotonic(existing, validated);
+      await this.hooks.afterSaveValidation?.(target);
+      if (validated.assignment.terminal) {
+        // Terminal decisions and delivery acknowledgements are append-only.
+        // A stale writer in another process cannot rename over a completed
+        // result after passing its own earlier monotonic check.
+        const publication =
+          validated.parentDelivery === "acknowledged"
+            ? `${target}.delivery-ack`
+            : `${target}.terminal`;
+        try {
+          await this.publishExclusive(
+            publication,
+            this.serialize(validated),
+            this.hooks.beforeCommit,
+          );
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          const winner = await this.readCurrentRecord(
+            target,
+            validated.assignment.identity,
+          );
+          if (!sameValue(winner, validated))
+            throw new Error("AGENT_ASSIGNMENT_TERMINAL_IMMUTABLE");
+        }
+        return;
+      }
       await this.atomicWrite(target, validated);
     });
   }
@@ -231,7 +266,45 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     return withAssignmentOperation(target, async () => {
       await this.ensureRoot();
       await this.cleanupTemporaryFiles(target);
-      return this.readRecord(target, identity);
+      return this.readCurrentRecord(target, identity);
+    });
+  }
+
+  async claimCancellation(
+    identity: AssignmentIdentity,
+    correlation: ChildCorrelation,
+  ): Promise<boolean> {
+    const assignmentFile = this.recordFile(identity);
+    return withAssignmentOperation(assignmentFile, async () => {
+      await this.ensureRoot();
+      const stored = await this.readCurrentRecord(assignmentFile, identity);
+      if (
+        !stored ||
+        stored.assignment.phase !== "running" ||
+        stored.assignment.terminal ||
+        !matchesChildCorrelation(stored.assignment, correlation)
+      )
+        throw new Error("AGENT_CANCELLATION_BINDING_MISMATCH");
+      const serialized = `${JSON.stringify({
+        schemaVersion: 1,
+        kind: "agent_cancellation_intent",
+        correlation,
+      })}\n`;
+      if (Buffer.byteLength(serialized, "utf8") > this.maximumRecordBytes)
+        throw new Error("AGENT_ASSIGNMENT_STATE_OVERSIZED");
+      try {
+        // Atomic no-replace publication is also the cross-process claim.
+        // Any existing entry refuses: unreadable/corrupt state cannot permit
+        // another interruption. Keep it even if the receipt fails to persist.
+        await this.publishExclusive(
+          `${assignmentFile}.cancel-intent`,
+          serialized,
+        );
+        return true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+        throw error;
+      }
     });
   }
 
@@ -359,6 +432,34 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     }
   }
 
+  private async readCurrentRecord(
+    target: string,
+    identity: AssignmentIdentity,
+  ): Promise<StoredAssignment | null> {
+    const base = await this.readRecord(target, identity);
+    const terminal = await this.readRecord(`${target}.terminal`, identity);
+    if (terminal) {
+      if (!base || !terminal.assignment.terminal)
+        throw new Error("AGENT_ASSIGNMENT_STATE_CORRUPT");
+      if (!sameValue(base, terminal)) this.assertMonotonic(base, terminal);
+    }
+    const current = terminal ?? base;
+    const acknowledged = await this.readRecord(
+      `${target}.delivery-ack`,
+      identity,
+    );
+    if (acknowledged) {
+      if (
+        current?.assignment.phase !== "completed" ||
+        current.parentDelivery !== "pending" ||
+        !sameValue(acknowledged, { ...current, parentDelivery: "acknowledged" })
+      )
+        throw new Error("AGENT_ASSIGNMENT_STATE_CORRUPT");
+      return acknowledged;
+    }
+    return current;
+  }
+
   private async readRecord(
     file: string,
     identity: AssignmentIdentity,
@@ -410,11 +511,11 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     return new Error("AGENT_ASSIGNMENT_STATE_CORRUPT");
   }
 
-  private async createExclusive(
+  private async publishExclusive(
     target: string,
-    record: StoredAssignment,
+    serialized: string,
+    beforeCommit?: (target: string) => Promise<void>,
   ): Promise<void> {
-    const serialized = this.serialize(record);
     const directory = path.dirname(target);
     const temporary = this.temporaryFile(target);
     const handle = await fs.open(
@@ -434,7 +535,7 @@ export class PrivateAssignmentStore implements AssignmentRepository {
       } finally {
         await handle.close();
       }
-      await this.hooks.beforeAdmissionCommit?.(target);
+      await beforeCommit?.(target);
       await fs.link(temporary, target);
       await fs.unlink(temporary);
       temporaryExists = false;

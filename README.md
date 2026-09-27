@@ -63,14 +63,12 @@ after restart without blind resubmission.
 The deterministic E2E site remains a fixture; its green report does not claim that the
 owner's authenticated ChatGPT account completed a live call.
 
-Setup can also select and attest a Codex executable, run one bounded live App Server
-tool turn, and verify native-Agent lineage. After that verification, an ordinary live
-task's menu admits one owner-written Product Agent objective. Farol creates one
-genuine child, preserves the complete applicable read/verify TaskGrant through Main
--> Agent -> Critic, lets that child discover relevant files beyond its initial focus,
-observes bounded running, rejoins the same child after restart, retains the result,
-and acknowledges parent delivery. Product Agent does not gain mutation or network
-authority from its role.
+The source includes Codex executable attestation and a bounded native-Agent
+lineage-check seam. Product Agent remains default-off: start and rejoin refuse
+with `AGENT_NOT_READY` before creating input, assignment or host work. Local
+fixtures exercise child lineage, read/verify TaskGrant propagation, same-child
+rejoin and result retention; they do not qualify a live Product Agent. Enabling
+that route and its positive qualification require a separate owner decision.
 
 Context continuity keeps the same retained conversation when available, uses a
 summary-only provider turn with no tools, stores a private bounded checkpoint before
@@ -88,11 +86,18 @@ do-not-inspect paths, and intersects every Computer action with current Computer
 policy. Results retain exact request and operation correlation; only a validated,
 correlated refusal is reported as known, while malformed or rebound responses are
 outcome-unknown. The Agent app seam persists assignment correlation in a private
-atomic store with exclusive first publication and serialized monotonic updates,
+atomic store with exclusive first publication and monotonic updates,
 rejoins an already-known running child without another spawn, distinguishes a durable
-result from a memory-only result, and records exact parent delivery. The selected
-native Codex host and product UI exercise this seam for both the setup lineage check
-and bounded owner-written Product Agent objectives.
+result from a memory-only result, and records exact parent delivery. Cancellation
+publishes one private, no-replace intent before the host interruption. A crash,
+lost acknowledgement or failed terminal save never permits another cancellation
+request. Terminal receipts and parent-delivery acknowledgements use separate
+no-replace publications, so a stale process cannot overwrite a completed result
+after an earlier state check. A later durable terminal receipt can be read; without one, replay stays
+outcome-unknown and does not overwrite the in-flight owner's record. Repositories
+without this intent capability refuse cancellation. These recovery checks use
+disposable stores and synthetic hosts, including an exclusive claim from two
+independent Node processes; the default-off product is unchanged.
 
 ## Reproduce
 

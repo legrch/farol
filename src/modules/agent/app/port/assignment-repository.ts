@@ -1,4 +1,8 @@
-import type { Assignment, AssignmentIdentity } from "../../domain/assignment";
+import type {
+  Assignment,
+  AssignmentIdentity,
+  ChildCorrelation,
+} from "../../domain/assignment";
 
 export type StoredAssignment = Readonly<{
   assignment: Assignment;
@@ -15,4 +19,9 @@ export interface AssignmentRepository {
   admit(record: StoredAssignment): Promise<AssignmentAdmission>;
   load(identity: AssignmentIdentity): Promise<StoredAssignment | null>;
   save(record: StoredAssignment): Promise<void>;
+  /** Persist one cancellation intent before any host effect. Never reclaim it. */
+  claimCancellation?(
+    identity: AssignmentIdentity,
+    correlation: ChildCorrelation,
+  ): Promise<boolean>;
 }

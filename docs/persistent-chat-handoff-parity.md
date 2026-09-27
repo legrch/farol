@@ -187,6 +187,13 @@ same handle, while a conflicting binding refuses. `codex_task_status` and
 handle cannot be steered or continued, and reads stop when the selected thread
 or grant expires. A changed project/root or unavailable host refuses or remains
 unknown. Durable owner-task control is still separate.
+The inspected CLI schema supplies model and reasoning effort in `thread/read`,
+but does not supply sandbox or approval policy there. Those fields in
+`thread/resume` do not authorize resuming a selected task merely to obtain
+observation/control metadata. Adoption therefore does not infer the native
+task's execution policy from the configured Farol creation grant. Bounded
+owner-task control still requires a supported policy readback or a separately
+qualified exact control proof; the CLI schema is not serving-runtime proof.
 Fixture PASS is not proof of a native shared
 host task, paid model result or provider delivery. Project creation,
 project-root rebind, title mutation, owner-task control, live control

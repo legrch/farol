@@ -2,7 +2,11 @@ import type {
   AssignmentRepository,
   StoredAssignment,
 } from "../../app/port/assignment-repository";
-import type { AssignmentIdentity } from "../../domain/assignment";
+import {
+  matchesChildCorrelation,
+  type AssignmentIdentity,
+  type ChildCorrelation,
+} from "../../domain/assignment";
 
 function key(identity: AssignmentIdentity): string {
   return JSON.stringify([
@@ -17,6 +21,7 @@ function key(identity: AssignmentIdentity): string {
 
 export class InMemoryAssignments implements AssignmentRepository {
   private readonly assignments = new Map<string, StoredAssignment>();
+  private readonly cancellations = new Set<string>();
 
   async admit(record: StoredAssignment) {
     const identity = key(record.assignment.identity);
@@ -41,5 +46,23 @@ export class InMemoryAssignments implements AssignmentRepository {
       key(record.assignment.identity),
       structuredClone(record),
     );
+  }
+
+  async claimCancellation(
+    identity: AssignmentIdentity,
+    correlation: ChildCorrelation,
+  ): Promise<boolean> {
+    const identityKey = key(identity);
+    const stored = this.assignments.get(identityKey);
+    if (
+      !stored ||
+      stored.assignment.phase !== "running" ||
+      stored.assignment.terminal ||
+      !matchesChildCorrelation(stored.assignment, correlation)
+    )
+      throw new Error("AGENT_CANCELLATION_BINDING_MISMATCH");
+    if (this.cancellations.has(identityKey)) return false;
+    this.cancellations.add(identityKey);
+    return true;
   }
 }
