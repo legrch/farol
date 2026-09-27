@@ -262,7 +262,10 @@ describe("app-owned saved-chat bridge", () => {
       });
       await started;
       let stopped = false;
-      const closing = bridge.close().then(() => {
+      const firstClose = bridge.close();
+      const secondClose = bridge.close();
+      expect(secondClose).toBe(firstClose);
+      const closing = secondClose.then(() => {
         stopped = true;
       });
       await Promise.resolve();

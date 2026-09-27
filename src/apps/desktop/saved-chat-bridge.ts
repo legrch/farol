@@ -52,6 +52,7 @@ export async function startSavedChatBridge(
   const sockets = new Set<Socket>();
   const active = new Set<Promise<void>>();
   let closing = false;
+  let closePromise: Promise<void> | null = null;
 
   const server = createServer((socket) => {
     sockets.add(socket);
@@ -149,17 +150,20 @@ export async function startSavedChatBridge(
 
   return {
     endpoint,
-    close: async () => {
-      if (closing) return;
+    close: () => {
+      if (closePromise) return closePromise;
       closing = true;
-      await Promise.allSettled([...active]);
-      for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      // Node may remove its Unix socket as part of server.close().
-      await fs.unlink(socketPath).catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      });
-      await fs.rmdir(root);
+      closePromise = (async () => {
+        await Promise.allSettled([...active]);
+        for (const socket of sockets) socket.destroy();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        // Node may remove its Unix socket as part of server.close().
+        await fs.unlink(socketPath).catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        });
+        await fs.rmdir(root);
+      })();
+      return closePromise;
     },
   };
 }
