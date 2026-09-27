@@ -38,6 +38,7 @@ const projectId = "saved-fixture-project";
 const threadId = "issued-fixture-thread";
 const turnId = "issued-fixture-turn";
 const calls = [];
+let turnStatus = "inProgress";
 const sockets = new Set();
 
 function canonical(value) {
@@ -109,6 +110,12 @@ function hostResult(method, params) {
     });
     return { turn: { id: turnId, status: "inProgress" } };
   }
+  if (method === "turn/steer") {
+    assert.equal(params.threadId, threadId);
+    assert.equal(params.expectedTurnId, turnId);
+    assert.deepEqual(params.input, [{ type: "text", text: "One steer" }]);
+    return { turnId };
+  }
   if (method === "thread/read") {
     return {
       thread: {
@@ -120,7 +127,7 @@ function hostResult(method, params) {
     };
   }
   if (method === "thread/turns/list") {
-    return { data: [{ id: turnId, status: "completed" }], nextCursor: null };
+    return { data: [{ id: turnId, status: turnStatus }], nextCursor: null };
   }
   if (method === "thread/items/list") {
     assert.equal(params.turnId, turnId);
@@ -300,6 +307,7 @@ try {
   assert(tools.includes("codex_task_create"), stderr);
   assert(tools.includes("codex_task_status"), stderr);
   assert(tools.includes("codex_task_result"), stderr);
+  assert(tools.includes("codex_task_message"), stderr);
   const created = await client.callTool({
     name: "codex_task_create",
     arguments: {
@@ -315,6 +323,52 @@ try {
     status: "dispatched",
     dispatchId: key,
   });
+  const steerKey = "18ff8059-8246-4b8d-9c68-4aa17c2f8421";
+  const invalidMessage = await client.callTool({
+    name: "codex_task_message",
+    arguments: {
+      key: steerKey,
+      dispatchId: key,
+      workspaceId: "approved-writer",
+      projectId,
+      message: "😀".repeat(2_049),
+      model: "gpt-6-luna",
+      reasoningEffort: "medium",
+    },
+  });
+  assert.equal(invalidMessage.isError, true);
+  assert.equal(calls.filter((method) => method === "turn/steer").length, 0);
+  const steered = await client.callTool({
+    name: "codex_task_message",
+    arguments: {
+      key: steerKey,
+      dispatchId: key,
+      workspaceId: "approved-writer",
+      projectId,
+      message: "One steer",
+      model: "gpt-6-luna",
+      reasoningEffort: "medium",
+    },
+  });
+  assert.deepEqual(steered.structuredContent, {
+    status: "steered",
+    dispatchId: key,
+  });
+  const replay = await client.callTool({
+    name: "codex_task_message",
+    arguments: {
+      key: steerKey,
+      dispatchId: key,
+      workspaceId: "approved-writer",
+      projectId,
+      message: "One steer",
+      model: "gpt-6-luna",
+      reasoningEffort: "medium",
+    },
+  });
+  assert.deepEqual(replay.structuredContent, steered.structuredContent);
+  assert.equal(calls.filter((method) => method === "turn/steer").length, 1);
+  turnStatus = "completed";
   const status = await client.callTool({
     name: "codex_task_status",
     arguments: { dispatchId: key },

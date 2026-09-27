@@ -7,6 +7,21 @@ export type HandoffRequest = Readonly<{
   reasoningEffort: string;
 }>;
 
+export type HandoffMessage = Readonly<{
+  key: string;
+  dispatchId: string;
+  workspaceId: string;
+  projectId: string;
+  message: string;
+  model: string;
+  reasoningEffort: string;
+}>;
+
+export type HandoffMessageResult =
+  | Readonly<{ status: "steered"; dispatchId: string; turnId: string }>
+  | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
+  | Readonly<{ status: "refused"; code: string }>;
+
 export type HandoffWorkspace = Readonly<{
   root: string;
   device: string;
@@ -26,6 +41,8 @@ export type HandoffWorkspace = Readonly<{
 
 export type HandoffRecord = Readonly<{
   requestDigest: string;
+  model?: string;
+  reasoningEffort?: string;
   workspaceId: string;
   workspace: HandoffWorkspace;
   projectId: string;
@@ -42,6 +59,16 @@ export interface HandoffJournal {
   claimTurn(key: string): Promise<boolean>;
   recordTurn(key: string, turnId: string): Promise<void>;
   read(key: string): Promise<HandoffRecord | null>;
+  claimMessage(
+    dispatchId: string,
+    key: string,
+    digest: string,
+  ): Promise<"claimed" | "existing" | "conflict">;
+  readMessage(
+    dispatchId: string,
+    key: string,
+  ): Promise<Readonly<{ digest: string; turnId: string | null }> | null>;
+  recordMessage(dispatchId: string, key: string, turnId: string): Promise<void>;
 }
 
 export interface HandoffAuthority {
@@ -51,11 +78,26 @@ export interface HandoffAuthority {
 }
 
 export interface HandoffHost {
-  request(method: string, params: unknown): Promise<unknown>;
+  request(
+    method: string,
+    params: unknown,
+    deadlineAt?: number,
+  ): Promise<unknown>;
 }
+
+export class HandoffNotSubmittedError extends Error {}
 
 export interface HandoffRequestDigester {
   digest(request: HandoffRequest): string;
+  digestMessage(request: HandoffMessage): string;
+}
+
+export interface HandoffMutationGate {
+  run<T>(
+    preflight: () => Promise<void>,
+    effect: () => Promise<T>,
+    safeToReleaseError: (error: unknown) => boolean,
+  ): Promise<T>;
 }
 
 export type HandoffCreateResult =
@@ -111,6 +153,24 @@ function validRequest(request: HandoffRequest): boolean {
   return (
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
       request.key,
+    ) &&
+    identifier(request.workspaceId) &&
+    identifier(request.projectId) &&
+    request.message.length > 0 &&
+    new TextEncoder().encode(request.message).byteLength <= 8_192 &&
+    !request.message.includes("\0") &&
+    /^[A-Za-z0-9_.\/-]{1,120}$/u.test(request.model) &&
+    /^[A-Za-z0-9_-]{1,40}$/u.test(request.reasoningEffort)
+  );
+}
+
+function validMessage(request: HandoffMessage): boolean {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      request.key,
+    ) &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      request.dispatchId,
     ) &&
     identifier(request.workspaceId) &&
     identifier(request.projectId) &&
@@ -222,7 +282,159 @@ export class PersistentCodexHandoff {
     private readonly host: HandoffHost,
     private readonly journal: HandoffJournal,
     private readonly digester: HandoffRequestDigester,
+    private readonly mutationExpiresAt: number,
+    private readonly mutationGate: HandoffMutationGate,
+    private readonly now: () => number = Date.now,
   ) {}
+
+  async message(request: HandoffMessage): Promise<HandoffMessageResult> {
+    if (!validMessage(request))
+      return { status: "refused", code: "HANDOFF_INPUT_INVALID" };
+    if (this.now() >= this.mutationExpiresAt)
+      return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+    const digest = this.digester.digestMessage(request);
+    if (!/^[a-f0-9]{64}$/u.test(digest))
+      return { status: "refused", code: "HANDOFF_DIGEST_INVALID" };
+    let record: HandoffRecord | null;
+    let prior: Awaited<ReturnType<HandoffJournal["readMessage"]>>;
+    try {
+      record = await this.journal.read(request.dispatchId);
+      if (!record?.threadId || !record.turnId)
+        return { status: "refused", code: "HANDOFF_DISPATCH_UNKNOWN" };
+      prior = await this.journal.readMessage(request.dispatchId, request.key);
+    } catch {
+      return { status: "outcome_unknown", dispatchId: request.dispatchId };
+    }
+    if (prior?.digest !== undefined && prior.digest !== digest)
+      return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
+    if (prior) {
+      return prior.turnId === record.turnId
+        ? {
+            status: "steered",
+            dispatchId: request.dispatchId,
+            turnId: prior.turnId,
+          }
+        : { status: "outcome_unknown", dispatchId: request.dispatchId };
+    }
+    if (
+      record.workspaceId !== request.workspaceId ||
+      record.projectId !== request.projectId ||
+      record.model !== request.model ||
+      record.reasoningEffort !== request.reasoningEffort
+    )
+      return { status: "refused", code: "HANDOFF_DISPATCH_BINDING_CHANGED" };
+    const turnId = record.turnId;
+    const workspace = await this.authority.resolve(record.workspaceId);
+    if (
+      !validWorkspace(workspace) ||
+      !sameWorkspace(workspace, record.workspace)
+    )
+      return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
+    try {
+      if (
+        !(await exactProject(
+          this.host,
+          record.projectId,
+          workspace.project.root,
+        ))
+      )
+        return {
+          status: "refused",
+          code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+        };
+      const response = object(
+        await this.host.request("thread/read", {
+          threadId: record.threadId,
+          includeTurns: false,
+        }),
+      );
+      const thread = object(response?.thread);
+      if (
+        !record.model ||
+        thread?.id !== record.threadId ||
+        thread?.projectId !== record.projectId ||
+        thread?.cwd !== workspace.root ||
+        thread?.model !== record.model
+      )
+        return { status: "outcome_unknown", dispatchId: request.dispatchId };
+      const status = await this.status(request.dispatchId);
+      if (status.status !== "known")
+        return { status: "outcome_unknown", dispatchId: request.dispatchId };
+      if (status.turnId !== turnId || status.turnStatus !== "inProgress")
+        return { status: "refused", code: "HANDOFF_TURN_NOT_ACTIVE" };
+      const stillApproved = await this.authority.resolve(record.workspaceId);
+      if (
+        !validWorkspace(stillApproved) ||
+        !sameWorkspace(stillApproved, workspace)
+      )
+        return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
+    } catch {
+      return { status: "outcome_unknown", dispatchId: request.dispatchId };
+    }
+    let claim: "claimed" | "existing" | "conflict";
+    try {
+      claim = await this.journal.claimMessage(
+        request.dispatchId,
+        request.key,
+        digest,
+      );
+    } catch {
+      return { status: "outcome_unknown", dispatchId: request.dispatchId };
+    }
+    if (claim === "conflict")
+      return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
+    if (claim !== "claimed")
+      return { status: "outcome_unknown", dispatchId: request.dispatchId };
+    // The durable intent precedes the only host side effect. A lost response
+    // or failed receipt never permits a replay with the same or a new key.
+    try {
+      const atSend = await this.authority.resolve(record.workspaceId);
+      if (
+        this.now() >= this.mutationExpiresAt ||
+        !validWorkspace(atSend) ||
+        !sameWorkspace(atSend, workspace)
+      )
+        return { status: "outcome_unknown", dispatchId: request.dispatchId };
+      await this.mutationGate.run(
+        async () => {
+          const stillCurrent = await this.authority.resolve(record.workspaceId);
+          if (
+            this.now() >= this.mutationExpiresAt ||
+            !validWorkspace(stillCurrent) ||
+            !sameWorkspace(stillCurrent, workspace)
+          )
+            throw new Error("HANDOFF_PREFLIGHT_DENIED");
+        },
+        async () => {
+          if (this.now() >= this.mutationExpiresAt)
+            throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
+          const response = object(
+            await this.host.request(
+              "turn/steer",
+              {
+                threadId: record.threadId,
+                expectedTurnId: turnId,
+                input: [{ type: "text", text: request.message }],
+                clientUserMessageId: request.key,
+              },
+              this.mutationExpiresAt,
+            ),
+          );
+          if (response?.turnId !== turnId)
+            throw new Error("HANDOFF_STEER_UNVERIFIED");
+        },
+        (error) => error instanceof HandoffNotSubmittedError,
+      );
+      await this.journal.recordMessage(request.dispatchId, request.key, turnId);
+      return {
+        status: "steered",
+        dispatchId: request.dispatchId,
+        turnId,
+      };
+    } catch {
+      return { status: "outcome_unknown", dispatchId: request.dispatchId };
+    }
+  }
 
   async create(request: HandoffRequest): Promise<HandoffCreateResult> {
     if (!validRequest(request))
@@ -300,6 +512,8 @@ export class PersistentCodexHandoff {
     try {
       reserved = await this.journal.reserve(request.key, {
         requestDigest,
+        model: request.model,
+        reasoningEffort: request.reasoningEffort,
         workspaceId: request.workspaceId,
         workspace,
         projectId: request.projectId,
@@ -447,7 +661,8 @@ export class PersistentCodexHandoff {
       if (
         thread?.id !== record.threadId ||
         thread?.projectId !== record.projectId ||
-        thread?.cwd !== record.workspace.root
+        thread?.cwd !== record.workspace.root ||
+        (record.model !== undefined && thread?.model !== record.model)
       ) {
         return { status: "outcome_unknown", dispatchId };
       }

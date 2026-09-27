@@ -541,8 +541,8 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     await expect(fence.admits()).resolves.toEqual({ admitted: true });
   });
   it("holds the connector closed when a required fence record cannot be materialized, until a later start reconciles for real", async () => {
-    const launchRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-fence-recovery-"),
+    const launchRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-recovery-")),
     );
     roots.push(launchRoot);
     const fence = new PrivateExecutionFence({ root: launchRoot });

@@ -179,6 +179,66 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     }
   }
 
+  async claimMessage(
+    dispatchId: string,
+    key: string,
+    digest: string,
+  ): Promise<"claimed" | "existing" | "conflict"> {
+    if (!validKey(key) || !/^[a-f0-9]{64}$/u.test(digest))
+      throw new Error("HANDOFF_MESSAGE_INVALID");
+    const file = path.join(this.directory(dispatchId), "message-intent.json");
+    if (await writeOnce(file, { key, digest })) return "claimed";
+    const existing = await readPrivate(file);
+    if (!existing || typeof existing !== "object" || Array.isArray(existing))
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    const prior = existing as Record<string, unknown>;
+    return prior.key === key && prior.digest === digest
+      ? "existing"
+      : "conflict";
+  }
+
+  async readMessage(
+    dispatchId: string,
+    key: string,
+  ): Promise<Readonly<{ digest: string; turnId: string | null }> | null> {
+    if (!validKey(key)) throw new Error("HANDOFF_MESSAGE_INVALID");
+    const directory = this.directory(dispatchId);
+    const intent = await readPrivate(
+      path.join(directory, "message-intent.json"),
+    );
+    if (intent === null) return null;
+    if (typeof intent !== "object" || Array.isArray(intent))
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    const prior = intent as Record<string, unknown>;
+    if (
+      !validKey(String(prior.key)) ||
+      typeof prior.digest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(prior.digest)
+    )
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    if (prior.key !== key) return { digest: "", turnId: null };
+    const receipt = await readPrivate(path.join(directory, "message.json"));
+    if (receipt === null) return { digest: prior.digest, turnId: null };
+    return { digest: prior.digest, turnId: stringRecord(receipt) };
+  }
+
+  async recordMessage(
+    dispatchId: string,
+    key: string,
+    turnId: string,
+  ): Promise<void> {
+    const prior = await this.readMessage(dispatchId, key);
+    if (!prior || prior.digest === "" || prior.turnId !== null)
+      throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
+    if (
+      !(await writeOnce(
+        path.join(this.directory(dispatchId), "message.json"),
+        stringRecord(turnId),
+      ))
+    )
+      throw new Error("HANDOFF_MESSAGE_CONFLICT");
+  }
+
   async read(key: string): Promise<HandoffRecord | null> {
     const directory = this.directory(key);
     const base = await readPrivate(path.join(directory, "reservation.json"));
@@ -190,6 +250,12 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     if (
       typeof record.requestDigest !== "string" ||
       !/^[a-f0-9]{64}$/u.test(record.requestDigest) ||
+      (record.model !== undefined &&
+        (typeof record.model !== "string" ||
+          !/^[A-Za-z0-9_.\/-]{1,120}$/u.test(record.model))) ||
+      (record.reasoningEffort !== undefined &&
+        (typeof record.reasoningEffort !== "string" ||
+          !/^[A-Za-z0-9_-]{1,40}$/u.test(record.reasoningEffort))) ||
       typeof record.workspaceId !== "string" ||
       typeof record.projectId !== "string" ||
       !record.workspace ||
@@ -243,6 +309,10 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       throw new Error("HANDOFF_JOURNAL_INVALID");
     return {
       requestDigest: record.requestDigest,
+      ...(record.model === undefined ? {} : { model: record.model }),
+      ...(record.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: record.reasoningEffort }),
       workspaceId: stringRecord(record.workspaceId),
       workspace: record.workspace,
       projectId: stringRecord(record.projectId),

@@ -14,13 +14,16 @@ let root = "";
 const recordEntries = async (directory: string) =>
   (await fs.readdir(directory)).filter((entry) => entry.endsWith(".json"));
 
+const makeRoot = async () =>
+  fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")));
+
 afterEach(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
 describe("private execution fence", () => {
   it("serializes an admitted effect with summary raise across independent instances", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await makeRoot();
     const connector = new PrivateExecutionFence({ root });
     const desktop = new PrivateExecutionFence({ root });
     const admitted = await connector.acquireAdmission();
@@ -42,7 +45,7 @@ describe("private execution fence", () => {
   });
 
   it("keeps an unverified shell reservation across connector restart until its owner proves cleanup", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await makeRoot();
     const connector = new PrivateExecutionFence({ root });
     const desktop = new PrivateExecutionFence({ root });
     const admitted = await connector.acquireAdmission();
@@ -70,7 +73,7 @@ describe("private execution fence", () => {
   });
 
   it("quarantines an unverified group for this connector and for a restarted connector", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await makeRoot();
     const connector = new PrivateExecutionFence({ root });
     const admitted = await connector.acquireAdmission();
     if (!admitted.admitted) throw new Error(admitted.code);
@@ -89,7 +92,7 @@ describe("private execution fence", () => {
   });
 
   it("refuses summary raise while a separate process holds admission", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await makeRoot();
     const desktop = new PrivateExecutionFence({ root });
     const initial = await desktop.acquireAdmission();
     if (!initial.admitted) throw new Error(initial.code);
@@ -144,7 +147,7 @@ describe("private execution fence", () => {
   });
 
   it("keeps the shared lock after the parent FD closes while an owned child inherits it", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await makeRoot();
     const desktop = new PrivateExecutionFence({ root });
     const admitted = await desktop.acquireAdmission();
     if (!admitted.admitted || admitted.fd === undefined) {
@@ -178,8 +181,91 @@ describe("private execution fence", () => {
     await desktop.lower("summary");
   });
 
+  it("releases preflight denials but retains an ambiguous submitted effect lock", async () => {
+    root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+    );
+    const fence = new PrivateExecutionFence({ root });
+    const lock = path.join(root, "execution-fence-mutation.lock");
+    let sent = false;
+    await expect(
+      fence.run(
+        async () => {
+          throw new Error("PREFLIGHT_DENIED");
+        },
+        async () => {
+          sent = true;
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("PREFLIGHT_DENIED");
+    expect(sent).toBe(false);
+    await expect(fs.access(lock)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fence.run(
+        async () => {},
+        async () => {
+          throw new Error("ACK_LOST");
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("ACK_LOST");
+    expect((await fs.stat(lock)).isDirectory()).toBe(true);
+  });
+
+  it("serializes an admitted mutation with a later summary raise across instances", async () => {
+    root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+    );
+    const connector = new PrivateExecutionFence({ root });
+    const desktop = new PrivateExecutionFence({ root });
+    let releaseEffect!: () => void;
+    let entered!: () => void;
+    const effectEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const effectRelease = new Promise<void>((resolve) => {
+      releaseEffect = resolve;
+    });
+    const mutation = connector.run(
+      async () => {},
+      async () => {
+        entered();
+        await effectRelease;
+        return "sent";
+      },
+      () => false,
+    );
+    await effectEntered;
+    let raised = false;
+    const raise = desktop
+      .raise({ operationId: "summary-after-send", taskId: "task-a" })
+      .then(() => {
+        raised = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(raised).toBe(false);
+    releaseEffect();
+    await expect(mutation).resolves.toBe("sent");
+    await raise;
+    expect(raised).toBe(true);
+    let attempted = false;
+    await expect(
+      connector.run(
+        async () => {},
+        async () => {
+          attempted = true;
+        },
+        () => false,
+      ),
+    ).rejects.toThrow("COMPUTER_SUMMARY_PHASE_ACTIVE");
+    expect(attempted).toBe(false);
+  });
+
   it("admits with no fence, refuses while any operation is raised, and admits again once every one is lowered", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+    );
     const writer = new PrivateExecutionFence({ root });
     // The connector's process reads the same root with its own instance.
     const reader = new PrivateExecutionFence({ root });
@@ -218,7 +304,9 @@ describe("private execution fence", () => {
   });
 
   it("fails closed on a record it cannot read, and a start keeps exactly the operations the store still holds", async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-")),
+    );
     const fence = new PrivateExecutionFence({ root });
     const directory = path.join(root, EXECUTION_FENCE_DIRECTORY);
     // A start with nothing raised and nothing unresolved touches nothing.

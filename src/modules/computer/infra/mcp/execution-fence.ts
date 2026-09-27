@@ -70,12 +70,83 @@ function shellFileName(operationId: string): string {
 export class PrivateExecutionFence implements ExecutionFenceReader {
   private readonly directory: string;
   private readonly ownedShellMarkers = new Set<string>();
+  private readonly mutationLock: string;
 
   constructor(options: Readonly<{ root: string }>) {
     if (!path.isAbsolute(options.root) || options.root.includes("\0")) {
       throw new Error("EXECUTION_FENCE_ROOT_NOT_ABSOLUTE");
     }
     this.directory = path.join(options.root, EXECUTION_FENCE_DIRECTORY);
+    this.mutationLock = path.join(
+      options.root,
+      "execution-fence-mutation.lock",
+    );
+  }
+
+  // Both desktop fence raises and task-host mutations use this atomic
+  // cross-process lock. A crash leaves the lock in place and fails closed;
+  // it is never stolen by age or PID guessing.
+  private async withLock<T>(
+    work: () => Promise<T>,
+    retainIfWorkFails: (error: unknown) => boolean = () => false,
+  ): Promise<T> {
+    const root = path.dirname(this.mutationLock);
+    await fs.mkdir(root, { recursive: true, mode: 0o700 });
+    const rootInfo = await fs.lstat(root);
+    if (
+      !rootInfo.isDirectory() ||
+      rootInfo.isSymbolicLink() ||
+      (rootInfo.mode & 0o077) !== 0 ||
+      (process.geteuid?.() !== undefined &&
+        rootInfo.uid !== process.geteuid()) ||
+      (await fs.realpath(root)) !== root
+    )
+      throw new Error("COMPUTER_EXECUTION_FENCE_ROOT_UNSAFE");
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      try {
+        await fs.mkdir(this.mutationLock, { mode: 0o700 });
+        break;
+      } catch (error) {
+        if (
+          (error as NodeJS.ErrnoException).code !== "EEXIST" ||
+          Date.now() >= deadline
+        )
+          throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+    let retained = false;
+    try {
+      await this.syncLockParent();
+      return await work();
+    } catch (error) {
+      retained = retainIfWorkFails(error);
+      throw error;
+    } finally {
+      if (!retained) {
+        await fs.rmdir(this.mutationLock);
+        await this.syncLockParent();
+      }
+    }
+  }
+
+  async run<T>(
+    preflight: () => Promise<void>,
+    effect: () => Promise<T>,
+    safeToReleaseError: (error: unknown) => boolean,
+  ): Promise<T> {
+    let effectStarted = false;
+    return this.withLock(
+      async () => {
+        const admission = await this.admits();
+        if (!admission.admitted) throw new Error(admission.code);
+        await preflight();
+        effectStarted = true;
+        return effect();
+      },
+      (error) => effectStarted && !safeToReleaseError(error),
+    );
   }
 
   private async lock(exclusive: boolean): Promise<fs.FileHandle | null> {
@@ -210,6 +281,12 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
   }
 
   async raise(
+    input: Readonly<{ operationId: string; taskId: string; now?: number }>,
+  ): Promise<void> {
+    return this.withLock(() => this.raiseLocked(input));
+  }
+
+  private async raiseLocked(
     input: Readonly<{ operationId: string; taskId: string; now?: number }>,
   ): Promise<void> {
     const record = fenceRecordSchema.parse({
@@ -430,6 +507,21 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
       await directory.sync();
     } finally {
       await directory.close();
+    }
+  }
+
+  private async syncLockParent(): Promise<void> {
+    const handle = await fs.open(
+      path.dirname(this.mutationLock),
+      fsConstants.O_RDONLY |
+        (fsConstants.O_DIRECTORY ?? 0) |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+    );
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
   }
 }

@@ -4,7 +4,10 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { HandoffHost } from "../../app/service/persistent-codex-handoff";
+import {
+  HandoffNotSubmittedError,
+  type HandoffHost,
+} from "../../app/service/persistent-codex-handoff";
 
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
 const MAX_PENDING = 8;
@@ -18,6 +21,7 @@ const METHODS = new Set([
   "thread/turns/list",
   "thread/items/list",
   "turn/start",
+  "turn/steer",
 ]);
 
 type Pending = {
@@ -215,9 +219,27 @@ export class SharedCodexProxyHost implements HandoffHost {
     return this.ready;
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
+  async request(
+    method: string,
+    params: unknown,
+    deadlineAt?: number,
+  ): Promise<unknown> {
     if (!METHODS.has(method)) throw new Error("CODEX_SHARED_METHOD_DENIED");
-    await this.connect();
+    try {
+      await this.connect();
+    } catch {
+      // This request has not reached send(); no steer frame exists. Errors
+      // after send() keep their original unknown-submission classification.
+      throw new HandoffNotSubmittedError("CODEX_SHARED_HOST_UNAVAILABLE");
+    }
+    // Capacity is checked synchronously before send() can write a frame.
+    // Never classify a rejection from an already pending request this way.
+    if (this.pending.size >= MAX_PENDING)
+      throw new HandoffNotSubmittedError("CODEX_SHARED_HOST_BUSY");
+    // This request has not reached send(); deadline expiry cannot have
+    // submitted a steer frame. Failures after send() remain outcome-unknown.
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt)
+      throw new HandoffNotSubmittedError("CODEX_SHARED_DEADLINE_EXPIRED");
     return this.send(method, params);
   }
 

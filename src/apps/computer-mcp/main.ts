@@ -94,6 +94,7 @@ async function main(): Promise<void> {
   const callerRelay = launch.callerRelay
     ? new CodexCallerRelayClient(launch.callerRelay)
     : undefined;
+  const fence = new PrivateExecutionFence({ root: path.dirname(launchFile) });
   const taskLaunch = launch.codexTasks;
   const sharedHost = taskLaunch
     ? await SharedCodexProxyHost.attach({
@@ -129,6 +130,8 @@ async function main(): Promise<void> {
               path.join(path.dirname(launchFile), "codex-task-journal"),
             ),
             new Sha256HandoffRequestDigester(),
+            taskLaunch.grant.expiresAt,
+            fence,
           ),
           taskLaunch.grant,
         )
@@ -141,7 +144,6 @@ async function main(): Promise<void> {
     : undefined;
   // The desktop raises a fence in the launch root while a summary-only
   // phase runs; no tool executes until it is lowered.
-  const fence = new PrivateExecutionFence({ root: path.dirname(launchFile) });
   const shell =
     launch.approval.commands === "workspace"
       ? new SandboxedWorkspaceShell(

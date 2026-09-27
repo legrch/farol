@@ -44,9 +44,62 @@ async function connected(route?: CodexTaskRoute) {
 }
 
 describe("Codex task Computer MCP surface", () => {
+  it("validates active message bytes before delegate and exposes exact steer receipt", async () => {
+    const messages: string[] = [];
+    const route: CodexTaskRoute = {
+      async create() {
+        throw new Error("unexpected create");
+      },
+      async status() {
+        throw new Error("unexpected status");
+      },
+      async result() {
+        throw new Error("unexpected result");
+      },
+      async message(input) {
+        messages.push(input.message);
+        return {
+          status: "steered",
+          dispatchId: input.dispatchId,
+          turnId: "issued-turn",
+        };
+      },
+    };
+    const { client, server } = await connected(route);
+    const send = (message: string) =>
+      client.callTool({
+        name: "codex_task_message",
+        arguments: {
+          key: "18ff8059-8246-4b8d-9c68-4aa17c2f8421",
+          dispatchId: key,
+          workspaceId: "writer",
+          projectId: "saved-project",
+          message,
+          model: "gpt-6-luna",
+          reasoningEffort: "medium",
+        },
+      });
+    try {
+      for (const message of ["", "bad\0message", "😀".repeat(2_049)])
+        expect((await send(message)).isError).toBe(true);
+      expect(messages).toEqual([]);
+      const accepted = await send("  One steer\r\n");
+      expect(accepted.structuredContent).toEqual({
+        status: "steered",
+        dispatchId: key,
+      });
+      expect(messages).toEqual(["  One steer\r\n"]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
   it("validates UTF-8 bytes and NUL before dispatching through the real MCP route", async () => {
     const forwarded: string[] = [];
     const route: CodexTaskRoute = {
+      async message() {
+        throw new Error("unexpected message");
+      },
       async create(input) {
         forwarded.push(input.message);
         return {
@@ -138,6 +191,9 @@ describe("Codex task Computer MCP surface", () => {
   it("routes one create/status/result and exposes only the dispatch handle", async () => {
     const calls: string[] = [];
     const route: CodexTaskRoute = {
+      async message() {
+        throw new Error("unexpected message");
+      },
       async create(request) {
         calls.push(`create:${request.key}:${request.projectId}`);
         return {
@@ -222,6 +278,9 @@ describe("Codex task Computer MCP surface", () => {
   it("keeps a lost create acknowledgement outcome-unknown with the same key", async () => {
     let count = 0;
     const route: CodexTaskRoute = {
+      async message() {
+        throw new Error("unexpected message");
+      },
       async create() {
         count += 1;
         throw new Error("lost acknowledgement");

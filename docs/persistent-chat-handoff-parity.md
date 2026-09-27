@@ -55,7 +55,19 @@ policy changes, provided both physical roots still match.
 
 The current branch adds explicit host-task creation admission, a trusted
 Computer workspace adapter and a typed desktop/Computer MCP
-create/status/result route. `PhysicalCodexHandoffAuthority`
+create/status/result route. The active-turn slice also exposes
+`codex_task_message` for one exact steer per issued dispatch. It binds a
+separate message UUID to the dispatch, saved project, approved workspace,
+model and effort. The exact turn ID comes from the durable dispatch record,
+is checked as active, and is supplied as the host's `expectedTurnId`; the MCP
+caller does not have to know an internal turn ID. A durable content-free intent precedes
+`turn/steer`; a lost acknowledgement stays outcome-unknown and never causes a
+second send with the same or a new key. A confirmed receipt can be read after
+connector restart. The send checks the admission deadline and current
+workspace again inside a cross-process fence lock shared with desktop summary
+raises. A crash or outcome-unknown after submitting the host request leaves
+that lock fail-closed for explicit recovery; a preflight refusal releases it.
+`PhysicalCodexHandoffAuthority`
 re-measures the approved writer and saved-project root device/inode and
 requires their current Git common directory to match the explicitly selected
 repository. It refuses symlinked, replaced or foreign roots. This adapter
@@ -73,7 +85,8 @@ against a disposable fake socket; this is not a connection to the owner's
 running daemon or proof that native Desktop shares that runtime.
 The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
 installed-host schema methods and response fields, including
-`thread/items/list`, its turn filter, and the typed final-answer phase. It is not yet attached to
+`thread/items/list`, its turn filter, the typed final-answer phase, and
+`turn/steer` with an expected turn ID. It is not yet attached to
 that route. It was checked against the locally installed Codex CLI's generated
 schema without launching a task.
 The adapter must preserve the owner-selected host execution policy and refuse
@@ -92,8 +105,9 @@ selected Codex executable. The built Computer MCP entrypoint attaches once,
 constructs a durable journal and refuses a different project, workspace,
 model, effort or expired grant before starting a task. An in-memory MCP test
 and a built-byte test with the installed CLI proxy against a disposable fake
-socket prove create/status/result. They expose only the dispatch handle and
-exact final text, not internal thread, turn or item IDs, and consume no model
+socket prove create/status/result and one active-turn steer. They expose only
+the dispatch handle and exact final text, not internal thread, turn or item IDs,
+and consume no model
 turn. The owner-facing Native hosts setting selects an exact existing socket,
 serving Codex home, saved project ID/root, verified Computer workspace,
 execution policy, model and effort. Desktop checks the saved project through
@@ -102,7 +116,7 @@ route selection. The next connector launch includes the separate task grant;
 an unavailable task socket leaves Computer running without task tools. No
 daemon is started or repaired. Fixture PASS is not proof of a native shared
 host task, paid model result or provider delivery. Project creation,
-project-root rebind, title/message/continue,
+project-root rebind, title/continue/additional messages,
 live terminal result retrieval and archive/delete remain open.
 
 With a selected installed Codex CLI path, the content-free local route proof is

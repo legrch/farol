@@ -7,15 +7,19 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   PersistentCodexHandoff,
+  HandoffNotSubmittedError,
   type HandoffAuthority,
   type HandoffHost,
   type HandoffJournal,
+  type HandoffMutationGate,
   type HandoffRecord,
   type HandoffRequest,
+  type HandoffRequestDigester,
   type HandoffWorkspace,
 } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 import { Sha256HandoffRequestDigester } from "../../src/modules/chat/infra/native/sha256-handoff-request-digester";
 import { PrivateCodexHandoffJournal } from "../../src/modules/chat/infra/repo/private-codex-handoff-journal";
+import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
 
 const key = randomUUID();
 const workspace: HandoffWorkspace = {
@@ -39,6 +43,12 @@ const request: HandoffRequest = {
   model: "selected-model",
   reasoningEffort: "medium",
 };
+const mutationGate: HandoffMutationGate = {
+  run: async (preflight, effect) => {
+    await preflight();
+    return effect();
+  },
+};
 
 class FixtureHost implements HandoffHost {
   readonly calls: string[] = [];
@@ -47,6 +57,9 @@ class FixtureHost implements HandoffHost {
   ];
   failThread = false;
   failTurn = false;
+  failSteer = false;
+  steerError: Error | undefined;
+  steerResponse?: unknown;
   failProject = false;
   failStatus = false;
   failItems = false;
@@ -111,6 +124,17 @@ class FixtureHost implements HandoffHost {
         },
       });
       return { turn: { id: "issued-turn", status: "inProgress" } };
+    }
+    if (method === "turn/steer") {
+      if (this.failSteer) throw new Error("ACK_LOST");
+      if (this.steerError) throw this.steerError;
+      if (this.steerResponse !== undefined) return this.steerResponse;
+      expect(params).toMatchObject({
+        threadId: "issued-thread",
+        expectedTurnId: "issued-turn",
+        input: [{ type: "text", text: "One steer" }],
+      });
+      return { turnId: "issued-turn" };
     }
     if (method === "thread/read") {
       if (this.failStatus) throw new Error("STATUS_UNAVAILABLE");
@@ -217,10 +241,13 @@ async function fixture(host = new FixtureHost()) {
       host,
       new PrivateCodexHandoffJournal(journalRoot),
       new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
     );
   return {
     host,
     service,
+    authority,
     journalRoot,
     setWorkspace(value: HandoffWorkspace | null) {
       current = value;
@@ -235,6 +262,13 @@ function byteBudgetFixture() {
   const hostCalls: string[] = [];
   let forwardedMessage: string | null = null;
   const journal: HandoffJournal = {
+    async claimMessage() {
+      return "claimed";
+    },
+    async readMessage() {
+      return null;
+    },
+    async recordMessage() {},
     async read() {
       journalCalls += 1;
       return record;
@@ -306,6 +340,8 @@ function byteBudgetFixture() {
     host,
     journal,
     new Sha256HandoffRequestDigester(),
+    Date.now() + 60_000,
+    mutationGate,
   );
   return {
     service,
@@ -315,6 +351,387 @@ function byteBudgetFixture() {
 }
 
 describe("persistent Codex handoff core", () => {
+  it("fails closed at each message preflight boundary without sending a steer", async () => {
+    const { service, host, authority, journalRoot, setWorkspace } =
+      await fixture();
+    expect((await service().create(request)).status).toBe("dispatched");
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    const makeService = (
+      digester: HandoffRequestDigester = new Sha256HandoffRequestDigester(),
+      expiresAt = Date.now() + 60_000,
+    ) =>
+      new PersistentCodexHandoff(
+        authority,
+        host,
+        journal,
+        digester,
+        expiresAt,
+        mutationGate,
+      );
+
+    expect(
+      await makeService(undefined, Date.now() - 1).message(message),
+    ).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    const validDigester = new Sha256HandoffRequestDigester();
+    expect(
+      await makeService({
+        digest: (value) => validDigester.digest(value),
+        digestMessage: () => "invalid",
+      }).message(message),
+    ).toEqual({ status: "refused", code: "HANDOFF_DIGEST_INVALID" });
+    expect(
+      await service().message({ ...message, dispatchId: randomUUID() }),
+    ).toEqual({ status: "refused", code: "HANDOFF_DISPATCH_UNKNOWN" });
+
+    host.projects = [];
+    expect(await service().message(message)).toEqual({
+      status: "refused",
+      code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+    });
+    host.projects = [
+      { id: request.projectId, roots: [{ path: workspace.project.root }] },
+    ];
+    host.readResponse = {
+      thread: {
+        id: "issued-thread",
+        projectId: request.projectId,
+        cwd: workspace.root,
+        model: "another-model",
+      },
+    };
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.readResponse = undefined;
+    host.failStatus = true;
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.failStatus = false;
+    host.turnsResponse = { data: [], nextCursor: null };
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.turnsResponse = undefined;
+    host.onProjectList = () => setWorkspace({ ...workspace, inode: "changed" });
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.onProjectList = undefined;
+    setWorkspace(workspace);
+    let authorityReads = 0;
+    const lateRevocation = new PersistentCodexHandoff(
+      {
+        resolve: async () =>
+          ++authorityReads < 3 ? workspace : { ...workspace, inode: "changed" },
+      },
+      host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await lateRevocation.message(message)).toEqual({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_CHANGED",
+    });
+    expect(host.calls).not.toContain("turn/steer");
+  });
+
+  it("steers the exact active turn once and reads back its durable receipt after restart", async () => {
+    const { service, host, journalRoot } = await fixture();
+    expect((await service().create(request)).status).toBe("dispatched");
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(await service().message(message)).toEqual({
+      status: "steered",
+      dispatchId: request.key,
+      turnId: "issued-turn",
+    });
+    expect(await service().message(message)).toMatchObject({
+      status: "steered",
+    });
+    const intent = await fs.readFile(
+      path.join(journalRoot, request.key, "message-intent.json"),
+      "utf8",
+    );
+    expect(intent).not.toContain(message.message);
+    expect(intent).not.toContain(request.message);
+    expect(host.calls.filter((method) => method === "turn/steer")).toHaveLength(
+      1,
+    );
+    expect(
+      await service().message({ ...message, key: randomUUID() }),
+    ).toMatchObject({ status: "refused", code: "HANDOFF_KEY_CONFLICT" });
+    expect(
+      await service().message({ ...message, message: "changed" }),
+    ).toMatchObject({ status: "refused", code: "HANDOFF_KEY_CONFLICT" });
+    expect(
+      await service().message({ ...message, projectId: "different" }),
+    ).toMatchObject({ status: "refused", code: "HANDOFF_KEY_CONFLICT" });
+  });
+
+  it("keeps a lost steer acknowledgement unknown and never sends another key", async () => {
+    const host = new FixtureHost();
+    const { service } = await fixture(host);
+    await service().create(request);
+    host.failSteer = true;
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.failSteer = false;
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(
+      await service().message({ ...message, key: randomUUID() }),
+    ).toMatchObject({ status: "refused", code: "HANDOFF_KEY_CONFLICT" });
+    expect(host.calls.filter((method) => method === "turn/steer")).toHaveLength(
+      1,
+    );
+  });
+
+  it("refuses invalid, stale, terminal, and changed-workspace steer before host mutation", async () => {
+    const { service, host, setWorkspace } = await fixture();
+    await service().create(request);
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    for (const text of ["", "bad\0input", "я".repeat(4_097)])
+      expect(
+        await service().message({ ...message, message: text }),
+      ).toMatchObject({ status: "refused", code: "HANDOFF_INPUT_INVALID" });
+    expect(
+      await service().message({ ...message, projectId: "other" }),
+    ).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_DISPATCH_BINDING_CHANGED",
+    });
+    host.turnStatus = "completed";
+    expect(await service().message(message)).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_TURN_NOT_ACTIVE",
+    });
+    host.turnStatus = "inProgress";
+    setWorkspace({ ...workspace, inode: "different" });
+    expect(await service().message(message)).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_CHANGED",
+    });
+    expect(host.calls).not.toContain("turn/steer");
+  });
+
+  it("burns intent without host mutation when authority changes after the durable claim", async () => {
+    const { service, host, authority, journalRoot, setWorkspace } =
+      await fixture();
+    await service().create(request);
+    const base = new PrivateCodexHandoffJournal(journalRoot);
+    const journal: HandoffJournal = {
+      read: (key) => base.read(key),
+      reserve: (key, value) => base.reserve(key, value),
+      claimThread: (key) => base.claimThread(key),
+      recordThread: (key, threadId) => base.recordThread(key, threadId),
+      claimTurn: (key) => base.claimTurn(key),
+      recordTurn: (key, turnId) => base.recordTurn(key, turnId),
+      readMessage: (dispatchId, key) => base.readMessage(dispatchId, key),
+      async claimMessage(dispatchId, key, digest) {
+        const claim = await base.claimMessage(dispatchId, key, digest);
+        setWorkspace(null);
+        return claim;
+      },
+      recordMessage: (dispatchId, key, turnId) =>
+        base.recordMessage(dispatchId, key, turnId),
+    };
+    const route = new PersistentCodexHandoff(
+      authority,
+      host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    setWorkspace(workspace);
+    expect(await service().message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls).not.toContain("turn/steer");
+  });
+
+  it("does not steer when admission expires at the gated effect boundary", async () => {
+    const { service, host, journalRoot } = await fixture();
+    await service().create(request);
+    let now = 0;
+    let inPreflight = false;
+    const authority: HandoffAuthority = {
+      async resolve() {
+        if (inPreflight) now = 100;
+        return workspace;
+      },
+    };
+    const gate: HandoffMutationGate = {
+      async run(preflight, effect) {
+        inPreflight = true;
+        await preflight();
+        return effect();
+      },
+    };
+    const route = new PersistentCodexHandoff(
+      authority,
+      host,
+      new PrivateCodexHandoffJournal(journalRoot),
+      new Sha256HandoffRequestDigester(),
+      100,
+      gate,
+      () => now,
+    );
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls).not.toContain("turn/steer");
+    now = 0;
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls).not.toContain("turn/steer");
+  });
+
+  it("retains the real fence lock when a submitted steer returns a foreign turn", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    await service().create(request);
+    host.steerResponse = { turnId: "foreign-turn" };
+    const gateRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-message-gate-")),
+    );
+    roots.push(gateRoot);
+    const route = new PersistentCodexHandoff(
+      authority,
+      host,
+      new PrivateCodexHandoffJournal(journalRoot),
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      new PrivateExecutionFence({ root: gateRoot }),
+    );
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(
+      (
+        await fs.stat(path.join(gateRoot, "execution-fence-mutation.lock"))
+      ).isDirectory(),
+    ).toBe(true);
+    expect(host.calls.filter((method) => method === "turn/steer")).toHaveLength(
+      1,
+    );
+  });
+
+  it("releases the real fence lock only for a certified pre-send proxy failure", async () => {
+    const host = new FixtureHost();
+    const { service, authority, journalRoot } = await fixture(host);
+    await service().create(request);
+    host.steerError = new HandoffNotSubmittedError("HOST_FAILED_BEFORE_SEND");
+    const gateRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-message-gate-")),
+    );
+    roots.push(gateRoot);
+    const route = new PersistentCodexHandoff(
+      authority,
+      host,
+      new PrivateCodexHandoffJournal(journalRoot),
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      new PrivateExecutionFence({ root: gateRoot }),
+    );
+    const message = {
+      key: randomUUID(),
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    await expect(
+      fs.access(path.join(gateRoot, "execution-fence-mutation.lock")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(host.calls.filter((method) => method === "turn/steer")).toHaveLength(
+      1,
+    );
+    host.steerError = undefined;
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls.filter((method) => method === "turn/steer")).toHaveLength(
+      1,
+    );
+  });
   it("refuses invalid UTF-8 byte budgets before authority, journal or host access", async () => {
     for (const message of [
       "",
@@ -621,7 +1038,9 @@ describe("persistent Codex handoff core", () => {
       { resolve: async () => workspace },
       host,
       new PrivateCodexHandoffJournal(path.join(os.tmpdir(), "unused-journal")),
-      { digest: () => "bad" },
+      { digest: () => "bad", digestMessage: () => "bad" },
+      Date.now() + 60_000,
+      mutationGate,
     );
     expect(await invalid.create(request)).toEqual({
       status: "refused",
@@ -679,6 +1098,15 @@ describe("persistent Codex handoff core", () => {
     const host = new FixtureHost();
     const authority: HandoffAuthority = { resolve: async () => workspace };
     const journal: HandoffJournal = {
+      claimMessage: async () => {
+        throw new Error("MUST_NOT_CLAIM");
+      },
+      readMessage: async () => {
+        throw new Error("MUST_NOT_READ");
+      },
+      recordMessage: async () => {
+        throw new Error("MUST_NOT_RECORD");
+      },
       read: async () => null,
       reserve: async (_key, record) => ({
         ...record,
@@ -702,6 +1130,8 @@ describe("persistent Codex handoff core", () => {
       host,
       journal,
       new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
     );
     expect(await service.create(request)).toMatchObject({
       status: "refused",

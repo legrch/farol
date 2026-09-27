@@ -16,6 +16,10 @@ describe("separate Codex task admission", () => {
   it("refuses drift in project, workspace, model, effort or expiry before any host call", async () => {
     let calls = 0;
     const delegate: CodexTaskRoute = {
+      async message(input) {
+        calls += 1;
+        return { status: "outcome_unknown", dispatchId: input.dispatchId };
+      },
       async create(input) {
         calls += 1;
         return { status: "outcome_unknown", dispatchId: input.key };
@@ -56,11 +60,35 @@ describe("separate Codex task admission", () => {
       dispatchId: request.key,
     });
     expect(calls).toBe(1);
+    const message = {
+      key: "18ff8059-8246-4b8d-9c68-4aa17c2f8421",
+      dispatchId: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      message: "One steer",
+      model: request.model,
+      reasoningEffort: request.reasoningEffort,
+    };
+    expect(
+      await route.message({ ...message, projectId: "other" }),
+    ).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    expect(calls).toBe(1);
+    expect(await route.message(message)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(calls).toBe(2);
     now = 2_000;
     await expect(route.create(request)).resolves.toEqual({
       status: "refused",
       code: "HANDOFF_TASK_ADMISSION_DENIED",
     });
-    expect(calls).toBe(1);
+    expect(await route.message(message)).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    expect(calls).toBe(2);
   });
 });

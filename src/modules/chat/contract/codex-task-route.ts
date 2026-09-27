@@ -1,5 +1,20 @@
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  message(
+    request: Readonly<{
+      key: string;
+      dispatchId: string;
+      workspaceId: string;
+      projectId: string;
+      message: string;
+      model: string;
+      reasoningEffort: string;
+    }>,
+  ): Promise<
+    | Readonly<{ status: "steered"; dispatchId: string; turnId: string }>
+    | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
+    | Readonly<{ status: "refused"; code: string }>
+  >;
   create(
     request: Readonly<{
       key: string;

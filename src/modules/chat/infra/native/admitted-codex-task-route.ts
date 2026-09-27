@@ -32,6 +32,21 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     return this.delegate.create(request);
   }
 
+  async message(request: Parameters<CodexTaskRoute["message"]>[0]) {
+    if (
+      this.now() >= this.admission.expiresAt ||
+      request.workspaceId !== this.admission.workspaceId ||
+      request.projectId !== this.admission.projectId ||
+      request.model !== this.admission.model ||
+      request.reasoningEffort !== this.admission.reasoningEffort
+    )
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      };
+    return this.delegate.message(request);
+  }
+
   status(dispatchId: string) {
     return this.delegate.status(dispatchId);
   }

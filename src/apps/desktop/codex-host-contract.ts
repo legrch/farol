@@ -23,6 +23,8 @@ const HANDOFF_SCHEMA_FILES = [
   "v2/ThreadStartResponse.json",
   "v2/TurnStartParams.json",
   "v2/TurnStartResponse.json",
+  "v2/TurnSteerParams.json",
+  "v2/TurnSteerResponse.json",
   "v2/ThreadReadParams.json",
   "v2/ThreadReadResponse.json",
   "v2/ThreadTurnsListParams.json",
@@ -208,6 +210,11 @@ const HANDOFF_FIELDS: readonly SchemaField[] = (
     ["TurnStartParams", "sandboxPolicy", "nullable-ref:SandboxPolicy"],
     ["TurnStartParams", "approvalPolicy", "nullable-ref:AskForApproval"],
     ["TurnStartResponse", "turn", "ref:Turn"],
+    ["TurnSteerParams", "threadId", "string"],
+    ["TurnSteerParams", "expectedTurnId", "string"],
+    ["TurnSteerParams", "input", "array:UserInput"],
+    ["TurnSteerParams", "clientUserMessageId", "string|null"],
+    ["TurnSteerResponse", "turnId", "string"],
     ["ThreadReadParams", "threadId", "string"],
     ["ThreadReadParams", "includeTurns", "boolean"],
     ["ThreadReadResponse", "thread", "ref:Thread"],
@@ -466,6 +473,8 @@ const HANDOFF_REQUIRED: readonly (readonly [
   ["TurnStartParams", [], ["threadId", "input"]],
   ["TurnStartResponse", [], ["turn"]],
   ["TurnStartResponse", ["Turn"], ["id"]],
+  ["TurnSteerParams", [], ["threadId", "expectedTurnId", "input"]],
+  ["TurnSteerResponse", [], ["turnId"]],
   ["ThreadReadParams", [], ["threadId"]],
   ["ThreadReadResponse", [], ["thread"]],
   ["ThreadReadResponse", ["Thread"], ["id", "projectId", "cwd"]],
@@ -642,6 +651,7 @@ export async function inspectCodexHandoffHostContract(
         ["thread/turns/list", "ThreadTurnsListParams"],
         ["thread/items/list", "ThreadItemsListParams"],
         ["turn/start", "TurnStartParams"],
+        ["turn/steer", "TurnSteerParams"],
       ] as readonly (readonly [string, string])[]
     ).every(([method, params]) =>
       hasRequestMethod(

@@ -83,6 +83,7 @@ async function schemaRoot(
         "thread/turns/list",
         "thread/items/list",
         "turn/start",
+        "turn/steer",
       ].map((method) => ({
         type: "object",
         required: ["id", "method", "params"],
@@ -96,6 +97,7 @@ async function schemaRoot(
               "thread/turns/list": "ThreadTurnsListParams",
               "thread/items/list": "ThreadItemsListParams",
               "turn/start": "TurnStartParams",
+              "turn/steer": "TurnSteerParams",
             }[method] ?? "ThreadCompactStartParams",
           ),
         },
@@ -150,6 +152,19 @@ async function schemaRoot(
       definitions: {
         Turn: { required: ["id"], properties: { id: typed("string") } },
       },
+    },
+    "v2/TurnSteerParams.json": {
+      required: ["threadId", "expectedTurnId", "input"],
+      properties: {
+        threadId: typed("string"),
+        expectedTurnId: typed("string"),
+        input: list("UserInput"),
+        clientUserMessageId: optional("string"),
+      },
+    },
+    "v2/TurnSteerResponse.json": {
+      required: ["turnId"],
+      properties: { turnId: typed("string") },
     },
     "v2/ThreadReadParams.json": {
       required: ["threadId"],
@@ -301,6 +316,8 @@ async function schemaRoot(
     AbsolutePathBuf: sharedDefinitions.AbsolutePathBuf,
     AskForApproval: sharedDefinitions.AskForApproval,
   };
+  const turnSteer = files["v2/TurnSteerParams.json"] as Record<string, any>;
+  turnSteer.definitions = { UserInput: sharedDefinitions.UserInput };
   const turnsList = files["v2/ThreadTurnsListParams.json"] as Record<
     string,
     any
@@ -315,6 +332,7 @@ async function schemaRoot(
       "ThreadTurnsListParams",
       "ThreadItemsListParams",
       "TurnStartParams",
+      "TurnSteerParams",
     ].map((name) => {
       const { definitions: _definitions, ...shape } = files[
         `v2/${name}.json`
@@ -389,6 +407,19 @@ describe("installed Codex saved-project handoff schema", () => {
       "codex-cli 0.153.4",
     );
     expect(after.schemaSha256).not.toBe(before.schemaSha256);
+  });
+
+  it("refuses active messaging when the selected host lacks exact turn/steer", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "ClientRequest.json", (schema) => {
+      schema.oneOf = schema.oneOf.filter(
+        (entry: { properties?: { method?: { enum?: string[] } } }) =>
+          !entry.properties?.method?.enum?.includes("turn/steer"),
+      );
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
   });
 
   it("refuses result APIs without a typed final answer phase", async () => {

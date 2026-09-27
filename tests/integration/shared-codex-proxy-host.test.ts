@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SharedCodexProxyHost } from "../../src/modules/chat/infra/native/shared-codex-proxy-host";
+import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 
 const EXPECTED_HOME = "/fixture/codex-home";
 const PROXY_FIXTURE = String.raw`
@@ -53,6 +54,8 @@ process.stdin.on("data", (chunk) => {
       process.exit(0);
     } else if (process.env.FIXTURE_MODE === "wrong-id") {
       process.stdout.write(JSON.stringify({id: request.id + 1, result: {}}) + "\n");
+    } else if (process.env.FIXTURE_MODE === "hang") {
+      // Deliberately keep this request pending without a response.
     } else if (process.env.FIXTURE_MODE === "server-request") {
       approvalBlockedRequest = request.id;
       process.stdout.write(JSON.stringify({
@@ -213,8 +216,8 @@ describe("shared Codex proxy transport fixture", () => {
 
   it("refuses a different serving profile before a task request", async () => {
     const host = fixture("wrong-home");
-    await expect(host.request("thread/start", {})).rejects.toThrow(
-      "CODEX_SHARED_HOST_UNAVAILABLE",
+    await expect(host.request("thread/start", {})).rejects.toBeInstanceOf(
+      HandoffNotSubmittedError,
     );
     await expect(host.request("thread/start", {})).rejects.toThrow(
       "CODEX_SHARED_HOST_UNAVAILABLE",
@@ -225,10 +228,36 @@ describe("shared Codex proxy transport fixture", () => {
     const host = fixture("drop");
     await expect(
       host.request("turn/start", { threadId: "issued-thread" }),
-    ).rejects.toThrow("CODEX_SHARED_HOST_UNAVAILABLE");
+    ).rejects.not.toBeInstanceOf(HandoffNotSubmittedError);
     await expect(
       host.request("turn/start", { threadId: "issued-thread" }),
     ).rejects.toThrow("CODEX_SHARED_HOST_UNAVAILABLE");
+  });
+
+  it("classifies capacity refusal before write without reclassifying pending requests", async () => {
+    const host = fixture("hang", 1_000);
+    await host.connect();
+    const pending = Array.from({ length: 8 }, (_, index) =>
+      host.request("thread/read", { threadId: `pending-${index}` }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await expect(
+      host.request("turn/steer", {
+        threadId: "issued-thread",
+        expectedTurnId: "issued-turn",
+        input: [{ type: "text", text: "one" }],
+      }),
+    ).rejects.toBeInstanceOf(HandoffNotSubmittedError);
+    host.close();
+    const outcomes = await Promise.allSettled(pending);
+    expect(outcomes).toHaveLength(8);
+    expect(
+      outcomes.every(
+        (outcome) =>
+          outcome.status === "rejected" &&
+          !(outcome.reason instanceof HandoffNotSubmittedError),
+      ),
+    ).toBe(true);
   });
 
   it("fails closed when the proxy closes its input pipe", async () => {

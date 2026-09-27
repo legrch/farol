@@ -54,6 +54,23 @@ const CodexTaskCreateInputSchema = z.strictObject({
 const CodexTaskReadInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
 });
+const CodexTaskMessageInputSchema = z.strictObject({
+  key: DispatchIdSchema,
+  dispatchId: DispatchIdSchema,
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+  message: z
+    .string()
+    .min(1)
+    .max(8_192)
+    .refine(
+      (value) =>
+        !value.includes("\0") &&
+        new TextEncoder().encode(value).byteLength <= 8_192,
+    ),
+  model: z.string().min(1).max(120),
+  reasoningEffort: z.string().min(1).max(40),
+});
 
 function relativePath(value: string, root: boolean): boolean {
   if (root && value === ".") return true;
@@ -704,6 +721,32 @@ export function createReadonlyComputerMcpServer(
         } catch {
           return taskResponse(
             { status: "outcome_unknown", dispatchId: request.key },
+            true,
+          );
+        }
+      }),
+    );
+    server.registerTool(
+      "codex_task_message",
+      {
+        title: "Steer one active Codex task turn",
+        description:
+          "Send at most one message to this issued dispatch's exact active turn. Supply a new UUID key once. An outcome_unknown must never be retried with a different key.",
+        inputSchema: CodexTaskMessageInputSchema,
+        annotations: CODEX_TASK_CREATE_ANNOTATIONS,
+      },
+      guarded(async (request) => {
+        try {
+          const result = await codexTasks.message(request);
+          return taskResponse(
+            result.status === "steered"
+              ? { status: "steered", dispatchId: result.dispatchId }
+              : result,
+            result.status === "refused" || result.status === "outcome_unknown",
+          );
+        } catch {
+          return taskResponse(
+            { status: "outcome_unknown", dispatchId: request.dispatchId },
             true,
           );
         }
