@@ -32,6 +32,21 @@ function canonical(value) {
   return JSON.stringify(value);
 }
 
+const ownedConnectorPids = new Set();
+
+async function waitPidGone(pid) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
 async function connect(launchFile) {
   const transport = new StdioClientTransport({
     command: executable,
@@ -54,8 +69,40 @@ async function connect(launchFile) {
     stderr += String(chunk);
   });
   const client = new Client({ name: "farol-shell-e2e", version: "1.0.0" });
-  await client.connect(transport);
-  return { client, stderr: () => stderr };
+  try {
+    await client.connect(transport);
+  } catch (error) {
+    const pid = transport.pid;
+    if (pid !== null) ownedConnectorPids.add(pid);
+    await client.close().catch(() => undefined);
+    if (pid !== null && (await waitPidGone(pid)))
+      ownedConnectorPids.delete(pid);
+    throw error;
+  }
+  const pid = transport.pid;
+  if (!Number.isSafeInteger(pid) || pid <= 1) {
+    await client.close().catch(() => undefined);
+    throw new Error("MCP_PROCESS_ID_UNVERIFIED");
+  }
+  ownedConnectorPids.add(pid);
+  return { client, pid, stderr: () => stderr };
+}
+
+async function disconnect(connection) {
+  let closeError = null;
+  try {
+    await connection.client.close();
+  } catch (error) {
+    closeError = error;
+  }
+  assert.equal(
+    await waitPidGone(connection.pid),
+    true,
+    `MCP_OWNED_PROCESS_SURVIVED_CLOSE:${connection.pid}`,
+  );
+  ownedConnectorPids.delete(connection.pid);
+  if (closeError) throw closeError;
+  assert.equal(connection.stderr(), "");
 }
 
 async function complete(client, handle) {
@@ -155,6 +202,11 @@ try {
     flag: "wx",
   });
 
+  const failedLaunchFile = path.join(launchRoot, "invalid-launch.json");
+  await fs.writeFile(failedLaunchFile, "{invalid", { mode: 0o600, flag: "wx" });
+  await assert.rejects(connect(failedLaunchFile));
+  assert.equal(ownedConnectorPids.size, 0);
+
   const first = await connect(launchFile);
   try {
     const tools = await first.client.listTools();
@@ -231,8 +283,7 @@ try {
     assert.notEqual(historyDenied.exitCode, 0);
     assert.equal(historyDenied.stdout.includes("HISTORY_SECRET_CANARY"), false);
   } finally {
-    await first.client.close();
-    assert.equal(first.stderr(), "");
+    await disconnect(first);
   }
 
   // A new connector generation creates new synthetic session/task IDs while
@@ -269,8 +320,7 @@ try {
       "SHELL_OUTCOME_UNKNOWN",
     );
   } finally {
-    await restarted.client.close();
-    assert.equal(restarted.stderr(), "");
+    await disconnect(restarted);
   }
 
   const historyLaunchRoot = path.join(root, "history-launch");
@@ -365,8 +415,7 @@ try {
       "",
     );
   } finally {
-    await approved.client.close();
-    assert.equal(approved.stderr(), "");
+    await disconnect(approved);
   }
 
   // A linked writer needs both its own Git directory and the common object
@@ -477,9 +526,13 @@ try {
       "foreign.txt\n",
     );
   } finally {
-    await linked.client.close();
-    assert.equal(linked.stderr(), "");
+    await disconnect(linked);
   }
 } finally {
+  assert.equal(
+    ownedConnectorPids.size,
+    0,
+    `MCP_OWNED_PROCESS_CLEANUP_UNVERIFIED:${[...ownedConnectorPids].join(",")}`,
+  );
   await fs.rm(root, { recursive: true, force: true });
 }
