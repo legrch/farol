@@ -4832,6 +4832,9 @@ async function configureAdmittedProduct(
       }
     }
     case "host.clear-codex-tasks":
+      if (codexHostTaskAdmission) {
+        return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
+      }
       return ProductConfigurationResultSchema.parse(
         await configuration.clearCodexTaskRoute(),
       );

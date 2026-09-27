@@ -4239,7 +4239,7 @@ function renderSettings(): void {
         const taskNote = document.createElement("p");
         taskNote.textContent = taskRoute
           ? `Saved task route: ${taskRoute.projectRoot} · expires ${new Date(taskRoute.expiresAt).toLocaleString()}`
-          : "Persistent task route is off. Select an existing shared Codex socket and saved project; this check does not run a model turn. The selection takes effect when the connector next starts.";
+          : "Persistent task route is off. Stop the connector, then select an existing shared Codex socket and saved project. Verification does not run a model turn; the selection takes effect when the connector next starts.";
         row.append(taskNote);
         const taskForm = document.createElement("form");
         taskForm.className = "connector-form";

@@ -12,6 +12,8 @@ const agentGuardedCommands = new Set<string>([
   "computer.update-commands",
   "computer.verify-workspace",
   "dev-proof.prepare",
+  "host.configure-codex-tasks",
+  "host.clear-codex-tasks",
 ]);
 
 const connectorGuardedCommands = new Set<string>([
@@ -23,6 +25,13 @@ const connectorGuardedCommands = new Set<string>([
   "computer.update-commands",
   "computer.verify-workspace",
   "dev-proof.prepare",
+  "host.select-codex",
+  "host.discover-codex",
+  "host.select-discovered-codex",
+  "host.verify-codex",
+  "host.remove-codex",
+  "host.configure-codex-tasks",
+  "host.clear-codex-tasks",
 ]);
 
 export type ConfigurationAdmission =
