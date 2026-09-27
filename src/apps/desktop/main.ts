@@ -25,6 +25,16 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import {
+  closeSync,
+  constants as fsConstants,
+  ftruncateSync,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  realpathSync,
+  writeSync,
+} from "node:fs";
 import os from "node:os";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
@@ -441,10 +451,44 @@ const instanceRequest = createInstanceRequest(launchIdentity);
 const secondInstanceResultPrefix = "FAROL_NEXT_SECOND_INSTANCE_RESULT:";
 const secondInstanceAcknowledgementPrefix =
   "FAROL_NEXT_SECOND_INSTANCE_ACK_FAILED:";
-const startupStage = (stage: StartupStage) =>
-  emitStartupStage(stage, process.env.FAROL_NEXT_E2E === "1", (line) =>
-    process.stderr.write(line),
-  );
+const startupStage = (stage: StartupStage) => {
+  const enabled = process.env.FAROL_NEXT_E2E === "1";
+  emitStartupStage(stage, enabled, (line) => process.stderr.write(line));
+  // Playwright can attach after early stderr tokens have passed. Persist one
+  // fixed last-stage marker in this run's private disposable E2E home.
+  if (!enabled || stage === "lock-secondary") return;
+  try {
+    const home = process.env.HOME;
+    if (
+      !home ||
+      !/^farol-next-e2e-home-[A-Za-z0-9]{6,}$/u.test(path.basename(home))
+    )
+      return;
+    if (realpathSync(path.dirname(home)) !== realpathSync(os.tmpdir())) return;
+    const info = lstatSync(home);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      (info.mode & 0o077) !== 0 ||
+      info.uid !== process.getuid?.()
+    )
+      return;
+    const file = openSync(
+      path.join(home, ".farol-next-startup-stage"),
+      fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      ftruncateSync(file, 0);
+      writeSync(file, `${stage}\n`);
+      fsyncSync(file);
+    } finally {
+      closeSync(file);
+    }
+  } catch {
+    // Missing diagnostic evidence must not change startup behavior.
+  }
+};
 const primaryStartup = new PrimaryStartup();
 const startupDelayMs = previewStartupDelay(
   process.argv,
