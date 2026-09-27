@@ -5,6 +5,12 @@ import path from "node:path";
 import { z } from "zod";
 
 export const EXECUTION_FENCE_DIRECTORY = "execution-fence";
+const ADMISSION_LOCK = "admission.lock";
+const SHELL_MARKER = /^shell-[a-f0-9]{64}\.json$/u;
+// BSD open(2) locks. The inode is never removed: unlinking a held lock would
+// allow another process to acquire a different inode at the same path.
+const SHARED_LOCK = 0x10;
+const EXCLUSIVE_LOCK = 0x20;
 
 const MAXIMUM_RECORD_BYTES = 4 * 1_024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -34,25 +40,173 @@ export type ExecutionFenceAdmission =
 
 export type ExecutionFenceReader = Readonly<{
   admits(): Promise<ExecutionFenceAdmission>;
+  acquireAdmission(): Promise<ExecutionFenceAdmissionLease>;
+  reserveShell(operationId: string): Promise<void>;
+  clearShell(operationId: string): Promise<void>;
+  quarantineShell(operationId: string): void;
 }>;
+
+export type ExecutionFenceAdmissionLease =
+  | Readonly<{
+      admitted: false;
+      code: Exclude<ExecutionFenceAdmission, { admitted: true }>["code"];
+    }>
+  | Readonly<{ admitted: true; fd?: number; release(): Promise<void> }>;
 
 function fileName(operationId: string): string {
   return `${createHash("sha256").update(operationId).digest("hex")}.json`;
 }
 
+function shellFileName(operationId: string): string {
+  return `shell-${fileName(operationId)}`;
+}
+
 /**
  * The fence as files under the launch root: one record per raised
  * operation. Any record, readable or not, fences execution; the directory
- * being absent or empty admits it. The connector's process never writes.
+ * being absent or empty admits it. The connector creates only the shared
+ * lock inode; summary records remain desktop-owned.
  */
 export class PrivateExecutionFence implements ExecutionFenceReader {
   private readonly directory: string;
+  private readonly ownedShellMarkers = new Set<string>();
 
   constructor(options: Readonly<{ root: string }>) {
     if (!path.isAbsolute(options.root) || options.root.includes("\0")) {
       throw new Error("EXECUTION_FENCE_ROOT_NOT_ABSOLUTE");
     }
     this.directory = path.join(options.root, EXECUTION_FENCE_DIRECTORY);
+  }
+
+  private async lock(exclusive: boolean): Promise<fs.FileHandle | null> {
+    if (process.platform !== "darwin") {
+      throw new Error("EXECUTION_FENCE_LOCK_UNSUPPORTED");
+    }
+    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const directory = await fs.lstat(this.directory);
+    if (
+      !directory.isDirectory() ||
+      directory.isSymbolicLink() ||
+      (directory.mode & 0o077) !== 0 ||
+      (process.getuid?.() !== undefined && directory.uid !== process.getuid())
+    ) {
+      throw new Error("EXECUTION_FENCE_LOCK_UNSAFE");
+    }
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      let handle: fs.FileHandle;
+      try {
+        handle = await fs.open(
+          path.join(this.directory, ADMISSION_LOCK),
+          fsConstants.O_RDWR |
+            fsConstants.O_CREAT |
+            NO_FOLLOW |
+            CLOSE_ON_EXEC |
+            fsConstants.O_NONBLOCK |
+            (exclusive ? EXCLUSIVE_LOCK : SHARED_LOCK),
+          0o600,
+        );
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "EAGAIN" && code !== "EWOULDBLOCK") throw error;
+        if (attempt === 3) return null;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        continue;
+      }
+      try {
+        const info = await handle.stat();
+        if (
+          !info.isFile() ||
+          info.nlink !== 1 ||
+          (info.mode & 0o077) !== 0 ||
+          (process.getuid?.() !== undefined && info.uid !== process.getuid())
+        ) {
+          throw new Error("EXECUTION_FENCE_LOCK_UNSAFE");
+        }
+      } catch (error) {
+        await handle.close();
+        throw error;
+      }
+      return handle;
+    }
+    return null;
+  }
+
+  // Hold a shared kernel lock through the whole Computer effect. A summary
+  // cannot raise its record until all such effects release their leases.
+  async acquireAdmission(): Promise<ExecutionFenceAdmissionLease> {
+    let handle: fs.FileHandle | null;
+    try {
+      handle = await this.lock(false);
+    } catch {
+      return { admitted: false, code: "COMPUTER_EXECUTION_FENCE_UNREADABLE" };
+    }
+    if (!handle) {
+      return { admitted: false, code: "COMPUTER_SUMMARY_PHASE_ACTIVE" };
+    }
+    const admission = await this.admits().catch(() => ({
+      admitted: false as const,
+      code: "COMPUTER_EXECUTION_FENCE_UNREADABLE" as const,
+    }));
+    if (!admission.admitted) {
+      await handle.close();
+      return admission;
+    }
+    let released = false;
+    return {
+      admitted: true,
+      fd: handle.fd,
+      release: async () => {
+        if (released) return;
+        released = true;
+        await handle.close();
+      },
+    };
+  }
+
+  // Called under an admission lease immediately before dispatch. A crash at
+  // any point after the durable marker leaves the command outcome unknown;
+  // a new connector cannot infer group cleanup from an unlocked inode.
+  async reserveShell(operationId: string): Promise<void> {
+    if (!/^[A-Za-z0-9._:-]{1,160}$/u.test(operationId)) {
+      throw new Error("EXECUTION_FENCE_SHELL_ID_INVALID");
+    }
+    const name = shellFileName(operationId);
+    const handle = await fs.open(
+      path.join(this.directory, name),
+      fsConstants.O_WRONLY |
+        fsConstants.O_CREAT |
+        fsConstants.O_EXCL |
+        NO_FOLLOW |
+        CLOSE_ON_EXEC,
+      0o600,
+    );
+    try {
+      await handle.writeFile(
+        JSON.stringify({ schema: 1, operationId }),
+        "utf8",
+      );
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await this.syncDirectory();
+    this.ownedShellMarkers.add(name);
+  }
+
+  async clearShell(operationId: string): Promise<void> {
+    const name = shellFileName(operationId);
+    if (!this.ownedShellMarkers.has(name)) {
+      throw new Error("EXECUTION_FENCE_SHELL_NOT_OWNED");
+    }
+    await fs.unlink(path.join(this.directory, name));
+    await this.syncDirectory();
+    this.ownedShellMarkers.delete(name);
+  }
+
+  quarantineShell(operationId: string): void {
+    // A failed group proof is no longer an active, known-cleanup reservation.
+    // Its durable marker remains and every later admission fails closed.
+    this.ownedShellMarkers.delete(shellFileName(operationId));
   }
 
   async raise(
@@ -65,31 +219,43 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
       taskId: input.taskId,
       raisedAt: new Date(input.now ?? Date.now()).toISOString(),
     });
-    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 });
-    const target = path.join(this.directory, fileName(input.operationId));
-    const temporary = `${target}.${process.pid}.tmp`;
-    const handle = await fs.open(
-      temporary,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        NO_FOLLOW |
-        CLOSE_ON_EXEC,
-      0o600,
-    );
+    const lease = await this.lock(true);
+    if (!lease) throw new Error("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
     try {
-      await handle.writeFile(JSON.stringify(record), "utf8");
-      await handle.sync();
+      if (
+        (await fs.readdir(this.directory)).some((entry) =>
+          SHELL_MARKER.test(entry),
+        )
+      ) {
+        throw new Error("EXECUTION_FENCE_UNVERIFIED_SHELL");
+      }
+      const target = path.join(this.directory, fileName(input.operationId));
+      const temporary = `${target}.${process.pid}.tmp`;
+      const handle = await fs.open(
+        temporary,
+        fsConstants.O_WRONLY |
+          fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC,
+        0o600,
+      );
+      try {
+        await handle.writeFile(JSON.stringify(record), "utf8");
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await fs.rename(temporary, target);
+      } catch (error) {
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      await this.syncDirectory();
     } finally {
-      await handle.close();
+      await lease.close();
     }
-    try {
-      await fs.rename(temporary, target);
-    } catch (error) {
-      await fs.rm(temporary, { force: true }).catch(() => undefined);
-      throw error;
-    }
-    await this.syncDirectory();
   }
 
   async lower(operationId: string): Promise<void> {
@@ -139,7 +305,12 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
     }
     let removed = false;
     for (const entry of entries) {
-      if (keep.has(entry)) continue;
+      if (
+        keep.has(entry) ||
+        entry === ADMISSION_LOCK ||
+        SHELL_MARKER.test(entry)
+      )
+        continue;
       await fs.rm(path.join(this.directory, entry), { force: true });
       removed = true;
     }
@@ -209,6 +380,14 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
     const records = entries.filter((entry) =>
       /^[a-f0-9]{64}\.json$/u.test(entry),
     );
+    if (
+      entries.some(
+        (entry) =>
+          SHELL_MARKER.test(entry) && !this.ownedShellMarkers.has(entry),
+      )
+    ) {
+      return { admitted: false, code: "COMPUTER_EXECUTION_FENCE_UNREADABLE" };
+    }
     if (records.length === 0) return { admitted: true };
     for (const entry of records) {
       const file = path.join(this.directory, entry);

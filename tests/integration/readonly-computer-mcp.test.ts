@@ -511,6 +511,19 @@ describe("read-only Computer MCP adapter", () => {
                   ? ("COMPUTER_SUMMARY_PHASE_ACTIVE" as const)
                   : ("COMPUTER_EXECUTION_FENCE_UNREADABLE" as const),
             },
+      acquireAdmission: async () =>
+        phase === "open"
+          ? { admitted: true as const, release: async () => undefined }
+          : {
+              admitted: false as const,
+              code:
+                phase === "fenced"
+                  ? ("COMPUTER_SUMMARY_PHASE_ACTIVE" as const)
+                  : ("COMPUTER_EXECUTION_FENCE_UNREADABLE" as const),
+            },
+      reserveShell: async () => undefined,
+      clearShell: async () => undefined,
+      quarantineShell: () => undefined,
     };
     const server = createReadonlyComputerMcpServer(
       contract,

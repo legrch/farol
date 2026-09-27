@@ -91,6 +91,8 @@ type RunningCommand = {
     | "SHELL_GROUP_CLEANUP_UNVERIFIED"
     | null;
   scratch: string;
+  terminal: Promise<"confirmed" | "unverified">;
+  settleTerminal: (cleanup: "confirmed" | "unverified") => void;
 };
 
 type Binding = Readonly<{
@@ -244,10 +246,12 @@ export class SandboxedWorkspaceShell {
   private readonly byOperation = new Map<string, RunningCommand>();
   private readonly byHandle = new Map<string, RunningCommand>();
   private readonly pendingOperations = new Set<string>();
+  private readonly pendingTerminalCleanup = new Set<Promise<void>>();
   private readonly completedOrder: string[] = [];
   private closing = false;
   private groupCleanupUnverified = false;
   private scratchCleanupUnverified = false;
+  private terminalCleanupUnverified = false;
 
   constructor(
     private readonly approval: ComputerApproval,
@@ -444,6 +448,8 @@ export class SandboxedWorkspaceShell {
     input: ShellStart,
     signal?: AbortSignal,
     dispatchAllowed?: () => Promise<boolean>,
+    admissionFd?: number,
+    reserveBeforeDispatch?: () => Promise<void>,
   ): Promise<ShellResponse> {
     if (this.closing) return refusal("SHELL_CLOSED");
     if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
@@ -639,11 +645,26 @@ export class SandboxedWorkspaceShell {
       LANG: "C.UTF-8",
       LC_ALL: "C.UTF-8",
     };
+    if (reserveBeforeDispatch) {
+      try {
+        await reserveBeforeDispatch();
+      } catch {
+        return abandonReserved("SHELL_DISPATCH_FENCED");
+      }
+    }
     const child = spawn(process.execPath, ["-e", SHELL_WATCHDOG_SOURCE], {
       cwd: verified.cwd,
       env: { ELECTRON_RUN_AS_NODE: "1" },
       detached: true,
-      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      // The watchdog inherits the same locked inode. If the MCP parent
+      // crashes, summary raise still waits for disconnect cleanup and the
+      // watchdog's actual exit, rather than racing the parent FD close.
+      stdio: ["ignore", "ignore", "ignore", "ipc", admissionFd ?? "ignore"],
+    });
+    let settleTerminal: (cleanup: "confirmed" | "unverified") => void = () =>
+      undefined;
+    const terminal = new Promise<"confirmed" | "unverified">((resolve) => {
+      settleTerminal = resolve;
     });
     const record: RunningCommand = {
       operationId: input.operationId,
@@ -666,6 +687,8 @@ export class SandboxedWorkspaceShell {
       authorityExpired: false,
       errorCode: null,
       scratch,
+      terminal,
+      settleTerminal,
     };
     this.byOperation.set(input.operationId, record);
     this.byHandle.set(handle, record);
@@ -735,6 +758,7 @@ export class SandboxedWorkspaceShell {
       this.groupCleanupUnverified = true;
       record.exitSignal = null;
       record.errorCode = "SHELL_SPAWN_FAILED";
+      record.settleTerminal("unverified");
     });
     child.once("exit", () => {
       signal?.removeEventListener("abort", onAbort);
@@ -775,6 +799,7 @@ export class SandboxedWorkspaceShell {
         }
         record.state = "exited";
         this.completed(record);
+        record.settleTerminal(record.groupCleanup);
       })();
     });
     // The watchdog checks absolute host deadlines before spawning the command.
@@ -826,6 +851,26 @@ export class SandboxedWorkspaceShell {
     return { ok: true, value: this.snapshot(record, input) };
   }
 
+  // The MCP admission lease stays held until the watchdog group is really
+  // gone. A failed proof is returned explicitly so the caller can retain a
+  // fail-closed lease for the lifetime of this connector process.
+  waitForTerminal(handle: string): Promise<"confirmed" | "unverified"> {
+    const record = this.byHandle.get(handle);
+    if (!record) return Promise.resolve("unverified");
+    return record.terminal;
+  }
+
+  trackTerminalCleanup(work: Promise<void>): void {
+    const tracked = work
+      .catch(() => {
+        this.terminalCleanupUnverified = true;
+      })
+      .finally(() => {
+        this.pendingTerminalCleanup.delete(tracked);
+      });
+    this.pendingTerminalCleanup.add(tracked);
+  }
+
   cancel(handle: string): ShellResponse {
     const record = this.byHandle.get(handle);
     if (!record) return refusal("SHELL_HANDLE_UNKNOWN");
@@ -871,6 +916,7 @@ export class SandboxedWorkspaceShell {
     const deadline = Date.now() + 4_000;
     while (
       (this.pendingOperations.size > 0 ||
+        this.pendingTerminalCleanup.size > 0 ||
         [...this.byHandle.values()].some(
           (record) => record.state === "running",
         )) &&
@@ -879,8 +925,10 @@ export class SandboxedWorkspaceShell {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     return this.pendingOperations.size === 0 &&
+      this.pendingTerminalCleanup.size === 0 &&
       !this.groupCleanupUnverified &&
       !this.scratchCleanupUnverified &&
+      !this.terminalCleanupUnverified &&
       [...this.byHandle.values()].every(
         (record) =>
           record.state === "exited" && record.groupCleanup === "confirmed",

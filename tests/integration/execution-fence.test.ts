@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,11 +11,173 @@ import {
 
 let root = "";
 
+const recordEntries = async (directory: string) =>
+  (await fs.readdir(directory)).filter((entry) => entry.endsWith(".json"));
+
 afterEach(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true });
 });
 
 describe("private execution fence", () => {
+  it("serializes an admitted effect with summary raise across independent instances", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    const connector = new PrivateExecutionFence({ root });
+    const desktop = new PrivateExecutionFence({ root });
+    const admitted = await connector.acquireAdmission();
+    expect(admitted.admitted).toBe(true);
+    if (!admitted.admitted) return;
+    await expect(
+      desktop.raise({ operationId: "summary", taskId: "task-a" }),
+    ).rejects.toThrow("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+    await admitted.release();
+    await desktop.raise({ operationId: "summary", taskId: "task-a" });
+    await expect(connector.acquireAdmission()).resolves.toEqual({
+      admitted: false,
+      code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
+    });
+    await desktop.lower("summary");
+    const after = await connector.acquireAdmission();
+    expect(after.admitted).toBe(true);
+    if (after.admitted) await after.release();
+  });
+
+  it("keeps an unverified shell reservation across connector restart until its owner proves cleanup", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    const connector = new PrivateExecutionFence({ root });
+    const desktop = new PrivateExecutionFence({ root });
+    const admitted = await connector.acquireAdmission();
+    if (!admitted.admitted) throw new Error(admitted.code);
+    await connector.reserveShell("shell-a");
+    await admitted.release();
+    await expect(
+      desktop.raise({ operationId: "summary", taskId: "task-a" }),
+    ).rejects.toThrow("EXECUTION_FENCE_UNVERIFIED_SHELL");
+    const restarted = new PrivateExecutionFence({ root });
+    await expect(restarted.acquireAdmission()).resolves.toEqual({
+      admitted: false,
+      code: "COMPUTER_EXECUTION_FENCE_UNREADABLE",
+    });
+    await desktop.reconcile([]);
+    expect(
+      await recordEntries(path.join(root, EXECUTION_FENCE_DIRECTORY)),
+    ).toHaveLength(1);
+    await connector.clearShell("shell-a");
+    const after = await restarted.acquireAdmission();
+    if (!after.admitted) throw new Error(after.code);
+    await after.release();
+    await desktop.raise({ operationId: "summary", taskId: "task-a" });
+    await desktop.lower("summary");
+  });
+
+  it("quarantines an unverified group for this connector and for a restarted connector", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    const connector = new PrivateExecutionFence({ root });
+    const admitted = await connector.acquireAdmission();
+    if (!admitted.admitted) throw new Error(admitted.code);
+    await connector.reserveShell("shell-unknown");
+    connector.quarantineShell("shell-unknown");
+    await admitted.release();
+    for (const fence of [connector, new PrivateExecutionFence({ root })]) {
+      await expect(fence.acquireAdmission()).resolves.toEqual({
+        admitted: false,
+        code: "COMPUTER_EXECUTION_FENCE_UNREADABLE",
+      });
+      await expect(
+        fence.raise({ operationId: "summary", taskId: "task-a" }),
+      ).rejects.toThrow("EXECUTION_FENCE_UNVERIFIED_SHELL");
+    }
+  });
+
+  it("refuses summary raise while a separate process holds admission", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    const desktop = new PrivateExecutionFence({ root });
+    const initial = await desktop.acquireAdmission();
+    if (!initial.admitted) throw new Error(initial.code);
+    await initial.release();
+    const lockFile = path.join(
+      root,
+      EXECUTION_FENCE_DIRECTORY,
+      "admission.lock",
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        [
+          "const fs = require('node:fs');",
+          "const fd = fs.openSync(process.argv[1], fs.constants.O_RDWR | fs.constants.O_NONBLOCK | 0x10);",
+          "process.stdout.write('held\\n');",
+          "process.stdin.resume();",
+          "process.stdin.once('end', () => { fs.closeSync(fd); process.exit(0); });",
+        ].join("\n"),
+        lockFile,
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    const exited = new Promise<number | null>((resolve) =>
+      child.once("close", (code) => resolve(code)),
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdout!.once("data", (chunk) =>
+          String(chunk).includes("held")
+            ? resolve()
+            : reject(new Error(String(chunk))),
+        );
+        child.once("error", reject);
+        child.once("exit", (code) =>
+          reject(new Error(`lease child exited: ${code}`)),
+        );
+      });
+      await expect(
+        desktop.raise({ operationId: "summary", taskId: "task-a" }),
+      ).rejects.toThrow("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+      child.stdin!.end();
+      expect(await exited).toBe(0);
+      await desktop.raise({ operationId: "summary", taskId: "task-a" });
+      await desktop.lower("summary");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill("SIGKILL");
+      await exited;
+    }
+  });
+
+  it("keeps the shared lock after the parent FD closes while an owned child inherits it", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
+    const desktop = new PrivateExecutionFence({ root });
+    const admitted = await desktop.acquireAdmission();
+    if (!admitted.admitted || admitted.fd === undefined) {
+      throw new Error("admission FD unavailable");
+    }
+    const child = spawn(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 10000)"],
+      {
+        stdio: ["ignore", "ignore", "ignore", admitted.fd],
+      },
+    );
+    const exited = new Promise<void>((resolve) =>
+      child.once("close", () => resolve()),
+    );
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      await admitted.release();
+      await expect(
+        desktop.raise({ operationId: "summary", taskId: "task-a" }),
+      ).rejects.toThrow("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null)
+        child.kill("SIGKILL");
+      await exited;
+    }
+    await desktop.raise({ operationId: "summary", taskId: "task-a" });
+    await desktop.lower("summary");
+  });
+
   it("admits with no fence, refuses while any operation is raised, and admits again once every one is lowered", async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-fence-"));
     const writer = new PrivateExecutionFence({ root });
@@ -92,7 +255,7 @@ describe("private execution fence", () => {
     // its unreadable record is raised again, while compact-b, which the
     // store settled, and the foreign record are removed.
     await fence.reconcile([{ operationId: "compact-a", taskId: "task-a" }]);
-    await expect(fs.readdir(directory)).resolves.toEqual([
+    await expect(recordEntries(directory)).resolves.toEqual([
       path.basename(recordA),
     ]);
     expect(JSON.parse(await fs.readFile(recordA, "utf8"))).toMatchObject({
@@ -108,11 +271,11 @@ describe("private execution fence", () => {
       { operationId: "compact-a", taskId: "task-a" },
       { operationId: "compact-c", taskId: "task-c" },
     ]);
-    await expect(fs.readdir(directory)).resolves.toHaveLength(2);
+    await expect(recordEntries(directory)).resolves.toHaveLength(2);
     await expect(recordOf("compact-c")).resolves.toBeDefined();
     // Nothing possibly running: every record goes and admission returns.
     await fence.reconcile([]);
-    await expect(fs.readdir(directory)).resolves.toEqual([]);
+    await expect(recordEntries(directory)).resolves.toEqual([]);
     await expect(fence.admits()).resolves.toEqual({ admitted: true });
     await expect(fence.reconcile([])).resolves.toBeUndefined();
   });

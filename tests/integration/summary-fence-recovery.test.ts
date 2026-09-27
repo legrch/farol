@@ -41,6 +41,9 @@ import {
   PrivateExecutionFence,
 } from "../../src/modules/computer/infra/mcp/execution-fence";
 
+const recordEntries = async (directory: string) =>
+  (await fs.readdir(directory)).filter((entry) => entry.endsWith(".json"));
+
 const threadId = "0199c0de-0000-7000-8000-00000000f011";
 
 function binding(taskId: string): ContextBinding {
@@ -313,7 +316,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       expect(summaries).toBe(1);
       // What a crash leaves behind: one raised record, one possibly sent
       // attempt, and a connector that keeps refusing on its own.
-      await expect(fs.readdir(fenceDirectory)).resolves.toHaveLength(1);
+      await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(1);
       await runtime.close();
       runtime = null;
       expect(await computerRead()).toMatchObject({
@@ -361,7 +364,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
           store: second.store,
         }),
       ).resolves.toEqual({ status: "reconciled", unresolved: 1 });
-      await expect(fs.readdir(fenceDirectory)).resolves.toHaveLength(1);
+      await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(1);
       expect(await computerRead()).toMatchObject({
         ok: false,
         error: { code: "COMPUTER_SUMMARY_PHASE_ACTIVE" },
@@ -400,7 +403,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
       await expect(
         deleteTaskContext(second.store, binding(threadId), secondFence),
       ).resolves.toBe("deleted");
-      await expect(fs.readdir(fenceDirectory)).resolves.toEqual([]);
+      await expect(recordEntries(fenceDirectory)).resolves.toEqual([]);
       expect(await computerRead()).toMatchObject({
         ok: false,
         error: { code: "AUTHORITY_PATH_DENIED" },
@@ -460,7 +463,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     await fence.raise({ operationId: "compact-a", taskId: "task-a" });
     await fence.raise({ operationId: "compact-b-prepared", taskId: "task-b" });
     await fence.raise({ operationId: "compact-stale", taskId: "task-gone" });
-    await expect(fs.readdir(fenceDirectory)).resolves.toHaveLength(3);
+    await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(3);
 
     // An unreadable task proves nothing: every record stays as it is.
     const tasks = path.join(stateRoot, "tasks");
@@ -472,7 +475,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     await expect(
       recoverSummaryExecutionFence({ fence, store }),
     ).resolves.toEqual({ status: "kept", code: "CONTEXT_TASK_UNREADABLE" });
-    await expect(fs.readdir(fenceDirectory)).resolves.toHaveLength(3);
+    await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(3);
     await expect(fence.admits()).resolves.toEqual({
       admitted: false,
       code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
@@ -497,7 +500,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     await expect(
       recoverSummaryExecutionFence({ fence, store }),
     ).resolves.toEqual({ status: "kept", code: "CONTEXT_STORE_UNREADABLE" });
-    await expect(fs.readdir(fenceDirectory)).resolves.toHaveLength(3);
+    await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(3);
     await fs.writeFile(attemptA, attemptBytes, { mode: 0o600 });
 
     // A readable store settles it: the prepared attempt never reached a page
@@ -506,7 +509,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     await expect(
       recoverSummaryExecutionFence({ fence, store }),
     ).resolves.toEqual({ status: "reconciled", unresolved: 2 });
-    await expect(fs.readdir(fenceDirectory)).resolves.toHaveLength(2);
+    await expect(recordEntries(fenceDirectory)).resolves.toHaveLength(2);
     await expect(fence.admits()).resolves.toEqual({
       admitted: false,
       code: "COMPUTER_SUMMARY_PHASE_ACTIVE",
@@ -534,7 +537,7 @@ describe("HR-011/F1 a restart during a possibly submitted summary keeps the Comp
     await expect(
       recoverSummaryExecutionFence({ fence, store }),
     ).resolves.toEqual({ status: "reconciled", unresolved: 0 });
-    await expect(fs.readdir(fenceDirectory)).resolves.toEqual([]);
+    await expect(recordEntries(fenceDirectory)).resolves.toEqual([]);
     await expect(fence.admits()).resolves.toEqual({ admitted: true });
   });
   it("holds the connector closed when a required fence record cannot be materialized, until a later start reconciles for real", async () => {

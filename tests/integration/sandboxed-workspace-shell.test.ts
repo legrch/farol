@@ -18,6 +18,7 @@ import {
 import { SandboxedWorkspaceShell } from "../../src/modules/computer/infra/native/sandboxed-workspace-shell";
 import { SHELL_WATCHDOG_SOURCE } from "../../src/modules/computer/infra/native/shell-watchdog-source";
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
+import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
 
 const binding = {
   ownerId: "owner-test",
@@ -1476,6 +1477,90 @@ describe.skipIf(process.platform !== "darwin")(
       }
     });
 
+    it("holds summary admission until an MCP shell command's group has exited", async () => {
+      const { root, shell } = await fixture();
+      const launchRoot = path.join(root, "launch");
+      const desktopFence = new PrivateExecutionFence({ root: launchRoot });
+      const server = createReadonlyComputerMcpServer(
+        {
+          async execute(): Promise<never> {
+            throw new Error("unused");
+          },
+        },
+        {
+          ...binding,
+          participantId: "main-test",
+          turnId: "turn-test",
+          generation: 1,
+        },
+        undefined,
+        undefined,
+        undefined,
+        new PrivateExecutionFence({ root: launchRoot }),
+        undefined,
+        undefined,
+        shell,
+      );
+      const client = new Client({
+        name: "shell-lease-fixture",
+        version: "1.0.0",
+      });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        client.connect(clientTransport),
+        server.connect(serverTransport),
+      ]);
+      try {
+        const request = {
+          name: "computer_shell_start",
+          arguments: {
+            operationId: "lease-running",
+            workspaceId: "fixture",
+            relativeCwd: ".",
+            command: "printf started; sleep 20",
+            timeoutMs: 30_000,
+            write: false,
+          },
+        };
+        const started = await client.callTool(request);
+        const handle = (
+          started.structuredContent as { value: { handle: string } }
+        ).value.handle;
+        expect(
+          (await client.callTool(request)).structuredContent,
+        ).toMatchObject({
+          ok: true,
+          value: { handle },
+        });
+        await expect(
+          desktopFence.raise({ operationId: "summary", taskId: "task-a" }),
+        ).rejects.toThrow("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+        const cancelled = await client.callTool({
+          name: "computer_shell_cancel",
+          arguments: { handle },
+        });
+        expect(cancelled.structuredContent).toMatchObject({ ok: true });
+        expect(await shell.closeAndWait()).toBe("confirmed");
+        expect((await complete(shell, handle)).groupCleanup).toBe("confirmed");
+        await desktopFence.raise({ operationId: "summary", taskId: "task-a" });
+        expect(
+          (
+            await client.callTool({
+              name: "computer_shell_read",
+              arguments: { handle, stdoutOffset: 0, stderrOffset: 0 },
+            })
+          ).structuredContent,
+        ).toMatchObject({
+          ok: false,
+          error: { code: "COMPUTER_SUMMARY_PHASE_ACTIVE" },
+        });
+        await desktopFence.lower("summary");
+      } finally {
+        await Promise.all([client.close(), server.close()]);
+      }
+    });
+
     it("keeps owned shell cancellation available while the fence blocks reads and starts", async () => {
       const { shell } = await fixture();
       let phase: "open" | "fenced" | "unreadable" = "open";
@@ -1504,6 +1589,18 @@ describe.skipIf(process.platform !== "darwin")(
                 }
               : { admitted: true as const };
           },
+          acquireAdmission: async () => {
+            if (phase === "unreadable") throw new Error("unreadable fence");
+            return phase === "fenced"
+              ? {
+                  admitted: false as const,
+                  code: "COMPUTER_SUMMARY_PHASE_ACTIVE" as const,
+                }
+              : { admitted: true as const, release: async () => undefined };
+          },
+          reserveShell: async () => undefined,
+          clearShell: async () => undefined,
+          quarantineShell: () => undefined,
         },
         undefined,
         undefined,
@@ -1635,6 +1732,16 @@ describe.skipIf(process.platform !== "darwin")(
                   code: "COMPUTER_SUMMARY_PHASE_ACTIVE" as const,
                 }
               : { admitted: true as const },
+          acquireAdmission: async () => {
+            admissions += 1;
+            return {
+              admitted: true as const,
+              release: async () => undefined,
+            };
+          },
+          reserveShell: async () => undefined,
+          clearShell: async () => undefined,
+          quarantineShell: () => undefined,
         },
         undefined,
         undefined,

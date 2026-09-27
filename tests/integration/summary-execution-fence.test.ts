@@ -310,7 +310,11 @@ describe("summary-only phase fences the Computer connector as the product compos
       });
       expect(contractCalls).toBe(2);
       await expect(
-        fs.readdir(path.join(launchRoot, "execution-fence")),
+        fs
+          .readdir(path.join(launchRoot, "execution-fence"))
+          .then((entries) =>
+            entries.filter((entry) => entry.endsWith(".json")),
+          ),
       ).resolves.toEqual([]);
     } finally {
       await client.close();

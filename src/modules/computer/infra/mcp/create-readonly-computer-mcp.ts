@@ -616,23 +616,35 @@ export function createReadonlyComputerMcpServer(
     name: "farol-next-computer",
     version: "0.1.0-preview.0",
   });
-  // Every tool consults the fence before its contract; an unreadable fence
-  // refuses like a raised one.
+  // Keep unresolved leases reachable: a failed group-cleanup proof must not
+  // silently reopen summary admission while this connector still runs.
+  const unverifiedShellLeases = new Set<
+    Extract<
+      Awaited<ReturnType<NonNullable<typeof fence>["acquireAdmission"]>>,
+      { admitted: true }
+    >
+  >();
+  const leasedShellHandles = new Set<string>();
+  // Every tool holds the shared admission lock through its contract. A
+  // summary's exclusive raise either follows completed work or refuses.
   const guarded =
     <Arguments extends unknown[]>(
       run: (...arguments_: Arguments) => Promise<CallToolResult>,
     ) =>
     async (...arguments_: Arguments): Promise<CallToolResult> => {
-      if (fence) {
-        let admission;
-        try {
-          admission = await fence.admits();
-        } catch {
-          return fenced("COMPUTER_EXECUTION_FENCE_UNREADABLE");
-        }
-        if (!admission.admitted) return fenced(admission.code);
+      if (!fence) return run(...arguments_);
+      let admission;
+      try {
+        admission = await fence.acquireAdmission();
+      } catch {
+        return fenced("COMPUTER_EXECUTION_FENCE_UNREADABLE");
       }
-      return run(...arguments_);
+      if (!admission.admitted) return fenced(admission.code);
+      try {
+        return await run(...arguments_);
+      } finally {
+        await admission.release();
+      }
     };
 
   if (codexTasks) {
@@ -968,9 +980,17 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellStartInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      guarded(async (input, context) =>
-        shellResult(
-          await shell.start(
+      async (input, context) => {
+        let admission;
+        try {
+          admission = await fence?.acquireAdmission();
+        } catch {
+          return fenced("COMPUTER_EXECUTION_FENCE_UNREADABLE");
+        }
+        if (admission && !admission.admitted) return fenced(admission.code);
+        let transferred = false;
+        try {
+          const result = await shell.start(
             {
               ...input,
               ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
@@ -984,9 +1004,42 @@ export function createReadonlyComputerMcpServer(
                 return false;
               }
             },
-          ),
-        ),
-      ),
+            admission?.admitted ? admission.fd : undefined,
+            fence ? () => fence.reserveShell(input.operationId) : undefined,
+          );
+          if (
+            result.ok &&
+            result.value.state === "running" &&
+            admission?.admitted &&
+            !leasedShellHandles.has(result.value.handle)
+          ) {
+            const lease = admission;
+            leasedShellHandles.add(result.value.handle);
+            transferred = true;
+            const terminalCleanup = shell
+              .waitForTerminal(result.value.handle)
+              .then(async (cleanup) => {
+                if (cleanup !== "confirmed") {
+                  fence?.quarantineShell(input.operationId);
+                  unverifiedShellLeases.add(lease);
+                  throw new Error("SHELL_GROUP_CLEANUP_UNVERIFIED");
+                }
+                if (fence) await fence.clearShell(input.operationId);
+                await lease.release();
+                leasedShellHandles.delete(result.value.handle);
+              })
+              .catch((error: unknown) => {
+                fence?.quarantineShell(input.operationId);
+                unverifiedShellLeases.add(lease);
+                throw error;
+              });
+            shell.trackTerminalCleanup(terminalCleanup);
+          }
+          return shellResult(result);
+        } finally {
+          if (!transferred && admission?.admitted) await admission.release();
+        }
+      },
     );
     server.registerTool(
       "computer_shell_read",
