@@ -1,17 +1,18 @@
 # Persistent handoff parity
 
 Status: a fail-closed, fixture-only **Codex saved-project task** create/status core
-is committed at `6772aa7`. It has no desktop/Computer MCP route and no live
+is integrated through `83774aa`. A read-only exact-result extension is under
+review on `codex/standalone-task-route`. It has no desktop/Computer MCP route and no live
 Codex-host qualification. Standalone Farol does not yet expose a persistent
 handoff tool.
 
 ## Two different destinations
 
-| Route                      | Owner-visible result                                                                                 | Current standalone state                                                                                                            |
-| -------------------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof             | Separate backlog; the V0 implementation and its private-alpha evidence are historical references, not standalone code or acceptance |
-| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn and a metadata-only dispatch status | Private `PersistentCodexHandoff` core and hermetic fixtures only; no tool, host adapter or live task                                |
-| Product Agent              | A correlated child of the current host task                                                          | Intentionally disabled; it is neither of the handoff routes above                                                                   |
+| Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Separate backlog; the V0 implementation and its private-alpha evidence are historical references, not standalone code or acceptance |
+| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Private `PersistentCodexHandoff` core and hermetic fixtures only; no tool, host adapter or live task                                |
+| Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                                   |
 
 The V0 browser route is documented in the V0 repository's
 `docs/persistent-chat-handoff.md`. Its Legacy browser partition, Hub bridge,
@@ -31,9 +32,13 @@ acknowledgement remains outcome-unknown; replay never creates a second task or
 turn.
 
 `PersistentCodexHandoff` in Chat app code owns the closed create/status
-policy. Its private append-only journal and request digester have 25 hermetic
-tests, including conflicting keys, restart, lost acknowledgement and exact
-status readback. The caller supplies a workspace ID, not an arbitrary root;
+policy. The result extension pages `thread/items/list` with the issued
+`turnId`, checks every returned entry against that turn, and returns text only
+from one explicit `final_answer` item after the turn is completed. Incomplete,
+foreign, conflicting or unreadable results remain outcome-unknown; a result
+read never starts work. The private append-only journal and request digester
+have hermetic tests for conflicting keys, restart, lost acknowledgement and
+exact status/result readback. The caller supplies a workspace ID, not an arbitrary root;
 the trusted adapter must resolve the approved writer and canonical project
 roots, both device/inode identities, their shared Git common directory, and
 the selected sandbox/approval policy. This is a fixture contract; no production
@@ -51,7 +56,8 @@ The next source slice must add explicit host-task creation admission, a trusted
 Computer workspace adapter, an App Server adapter against the **installed**
 host's current schema, and a typed desktop/Computer MCP create/status route.
 The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
-installed-host schema methods and response fields; it is not yet attached to
+installed-host schema methods and response fields, including
+`thread/items/list`, its turn filter, and the typed final-answer phase. It is not yet attached to
 that route. It was checked against the locally installed Codex CLI's generated
 schema without launching a task.
 The adapter must preserve the owner-selected host execution policy and refuse
@@ -62,10 +68,10 @@ before any live smoke. A Computer folder grant alone is not task-creation
 authority.
 
 Until that outer route and a separately authorized live test pass,
-`codex_task_create` and `codex_task_status` remain unavailable. Fixture
+`codex_task_create`, `codex_task_status` and `codex_task_result` remain unavailable. Fixture
 PASS is not proof of a native host task, paid model result, or provider
 delivery. Project creation, project-root rebind, title/message/continue,
-terminal result-body retrieval and archive/delete are later slices.
+live terminal result retrieval and archive/delete remain open.
 
 ## Separate saved ChatGPT conversation backlog
 

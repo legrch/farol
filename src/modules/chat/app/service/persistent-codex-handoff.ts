@@ -79,6 +79,24 @@ export type HandoffStatusResult =
       turnStatus: string;
     }>;
 
+export type HandoffResult =
+  | Readonly<{ status: "unknown" }>
+  | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
+  | Readonly<{
+      status: "running" | "failed" | "interrupted";
+      dispatchId: string;
+      threadId: string;
+      turnId: string;
+    }>
+  | Readonly<{
+      status: "completed";
+      dispatchId: string;
+      threadId: string;
+      turnId: string;
+      finalItemId: string;
+      text: string;
+    }>;
+
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -468,6 +486,93 @@ export class PersistentCodexHandoff {
       }
     } catch {
       // A status read is never a reason to create another task or turn.
+    }
+    return { status: "outcome_unknown", dispatchId };
+  }
+
+  async result(dispatchId: string): Promise<HandoffResult> {
+    const status = await this.status(dispatchId);
+    if (status.status !== "known") return status;
+    const identity = {
+      dispatchId,
+      threadId: status.threadId,
+      turnId: status.turnId,
+    };
+    if (status.turnStatus === "inProgress") {
+      return { status: "running", ...identity };
+    }
+    if (status.turnStatus === "failed" || status.turnStatus === "interrupted") {
+      return { status: status.turnStatus, ...identity };
+    }
+    if (status.turnStatus !== "completed") {
+      return { status: "outcome_unknown", dispatchId };
+    }
+    // The provider's item filter is checked again here. A terminal turn with
+    // no single explicit final answer is not evidence of an exact result.
+    let final: Readonly<{ id: string; text: string }> | null = null;
+    let cursor: string | null = null;
+    const seen = new Set<string>();
+    try {
+      for (let page = 0; page < 32; page += 1) {
+        const response = object(
+          await this.host.request("thread/items/list", {
+            threadId: status.threadId,
+            turnId: status.turnId,
+            cursor,
+            limit: 100,
+          }),
+        );
+        if (
+          !response ||
+          !Array.isArray(response.data) ||
+          response.data.length > 100
+        ) {
+          break;
+        }
+        for (const value of response.data) {
+          const entry = object(value);
+          const item = object(entry?.item);
+          if (
+            entry?.turnId !== status.turnId ||
+            !item ||
+            !identifier(item.id)
+          ) {
+            return { status: "outcome_unknown", dispatchId };
+          }
+          if (item.type === "agentMessage" && item.phase === "final_answer") {
+            if (
+              final !== null ||
+              typeof item.text !== "string" ||
+              item.text.length === 0 ||
+              item.text.length > 256 * 1024
+            ) {
+              return { status: "outcome_unknown", dispatchId };
+            }
+            final = { id: item.id, text: item.text };
+          }
+        }
+        if (response.nextCursor === null) {
+          return final
+            ? {
+                status: "completed",
+                ...identity,
+                finalItemId: final.id,
+                text: final.text,
+              }
+            : { status: "outcome_unknown", dispatchId };
+        }
+        if (
+          typeof response.nextCursor !== "string" ||
+          response.nextCursor.length === 0 ||
+          seen.has(response.nextCursor)
+        ) {
+          break;
+        }
+        cursor = response.nextCursor;
+        seen.add(cursor);
+      }
+    } catch {
+      // Result reads never create a replacement task or a model turn.
     }
     return { status: "outcome_unknown", dispatchId };
   }

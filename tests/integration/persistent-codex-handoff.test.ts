@@ -48,12 +48,15 @@ class FixtureHost implements HandoffHost {
   failTurn = false;
   failProject = false;
   failStatus = false;
+  failItems = false;
   turnStatus = "inProgress";
   onProjectList?: (() => void) | undefined;
   threadResponse?: unknown;
   turnResponse?: unknown;
   readResponse?: unknown;
   turnsResponse?: unknown;
+  itemsResponse?: unknown;
+  pagedItems = false;
   pagedProjects = false;
   badProjectCursor = false;
   pagedTurns = false;
@@ -138,6 +141,59 @@ class FixtureHost implements HandoffHost {
         nextCursor: null,
       };
     }
+    if (method === "thread/items/list") {
+      if (this.failItems) throw new Error("ITEMS_UNAVAILABLE");
+      if (this.itemsResponse !== undefined) return this.itemsResponse;
+      expect(params).toMatchObject({
+        threadId: "issued-thread",
+        turnId: "issued-turn",
+      });
+      if (this.pagedItems) {
+        return (params as { cursor: string | null }).cursor === null
+          ? {
+              data: [
+                {
+                  turnId: "issued-turn",
+                  item: {
+                    id: "progress",
+                    type: "agentMessage",
+                    phase: "commentary",
+                    text: "Working",
+                  },
+                },
+              ],
+              nextCursor: "next",
+            }
+          : {
+              data: [
+                {
+                  turnId: "issued-turn",
+                  item: {
+                    id: "answer",
+                    type: "agentMessage",
+                    phase: "final_answer",
+                    text: "Exact result",
+                  },
+                },
+              ],
+              nextCursor: null,
+            };
+      }
+      return {
+        data: [
+          {
+            turnId: "issued-turn",
+            item: {
+              id: "answer",
+              type: "agentMessage",
+              phase: "final_answer",
+              text: "Exact result",
+            },
+          },
+        ],
+        nextCursor: null,
+      };
+    }
     throw new Error("UNEXPECTED_METHOD");
   }
 }
@@ -172,6 +228,142 @@ async function fixture(host = new FixtureHost()) {
 }
 
 describe("persistent Codex handoff core", () => {
+  it("reads only the issued turn's exact terminal answer without starting work", async () => {
+    const { host, service } = await fixture();
+    await service().create(request);
+    host.turnStatus = "completed";
+    host.pagedItems = true;
+    const before = host.calls.length;
+    expect(await service().result(key)).toEqual({
+      status: "completed",
+      dispatchId: key,
+      threadId: "issued-thread",
+      turnId: "issued-turn",
+      finalItemId: "answer",
+      text: "Exact result",
+    });
+    expect(host.calls.slice(before)).toEqual([
+      "thread/read",
+      "thread/turns/list",
+      "thread/items/list",
+      "thread/items/list",
+    ]);
+  });
+
+  it("keeps incomplete, foreign and ambiguous result reads unknown", async () => {
+    const { host, service } = await fixture();
+    expect(await service().result(key)).toEqual({ status: "unknown" });
+    await service().create(request);
+    expect(await service().result(key)).toMatchObject({ status: "running" });
+    expect(host.calls).not.toContain("thread/items/list");
+    host.turnStatus = "completed";
+    host.itemsResponse = {
+      data: [
+        {
+          turnId: "other-turn",
+          item: {
+            id: "foreign",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "wrong",
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+    expect(await service().result(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.itemsResponse = {
+      data: [
+        {
+          turnId: "issued-turn",
+          item: {
+            id: "one",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "one",
+          },
+        },
+        {
+          turnId: "issued-turn",
+          item: {
+            id: "two",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "two",
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+    expect(await service().result(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.itemsResponse = { data: [], nextCursor: "repeat" };
+    expect(await service().result(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+  });
+
+  it("reports terminal failure without fetching content or starting a new turn", async () => {
+    const { host, service } = await fixture();
+    await service().create(request);
+    for (const terminal of ["failed", "interrupted"] as const) {
+      host.turnStatus = terminal;
+      expect(await service().result(key)).toEqual({
+        status: terminal,
+        dispatchId: key,
+        threadId: "issued-thread",
+        turnId: "issued-turn",
+      });
+    }
+    expect(host.calls).not.toContain("thread/items/list");
+    expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps missing final text and provider read failure explicitly unknown", async () => {
+    const { host, service } = await fixture();
+    await service().create(request);
+    host.turnStatus = "completed";
+    host.itemsResponse = { data: [], nextCursor: null };
+    expect(await service().result(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    host.failItems = true;
+    expect(await service().result(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    host.failStatus = true;
+    expect(await service().result(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    expect(
+      host.calls.filter((method) => method === "thread/start"),
+    ).toHaveLength(1);
+  });
+
+  it("refuses an unsupported turn state and an oversized item page", async () => {
+    const { host, service } = await fixture();
+    await service().create(request);
+    host.turnStatus = "queued-new-state";
+    expect(await service().result(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    host.turnStatus = "completed";
+    host.itemsResponse = {
+      data: Array.from({ length: 101 }, () => ({})),
+      nextCursor: null,
+    };
+    expect(await service().result(key)).toMatchObject({
+      status: "outcome_unknown",
+    });
+  });
   it("starts one project-bound persistent thread and one turn, then reads exact metadata after restart", async () => {
     const { host, service } = await fixture();
     expect(await service().create(request)).toEqual({

@@ -81,6 +81,7 @@ async function schemaRoot(
         "thread/start",
         "thread/read",
         "thread/turns/list",
+        "thread/items/list",
         "turn/start",
       ].map((method) => ({
         type: "object",
@@ -93,6 +94,7 @@ async function schemaRoot(
               "thread/start": "ThreadStartParams",
               "thread/read": "ThreadReadParams",
               "thread/turns/list": "ThreadTurnsListParams",
+              "thread/items/list": "ThreadItemsListParams",
               "turn/start": "TurnStartParams",
             }[method] ?? "ThreadCompactStartParams",
           ),
@@ -186,13 +188,57 @@ async function schemaRoot(
         },
       },
     },
+    "v2/ThreadItemsListParams.json": {
+      required: ["threadId"],
+      properties: {
+        threadId: typed("string"),
+        turnId: optional("string"),
+        cursor: optional("string"),
+        limit: optional("integer"),
+      },
+    },
+    "v2/ThreadItemsListResponse.json": {
+      required: ["data"],
+      properties: {
+        data: list("ThreadItemEntry"),
+        nextCursor: optional("string"),
+      },
+      definitions: {
+        ThreadItemEntry: {
+          required: ["item", "turnId"],
+          properties: { item: ref("ThreadItem"), turnId: typed("string") },
+        },
+        ThreadItem: {
+          oneOf: [
+            {
+              required: ["id", "text", "type"],
+              properties: {
+                id: typed("string"),
+                text: typed("string"),
+                type: { type: "string", enum: ["agentMessage"] },
+                phase: nullableRef("MessagePhase"),
+              },
+            },
+          ],
+        },
+        MessagePhase: {
+          oneOf: [{ type: "string", enum: ["commentary", "final_answer"] }],
+        },
+      },
+    },
     ...overrides,
   };
   for (const [name, value] of Object.entries(files)) {
     if (!name.startsWith("v2/")) continue;
     const schema = value as Record<string, any>;
     schema.type ??= "object";
-    for (const definition of ["Project", "ProjectRoot", "Thread", "Turn"]) {
+    for (const definition of [
+      "Project",
+      "ProjectRoot",
+      "Thread",
+      "Turn",
+      "ThreadItemEntry",
+    ]) {
       if (schema.definitions?.[definition]) {
         schema.definitions[definition].type ??= "object";
       }
@@ -267,6 +313,7 @@ async function schemaRoot(
       "ThreadStartParams",
       "ThreadReadParams",
       "ThreadTurnsListParams",
+      "ThreadItemsListParams",
       "TurnStartParams",
     ].map((name) => {
       const { definitions: _definitions, ...shape } = files[
@@ -302,6 +349,20 @@ async function schemaRoot(
 }
 
 describe("installed Codex saved-project handoff schema", () => {
+  it.skipIf(
+    !process.env.FAROL_CODEX_SCHEMA_ROOT ||
+      !process.env.FAROL_CODEX_SCHEMA_VERSION,
+  )(
+    "accepts a selected real generated schema without starting the host",
+    async () => {
+      const root = process.env.FAROL_CODEX_SCHEMA_ROOT;
+      const version = process.env.FAROL_CODEX_SCHEMA_VERSION;
+      if (!root || !version) throw new Error("SCHEMA_ROOT_REQUIRED");
+      await expect(
+        inspectCodexHandoffHostContract(root, version),
+      ).resolves.toMatchObject({ projectBoundCreateStatus: true });
+    },
+  );
   it("recognizes the exact project-bound create and metadata-only status methods", async () => {
     const root = await schemaRoot();
     await expect(
@@ -328,6 +389,16 @@ describe("installed Codex saved-project handoff schema", () => {
       "codex-cli 0.153.4",
     );
     expect(after.schemaSha256).not.toBe(before.schemaSha256);
+  });
+
+  it("refuses result APIs without a typed final answer phase", async () => {
+    const root = await schemaRoot();
+    await changeSchema(root, "v2/ThreadItemsListResponse.json", (schema) => {
+      schema.definitions.MessagePhase.oneOf[0].enum = ["commentary"];
+    });
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
   });
 
   it("refuses a host without project-bound thread creation", async () => {

@@ -27,6 +27,8 @@ const HANDOFF_SCHEMA_FILES = [
   "v2/ThreadReadResponse.json",
   "v2/ThreadTurnsListParams.json",
   "v2/ThreadTurnsListResponse.json",
+  "v2/ThreadItemsListParams.json",
+  "v2/ThreadItemsListResponse.json",
 ] as const;
 
 type JsonRecord = Record<string, unknown>;
@@ -215,6 +217,12 @@ const HANDOFF_FIELDS: readonly SchemaField[] = (
     ["ThreadTurnsListParams", "itemsView", "nullable-ref:TurnItemsView"],
     ["ThreadTurnsListResponse", "data", "array:Turn"],
     ["ThreadTurnsListResponse", "nextCursor", "string|null"],
+    ["ThreadItemsListParams", "threadId", "string"],
+    ["ThreadItemsListParams", "turnId", "string|null"],
+    ["ThreadItemsListParams", "cursor", "string|null"],
+    ["ThreadItemsListParams", "limit", "integer|null"],
+    ["ThreadItemsListResponse", "data", "array:ThreadItemEntry"],
+    ["ThreadItemsListResponse", "nextCursor", "string|null"],
   ] as readonly (readonly [string, string, string])[]
 ).map(([schema, name, shape]) => ({
   schema: `v2/${schema}.json`,
@@ -238,6 +246,8 @@ const HANDOFF_DEFINITION_FIELDS: readonly SchemaField[] = (
     ["ThreadReadResponse", "Thread", "model", "string|null"],
     ["ThreadTurnsListResponse", "Turn", "id", "string"],
     ["ThreadTurnsListResponse", "Turn", "status", "ref:TurnStatus"],
+    ["ThreadItemsListResponse", "ThreadItemEntry", "turnId", "string"],
+    ["ThreadItemsListResponse", "ThreadItemEntry", "item", "ref:ThreadItem"],
   ] as readonly (readonly [string, string, string, string])[]
 ).map(([schema, definition, name, shape]) => ({
   schema: `v2/${schema}.json`,
@@ -366,6 +376,7 @@ function supportsSandboxPolicy(schema: unknown): boolean {
 function supportsHandoffValues(
   client: unknown,
   turnsResponse: unknown,
+  itemsResponse: unknown,
   threadStartResponse: unknown,
   projectListResponse: unknown,
   threadReadResponse: unknown,
@@ -377,6 +388,21 @@ function supportsHandoffValues(
       array(child(variant, "properties", "type", "enum")).includes("text") &&
       child(variant, "properties", "text", "type") === "string" &&
       hasRequired(variant, "type", "text"),
+  );
+  const finalAnswer = array(
+    child(itemsResponse, "definitions", "ThreadItem", "oneOf"),
+  ).some(
+    (variant) =>
+      array(child(variant, "properties", "type", "enum")).includes(
+        "agentMessage",
+      ) &&
+      hasRequired(variant, "id", "text", "type") &&
+      hasShape(child(variant, "properties", "id"), "string") &&
+      hasShape(child(variant, "properties", "text"), "string") &&
+      hasShape(
+        child(variant, "properties", "phase"),
+        "nullable-ref:MessagePhase",
+      ),
   );
   return (
     hasEnumValues(
@@ -392,6 +418,11 @@ function supportsHandoffValues(
     hasEnumValues(child(definitions, "TurnItemsView"), "notLoaded") &&
     child(definitions, "ReasoningEffort", "type") === "string" &&
     textInput &&
+    finalAnswer &&
+    hasEnumValues(
+      child(itemsResponse, "definitions", "MessagePhase"),
+      "final_answer",
+    ) &&
     supportsSandboxPolicy(child(definitions, "SandboxPolicy")) &&
     supportsSandboxPolicy(
       child(threadStartResponse, "definitions", "SandboxPolicy"),
@@ -441,6 +472,9 @@ const HANDOFF_REQUIRED: readonly (readonly [
   ["ThreadTurnsListParams", [], ["threadId"]],
   ["ThreadTurnsListResponse", [], ["data"]],
   ["ThreadTurnsListResponse", ["Turn"], ["id", "status"]],
+  ["ThreadItemsListParams", [], ["threadId"]],
+  ["ThreadItemsListResponse", [], ["data"]],
+  ["ThreadItemsListResponse", ["ThreadItemEntry"], ["item", "turnId"]],
 ];
 
 function hasRequiredFields(schemas: ReadonlyMap<string, JsonRecord>): boolean {
@@ -606,6 +640,7 @@ export async function inspectCodexHandoffHostContract(
         ["thread/start", "ThreadStartParams"],
         ["thread/read", "ThreadReadParams"],
         ["thread/turns/list", "ThreadTurnsListParams"],
+        ["thread/items/list", "ThreadItemsListParams"],
         ["turn/start", "TurnStartParams"],
       ] as readonly (readonly [string, string])[]
     ).every(([method, params]) =>
@@ -622,6 +657,7 @@ export async function inspectCodexHandoffHostContract(
     !supportsHandoffValues(
       client,
       schemas.get("v2/ThreadTurnsListResponse.json"),
+      schemas.get("v2/ThreadItemsListResponse.json"),
       schemas.get("v2/ThreadStartResponse.json"),
       schemas.get("v2/ProjectListResponse.json"),
       schemas.get("v2/ThreadReadResponse.json"),
