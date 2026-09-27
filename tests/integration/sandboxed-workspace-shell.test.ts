@@ -41,6 +41,7 @@ async function fixture(
   linked = false,
   folderName = "workspace",
   gitHistoryApproved = false,
+  expiresAt = Date.now() + 60_000,
 ) {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-shell-")),
@@ -118,7 +119,7 @@ async function fixture(
     capabilities: ["workspace.shell", "workspace.write"],
     network: "none",
     commands,
-    expiresAt: Date.now() + 60_000,
+    expiresAt,
   };
   const admission: TaskAdmission = {
     authorityId: "authority-test",
@@ -1030,13 +1031,18 @@ describe.skipIf(process.platform !== "darwin")(
     });
 
     it("classifies an authority deadline separately from a command timeout", async () => {
-      const { root, approval, participant } = await fixture();
+      const { root, approval, participant } = await fixture(
+        "workspace",
+        false,
+        "workspace",
+        false,
+        Date.now() + 1_000,
+      );
       const almostExpired = new SandboxedWorkspaceShell(
         approval,
         participant,
         binding,
         path.join(root, "authority-deadline-private"),
-        () => Date.now() + 59_800,
       );
       shells.push(almostExpired);
       const started = await almostExpired.start({
@@ -1383,7 +1389,7 @@ describe.skipIf(process.platform !== "darwin")(
       }
     });
 
-    it("keeps owned shell read and cancel available when new execution is fenced", async () => {
+    it("keeps owned shell cancellation available while the fence blocks reads and starts", async () => {
       const { shell } = await fixture();
       let phase: "open" | "fenced" | "unreadable" = "open";
       const server = createReadonlyComputerMcpServer(
@@ -1469,6 +1475,15 @@ describe.skipIf(process.platform !== "darwin")(
           arguments: { handle, stdoutOffset: 0, stderrOffset: 0 },
         });
         expect(read.structuredContent).toMatchObject({
+          ok: false,
+          error: { code: "COMPUTER_EXECUTION_FENCE_UNREADABLE" },
+        });
+        phase = "open";
+        const afterFence = await client.callTool({
+          name: "computer_shell_read",
+          arguments: { handle, stdoutOffset: 0, stderrOffset: 0 },
+        });
+        expect(afterFence.structuredContent).toMatchObject({
           ok: true,
           value: {
             state: "exited",
@@ -1476,6 +1491,79 @@ describe.skipIf(process.platform !== "darwin")(
             groupCleanup: "confirmed",
           },
         });
+      } finally {
+        await Promise.all([client.close(), server.close()]);
+      }
+    });
+
+    it("rechecks the execution fence after shell reservation and before dispatch", async () => {
+      const { shell, workspace } = await fixture();
+      let admissions = 0;
+      const server = createReadonlyComputerMcpServer(
+        {
+          async execute(): Promise<never> {
+            throw new Error("unused");
+          },
+        },
+        {
+          ...binding,
+          participantId: "main-test",
+          turnId: "turn-test",
+          generation: 1,
+        },
+        undefined,
+        undefined,
+        undefined,
+        {
+          admits: async () =>
+            ++admissions === 2
+              ? {
+                  admitted: false as const,
+                  code: "COMPUTER_SUMMARY_PHASE_ACTIVE" as const,
+                }
+              : { admitted: true as const },
+        },
+        undefined,
+        undefined,
+        shell,
+      );
+      const client = new Client({
+        name: "shell-dispatch-fence",
+        version: "1.0.0",
+      });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        client.connect(clientTransport),
+        server.connect(serverTransport),
+      ]);
+      const request = {
+        name: "computer_shell_start",
+        arguments: {
+          operationId: "late-fence",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "printf forbidden > late-fence.txt",
+          timeoutMs: 5_000,
+          write: true,
+        },
+      };
+      try {
+        const refused = await client.callTool(request);
+        expect(admissions).toBe(2);
+        expect(refused.structuredContent).toMatchObject({
+          ok: false,
+          error: { code: "SHELL_DISPATCH_FENCED" },
+        });
+        expect(
+          (await client.callTool(request)).structuredContent,
+        ).toMatchObject({
+          ok: false,
+          error: { code: "SHELL_OUTCOME_UNKNOWN" },
+        });
+        await expect(
+          fs.stat(path.join(workspace, "late-fence.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await Promise.all([client.close(), server.close()]);
       }

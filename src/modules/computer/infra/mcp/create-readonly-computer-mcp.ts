@@ -976,6 +976,14 @@ export function createReadonlyComputerMcpServer(
               ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
             },
             context.mcpReq.signal,
+            async () => {
+              if (!fence) return true;
+              try {
+                return (await fence.admits()).admitted;
+              } catch {
+                return false;
+              }
+            },
           ),
         ),
       ),
@@ -989,7 +997,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
-      async (input) => shellResult(shell.read(input)),
+      guarded(async (input) => shellResult(shell.read(input))),
     );
     server.registerTool(
       "computer_shell_cancel",

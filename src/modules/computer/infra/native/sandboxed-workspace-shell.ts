@@ -426,7 +426,11 @@ export class SandboxedWorkspaceShell {
     return path.join(this.privateRoot, "shell-v2", identity);
   }
 
-  async start(input: ShellStart, signal?: AbortSignal): Promise<ShellResponse> {
+  async start(
+    input: ShellStart,
+    signal?: AbortSignal,
+    dispatchAllowed?: () => Promise<boolean>,
+  ): Promise<ShellResponse> {
     if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
     if (
       !/^[A-Za-z0-9._:-]{1,160}$/u.test(input.operationId) ||
@@ -566,6 +570,13 @@ export class SandboxedWorkspaceShell {
         .rm(scratch, { recursive: true, force: true })
         .catch(() => undefined);
       return refusal("SHELL_OUTCOME_UNKNOWN");
+    }
+    if (dispatchAllowed && !(await dispatchAllowed().catch(() => false))) {
+      this.pendingOperations.delete(input.operationId);
+      await fs
+        .rm(scratch, { recursive: true, force: true })
+        .catch(() => undefined);
+      return refusal("SHELL_DISPATCH_FENCED");
     }
     const dispatchAuthority = this.authorize(
       input.workspaceId,
@@ -754,7 +765,10 @@ export class SandboxedWorkspaceShell {
       })();
     });
     // The watchdog checks absolute host deadlines before spawning the command.
-    const authorityDeadlineAt = Date.now() + authorityRemaining;
+    const authorityDeadlineAt = Math.min(
+      this.approval.expiresAt,
+      this.participant.grant.expiresAt,
+    );
     const commandDeadlineAt = Date.now() + input.timeoutMs;
     child.send({
       type: "start",
