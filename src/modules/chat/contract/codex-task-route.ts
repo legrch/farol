@@ -1,5 +1,24 @@
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  /** Inspect only the exact owner-selected thread in the approved project. */
+  observe?(
+    request: Readonly<{
+      threadId: string;
+      workspaceId: string;
+      projectId: string;
+    }>,
+  ): Promise<
+    | Readonly<{
+        status: "observed";
+        threadId: string;
+        title: string | null;
+        model: string | null;
+        turns: ReadonlyArray<Readonly<{ id: string; status: string }>>;
+        hasMoreTurns: boolean;
+      }>
+    | Readonly<{ status: "refused"; code: string }>
+    | Readonly<{ status: "outcome_unknown"; threadId: string }>
+  >;
   /** Control is advertised only after the serving host is qualified. */
   readonly controlCapabilities?: Readonly<{
     message: boolean;

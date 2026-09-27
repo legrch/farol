@@ -330,6 +330,122 @@ export class PersistentCodexHandoff {
     private readonly now: () => number = Date.now,
   ) {}
 
+  async observe(
+    request: Readonly<{
+      threadId: string;
+      workspaceId: string;
+      projectId: string;
+    }>,
+  ) {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        request.threadId,
+      ) ||
+      !identifier(request.workspaceId) ||
+      !identifier(request.projectId)
+    )
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_OBSERVE_INPUT_INVALID",
+      };
+    const workspace = await this.authority.resolve(request.workspaceId);
+    if (!validWorkspace(workspace))
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_WORKSPACE_UNVERIFIED",
+      };
+    try {
+      if (
+        !(await exactProject(
+          this.host,
+          request.projectId,
+          workspace.project.root,
+        ))
+      )
+        return {
+          status: "refused" as const,
+          code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+        };
+      const response = object(
+        await this.host.request("thread/read", {
+          threadId: request.threadId,
+          includeTurns: false,
+        }),
+      );
+      const thread = object(response?.thread);
+      if (
+        thread?.id !== request.threadId ||
+        thread?.projectId !== request.projectId ||
+        thread?.cwd !== workspace.root
+      )
+        return {
+          status: "refused" as const,
+          code: "HANDOFF_OBSERVE_THREAD_BINDING_CHANGED",
+        };
+      const page = object(
+        await this.host.request("thread/turns/list", {
+          threadId: request.threadId,
+          cursor: null,
+          limit: 100,
+          itemsView: "notLoaded",
+        }),
+      );
+      if (
+        !Array.isArray(page?.data) ||
+        page.data.length > 100 ||
+        (page.nextCursor !== null &&
+          (typeof page.nextCursor !== "string" || page.nextCursor.length === 0))
+      )
+        return {
+          status: "outcome_unknown" as const,
+          threadId: request.threadId,
+        };
+      const turns = page.data.map(object);
+      if (
+        turns.some(
+          (turn) =>
+            !identifier(turn?.id) ||
+            !["inProgress", "completed", "failed", "interrupted"].includes(
+              turn?.status as string,
+            ),
+        )
+      )
+        return {
+          status: "outcome_unknown" as const,
+          threadId: request.threadId,
+        };
+      const current = await this.authority.resolve(request.workspaceId);
+      if (
+        !validWorkspace(current) ||
+        !samePhysicalWorkspace(current, workspace)
+      )
+        return {
+          status: "refused" as const,
+          code: "HANDOFF_WORKSPACE_CHANGED",
+        };
+      return {
+        status: "observed" as const,
+        threadId: request.threadId,
+        title:
+          typeof thread.title === "string" && thread.title.length <= 1_000
+            ? thread.title
+            : null,
+        model:
+          typeof thread.model === "string" && thread.model.length <= 120
+            ? thread.model
+            : null,
+        turns: turns.map((turn) => ({
+          id: turn!.id as string,
+          status: turn!.status as string,
+        })),
+        hasMoreTurns: page.nextCursor !== null,
+      };
+    } catch {
+      // Read failure cannot authorize a retry with a new task or turn.
+      return { status: "outcome_unknown" as const, threadId: request.threadId };
+    }
+  }
+
   async message(request: HandoffMessage): Promise<HandoffMessageResult> {
     if (!validMessage(request))
       return { status: "refused", code: "HANDOFF_INPUT_INVALID" };

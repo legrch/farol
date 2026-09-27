@@ -36,6 +36,7 @@ const socketPath = path.join(root, "control.sock");
 const key = "41949674-c1e4-4a73-9098-4d31da6e7aaa";
 const projectId = "saved-fixture-project";
 const threadId = "issued-fixture-thread";
+const ownerThreadId = "0e4b2463-5506-47d5-a1a0-b4b84e941301";
 const turnId = "issued-fixture-turn";
 const calls = [];
 let turnStatus = "inProgress";
@@ -117,6 +118,16 @@ function hostResult(method, params) {
     return { turnId };
   }
   if (method === "thread/read") {
+    if (params.threadId === ownerThreadId)
+      return {
+        thread: {
+          id: ownerThreadId,
+          projectId,
+          cwd: writerRoot,
+          title: "Farol · Native observer canary",
+          model: "gpt-6-luna",
+        },
+      };
     return {
       thread: {
         id: threadId,
@@ -127,6 +138,11 @@ function hostResult(method, params) {
     };
   }
   if (method === "thread/turns/list") {
+    if (params.threadId === ownerThreadId)
+      return {
+        data: [{ id: "owner-turn", status: "completed" }],
+        nextCursor: null,
+      };
     return { data: [{ id: turnId, status: turnStatus }], nextCursor: null };
   }
   if (method === "thread/items/list") {
@@ -326,7 +342,40 @@ try {
   assert(tools.includes("codex_task_create"), stderr);
   assert(tools.includes("codex_task_status"), stderr);
   assert(tools.includes("codex_task_result"), stderr);
+  assert(tools.includes("codex_task_observe"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
+  const observed = await client.callTool({
+    name: "codex_task_observe",
+    arguments: {
+      threadId: ownerThreadId,
+      workspaceId: "approved-writer",
+      projectId,
+    },
+  });
+  assert.deepEqual(observed.structuredContent, {
+    status: "observed",
+    threadId: ownerThreadId,
+    title: "Farol · Native observer canary",
+    model: "gpt-6-luna",
+    turns: [{ id: "owner-turn", status: "completed" }],
+    hasMoreTurns: false,
+  });
+  assert.equal(calls.filter((method) => method === "thread/start").length, 0);
+  assert.equal(calls.filter((method) => method === "turn/start").length, 0);
+  const wrongProject = await client.callTool({
+    name: "codex_task_observe",
+    arguments: {
+      threadId: ownerThreadId,
+      workspaceId: "approved-writer",
+      projectId: "wrong-project",
+    },
+  });
+  assert.deepEqual(wrongProject.structuredContent, {
+    status: "refused",
+    code: "HANDOFF_TASK_ADMISSION_DENIED",
+  });
+  assert.equal(calls.filter((method) => method === "thread/start").length, 0);
+  assert.equal(calls.filter((method) => method === "turn/start").length, 0);
   const created = await client.callTool({
     name: "codex_task_create",
     arguments: {

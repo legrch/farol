@@ -133,10 +133,17 @@ not an atomic cross-client `turn/start` contract.
 The config file must be edited while the new app is stopped; concurrent raw
 JSON edits are not supported by this slice. An unavailable task socket
 leaves Computer running without task tools; no daemon is started or repaired.
+The read-only `codex_task_observe` route accepts one exact owner-selected native
+thread ID, workspace ID and saved project ID. It rechecks the physical writer
+and canonical project identities, checks the host's thread project/cwd, and
+returns a bounded first page of turn statuses with an explicit `hasMoreTurns`
+flag. It never calls `thread/start`, `turn/start`, `turn/steer`, resume or fork.
+It does not persist an adoption grant or authorize control of the observed
+thread. A changed project/root or unavailable host refuses or remains unknown.
 Fixture PASS is not proof of a native shared
 host task, paid model result or provider delivery. Project creation,
-project-root rebind, title/additional messages, live control qualification,
-live terminal result retrieval and archive/delete remain open.
+project-root rebind, title mutation, owner-task control, live control
+qualification, live terminal result retrieval and archive/delete remain open.
 
 With a selected installed Codex CLI path, the content-free local route proof is
 `FAROL_CODEX_PROXY_BINARY=/absolute/path/to/codex npm run test:e2e:codex-task-fixture`

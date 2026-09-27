@@ -57,6 +57,11 @@ const CodexTaskCreateInputSchema = z.strictObject({
 const CodexTaskReadInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
 });
+const CodexTaskObserveInputSchema = z.strictObject({
+  threadId: DispatchIdSchema,
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+});
 const CodexTaskContinueInputSchema = z.strictObject({
   key: DispatchIdSchema,
   dispatchId: DispatchIdSchema,
@@ -698,6 +703,28 @@ export function createReadonlyComputerMcpServer(
       structuredContent: value,
       ...(isError ? { isError: true } : {}),
     });
+    if (codexTasks.observe)
+      server.registerTool(
+        "codex_task_observe",
+        {
+          title: "Observe one selected Codex task",
+          description:
+            "Read only the exact owner-selected thread in the approved saved project and physical workspace. This never starts, resumes, forks or controls a task; repeat the same read to refresh. Turns are bounded to one page and hasMoreTurns reports truncation.",
+          inputSchema: CodexTaskObserveInputSchema,
+          annotations: READONLY_ANNOTATIONS,
+        },
+        guarded(async (request) => {
+          try {
+            const result = await codexTasks.observe!(request);
+            return taskResponse(result, result.status !== "observed");
+          } catch {
+            return taskResponse(
+              { status: "outcome_unknown", threadId: request.threadId },
+              true,
+            );
+          }
+        }),
+      );
     server.registerTool(
       "codex_task_create",
       {

@@ -355,6 +355,90 @@ function byteBudgetFixture() {
 }
 
 describe("persistent Codex handoff core", () => {
+  it("observes only the exact selected native thread without starting work", async () => {
+    const { service, host, setWorkspace } = await fixture();
+    const threadId = randomUUID();
+    const selection = {
+      threadId,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+        title: "Owner-selected task",
+        model: "gpt-6-luna",
+      },
+    };
+    host.turnsResponse = {
+      data: [{ id: randomUUID(), status: "inProgress" }],
+      nextCursor: "more",
+    };
+    expect(await service().observe(selection)).toMatchObject({
+      status: "observed",
+      threadId,
+      title: "Owner-selected task",
+      model: "gpt-6-luna",
+      hasMoreTurns: true,
+      turns: [{ status: "inProgress" }],
+    });
+    expect(host.calls).toEqual([
+      "project/list",
+      "thread/read",
+      "thread/turns/list",
+    ]);
+    host.calls.length = 0;
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: "/different/worktree",
+      },
+    };
+    expect(await service().observe(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_OBSERVE_THREAD_BINDING_CHANGED",
+    });
+    expect(host.calls).toEqual(["project/list", "thread/read"]);
+    host.calls.length = 0;
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = {
+      data: [{ id: "turn", status: "invented" }],
+      nextCursor: null,
+    };
+    expect(await service().observe(selection)).toEqual({
+      status: "outcome_unknown",
+      threadId,
+    });
+    expect(host.calls).toEqual([
+      "project/list",
+      "thread/read",
+      "thread/turns/list",
+    ]);
+    host.calls.length = 0;
+    setWorkspace(null);
+    expect(await service().observe(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_UNVERIFIED",
+    });
+    expect(host.calls).toEqual([]);
+    expect(
+      await service().observe({ ...selection, threadId: "../other" }),
+    ).toEqual({
+      status: "refused",
+      code: "HANDOFF_OBSERVE_INPUT_INVALID",
+    });
+    expect(host.calls).toEqual([]);
+  });
+
   it("fails closed on unavailable digest, unknown parent, malformed digest, and unavailable host read", async () => {
     const host = new FixtureHost();
     const { service, authority, journalRoot } = await fixture(host);

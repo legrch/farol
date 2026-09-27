@@ -18,6 +18,17 @@ describe("separate Codex task admission", () => {
     let calls = 0;
     const creates: HandoffRequest[] = [];
     const delegate: CodexTaskRoute = {
+      async observe(input) {
+        calls += 1;
+        return {
+          status: "observed",
+          threadId: input.threadId,
+          title: null,
+          model: null,
+          turns: [],
+          hasMoreTurns: false,
+        };
+      },
       async message(input) {
         calls += 1;
         return { status: "outcome_unknown", dispatchId: input.dispatchId };
@@ -53,11 +64,26 @@ describe("separate Codex task admission", () => {
       });
     }
     expect(calls).toBe(0);
+    const selection = {
+      threadId: randomUUID(),
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    expect(await route.observe({ ...selection, projectId: "other" })).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    expect(calls).toBe(0);
+    expect(await route.observe(selection)).toMatchObject({
+      status: "observed",
+      threadId: selection.threadId,
+    });
+    expect(calls).toBe(1);
     expect(await route.create(request)).toEqual({
       status: "outcome_unknown",
       dispatchId: request.key,
     });
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(creates[0]).toMatchObject({
       model: "gpt-6-luna",
       reasoningEffort: "medium",
@@ -80,12 +106,16 @@ describe("separate Codex task admission", () => {
       status: "refused",
       code: "HANDOFF_TASK_ADMISSION_DENIED",
     });
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(await route.message(message)).toMatchObject({
       status: "outcome_unknown",
     });
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     now = 2_000;
+    expect(await route.observe(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
     await expect(route.create(request)).resolves.toEqual({
       status: "refused",
       code: "HANDOFF_TASK_ADMISSION_DENIED",
@@ -94,7 +124,7 @@ describe("separate Codex task admission", () => {
       status: "refused",
       code: "HANDOFF_TASK_ADMISSION_DENIED",
     });
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
   });
 
   it("does not advertise unqualified task control from configured models", async () => {
