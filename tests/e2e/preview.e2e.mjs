@@ -12947,9 +12947,31 @@ n10ComputerPanelSegment: {
       const droppedCard = droppedReply.window
         .locator("#computer-workspaces .workspace-card")
         .filter({ hasText: "approved-workspace" });
-      await droppedCard
-        .getByRole("button", { name: "Enable edits", exact: true })
-        .click();
+      const busyFeedback =
+        "Another change to Computer access, a connector start or an Agent start is in progress. Try again when it has finished.";
+      let accessFeedback = "";
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        await droppedCard
+          .getByRole("button", { name: "Enable edits", exact: true })
+          .click();
+        await droppedReply.window.waitForFunction(() => {
+          const feedback =
+            document.querySelector("#settings-feedback")?.textContent;
+          return Boolean(feedback && feedback !== "Saving and reading back…");
+        });
+        accessFeedback =
+          (await droppedReply.window
+            .locator("#settings-feedback")
+            .textContent()) ?? "";
+        if (accessFeedback !== busyFeedback) break;
+        // The reservation refusal precedes access mutation. Every other
+        // result, including an unknown reply, stops without another click.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      assert.equal(
+        accessFeedback,
+        "approved-workspace now requires write verification.",
+      );
       await droppedCard.getByText(/guarded edits · not verified/u).waitFor();
       await droppedCard
         .getByRole("button", { name: "Verify folder", exact: true })
