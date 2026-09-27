@@ -439,6 +439,55 @@ describe("persistent Codex handoff core", () => {
     expect(host.calls).toEqual([]);
   });
 
+  it("keeps ambiguous, unavailable, malformed and physically changed observation unknown or refused", async () => {
+    const { service, host, setWorkspace } = await fixture();
+    const threadId = randomUUID();
+    const selection = {
+      threadId,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    host.projects.push({
+      id: "other-project",
+      roots: [{ path: workspace.project.root }],
+    });
+    expect(await service().observe(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+    });
+    host.projects.pop();
+    host.failStatus = true;
+    expect(await service().observe(selection)).toEqual({
+      status: "outcome_unknown",
+      threadId,
+    });
+    host.failStatus = false;
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = { data: [], nextCursor: "" };
+    expect(await service().observe(selection)).toEqual({
+      status: "outcome_unknown",
+      threadId,
+    });
+    host.turnsResponse = { data: [], nextCursor: null };
+    host.onTurnsList = () => {
+      setWorkspace({ ...workspace, inode: "changed" });
+      return host.turnsResponse;
+    };
+    expect(await service().observe(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_WORKSPACE_CHANGED",
+    });
+    expect(host.calls).not.toContain("thread/start");
+    expect(host.calls).not.toContain("turn/start");
+    expect(host.calls).not.toContain("turn/steer");
+  });
+
   it("fails closed on unavailable digest, unknown parent, malformed digest, and unavailable host read", async () => {
     const host = new FixtureHost();
     const { service, authority, journalRoot } = await fixture(host);

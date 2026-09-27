@@ -302,6 +302,7 @@ describe("secure MCP Computer launch contract", () => {
           expectedCodexHome: codexTasks.host.expectedCodexHome,
           workspaceId: codexTasks.grant.workspaceId,
           projectId: codexTasks.grant.projectId,
+          observeThreadId: "0e4b2463-5506-47d5-a1a0-b4b84e941301",
           projectRoot: codexTasks.grant.projectRoot,
           projectIdentity: codexTasks.grant.projectIdentity,
           gitCommonDirectory: codexTasks.grant.gitCommonDirectory,
@@ -337,6 +338,7 @@ describe("secure MCP Computer launch contract", () => {
     expect(automatic.codexTasks).toMatchObject(codexTasks);
     expect(automatic.codexTasks?.grant).toMatchObject({
       harness: "codex",
+      observeThreadId: "0e4b2463-5506-47d5-a1a0-b4b84e941301",
       configSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
     const newTasks = taskPolicy();

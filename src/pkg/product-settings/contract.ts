@@ -264,6 +264,8 @@ export const CodexTaskSelectionSchema = z.strictObject({
   expectedCodexHome: CanonicalAbsolutePathSchema,
   workspaceId: IdentifierSchema,
   projectId: IdentifierSchema,
+  /** One thread explicitly selected in Settings for read-only observation. */
+  observeThreadId: z.string().uuid().optional(),
   projectRoot: CanonicalAbsolutePathSchema,
   projectIdentity: WorkspaceRootIdentitySchema,
   gitCommonDirectory: CanonicalAbsolutePathSchema,
@@ -467,6 +469,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     expectedCodexHome: CanonicalAbsolutePathSchema,
     workspaceId: IdentifierSchema,
     projectId: IdentifierSchema,
+    observeThreadId: z.string().uuid().optional(),
     projectRoot: CanonicalAbsolutePathSchema,
     sandbox: CodexTaskSelectionSchema.shape.execution.shape.sandbox,
     approvalPolicy:
@@ -1208,6 +1211,7 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CODEX_HOST_PICKER_CANCELLED",
       "CODEX_HOST_NOT_CONFIGURED",
       "CODEX_TASK_ROUTE_REFUSED",
+      "CODEX_TASK_OBSERVATION_REFUSED",
       "CODEX_TASK_ROUTE_UNAVAILABLE",
       "CODEX_HOST_SELECTION_INVALID",
       "CODEX_HOST_EXECUTABLE_UNSAFE",

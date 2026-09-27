@@ -116,6 +116,7 @@ describe("Farol Next product configuration", () => {
       expectedCodexHome: "/Users/example/.codex",
       workspaceId,
       projectId: "00000000-0000-4000-8000-000000000003",
+      observeThreadId: "0e4b2463-5506-47d5-a1a0-b4b84e941301",
       projectRoot: "/Users/example/project",
       projectIdentity: { device: "5", inode: "10" },
       gitCommonDirectory: "/Users/example/project/.git",
@@ -134,6 +135,12 @@ describe("Farol Next product configuration", () => {
     });
     await expect(
       service.recordCodexTaskRoute({ ...selection, hostGeneration: 1 }),
+    ).resolves.toMatchObject({ ok: false });
+    await expect(
+      service.recordCodexTaskRoute({
+        ...selection,
+        observeThreadId: "not-a-thread-id",
+      }),
     ).resolves.toMatchObject({ ok: false });
     await expect(service.clearCodexTaskRoute()).resolves.toMatchObject({
       ok: true,

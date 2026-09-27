@@ -4942,6 +4942,27 @@ async function configureAdmittedProduct(
         ) {
           return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
         }
+        if (command.observeThreadId) {
+          const response = await proxy.request("thread/read", {
+            threadId: command.observeThreadId,
+            includeTurns: false,
+          });
+          const thread =
+            response && typeof response === "object" && !Array.isArray(response)
+              ? (response as { thread?: unknown }).thread
+              : null;
+          if (
+            !thread ||
+            typeof thread !== "object" ||
+            Array.isArray(thread) ||
+            (thread as { id?: unknown }).id !== command.observeThreadId ||
+            (thread as { projectId?: unknown }).projectId !==
+              command.projectId ||
+            (thread as { cwd?: unknown }).cwd !== workspace.root ||
+            !(await authority.resolve(command.workspaceId))
+          )
+            return configurationFailure("CODEX_TASK_OBSERVATION_REFUSED");
+        }
         const approvedAt = new Date().toISOString();
         return ProductConfigurationResultSchema.parse(
           await configuration.recordCodexTaskRoute({
@@ -4950,6 +4971,9 @@ async function configureAdmittedProduct(
             expectedCodexHome: command.expectedCodexHome,
             workspaceId: command.workspaceId,
             projectId: command.projectId,
+            ...(command.observeThreadId === undefined
+              ? {}
+              : { observeThreadId: command.observeThreadId }),
             projectRoot: command.projectRoot,
             projectIdentity: {
               device: String(projectStat.dev),

@@ -16,10 +16,14 @@ const request = {
 describe("separate Codex task admission", () => {
   it("resolves an exact policy snapshot and refuses project, workspace or expiry drift", async () => {
     let calls = 0;
+    let now = 1_000;
+    let expireOnObserve = false;
+    const selectedThreadId = randomUUID();
     const creates: HandoffRequest[] = [];
     const delegate: CodexTaskRoute = {
       async observe(input) {
         calls += 1;
+        if (expireOnObserve) now = 2_000;
         return {
           status: "observed",
           threadId: input.threadId,
@@ -45,12 +49,12 @@ describe("separate Codex task admission", () => {
         return { status: "unknown" };
       },
     };
-    let now = 1_000;
     const route = new AdmittedCodexTaskRoute(
       delegate,
       {
         workspaceId: request.workspaceId,
         projectId: request.projectId,
+        observeThreadId: selectedThreadId,
         ...taskGrantPolicy(),
         expiresAt: 2_000,
       },
@@ -65,11 +69,19 @@ describe("separate Codex task admission", () => {
     }
     expect(calls).toBe(0);
     const selection = {
-      threadId: randomUUID(),
+      threadId: selectedThreadId,
       workspaceId: request.workspaceId,
       projectId: request.projectId,
     };
     expect(await route.observe({ ...selection, projectId: "other" })).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    expect(calls).toBe(0);
+    expect(route.observeEnabled).toBe(true);
+    expect(
+      await route.observe({ ...selection, threadId: randomUUID() }),
+    ).toEqual({
       status: "refused",
       code: "HANDOFF_TASK_ADMISSION_DENIED",
     });
@@ -111,6 +123,12 @@ describe("separate Codex task admission", () => {
       status: "outcome_unknown",
     });
     expect(calls).toBe(3);
+    expireOnObserve = true;
+    expect(await route.observe(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    expect(calls).toBe(4);
     now = 2_000;
     expect(await route.observe(selection)).toEqual({
       status: "refused",
@@ -124,7 +142,7 @@ describe("separate Codex task admission", () => {
       status: "refused",
       code: "HANDOFF_TASK_ADMISSION_DENIED",
     });
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
   });
 
   it("does not advertise unqualified task control from configured models", async () => {

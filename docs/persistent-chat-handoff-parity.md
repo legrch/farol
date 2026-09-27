@@ -133,11 +133,16 @@ not an atomic cross-client `turn/start` contract.
 The config file must be edited while the new app is stopped; concurrent raw
 JSON edits are not supported by this slice. An unavailable task socket
 leaves Computer running without task tools; no daemon is started or repaired.
-The read-only `codex_task_observe` route accepts one exact owner-selected native
-thread ID, workspace ID and saved project ID. It rechecks the physical writer
+The owner may select one exact native thread ID in the desktop task-route
+Settings. The desktop verifies that thread's saved project and writer cwd
+against the selected host before sealing it into the connector grant; without
+that selection the tool is absent. The read-only `codex_task_observe` route
+accepts only this sealed thread ID, workspace ID and saved project ID. It
+rechecks the physical writer
 and canonical project identities, checks the host's thread project/cwd, and
 returns a bounded first page of turn statuses with an explicit `hasMoreTurns`
-flag. It never calls `thread/start`, `turn/start`, `turn/steer`, resume or fork.
+flag. The grant expiry is checked again before returning the read result. It
+never calls `thread/start`, `turn/start`, `turn/steer`, resume or fork.
 It does not persist an adoption grant or authorize control of the observed
 thread. A changed project/root or unavailable host refuses or remains unknown.
 Fixture PASS is not proof of a native shared

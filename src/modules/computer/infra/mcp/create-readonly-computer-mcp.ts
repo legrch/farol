@@ -703,7 +703,7 @@ export function createReadonlyComputerMcpServer(
       structuredContent: value,
       ...(isError ? { isError: true } : {}),
     });
-    if (codexTasks.observe)
+    if (codexTasks.observeEnabled === true && codexTasks.observe)
       server.registerTool(
         "codex_task_observe",
         {

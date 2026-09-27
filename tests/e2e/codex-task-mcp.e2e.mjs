@@ -281,6 +281,7 @@ try {
         writerRoot,
         writerIdentity,
         projectId,
+        observeThreadId: ownerThreadId,
         projectRoot,
         projectIdentity,
         gitCommonDirectory: commonDirectory,
@@ -362,6 +363,25 @@ try {
   });
   assert.equal(calls.filter((method) => method === "thread/start").length, 0);
   assert.equal(calls.filter((method) => method === "turn/start").length, 0);
+  const readsBeforeWrongThread = calls.filter(
+    (method) => method === "thread/read",
+  ).length;
+  const wrongThread = await client.callTool({
+    name: "codex_task_observe",
+    arguments: {
+      threadId: "323c8bfa-806c-4bb0-b07e-9e90b3a6471a",
+      workspaceId: "approved-writer",
+      projectId,
+    },
+  });
+  assert.deepEqual(wrongThread.structuredContent, {
+    status: "refused",
+    code: "HANDOFF_TASK_ADMISSION_DENIED",
+  });
+  assert.equal(
+    calls.filter((method) => method === "thread/read").length,
+    readsBeforeWrongThread,
+  );
   const wrongProject = await client.callTool({
     name: "codex_task_observe",
     arguments: {

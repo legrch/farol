@@ -71,6 +71,9 @@ export function selectedCodexTaskRouteLaunch(
       writerRoot: workspace.root,
       writerIdentity: workspace.rootIdentity,
       projectId: selected.projectId,
+      ...(selected.observeThreadId === undefined
+        ? {}
+        : { observeThreadId: selected.observeThreadId }),
       projectRoot: selected.projectRoot,
       projectIdentity: selected.projectIdentity,
       gitCommonDirectory: selected.gitCommonDirectory,

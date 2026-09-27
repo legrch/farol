@@ -12,6 +12,7 @@ import {
 export type CodexTaskAdmission = Readonly<{
   workspaceId: string;
   projectId: string;
+  observeThreadId?: string | undefined;
   harness: "codex";
   tasks: TaskExecutionSettings;
   configSha256: string;
@@ -28,6 +29,7 @@ type ResolvedTaskRoute = Pick<
 /** An exact physical grant with an owned task-policy snapshot. */
 export class AdmittedCodexTaskRoute implements CodexTaskRoute {
   private readonly admission: CodexTaskAdmission;
+  readonly observeEnabled: boolean;
 
   constructor(
     private readonly delegate: ResolvedTaskRoute,
@@ -51,6 +53,7 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     if (controlCapabilities.continue && !delegate.continue)
       throw new Error("HANDOFF_CONTINUE_UNAVAILABLE");
     this.admission = { ...admission, tasks };
+    this.observeEnabled = admission.observeThreadId !== undefined;
   }
 
   async observe(
@@ -59,7 +62,8 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     if (
       this.now() >= this.admission.expiresAt ||
       request.workspaceId !== this.admission.workspaceId ||
-      request.projectId !== this.admission.projectId
+      request.projectId !== this.admission.projectId ||
+      request.threadId !== this.admission.observeThreadId
     )
       return {
         status: "refused" as const,
@@ -70,7 +74,10 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
         status: "refused" as const,
         code: "HANDOFF_OBSERVE_UNAVAILABLE",
       };
-    return this.delegate.observe(request);
+    const result = await this.delegate.observe(request);
+    return this.now() >= this.admission.expiresAt
+      ? { status: "refused" as const, code: "HANDOFF_TASK_ADMISSION_DENIED" }
+      : result;
   }
 
   async create(request: Parameters<CodexTaskRoute["create"]>[0]) {

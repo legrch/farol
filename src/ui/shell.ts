@@ -4298,7 +4298,7 @@ function renderSettings(): void {
         const taskRoute = settings.nativeHosts.taskRoute;
         const taskNote = document.createElement("p");
         taskNote.textContent = taskRoute
-          ? `Saved task route: ${taskRoute.projectRoot} · expires ${new Date(taskRoute.expiresAt).toLocaleString()}`
+          ? `Saved task route: ${taskRoute.projectRoot} · ${taskRoute.observeThreadId ? "one owner-selected observation thread" : "observation off"} · expires ${new Date(taskRoute.expiresAt).toLocaleString()}`
           : "Persistent task route is off. Stop the connector, then select an existing shared Codex socket and saved project. Verification does not run a model turn; the selection takes effect when the connector next starts.";
         row.append(taskNote);
         const taskForm = document.createElement("form");
@@ -4352,6 +4352,12 @@ function renderSettings(): void {
           "Saved project root",
           taskRoute?.projectRoot ?? "",
           "/absolute/path/to/repository",
+        );
+        const observeThreadId = taskText(
+          "observe-thread-id",
+          "Owner-selected thread ID for read-only observation (optional)",
+          taskRoute?.observeThreadId ?? "",
+          "Exact native task UUID",
         );
         const modelPolicy = document.createElement("p");
         modelPolicy.textContent =
@@ -4413,6 +4419,9 @@ function renderSettings(): void {
             expectedCodexHome: codexHome.value.trim(),
             workspaceId: workspaceSelect.value,
             projectId: projectId.value.trim(),
+            ...(observeThreadId.value.trim()
+              ? { observeThreadId: observeThreadId.value.trim() }
+              : {}),
             projectRoot: projectRoot.value.trim(),
             sandbox: sandboxSelect.value,
             approvalPolicy: approvalSelect.value,

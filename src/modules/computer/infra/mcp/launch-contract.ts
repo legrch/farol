@@ -233,6 +233,7 @@ export const CodexTaskRouteLaunchSchema = z.strictObject({
     writerRoot: AbsolutePathSchema,
     writerIdentity: RootIdentitySchema,
     projectId: IdentifierSchema,
+    observeThreadId: z.string().uuid().optional(),
     projectRoot: AbsolutePathSchema,
     projectIdentity: RootIdentitySchema,
     gitCommonDirectory: AbsolutePathSchema,

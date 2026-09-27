@@ -1,5 +1,6 @@
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  readonly observeEnabled?: boolean;
   /** Inspect only the exact owner-selected thread in the approved project. */
   observe?(
     request: Readonly<{
