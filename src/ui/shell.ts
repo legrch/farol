@@ -4163,7 +4163,16 @@ function renderSettings(): void {
         choose.addEventListener("click", () => {
           void configureProduct(
             { kind: "host.discover-codex" },
-            "Supported local Codex host detected and contract verified.",
+            "Local Codex host candidates detected. Choose one to verify.",
+          );
+        });
+        const chooseFile = document.createElement("button");
+        chooseFile.type = "button";
+        chooseFile.textContent = "Choose host…";
+        chooseFile.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.select-codex" },
+            "Selected local Codex host contract verified.",
           );
         });
         const verify = document.createElement("button");
@@ -4284,7 +4293,7 @@ function renderSettings(): void {
             "Route B answered through ChatGPT.",
           );
         });
-        actions.append(choose, verify, live, agent, routeB, remove);
+        actions.append(choose, chooseFile, verify, live, agent, routeB, remove);
         row.append(actions);
         const taskRoute = settings.nativeHosts.taskRoute;
         const taskNote = document.createElement("p");

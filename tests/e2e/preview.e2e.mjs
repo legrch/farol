@@ -11617,6 +11617,9 @@ n12AgentDraftSegment: {
       .filter({ hasText: "Native hosts · " });
 
     await toConnections();
+    await hostRow
+      .getByRole("button", { name: "Choose host…", exact: true })
+      .click({ timeout: 20_000 });
     await draft.window.waitForFunction(() =>
       [...document.querySelectorAll("#connection-readiness button")].some(
         (button) => button.textContent === "Re-detect host",
@@ -12366,6 +12369,7 @@ n11AgentScopeSegment: {
         .getByRole("button", { name: label, exact: true })
         .click({ timeout: 20_000 });
     };
+    await clickHostButton("Choose host…");
     await agentScope.window.waitForFunction(() =>
       [...document.querySelectorAll("#connection-readiness button")].some(
         (button) => button.textContent === "Re-detect host",
