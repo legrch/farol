@@ -2713,7 +2713,7 @@ async function stopProfileBoundHelpers(instance, label) {
 
 async function stopOwnedTestGroup(instance, label, knownPid = null) {
   const pid = knownPid ?? instance.application.process().pid;
-  instance.ownedProcessGroup ??= captureOwnedProcessGroup(pid);
+  // A dead main PID may be reused. Only the group captured at launch is ours.
   const groupId = instance.ownedProcessGroup;
   if (groupId !== pid || !Number.isSafeInteger(groupId) || groupId <= 1) {
     evidenceAttempt.recordFailure(
@@ -2867,7 +2867,6 @@ async function close(instance, options = {}) {
     }
   }
   const mainPid = instance.application.process().pid;
-  instance.ownedProcessGroup ??= captureOwnedProcessGroup(mainPid);
   const metrics = await phases.step(
     `${label}.utilityMetrics`,
     CLOSE_PHASE_BUDGET_MS,
