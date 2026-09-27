@@ -1439,7 +1439,7 @@ describe.skipIf(process.platform !== "darwin")(
             operationId: "fence-running",
             workspaceId: "fixture",
             relativeCwd: ".",
-            command: "sleep 20",
+            command: "printf secret-before-fence; sleep 20",
             timeoutMs: 30_000,
             write: false,
           },
@@ -1447,6 +1447,22 @@ describe.skipIf(process.platform !== "darwin")(
         const handle = (
           started.structuredContent as { value: { handle: string } }
         ).value.handle;
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          const output = shell.read({
+            handle,
+            stdoutOffset: 0,
+            stderrOffset: 0,
+          });
+          if (output.ok && output.value.stdout.includes("secret-before-fence"))
+            break;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(
+          shell.read({ handle, stdoutOffset: 0, stderrOffset: 0 }),
+        ).toMatchObject({
+          ok: true,
+          value: { stdout: "secret-before-fence" },
+        });
         phase = "fenced";
         const denied = await client.callTool({
           name: "computer_shell_start",
@@ -1467,7 +1483,13 @@ describe.skipIf(process.platform !== "darwin")(
           name: "computer_shell_cancel",
           arguments: { handle },
         });
-        expect(cancelled.structuredContent).toMatchObject({ ok: true });
+        expect(cancelled.structuredContent).toMatchObject({
+          ok: true,
+          value: { stdout: "", stderr: "", stdoutBase64: "", stderrBase64: "" },
+        });
+        expect(JSON.stringify(cancelled.structuredContent)).not.toContain(
+          "secret-before-fence",
+        );
         await complete(shell, handle);
         phase = "unreadable";
         const read = await client.callTool({
@@ -1489,6 +1511,7 @@ describe.skipIf(process.platform !== "darwin")(
             state: "exited",
             cancelRequested: true,
             groupCleanup: "confirmed",
+            stdout: "secret-before-fence",
           },
         });
       } finally {

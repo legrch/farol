@@ -820,13 +820,26 @@ export class SandboxedWorkspaceShell {
       record.cancelRequested = true;
       stopWatchdog(record.child);
     }
+    const snapshot = this.snapshot(record, {
+      handle,
+      stdoutOffset: 0,
+      stderrOffset: 0,
+    });
+    // Cancellation must stay available while a summary fence is raised.
+    // Its response is status-only so it cannot bypass a fenced read.
     return {
       ok: true,
-      value: this.snapshot(record, {
-        handle,
-        stdoutOffset: 0,
-        stderrOffset: 0,
-      }),
+      value: {
+        ...snapshot,
+        stdout: "",
+        stderr: "",
+        stdoutBase64: "",
+        stderrBase64: "",
+        stdoutNextOffset: 0,
+        stderrNextOffset: 0,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+      },
     };
   }
 
