@@ -140,6 +140,7 @@ function profile(
   exclusions: readonly Readonly<{ path: string }>[],
   scratch: string,
   write: boolean,
+  gitSettings: readonly string[],
 ): Readonly<{ source: string; parameters: string[] }> {
   const parameters: string[] = [];
   const reads: string[] = [];
@@ -171,6 +172,7 @@ function profile(
       }
     }
   }
+  for (const setting of gitSettings) add("GIT_SETTINGS", setting, reads);
   for (const exclusion of exclusions ?? []) {
     // A command may cross effective task roots, but never an excluded path.
     add("DENY", exclusion.path, denies);
@@ -289,6 +291,7 @@ export class SandboxedWorkspaceShell {
         cwd: string;
         effective: readonly EffectiveWorkspace[];
         credentialDenials: readonly string[];
+        gitSettings: readonly string[];
       }>
     | Readonly<{ error: string }>
   > {
@@ -362,8 +365,72 @@ export class SandboxedWorkspaceShell {
       if (!cwdInfo.isDirectory() || cwdInfo.isSymbolicLink()) {
         return { error: "SHELL_CWD_DENIED" };
       }
+      const gitSettings: string[] = [];
+      if (
+        scope.root === workspace.root &&
+        workspace.gitHistoryApproved === true
+      ) {
+        const home = this.homeDirectory;
+        if (!path.isAbsolute(home) || (await fs.realpath(home)) !== home) {
+          return { error: "SHELL_GIT_SETTINGS_UNSAFE" };
+        }
+        for (const [candidate, kind] of [
+          [home, "directory"],
+          [path.join(home, ".config"), "directory"],
+          [path.join(home, ".gitconfig"), "file"],
+          [path.join(home, ".config", "git"), "directory"],
+        ] as const) {
+          let entry;
+          try {
+            entry = await fs.lstat(candidate);
+          } catch (error) {
+            if (
+              (error as NodeJS.ErrnoException).code === "ENOENT" &&
+              candidate !== home
+            )
+              continue;
+            return { error: "SHELL_GIT_SETTINGS_UNSAFE" };
+          }
+          if (
+            candidate === path.join(home, ".gitconfig") &&
+            entry.isSymbolicLink()
+          ) {
+            const target = await fs.realpath(candidate);
+            const targetInfo = await fs.lstat(target);
+            if (
+              !inside(home, target) ||
+              credentialStorePolicy(target, home).kind === "inside-store" ||
+              !targetInfo.isFile() ||
+              (process.getuid?.() !== undefined &&
+                targetInfo.uid !== process.getuid()) ||
+              (await fs.realpath(target)) !== target
+            ) {
+              return { error: "SHELL_GIT_SETTINGS_UNSAFE" };
+            }
+            // Only the link and its exact owner-owned target are visible, not
+            // the containing dotfiles repository or any credential store.
+            gitSettings.push(candidate, target);
+            continue;
+          }
+          if (
+            entry.isSymbolicLink() ||
+            (kind === "directory" ? !entry.isDirectory() : !entry.isFile()) ||
+            (process.getuid?.() !== undefined &&
+              entry.uid !== process.getuid()) ||
+            (await fs.realpath(candidate)) !== candidate
+          ) {
+            return { error: "SHELL_GIT_SETTINGS_UNSAFE" };
+          }
+          if (
+            candidate.endsWith("/.gitconfig") ||
+            candidate.endsWith("/.config/git")
+          )
+            gitSettings.push(candidate);
+        }
+      }
       return {
         cwd,
+        gitSettings,
         credentialDenials: stores.deniedPaths.map((relative) =>
           path.join(scope.root, relative),
         ),
@@ -633,18 +700,23 @@ export class SandboxedWorkspaceShell {
       ],
       scratch,
       input.write,
+      verified.gitSettings,
     );
     const environment: NodeJS.ProcessEnv = {
-      HOME: scratch,
+      HOME: verified.gitSettings.length > 0 ? this.homeDirectory : scratch,
       TMPDIR: scratch,
       PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_TERMINAL_PROMPT: "0",
       GIT_OPTIONAL_LOCKS: input.write ? "1" : "0",
       LANG: "C.UTF-8",
       LC_ALL: "C.UTF-8",
     };
+    if (verified.gitSettings.length > 0) {
+      environment.XDG_CONFIG_HOME = path.join(this.homeDirectory, ".config");
+    } else {
+      environment.GIT_CONFIG_GLOBAL = "/dev/null";
+    }
     if (reserveBeforeDispatch) {
       try {
         await reserveBeforeDispatch();

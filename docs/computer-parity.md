@@ -32,22 +32,35 @@ approved folder again before starting the new connector. This is separate from
 the default-off Model and Product Agent. The same approved root may be
 read-only or writable; the shell call declares `write` and the authority
 service checks both that mode and mutation ownership. Each call exposes only
-the selected task-granted subtree. The process receives a private empty home
-and temp directory, fixed local PATH, no inherited credentials, and a
-Seatbelt profile with `deny network*`.
+the selected task-granted subtree. Without full Git approval the process
+receives a private empty home. With full Git approval for the exact selected
+root it receives the user's HOME path and read access only to the owner-owned
+`~/.gitconfig` (or its exact owner-owned target inside HOME) and
+`~/.config/git`; write access to HOME is not granted. All commands receive a
+private temp directory, fixed local PATH, no inherited credentials, and a
+Seatbelt profile with `deny network*`. System Git configuration and
+interactive Git prompts stay disabled. Git includes and hooks outside the
+approved roots or these user Git paths remain inaccessible.
 
 Shell Git can read complete object history, including old versions of files
 excluded from normal workspace reads. Accordingly `.git` and linked-worktree
 metadata remain denied until the owner explicitly chooses **Approve full Git
-metadata** for that verified folder and verifies it again. Settings discloses
-that this includes `.git/config`, refs, objects, hooks and linked metadata,
-which may contain credentials. A changed access mode, exclusion, command mode, or linked
+and user settings** for that verified folder and verifies it again. Settings discloses
+that this includes `.git/config`, refs, objects, hooks, linked metadata and the
+standard user Git configuration paths, which may contain credentials. A changed
+access mode, exclusion, command mode, or linked
 metadata revokes this approval. After approval, Git is the ordinary CLI,
 including hooks. There is no Farol Git stage/commit command language. Excluded
 current paths remain denied to ordinary shell reads; this is a distinct broad
 grant. The owner approved the bounded disclosure for an individually selected
 workspace; the live owner-connector selection and acceptance remain pending.
-Synthetic native Git fixtures do not settle that live proof.
+Synthetic native Git fixtures do not settle that live proof. The user's actual
+configuration may reference further files, programs or credential stores that
+remain outside this approval; those are a visible command failure, not an
+unsandboxed fallback or proof of complete host-terminal parity. A worktree
+inside the user's protected `.codex` store remains denied even when its
+repository metadata has been approved; a normal linked worktree outside that
+store is covered by the existing explicit metadata grant.
 
 Shell launch requires a current owner verification for each selected workspace:
 its access-check generation, folder identity and build evidence must match the

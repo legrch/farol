@@ -1,7 +1,7 @@
 # Ordinary Git environment fixture
 
-This is a reusable acceptance input and reference self-test, not a new Git API,
-production permission change, or proof that Computer already supports this flow.
+This is a reusable acceptance input and reference self-test, not a new Git API
+or live owner-connector proof.
 
 Run the dependency-free reference checks:
 
@@ -25,10 +25,14 @@ outside-approval canary and then verifies that its temporary root was removed.
 
 ## Incorporation into Computer acceptance
 
-Reuse the fixture in the existing workspace-shell MCP lane rather than building
-another runner or copying owner configuration. Select its writer, the exact
-linked Git metadata, and the intended synthetic user-config scope through the
-same trusted grant and environment preparation that production will use.
+The existing workspace-shell MCP lane now uses the fixture's repository and
+synthetic HOME. With full Git approval it checks user/XDG config, a relative
+include, configured hook execution and refusal, path-scoped commit with a
+foreign staged file, byte-preserving unstage, and outside-path denial. Without
+full Git approval the user config remains unavailable. A symlink from the
+allowed config directory to the outside canary stays denied; an owner-owned
+`~/.gitconfig` symlink inside HOME is readable, while one pointing outside
+HOME makes the shell start refuse before dispatch.
 
 Issue the ordinary `git config`, `git add`, `git restore --staged`, `git commit`
 and readback commands through `computer_shell_start/read`. The fixture's native
@@ -36,16 +40,18 @@ and readback commands through `computer_shell_start/read`. The fixture's native
 Git configuration inside each command to conceal missing production wiring.
 Do not pass a new caller-controlled environment bypass merely to satisfy tests.
 
-The narrower-grant negative variant must keep an outside-approval path closed.
-A second approved non-Git root must not invalidate a first root's Git access.
-A `.codex/worktrees` checkout is ordinary source under a selected grant; it is
-not permission to enumerate unrelated provider stores. Repeat the relevant
-flow after connector regeneration. Preserve failure and cleanup evidence.
+The managed writer under synthetic `.codex/worktrees` remains a reference-only
+part of this fixture. The product continues to refuse source roots inside the
+user's protected `.codex` store. Existing linked-worktree MCP tests cover a
+normal writer outside that store with its exact approved Git metadata. A
+second approved non-Git root and a new connector generation still need their
+own tests for this user-config behavior.
 
-On the inspected Computer baseline, shell uses a temporary HOME and sets
+Without full Git approval shell still uses a temporary HOME and sets
 `GIT_CONFIG_GLOBAL=/dev/null`. The reference negative control shows why a
 successful `git status`/HEAD alone misses global identity, includes and hooks.
-This fixture does not resolve that production gap or change Seatbelt policy.
+The new MCP assertions are local sandbox/package evidence only; actual owner
+Git configuration and the live new connector remain unqualified.
 
 Protocol reference for normal Git configuration and include semantics:
 https://git-scm.com/docs/git-config

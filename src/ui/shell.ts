@@ -2254,7 +2254,7 @@ function renderComputerConfiguration(): void {
   commandTitle.textContent = "Computer commands";
   commandDetail.textContent =
     settings.computer.commands === "workspace"
-      ? "Sandboxed workspace shell · no network · Git history requires separate folder approval"
+      ? "Sandboxed workspace shell · no network · Git history and user settings require separate folder approval"
       : settings.computer.commands === "verification"
         ? "Fixed Git status and HEAD · Apple Git · no network · bounded output"
         : "Off · no command authority is granted";
@@ -2430,19 +2430,19 @@ function renderComputerConfiguration(): void {
       policy.append(exclusionLabel, saveExclusions);
       const gitDisclosure = document.createElement("p");
       gitDisclosure.textContent =
-        "Full Git access includes .git/config, refs, objects, hooks, and linked-worktree metadata. These can contain credentials or past versions of excluded files. Approve only if this repository's complete metadata may be shared with the connected ChatGPT service.";
+        "Full Git access includes .git/config, refs, objects, hooks, linked-worktree metadata, ~/.gitconfig (including an owner-owned symlink target inside HOME), and ~/.config/git with includes and hooks. These can contain credentials or past versions of excluded files. Approve only if these Git settings and this repository's complete metadata may be shared with the connected ChatGPT service. Verify the folder again after changing this approval.";
       policy.append(gitDisclosure);
       const gitHistory = document.createElement("button");
       gitHistory.type = "button";
       gitHistory.textContent = workspace.gitHistoryApproved
-        ? "Revoke full Git metadata"
-        : "Approve full Git metadata";
+        ? "Revoke full Git and user settings"
+        : "Approve full Git and user settings";
       gitHistory.disabled =
         !workspace.gitHistoryApproved &&
         (!verified || settings.computer.commands !== "workspace");
       gitHistory.title = workspace.gitHistoryApproved
-        ? "Remove shell access to this repository's Git metadata"
-        : "Allow shell access to complete Git metadata after verifying this folder and reviewing the disclosure above.";
+        ? "Remove shell access to this repository's Git metadata and user Git settings"
+        : "Allow shell access to complete Git metadata and user Git settings after verifying this folder and reviewing the disclosure above.";
       gitHistory.addEventListener("click", () => {
         void configureProduct(
           {

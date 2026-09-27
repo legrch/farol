@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createOrdinaryGitEnvironment } from "../fixtures/ordinary-git-environment.mjs";
 import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 
 const packaged = process.argv[2] === "--packaged";
@@ -101,7 +102,7 @@ async function waitPidGone(pid) {
   return false;
 }
 
-async function connect(launchFile, onSpawn = () => {}) {
+async function connect(launchFile, onSpawn = () => {}, fixtureHome = null) {
   await prepareMcpLifecycle(launchFile);
   let launchedPid = null;
   const transport = new TrackedStdioClientTransport(
@@ -110,11 +111,11 @@ async function connect(launchFile, onSpawn = () => {}) {
       args: [entry, "--launch-contract", launchFile],
       cwd: process.cwd(),
       stderr: "pipe",
-      ...(packaged
+      ...(packaged || fixtureHome
         ? {
             env: {
-              ELECTRON_RUN_AS_NODE: "1",
-              HOME: process.env.HOME ?? os.homedir(),
+              ...(packaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+              HOME: fixtureHome ?? process.env.HOME ?? os.homedir(),
               PATH: process.env.PATH ?? "/usr/bin:/bin",
               TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
             },
@@ -601,6 +602,387 @@ try {
     );
   } finally {
     await disconnect(approved);
+  }
+
+  // Global Git settings are read from a disposable HOME only when this exact
+  // repository has full Git approval. The shell itself receives no caller-
+  // selected environment override; this fixture HOME belongs to the MCP host.
+  const gitEnvironment = await createOrdinaryGitEnvironment();
+  try {
+    await fs.symlink(
+      gitEnvironment.canary,
+      path.join(gitEnvironment.home, ".config", "git", "outside-link"),
+    );
+    const repositoryInfo = await fs.lstat(gitEnvironment.repository, {
+      bigint: true,
+    });
+    const settingsLaunch = {
+      ...launch,
+      approval: {
+        ...approval,
+        computerId: "computer-git-settings-e2e",
+        workspaces: [
+          {
+            workspaceId: "git-settings",
+            root: gitEnvironment.repository,
+            access: "write",
+            rootIdentity: {
+              device: String(repositoryInfo.dev),
+              inode: String(repositoryInfo.ino),
+            },
+            shellVerified: true,
+            gitHistoryApproved: true,
+          },
+        ],
+      },
+      admission: {
+        ...launch.admission,
+        computerId: "computer-git-settings-e2e",
+        workspaces: [
+          {
+            workspaceId: "git-settings",
+            mode: "subtree",
+            root: gitEnvironment.repository,
+            access: "write",
+          },
+        ],
+      },
+    };
+    const settingsLaunchRoot = path.join(root, "git-settings-launch");
+    await fs.mkdir(settingsLaunchRoot, { mode: 0o700 });
+    const settingsLaunchFile = path.join(
+      settingsLaunchRoot,
+      "computer-launch.json",
+    );
+    await fs.writeFile(settingsLaunchFile, `${canonical(settingsLaunch)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    const configured = await connect(
+      settingsLaunchFile,
+      () => {},
+      gitEnvironment.home,
+    );
+    try {
+      const started = await startShell(configured.client, {
+        operationId: "packaged-ordinary-git-settings",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command:
+          "git config --get user.name && git config --get user.email && git config --get farolFixture.xdg && git config --get farolFixture.included && git config --get farolFixture.local",
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(started.isError, undefined);
+      const outcome = await complete(
+        configured.client,
+        started.structuredContent.value.handle,
+      );
+      assert.equal(
+        outcome.exitCode,
+        0,
+        JSON.stringify({ stdout: outcome.stdout, stderr: outcome.stderr }),
+      );
+      assert.equal(outcome.groupCleanup, "confirmed");
+      assert.equal(
+        outcome.stdout,
+        [
+          gitEnvironment.expected.user,
+          gitEnvironment.expected.email,
+          gitEnvironment.expected.xdg,
+          gitEnvironment.expected.include,
+          gitEnvironment.expected.local,
+          "",
+        ].join("\n"),
+      );
+
+      await fs.writeFile(
+        path.join(gitEnvironment.repository, "foreign.txt"),
+        "foreign staged change\n",
+      );
+      await fs.writeFile(
+        path.join(gitEnvironment.repository, "owned.txt"),
+        "own change\n",
+      );
+      gitEnvironment.mustGit(["add", "--", "foreign.txt"], {
+        cwd: gitEnvironment.repository,
+      });
+      const commit = await startShell(configured.client, {
+        operationId: "packaged-ordinary-git-configured-commit",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command:
+          "git add -- owned.txt && git commit --only -m 'test: own change' -- owned.txt && git log -1 --format='%an <%ae>'",
+        timeoutMs: 10_000,
+        write: true,
+      });
+      assert.equal(commit.isError, undefined);
+      const committed = await complete(
+        configured.client,
+        commit.structuredContent.value.handle,
+      );
+      assert.equal(committed.exitCode, 0, committed.stderr);
+      assert.match(committed.stderr, /fixture-hook-ran/u);
+      assert.match(
+        committed.stdout,
+        new RegExp(
+          `${gitEnvironment.expected.user} <${gitEnvironment.expected.email}>`,
+          "u",
+        ),
+      );
+      assert.equal(
+        gitEnvironment.mustGit(["diff", "--cached", "--name-only"], {
+          cwd: gitEnvironment.repository,
+        }).stdout,
+        "foreign.txt\n",
+      );
+
+      const beforeRefusal = gitEnvironment.mustGit(["rev-parse", "HEAD"], {
+        cwd: gitEnvironment.repository,
+      }).stdout;
+      await fs.writeFile(
+        path.join(gitEnvironment.repository, ".fixture-reject"),
+        "reject\n",
+      );
+      await fs.writeFile(
+        path.join(gitEnvironment.repository, "owned.txt"),
+        "hook must refuse\n",
+      );
+      const refused = await startShell(configured.client, {
+        operationId: "packaged-ordinary-git-hook-refusal",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command:
+          "git add -- owned.txt && git commit --only -m 'test: must fail' -- owned.txt",
+        timeoutMs: 10_000,
+        write: true,
+      });
+      assert.equal(refused.isError, undefined);
+      const hookRefusal = await complete(
+        configured.client,
+        refused.structuredContent.value.handle,
+      );
+      assert.notEqual(hookRefusal.exitCode, 0);
+      assert.match(hookRefusal.stderr, /fixture-hook-refused/u);
+      assert.equal(
+        gitEnvironment.mustGit(["rev-parse", "HEAD"], {
+          cwd: gitEnvironment.repository,
+        }).stdout,
+        beforeRefusal,
+      );
+
+      const ownedBytes = Buffer.from("own modified bytes\r\nПривет\n", "utf8");
+      await fs.writeFile(
+        path.join(gitEnvironment.repository, "owned.txt"),
+        ownedBytes,
+      );
+      const unstaged = await startShell(configured.client, {
+        operationId: "packaged-ordinary-git-unstage",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: "git add -- owned.txt && git restore --staged -- owned.txt",
+        timeoutMs: 5_000,
+        write: true,
+      });
+      assert.equal(unstaged.isError, undefined);
+      const unstageResult = await complete(
+        configured.client,
+        unstaged.structuredContent.value.handle,
+      );
+      assert.equal(unstageResult.exitCode, 0, unstageResult.stderr);
+      assert.deepEqual(
+        await fs.readFile(path.join(gitEnvironment.repository, "owned.txt")),
+        ownedBytes,
+      );
+      assert.equal(
+        gitEnvironment.mustGit(["diff", "--cached", "--name-only"], {
+          cwd: gitEnvironment.repository,
+        }).stdout,
+        "foreign.txt\n",
+      );
+
+      const outside = await startShell(configured.client, {
+        operationId: "packaged-git-settings-outside-denied",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: "cat ../../../outside-approval/canary.txt",
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(outside.isError, undefined);
+      const denial = await complete(
+        configured.client,
+        outside.structuredContent.value.handle,
+      );
+      assert.notEqual(denial.exitCode, 0);
+      assert.equal(
+        denial.stdout.includes(gitEnvironment.expected.outside),
+        false,
+      );
+      const configSymlink = await startShell(configured.client, {
+        operationId: "packaged-git-settings-symlink-denied",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: 'cat "$HOME/.config/git/outside-link"',
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(configSymlink.isError, undefined);
+      const symlinkDenial = await complete(
+        configured.client,
+        configSymlink.structuredContent.value.handle,
+      );
+      assert.notEqual(symlinkDenial.exitCode, 0);
+      assert.equal(
+        symlinkDenial.stdout.includes(gitEnvironment.expected.outside),
+        false,
+      );
+    } finally {
+      await disconnect(configured);
+    }
+    const reconnectedSettings = await connect(
+      settingsLaunchFile,
+      () => {},
+      gitEnvironment.home,
+    );
+    try {
+      const readback = await startShell(reconnectedSettings.client, {
+        operationId: "packaged-ordinary-git-settings-reconnect",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: "git config --get user.name",
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(readback.isError, undefined);
+      const result = await complete(
+        reconnectedSettings.client,
+        readback.structuredContent.value.handle,
+      );
+      assert.equal(result.exitCode, 0, result.stderr);
+      assert.equal(result.stdout, `${gitEnvironment.expected.user}\n`);
+    } finally {
+      await disconnect(reconnectedSettings);
+    }
+    const noGitLaunch = {
+      ...settingsLaunch,
+      approval: {
+        ...settingsLaunch.approval,
+        computerId: "computer-git-settings-denied-e2e",
+        workspaces: settingsLaunch.approval.workspaces.map((workspace) => ({
+          ...workspace,
+          gitHistoryApproved: false,
+        })),
+      },
+      admission: {
+        ...settingsLaunch.admission,
+        computerId: "computer-git-settings-denied-e2e",
+      },
+    };
+    const noGitRoot = path.join(root, "git-settings-denied-launch");
+    await fs.mkdir(noGitRoot, { mode: 0o700 });
+    const noGitFile = path.join(noGitRoot, "computer-launch.json");
+    await fs.writeFile(noGitFile, `${canonical(noGitLaunch)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    const noGit = await connect(noGitFile, () => {}, gitEnvironment.home);
+    try {
+      const deniedSettings = await startShell(noGit.client, {
+        operationId: "packaged-git-settings-without-full-git-denied",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: "git config --get user.name",
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(deniedSettings.isError, undefined);
+      const deniedResult = await complete(
+        noGit.client,
+        deniedSettings.structuredContent.value.handle,
+      );
+      assert.notEqual(deniedResult.exitCode, 0);
+      assert.equal(
+        deniedResult.stdout.includes(gitEnvironment.expected.user),
+        false,
+      );
+    } finally {
+      await disconnect(noGit);
+    }
+    const userConfig = path.join(gitEnvironment.home, ".gitconfig");
+    const safeTarget = path.join(gitEnvironment.home, "owned-git-settings");
+    await fs.writeFile(safeTarget, "SAFE_USER_GIT_SETTINGS\n", { mode: 0o600 });
+    await fs.rm(userConfig);
+    await fs.symlink("owned-git-settings", userConfig);
+    const symlinkLaunch = {
+      ...settingsLaunch,
+      approval: {
+        ...settingsLaunch.approval,
+        computerId: "computer-git-symlink-e2e",
+      },
+      admission: {
+        ...settingsLaunch.admission,
+        computerId: "computer-git-symlink-e2e",
+      },
+    };
+    const symlinkRoot = path.join(root, "git-symlink-launch");
+    await fs.mkdir(symlinkRoot, { mode: 0o700 });
+    const symlinkFile = path.join(symlinkRoot, "computer-launch.json");
+    await fs.writeFile(symlinkFile, `${canonical(symlinkLaunch)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    const linkedConfig = await connect(
+      symlinkFile,
+      () => {},
+      gitEnvironment.home,
+    );
+    try {
+      const safeRead = await startShell(linkedConfig.client, {
+        operationId: "packaged-owner-owned-gitconfig-symlink",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: 'cat "$HOME/.gitconfig"',
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(safeRead.isError, undefined);
+      const safeResult = await complete(
+        linkedConfig.client,
+        safeRead.structuredContent.value.handle,
+      );
+      assert.equal(safeResult.exitCode, 0, safeResult.stderr);
+      assert.equal(safeResult.stdout, "SAFE_USER_GIT_SETTINGS\n");
+    } finally {
+      await disconnect(linkedConfig);
+    }
+    await fs.rm(userConfig);
+    await fs.symlink(gitEnvironment.canary, userConfig);
+    const refusedLink = await connect(
+      symlinkFile,
+      () => {},
+      gitEnvironment.home,
+    );
+    try {
+      const unsafe = await startShell(refusedLink.client, {
+        operationId: "packaged-gitconfig-outside-symlink-refused",
+        workspaceId: "git-settings",
+        relativeCwd: ".",
+        command: "git status --short",
+        timeoutMs: 5_000,
+        write: false,
+      });
+      assert.equal(unsafe.isError, true);
+      assert.equal(
+        unsafe.structuredContent?.error?.code,
+        "SHELL_GIT_SETTINGS_UNSAFE",
+      );
+      unknownShellStarts.delete("packaged-gitconfig-outside-symlink-refused");
+    } finally {
+      await disconnect(refusedLink);
+    }
+  } finally {
+    await gitEnvironment.dispose();
   }
 
   // A linked writer needs both its own Git directory and the common object
