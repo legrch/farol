@@ -216,6 +216,81 @@ describe("workspace shell authority", () => {
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("honors caller cancellation during asynchronous workspace verification", async () => {
+    const { root, workspace, approval, participant } = await fixture();
+    const controller = new AbortController();
+    let checks = 0;
+    const cancelling = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      binding,
+      path.join(root, "verification-abort-private"),
+      () => {
+        if (++checks === 1) controller.abort();
+        return Date.now();
+      },
+    );
+    shells.push(cancelling);
+    expect(
+      await cancelling.start(
+        {
+          operationId: "abort-during-verification",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "printf forbidden > verification-abort.txt",
+          timeoutMs: 5_000,
+          write: true,
+        },
+        controller.signal,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_CALL_ABORTED" },
+    });
+    await expect(
+      fs.stat(path.join(workspace, "verification-abort.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses authority that expires after durable reservation but before dispatch", async () => {
+    const { root, workspace, approval, participant } = await fixture();
+    let checks = 0;
+    const expiring = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      binding,
+      path.join(root, "dispatch-expiry-private"),
+      () => (++checks < 3 ? Date.now() : Date.now() + 61_000),
+    );
+    shells.push(expiring);
+    const input = {
+      operationId: "expire-before-dispatch",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf forbidden > dispatch-expired.txt",
+      timeoutMs: 5_000,
+      write: true,
+    };
+    expect(await expiring.start(input)).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_EXPIRED" },
+    });
+    const resumed = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      binding,
+      path.join(root, "dispatch-expiry-private"),
+    );
+    shells.push(resumed);
+    expect(await resumed.start(input)).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_OUTCOME_UNKNOWN" },
+    });
+    await expect(
+      fs.stat(path.join(workspace, "dispatch-expired.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("never dispatches an operation cancelled after its durable reservation", async () => {
     const { root, workspace, approval, participant } = await fixture();
     const controller = new AbortController();
