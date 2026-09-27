@@ -46,7 +46,10 @@ async function connected(route?: CodexTaskRoute) {
 
 describe("Codex task Computer MCP surface", () => {
   it("validates active message bytes before delegate and exposes exact steer receipt", async () => {
-    const messages: string[] = [];
+    const messages: Array<{
+      message: string;
+      reasoningEffort: string | undefined;
+    }> = [];
     const route: CodexTaskRoute = {
       controlCapabilities: { message: true },
       async create() {
@@ -59,7 +62,10 @@ describe("Codex task Computer MCP surface", () => {
         throw new Error("unexpected result");
       },
       async message(input) {
-        messages.push(input.message);
+        messages.push({
+          message: input.message,
+          reasoningEffort: input.reasoningEffort,
+        });
         return {
           status: "steered",
           dispatchId: input.dispatchId,
@@ -69,29 +75,49 @@ describe("Codex task Computer MCP surface", () => {
     };
     const { client, server } = await connected(route);
     const steerKey = randomUUID();
-    const send = (message: string) =>
+    const send = (
+      message: string,
+      reasoningEffort?: string,
+      messageKey = steerKey,
+    ) =>
       client.callTool({
         name: "codex_task_message",
         arguments: {
-          key: steerKey,
+          key: messageKey,
           dispatchId: key,
           workspaceId: "writer",
           projectId: "saved-project",
           message,
           model: "gpt-6-luna",
-          reasoningEffort: "medium",
+          reasoningEffort,
         },
       });
     try {
       for (const message of ["", "bad\0message", "😀".repeat(2_049)])
         expect((await send(message)).isError).toBe(true);
       expect(messages).toEqual([]);
-      const accepted = await send("  One steer\r\n");
+      const accepted = await send("  One steer\r\n", "medium");
       expect(accepted.structuredContent).toEqual({
         status: "steered",
         dispatchId: key,
       });
-      expect(messages).toEqual(["  One steer\r\n"]);
+      expect(messages).toEqual([
+        { message: "  One steer\r\n", reasoningEffort: "medium" },
+      ]);
+      expect((await send("Invalid effort", "")).isError).toBe(true);
+      const noEffort = await send(
+        "No effort override",
+        undefined,
+        randomUUID(),
+      );
+      expect(noEffort.structuredContent).toEqual({
+        status: "steered",
+        dispatchId: key,
+      });
+      expect(messages).toEqual([
+        { message: "  One steer\r\n", reasoningEffort: "medium" },
+        { message: "No effort override", reasoningEffort: undefined },
+      ]);
     } finally {
       await client.close();
       await server.close();

@@ -64,7 +64,7 @@ const CodexTaskMessageInputSchema = z.strictObject({
   projectId: IdentifierSchema,
   message: CodexTaskTextSchema,
   model: z.string().min(1).max(120),
-  reasoningEffort: z.string().min(1).max(40),
+  reasoningEffort: z.string().min(1).max(40).optional(),
 });
 
 function relativePath(value: string, root: boolean): boolean {

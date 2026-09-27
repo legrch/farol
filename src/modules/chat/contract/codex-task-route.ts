@@ -10,7 +10,7 @@ export interface CodexTaskRoute {
       projectId: string;
       message: string;
       model: string;
-      reasoningEffort: string;
+      reasoningEffort?: string | undefined;
     }>,
   ): Promise<
     | Readonly<{ status: "steered"; dispatchId: string; turnId: string }>
