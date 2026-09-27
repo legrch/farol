@@ -2196,7 +2196,12 @@ async function proveSecondLaunchRejectsFailedStartup() {
     env: launchEnvironment,
     timeout: 15_000,
   });
-  const instance = { application, isolatedHome, userData };
+  const instance = {
+    application,
+    ownedProcessGroup: captureOwnedProcessGroup(application.process().pid),
+    isolatedHome,
+    userData,
+  };
   try {
     const repeated = await runBoundedProcess(executable, launchArgs, {
       cwd: root,
@@ -3156,7 +3161,12 @@ async function proveStartupRuntimeDeath(stage) {
     },
     timeout: 15_000,
   });
-  const instance = { application, isolatedHome, userData };
+  const instance = {
+    application,
+    ownedProcessGroup: captureOwnedProcessGroup(application.process().pid),
+    isolatedHome,
+    userData,
+  };
   try {
     const killed = await instance.application.evaluate(
       async ({ app, BrowserWindow }, targetStage) => {
