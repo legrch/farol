@@ -2710,8 +2710,8 @@ async function stopProfileBoundHelpers(instance, label) {
   return helpers.length;
 }
 
-async function stopOwnedTestGroup(instance, label) {
-  const pid = instance.application.process().pid;
+async function stopOwnedTestGroup(instance, label, knownPid = null) {
+  const pid = knownPid ?? instance.application.process().pid;
   instance.ownedProcessGroup ??= captureOwnedProcessGroup(pid);
   const groupId = instance.ownedProcessGroup;
   if (groupId !== pid || !Number.isSafeInteger(groupId) || groupId <= 1) {
@@ -2765,7 +2765,7 @@ async function stopOwnedTestGroup(instance, label) {
   }
 }
 
-async function requestProductQuit(instance) {
+async function requestProductQuit(instance, expectedUnconfirmed = null) {
   const owned = instance.application.process();
   if (owned.exitCode !== null || owned.signalCode !== null) {
     throw new Error("E2E_PRODUCT_EXITED_BEFORE_QUIT_REQUEST");
@@ -2810,10 +2810,24 @@ async function requestProductQuit(instance) {
     typeof receipt.at !== "string" ||
     !Number.isFinite(Date.parse(receipt.at)) ||
     Date.parse(receipt.at) < instance.quitRequestAt ||
-    receipt.drained !== true ||
-    !Array.isArray(receipt.unconfirmed) ||
-    receipt.unconfirmed.length !== 0
+    !Array.isArray(receipt.unconfirmed)
   ) {
+    throw new Error("E2E_PRODUCT_QUIT_DRAIN_UNVERIFIED");
+  }
+  if (expectedUnconfirmed !== null) {
+    assert.equal(receipt.drained, false, "E2E_EXPECTED_UNDRAINED_QUIT");
+    assert.deepEqual(
+      receipt.unconfirmed,
+      expectedUnconfirmed,
+      "E2E_UNCONFIRMED_CHILD_MISMATCH",
+    );
+    const marker = JSON.parse(
+      await fs.readFile(path.join(stateRoot, "running.json"), "utf8"),
+    );
+    assert.equal(marker.pid, owned.pid, "E2E_UNDRAINED_MARKER_NOT_CURRENT");
+    return;
+  }
+  if (receipt.drained !== true || receipt.unconfirmed.length !== 0) {
     throw new Error("E2E_PRODUCT_QUIT_DRAIN_UNVERIFIED");
   }
   const marker = await fs.lstat(path.join(stateRoot, "running.json")).then(
@@ -2826,6 +2840,7 @@ async function requestProductQuit(instance) {
 
 async function close(instance, options = {}) {
   const removeHome = options.removeHome ?? true;
+  const expectedUnconfirmed = options.expectedUnconfirmed ?? null;
   const label = `close[${instance.windowMode ?? "unknown"}]`;
   let provedQuit = true;
   let inspected;
@@ -2893,13 +2908,14 @@ async function close(instance, options = {}) {
         CLOSE_PHASE_BUDGET_MS,
         () =>
           ifApplicationLive(instance, "application-close", () =>
-            requestProductQuit(instance),
+            requestProductQuit(instance, expectedUnconfirmed),
           ),
       );
       if (closed === null) {
         provedQuit = false;
         closeReturnedAfterEarlyExit = true;
       }
+      if (expectedUnconfirmed !== null) provedQuit = false;
     } catch (error) {
       evidenceAttempt.recordFailure(
         "close",
@@ -2944,7 +2960,18 @@ async function close(instance, options = {}) {
             ),
         }),
       );
-      await stopOwnedTestGroup(instance, `${label}.abort-stalled-close`);
+      if (mainState === "gone" && groupState === "gone") {
+        phases.note(
+          `${label}.abort-stalled-close`,
+          "owned-processes-already-gone",
+        );
+      } else {
+        await stopOwnedTestGroup(
+          instance,
+          `${label}.abort-stalled-close`,
+          mainPid,
+        );
+      }
       throw error;
     }
   }
@@ -9727,7 +9754,7 @@ fenceUnheldSegment: try {
 
   cases.push("connector-refuses-unheld-summary-fence");
 } finally {
-  await close(heldFalseFence);
+  await close(heldFalseFence, { expectedUnconfirmed: ["connector"] });
 }
 
 const reconciledFence = await launch([], "hidden", "ordinary");
