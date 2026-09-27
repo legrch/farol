@@ -168,6 +168,89 @@ async function complete(shell: SandboxedWorkspaceShell, handle: string) {
 }
 
 describe("workspace shell authority", () => {
+  it("rejects a cancelled call before reserving or starting an operation", async () => {
+    const { shell, workspace } = await fixture();
+    const controller = new AbortController();
+    controller.abort();
+    const input = {
+      operationId: "aborted-before-intent",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf forbidden > cancelled.txt",
+      timeoutMs: 5_000,
+      write: true,
+    };
+    expect(await shell.start(input, controller.signal)).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_CALL_ABORTED" },
+    });
+    await expect(
+      fs.stat(path.join(workspace, "cancelled.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rechecks authority after asynchronous workspace verification", async () => {
+    const { root, workspace, approval, participant } = await fixture();
+    let checks = 0;
+    const expiring = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      binding,
+      path.join(root, "expiring-private"),
+      () => (++checks === 1 ? Date.now() : Date.now() + 61_000),
+    );
+    shells.push(expiring);
+    expect(
+      await expiring.start({
+        operationId: "expiry-during-verification",
+        workspaceId: "fixture",
+        relativeCwd: ".",
+        command: "printf forbidden > expired.txt",
+        timeoutMs: 5_000,
+        write: true,
+      }),
+    ).toMatchObject({ ok: false });
+    expect(checks).toBeGreaterThanOrEqual(2);
+    await expect(
+      fs.stat(path.join(workspace, "expired.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("never dispatches an operation cancelled after its durable reservation", async () => {
+    const { root, workspace, approval, participant } = await fixture();
+    const controller = new AbortController();
+    let checks = 0;
+    const cancelling = new SandboxedWorkspaceShell(
+      approval,
+      participant,
+      binding,
+      path.join(root, "aborting-private"),
+      () => {
+        if (++checks === 3) controller.abort();
+        return Date.now();
+      },
+    );
+    shells.push(cancelling);
+    const input = {
+      operationId: "abort-after-intent",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf forbidden > late.txt",
+      timeoutMs: 5_000,
+      write: true,
+    };
+    expect(await cancelling.start(input, controller.signal)).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_OUTCOME_UNKNOWN" },
+    });
+    expect(await cancelling.start(input)).toMatchObject({
+      ok: false,
+      error: { code: "SHELL_OUTCOME_UNKNOWN" },
+    });
+    await expect(
+      fs.stat(path.join(workspace, "late.txt")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it("refuses commands when command authority is off", async () => {
     const { shell } = await fixture("none");
     const result = await shell.start({
@@ -215,6 +298,42 @@ describe("workspace shell authority", () => {
 describe.skipIf(process.platform !== "darwin")(
   "native sandboxed workspace shell",
   () => {
+    it("never spawns a command after the absolute authority deadline", async () => {
+      const { workspace } = await fixture();
+      const watchdog = spawn(process.execPath, ["-e", SHELL_WATCHDOG_SOURCE], {
+        detached: true,
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      });
+      const events: string[] = [];
+      watchdog.on("message", (message: unknown) => {
+        events.push((message as { type: string }).type);
+      });
+      try {
+        const exited = new Promise<void>((resolve) =>
+          watchdog.once("exit", () => resolve()),
+        );
+        watchdog.send({
+          type: "start",
+          executable: "/bin/zsh",
+          args: ["-c", "printf forbidden > missed-deadline.txt"],
+          cwd: workspace,
+          environment: { PATH: "/usr/bin:/bin" },
+          authorityDeadlineAt: Date.now() - 1,
+          commandDeadlineAt: Date.now() + 30_000,
+          stdin: "",
+        });
+        await exited;
+        expect(events).toContain("deadline");
+        expect(events).toContain("close");
+        expect(events).not.toContain("ready");
+        await expect(
+          fs.stat(path.join(workspace, "missed-deadline.txt")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        if (watchdog.connected) watchdog.send({ type: "stop" });
+      }
+    });
+
     it("terminates its owned process group when the MCP control channel disappears", async () => {
       const watchdog = spawn(process.execPath, ["-e", SHELL_WATCHDOG_SOURCE], {
         detached: true,
@@ -234,7 +353,8 @@ describe.skipIf(process.platform !== "darwin")(
           args: ["-c", "sleep 20"],
           cwd: os.tmpdir(),
           environment: { PATH: "/usr/bin:/bin" },
-          timeoutMs: 30_000,
+          authorityDeadlineAt: Date.now() + 60_000,
+          commandDeadlineAt: Date.now() + 30_000,
           stdin: "",
         });
         const ownedPid = await ready;
@@ -617,6 +737,28 @@ describe.skipIf(process.platform !== "darwin")(
       expect(result.exitSignal).toBe("SIGTERM");
       expect(result.groupCleanup).toBe("confirmed");
       expect(result.detachedCleanup).toBe("unverified");
+    });
+
+    it("stops its running command when the initiating call is aborted", async () => {
+      const { shell } = await fixture();
+      const controller = new AbortController();
+      const started = await shell.start(
+        {
+          operationId: "abort-running",
+          workspaceId: "fixture",
+          relativeCwd: ".",
+          command: "sleep 20",
+          timeoutMs: 30_000,
+          write: false,
+        },
+        controller.signal,
+      );
+      if (!started.ok) throw new Error(started.error.code);
+      controller.abort();
+      const outcome = await complete(shell, started.value.handle);
+      expect(outcome.cancelRequested).toBe(true);
+      expect(outcome.groupCleanup).toBe("confirmed");
+      expect(outcome.exitCode).toBeNull();
     });
 
     it("does not report cleanup while a detached descendant still runs", async () => {
@@ -1160,6 +1302,104 @@ describe.skipIf(process.platform !== "darwin")(
         expect(read.structuredContent).toMatchObject({
           ok: true,
           value: { state: "exited", exitCode: 0, stdout: "mcp-route" },
+        });
+      } finally {
+        await Promise.all([client.close(), server.close()]);
+      }
+    });
+
+    it("keeps owned shell read and cancel available when new execution is fenced", async () => {
+      const { shell } = await fixture();
+      let phase: "open" | "fenced" | "unreadable" = "open";
+      const server = createReadonlyComputerMcpServer(
+        {
+          async execute(): Promise<never> {
+            throw new Error("unused");
+          },
+        },
+        {
+          ...binding,
+          participantId: "main-test",
+          turnId: "turn-test",
+          generation: 1,
+        },
+        undefined,
+        undefined,
+        undefined,
+        {
+          admits: async () => {
+            if (phase === "unreadable") throw new Error("unreadable fence");
+            return phase === "fenced"
+              ? {
+                  admitted: false as const,
+                  code: "COMPUTER_SUMMARY_PHASE_ACTIVE" as const,
+                }
+              : { admitted: true as const };
+          },
+        },
+        undefined,
+        undefined,
+        shell,
+      );
+      const client = new Client({
+        name: "shell-fence-fixture",
+        version: "1.0.0",
+      });
+      const [clientTransport, serverTransport] =
+        InMemoryTransport.createLinkedPair();
+      await Promise.all([
+        client.connect(clientTransport),
+        server.connect(serverTransport),
+      ]);
+      try {
+        const started = await client.callTool({
+          name: "computer_shell_start",
+          arguments: {
+            operationId: "fence-running",
+            workspaceId: "fixture",
+            relativeCwd: ".",
+            command: "sleep 20",
+            timeoutMs: 30_000,
+            write: false,
+          },
+        });
+        const handle = (
+          started.structuredContent as { value: { handle: string } }
+        ).value.handle;
+        phase = "fenced";
+        const denied = await client.callTool({
+          name: "computer_shell_start",
+          arguments: {
+            operationId: "fence-denied",
+            workspaceId: "fixture",
+            relativeCwd: ".",
+            command: "printf forbidden",
+            timeoutMs: 5_000,
+            write: false,
+          },
+        });
+        expect(denied.structuredContent).toMatchObject({
+          ok: false,
+          error: { code: "COMPUTER_SUMMARY_PHASE_ACTIVE" },
+        });
+        const cancelled = await client.callTool({
+          name: "computer_shell_cancel",
+          arguments: { handle },
+        });
+        expect(cancelled.structuredContent).toMatchObject({ ok: true });
+        await complete(shell, handle);
+        phase = "unreadable";
+        const read = await client.callTool({
+          name: "computer_shell_read",
+          arguments: { handle, stdoutOffset: 0, stderrOffset: 0 },
+        });
+        expect(read.structuredContent).toMatchObject({
+          ok: true,
+          value: {
+            state: "exited",
+            cancelRequested: true,
+            groupCleanup: "confirmed",
+          },
         });
       } finally {
         await Promise.all([client.close(), server.close()]);

@@ -26,6 +26,14 @@ function stop(reason) {
   if (stopped) return;
   stopped = true;
   stopReason = reason;
+  if (!command) {
+    if (process.connected) {
+      process.send({ type: "close", code: null, signal: null, reason }, () => process.exit(0));
+    } else {
+      process.exit(0);
+    }
+    return;
+  }
   signalGroup("SIGTERM");
   escalation = setTimeout(() => signalGroup("SIGKILL"), 1000);
 }
@@ -44,7 +52,23 @@ process.on("SIGTERM", () => stop("signal"));
 process.on("SIGINT", () => stop("signal"));
 process.on("message", (message) => {
   if (message?.type === "stop") { stop("cancel"); return; }
-  if (message?.type !== "start" || command) return;
+  if (message?.type !== "start" || command || stopped) return;
+  const authorityDeadlineAt = message.authorityDeadlineAt;
+  const commandDeadlineAt = message.commandDeadlineAt;
+  if (!Number.isSafeInteger(authorityDeadlineAt) ||
+      !Number.isSafeInteger(commandDeadlineAt)) {
+    report({ type: "error" });
+    stop("invalid-deadline");
+    return;
+  }
+  const firstDeadline = Math.min(authorityDeadlineAt, commandDeadlineAt);
+  const deadlineReason = authorityDeadlineAt <= commandDeadlineAt
+    ? "authority" : "timeout";
+  if (Date.now() >= firstDeadline) {
+    report({ type: "deadline", reason: deadlineReason });
+    stop("deadline-before-spawn");
+    return;
+  }
   try {
     command = spawn(message.executable, message.args, {
       cwd: message.cwd,
@@ -73,9 +97,9 @@ process.on("message", (message) => {
     }
   });
   deadline = setTimeout(() => {
-    report({ type: "deadline" });
+    report({ type: "deadline", reason: deadlineReason });
     stop("deadline");
-  }, message.timeoutMs);
+  }, Math.max(1, firstDeadline - Date.now()));
   command.stdin.on("error", () => {});
   command.stdin.end(message.stdin);
   report({ type: "ready", pid: command.pid });

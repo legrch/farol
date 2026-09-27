@@ -545,6 +545,23 @@ describe("Farol Next product configuration", () => {
     expect(service.snapshot()).toMatchObject({
       settings: { computer: { workspaces: [{ gitHistoryApproved: true }] } },
     });
+    const elevated = await service.updateWorkspaceAccess(workspaceId, "write");
+    expect(elevated).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          computer: {
+            workspaces: [{ access: "write", gitHistoryApproved: false }],
+          },
+        },
+      },
+    });
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity: { device: "1", inode: "2" },
+    });
+    expect(
+      await service.updateWorkspaceGitHistory(workspaceId, true),
+    ).toMatchObject({ ok: true });
     const excluded = await service.updateWorkspaceExclusions(workspaceId, [
       "/Users/example/project/private",
     ]);

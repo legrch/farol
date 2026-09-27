@@ -968,12 +968,15 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellStartInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      guarded(async (input) =>
+      guarded(async (input, context) =>
         shellResult(
-          await shell.start({
-            ...input,
-            ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
-          }),
+          await shell.start(
+            {
+              ...input,
+              ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+            },
+            context.mcpReq.signal,
+          ),
         ),
       ),
     );
@@ -986,7 +989,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
-      guarded(async (input) => shellResult(shell.read(input))),
+      async (input) => shellResult(shell.read(input)),
     );
     server.registerTool(
       "computer_shell_cancel",
@@ -997,7 +1000,7 @@ export function createReadonlyComputerMcpServer(
         inputSchema: ShellCancelInputSchema,
         annotations: MUTATION_ANNOTATIONS,
       },
-      guarded(async ({ handle }) => shellResult(shell.cancel(handle))),
+      async ({ handle }) => shellResult(shell.cancel(handle)),
     );
   }
 

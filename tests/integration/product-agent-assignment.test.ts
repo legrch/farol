@@ -36,7 +36,7 @@ function readiness() {
 
 function settings(
   generation = 7,
-  commands: "none" | "verification" = "none",
+  commands: "none" | "verification" | "workspace" = "none",
   access: "read" | "write" = "read",
 ) {
   return ProductSettingsSchema.parse({
@@ -336,6 +336,28 @@ describe("product Agent assignment composition", () => {
     await expect(
       runProductAgentAssignment(
         settings(7, "verification"),
+        task,
+        input(),
+        fixture.value,
+      ),
+    ).resolves.toMatchObject({ ok: true });
+    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
+    expect(request.authority).toMatchObject({
+      capabilities: [
+        "workspace.list",
+        "workspace.read",
+        "workspace.search",
+        "verification.run",
+      ],
+      commands: "verification",
+    });
+  });
+
+  it("projects workspace shell authority to fixed verification for the product Agent", async () => {
+    const fixture = dependencies();
+    await expect(
+      runProductAgentAssignment(
+        settings(7, "workspace"),
         task,
         input(),
         fixture.value,

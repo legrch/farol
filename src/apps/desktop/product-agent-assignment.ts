@@ -90,12 +90,12 @@ export async function runProductAgentAssignment(
         "workspace.list",
         "workspace.read",
         "workspace.search",
-        ...(settings.computer.commands === "verification"
+        ...(settings.computer.commands !== "none"
           ? (["verification.run"] as const)
           : []),
       ];
   const commands =
-    !exactFilesOnly && settings.computer.commands === "verification"
+    !exactFilesOnly && settings.computer.commands !== "none"
       ? ("verification" as const)
       : ("none" as const);
   const approval = productAgentApproval(settings.computer, {

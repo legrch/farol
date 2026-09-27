@@ -426,7 +426,8 @@ export class SandboxedWorkspaceShell {
     return path.join(this.privateRoot, "shell-v2", identity);
   }
 
-  async start(input: ShellStart): Promise<ShellResponse> {
+  async start(input: ShellStart, signal?: AbortSignal): Promise<ShellResponse> {
+    if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
     if (
       !/^[A-Za-z0-9._:-]{1,160}$/u.test(input.operationId) ||
       !exactRelative(input.relativeCwd) ||
@@ -468,6 +469,10 @@ export class SandboxedWorkspaceShell {
     }
     this.pendingOperations.add(input.operationId);
     const verified = await this.verifiedWorkspace(input);
+    if (signal?.aborted) {
+      this.pendingOperations.delete(input.operationId);
+      return refusal("SHELL_CALL_ABORTED");
+    }
     if ("error" in verified) {
       this.pendingOperations.delete(input.operationId);
       return refusal(verified.error);
@@ -478,6 +483,15 @@ export class SandboxedWorkspaceShell {
     ) {
       this.pendingOperations.delete(input.operationId);
       return refusal("SHELL_NETWORK_POLICY_UNSUPPORTED");
+    }
+    const renewed = this.authorize(
+      input.workspaceId,
+      verified.cwd,
+      input.write,
+    );
+    if (renewed) {
+      this.pendingOperations.delete(input.operationId);
+      return refusal(renewed);
     }
     const taskRoot = this.computerRoot();
     const intentPath = path.join(
@@ -544,6 +558,41 @@ export class SandboxedWorkspaceShell {
           : "SHELL_PRIVATE_STORE_UNAVAILABLE",
       );
     }
+    // The fsynced reservation already exists. Never reissue it after a lost
+    // acknowledgement, even when no command was dispatched.
+    if (signal?.aborted) {
+      this.pendingOperations.delete(input.operationId);
+      await fs
+        .rm(scratch, { recursive: true, force: true })
+        .catch(() => undefined);
+      return refusal("SHELL_OUTCOME_UNKNOWN");
+    }
+    const dispatchAuthority = this.authorize(
+      input.workspaceId,
+      verified.cwd,
+      input.write,
+    );
+    if (dispatchAuthority) {
+      this.pendingOperations.delete(input.operationId);
+      await fs
+        .rm(scratch, { recursive: true, force: true })
+        .catch(() => undefined);
+      return refusal(dispatchAuthority);
+    }
+    const authorityRemaining =
+      Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) -
+      this.now();
+    if (authorityRemaining <= 0) {
+      this.pendingOperations.delete(input.operationId);
+      return refusal("SHELL_AUTHORITY_EXPIRED");
+    }
+    if (signal?.aborted) {
+      this.pendingOperations.delete(input.operationId);
+      await fs
+        .rm(scratch, { recursive: true, force: true })
+        .catch(() => undefined);
+      return refusal("SHELL_OUTCOME_UNKNOWN");
+    }
     const sandbox = profile(
       verified.effective,
       [
@@ -597,6 +646,11 @@ export class SandboxedWorkspaceShell {
     this.byOperation.set(input.operationId, record);
     this.byHandle.set(handle, record);
     this.pendingOperations.delete(input.operationId);
+    const onAbort = () => {
+      record.cancelRequested = true;
+      stopWatchdog(child);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
     const collect = (stream: "stdout" | "stderr", chunk: Buffer) => {
       const total = record.stdoutBytes + record.stderrBytes;
       if (total + chunk.length > MAX_OUTPUT_BYTES) {
@@ -629,10 +683,7 @@ export class SandboxedWorkspaceShell {
       ) {
         record.productPid = event.pid!;
       } else if (event.type === "deadline") {
-        record.authorityExpired =
-          Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) -
-            this.now() <=
-          0;
+        record.authorityExpired = event.reason === "authority";
         record.timedOut = !record.authorityExpired;
       } else if (event.type === "error") {
         record.errorCode = "SHELL_SPAWN_FAILED";
@@ -654,12 +705,14 @@ export class SandboxedWorkspaceShell {
       }
     });
     child.once("error", () => {
+      signal?.removeEventListener("abort", onAbort);
       record.state = "exited";
       record.groupCleanup = "unverified";
       record.exitSignal = null;
       record.errorCode = "SHELL_SPAWN_FAILED";
     });
     child.once("exit", () => {
+      signal?.removeEventListener("abort", onAbort);
       if (!record.rootExitReported && record.state === "running") {
         try {
           process.kill(-child.pid!, "SIGKILL");
@@ -700,9 +753,9 @@ export class SandboxedWorkspaceShell {
         }
       })();
     });
-    const authorityRemaining =
-      Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) -
-      this.now();
+    // The watchdog checks absolute host deadlines before spawning the command.
+    const authorityDeadlineAt = Date.now() + authorityRemaining;
+    const commandDeadlineAt = Date.now() + input.timeoutMs;
     child.send({
       type: "start",
       executable: SANDBOX_EXEC,
@@ -716,7 +769,8 @@ export class SandboxedWorkspaceShell {
       ],
       cwd: verified.cwd,
       environment,
-      timeoutMs: Math.max(1, Math.min(input.timeoutMs, authorityRemaining)),
+      authorityDeadlineAt,
+      commandDeadlineAt,
       stdin: input.stdin ?? "",
     });
     return {

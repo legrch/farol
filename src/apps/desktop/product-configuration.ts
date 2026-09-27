@@ -1202,7 +1202,7 @@ export class ProductConfigurationService {
         generation: settings.computer.generation + 1,
         workspaces: settings.computer.workspaces.map((workspace) =>
           workspace.workspaceId === workspaceId
-            ? { ...workspace, access }
+            ? { ...workspace, access, gitHistoryApproved: false }
             : workspace,
         ),
       },
