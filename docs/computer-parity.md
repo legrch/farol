@@ -34,9 +34,11 @@ read-only or writable; the shell call declares `write` and the authority
 service checks both that mode and mutation ownership. Each call exposes only
 the selected task-granted subtree. Without full Git approval the process
 receives a private empty home. With full Git approval for the exact selected
-root it receives the user's HOME path and read access only to the owner-owned
+root its shell receives the OS account HOME path from the sealed launch contract
+and read access only to the owner-owned
 `~/.gitconfig` (or its exact owner-owned target inside HOME) and
-`~/.config/git`; write access to HOME is not granted. All commands receive a
+`~/.config/git`; the connector process keeps its separate private HOME, and
+write access to the account HOME is not granted. All commands receive a
 private temp directory, fixed local PATH, no inherited credentials, and a
 Seatbelt profile with `deny network*`. System Git configuration and
 interactive Git prompts stay disabled. Git includes and hooks outside the

@@ -33,6 +33,10 @@ full Git approval the user config remains unavailable. A symlink from the
 allowed config directory to the outside canary stays denied; an owner-owned
 `~/.gitconfig` symlink inside HOME is readable, while one pointing outside
 HOME makes the shell start refuse before dispatch.
+The test host's synthetic HOME is sealed in its launch contract. The desktop
+uses the OS account home in that same field while retaining the connector's
+private process HOME in Dev; a verified shell launch with an unbound home is
+refused. Neither route copies user config or credentials into the fixture.
 
 Issue the ordinary `git config`, `git add`, `git restore --staged`, `git commit`
 and readback commands through `computer_shell_start/read`. The fixture's native

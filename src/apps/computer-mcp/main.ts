@@ -151,6 +151,8 @@ async function main(): Promise<void> {
           launch.participants.at(-1)!,
           launch.binding,
           path.dirname(launchFile),
+          undefined,
+          launch.gitSettingsHome ?? undefined,
         )
       : undefined;
   const handle = serveStdio(

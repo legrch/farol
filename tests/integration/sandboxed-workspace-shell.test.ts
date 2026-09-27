@@ -59,6 +59,8 @@ async function fixture(
     await fs.mkdtemp(path.join(os.tmpdir(), "farol-shell-")),
   );
   roots.push(root);
+  const accountHome = path.join(root, "account-home");
+  await fs.mkdir(accountHome, { mode: 0o700 });
   const workspace = path.join(root, folderName);
   let gitMetadata:
     { gitDirectory: string; commonDirectory: string } | undefined;
@@ -165,6 +167,8 @@ async function fixture(
     participant,
     binding,
     path.join(root, "private"),
+    () => Date.now(),
+    accountHome,
   );
   shells.push(shell);
   return { root, workspace, shell, approval, participant };

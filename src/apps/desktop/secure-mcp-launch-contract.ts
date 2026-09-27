@@ -89,6 +89,7 @@ export function createSecureMcpLaunchContract(
     now: number;
     runtimeId: string;
     challengeSha256: string;
+    gitSettingsHome?: string;
     devMcpProof?: DevMcpProofPreparation;
     callerRelay?: CodexCallerRelayEndpoint;
     codexTasks?: CodexTaskRouteLaunch;
@@ -147,6 +148,9 @@ export function createSecureMcpLaunchContract(
       workspace.rootIdentity.device &&
     workspace.accessCheck.rootIdentity.inode === workspace.rootIdentity.inode;
   const shellEnabled = workspaces.some(freshShellWorkspace);
+  if (shellEnabled && !input.gitSettingsHome) {
+    launchError("SECURE_MCP_OWNER_HOME_REQUIRED");
+  }
   const effectiveCommands =
     settings.computer.commands === "workspace" && !shellEnabled
       ? "verification"
@@ -178,6 +182,7 @@ export function createSecureMcpLaunchContract(
 
   return ReadonlyComputerLaunchContractSchema.parse({
     schema: 2,
+    ...(shellEnabled ? { gitSettingsHome: input.gitSettingsHome } : {}),
     approval: {
       ownerId: "owner-desktop",
       computerId: settings.computer.computerId,

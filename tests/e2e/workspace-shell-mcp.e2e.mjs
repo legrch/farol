@@ -40,6 +40,7 @@ const connectorExits = new Map();
 const ownedShellPids = new Set();
 const unverifiedShellHandles = new Set();
 const unknownShellStarts = new Set();
+const externalFixtures = [];
 let allCasesPassed = false;
 
 class TrackedStdioClientTransport extends StdioClientTransport {
@@ -111,16 +112,12 @@ async function connect(launchFile, onSpawn = () => {}, fixtureHome = null) {
       args: [entry, "--launch-contract", launchFile],
       cwd: process.cwd(),
       stderr: "pipe",
-      ...(packaged || fixtureHome
-        ? {
-            env: {
-              ...(packaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-              HOME: fixtureHome ?? process.env.HOME ?? os.homedir(),
-              PATH: process.env.PATH ?? "/usr/bin:/bin",
-              TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
-            },
-          }
-        : {}),
+      env: {
+        ...(packaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+        HOME: fixtureHome ?? hostHome,
+        PATH: process.env.PATH ?? "/usr/bin:/bin",
+        TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
+      },
     },
     (pid) => {
       launchedPid = pid;
@@ -218,10 +215,12 @@ async function complete(client, handle) {
 const root = await fs.realpath(
   await fs.mkdtemp(path.join(os.tmpdir(), "farol-shell-mcp-e2e-")),
 );
+const hostHome = path.join(root, "host-home");
 try {
   const launchRoot = path.join(root, "launch");
   const workspaceRoot = path.join(root, "workspace");
   await fs.chmod(root, 0o700);
+  await fs.mkdir(hostHome, { mode: 0o700 });
   await fs.mkdir(launchRoot, { mode: 0o700 });
   await fs.mkdir(workspaceRoot, { mode: 0o700 });
   await fs.writeFile(path.join(workspaceRoot, "input.txt"), "source\n");
@@ -265,6 +264,7 @@ try {
   };
   const launch = {
     schema: 2,
+    gitSettingsHome: hostHome,
     approval,
     admission: {
       authorityId: "authority-e2e",
@@ -608,6 +608,7 @@ try {
   // repository has full Git approval. The shell itself receives no caller-
   // selected environment override; this fixture HOME belongs to the MCP host.
   const gitEnvironment = await createOrdinaryGitEnvironment();
+  externalFixtures.push(gitEnvironment);
   try {
     await fs.symlink(
       gitEnvironment.canary,
@@ -618,6 +619,7 @@ try {
     });
     const settingsLaunch = {
       ...launch,
+      gitSettingsHome: gitEnvironment.home,
       approval: {
         ...approval,
         computerId: "computer-git-settings-e2e",
@@ -982,7 +984,8 @@ try {
       await disconnect(refusedLink);
     }
   } finally {
-    await gitEnvironment.dispose();
+    // The outer owned-PID/handle audit decides whether this separate root is
+    // safe to remove. A failed disconnect must preserve it for inspection.
   }
 
   // A linked writer needs both its own Git directory and the common object
@@ -1138,12 +1141,14 @@ try {
       unverifiedPids,
       unverifiedHandles: [...unverifiedShellHandles],
       unknownStarts: [...unknownShellStarts],
+      externalFixtureRoots: externalFixtures.map((fixture) => fixture.root),
     };
     process.stderr.write(
       `MCP_OWNED_CLEANUP_UNVERIFIED:${JSON.stringify(details)}\n`,
     );
     if (allCasesPassed) throw new Error("MCP_OWNED_CLEANUP_UNVERIFIED");
   } else {
+    for (const fixture of externalFixtures) await fixture.dispose();
     await fs.rm(root, { recursive: true, force: true });
   }
 }

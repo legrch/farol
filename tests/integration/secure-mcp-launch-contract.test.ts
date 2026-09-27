@@ -134,7 +134,24 @@ describe("secure MCP Computer launch contract", () => {
       now: 1_789_516_800_000,
       runtimeId: "runtime-shell",
       challengeSha256: "a".repeat(64),
+      gitSettingsHome: "/Users/example",
     });
+    expect(enabled.gitSettingsHome).toBe("/Users/example");
+    expect(
+      materializeReadonlyComputerLaunch(enabled, 1_789_516_800_000)
+        .gitSettingsHome,
+    ).toBe("/Users/example");
+    const { gitSettingsHome: _home, ...unboundHome } = enabled;
+    expect(() =>
+      materializeReadonlyComputerLaunch(unboundHome, 1_789_516_800_000),
+    ).toThrow("COMPUTER_LAUNCH_OWNER_HOME_UNBOUND");
+    expect(() =>
+      createSecureMcpLaunchContract(verifiedSettings, {
+        now: 1_789_516_800_000,
+        runtimeId: "runtime-shell-unbound-home",
+        challengeSha256: "a".repeat(64),
+      }),
+    ).toThrow("SECURE_MCP_OWNER_HOME_REQUIRED");
     expect(enabled.approval.capabilities).toContain("workspace.shell");
     expect(enabled.admission.commands).toBe("workspace");
     expect(enabled.approval.workspaces).toMatchObject([

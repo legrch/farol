@@ -324,6 +324,7 @@ function validateChain(
 const ReadonlyLaunchContractSchema = z
   .strictObject({
     schema: z.literal(1),
+    gitSettingsHome: AbsolutePathSchema.optional(),
     approval: ReadonlyComputerApprovalSchema,
     admission: ReadonlyTaskAdmissionSchema,
     delegationChain: z.array(ReadonlyParticipantSchema).min(1).max(16),
@@ -338,6 +339,9 @@ const ReadonlyLaunchContractSchema = z
 const MutableLaunchContractSchema = z
   .strictObject({
     schema: z.literal(2),
+    // Desktop records the OS account home in the sealed launch contract.
+    // The connector's own HOME may be a private process-home in Dev.
+    gitSettingsHome: AbsolutePathSchema.optional(),
     approval: MutableComputerApprovalSchema,
     admission: MutableTaskAdmissionSchema,
     delegationChain: z.array(MutableParticipantSchema).min(1).max(16),
@@ -486,12 +490,20 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   devMcpProof: DevMcpProofPreparation | null;
   callerRelay: CodexCallerRelayEndpoint | null;
   codexTasks: z.infer<typeof CodexTaskRouteLaunchSchema> | null;
+  gitSettingsHome: string | null;
 }>;
 
 export function materializeReadonlyComputerLaunch(
   launch: ReadonlyComputerLaunchContract,
   now: number,
 ): MaterializedReadonlyComputerLaunch {
+  if (
+    launch.approval.commands === "workspace" &&
+    launch.approval.workspaces.some((workspace) => workspace.shellVerified) &&
+    !launch.gitSettingsHome
+  ) {
+    throw new Error("COMPUTER_LAUNCH_OWNER_HOME_UNBOUND");
+  }
   const approval: ComputerApproval = launch.approval;
   const admission: TaskAdmission = launch.admission;
   const grant = deriveTaskGrant(approval, admission, now);
@@ -548,5 +560,6 @@ export function materializeReadonlyComputerLaunch(
     devMcpProof: launch.devMcpProof ?? null,
     callerRelay: launch.callerRelay ?? null,
     codexTasks: launch.codexTasks ?? null,
+    gitSettingsHome: launch.gitSettingsHome ?? null,
   };
 }

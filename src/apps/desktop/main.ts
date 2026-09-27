@@ -3612,6 +3612,10 @@ async function startSecureMcpConnector(
         now: Date.now(),
         runtimeId,
         challengeSha256: verificationChallengeSha256,
+        // This is the OS account home, not the connector's isolated Dev HOME.
+        // It is sealed in the private launch contract and used only by the
+        // sandboxed Computer shell's explicit workspace policy.
+        gitSettingsHome: os.userInfo().homedir,
         ...(devMcpProof === undefined ? {} : { devMcpProof }),
         ...(callerRelayRuntime
           ? { callerRelay: callerRelayRuntime.endpoint }
