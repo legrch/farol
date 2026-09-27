@@ -103,7 +103,7 @@ async function waitPidGone(pid) {
   return false;
 }
 
-async function connect(launchFile, onSpawn = () => {}, fixtureHome = null) {
+async function connect(launchFile, onSpawn = () => {}) {
   await prepareMcpLifecycle(launchFile);
   let launchedPid = null;
   const transport = new TrackedStdioClientTransport(
@@ -114,7 +114,7 @@ async function connect(launchFile, onSpawn = () => {}, fixtureHome = null) {
       stderr: "pipe",
       env: {
         ...(packaged ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-        HOME: fixtureHome ?? hostHome,
+        HOME: hostHome,
         PATH: process.env.PATH ?? "/usr/bin:/bin",
         TMPDIR: process.env.TMPDIR ?? os.tmpdir(),
       },
@@ -604,12 +604,13 @@ try {
     await disconnect(approved);
   }
 
-  // Global Git settings are read from a disposable HOME only when this exact
-  // repository has full Git approval. The shell itself receives no caller-
-  // selected environment override; this fixture HOME belongs to the MCP host.
+  // The MCP process always keeps its separate empty hostHome. The sealed
+  // launch contract selects this disposable account HOME for shell Git only
+  // when the exact repository has full Git approval.
   const gitEnvironment = await createOrdinaryGitEnvironment();
   externalFixtures.push(gitEnvironment);
   try {
+    assert.notEqual(hostHome, gitEnvironment.home);
     await fs.symlink(
       gitEnvironment.canary,
       path.join(gitEnvironment.home, ".config", "git", "outside-link"),
@@ -660,11 +661,7 @@ try {
       mode: 0o600,
       flag: "wx",
     });
-    const configured = await connect(
-      settingsLaunchFile,
-      () => {},
-      gitEnvironment.home,
-    );
+    const configured = await connect(settingsLaunchFile);
     try {
       const started = await startShell(configured.client, {
         operationId: "packaged-ordinary-git-settings",
@@ -842,11 +839,7 @@ try {
     } finally {
       await disconnect(configured);
     }
-    const reconnectedSettings = await connect(
-      settingsLaunchFile,
-      () => {},
-      gitEnvironment.home,
-    );
+    const reconnectedSettings = await connect(settingsLaunchFile);
     try {
       const readback = await startShell(reconnectedSettings.client, {
         operationId: "packaged-ordinary-git-settings-reconnect",
@@ -888,7 +881,7 @@ try {
       mode: 0o600,
       flag: "wx",
     });
-    const noGit = await connect(noGitFile, () => {}, gitEnvironment.home);
+    const noGit = await connect(noGitFile);
     try {
       const deniedSettings = await startShell(noGit.client, {
         operationId: "packaged-git-settings-without-full-git-denied",
@@ -934,11 +927,7 @@ try {
       mode: 0o600,
       flag: "wx",
     });
-    const linkedConfig = await connect(
-      symlinkFile,
-      () => {},
-      gitEnvironment.home,
-    );
+    const linkedConfig = await connect(symlinkFile);
     try {
       const safeRead = await startShell(linkedConfig.client, {
         operationId: "packaged-owner-owned-gitconfig-symlink",
@@ -960,11 +949,7 @@ try {
     }
     await fs.rm(userConfig);
     await fs.symlink(gitEnvironment.canary, userConfig);
-    const refusedLink = await connect(
-      symlinkFile,
-      () => {},
-      gitEnvironment.home,
-    );
+    const refusedLink = await connect(symlinkFile);
     try {
       const unsafe = await startShell(refusedLink.client, {
         operationId: "packaged-gitconfig-outside-symlink-refused",
