@@ -315,6 +315,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     if (
       typeof record.requestDigest !== "string" ||
       !/^[a-f0-9]{64}$/u.test(record.requestDigest) ||
+      (record.adopted !== undefined && record.adopted !== true) ||
       (record.model !== undefined &&
         (typeof record.model !== "string" ||
           !/^[A-Za-z0-9_.\/-]{1,120}$/u.test(record.model))) ||
@@ -400,6 +401,7 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     }
     return {
       requestDigest: record.requestDigest,
+      ...(record.adopted ? { adopted: true as const } : {}),
       ...(record.model === undefined ? {} : { model: record.model }),
       ...(record.reasoningEffort === undefined
         ? {}

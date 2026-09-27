@@ -239,14 +239,20 @@ async function fixture(host = new FixtureHost()) {
   let current: HandoffWorkspace | null = workspace;
   const authority: HandoffAuthority = { resolve: async () => current };
   const journalRoot = path.join(root, "journal");
-  const service = () =>
+  const service = (
+    selectedOwnerThreadId?: string,
+    now: () => number = Date.now,
+    expiresAt = Date.now() + 60_000,
+  ) =>
     new PersistentCodexHandoff(
       authority,
       host,
       new PrivateCodexHandoffJournal(journalRoot),
       new Sha256HandoffRequestDigester(),
-      Date.now() + 60_000,
+      expiresAt,
       mutationGate,
+      now,
+      selectedOwnerThreadId,
     );
   return {
     host,
@@ -355,6 +361,198 @@ function byteBudgetFixture() {
 }
 
 describe("persistent Codex handoff core", () => {
+  it("adopts one owner-selected turn as a durable read-only status/result handle", async () => {
+    const { service, host, journalRoot } = await fixture();
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    const selected = {
+      threadId,
+      turnId,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = {
+      data: [{ id: turnId, status: "completed" }],
+      nextCursor: null,
+    };
+    host.itemsResponse = {
+      data: [
+        {
+          turnId,
+          item: {
+            id: "answer",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Owner result",
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+    const bound = service(threadId);
+    expect(await bound.adopt(selected)).toEqual({
+      status: "adopted",
+      dispatchId: turnId,
+    });
+    expect(await service(threadId).adopt(selected)).toEqual({
+      status: "adopted",
+      dispatchId: turnId,
+    });
+    expect(await service(threadId).status(turnId)).toMatchObject({
+      status: "known",
+      dispatchId: turnId,
+      turnId,
+      threadId,
+    });
+    expect(await service(threadId).result(turnId)).toEqual({
+      status: "completed",
+      dispatchId: turnId,
+      turnId,
+      threadId,
+      finalItemId: "answer",
+      text: "Owner result",
+    });
+    expect(
+      await new PrivateCodexHandoffJournal(journalRoot).read(turnId),
+    ).toMatchObject({
+      adopted: true,
+      threadId,
+      turnId,
+    });
+    expect(await service(randomUUID()).status(turnId)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: turnId,
+    });
+    expect(
+      await bound.message({
+        key: randomUUID(),
+        dispatchId: turnId,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        model: request.model,
+        reasoningEffort: request.reasoningEffort,
+        message: "Do not send",
+      }),
+    ).toEqual({ status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" });
+    expect(
+      await bound.continue({
+        key: randomUUID(),
+        dispatchId: turnId,
+        message: "Do not continue",
+      }),
+    ).toEqual({ status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" });
+    expect(host.calls).not.toContain("thread/start");
+    expect(host.calls).not.toContain("turn/start");
+    expect(host.calls).not.toContain("turn/steer");
+  });
+
+  it("refuses unselected or absent native turns before any adoption record", async () => {
+    const { service, host, journalRoot } = await fixture();
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    const selected = {
+      threadId,
+      turnId,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    expect(await service(randomUUID()).adopt(selected)).toEqual({
+      status: "refused",
+      code: "HANDOFF_ADOPT_DENIED",
+    });
+    expect(host.calls).toEqual([]);
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = { data: [], nextCursor: null };
+    expect(await service(threadId).adopt(selected)).toEqual({
+      status: "refused",
+      code: "HANDOFF_ADOPT_TURN_MISSING",
+    });
+    expect(
+      await new PrivateCodexHandoffJournal(journalRoot).read(turnId),
+    ).toBeNull();
+  });
+
+  it("does not record an adopted turn after its grant expires during observation", async () => {
+    const { service, host, journalRoot } = await fixture();
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    let now = 1_000;
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.onTurnsList = () => {
+      now = 2_000;
+      return { data: [{ id: turnId, status: "completed" }], nextCursor: null };
+    };
+    expect(
+      await service(threadId, () => now, 2_000).adopt({
+        threadId,
+        turnId,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+      }),
+    ).toEqual({ status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" });
+    expect(
+      await new PrivateCodexHandoffJournal(journalRoot).read(turnId),
+    ).toBeNull();
+    expect(host.calls).not.toContain("thread/start");
+    expect(host.calls).not.toContain("turn/start");
+  });
+
+  it("does not publish an adopted status after its grant expires during host read", async () => {
+    const { service, host } = await fixture();
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    let now = 1_000;
+    const bound = service(threadId, () => now, 2_000);
+    const selection = {
+      threadId,
+      turnId,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+      },
+    };
+    host.turnsResponse = {
+      data: [{ id: turnId, status: "completed" }],
+      nextCursor: null,
+    };
+    expect(await bound.adopt(selection)).toEqual({
+      status: "adopted",
+      dispatchId: turnId,
+    });
+    host.onTurnsList = () => {
+      now = 2_000;
+      return host.turnsResponse;
+    };
+    expect(await bound.status(turnId)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: turnId,
+    });
+  });
+
   it("observes only the exact selected native thread without starting work", async () => {
     const { service, host, setWorkspace } = await fixture();
     const threadId = randomUUID();

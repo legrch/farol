@@ -132,6 +132,8 @@ async function main(): Promise<void> {
             new Sha256HandoffRequestDigester(),
             taskLaunch.grant.expiresAt,
             fence,
+            Date.now,
+            taskLaunch.grant.observeThreadId,
           ),
           taskLaunch.grant,
         )

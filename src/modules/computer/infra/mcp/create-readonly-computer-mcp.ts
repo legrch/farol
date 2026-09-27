@@ -62,6 +62,9 @@ const CodexTaskObserveInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   projectId: IdentifierSchema,
 });
+const CodexTaskAdoptInputSchema = CodexTaskObserveInputSchema.extend({
+  turnId: DispatchIdSchema,
+});
 const CodexTaskContinueInputSchema = z.strictObject({
   key: DispatchIdSchema,
   dispatchId: DispatchIdSchema,
@@ -206,6 +209,13 @@ const ShellCancelInputSchema = z.strictObject({ handle: z.string().uuid() });
 
 const READONLY_ANNOTATIONS = {
   readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const LOCAL_RECORD_ANNOTATIONS = {
+  readOnlyHint: false,
   destructiveHint: false,
   idempotentHint: true,
   openWorldHint: false,
@@ -720,6 +730,28 @@ export function createReadonlyComputerMcpServer(
           } catch {
             return taskResponse(
               { status: "outcome_unknown", threadId: request.threadId },
+              true,
+            );
+          }
+        }),
+      );
+    if (codexTasks.observeEnabled === true && codexTasks.adopt)
+      server.registerTool(
+        "codex_task_adopt",
+        {
+          title: "Keep a read-only handle to one selected Codex turn",
+          description:
+            "Record the exact verified turn of the owner-selected native task for later status/result reads. This makes no provider mutation and never starts, resumes, forks or controls work. A repeated call for the same thread and turn returns the same handle; an unknown record must not be reinterpreted as another turn.",
+          inputSchema: CodexTaskAdoptInputSchema,
+          annotations: LOCAL_RECORD_ANNOTATIONS,
+        },
+        guarded(async (request) => {
+          try {
+            const result = await codexTasks.adopt!(request);
+            return taskResponse(result, result.status !== "adopted");
+          } catch {
+            return taskResponse(
+              { status: "outcome_unknown", dispatchId: request.turnId },
               true,
             );
           }

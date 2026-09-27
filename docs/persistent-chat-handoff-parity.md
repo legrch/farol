@@ -143,8 +143,15 @@ and canonical project identities, checks the host's thread project/cwd, and
 returns a bounded first page of turn statuses with an explicit `hasMoreTurns`
 flag. The grant expiry is checked again before returning the read result. It
 never calls `thread/start`, `turn/start`, `turn/steer`, resume or fork.
-It does not persist an adoption grant or authorize control of the observed
-thread. A changed project/root or unavailable host refuses or remains unknown.
+With the same selected thread, `codex_task_adopt` can persist a read-only
+handle for one exact turn found on that first bounded page. It verifies the
+project and physical writer again before recording the turn; a missing turn on
+an incomplete page remains unknown. Repeating the same request returns the
+same handle, while a conflicting binding refuses. `codex_task_status` and
+`codex_task_result` use that handle without creating a provider turn. The
+handle cannot be steered or continued, and reads stop when the selected thread
+or grant expires. A changed project/root or unavailable host refuses or remains
+unknown. Durable owner-task control is still separate.
 Fixture PASS is not proof of a native shared
 host task, paid model result or provider delivery. Project creation,
 project-root rebind, title mutation, owner-task control, live control

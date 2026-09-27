@@ -34,6 +34,13 @@ export type HandoffContinue = Readonly<{
   message: string;
 }>;
 
+export type HandoffAdopt = Readonly<{
+  threadId: string;
+  turnId: string;
+  workspaceId: string;
+  projectId: string;
+}>;
+
 export type HandoffMessageResult =
   | Readonly<{ status: "steered"; dispatchId: string; turnId: string }>
   | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
@@ -58,6 +65,7 @@ export type HandoffWorkspace = Readonly<{
 
 export type HandoffRecord = Readonly<{
   requestDigest: string;
+  adopted?: true | undefined;
   model?: string;
   reasoningEffort?: string | undefined;
   modelBinding?: HandoffModelBinding | undefined;
@@ -118,6 +126,7 @@ export interface HandoffRequestDigester {
   digest(request: HandoffRequest): string;
   digestMessage(request: HandoffMessage): string;
   digestContinue?(request: HandoffContinue): string;
+  digestAdopt?(request: HandoffAdopt): string;
 }
 
 export interface HandoffMutationGate {
@@ -328,6 +337,7 @@ export class PersistentCodexHandoff {
     private readonly mutationExpiresAt: number,
     private readonly mutationGate: HandoffMutationGate,
     private readonly now: () => number = Date.now,
+    private readonly selectedOwnerThreadId?: string,
   ) {}
 
   async observe(
@@ -446,6 +456,99 @@ export class PersistentCodexHandoff {
     }
   }
 
+  async adopt(request: HandoffAdopt) {
+    const unknown = {
+      status: "outcome_unknown" as const,
+      dispatchId: request.turnId,
+    };
+    if (
+      request.threadId !== this.selectedOwnerThreadId ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        request.turnId,
+      ) ||
+      !this.digester.digestAdopt
+    )
+      return { status: "refused" as const, code: "HANDOFF_ADOPT_DENIED" };
+    if (this.now() >= this.mutationExpiresAt)
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      };
+    const workspace = await this.authority.resolve(request.workspaceId);
+    if (!validWorkspace(workspace))
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_WORKSPACE_UNVERIFIED",
+      };
+    const observed = await this.observe(request);
+    if (observed.status === "refused") return observed;
+    if (observed.status !== "observed") return unknown;
+    const matches = observed.turns.filter((turn) => turn.id === request.turnId);
+    if (matches.length > 1) return unknown;
+    if (matches.length === 0)
+      return observed.hasMoreTurns
+        ? unknown
+        : { status: "refused" as const, code: "HANDOFF_ADOPT_TURN_MISSING" };
+    const current = await this.authority.resolve(request.workspaceId);
+    if (!validWorkspace(current) || !sameWorkspace(current, workspace))
+      return { status: "refused" as const, code: "HANDOFF_WORKSPACE_CHANGED" };
+    if (this.now() >= this.mutationExpiresAt)
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      };
+    const digest = this.digester.digestAdopt(request);
+    if (!/^[a-f0-9]{64}$/u.test(digest))
+      return { status: "refused" as const, code: "HANDOFF_DIGEST_INVALID" };
+    try {
+      let record = await this.journal.read(request.turnId);
+      if (!record) {
+        record = await this.journal.reserve(request.turnId, {
+          requestDigest: digest,
+          adopted: true,
+          workspaceId: request.workspaceId,
+          workspace,
+          projectId: request.projectId,
+          threadIntent: false,
+          turnIntent: false,
+        });
+      }
+      if (
+        record.adopted !== true ||
+        record.requestDigest !== digest ||
+        record.workspaceId !== request.workspaceId ||
+        record.projectId !== request.projectId ||
+        !sameWorkspace(record.workspace, workspace) ||
+        (record.threadId !== undefined &&
+          record.threadId !== request.threadId) ||
+        (record.turnId !== undefined && record.turnId !== request.turnId)
+      )
+        return { status: "refused" as const, code: "HANDOFF_ADOPT_CONFLICT" };
+      if (!record.threadIntent) {
+        if (!(await this.journal.claimThread(request.turnId))) return unknown;
+      }
+      if (!record.threadId)
+        await this.journal.recordThread(request.turnId, request.threadId);
+      if (!record.turnIntent) {
+        if (!(await this.journal.claimTurn(request.turnId))) return unknown;
+      }
+      if (!record.turnId)
+        await this.journal.recordTurn(request.turnId, request.turnId);
+      record = await this.journal.read(request.turnId);
+      if (
+        record?.adopted !== true ||
+        record.threadId !== request.threadId ||
+        record.turnId !== request.turnId
+      )
+        return unknown;
+      return { status: "adopted" as const, dispatchId: request.turnId };
+    } catch {
+      // The operation is local and read-only to the provider. An uncertain
+      // journal record is never interpreted as a different task or turn.
+      return unknown;
+    }
+  }
+
   async message(request: HandoffMessage): Promise<HandoffMessageResult> {
     if (!validMessage(request))
       return { status: "refused", code: "HANDOFF_INPUT_INVALID" };
@@ -460,6 +563,8 @@ export class PersistentCodexHandoff {
       record = await this.journal.read(request.dispatchId);
       if (!record?.threadId || !record.turnId)
         return { status: "refused", code: "HANDOFF_DISPATCH_UNKNOWN" };
+      if (record.adopted)
+        return { status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" };
       if (record.continuedFrom && record.continuationVerified !== true)
         return { status: "outcome_unknown", dispatchId: request.dispatchId };
       prior = await this.journal.readMessage(request.dispatchId, request.key);
@@ -638,6 +743,8 @@ export class PersistentCodexHandoff {
       return unknown;
     }
     if (!parent?.threadId || !parent.turnId) return unknown;
+    if (parent.adopted)
+      return { status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" };
     if (parent.continuedFrom && parent.continuationVerified !== true)
       return unknown;
     try {
@@ -1097,6 +1204,12 @@ export class PersistentCodexHandoff {
       return { status: "outcome_unknown", dispatchId };
     }
     if (!record) return { status: "unknown" };
+    if (
+      record.adopted &&
+      (record.threadId !== this.selectedOwnerThreadId ||
+        this.now() >= this.mutationExpiresAt)
+    )
+      return { status: "outcome_unknown", dispatchId };
     if (record.continuedFrom && record.continuationVerified !== true)
       return { status: "outcome_unknown", dispatchId };
     const workspace = await this.authority.resolve(record.workspaceId);
@@ -1141,6 +1254,8 @@ export class PersistentCodexHandoff {
           .map(object)
           .find((item) => item?.id === record.turnId);
         if (match && typeof match.status === "string") {
+          if (record.adopted && this.now() >= this.mutationExpiresAt)
+            return { status: "outcome_unknown", dispatchId };
           return {
             status: "known",
             dispatchId,
@@ -1226,6 +1341,11 @@ export class PersistentCodexHandoff {
           }
         }
         if (response.nextCursor === null) {
+          if (this.now() >= this.mutationExpiresAt) {
+            const record = await this.journal.read(dispatchId);
+            if (record?.adopted)
+              return { status: "outcome_unknown", dispatchId };
+          }
           return final
             ? {
                 status: "completed",

@@ -21,7 +21,7 @@ export type CodexTaskAdmission = Readonly<{
 
 type ResolvedTaskRoute = Pick<
   CodexTaskRoute,
-  "status" | "result" | "message" | "continue" | "observe"
+  "status" | "result" | "message" | "continue" | "observe" | "adopt"
 > & {
   create(request: HandoffRequest): ReturnType<CodexTaskRoute["create"]>;
 };
@@ -75,6 +75,25 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
         code: "HANDOFF_OBSERVE_UNAVAILABLE",
       };
     const result = await this.delegate.observe(request);
+    return this.now() >= this.admission.expiresAt
+      ? { status: "refused" as const, code: "HANDOFF_TASK_ADMISSION_DENIED" }
+      : result;
+  }
+
+  async adopt(request: Parameters<NonNullable<CodexTaskRoute["adopt"]>>[0]) {
+    if (
+      this.now() >= this.admission.expiresAt ||
+      request.workspaceId !== this.admission.workspaceId ||
+      request.projectId !== this.admission.projectId ||
+      request.threadId !== this.admission.observeThreadId
+    )
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      };
+    if (!this.delegate.adopt)
+      return { status: "refused" as const, code: "HANDOFF_ADOPT_UNAVAILABLE" };
+    const result = await this.delegate.adopt(request);
     return this.now() >= this.admission.expiresAt
       ? { status: "refused" as const, code: "HANDOFF_TASK_ADMISSION_DENIED" }
       : result;

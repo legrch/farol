@@ -20,6 +20,19 @@ export interface CodexTaskRoute {
     | Readonly<{ status: "refused"; code: string }>
     | Readonly<{ status: "outcome_unknown"; threadId: string }>
   >;
+  /** Persist a read-only handle for one verified turn of the selected thread. */
+  adopt?(
+    request: Readonly<{
+      threadId: string;
+      turnId: string;
+      workspaceId: string;
+      projectId: string;
+    }>,
+  ): Promise<
+    | Readonly<{ status: "adopted"; dispatchId: string }>
+    | Readonly<{ status: "refused"; code: string }>
+    | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
+  >;
   /** Control is advertised only after the serving host is qualified. */
   readonly controlCapabilities?: Readonly<{
     message: boolean;

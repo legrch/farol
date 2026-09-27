@@ -14,6 +14,62 @@ const request = {
 };
 
 describe("separate Codex task admission", () => {
+  it("admits one selected native turn for a local read-only handle and rechecks expiry", async () => {
+    const threadId = randomUUID();
+    const turnId = randomUUID();
+    let now = 1_000;
+    let calls = 0;
+    const route = new AdmittedCodexTaskRoute(
+      {
+        create: async (input) => ({
+          status: "outcome_unknown",
+          dispatchId: input.key,
+        }),
+        message: async () => {
+          throw new Error("unexpected message");
+        },
+        adopt: async () => {
+          calls += 1;
+          return { status: "adopted", dispatchId: turnId };
+        },
+        status: async () => ({ status: "unknown" }),
+        result: async () => ({ status: "unknown" }),
+      },
+      {
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        observeThreadId: threadId,
+        ...taskGrantPolicy(),
+        expiresAt: 2_000,
+      },
+      () => now,
+    );
+    const selection = {
+      threadId,
+      turnId,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+    };
+    expect(await route.adopt({ ...selection, threadId: randomUUID() })).toEqual(
+      {
+        status: "refused",
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      },
+    );
+    expect(calls).toBe(0);
+    expect(await route.adopt(selection)).toEqual({
+      status: "adopted",
+      dispatchId: turnId,
+    });
+    expect(calls).toBe(1);
+    now = 2_000;
+    expect(await route.adopt(selection)).toEqual({
+      status: "refused",
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    expect(calls).toBe(1);
+  });
+
   it("resolves an exact policy snapshot and refuses project, workspace or expiry drift", async () => {
     let calls = 0;
     let now = 1_000;
