@@ -13,6 +13,7 @@ import {
 } from "../../src/pkg/product-settings/contract";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
+import { taskPolicy } from "../fixtures/task-policy";
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -52,6 +53,7 @@ describe("Farol Next product configuration", () => {
     const verifiedAt = "2026-09-16T10:00:00.000Z";
     await store.save({
       ...base,
+      tasks: taskPolicy(),
       revision: base.revision + 1,
       computer: {
         ...base.computer,
@@ -118,8 +120,7 @@ describe("Farol Next product configuration", () => {
       projectIdentity: { device: "5", inode: "10" },
       gitCommonDirectory: "/Users/example/project/.git",
       execution: { sandbox: "read-only", approvalPolicy: "on-request" },
-      model: "gpt-6-luna",
-      reasoningEffort: "medium",
+      harness: "codex",
       computerGeneration: base.computer.generation,
       hostGeneration: 2,
       approvedAt: verifiedAt,

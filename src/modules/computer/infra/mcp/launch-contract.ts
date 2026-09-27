@@ -2,6 +2,7 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { z } from "zod";
+import { TaskExecutionSettingsSchema } from "../../../../pkg/owner-config/contract";
 
 import type { ReadonlyWorkspace } from "../../app/port/readonly-workspace";
 import {
@@ -239,8 +240,9 @@ export const CodexTaskRouteLaunchSchema = z.strictObject({
       sandbox: z.enum(["read-only", "workspace-write"]),
       approvalPolicy: z.enum(["untrusted", "on-request"]),
     }),
-    model: z.string().regex(/^[A-Za-z0-9_.\/-]{1,120}$/u),
-    reasoningEffort: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/u),
+    harness: z.literal("codex"),
+    tasks: TaskExecutionSettingsSchema,
+    configSha256: z.string().regex(/^[a-f0-9]{64}$/u),
     expiresAt: z.number().int().positive().safe(),
   }),
 });

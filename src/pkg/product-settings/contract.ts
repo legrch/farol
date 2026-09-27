@@ -271,8 +271,7 @@ export const CodexTaskSelectionSchema = z.strictObject({
     sandbox: z.enum(["read-only", "workspace-write"]),
     approvalPolicy: z.enum(["untrusted", "on-request"]),
   }),
-  model: z.string().regex(/^[A-Za-z0-9_.\/-]{1,120}$/u),
-  reasoningEffort: z.string().regex(/^[A-Za-z0-9_-]{1,40}$/u),
+  harness: z.literal("codex"),
   computerGeneration: z.number().int().positive(),
   hostGeneration: z.number().int().positive(),
   approvedAt: CanonicalTimestampSchema,
@@ -375,6 +374,9 @@ export const ProductSettingsSchema = z.strictObject({
   schema: z.literal(1),
   revision: z.number().int().positive(),
   general: ProductGeneralSettingsSchema,
+  // Human-editable model policy lives in this existing document. Validate the
+  // subsection at resolution so a malformed task policy cannot disable Computer.
+  tasks: z.unknown().optional(),
   computer: z.strictObject({
     computerId: IdentifierSchema,
     generation: z.number().int().positive(),
@@ -466,8 +468,6 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     workspaceId: IdentifierSchema,
     projectId: IdentifierSchema,
     projectRoot: CanonicalAbsolutePathSchema,
-    model: CodexTaskSelectionSchema.shape.model,
-    reasoningEffort: CodexTaskSelectionSchema.shape.reasoningEffort,
     sandbox: CodexTaskSelectionSchema.shape.execution.shape.sandbox,
     approvalPolicy:
       CodexTaskSelectionSchema.shape.execution.shape.approvalPolicy,

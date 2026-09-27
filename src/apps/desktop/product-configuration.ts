@@ -24,6 +24,8 @@ import {
 } from "../../pkg/product-settings/contract";
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 
+import { resolveOwnerTaskModel } from "./owner-config";
+
 const FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -1865,6 +1867,12 @@ export class ProductConfigurationService {
     }
     const selected = parsed.data;
     return this.mutate((current) => {
+      const model = resolveOwnerTaskModel(current, {
+        harness: selected.harness,
+      });
+      if (model.status !== "ready") {
+        throw new Error("CODEX_TASK_ROUTE_STALE");
+      }
       const workspace = current.computer.workspaces.find(
         (entry) => entry.workspaceId === selected.workspaceId,
       );

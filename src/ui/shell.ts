@@ -4353,18 +4353,10 @@ function renderSettings(): void {
           taskRoute?.projectRoot ?? "",
           "/absolute/path/to/repository",
         );
-        const model = taskText(
-          "model",
-          "Codex model",
-          taskRoute?.model ?? "gpt-6-luna",
-          "gpt-6-luna",
-        );
-        const effort = taskText(
-          "effort",
-          "Reasoning effort",
-          taskRoute?.reasoningEffort ?? "medium",
-          "medium",
-        );
+        const modelPolicy = document.createElement("p");
+        modelPolicy.textContent =
+          "Model names and default effort come from tasks.harnesses in product-settings.json. Each task may select a configured model and override effort. Close Farol before editing; restart to load the new policy.";
+        taskForm.append(modelPolicy);
         const workspaceLabel = document.createElement("label");
         workspaceLabel.textContent = "Verified Computer workspace";
         const workspaceSelect = document.createElement("select");
@@ -4422,8 +4414,6 @@ function renderSettings(): void {
             workspaceId: workspaceSelect.value,
             projectId: projectId.value.trim(),
             projectRoot: projectRoot.value.trim(),
-            model: model.value.trim(),
-            reasoningEffort: effort.value.trim(),
             sandbox: sandboxSelect.value,
             approvalPolicy: approvalSelect.value,
           });

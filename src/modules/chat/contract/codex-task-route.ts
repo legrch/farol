@@ -1,5 +1,7 @@
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  /** Control is advertised only after the serving host is qualified. */
+  readonly controlCapabilities?: Readonly<{ message: boolean }>;
   message(
     request: Readonly<{
       key: string;
@@ -21,8 +23,10 @@ export interface CodexTaskRoute {
       workspaceId: string;
       projectId: string;
       message: string;
-      model: string;
-      reasoningEffort: string;
+      harness?: string | undefined;
+      /** Configured alias, not a provider model identifier. */
+      model?: string | undefined;
+      effort?: string | undefined;
     }>,
   ): Promise<
     | Readonly<{

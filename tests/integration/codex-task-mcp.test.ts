@@ -48,6 +48,7 @@ describe("Codex task Computer MCP surface", () => {
   it("validates active message bytes before delegate and exposes exact steer receipt", async () => {
     const messages: string[] = [];
     const route: CodexTaskRoute = {
+      controlCapabilities: { message: true },
       async create() {
         throw new Error("unexpected create");
       },
@@ -127,8 +128,6 @@ describe("Codex task Computer MCP surface", () => {
           workspaceId: "writer",
           projectId: "saved-project",
           message,
-          model: "gpt-6-luna",
-          reasoningEffort: "medium",
         },
       });
     try {
@@ -233,6 +232,7 @@ describe("Codex task Computer MCP surface", () => {
       expect(tools).toContain("codex_task_create");
       expect(tools).toContain("codex_task_status");
       expect(tools).toContain("codex_task_result");
+      expect(tools).not.toContain("codex_task_message");
       const created = await client.callTool({
         name: "codex_task_create",
         arguments: {
@@ -240,8 +240,6 @@ describe("Codex task Computer MCP surface", () => {
           workspaceId: "writer",
           projectId: "saved-project",
           message: "Read the H1",
-          model: "gpt-6-luna",
-          reasoningEffort: "medium",
         },
       });
       expect(created.structuredContent).toEqual({
@@ -303,8 +301,6 @@ describe("Codex task Computer MCP surface", () => {
           workspaceId: "writer",
           projectId: "saved-project",
           message: "Read the H1",
-          model: "gpt-6-luna",
-          reasoningEffort: "medium",
         },
       });
       expect(response.structuredContent).toEqual({

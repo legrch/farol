@@ -1,5 +1,9 @@
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import {
+  TaskEffortSchema,
+  TaskNameSchema,
+} from "../../../../pkg/owner-config/contract";
 
 import {
   MutableComputerCallResponseSchema,
@@ -35,21 +39,20 @@ export type ReadonlyComputerMcpBinding = Readonly<{
 
 const IdentifierSchema = z.string().min(1).max(120);
 const DispatchIdSchema = z.string().uuid();
+const CodexTaskTextSchema = z
+  .string()
+  .min(1)
+  .max(8_192)
+  .refine((value) => !value.includes("\0"))
+  .refine((value) => new TextEncoder().encode(value).byteLength <= 8_192);
 const CodexTaskCreateInputSchema = z.strictObject({
   key: DispatchIdSchema,
   workspaceId: IdentifierSchema,
   projectId: IdentifierSchema,
-  message: z
-    .string()
-    .min(1)
-    .max(8_192)
-    .refine(
-      (value) =>
-        !value.includes("\0") &&
-        new TextEncoder().encode(value).byteLength <= 8_192,
-    ),
-  model: z.string().min(1).max(120),
-  reasoningEffort: z.string().min(1).max(40),
+  message: CodexTaskTextSchema,
+  harness: TaskNameSchema.optional(),
+  model: TaskNameSchema.optional(),
+  effort: TaskEffortSchema.optional(),
 });
 const CodexTaskReadInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
@@ -59,15 +62,7 @@ const CodexTaskMessageInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
   workspaceId: IdentifierSchema,
   projectId: IdentifierSchema,
-  message: z
-    .string()
-    .min(1)
-    .max(8_192)
-    .refine(
-      (value) =>
-        !value.includes("\0") &&
-        new TextEncoder().encode(value).byteLength <= 8_192,
-    ),
+  message: CodexTaskTextSchema,
   model: z.string().min(1).max(120),
   reasoningEffort: z.string().min(1).max(40),
 });
@@ -703,7 +698,7 @@ export function createReadonlyComputerMcpServer(
       {
         title: "Create one persistent Codex task",
         description:
-          "Start one task in an explicitly approved existing saved project. Message limit: 8,192 UTF-8 bytes, without NUL. Supply a new UUID key once; an outcome_unknown result must never trigger a new key or blind retry.",
+          "Start one task in an approved saved project. Omit harness/model/effort for configured defaults; model names a configured alias. Message limit: 8,192 UTF-8 bytes without NUL. Supply one UUID key; never retry an unknown outcome with a fresh key.",
         inputSchema: CodexTaskCreateInputSchema,
         annotations: CODEX_TASK_CREATE_ANNOTATIONS,
       },
@@ -726,32 +721,34 @@ export function createReadonlyComputerMcpServer(
         }
       }),
     );
-    server.registerTool(
-      "codex_task_message",
-      {
-        title: "Steer one active Codex task turn",
-        description:
-          "Send at most one message to this issued dispatch's exact active turn. Supply a new UUID key once. An outcome_unknown must never be retried with a different key.",
-        inputSchema: CodexTaskMessageInputSchema,
-        annotations: CODEX_TASK_CREATE_ANNOTATIONS,
-      },
-      guarded(async (request) => {
-        try {
-          const result = await codexTasks.message(request);
-          return taskResponse(
-            result.status === "steered"
-              ? { status: "steered", dispatchId: result.dispatchId }
-              : result,
-            result.status === "refused" || result.status === "outcome_unknown",
-          );
-        } catch {
-          return taskResponse(
-            { status: "outcome_unknown", dispatchId: request.dispatchId },
-            true,
-          );
-        }
-      }),
-    );
+    if (codexTasks.controlCapabilities?.message === true)
+      server.registerTool(
+        "codex_task_message",
+        {
+          title: "Steer one active Codex task turn",
+          description:
+            "Send at most one message to this issued dispatch's exact active turn. Supply a new UUID key once. An outcome_unknown must never be retried with a different key.",
+          inputSchema: CodexTaskMessageInputSchema,
+          annotations: CODEX_TASK_CREATE_ANNOTATIONS,
+        },
+        guarded(async (request) => {
+          try {
+            const result = await codexTasks.message(request);
+            return taskResponse(
+              result.status === "steered"
+                ? { status: "steered", dispatchId: result.dispatchId }
+                : result,
+              result.status === "refused" ||
+                result.status === "outcome_unknown",
+            );
+          } catch {
+            return taskResponse(
+              { status: "outcome_unknown", dispatchId: request.dispatchId },
+              true,
+            );
+          }
+        }),
+      );
     server.registerTool(
       "codex_task_status",
       {

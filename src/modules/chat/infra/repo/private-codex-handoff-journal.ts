@@ -2,6 +2,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { TaskModelBindingSchema } from "../../../../pkg/owner-config/contract";
 
 import type {
   HandoffJournal,
@@ -280,6 +281,17 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     ) {
       throw new Error("HANDOFF_JOURNAL_INVALID");
     }
+    if (record.modelBinding !== undefined) {
+      const binding = TaskModelBindingSchema.safeParse(record.modelBinding);
+      if (
+        !binding.success ||
+        binding.data.selection.harness !== "codex" ||
+        binding.data.selection.model !== record.model ||
+        binding.data.selection.effort !== record.reasoningEffort
+      ) {
+        throw new Error("HANDOFF_JOURNAL_MODEL_BINDING_INVALID");
+      }
+    }
     let threadIntent = await readPrivate(
       path.join(directory, "thread-intent.json"),
     );
@@ -316,6 +328,13 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       workspaceId: stringRecord(record.workspaceId),
       workspace: record.workspace,
       projectId: stringRecord(record.projectId),
+      ...(record.model === undefined ? {} : { model: record.model }),
+      ...(record.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: record.reasoningEffort }),
+      ...(record.modelBinding === undefined
+        ? {}
+        : { modelBinding: record.modelBinding }),
       threadIntent: threadIntent !== null,
       turnIntent: turnIntent !== null,
       ...(thread === null ? {} : { threadId: stringRecord(thread) }),

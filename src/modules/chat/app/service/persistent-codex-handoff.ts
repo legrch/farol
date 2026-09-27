@@ -1,10 +1,21 @@
+export type HandoffModelBinding = Readonly<{
+  selection: Readonly<{
+    harness: string;
+    modelAlias: string;
+    model: string;
+    effort?: string | undefined;
+  }>;
+  configSha256: string;
+}>;
+
 export type HandoffRequest = Readonly<{
   key: string;
   workspaceId: string;
   projectId: string;
   message: string;
   model: string;
-  reasoningEffort: string;
+  reasoningEffort?: string | undefined;
+  modelBinding?: HandoffModelBinding | undefined;
 }>;
 
 export type HandoffMessage = Readonly<{
@@ -14,7 +25,7 @@ export type HandoffMessage = Readonly<{
   projectId: string;
   message: string;
   model: string;
-  reasoningEffort: string;
+  reasoningEffort?: string | undefined;
 }>;
 
 export type HandoffMessageResult =
@@ -42,7 +53,8 @@ export type HandoffWorkspace = Readonly<{
 export type HandoffRecord = Readonly<{
   requestDigest: string;
   model?: string;
-  reasoningEffort?: string;
+  reasoningEffort?: string | undefined;
+  modelBinding?: HandoffModelBinding | undefined;
   workspaceId: string;
   workspace: HandoffWorkspace;
   projectId: string;
@@ -150,6 +162,19 @@ function identifier(value: unknown): value is string {
 }
 
 function validRequest(request: HandoffRequest): boolean {
+  if (request.modelBinding) {
+    const selection = object(request.modelBinding.selection);
+    if (
+      selection?.harness !== "codex" ||
+      typeof selection?.modelAlias !== "string" ||
+      !/^[a-z][a-z0-9]*(?:[-_.][a-z0-9]+)*$/u.test(selection.modelAlias) ||
+      selection.modelAlias.length > 80 ||
+      selection.model !== request.model ||
+      selection.effort !== request.reasoningEffort ||
+      !/^[a-f0-9]{64}$/u.test(request.modelBinding.configSha256)
+    )
+      return false;
+  }
   return (
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
       request.key,
@@ -160,7 +185,8 @@ function validRequest(request: HandoffRequest): boolean {
     new TextEncoder().encode(request.message).byteLength <= 8_192 &&
     !request.message.includes("\0") &&
     /^[A-Za-z0-9_.\/-]{1,120}$/u.test(request.model) &&
-    /^[A-Za-z0-9_-]{1,40}$/u.test(request.reasoningEffort)
+    (request.reasoningEffort === undefined ||
+      /^[A-Za-z0-9_-]{1,40}$/u.test(request.reasoningEffort))
   );
 }
 
@@ -178,7 +204,8 @@ function validMessage(request: HandoffMessage): boolean {
     new TextEncoder().encode(request.message).byteLength <= 8_192 &&
     !request.message.includes("\0") &&
     /^[A-Za-z0-9_.\/-]{1,120}$/u.test(request.model) &&
-    /^[A-Za-z0-9_-]{1,40}$/u.test(request.reasoningEffort)
+    (request.reasoningEffort === undefined ||
+      /^[A-Za-z0-9_-]{1,40}$/u.test(request.reasoningEffort))
   );
 }
 
@@ -514,6 +541,7 @@ export class PersistentCodexHandoff {
         requestDigest,
         model: request.model,
         reasoningEffort: request.reasoningEffort,
+        ...(request.modelBinding ? { modelBinding: request.modelBinding } : {}),
         workspaceId: request.workspaceId,
         workspace,
         projectId: request.projectId,
@@ -605,7 +633,9 @@ export class PersistentCodexHandoff {
           input: [{ type: "text", text: request.message }],
           cwd: workspace.root,
           model: request.model,
-          effort: request.reasoningEffort,
+          ...(request.reasoningEffort === undefined
+            ? {}
+            : { effort: request.reasoningEffort }),
           approvalPolicy: workspace.execution.approvalPolicy,
           sandboxPolicy:
             workspace.execution.sandbox === "read-only"

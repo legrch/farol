@@ -754,6 +754,29 @@ describe("persistent Codex handoff core", () => {
     }
   });
 
+  it("refuses a forged model binding before consulting workspace or host", async () => {
+    const fixture = byteBudgetFixture();
+    expect(
+      await fixture.service.create({
+        ...request,
+        modelBinding: {
+          selection: {
+            harness: "codex",
+            modelAlias: "luna",
+            model: "different-model",
+            effort: request.reasoningEffort,
+          },
+          configSha256: "0".repeat(64),
+        },
+      }),
+    ).toEqual({ status: "refused", code: "HANDOFF_INPUT_INVALID" });
+    expect(fixture.counts()).toEqual({
+      authorityCalls: 0,
+      journalCalls: 0,
+      hostCalls: [],
+    });
+  });
+
   it("forwards exact at-budget ASCII, Cyrillic, emoji and formatted messages", async () => {
     for (const message of [
       "a".repeat(8_192),

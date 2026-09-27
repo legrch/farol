@@ -13,6 +13,7 @@ import {
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
 import { identityBoundWorkspaces } from "./identity-bound-workspaces";
+import { resolveOwnerTaskModel } from "./owner-config";
 import type { DevMcpProofPreparation } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
@@ -30,8 +31,11 @@ export function selectedCodexTaskRouteLaunch(
 ): CodexTaskRouteLaunch | null {
   const selected = settings.nativeHosts.taskRoute;
   const host = settings.nativeHosts.codex;
+  const resolved = resolveOwnerTaskModel(settings, { harness: "codex" });
   if (
+    resolved.status !== "ready" ||
     !selected ||
+    selected.harness !== "codex" ||
     !host?.localVerification ||
     selected.hostGeneration !== settings.nativeHosts.generation ||
     selected.computerGeneration !== settings.computer.generation ||
@@ -71,8 +75,9 @@ export function selectedCodexTaskRouteLaunch(
       projectIdentity: selected.projectIdentity,
       gitCommonDirectory: selected.gitCommonDirectory,
       execution: selected.execution,
-      model: selected.model,
-      reasoningEffort: selected.reasoningEffort,
+      harness: "codex",
+      tasks: resolved.tasks,
+      configSha256: resolved.configSha256,
       expiresAt: selected.expiresAt,
     },
   };

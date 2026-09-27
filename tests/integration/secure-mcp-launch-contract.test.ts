@@ -12,6 +12,7 @@ import {
   materializeReadonlyComputerLaunch,
 } from "../../src/modules/computer/infra/mcp/launch-contract";
 import { ProductSettingsSchema } from "../../src/pkg/product-settings/contract";
+import { taskGrantPolicy, taskPolicy } from "../fixtures/task-policy";
 import type { ReadonlyWorkspace } from "../../src/modules/computer/app/port/readonly-workspace";
 
 const roots: string[] = [];
@@ -228,8 +229,7 @@ describe("secure MCP Computer launch contract", () => {
           sandbox: "workspace-write" as const,
           approvalPolicy: "on-request" as const,
         },
-        model: "gpt-6-luna",
-        reasoningEffort: "medium",
+        ...taskGrantPolicy(),
         expiresAt: 1_789_517_000_000,
       },
     };
@@ -267,6 +267,7 @@ describe("secure MCP Computer launch contract", () => {
 
     const approved = ProductSettingsSchema.parse({
       ...selected,
+      tasks: taskPolicy(),
       nativeHosts: {
         ...selected.nativeHosts,
         codex: {
@@ -288,8 +289,7 @@ describe("secure MCP Computer launch contract", () => {
           projectIdentity: codexTasks.grant.projectIdentity,
           gitCommonDirectory: codexTasks.grant.gitCommonDirectory,
           execution: codexTasks.grant.execution,
-          model: codexTasks.grant.model,
-          reasoningEffort: codexTasks.grant.reasoningEffort,
+          harness: "codex",
           computerGeneration: selected.computer.generation,
           hostGeneration: selected.nativeHosts.generation,
           approvedAt: new Date(input.now).toISOString(),
@@ -317,7 +317,30 @@ describe("secure MCP Computer launch contract", () => {
       runtimeId: "runtime-with-owner-selection",
       challengeSha256: "f".repeat(64),
     });
-    expect(automatic.codexTasks).toEqual(codexTasks);
+    expect(automatic.codexTasks).toMatchObject(codexTasks);
+    expect(automatic.codexTasks?.grant).toMatchObject({
+      harness: "codex",
+      configSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    const newTasks = taskPolicy();
+    newTasks.harnesses.codex!.models.luna = {
+      model: "next-model",
+      defaultEffort: "high",
+    };
+    const nextPolicy = ProductSettingsSchema.parse({
+      ...approved,
+      tasks: newTasks,
+    });
+    const nextLaunch = createSecureMcpLaunchContract(nextPolicy, {
+      now: input.now,
+      runtimeId: "next-policy",
+      challengeSha256: "f".repeat(64),
+    });
+    expect(nextLaunch.codexTasks?.grant.tasks).toEqual(newTasks);
+    expect(nextLaunch.codexTasks?.grant.configSha256).not.toBe(
+      automatic.codexTasks?.grant.configSha256,
+    );
+    expect(automatic.codexTasks?.grant.tasks).toEqual(taskPolicy());
     const stale = ProductSettingsSchema.parse({
       ...approved,
       computer: { ...approved.computer, generation: 8 },

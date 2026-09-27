@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
@@ -269,8 +269,27 @@ try {
         projectIdentity,
         gitCommonDirectory: commonDirectory,
         execution: { sandbox: "read-only", approvalPolicy: "on-request" },
-        model: "gpt-6-luna",
-        reasoningEffort: "medium",
+        harness: "codex",
+        tasks: {
+          defaultHarness: "codex",
+          harnesses: {
+            codex: {
+              defaultModel: "luna",
+              models: {
+                luna: { model: "gpt-6-luna", defaultEffort: "medium" },
+              },
+            },
+          },
+        },
+        configSha256: createHash("sha256")
+          .update(
+            JSON.stringify([
+              "farol-task-policy/1",
+              "codex",
+              [["codex", "luna", [["luna", "gpt-6-luna", "medium"]]]],
+            ]),
+          )
+          .digest("hex"),
         expiresAt: now + 120_000,
       },
     },
@@ -307,7 +326,7 @@ try {
   assert(tools.includes("codex_task_create"), stderr);
   assert(tools.includes("codex_task_status"), stderr);
   assert(tools.includes("codex_task_result"), stderr);
-  assert(tools.includes("codex_task_message"), stderr);
+  assert(!tools.includes("codex_task_message"), stderr);
   const created = await client.callTool({
     name: "codex_task_create",
     arguments: {
@@ -315,59 +334,13 @@ try {
       workspaceId: "approved-writer",
       projectId,
       message: "Read README H1",
-      model: "gpt-6-luna",
-      reasoningEffort: "medium",
     },
   });
   assert.deepEqual(created.structuredContent, {
     status: "dispatched",
     dispatchId: key,
   });
-  const steerKey = randomUUID();
-  const invalidMessage = await client.callTool({
-    name: "codex_task_message",
-    arguments: {
-      key: steerKey,
-      dispatchId: key,
-      workspaceId: "approved-writer",
-      projectId,
-      message: "😀".repeat(2_049),
-      model: "gpt-6-luna",
-      reasoningEffort: "medium",
-    },
-  });
-  assert.equal(invalidMessage.isError, true);
   assert.equal(calls.filter((method) => method === "turn/steer").length, 0);
-  const steered = await client.callTool({
-    name: "codex_task_message",
-    arguments: {
-      key: steerKey,
-      dispatchId: key,
-      workspaceId: "approved-writer",
-      projectId,
-      message: "One steer",
-      model: "gpt-6-luna",
-      reasoningEffort: "medium",
-    },
-  });
-  assert.deepEqual(steered.structuredContent, {
-    status: "steered",
-    dispatchId: key,
-  });
-  const replay = await client.callTool({
-    name: "codex_task_message",
-    arguments: {
-      key: steerKey,
-      dispatchId: key,
-      workspaceId: "approved-writer",
-      projectId,
-      message: "One steer",
-      model: "gpt-6-luna",
-      reasoningEffort: "medium",
-    },
-  });
-  assert.deepEqual(replay.structuredContent, steered.structuredContent);
-  assert.equal(calls.filter((method) => method === "turn/steer").length, 1);
   turnStatus = "completed";
   const status = await client.callTool({
     name: "codex_task_status",

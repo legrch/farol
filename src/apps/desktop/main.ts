@@ -1,3 +1,4 @@
+import { resolveOwnerTaskModel } from "./owner-config";
 import {
   app,
   BrowserWindow,
@@ -4868,6 +4869,12 @@ async function configureAdmittedProduct(
         return configurationFailure("SETTINGS_UNAVAILABLE");
       }
       const settings = snapshot.settings;
+      const resolvedModel = resolveOwnerTaskModel(settings, {
+        harness: "codex",
+      });
+      if (resolvedModel.status !== "ready") {
+        return configurationFailure("CODEX_TASK_ROUTE_REFUSED");
+      }
       const selected = settings.nativeHosts.codex;
       const workspace = settings.computer.workspaces.find(
         (entry) => entry.workspaceId === command.workspaceId,
@@ -4949,8 +4956,7 @@ async function configureAdmittedProduct(
               sandbox: command.sandbox,
               approvalPolicy: command.approvalPolicy,
             },
-            model: command.model,
-            reasoningEffort: command.reasoningEffort,
+            harness: "codex",
             computerGeneration: settings.computer.generation,
             hostGeneration: settings.nativeHosts.generation,
             approvedAt,
