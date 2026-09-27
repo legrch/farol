@@ -780,7 +780,7 @@ function verificationWorkspaceAction(
   workspace: ApprovedProductWorkspace,
   expiresAt: number,
 ): RunReadonlyComputerAction | null {
-  if (settings.computer.commands !== "verification") return null;
+  if (settings.computer.commands === "none") return null;
   const ownerId = "owner-desktop";
   const sessionId = "desktop-command-session";
   const taskId = "desktop-command-task";
@@ -816,7 +816,7 @@ function verificationWorkspaceAction(
     ),
     capabilities: approvalCapabilities,
     network: "none",
-    commands: "verification",
+    commands: settings.computer.commands,
     expiresAt,
   };
   const admission: TaskAdmission = {
@@ -841,7 +841,7 @@ function verificationWorkspaceAction(
     })),
     capabilities: ["verification.run"],
     network: "none",
-    commands: "verification",
+    commands: settings.computer.commands,
     expiresAt,
   };
   const grant = deriveTaskGrant(approval, admission, Date.now());
@@ -6229,6 +6229,13 @@ async function configureAdmittedProduct(
           command.access,
         ),
       );
+    case "computer.update-git-history":
+      return ProductConfigurationResultSchema.parse(
+        await configuration.updateWorkspaceGitHistory(
+          command.workspaceId,
+          command.approved,
+        ),
+      );
     case "computer.update-commands":
       return ProductConfigurationResultSchema.parse(
         await configuration.updateComputerCommands(command.commands),
@@ -6419,7 +6426,7 @@ async function configureAdmittedProduct(
       if (snapshot.status !== "ready") {
         return configurationFailure("SETTINGS_UNAVAILABLE");
       }
-      if (snapshot.settings.computer.commands !== "verification") {
+      if (snapshot.settings.computer.commands === "none") {
         return configurationFailure("WORKSPACE_COMMAND_APPROVAL_REQUIRED");
       }
       const selected = verifiedProductWorkspace(command.workspaceId);

@@ -397,6 +397,64 @@ describe("Farol Next product configuration", () => {
     expect(restarted.snapshot()).toMatchObject(updated.snapshot);
   });
 
+  it("requires a verified, separate Git history approval and resets it on exclusions", async () => {
+    const root = await stateRoot();
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/project",
+      label: "Project",
+      rootIdentity: { device: "1", inode: "2" },
+    });
+    if (added.snapshot.status !== "ready") throw new Error("settings missing");
+    const workspaceId =
+      added.snapshot.settings.computer.workspaces[0]?.workspaceId;
+    if (!workspaceId) throw new Error("workspace missing");
+    await service.updateComputerCommands("workspace");
+    expect(
+      await service.updateWorkspaceGitHistory(workspaceId, true),
+    ).toMatchObject({
+      ok: false,
+      error: "SETTINGS_INPUT_INVALID",
+    });
+    const verification = {
+      profile: "computer.local.read/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    };
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity: { device: "1", inode: "2" },
+    });
+    const approved = await service.updateWorkspaceGitHistory(workspaceId, true);
+    expect(approved).toMatchObject({
+      ok: true,
+      snapshot: {
+        settings: {
+          computer: { workspaces: [{ gitHistoryApproved: true }] },
+          setup: { computer: { verified: null } },
+        },
+      },
+    });
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity: { device: "1", inode: "2" },
+    });
+    expect(service.snapshot()).toMatchObject({
+      settings: { computer: { workspaces: [{ gitHistoryApproved: true }] } },
+    });
+    const excluded = await service.updateWorkspaceExclusions(workspaceId, [
+      "/Users/example/project/private",
+    ]);
+    expect(excluded).toMatchObject({
+      snapshot: {
+        settings: { computer: { workspaces: [{ gitHistoryApproved: false }] } },
+      },
+    });
+  });
+
   it("persists a Next-only secure MCP connector without persisting its credential", async () => {
     const root = await stateRoot();
     const service = new ProductConfigurationService(

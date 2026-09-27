@@ -3,11 +3,12 @@ export type AuthorityCapability =
   | "workspace.read"
   | "workspace.search"
   | "verification.run"
-  | "workspace.write";
+  | "workspace.write"
+  | "workspace.shell";
 
 export type WorkspaceAccess = "read" | "write";
 export type NetworkAuthority = "none" | "approved";
-export type CommandAuthority = "none" | "verification";
+export type CommandAuthority = "none" | "verification" | "workspace";
 export type ParticipantRole = "main" | "agent" | "critic";
 export type MutationOwnership = "none" | "task";
 
@@ -34,6 +35,11 @@ export type ApprovedWorkspace = Readonly<{
   access: WorkspaceAccess;
   rootIdentity: WorkspaceRootIdentity;
   gitMetadata?: WorkspaceGitMetadataApproval | undefined;
+  // Shell access to the full Git object database, including historical
+  // versions of paths excluded from ordinary workspace reads.
+  gitHistoryApproved?: boolean | undefined;
+  // A launch-time, generation-bound owner verification for shell effects.
+  shellVerified?: boolean | undefined;
 }>;
 
 export type WorkspaceExclusion = Readonly<{
@@ -151,9 +157,11 @@ export type WorkspaceOperation = Readonly<{
     | "workspace.read"
     | "workspace.search"
     | "verification.run"
-    | "workspace.write";
+    | "workspace.write"
+    | "workspace.shell";
   workspaceId: string;
   path: string;
+  write?: boolean;
 }>;
 
 export type AuthorityOperation =
@@ -287,7 +295,11 @@ function commandsInclude(
   parent: CommandAuthority,
   requested: CommandAuthority,
 ): boolean {
-  return parent === "verification" || requested === "none";
+  return (
+    parent === requested ||
+    requested === "none" ||
+    (parent === "workspace" && requested === "verification")
+  );
 }
 
 function networkIncludes(
@@ -678,8 +690,12 @@ function authorizeAgainstPolicy(
   }
   if (
     operation.kind === "verification.run" &&
-    policy.commands !== "verification"
+    policy.commands !== "verification" &&
+    policy.commands !== "workspace"
   ) {
+    return failure("AUTHORITY_COMMAND_DENIED", source);
+  }
+  if (operation.kind === "workspace.shell" && policy.commands !== "workspace") {
     return failure("AUTHORITY_COMMAND_DENIED", source);
   }
   if (
@@ -694,7 +710,9 @@ function authorizeAgainstPolicy(
   const permitsPath = matching.some(
     (scope) =>
       scopeContainsPath(scope, operation.path) &&
-      (operation.kind !== "workspace.write" || scope.access === "write"),
+      ((operation.kind !== "workspace.write" &&
+        !(operation.kind === "workspace.shell" && operation.write)) ||
+        scope.access === "write"),
   );
   return permitsPath
     ? success(action)
@@ -711,7 +729,8 @@ export function authorizeTaskAction(
   const identity = authorizeTaskIdentity(participant, action);
   if (!identity.ok) return identity;
   if (
-    operation.kind === "workspace.write" &&
+    (operation.kind === "workspace.write" ||
+      (operation.kind === "workspace.shell" && operation.write)) &&
     participant.mutationOwnership !== "task"
   ) {
     return failure("AUTHORITY_MUTATION_OWNERSHIP_DENIED", "role");

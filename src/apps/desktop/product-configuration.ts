@@ -1157,7 +1157,11 @@ export class ProductConfigurationService {
           generation: settings.computer.generation + 1,
           workspaces: settings.computer.workspaces.map((workspace) =>
             workspace.workspaceId === workspaceId
-              ? { ...workspace, excludedPaths: parsed.data }
+              ? {
+                  ...workspace,
+                  excludedPaths: parsed.data,
+                  gitHistoryApproved: false,
+                }
               : workspace,
           ),
         },
@@ -1216,8 +1220,59 @@ export class ProductConfigurationService {
     }));
   }
 
+  async updateWorkspaceGitHistory(
+    workspaceId: string,
+    approved: boolean,
+  ): Promise<MutationResult> {
+    if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+    const current = this.current.computer.workspaces.find(
+      (workspace) => workspace.workspaceId === workspaceId,
+    );
+    if (!current) return this.failure("WORKSPACE_NOT_FOUND");
+    if (
+      approved &&
+      (this.current.computer.commands !== "workspace" ||
+        !current.rootIdentity ||
+        this.current.setup.computer.verified?.workspaceId !== workspaceId ||
+        this.current.setup.computer.verified?.configRevision !==
+          this.current.computer.generation)
+    )
+      return this.failure("SETTINGS_INPUT_INVALID");
+    if (current.gitHistoryApproved === approved) {
+      return { ok: true, snapshot: this.snapshot() };
+    }
+    return this.mutate((settings) => ({
+      ...settings,
+      revision: settings.revision + 1,
+      computer: {
+        ...settings.computer,
+        generation: settings.computer.generation + 1,
+        workspaces: settings.computer.workspaces.map((workspace) =>
+          workspace.workspaceId === workspaceId
+            ? { ...workspace, gitHistoryApproved: approved }
+            : workspace,
+        ),
+      },
+      setup: {
+        ...settings.setup,
+        computer: {
+          ...settings.setup.computer,
+          configured: true,
+          reachable: "unknown",
+          verified: null,
+          needsAction:
+            "Verify workspace access after changing Git history authority.",
+          unavailable: null,
+          outcomeUnknown: false,
+        },
+      },
+    }));
+  }
+
   async updateComputerCommands(input: unknown): Promise<MutationResult> {
-    const parsed = z.enum(["none", "verification"]).safeParse(input);
+    const parsed = z
+      .enum(["none", "verification", "workspace"])
+      .safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
     if (this.current.computer.commands === parsed.data) {
@@ -1232,6 +1287,10 @@ export class ProductConfigurationService {
           ...settings.computer,
           generation: settings.computer.generation + 1,
           commands: parsed.data,
+          workspaces: settings.computer.workspaces.map((workspace) => ({
+            ...workspace,
+            gitHistoryApproved: false,
+          })),
         },
         setup: {
           ...settings.setup,
@@ -1425,9 +1484,16 @@ export class ProductConfigurationService {
       ) => {
         if (workspace.workspaceId !== workspaceId) return workspace;
         const { gitMetadata: _previous, ...rest } = workspace;
+        const metadataChanged =
+          gitMetadata.data !== undefined &&
+          (gitMetadata.data?.gitDirectory !==
+            workspace.gitMetadata?.gitDirectory ||
+            gitMetadata.data?.commonDirectory !==
+              workspace.gitMetadata?.commonDirectory);
         return {
           ...(gitMetadata.data === undefined ? workspace : rest),
           rootIdentity,
+          ...(metadataChanged ? { gitHistoryApproved: false } : {}),
           accessCheck: {
             buildId: parsed.data.buildId,
             computerGeneration: this.current!.computer.generation,

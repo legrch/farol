@@ -32,15 +32,17 @@ const ReadonlyCapabilitySchema = z.enum([
   "workspace.read",
   "workspace.search",
   "verification.run",
+  "workspace.shell",
 ]);
 const MutableCapabilitySchema = z.enum([
   "workspace.list",
   "workspace.read",
   "workspace.search",
   "verification.run",
+  "workspace.shell",
   "workspace.write",
 ]);
-const CommandAuthoritySchema = z.enum(["none", "verification"]);
+const CommandAuthoritySchema = z.enum(["none", "verification", "workspace"]);
 
 function canonicalAbsolutePath(value: string): boolean {
   return (
@@ -78,6 +80,8 @@ const ReadonlyApprovedWorkspaceSchema = z.strictObject({
   access: z.literal("read"),
   rootIdentity: RootIdentitySchema,
   gitMetadata: GitMetadataSchema.optional(),
+  gitHistoryApproved: z.boolean().optional(),
+  shellVerified: z.boolean().optional(),
 });
 const ReadonlySubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -102,6 +106,8 @@ const MutableApprovedWorkspaceSchema = z.strictObject({
   access: z.enum(["read", "write"]),
   rootIdentity: RootIdentitySchema,
   gitMetadata: GitMetadataSchema.optional(),
+  gitHistoryApproved: z.boolean().optional(),
+  shellVerified: z.boolean().optional(),
 });
 const MutableSubtreeScopeSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -130,7 +136,7 @@ const ReadonlyComputerApprovalSchema = z.strictObject({
   generation: z.number().int().nonnegative(),
   workspaces: z.array(ReadonlyApprovedWorkspaceSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
+  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(7),
   network: z.literal("none"),
   commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
@@ -145,7 +151,7 @@ const ReadonlyTaskAdmissionSchema = z.strictObject({
   computerGeneration: z.number().int().nonnegative(),
   workspaces: z.array(ReadonlyWorkspaceScopeSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
+  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(7),
   network: z.literal("none"),
   commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
@@ -153,7 +159,7 @@ const ReadonlyTaskAdmissionSchema = z.strictObject({
 const ReadonlyAuthorityNarrowingSchema = z.strictObject({
   workspaces: z.array(ReadonlyWorkspaceScopeSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(5),
+  capabilities: z.array(ReadonlyCapabilitySchema).min(1).max(7),
   network: z.literal("none"),
   commands: CommandAuthoritySchema,
 });
@@ -169,7 +175,7 @@ const MutableComputerApprovalSchema = z.strictObject({
   generation: z.number().int().nonnegative(),
   workspaces: z.array(MutableApprovedWorkspaceSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
+  capabilities: z.array(MutableCapabilitySchema).min(1).max(7),
   network: z.literal("none"),
   commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
@@ -184,7 +190,7 @@ const MutableTaskAdmissionSchema = z.strictObject({
   computerGeneration: z.number().int().nonnegative(),
   workspaces: z.array(MutableWorkspaceScopeSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
+  capabilities: z.array(MutableCapabilitySchema).min(1).max(7),
   network: z.literal("none"),
   commands: CommandAuthoritySchema,
   expiresAt: z.number().int().positive().safe(),
@@ -192,7 +198,7 @@ const MutableTaskAdmissionSchema = z.strictObject({
 const MutableAuthorityNarrowingSchema = z.strictObject({
   workspaces: z.array(MutableWorkspaceScopeSchema).min(1).max(32),
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
-  capabilities: z.array(MutableCapabilitySchema).min(1).max(5),
+  capabilities: z.array(MutableCapabilitySchema).min(1).max(7),
   network: z.literal("none"),
   commands: CommandAuthoritySchema,
 });

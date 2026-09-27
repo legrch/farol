@@ -267,6 +267,7 @@ export const ApprovedProductWorkspaceSchema = z
     excludedPaths: z.array(CanonicalAbsolutePathSchema).max(32),
     rootIdentity: WorkspaceRootIdentitySchema.optional(),
     gitMetadata: WorkspaceGitMetadataSchema.optional(),
+    gitHistoryApproved: z.boolean().optional(),
     // Content-free evidence for the setup folder list, not another grant.
     // The descriptor and existing authority checks still admit every read.
     accessCheck: z
@@ -356,7 +357,7 @@ export const ProductSettingsSchema = z.strictObject({
     computerId: IdentifierSchema,
     generation: z.number().int().positive(),
     name: z.string().trim().min(1).max(80),
-    commands: z.enum(["none", "verification"]).default("none"),
+    commands: z.enum(["none", "verification", "workspace"]).default("none"),
     workspaces: z.array(ApprovedProductWorkspaceSchema).max(64),
     pendingEdit: PendingWorkspaceEditDeliverySchema.nullable().default(null),
   }),
@@ -525,8 +526,13 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     access: z.enum(["read", "write"]),
   }),
   z.strictObject({
+    kind: z.literal("computer.update-git-history"),
+    workspaceId: IdentifierSchema,
+    approved: z.boolean(),
+  }),
+  z.strictObject({
     kind: z.literal("computer.update-commands"),
-    commands: z.enum(["none", "verification"]),
+    commands: z.enum(["none", "verification", "workspace"]),
   }),
   z.strictObject({
     kind: z.literal("computer.check-folder"),

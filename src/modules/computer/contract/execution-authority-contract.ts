@@ -6,6 +6,7 @@ const AuthorityCapabilitySchema = z.enum([
   "workspace.search",
   "verification.run",
   "workspace.write",
+  "workspace.shell",
 ]);
 
 const WorkspaceScopeSchema = z.discriminatedUnion("mode", [
@@ -74,7 +75,7 @@ const AuthorityNarrowingSchema = z.strictObject({
   excludedPaths: z.array(WorkspaceExclusionSchema).max(32).optional(),
   capabilities: z.array(AuthorityCapabilitySchema).max(16),
   network: z.enum(["none", "approved"]),
-  commands: z.enum(["none", "verification"]),
+  commands: z.enum(["none", "verification", "workspace"]),
 });
 
 export const ExecutionAuthorityDelegationRequestSchema = z.strictObject({
@@ -105,7 +106,7 @@ const DelegatedAuthoritySchema = z.strictObject({
   excludedPaths: z.array(GrantedWorkspaceExclusionSchema).max(32),
   capabilities: z.array(AuthorityCapabilitySchema).max(16),
   network: z.enum(["none", "approved"]),
-  commands: z.enum(["none", "verification"]),
+  commands: z.enum(["none", "verification", "workspace"]),
   expiresAt: z.number().finite().nonnegative(),
   // Marks this record as carrying real provenance (added alongside
   // `restrictionSource` above). Absent on a record from before this field

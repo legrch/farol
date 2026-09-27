@@ -23,6 +23,7 @@ import { PrivateConnectorVerificationRecorder } from "../../modules/computer/inf
 import { PrivateExecutionFence } from "../../modules/computer/infra/mcp/execution-fence";
 import { PrivateDevMcpProofRecorder } from "../../modules/computer/infra/mcp/dev-mcp-proof";
 import { CodexCallerRelayClient } from "./codex-caller-relay-client";
+import { SandboxedWorkspaceShell } from "../../modules/computer/infra/native/sandboxed-workspace-shell";
 
 function launchContractArgument(arguments_: readonly string[]): string {
   if (
@@ -86,6 +87,15 @@ async function main(): Promise<void> {
   // The desktop raises a fence in the launch root while a summary-only
   // phase runs; no tool executes until it is lowered.
   const fence = new PrivateExecutionFence({ root: path.dirname(launchFile) });
+  const shell =
+    launch.approval.commands === "workspace"
+      ? new SandboxedWorkspaceShell(
+          launch.approval,
+          launch.participants.at(-1)!,
+          launch.binding,
+          path.dirname(launchFile),
+        )
+      : undefined;
   const handle = serveStdio(
     () =>
       createReadonlyComputerMcpServer(
@@ -96,6 +106,7 @@ async function main(): Promise<void> {
         callerRelay,
         fence,
         devMcpProof,
+        shell,
       ),
     {
       legacy: "serve",
@@ -108,10 +119,12 @@ async function main(): Promise<void> {
   const close = () => {
     if (closing) return;
     closing = true;
+    shell?.close();
     void handle.close().finally(() => process.exit(0));
   };
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
+  process.once("exit", () => shell?.close());
 }
 
 void main().catch(() => {

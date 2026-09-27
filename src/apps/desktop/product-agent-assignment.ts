@@ -14,7 +14,6 @@ import { DelegateExecutionAuthority } from "../../modules/computer/app/service/d
 import {
   createParticipantAuthority,
   deriveTaskGrant,
-  type ComputerApproval,
   type TaskAdmission,
 } from "../../modules/computer/domain/execution-authority";
 import { ExecutionAuthorityContractHandler } from "../../modules/computer/infra/authority-contract-handler";
@@ -80,7 +79,12 @@ export async function runProductAgentAssignment(
     return denied();
   }
   const exactFilesOnly = input.scope.mode === "exact";
-  const capabilities: ComputerApproval["capabilities"] = exactFilesOnly
+  const capabilities: readonly (
+    | "workspace.list"
+    | "workspace.read"
+    | "workspace.search"
+    | "verification.run"
+  )[] = exactFilesOnly
     ? ["workspace.read", "workspace.search"]
     : [
         "workspace.list",
@@ -90,9 +94,10 @@ export async function runProductAgentAssignment(
           ? (["verification.run"] as const)
           : []),
       ];
-  const commands = exactFilesOnly
-    ? ("none" as const)
-    : settings.computer.commands;
+  const commands =
+    !exactFilesOnly && settings.computer.commands === "verification"
+      ? ("verification" as const)
+      : ("none" as const);
   const approval = productAgentApproval(settings.computer, {
     ownerId: "owner-desktop",
     capabilities,

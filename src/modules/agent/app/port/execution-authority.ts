@@ -5,7 +5,8 @@ export type AgentAuthorityCapability =
   | "workspace.read"
   | "workspace.search"
   | "verification.run"
-  | "workspace.write";
+  | "workspace.write"
+  | "workspace.shell";
 
 export type AgentWorkspaceScope =
   | Readonly<{
@@ -63,7 +64,7 @@ export type AgentAuthorityNarrowing = Readonly<{
     | undefined;
   capabilities: readonly AgentAuthorityCapability[];
   network: "none" | "approved";
-  commands: "none" | "verification";
+  commands: "none" | "verification" | "workspace";
 }>;
 
 export type AgentDelegationRequest = Readonly<{
@@ -91,7 +92,7 @@ export type DelegatedAgentAuthority = Readonly<{
   excludedPaths: readonly GrantedAgentWorkspaceExclusion[];
   capabilities: readonly AgentAuthorityCapability[];
   network: "none" | "approved";
-  commands: "none" | "verification";
+  commands: "none" | "verification" | "workspace";
   expiresAt: number;
   // Absent on a record produced before provenance existed. See
   // `GrantedAgentWorkspaceScope` above.

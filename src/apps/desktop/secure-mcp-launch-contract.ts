@@ -61,13 +61,29 @@ export function createSecureMcpLaunchContract(
   const writeEnabled = workspaces.some(
     (workspace) => workspace.access === "write",
   );
+  const computerVerification = settings.setup.computer.verified;
+  const freshShellWorkspace = (workspace: (typeof workspaces)[number]) =>
+    settings.computer.commands === "workspace" &&
+    settings.setup.computer.reachable === "reachable" &&
+    !settings.setup.computer.outcomeUnknown &&
+    computerVerification?.configRevision === settings.computer.generation &&
+    workspace.accessCheck?.computerGeneration ===
+      settings.computer.generation &&
+    workspace.accessCheck.buildId === computerVerification.buildId &&
+    workspace.accessCheck.rootIdentity.device ===
+      workspace.rootIdentity.device &&
+    workspace.accessCheck.rootIdentity.inode === workspace.rootIdentity.inode;
+  const shellEnabled = workspaces.some(freshShellWorkspace);
+  const effectiveCommands =
+    settings.computer.commands === "workspace" && !shellEnabled
+      ? "verification"
+      : settings.computer.commands;
   const capabilities = [
     "workspace.list" as const,
     "workspace.read" as const,
     "workspace.search" as const,
-    ...(settings.computer.commands === "verification"
-      ? (["verification.run"] as const)
-      : []),
+    ...(effectiveCommands !== "none" ? (["verification.run"] as const) : []),
+    ...(shellEnabled ? (["workspace.shell"] as const) : []),
     ...(writeEnabled ? (["workspace.write"] as const) : []),
   ];
   const excludedPaths = workspaces.flatMap((workspace) =>
@@ -96,6 +112,10 @@ export function createSecureMcpLaunchContract(
         root: workspace.root,
         access: workspace.access,
         rootIdentity: workspace.rootIdentity,
+        ...(workspace.gitHistoryApproved !== undefined
+          ? { gitHistoryApproved: workspace.gitHistoryApproved }
+          : {}),
+        shellVerified: freshShellWorkspace(workspace),
         ...(workspace.gitMetadata
           ? { gitMetadata: workspace.gitMetadata }
           : {}),
@@ -103,7 +123,7 @@ export function createSecureMcpLaunchContract(
       excludedPaths,
       capabilities,
       network: "none",
-      commands: settings.computer.commands,
+      commands: effectiveCommands,
       expiresAt,
     },
     admission: {
@@ -118,7 +138,7 @@ export function createSecureMcpLaunchContract(
       excludedPaths,
       capabilities,
       network: "none",
-      commands: settings.computer.commands,
+      commands: effectiveCommands,
       expiresAt,
     },
     delegationChain: [

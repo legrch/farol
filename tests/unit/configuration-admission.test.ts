@@ -8,6 +8,7 @@ const computerAuthorityCommands = [
   "computer.remove-workspace",
   "computer.update-exclusions",
   "computer.update-access",
+  "computer.update-git-history",
   "computer.update-commands",
   "dev-proof.prepare",
 ] as const;

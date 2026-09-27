@@ -2248,27 +2248,46 @@ function renderComputerConfiguration(): void {
   const commandCopy = document.createElement("div");
   const commandTitle = document.createElement("strong");
   const commandDetail = document.createElement("small");
-  commandTitle.textContent = "Verified commands";
+  commandTitle.textContent = "Computer commands";
   commandDetail.textContent =
-    settings.computer.commands === "verification"
-      ? "Fixed Git status and HEAD · Apple Git · no network · bounded output"
-      : "Off · no command authority is granted";
+    settings.computer.commands === "workspace"
+      ? "Sandboxed workspace shell · no network · Git history requires separate folder approval"
+      : settings.computer.commands === "verification"
+        ? "Fixed Git status and HEAD · Apple Git · no network · bounded output"
+        : "Off · no command authority is granted";
   commandCopy.append(commandTitle, commandDetail);
+  const commandMode = document.createElement("select");
+  commandMode.setAttribute("aria-label", "Computer command authority");
+  for (const [value, label] of [
+    ["none", "Off"],
+    ["verification", "Fixed verification"],
+    ["workspace", "Workspace shell"],
+  ] as const) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    commandMode.append(option);
+  }
+  commandMode.value = settings.computer.commands;
   const updateCommands = document.createElement("button");
   updateCommands.type = "button";
-  updateCommands.textContent =
-    settings.computer.commands === "verification" ? "Turn off" : "Enable";
+  updateCommands.textContent = "Apply";
   updateCommands.addEventListener("click", () => {
-    const commands =
-      settings.computer.commands === "verification" ? "none" : "verification";
+    const commands = commandMode.value;
+    if (
+      commands !== "none" &&
+      commands !== "verification" &&
+      commands !== "workspace"
+    )
+      return;
     void configureProduct(
       { kind: "computer.update-commands", commands },
-      commands === "verification"
-        ? "Fixed no-network Git status and HEAD enabled. Verify the workspace again before use."
-        : "Command authority removed.",
+      commands === "none"
+        ? "Command authority removed."
+        : "Command authority changed. Verify the workspace again before use.",
     );
   });
-  commandRow.append(commandCopy, updateCommands);
+  commandRow.append(commandCopy, commandMode, updateCommands);
   commandPolicy.replaceChildren(commandRow);
 
   const computerState = settings.setup.computer;
@@ -2406,6 +2425,32 @@ function renderComputerConfiguration(): void {
         );
       });
       policy.append(exclusionLabel, saveExclusions);
+      const gitDisclosure = document.createElement("p");
+      gitDisclosure.textContent =
+        "Full Git access includes .git/config, refs, objects, hooks, and linked-worktree metadata. These can contain credentials or past versions of excluded files. Approve only if this repository's complete metadata may be shared with the connected ChatGPT service.";
+      policy.append(gitDisclosure);
+      const gitHistory = document.createElement("button");
+      gitHistory.type = "button";
+      gitHistory.textContent = workspace.gitHistoryApproved
+        ? "Revoke full Git metadata"
+        : "Approve full Git metadata";
+      gitHistory.disabled =
+        !workspace.gitHistoryApproved &&
+        (!verified || settings.computer.commands !== "workspace");
+      gitHistory.title = workspace.gitHistoryApproved
+        ? "Remove shell access to this repository's Git metadata"
+        : "Allow shell access to complete Git metadata after verifying this folder and reviewing the disclosure above.";
+      gitHistory.addEventListener("click", () => {
+        void configureProduct(
+          {
+            kind: "computer.update-git-history",
+            workspaceId: workspace.workspaceId,
+            approved: !workspace.gitHistoryApproved,
+          },
+          `${workspace.label} Git history authority changed. Verify the folder again.`,
+        );
+      });
+      policy.append(gitHistory);
       card.append(row, policy);
 
       const query = document.createElement("div");
@@ -2467,10 +2512,9 @@ function renderComputerConfiguration(): void {
       const gitStatus = document.createElement("button");
       gitStatus.type = "button";
       gitStatus.textContent = "Git status";
-      gitStatus.disabled =
-        !verified || settings.computer.commands !== "verification";
+      gitStatus.disabled = !verified || settings.computer.commands === "none";
       gitStatus.title =
-        settings.computer.commands !== "verification"
+        settings.computer.commands === "none"
           ? "Enable Verified commands above"
           : verified
             ? "Run the fixed no-network Git status verifier at this workspace root"
@@ -2487,10 +2531,9 @@ function renderComputerConfiguration(): void {
       const gitHead = document.createElement("button");
       gitHead.type = "button";
       gitHead.textContent = "Git HEAD";
-      gitHead.disabled =
-        !verified || settings.computer.commands !== "verification";
+      gitHead.disabled = !verified || settings.computer.commands === "none";
       gitHead.title =
-        settings.computer.commands !== "verification"
+        settings.computer.commands === "none"
           ? "Enable Verified commands above"
           : verified
             ? "Read the exact Git HEAD commit through the fixed no-network verifier"
@@ -2878,6 +2921,7 @@ async function configureProduct(
     command.kind === "computer.run-git-status" ||
     command.kind === "computer.prepare-workspace-edit" ||
     command.kind === "computer.update-access" ||
+    command.kind === "computer.update-git-history" ||
     command.kind === "computer.update-commands" ||
     command.kind === "computer.update-exclusions" ||
     command.kind === "computer.remove-workspace"

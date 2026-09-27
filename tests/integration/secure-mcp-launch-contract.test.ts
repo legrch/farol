@@ -89,6 +89,95 @@ function readiness() {
 }
 
 describe("secure MCP Computer launch contract", () => {
+  it("grants the ordinary shell only after the owner selects workspace command mode", () => {
+    const configured = settings();
+    const verifiedAt = new Date(1_789_516_700_000).toISOString();
+    const buildId = "f".repeat(64);
+    const verifiedSettings = ProductSettingsSchema.parse({
+      ...configured,
+      computer: {
+        ...configured.computer,
+        commands: "workspace",
+        workspaces: configured.computer.workspaces.map((workspace, index) =>
+          index === 0
+            ? {
+                ...workspace,
+                accessCheck: {
+                  buildId,
+                  computerGeneration: configured.computer.generation,
+                  verifiedAt,
+                  rootIdentity: workspace.rootIdentity,
+                },
+              }
+            : workspace,
+        ),
+      },
+      setup: {
+        ...configured.setup,
+        computer: {
+          ...configured.setup.computer,
+          reachable: "reachable",
+          verified: {
+            profile: "computer.local.read/1",
+            configRevision: configured.computer.generation,
+            workspaceId: configured.computer.workspaces[0]!.workspaceId,
+            runtimeGeneration: "runtime-1",
+            buildId,
+            protocol: "readonly-workspace/1",
+            verifiedAt,
+          },
+        },
+      },
+    });
+    const enabled = createSecureMcpLaunchContract(verifiedSettings, {
+      now: 1_789_516_800_000,
+      runtimeId: "runtime-shell",
+      challengeSha256: "a".repeat(64),
+    });
+    expect(enabled.approval.capabilities).toContain("workspace.shell");
+    expect(enabled.admission.commands).toBe("workspace");
+    expect(enabled.approval.workspaces).toMatchObject([
+      { shellVerified: true },
+      { shellVerified: false },
+    ]);
+    expect(
+      materializeReadonlyComputerLaunch(enabled, 1_789_516_800_000)
+        .participants,
+    ).toHaveLength(1);
+
+    const off = createSecureMcpLaunchContract(
+      {
+        ...configured,
+        computer: { ...configured.computer, commands: "none" },
+      },
+      {
+        now: 1_789_516_800_000,
+        runtimeId: "runtime-shell-off",
+        challengeSha256: "b".repeat(64),
+      },
+    );
+    expect(off.approval.capabilities).not.toContain("workspace.shell");
+
+    const stale = createSecureMcpLaunchContract(
+      {
+        ...verifiedSettings,
+        computer: {
+          ...verifiedSettings.computer,
+          generation: verifiedSettings.computer.generation + 1,
+        },
+      },
+      {
+        now: 1_789_516_800_000,
+        runtimeId: "runtime-shell-stale",
+        challengeSha256: "c".repeat(64),
+      },
+    );
+    expect(stale.approval.capabilities).not.toContain("workspace.shell");
+    expect(stale.approval.commands).toBe("verification");
+    expect(stale.approval.workspaces.every((item) => !item.shellVerified)).toBe(
+      true,
+    );
+  });
   it("carries only a generation-bound Farol DEV proof into the production launch", () => {
     const devMcpProof = {
       schema: 1 as const,
@@ -301,6 +390,7 @@ describe("secure MCP Computer launch contract", () => {
         root: "/Users/example/write",
         access: "write",
         rootIdentity: { device: "5", inode: "99" },
+        shellVerified: false,
         gitMetadata: {
           gitDirectory: "/Users/example/repo/.git/worktrees/write",
           commonDirectory: "/Users/example/repo/.git",

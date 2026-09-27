@@ -17,6 +17,10 @@ import {
 } from "../../../../pkg/caller-relay/protocol";
 import type { CodexCallerRelayPort } from "./codex-caller-relay-port";
 import type { ExecutionFenceReader } from "./execution-fence";
+import type {
+  SandboxedWorkspaceShell,
+  ShellResponse,
+} from "../native/sandboxed-workspace-shell";
 
 export type ReadonlyComputerMcpBinding = Readonly<{
   ownerId: string;
@@ -135,6 +139,27 @@ const EditInputSchema = z.strictObject({
     .max(256),
   expectedSha256: Sha256Schema,
 });
+const ShellStartInputSchema = z.strictObject({
+  operationId: IdentifierSchema,
+  workspaceId: IdentifierSchema,
+  relativeCwd: ScopeRelativePathSchema,
+  command: z
+    .string()
+    .min(1)
+    .max(16 * 1024),
+  stdin: z
+    .string()
+    .max(1024 * 1024)
+    .optional(),
+  timeoutMs: z.number().int().min(1).max(600_000),
+  write: z.boolean(),
+});
+const ShellReadInputSchema = z.strictObject({
+  handle: z.string().uuid(),
+  stdoutOffset: z.number().int().nonnegative(),
+  stderrOffset: z.number().int().nonnegative(),
+});
+const ShellCancelInputSchema = z.strictObject({ handle: z.string().uuid() });
 
 const READONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -548,6 +573,14 @@ async function executeCallerRelay(
   };
 }
 
+function shellResult(result: ShellResponse): CallToolResult {
+  return {
+    content: [{ type: "text", text: JSON.stringify(result) }],
+    structuredContent: { ...result },
+    ...(result.ok ? {} : { isError: true }),
+  };
+}
+
 export function createReadonlyComputerMcpServer(
   contract: ReadonlyComputerContract,
   binding: ReadonlyComputerMcpBinding,
@@ -556,6 +589,7 @@ export function createReadonlyComputerMcpServer(
   callerRelay?: CodexCallerRelayPort,
   fence?: ExecutionFenceReader,
   devMcpProof?: DevMcpProofRecorder,
+  shell?: SandboxedWorkspaceShell,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -806,6 +840,49 @@ export function createReadonlyComputerMcpServer(
             context.mcpReq.signal,
           ),
       ),
+    );
+  }
+
+  if (shell) {
+    server.registerTool(
+      "computer_shell_start",
+      {
+        title: "Start a sandboxed workspace command",
+        description:
+          "Run an ordinary command inside approved workspaces under the native OS sandbox. Use a stable operationId; an unknown start outcome must not be repeated with a new ID. write=false grants read-only workspace access.",
+        inputSchema: ShellStartInputSchema,
+        annotations: MUTATION_ANNOTATIONS,
+      },
+      guarded(async (input) =>
+        shellResult(
+          await shell.start({
+            ...input,
+            ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
+          }),
+        ),
+      ),
+    );
+    server.registerTool(
+      "computer_shell_read",
+      {
+        title: "Read a workspace command result",
+        description:
+          "Read bounded stdout/stderr from one owned handle using byte offsets; includes actual exit code or signal when the process is finished.",
+        inputSchema: ShellReadInputSchema,
+        annotations: READONLY_ANNOTATIONS,
+      },
+      guarded(async (input) => shellResult(shell.read(input))),
+    );
+    server.registerTool(
+      "computer_shell_cancel",
+      {
+        title: "Cancel an owned workspace command",
+        description:
+          "Signal only the process group belonging to the supplied command handle.",
+        inputSchema: ShellCancelInputSchema,
+        annotations: MUTATION_ANNOTATIONS,
+      },
+      guarded(async ({ handle }) => shellResult(shell.cancel(handle))),
     );
   }
 

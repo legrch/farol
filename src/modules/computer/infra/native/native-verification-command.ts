@@ -1288,6 +1288,22 @@ export async function discoverLinkedGitMetadata(
   };
 }
 
+// The shell's broader Git history grant must still name the Git layout the
+// owner verified, rather than following a changed linked-worktree pointer.
+export async function matchesApprovedGitMetadata(
+  root: string,
+  approved: WorkspaceGitMetadataGrant | undefined,
+): Promise<boolean> {
+  const current = await resolveWorkspaceGitMetadata(root, approved);
+  if (current === "not-repository") return approved === undefined;
+  if (current === null || current === "not-approved") return false;
+  return approved === undefined
+    ? current.gitDirectory === path.join(root, ".git") &&
+        current.commonDirectory === path.join(root, ".git")
+    : current.gitDirectory === approved.gitDirectory &&
+        current.commonDirectory === approved.commonDirectory;
+}
+
 export async function executeNativeVerificationCommand(
   request: ReadonlyWorkspaceRequest,
   operation: VerificationOperation,

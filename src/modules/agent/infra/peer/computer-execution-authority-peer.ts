@@ -3,6 +3,7 @@ import type {
   AgentAuthorityFailureSource,
   AgentAuthorityPort,
   AgentDelegationRequest,
+  AgentAuthorityCapability,
 } from "../../app/port/execution-authority";
 import {
   ExecutionAuthorityDelegationResponseSchema,
@@ -69,6 +70,31 @@ export class ComputerExecutionAuthorityPeer implements AgentAuthorityPort {
         },
       };
     }
-    return { ok: true, value: response.value };
+    // Agent assignments never acquire the ordinary owner's shell grant.
+    // Reject an unexpected response rather than erasing the capability and
+    // pretending that the provider narrowed it.
+    if (
+      response.value.commands === "workspace" ||
+      response.value.capabilities.includes("workspace.shell")
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "AGENT_AUTHORITY_UNAVAILABLE",
+          source: "authority-store",
+          retry: "never",
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        ...response.value,
+        capabilities: response.value.capabilities.filter(
+          (capability): capability is AgentAuthorityCapability =>
+            capability !== "workspace.shell",
+        ),
+      },
+    };
   }
 }
