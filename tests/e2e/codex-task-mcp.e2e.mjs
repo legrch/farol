@@ -1,0 +1,399 @@
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import { createServer } from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const executeFile = promisify(execFile);
+const binary = process.env.FAROL_CODEX_PROXY_BINARY;
+if (!binary || !path.isAbsolute(binary)) {
+  throw new Error("CODEX_PROXY_BINARY_REQUIRED");
+}
+const packaged = process.argv.slice(2).join(" ") === "--packaged";
+const entry = packaged
+  ? path.resolve(
+      "_output/package/Farol Next Preview.app/Contents/Resources/app/computer-mcp.cjs",
+    )
+  : path.resolve("_output/build/app/computer-mcp.cjs");
+const command = packaged
+  ? path.resolve(
+      "_output/package/Farol Next Preview.app/Contents/Frameworks/Electron Runtime.app/Contents/MacOS/Electron",
+    )
+  : process.execPath;
+const root = await fs.realpath(
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-task-mcp-e2e-")),
+);
+const projectRoot = path.join(root, "project");
+const writerRoot = path.join(root, "writer");
+const launchRoot = path.join(root, "launch");
+const socketPath = path.join(root, "control.sock");
+const key = "41949674-c1e4-4a73-9098-4d31da6e7aaa";
+const projectId = "saved-fixture-project";
+const threadId = "issued-fixture-thread";
+const turnId = "issued-fixture-turn";
+const calls = [];
+const sockets = new Set();
+
+function canonical(value) {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((field) => `${JSON.stringify(field)}:${canonical(value[field])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+async function git(...arguments_) {
+  return executeFile("/usr/bin/git", arguments_, {
+    env: {
+      HOME: root,
+      PATH: "/usr/bin:/bin",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+      GIT_COMMITTER_NAME: "Fixture",
+      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    },
+  });
+}
+
+async function identity(directory) {
+  const info = await fs.lstat(directory, { bigint: true });
+  return { device: String(info.dev), inode: String(info.ino) };
+}
+
+function hostResult(method, params) {
+  calls.push(method);
+  if (method === "initialize") {
+    return {
+      codexHome: "/fixture/codex-home",
+      platformFamily: "unix",
+      platformOs: "macos",
+      userAgent: "disposable-fixture",
+    };
+  }
+  if (method === "project/list") {
+    return {
+      data: [{ id: projectId, roots: [{ path: projectRoot }] }],
+      nextCursor: null,
+    };
+  }
+  if (method === "thread/start") {
+    assert.equal(params.projectId, projectId);
+    assert.equal(params.cwd, writerRoot);
+    assert.equal(params.allowProviderModelFallback, false);
+    return {
+      cwd: writerRoot,
+      model: "gpt-6-luna",
+      approvalPolicy: "on-request",
+      sandbox: { type: "readOnly" },
+      thread: { id: threadId, projectId },
+    };
+  }
+  if (method === "turn/start") {
+    assert.equal(params.threadId, threadId);
+    assert.equal(params.cwd, writerRoot);
+    assert.deepEqual(params.input, [{ type: "text", text: "Read README H1" }]);
+    assert.deepEqual(params.sandboxPolicy, {
+      type: "readOnly",
+      networkAccess: false,
+    });
+    return { turn: { id: turnId, status: "inProgress" } };
+  }
+  if (method === "thread/read") {
+    return {
+      thread: {
+        id: threadId,
+        projectId,
+        cwd: writerRoot,
+        model: "gpt-6-luna",
+      },
+    };
+  }
+  if (method === "thread/turns/list") {
+    return { data: [{ id: turnId, status: "completed" }], nextCursor: null };
+  }
+  if (method === "thread/items/list") {
+    assert.equal(params.turnId, turnId);
+    return {
+      data: [
+        {
+          turnId,
+          item: {
+            id: "answer",
+            type: "agentMessage",
+            phase: "final_answer",
+            text: "Exact built-byte fixture answer",
+          },
+        },
+      ],
+      nextCursor: null,
+    };
+  }
+  throw new Error(`UNEXPECTED_HOST_METHOD:${method}`);
+}
+
+const server = createServer((socket) => {
+  sockets.add(socket);
+  socket.on("close", () => sockets.delete(socket));
+  let pending = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    pending += chunk;
+    for (;;) {
+      const end = pending.indexOf("\n");
+      if (end < 0) break;
+      const line = pending.slice(0, end);
+      pending = pending.slice(end + 1);
+      const request = JSON.parse(line);
+      if (request.id === undefined) continue;
+      socket.write(
+        `${JSON.stringify({ id: request.id, result: hostResult(request.method, request.params) })}\n`,
+      );
+    }
+  });
+});
+
+let client;
+let transport;
+try {
+  await fs.chmod(root, 0o700);
+  await git("init", projectRoot);
+  await git("-C", projectRoot, "commit", "--allow-empty", "-m", "fixture");
+  await git(
+    "-C",
+    projectRoot,
+    "worktree",
+    "add",
+    "--detach",
+    writerRoot,
+    "HEAD",
+  );
+  await fs.mkdir(launchRoot, { mode: 0o700 });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+  const now = Date.now();
+  const writerIdentity = await identity(writerRoot);
+  const projectIdentity = await identity(projectRoot);
+  const gitDirectory = (
+    await git("-C", writerRoot, "rev-parse", "--absolute-git-dir")
+  ).stdout.trim();
+  const commonDirectory = path.join(projectRoot, ".git");
+  const launch = {
+    schema: 1,
+    approval: {
+      ownerId: "fixture-owner",
+      computerId: "fixture-computer",
+      generation: 1,
+      workspaces: [
+        {
+          workspaceId: "approved-writer",
+          root: writerRoot,
+          access: "read",
+          rootIdentity: writerIdentity,
+          gitMetadata: { gitDirectory, commonDirectory },
+        },
+      ],
+      capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+      network: "none",
+      commands: "none",
+      expiresAt: now + 120_000,
+    },
+    admission: {
+      authorityId: "fixture-authority",
+      ownerId: "fixture-owner",
+      sessionId: "fixture-session",
+      taskId: "fixture-task",
+      taskEpoch: 1,
+      computerId: "fixture-computer",
+      computerGeneration: 1,
+      workspaces: [
+        {
+          workspaceId: "approved-writer",
+          mode: "subtree",
+          root: writerRoot,
+          access: "read",
+        },
+      ],
+      capabilities: ["workspace.list", "workspace.read", "workspace.search"],
+      network: "none",
+      commands: "none",
+      expiresAt: now + 120_000,
+    },
+    delegationChain: [
+      {
+        participantId: "fixture-main",
+        role: "main",
+        mutationOwnership: "none",
+      },
+    ],
+    binding: {
+      participantId: "fixture-main",
+      turnId: "fixture-turn",
+      generation: 1,
+    },
+    codexTasks: {
+      transport: "codex-shared-proxy/v1",
+      host: {
+        executablePath: binary,
+        executableSha256: createHash("sha256")
+          .update(await fs.readFile(binary))
+          .digest("hex"),
+        socketPath,
+        expectedCodexHome: "/fixture/codex-home",
+      },
+      grant: {
+        workspaceId: "approved-writer",
+        writerRoot,
+        writerIdentity,
+        projectId,
+        projectRoot,
+        projectIdentity,
+        gitCommonDirectory: commonDirectory,
+        execution: { sandbox: "read-only", approvalPolicy: "on-request" },
+        model: "gpt-6-luna",
+        reasoningEffort: "medium",
+        expiresAt: now + 120_000,
+      },
+    },
+  };
+  const launchFile = path.join(launchRoot, "computer-launch.json");
+  await fs.writeFile(launchFile, `${canonical(launch)}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
+  transport = new StdioClientTransport({
+    command,
+    args: [entry, "--launch-contract", launchFile],
+    cwd: process.cwd(),
+    stderr: "pipe",
+    ...(packaged
+      ? {
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+            HOME: process.env.HOME ?? root,
+            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          },
+        }
+      : {}),
+  });
+  let stderr = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderr += String(chunk);
+  });
+  client = new Client({ name: "built-task-fixture", version: "1" });
+  await client.connect(transport);
+  const tools = (await client.listTools()).tools.map((tool) => tool.name);
+  assert(tools.includes("codex_task_create"), stderr);
+  assert(tools.includes("codex_task_status"), stderr);
+  assert(tools.includes("codex_task_result"), stderr);
+  const created = await client.callTool({
+    name: "codex_task_create",
+    arguments: {
+      key,
+      workspaceId: "approved-writer",
+      projectId,
+      message: "Read README H1",
+      model: "gpt-6-luna",
+      reasoningEffort: "medium",
+    },
+  });
+  assert.deepEqual(created.structuredContent, {
+    status: "dispatched",
+    dispatchId: key,
+  });
+  const status = await client.callTool({
+    name: "codex_task_status",
+    arguments: { dispatchId: key },
+  });
+  assert.deepEqual(status.structuredContent, {
+    status: "known",
+    dispatchId: key,
+    turnStatus: "completed",
+  });
+  const result = await client.callTool({
+    name: "codex_task_result",
+    arguments: { dispatchId: key },
+  });
+  assert.deepEqual(result.structuredContent, {
+    status: "completed",
+    dispatchId: key,
+    text: "Exact built-byte fixture answer",
+  });
+  assert.equal(calls.filter((method) => method === "thread/start").length, 1);
+  assert.equal(calls.filter((method) => method === "turn/start").length, 1);
+  await client.close();
+  await transport.close();
+  client = undefined;
+  transport = undefined;
+
+  const unavailableLaunch = structuredClone(launch);
+  unavailableLaunch.codexTasks.host.socketPath = path.join(
+    root,
+    "missing.sock",
+  );
+  const unavailableLaunchRoot = path.join(root, "launch-without-task-host");
+  await fs.mkdir(unavailableLaunchRoot, { mode: 0o700 });
+  const unavailableLaunchFile = path.join(
+    unavailableLaunchRoot,
+    "computer-launch.json",
+  );
+  await fs.writeFile(
+    unavailableLaunchFile,
+    `${canonical(unavailableLaunch)}\n`,
+    {
+      mode: 0o600,
+      flag: "wx",
+    },
+  );
+  transport = new StdioClientTransport({
+    command,
+    args: [entry, "--launch-contract", unavailableLaunchFile],
+    cwd: process.cwd(),
+    stderr: "pipe",
+    ...(packaged
+      ? {
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+            HOME: process.env.HOME ?? root,
+            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          },
+        }
+      : {}),
+  });
+  client = new Client({ name: "built-task-host-down", version: "1" });
+  await client.connect(transport);
+  const remainingTools = (await client.listTools()).tools.map(
+    (tool) => tool.name,
+  );
+  assert(remainingTools.includes("computer_workspace_list"));
+  assert(!remainingTools.some((tool) => tool.startsWith("codex_task_")));
+  const listed = await client.callTool({
+    name: "computer_workspace_list",
+    arguments: { workspaceId: "approved-writer", relativePath: "." },
+  });
+  assert.notEqual(listed.isError, true);
+  process.stdout.write(
+    `PASS: ${packaged ? "packaged" : "built"} Computer MCP task route used one disposable proxy socket; unavailable task host left Computer working; no model turn.\n`,
+  );
+} finally {
+  await client?.close().catch(() => undefined);
+  await transport?.close().catch(() => undefined);
+  for (const socket of sockets) socket.destroy();
+  if (server.listening) {
+    await new Promise((resolve) => server.close(() => resolve()));
+  }
+  await fs.rm(root, { recursive: true, force: true });
+}

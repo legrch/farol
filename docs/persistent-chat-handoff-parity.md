@@ -1,47 +1,129 @@
-# Persistent private conversation handoff parity
+# Persistent handoff parity
 
-Status: planned parity item for the existing Next writer. No Next implementation,
-DEV onboarding, browser partition, port or runtime configuration is changed here.
+Status: the fail-closed saved-project create/status core is integrated through
+`83774aa`. The branch `codex/standalone-task-route` adds exact result, a
+separately admitted Computer MCP route and an owner-facing desktop selection
+for an existing shared Codex socket and saved project. Built and packaged
+fixtures use a disposable fake socket. No native shared-runtime or live-model
+qualification has been completed, and the branch is not integrated.
 
-Legacy's implementation candidate is described in `../../docs/persistent-chat-handoff.md`.
-Its fixture results must not be presented as Next implementation or live-provider evidence.
+## Two different destinations
 
-## Scope
+| Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                            |
+| -------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Separate backlog; the V0 implementation and its private-alpha evidence are historical references, not standalone code or acceptance |
+| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Branch-only connector tools and disposable fixtures; no live task                                                                   |
+| Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                                   |
 
-Add an explicit owner-requested persistent ChatGPT handoff consumer in Chat. Keep it separate
-from temporary Consult, the Product Agent's correlated child task, and arbitrary native
-Codex Handoff. A saved conversation, a dispatched native task, a running turn and a completed
-turn are separate facts. Do not conceal an existing `NOT_SELECTED_U2` gap by relabelling
-Product Agent as generic Handoff.
+The V0 browser route is documented in the V0 repository's
+`docs/persistent-chat-handoff.md`. Its Legacy browser partition, Hub bridge,
+receipts and fixture results do not transfer into this standalone repository.
+Neither route changes temporary Consult defaults or grants Product Agent
+admission.
 
-The default route should be a small deterministic adapter rather than an extra model or
-permanent supervisor service. A future Codex/Luna helper must call the same narrow operation;
-it must not gain browser access by pretending to be a read-only assignment.
+## First Codex saved-project task slice
 
-## Acceptance backlog
+The selected first path is: explicit owner request → approved Computer workspace
+and current physical writer root → exactly one **existing** saved project at its
+canonical project root in the same Git common directory →
+durable one-key reservation → one persistent `thread/start` → one `turn/start` →
+issued dispatch handle → exact metadata-only status. Zero or multiple project
+matches, root drift and policy drift refuse before a new side effect. A lost
+acknowledgement remains outcome-unknown; replay never creates a second task or
+turn.
 
-| Item                 | Required evidence before parity is claimed                                                                                                                       |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Explicit create      | Principal authority; strict bounded title/handoff/key input; no recursive creation from a delegate.                                                              |
-| Exact delivery       | Empty normal surface, exact first-message digest, one occurrence, no duplicate send on lost response.                                                            |
-| Persistence          | Canonical private URL plus fresh-navigation, full reload and original-message/history proof.                                                                     |
-| Helper lifetime      | Reopen on a new owned surface after the creation helper has exited; process completion is not chat deletion.                                                     |
-| Title                | Scoped rename and actual read-back; an unavailable rename is reported independently.                                                                             |
-| Recovery             | Durable reservation, CAS updates, same-key replay, original dispatch reconciliation and app restart. No global chat sweep or new send after unknown.             |
-| Native Codex Handoff | Saved-project binding, persistence independent of execution, exact issued-turn status; retain the current parity gap until separately implemented and qualified. |
-| Isolation            | Next-owned partition/state/ports only. No read or mutation of Legacy profiles, runtime or installed links.                                                       |
-| Live qualification   | Correct signed-in account, intended message once, actual private reopen URL, history after restart, unchanged temporary Consult defaults.                        |
+`PersistentCodexHandoff` in Chat app code owns the closed create/status
+policy. The result extension pages `thread/items/list` with the issued
+`turnId`, checks every returned entry against that turn, and returns text only
+from one explicit `final_answer` item after the turn is completed. Incomplete,
+foreign, conflicting or unreadable results remain outcome-unknown; a result
+read never starts work. The private append-only journal and request digester
+have hermetic tests for conflicting keys, restart, lost acknowledgement and
+exact status/result readback. The caller supplies a workspace ID, not an arbitrary root;
+the trusted adapter must resolve the approved writer and canonical project
+roots, both device/inode identities, their shared Git common directory, and
+the selected sandbox/approval policy. The branch includes the physical
+resolver and a host adapter, but native shared-runtime compatibility remains
+unqualified. The caller-facing connector exposes only the dispatch handle,
+not internal thread/turn IDs.
 
-## Integration seam
+The earlier fixture-only journal format has no saved-project identity. It is
+intentionally read as outcome-unknown after this contract change and never
+replayed. No production handoff journal existed for that format. Read-only
+status for a current-format dispatch remains available when the execution
+policy changes, provided both physical roots still match.
 
-Keep pure contracts and closed state policy in Chat domain/app; inject the browser and
-receipt-store ports in boot. Peer access must go through the owning module's published
-contract. The shared material is the behavioural contract and acceptance cases, not a
-cross-product mutable browser singleton or an import of Legacy infrastructure.
+The current branch adds explicit host-task creation admission, a trusted
+Computer workspace adapter and a typed desktop/Computer MCP
+create/status/result route. `PhysicalCodexHandoffAuthority`
+re-measures the approved writer and saved-project root device/inode and
+requires their current Git common directory to match the explicitly selected
+repository. It refuses symlinked, replaced or foreign roots. This adapter
+requires a separately issued task-creation grant from desktop; a Computer
+folder grant alone never creates a task. `SharedCodexProxyHost`
+connects through the supported `codex app-server proxy --sock` command to an
+**already running, explicitly selected** Unix socket. It checks executable
+digest, socket ownership/canonical path and serving Codex home; it never starts
+or stops the daemon. The proxy child gets a private disposable `HOME` and a
+fixed executable search path; the selected socket determines which serving
+profile it reaches. A dropped proxy rejects pending calls and cannot silently
+reconnect/replay them. Provider approval requests are refused until an explicit
+owner-facing approval path exists. Its local fixture uses the installed CLI
+against a disposable fake socket; this is not a connection to the owner's
+running daemon or proof that native Desktop shares that runtime.
+The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
+installed-host schema methods and response fields, including
+`thread/items/list`, its turn filter, and the typed final-answer phase. It is not yet attached to
+that route. It was checked against the locally installed Codex CLI's generated
+schema without launching a task.
+The adapter must preserve the owner-selected host execution policy and refuse
+an ambiguous or unavailable saved project; it must not silently fall back to a
+projectless task. Qualify malformed inputs, stale/symlinked roots, ambiguous
+projects, process restart and both lost-start boundaries with local fixtures
+before any live smoke. A Computer folder grant alone is not task-creation
+authority.
 
-Do not import `integrations/farol-chatgpt-chat-bridge.mjs` into Next. Its Legacy partition
-and runtime locations are deliberate. Reuse the digest/exact-message semantics through
-reviewed fixtures while implementing the consumer within Next's module boundaries.
+The Computer MCP composition accepts an optional published Chat task port.
+When no distinct task port is supplied, none of the `codex_task_*` tools is
+advertised. A private canonical launch contract can carry a separate exact
+task grant, selected Codex executable digest and an explicit existing proxy
+socket. It must match a verified Computer Git workspace and the desktop's
+selected Codex executable. The built Computer MCP entrypoint attaches once,
+constructs a durable journal and refuses a different project, workspace,
+model, effort or expired grant before starting a task. An in-memory MCP test
+and a built-byte test with the installed CLI proxy against a disposable fake
+socket prove create/status/result. They expose only the dispatch handle and
+exact final text, not internal thread, turn or item IDs, and consume no model
+turn. The owner-facing Native hosts setting selects an exact existing socket,
+serving Codex home, saved project ID/root, verified Computer workspace,
+execution policy, model and effort. Desktop checks the saved project through
+`project/list` and re-measures the physical Git roots before saving a 12-hour
+route selection. The next connector launch includes the separate task grant;
+an unavailable task socket leaves Computer running without task tools. No
+daemon is started or repaired. Fixture PASS is not proof of a native shared
+host task, paid model result or provider delivery. Project creation,
+project-root rebind, title/message/continue,
+live terminal result retrieval and archive/delete remain open.
 
-The existing Next writer owns implementation and native qualification. This document does
-not start another writer, trigger a release, or change any completed DEV work.
+With a selected installed Codex CLI path, the content-free local route proof is
+`FAROL_CODEX_PROXY_BINARY=/absolute/path/to/codex npm run test:e2e:codex-task-fixture`
+after `npm run build`, or `npm run test:e2e:codex-task-fixture:package` after a
+clean `task package`. Both commands create only disposable Git roots and a fake
+Unix socket; they never attach to the owner's Codex daemon or start a model
+turn. A failure on this fixture blocks any later live task canary.
+
+## Separate saved ChatGPT conversation backlog
+
+A standalone browser conversation route, if selected later, requires its own
+owner admission, account identity, exact first-message digest and one-send
+proof, canonical private URL, fresh-navigation/history reopen, title readback,
+durable reservation, process-restart recovery and no duplicate send after an
+unknown outcome. Its helper lifetime, isolated browser partition and retained
+evidence must be qualified independently of a Codex task. Do not import V0
+`integrations/farol-chatgpt-chat-bridge.mjs` or treat a Codex task's
+`threadId` as a ChatGPT conversation URL.
+
+Keep pure policy in Chat domain/app, concrete host/browser and journal adapters
+in infrastructure, and lifecycle wiring in boot. Peer access must use the
+owning module's published contract. Do not add an extra model or permanent
+supervisor merely to make the two handoffs look alike.

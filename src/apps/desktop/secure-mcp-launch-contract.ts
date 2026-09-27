@@ -8,6 +8,7 @@ import {
   ReadonlyComputerLaunchContractSchema,
   serializeReadonlyComputerLaunchContract,
   type ReadonlyComputerLaunchContract,
+  type CodexTaskRouteLaunch,
 } from "../../modules/computer/infra/mcp/launch-contract";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import type { CodexCallerRelayEndpoint } from "../../pkg/caller-relay/protocol";
@@ -23,6 +24,60 @@ function launchError(code: string): never {
   throw new Error(code);
 }
 
+export function selectedCodexTaskRouteLaunch(
+  settings: ProductSettings,
+  now: number,
+): CodexTaskRouteLaunch | null {
+  const selected = settings.nativeHosts.taskRoute;
+  const host = settings.nativeHosts.codex;
+  if (
+    !selected ||
+    !host?.localVerification ||
+    selected.hostGeneration !== settings.nativeHosts.generation ||
+    selected.computerGeneration !== settings.computer.generation ||
+    selected.expiresAt <= now ||
+    selected.expiresAt > now + AUTHORITY_LIFETIME_MS ||
+    settings.setup.computer.verified?.workspaceId !== selected.workspaceId ||
+    settings.setup.computer.verified.configRevision !==
+      settings.computer.generation
+  ) {
+    return null;
+  }
+  const workspace = identityBoundWorkspaces(settings.computer.workspaces).find(
+    (entry) => entry.workspaceId === selected.workspaceId,
+  );
+  if (
+    !workspace ||
+    workspace.gitMetadata?.commonDirectory !== selected.gitCommonDirectory ||
+    (selected.execution.sandbox === "workspace-write" &&
+      workspace.access !== "write")
+  ) {
+    return null;
+  }
+  return {
+    transport: "codex-shared-proxy/v1",
+    host: {
+      executablePath: host.executablePath,
+      executableSha256: host.executableSha256,
+      socketPath: selected.socketPath,
+      expectedCodexHome: selected.expectedCodexHome,
+    },
+    grant: {
+      workspaceId: workspace.workspaceId,
+      writerRoot: workspace.root,
+      writerIdentity: workspace.rootIdentity,
+      projectId: selected.projectId,
+      projectRoot: selected.projectRoot,
+      projectIdentity: selected.projectIdentity,
+      gitCommonDirectory: selected.gitCommonDirectory,
+      execution: selected.execution,
+      model: selected.model,
+      reasoningEffort: selected.reasoningEffort,
+      expiresAt: selected.expiresAt,
+    },
+  };
+}
+
 export function createSecureMcpLaunchContract(
   settings: ProductSettings,
   input: Readonly<{
@@ -31,6 +86,7 @@ export function createSecureMcpLaunchContract(
     challengeSha256: string;
     devMcpProof?: DevMcpProofPreparation;
     callerRelay?: CodexCallerRelayEndpoint;
+    codexTasks?: CodexTaskRouteLaunch;
   }>,
 ): ReadonlyComputerLaunchContract {
   if (
@@ -56,6 +112,18 @@ export function createSecureMcpLaunchContract(
       ))
   ) {
     launchError("SECURE_MCP_DEV_PROOF_STALE");
+  }
+  if (input.codexTasks) {
+    const selected = settings.nativeHosts.codex;
+    if (
+      !selected ||
+      selected.executablePath !== input.codexTasks.host.executablePath ||
+      selected.executableSha256 !== input.codexTasks.host.executableSha256 ||
+      input.codexTasks.grant.expiresAt <= input.now ||
+      input.codexTasks.grant.expiresAt > input.now + AUTHORITY_LIFETIME_MS
+    ) {
+      launchError("SECURE_MCP_CODEX_TASK_ADMISSION_INVALID");
+    }
   }
 
   const writeEnabled = workspaces.some(
@@ -93,6 +161,8 @@ export function createSecureMcpLaunchContract(
     })),
   );
   const expiresAt = input.now + AUTHORITY_LIFETIME_MS;
+  const codexTasks =
+    input.codexTasks ?? selectedCodexTaskRouteLaunch(settings, input.now);
   const participantId = `secure-mcp-main-${input.runtimeId}`;
   const scopedWorkspaces = workspaces.map((workspace) => ({
     workspaceId: workspace.workspaceId,
@@ -162,6 +232,7 @@ export function createSecureMcpLaunchContract(
     ...(input.callerRelay === undefined
       ? {}
       : { callerRelay: input.callerRelay }),
+    ...(codexTasks === null || codexTasks === undefined ? {} : { codexTasks }),
   });
 }
 

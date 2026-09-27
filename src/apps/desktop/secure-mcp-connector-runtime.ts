@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -146,21 +146,18 @@ const runCommand: ConnectorCommandRunner = async (command) =>
     );
   });
 
-const startProcess: ConnectorProcessStarter = async (command) => {
-  const child = spawn(command.executablePath, [...command.arguments], {
-    cwd: command.cwd,
-    env: { ...command.environment },
-    stdio: "ignore",
-    windowsHide: true,
-  });
+export function observedConnectorChild(child: ChildProcess): ConnectorChild {
+  // A failed signal can emit `error` without `exit`. Keep a listener for the
+  // entire process lifetime, but never classify that event as confirmed exit.
+  child.on("error", () => undefined);
   return {
     pid: child.pid,
     get exitCode() {
-      return child.exitCode;
+      return child.exitCode ?? (child.signalCode === null ? null : -1);
     },
     kill: (signal) => child.kill(signal),
     waitForExit: async (timeoutMs) => {
-      if (child.exitCode !== null) return true;
+      if (child.exitCode !== null || child.signalCode !== null) return true;
       return new Promise<boolean>((resolve) => {
         let settled = false;
         const finish = (value: boolean) => {
@@ -172,13 +169,36 @@ const startProcess: ConnectorProcessStarter = async (command) => {
           resolve(value);
         };
         const exited = () => finish(true);
-        const failed = () => finish(true);
+        const failed = () => finish(false);
         const timer = setTimeout(() => finish(false), timeoutMs);
         child.once("exit", exited);
         child.once("error", failed);
       });
     },
   };
+}
+
+const startProcess: ConnectorProcessStarter = async (command) => {
+  const child = spawn(command.executablePath, [...command.arguments], {
+    cwd: command.cwd,
+    env: { ...command.environment },
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  const observed = observedConnectorChild(child);
+  await new Promise<void>((resolve, reject) => {
+    const spawned = () => {
+      child.off("error", failed);
+      resolve();
+    };
+    const failed = (error: Error) => {
+      child.off("spawn", spawned);
+      reject(error);
+    };
+    child.once("spawn", spawned);
+    child.once("error", failed);
+  });
+  return observed;
 };
 
 const getReady = async (url: string): Promise<boolean> => {
@@ -373,8 +393,19 @@ export class SecureMcpConnectorRuntime {
     }
     if (!healthObserved) {
       child.kill("SIGTERM");
-      if (!(await child.waitForExit(1_000))) child.kill("SIGKILL");
-      this.child = null;
+      let exited = await child.waitForExit(1_000);
+      if (!exited) {
+        child.kill("SIGKILL");
+        exited = await child.waitForExit(1_000);
+      }
+      if (exited) this.child = null;
+      else {
+        return {
+          state: "outcome_unknown",
+          runtimeGeneration,
+          code: "CONNECTOR_READINESS_TIMEOUT",
+        };
+      }
     }
     return {
       state: healthObserved ? "outcome_unknown" : "unreachable",
@@ -404,14 +435,18 @@ export class SecureMcpConnectorRuntime {
 
   async stop(): Promise<void> {
     const child = this.child;
-    this.child = null;
     this.healthBaseUrl = null;
-    if (!child || child.exitCode !== null) return;
-    child.kill("SIGTERM");
-    if (!(await child.waitForExit(5_000))) {
-      child.kill("SIGKILL");
-      await child.waitForExit(1_000);
+    if (!child) return;
+    if (child.exitCode === null) {
+      child.kill("SIGTERM");
+      if (!(await child.waitForExit(5_000))) {
+        child.kill("SIGKILL");
+        if (!(await child.waitForExit(1_000))) {
+          throw new Error("CONNECTOR_STOP_UNCONFIRMED");
+        }
+      }
     }
+    if (this.child === child) this.child = null;
   }
 
   isRunning(): boolean {

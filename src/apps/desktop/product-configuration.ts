@@ -14,6 +14,7 @@ import {
   SetupStepIdSchema,
   WorkspaceGitMetadataSchema,
   WorkspaceRootIdentitySchema,
+  CodexTaskSelectionSchema,
   type ProductConfigurationSnapshot,
   type ProductSettings,
   type PendingWorkspaceEditDelivery,
@@ -1800,6 +1801,7 @@ export class ProductConfigurationService {
         revision: settings.revision + 1,
         nativeHosts: {
           generation,
+          taskRoute: sameContract ? settings.nativeHosts.taskRoute : null,
           codex: {
             executablePath: parsed.data.executablePath,
             executableSha256: parsed.data.executableSha256,
@@ -1854,6 +1856,54 @@ export class ProductConfigurationService {
         },
       };
     });
+  }
+
+  async recordCodexTaskRoute(input: unknown): Promise<MutationResult> {
+    const parsed = CodexTaskSelectionSchema.safeParse(input);
+    if (!parsed.success) {
+      return this.failure("SETTINGS_INPUT_INVALID");
+    }
+    const selected = parsed.data;
+    return this.mutate((current) => {
+      const workspace = current.computer.workspaces.find(
+        (entry) => entry.workspaceId === selected.workspaceId,
+      );
+      const now = Date.parse(this.now());
+      if (
+        !current.nativeHosts.codex?.localVerification ||
+        selected.hostGeneration !== current.nativeHosts.generation ||
+        selected.computerGeneration !== current.computer.generation ||
+        current.setup.computer.verified?.workspaceId !== selected.workspaceId ||
+        current.setup.computer.verified.configRevision !==
+          current.computer.generation ||
+        !workspace?.rootIdentity ||
+        workspace.gitMetadata?.commonDirectory !==
+          selected.gitCommonDirectory ||
+        (selected.execution.sandbox === "workspace-write" &&
+          workspace.access !== "write") ||
+        selected.expiresAt <= now ||
+        selected.expiresAt > now + 12 * 60 * 60 * 1_000
+      ) {
+        throw new Error("CODEX_TASK_ROUTE_STALE");
+      }
+      return {
+        ...current,
+        revision: current.revision + 1,
+        nativeHosts: { ...current.nativeHosts, taskRoute: selected },
+      };
+    });
+  }
+
+  async clearCodexTaskRoute(): Promise<MutationResult> {
+    return this.mutate((settings) =>
+      settings.nativeHosts.taskRoute === null
+        ? settings
+        : {
+            ...settings,
+            revision: settings.revision + 1,
+            nativeHosts: { ...settings.nativeHosts, taskRoute: null },
+          },
+    );
   }
 
   async recordCodexHostLiveVerification(
@@ -2110,6 +2160,7 @@ export class ProductConfigurationService {
         nativeHosts: selected
           ? {
               generation: settings.nativeHosts.generation + 1,
+              taskRoute: null,
               codex: {
                 ...selected,
                 localVerification: null,
@@ -2157,6 +2208,7 @@ export class ProductConfigurationService {
         nativeHosts: {
           generation: settings.nativeHosts.generation + 1,
           codex: null,
+          taskRoute: null,
         },
         setup: {
           ...settings.setup,

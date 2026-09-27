@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { configurationAdmission } from "../../src/apps/desktop/configuration-admission";
+import {
+  changesComputerAuthority,
+  configurationAdmission,
+} from "../../src/apps/desktop/configuration-admission";
 
 const computerAuthorityCommands = [
   "computer.rename",
@@ -11,6 +14,8 @@ const computerAuthorityCommands = [
   "computer.update-git-history",
   "computer.update-commands",
   "dev-proof.prepare",
+  "host.configure-codex-tasks",
+  "host.clear-codex-tasks",
 ] as const;
 
 describe("AUTH-07 Computer authority while a native Agent runs", () => {
@@ -71,5 +76,20 @@ describe("AUTH-07 Computer authority while a native Agent runs", () => {
         connectorRunning: true,
       }),
     ).toBe("CONNECTOR_STOP_REQUIRED");
+    for (const kind of [
+      "host.select-codex",
+      "host.discover-codex",
+      "host.select-discovered-codex",
+      "host.verify-codex",
+      "host.remove-codex",
+    ]) {
+      expect(
+        configurationAdmission(kind, {
+          agentActive: false,
+          connectorRunning: true,
+        }),
+      ).toBe("CONNECTOR_STOP_REQUIRED");
+      expect(changesComputerAuthority(kind)).toBe(true);
+    }
   });
 });

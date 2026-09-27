@@ -1039,6 +1039,7 @@ describe.skipIf(process.platform !== "darwin")(
         undefined,
         undefined,
         undefined,
+        undefined,
         shell,
       );
       const client = new Client({ name: "shell-fixture", version: "1.0.0" });
