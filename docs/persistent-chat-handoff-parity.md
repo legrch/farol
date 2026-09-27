@@ -199,10 +199,11 @@ clean `task package`. Both commands create only disposable Git roots and a fake
 Unix socket; they never attach to the owner's Codex daemon or start a model
 turn. A failure on this fixture blocks any later live task canary.
 
-## Separate saved ChatGPT conversation backlog
+## Saved ChatGPT route qualification backlog
 
-The first saved-chat source slice has a private write-once journal and an app
-service, but no desktop Browser or Computer MCP composition yet. It reserves a
+The saved-chat route now composes a private write-once journal, an app service,
+the dedicated Next Browser adapter and a gated desktop/Computer MCP endpoint.
+It reserves a
 lowercase UUID before opening a browser, writes a durable send intent before
 the one Send boundary, and cannot retry that key after an unknown outcome.
 Only a canonical private conversation URL with a separately verified
@@ -210,10 +211,10 @@ first-message/reopen/history proof may become `verified`; title verification is
 a separate boolean. The journal stores digests and status only, never prompt
 or answer text. Fault fixtures cover concurrent same-key calls, crash-like
 acknowledgement loss, bad URLs, corrupt private state and malformed browser
-proof. This does not establish account identity, real DOM selectors, helper
-lifetime, packaged route or live saved-chat delivery. The next slice must wire
-the existing Next browser partition through a dedicated read-only reopen
-adapter and expose create/status only when that route is qualified.
+proof. These source fixtures do not establish account identity, current real
+DOM selectors, packaged route or live saved-chat delivery. The remaining proof
+uses an exact new package, a refreshed connector, an owner-checked account and
+one bounded message; no real send has been performed by these fixtures.
 
 The standalone browser conversation route requires its own
 owner admission, account identity, exact first-message digest and one-send
