@@ -2711,12 +2711,7 @@ async function stopProfileBoundHelpers(instance, label) {
   return helpers.length;
 }
 
-async function stopOwnedTestGroup(
-  instance,
-  label,
-  knownPid = null,
-  knownMainState = "alive",
-) {
+async function stopOwnedTestGroup(instance, label, knownPid = null) {
   const pid = knownPid ?? instance.application.process().pid;
   instance.ownedProcessGroup ??= captureOwnedProcessGroup(pid);
   const groupId = instance.ownedProcessGroup;
@@ -2725,21 +2720,16 @@ async function stopOwnedTestGroup(
       "cleanup",
       `E2E_OWNED_GROUP_UNVERIFIED:${label}`,
     );
-    // Only a confirmed live main is safe to signal by PID here. Never
-    // mistake a stale PID after quit for a surviving owned process.
-    if (knownMainState === "alive") {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch (error) {
-        if (error?.code !== "ESRCH") throw error;
-      }
+    // The numerical PID can be stale after Playwright disconnects. Signal
+    // only processes still tied to this disposable profile, then fail closed.
+    await stopProfileBoundHelpers(instance, label);
+    if (Number.isSafeInteger(pid) && pid > 1) {
       assert.equal(
         await waitOwnedPidGone(pid),
         true,
         `E2E_OWNED_MAIN_SURVIVED_ABORT:${label}`,
       );
     }
-    await stopProfileBoundHelpers(instance, label);
     throw new Error(`E2E_OWNED_GROUP_UNVERIFIED:${label}`);
   }
   phases.note(label, `group=${groupId}`);
@@ -2981,7 +2971,6 @@ async function close(instance, options = {}) {
             instance,
             `${label}.abort-stalled-close`,
             mainPid,
-            mainState,
           );
         }
       } catch (cleanupError) {
@@ -2990,17 +2979,23 @@ async function close(instance, options = {}) {
       try {
         const escaped = await stopProfileBoundHelpers(instance, label);
         if (escaped > 0) {
-          throw new Error(
-            `E2E_PROFILE_HELPER_ESCAPED_GROUP:${label}:${escaped}`,
+          cleanupFailures.push(
+            new Error(`E2E_PROFILE_HELPER_ESCAPED_GROUP:${label}:${escaped}`),
           );
-        }
-        for (const pid of utilityPids) {
-          if (!(await waitOwnedPidGone(pid))) {
-            throw new Error(`E2E_OWNED_UTILITY_SURVIVED_ABORT:${pid}`);
-          }
         }
       } catch (cleanupError) {
         cleanupFailures.push(cleanupError);
+      }
+      for (const pid of utilityPids) {
+        try {
+          if (!(await waitOwnedPidGone(pid))) {
+            cleanupFailures.push(
+              new Error(`E2E_OWNED_UTILITY_SURVIVED_ABORT:${pid}`),
+            );
+          }
+        } catch (cleanupError) {
+          cleanupFailures.push(cleanupError);
+        }
       }
       if (cleanupFailures.length > 0) {
         for (const failure of cleanupFailures) {
