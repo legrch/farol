@@ -59,6 +59,7 @@ let primaryFailure;
 const cleanupFailures = [];
 let cleanupUnknown = false;
 let application;
+let profileIsolationConfirmed = false;
 let pendingLaunch;
 let closingLateLaunch = false;
 const childRecords = new Map();
@@ -131,6 +132,7 @@ async function launch(environment, mode = "normal", profile = mode) {
     undefined,
     "GUIDED_SETUP_PRIOR_INSTANCE_NOT_CLOSED",
   );
+  profileIsolationConfirmed = false;
   let profileRoot = profiles.get(profile);
   const freshProfile = !profileRoot;
   if (!profileRoot) {
@@ -220,6 +222,7 @@ async function launch(environment, mode = "normal", profile = mode) {
       await fs.realpath(nativePaths.userData),
       await fs.realpath(userData),
     );
+  profileIsolationConfirmed = true;
   observations.push({
     kind: "native-profile-isolation",
     environment,
@@ -557,7 +560,7 @@ try {
   }
 } catch (error) {
   primaryFailure = error;
-  if (application) {
+  if (application && profileIsolationConfirmed) {
     try {
       const windows = application.windows();
       const shell = windows.find(
@@ -593,6 +596,8 @@ try {
       });
     }
   }
+  if (application && !profileIsolationConfirmed)
+    observations.push({ kind: "failure-feedback-skipped-unverified-profile" });
 } finally {
   closingLateLaunch = true;
   if (pendingLaunch) {
