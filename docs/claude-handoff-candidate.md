@@ -59,6 +59,23 @@ introduced. Normal print context can load customizations; fixture isolation is
 not proof of a safe live owner customization setup. Unsupported host fields/flags
 must be qualified against the selected installed host, never guessed from docs.
 
+## Startup stream compatibility
+
+Normal print mode can emit `system/plugin_install`, `system/hook_started`,
+`system/hook_progress` and `system/hook_response` before `system/init`.
+The bounded parser accepts only those four pre-init system subtypes and rejects
+any present mismatched session ID. Their payload is ignored: startup cannot
+establish identity, permissions, a model choice or a terminal answer. The exact
+init and supported final result plus process-exit requirements remain mandatory.
+Unknown pre-init types, duplicate init, foreign sessions, NUL and oversized output
+still refuse. The service tests also keep permission denials as `needs_input`,
+require observed process exit and verify replay without a second process.
+
+This follows the [official stream startup order](https://code.claude.com/docs/en/headless#stream-responses),
+checked 2026-09-28. These are synthetic parser/service fixtures, not live hook,
+plugin, network, authentication or native-session qualification. Do not add
+`--bare` or skip hooks to make an ordering test pass.
+
 ## Verification
 
 Source tests include lost acknowledgement, concurrent dispatch, exact stream and

@@ -224,6 +224,51 @@ it("startup is not terminal; exact init then final event AND exit are required",
     proof: "recorded-terminal",
   });
 });
+it.each([false, true])(
+  "startup preludes preserve terminal semantics and replay (denied=%s)",
+  async (denied) => {
+    const f = fixture();
+    await f.service.create(request);
+    const startup =
+      ["plugin_install", "hook_started", "hook_progress", "hook_response"]
+        .map((subtype) =>
+          JSON.stringify({
+            type: "system",
+            subtype,
+            session_id: key,
+            stdout: "Startup payload is not the task result",
+          }),
+        )
+        .join("\n") + "\n";
+    f.setSnapshot({ stdout: startup });
+    expect((await f.service.status(key)).status).toBe("outcome_unknown");
+    expect(f.terminal.size).toBe(0);
+    const final = {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      session_id: key,
+      result: "Exact fixture result",
+      permission_denials: denied ? [{ tool_name: "Bash" }] : [],
+    };
+    f.setSnapshot({
+      stdout: startup + f.init + "\n" + JSON.stringify(final) + "\n",
+    });
+    expect(await f.service.status(key)).toMatchObject({ lifecycle: "running" });
+    expect(f.terminal.size).toBe(0);
+    f.setSnapshot({ state: "exited", exitCode: 0, groupCleanup: "confirmed" });
+    const terminal = await f.service.status(key);
+    expect(terminal).toMatchObject({
+      status: "known",
+      lifecycle: denied ? "needs_input" : "completed",
+      text: "Exact fixture result",
+      proof: "recorded-terminal",
+    });
+    expect(await f.service.status(key)).toEqual(terminal);
+    await f.service.create(request);
+    expect(f.calls).toBe(1);
+  },
+);
 it.each([
   "session",
   "cwd",

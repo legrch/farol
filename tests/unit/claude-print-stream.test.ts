@@ -23,6 +23,101 @@ const result = {
 };
 const text = (...events: unknown[]) =>
   events.map((e) => JSON.stringify(e)).join("\n") + "\n";
+
+const startupSubtypes = [
+  "plugin_install",
+  "hook_started",
+  "hook_progress",
+  "hook_response",
+];
+it.each(startupSubtypes)(
+  "documented startup system/%s may precede the required init",
+  (subtype) => {
+    for (const session of [{}, { session_id: expected.sessionId }]) {
+      expect(
+        observeClaudePrint(
+          text({ type: "system", subtype, ...session }, init, result),
+          expected,
+          true,
+        ),
+      ).toEqual({
+        model: expected.model,
+        result: { lifecycle: "completed", text: "Done" },
+      });
+    }
+  },
+);
+it.each(startupSubtypes)(
+  "startup system/%s cannot hide a different session",
+  (subtype) => {
+    for (const session_id of ["foreign", null, 42]) {
+      expect(
+        observeClaudePrint(
+          text({ type: "system", subtype, session_id }, init, result),
+          expected,
+          true,
+        ),
+      ).toBeNull();
+    }
+  },
+);
+it("startup output is inert until exact initialization and final result", () => {
+  const startup = startupSubtypes.map((subtype) => ({
+    type: "system",
+    subtype,
+    session_id: expected.sessionId,
+    stdout: "Do not turn hook text into an answer",
+    model: "not-authoritative",
+  }));
+  expect(observeClaudePrint(text(...startup), expected, false)).toBeNull();
+  expect(
+    observeClaudePrint(text(...startup, result), expected, true),
+  ).toBeNull();
+  expect(observeClaudePrint(text(...startup, init), expected, false)).toEqual({
+    model: expected.model,
+    result: null,
+  });
+  expect(
+    observeClaudePrint(text(...startup, init, result), expected, true),
+  ).toEqual({
+    model: expected.model,
+    result: { lifecycle: "completed", text: "Done" },
+  });
+});
+it.each([
+  { type: "system", subtype: "future_startup" },
+  { type: "system", subtype: "permission_denied" },
+  { type: "assistant", subtype: "hook_started" },
+  { type: "system" },
+  { type: "system", subtype: null },
+])("unrecognized pre-init event %j is not accepted as startup", (event) => {
+  expect(
+    observeClaudePrint(text(event, init, result), expected, true),
+  ).toBeNull();
+});
+it("startup never weakens init identity or stream limits", () => {
+  const startup = { type: "system", subtype: "hook_started" };
+  for (const changed of [
+    { ...init, session_id: "foreign" },
+    { ...init, cwd: "/foreign" },
+    { ...init, model: "foreign" },
+    { ...init, permissionMode: "bypassPermissions" },
+  ]) {
+    expect(
+      observeClaudePrint(text(startup, changed, result), expected, true),
+    ).toBeNull();
+  }
+  expect(
+    observeClaudePrint(
+      text({ ...startup, stdout: "x".repeat(65536) }, init, result),
+      expected,
+      true,
+    ),
+  ).toBeNull();
+  expect(
+    observeClaudePrint(text(startup, init, init, result), expected, true),
+  ).toBeNull();
+});
 it.each(["assistant", "user", "stream_event", "system", "rate_limit_event"])(
   "bounded %s event can be omitted before result",
   (type) => {

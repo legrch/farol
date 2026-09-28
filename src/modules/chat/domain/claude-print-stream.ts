@@ -43,6 +43,26 @@ export function observeClaudePrint(
       initialized = true;
       continue;
     }
+    // Normal print mode may report hook/plugin startup before system/init.
+    // These bounded records carry no initialization, answer or authority proof.
+    if (
+      !initialized &&
+      event.type === "system" &&
+      typeof event.subtype === "string" &&
+      [
+        "plugin_install",
+        "hook_started",
+        "hook_progress",
+        "hook_response",
+      ].includes(event.subtype)
+    ) {
+      if (
+        event.session_id !== undefined &&
+        event.session_id !== expected.sessionId
+      )
+        return null;
+      continue;
+    }
     if (
       !initialized ||
       (event.session_id !== undefined &&
