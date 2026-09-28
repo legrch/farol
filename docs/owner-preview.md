@@ -66,18 +66,28 @@ is not evidence about the packaged candidate.
   It does not publish, install, release, or update anything.
 - Activity contains only allowlisted lifecycle facts. It omits prompts, answers,
   tool payloads, paths, and bearer values.
-- Computer owns workspace list/search/read plus explicit access and exclusion changes.
-  A guarded edit requires preview and confirmation, checks the expected digest, and
-  stores a content-free mutation receipt. `Verified commands` is off by default. When
-  explicitly enabled and the workspace is verified again, `Git status` runs one fixed
-  Apple Git operation at that workspace root with no caller-supplied executable,
-  arguments, environment, path, or network access. Output and runtime are bounded and
-  the output is not persisted. Generic file tools hide `.git`; a linked or external
-  Git worktree metadata path fails closed as unavailable.
-- The Codex Agent verification creates one actual native child for a fixed read-only
-  compatibility assignment. A green result means lineage, unchanged TaskGrant,
-  workspace enforcement, bounded same-child rejoin, durable retention, and parent
-  delivery were all observed for that assignment. It is not a generic Agent launcher.
+- Computer owns approved workspace instructions, guidance, list/search/read and
+  explicit write/edit/rename/delete authority. Changes require a stable operation ID
+  and exact source digest; an unknown outcome never authorizes a blind repeat.
+  Choose **Workspace shell** and verify the folder again to expose ordinary
+  sandboxed commands through `computer_shell_start/read/cancel`. Shell handles retain
+  incremental stdout/stderr and actual root exit/signal. Network stays denied.
+  Full Git requires **Approve full Git and user settings**, then another Verify.
+  This grants the selected repository's object history and linked metadata plus
+  read access to the declared ordinary user Git settings; it does not grant arbitrary
+  account-home access or system Git configuration. Git remains the standard CLI,
+  including allowed hooks. Generic file tools still hide `.git`. See the exact
+  [Computer policy and cleanup limits](computer-parity.md).
+- A restricted first Computer-only trial uses a disposable approved repository and
+  foreground commands. `/bin/ps` and deliberately detached-descendant cleanup remain
+  unqualified; a successful group signal is not full tree cleanup. Compare the NEW
+  connector's serving build, owner challenge receipt and fresh client catalogue.
+  An old cached Farol Dev catalogue is not evidence about this preview. Keep V0 as
+  fallback. This scope does not qualify full V0 parity.
+- Model and Product Agent remain disabled in this preview baseline. Their positive
+  verification is not qualified; a disabled Agent returns `AGENT_NOT_READY` without
+  a child launch. Ordinary Computer and its separate connector do not require
+  embedded ChatGPT login, Model, Product Agent or a Codex/Claude task grant.
 - Export support writes schema 2 build/configuration/readiness metadata plus a
   content-free current native-Agent summary. It contains no workspace path or ID,
   prompt, answer, file content, token, cookie, or child/thread identifier.
