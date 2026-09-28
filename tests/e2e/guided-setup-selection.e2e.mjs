@@ -178,7 +178,7 @@ const chatFixture = createServer(async (request, response) => {
     response.end(`<!doctype html><html><head><title>Owned Setup fixture</title></head><body style="margin:24px;font:18px sans-serif">
       <h1>Owned Setup fixture</h1>
       <button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1)">Toggle fixture sidebar</button>
-      <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button aria-label="Select ChatGPT model">Instant</button>
+      <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button aria-label="Select ChatGPT model">Instant</button><input type="range" min="0" max="5" value="0" aria-label="Fixture Instant effort" />
       <div id="messages"></div><form onsubmit="return false"><span data-testid="composer-app-chip">${fixtureApp}</span><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea><button type="button" data-testid="send-button" onclick="sendFixture()">Send to owned fixture</button></form>
       <script>
       async function sendFixture() {
@@ -210,6 +210,7 @@ const profiles = new Map();
 let primaryFailure;
 const cleanupFailures = [];
 let cleanupUnknown = false;
+let electronCleanupUnknown = false;
 let application;
 let profileIsolationConfirmed = false;
 let pendingLaunch;
@@ -248,6 +249,7 @@ async function closeOwned() {
       await bounded(terminal, "GUIDED_SETUP_EXIT_RECONCILE_TIMEOUT");
     } catch {
       cleanupUnknown = true;
+      electronCleanupUnknown = true;
       observations.push({
         kind: "cleanup-unknown",
         pid: child.pid,
@@ -279,6 +281,11 @@ async function closeOwned() {
 }
 
 async function launch(environment, mode = "normal", profile = mode) {
+  assert.equal(
+    cleanupUnknown,
+    false,
+    "GUIDED_SETUP_PRIOR_RESOURCE_CLEANUP_UNKNOWN",
+  );
   assert.equal(
     application,
     undefined,
@@ -1047,12 +1054,13 @@ try {
       // success remains owned by its completion callback and is never duplicated.
       if (error?.message === "GUIDED_SETUP_LATE_LAUNCH_UNRESOLVED") {
         cleanupUnknown = true;
+        electronCleanupUnknown = true;
         cleanupFailures.push(error);
       }
     }
   }
   try {
-    if (!cleanupUnknown) await closeOwned();
+    if (!electronCleanupUnknown) await closeOwned();
   } catch (error) {
     cleanupFailures.push(error);
   }
