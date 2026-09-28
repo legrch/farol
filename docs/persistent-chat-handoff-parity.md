@@ -499,3 +499,41 @@ experimental initialize change is not included. Tests use deterministic host
 data and a packaged disposable socket; no live provider or account proof is
 claimed. The selected saved CLI schema is supplemental contract evidence,
 not an attestation of the serving runtime.
+
+## Fresh-project ensure contract checkpoint
+
+`ensureCodexProject` is a pure application/port contract with **in-memory tests only**.
+It is not wired into Computer MCP, Desktop admission, a native project mutation
+method, or a production filesystem journal. The refused experimental handshake
+and existing shared proxy remain unchanged; no new native capability is enabled.
+This is the independent Morning D2 foundation, not a serving ensure API or parity PASS.
+
+A complete bounded catalogue resolves only the approved physical canonical project,
+separately from the current writer cwd. Missing, ambiguous and stale explicit
+preference are distinct. Creation additionally requires a separately qualified
+owner project-mutation admission and the existing mutation gate. The journal port
+requires one durable no-replace intent per canonical physical identity across
+**different keys** before the single create submission, using the provider's
+idempotency key. The in-memory journal tests this policy; it proves no actual
+fsync, cross-process lock, native method or provider idempotency implementation.
+
+An exact create acknowledgement and a complete unique post-create catalogue are
+required before local confirmation. Every asynchronous boundary revalidates
+current physical roots, admission and absolute deadline. Unknown mutation paths
+throw through the gate so its error policy can quarantine; returning an unknown
+value alone cannot release the mutation lease. No user profile, model, task,
+preference or execution permission is changed or automatically granted.
+
+Lost acknowledgement, uncertain journal publication and concurrent claim remain
+unknown and never submit a second create, even under a new key. `inspect` is
+read-only: a unique current project can be reported as `observedProjectId` while
+**creation outcome remains unknown**. It neither confirms a missing acknowledgement
+nor grants task control. Replaying a confirmed intent uses the current catalogue
+and reports current resolution, never a new create. A missing/replaced confirmed
+project does not become permission to recreate it.
+
+Catalogue/create/readback are non-atomic. A concurrent native creation can still
+produce duplicate projects before readback; ambiguity is unknown, with no automatic
+delete/rename/retry. A real provider-side atomic ensure/CAS is not claimed. Actual
+journal adapter, exact serving methods/admission and owner qualification remain
+required before publication. The retained Computer-only candidate/trial is independent.
