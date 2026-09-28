@@ -1853,21 +1853,36 @@ describe.skipIf(process.platform !== "darwin")(
         const handle = (
           started.structuredContent as { value: { handle: string } }
         ).value.handle;
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          const output = shell.read({
+        // A shell handle can precede the watchdog's first output under load.
+        // Wait for the real running command, below its 30 s deadline, and retain
+        // the complete observed failure instead of assuming startup within 1 s.
+        const outputDeadline = Date.now() + 5_000;
+        let initialOutput = shell.read({
+          handle,
+          stdoutOffset: 0,
+          stderrOffset: 0,
+        });
+        while (
+          initialOutput.ok &&
+          initialOutput.value.state === "running" &&
+          initialOutput.value.errorCode === null &&
+          !initialOutput.value.stdout.includes("secret-before-fence") &&
+          Date.now() < outputDeadline
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          initialOutput = shell.read({
             handle,
             stdoutOffset: 0,
             stderrOffset: 0,
           });
-          if (output.ok && output.value.stdout.includes("secret-before-fence"))
-            break;
-          await new Promise((resolve) => setTimeout(resolve, 10));
         }
-        expect(
-          shell.read({ handle, stdoutOffset: 0, stderrOffset: 0 }),
-        ).toMatchObject({
+        expect(initialOutput, JSON.stringify(initialOutput)).toMatchObject({
           ok: true,
-          value: { stdout: "secret-before-fence" },
+          value: {
+            state: "running",
+            errorCode: null,
+            stdout: "secret-before-fence",
+          },
         });
         phase = "fenced";
         const denied = await client.callTool({
