@@ -51,6 +51,8 @@ const chatAddress = chatFixture.address();
 assert.ok(chatAddress && typeof chatAddress !== "string");
 const fixtureUrl = `http://127.0.0.1:${chatAddress.port}/`;
 const profiles = new Map();
+let primaryFailure;
+const cleanupFailures = [];
 let cleanupUnknown = false;
 let application;
 let pendingLaunch;
@@ -325,6 +327,14 @@ try {
     await window
       .locator('.nav-utility .nav-item[data-section="settings"]')
       .click();
+    if (environment === "dev") {
+      await window
+        .locator('#settings-nav [data-settings-category="diagnostics"]')
+        .click();
+      const diagnostics = window.locator("#connection-diagnostics");
+      if (!(await diagnostics.evaluate((details) => details.open)))
+        await diagnostics.locator("summary").click();
+    }
     await window.locator("#review-setup").click();
     observations.push({ kind: "review-setup", environment });
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
@@ -415,6 +425,8 @@ try {
     assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
     await closeOwned();
   }
+} catch (error) {
+  primaryFailure = error;
 } finally {
   closingLateLaunch = true;
   if (pendingLaunch) {
@@ -428,18 +440,31 @@ try {
         });
       // A failed launch already reports its native exit. An unresolved late
       // success remains owned by its completion callback and is never duplicated.
-      if (error?.message === "GUIDED_SETUP_LATE_LAUNCH_UNRESOLVED")
+      if (error?.message === "GUIDED_SETUP_LATE_LAUNCH_UNRESOLVED") {
         cleanupUnknown = true;
+        cleanupFailures.push(error);
+      }
     }
   }
-  if (!cleanupUnknown) await closeOwned();
-  await bounded(
-    new Promise((resolve, reject) =>
-      chatFixture.close((error) => (error ? reject(error) : resolve())),
-    ),
-    "BROWSER_FIXTURE_CLOSE_TIMEOUT",
-  );
-  observations.push({ kind: "local-http-fixture-closed", nonReadRequests });
+  try {
+    if (!cleanupUnknown) await closeOwned();
+  } catch (error) {
+    cleanupFailures.push(error);
+  }
+  // HTTP cleanup and evidence survive an Electron cleanup refusal/unknown.
+  // No second Electron close, signal fallback or replacement app is attempted.
+  try {
+    await bounded(
+      new Promise((resolve, reject) =>
+        chatFixture.close((error) => (error ? reject(error) : resolve())),
+      ),
+      "BROWSER_FIXTURE_CLOSE_TIMEOUT",
+    );
+    observations.push({ kind: "local-http-fixture-closed", nonReadRequests });
+  } catch (error) {
+    cleanupFailures.push(error);
+    observations.push({ kind: "local-http-fixture-cleanup-unknown" });
+  }
   const destination = path.join(
     root,
     "_output/evidence/guided-setup-selection",
@@ -453,6 +478,9 @@ try {
         schema: 1,
         packaged,
         observations,
+        primaryFailure: primaryFailure ? String(primaryFailure) : null,
+        cleanupFailures: cleanupFailures.map(String),
+        cleanupUnknown,
         limits: [
           "Hidden renderer, native page bounds and disposable IPC fixtures only",
           "Browser readiness and task pages are local HTTP fixtures, not live ChatGPT",
@@ -464,6 +492,12 @@ try {
       2,
     ) + "\n",
     { mode: 0o600 },
+  );
+}
+if (primaryFailure || cleanupFailures.length > 0 || cleanupUnknown) {
+  throw new AggregateError(
+    [primaryFailure, ...cleanupFailures].filter(Boolean),
+    cleanupUnknown ? "GUIDED_SETUP_CLEANUP_UNKNOWN" : "GUIDED_SETUP_FAILED",
   );
 }
 process.stdout.write(
