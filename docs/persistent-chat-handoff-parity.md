@@ -616,3 +616,19 @@ to resolve, provider timeout/disconnect semantics, Desktop identity, approvals o
 live compatibility. A provider may still require the requesting client to reply.
 The initializer, experimentalApi boundary and qualification gates are unchanged.
 Actual correlated approval lifecycle and an owner decision route remain open.
+
+## Owned proxy cleanup refusal checkpoint
+
+A failed signal to the exact proxy child is not successful cleanup. A thrown
+signal error or `kill()` returning false leaves cleanup unverified and prevents
+another signal for that client instance. Concurrent cleanup reads share at most
+one normal SIGKILL escalation after a successfully sent SIGTERM. An independently
+observed exit can subsequently establish that this exact child terminated;
+signal delivery alone cannot. A child already observed to exit by signal is not
+signalled again. Transport requests are rejected before stopping the proxy, and
+connection loss still cannot reconnect or replay a task mutation.
+
+The focused regressions use EventEmitter/stream fake children and fake timers.
+They do not issue native signals, repair an EPERM refusal, prove native permissions,
+qualify a shared Desktop host, or establish detached descendant cleanup. The
+original native cleanup refusal and mandatory-gate failures remain retained.

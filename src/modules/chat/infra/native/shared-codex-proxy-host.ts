@@ -88,6 +88,8 @@ export class SharedCodexProxyHost implements HandoffHost {
   private received = Buffer.alloc(0);
   private ready: Promise<void> | null = null;
   private lost = false;
+  private signalFailed = false;
+  private escalationAttempted = false;
 
   constructor(
     private readonly launch: Launch,
@@ -278,8 +280,11 @@ export class SharedCodexProxyHost implements HandoffHost {
     const first = exited(1_500);
     this.fail();
     if (await first) return true;
-    if (child.exitCode === null && child.signalCode === null)
-      child.kill("SIGKILL");
+    if (this.signalFailed) return false;
+    if (!this.escalationAttempted) {
+      this.escalationAttempted = true;
+      this.signalProxy("SIGKILL");
+    }
     return exited(1_000);
   }
 
@@ -294,7 +299,25 @@ export class SharedCodexProxyHost implements HandoffHost {
     this.child?.stdin.destroy();
     this.child?.stdout.destroy();
     this.child?.stderr.destroy();
-    if (this.child && this.child.exitCode === null) this.child.kill("SIGTERM");
+    this.signalProxy("SIGTERM");
+  }
+
+  private signalProxy(signal: "SIGTERM" | "SIGKILL"): void {
+    const child = this.child;
+    if (
+      this.signalFailed ||
+      !child ||
+      child.exitCode !== null ||
+      child.signalCode !== null
+    )
+      return;
+    try {
+      // Delivery is not exit proof. A refusal is final for this instance;
+      // later cleanup reads may only observe an independently completed exit.
+      if (!child.kill(signal)) this.signalFailed = true;
+    } catch {
+      this.signalFailed = true;
+    }
   }
 
   private send(method: string, params: unknown): Promise<unknown> {
