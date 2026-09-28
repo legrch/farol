@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import os
 import signal
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -171,16 +172,70 @@ def _reserves_for_churn(name: str) -> bool:
     return target in IGNORED_NAMES or target.endswith(IGNORED_SUFFIXES)
 
 
+class FingerprintError(Exception):
+    """A bounded fingerprint could not prove a stable filesystem object."""
+
+
+def _metadata(info: os.stat_result) -> str:
+    # atime changes on our own reads; the remaining fields protect identity,
+    # type, ownership, permissions and mutation without consuming special nodes.
+    return ":".join(str(value) for value in (
+        info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+        info.st_rdev, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+    ))
+
+
+def _require_stable(path: Path, before: os.stat_result, after: os.stat_result) -> None:
+    if _metadata(before) != _metadata(after):
+        raise FingerprintError(f"filesystem object changed while fingerprinting: {path}")
+
+
 def _digest(path: Path) -> str:
     try:
-        if path.is_symlink():
-            return "link:" + os.readlink(path)
-        info = path.stat()
-        if info.st_size > MAX_FINGERPRINT_BYTES:
-            return f"large:{info.st_size}"
-        return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+        before = path.lstat()
+        metadata = _metadata(before)
+        if stat.S_ISLNK(before.st_mode):
+            target = os.readlink(path)
+            _require_stable(path, before, path.lstat())
+            return f"link:{metadata}:{target}"
+        if not stat.S_ISREG(before.st_mode):
+            # FIFO, socket and device bytes have no safe file-content meaning.
+            # Keep the node visible and detect replacement/metadata changes.
+            _require_stable(path, before, path.lstat())
+            return f"special:{metadata}"
+        if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
+            raise FingerprintError("safe no-follow nonblocking file opens are unavailable")
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode):
+                raise FingerprintError(f"regular file replaced by a special object: {path}")
+            _require_stable(path, before, opened)
+            if opened.st_size > MAX_FINGERPRINT_BYTES:
+                result = f"large:{metadata}"
+            else:
+                digest = hashlib.sha256()
+                remaining = MAX_FINGERPRINT_BYTES + 1
+                count = 0
+                while remaining:
+                    chunk = os.read(fd, min(65536, remaining))
+                    if not chunk:
+                        break
+                    count += len(chunk)
+                    remaining -= len(chunk)
+                    if count > opened.st_size:
+                        raise FingerprintError(f"file grew while fingerprinting: {path}")
+                    digest.update(chunk)
+                if count != opened.st_size:
+                    raise FingerprintError(f"file length changed while fingerprinting: {path}")
+                result = f"regular:{metadata}:{digest.hexdigest()[:16]}"
+            _require_stable(path, before, os.fstat(fd))
+            _require_stable(path, before, path.lstat())
+            return result
+        finally:
+            os.close(fd)
     except OSError as error:
-        return f"unreadable:{error.errno}"
+        raise FingerprintError(f"cannot safely fingerprint {path}: errno {error.errno}") from error
 
 
 def _interesting(path: Path) -> bool:
@@ -221,14 +276,24 @@ def fingerprint(allowed_profiles: frozenset[str] = frozenset()) -> dict[str, str
             relative = target.relative_to(HOME)
         except ValueError:
             relative = target
-        if not target.exists() and not target.is_symlink():
+        try:
+            target_info = target.lstat()
+        except FileNotFoundError:
             continue
-        if target.is_symlink() or target.is_file():
+        except OSError as error:
+            raise FingerprintError(f"cannot inspect {target}: errno {error.errno}") from error
+        if not stat.S_ISDIR(target_info.st_mode):
             if _interesting(target):
                 seen[str(relative)] = _digest(target)
             continue
-        for base, _dirs, files in os.walk(target):
-            for name in files:
+        def walk_error(error):
+            raise FingerprintError(f"cannot walk protected directory: errno {error.errno}")
+
+        for base, dirs, files in os.walk(target, onerror=walk_error):
+            # os.walk does not follow directory symlinks, but their identity
+            # and target must still remain part of the protected tree.
+            links = [name for name in dirs if (Path(base) / name).is_symlink()]
+            for name in files + links:
                 path = Path(base) / name
                 if not _interesting(path):
                     continue
@@ -283,59 +348,105 @@ def report(before: dict[str, str], after: dict[str, str], allowed_profiles: froz
 
 
 _CHILD: subprocess.Popen | None = None
+_PHASE = "idle"
+_FORWARD_ERROR: int | None = None
 
 
-def _ignore_sigint(signum, frame):  # noqa: ANN001 - signal handler signature
-    # The terminal already delivered this to the child directly: a wrapped
-    # command runs in the same foreground process group unless it changes
-    # that itself, so Ctrl+C reaches both processes at once. Python's default
-    # SIGINT handler would otherwise raise KeyboardInterrupt here and abort
-    # this wrapper with a traceback before the child has actually exited.
-    # Doing nothing lets `_CHILD.wait()` below return normally once the child
-    # (which did receive the signal) finishes reacting to it.
-    del signum, frame
+class GuardCancelled(Exception):
+    def __init__(self, signum: int, phase: str):
+        self.signum = signum
+        self.phase = phase
+
+
+def _handle_sigint(signum, frame):  # noqa: ANN001 - signal handler signature
+    del frame
+    if _PHASE != "child":
+        raise GuardCancelled(signum, _PHASE)
+    # A foreground terminal delivers SIGINT to the child too. Wait for its
+    # actual exit instead of abandoning it with a wrapper traceback.
 
 
 def _forward_sigterm(signum, frame):  # noqa: ANN001 - signal handler signature
-    # Unlike SIGINT, a SIGTERM sent to this wrapper specifically (rather than
-    # to the whole foreground process group) would not otherwise reach the
-    # child at all, so it is relayed explicitly.
-    del signum, frame
+    del frame
+    if _PHASE != "child":
+        raise GuardCancelled(signum, _PHASE)
+    _signal_child(signum)
+
+
+def _signal_child(signum: int) -> None:
+    global _FORWARD_ERROR
     if _CHILD is not None and _CHILD.poll() is None:
         try:
-            _CHILD.send_signal(signal.SIGTERM)
-        except OSError:
+            _CHILD.send_signal(signum)
+        except ProcessLookupError:
             pass
+        except OSError as error:
+            # A refused relay is not proof of child exit. Keep waiting on the
+            # owned child and make the failure visible after its actual exit.
+            _FORWARD_ERROR = error.errno
+            sys.stderr.write(f"[fail] cannot forward cancellation: errno {error.errno}; child exit not yet observed\n")
+
+
+def _spawn_child(command: list[str]) -> None:
+    global _CHILD, _PHASE
+    # Publish the child atomically with respect to cancellation. The guard is
+    # single-threaded; only this tiny POSIX spawn section blocks the two signals.
+    # Restore the original mask in the child before exec, so it can be cancelled.
+    cancelled_signals = {signal.SIGINT, signal.SIGTERM}
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, cancelled_signals)
+    try:
+        pending = signal.sigpending() & cancelled_signals
+        if pending:
+            raise GuardCancelled(min(pending), "preflight")
+        _CHILD = subprocess.Popen(
+            command,
+            preexec_fn=lambda: signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask),
+        )
+        _PHASE = "child"
+        # A group signal received during spawn predates the child's membership.
+        # Relay it to the now-known child instead of losing cancellation.
+        for signum in signal.sigpending() & cancelled_signals:
+            _signal_child(signum)
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 def main(argv: list[str]) -> int:
-    global _CHILD
+    global _CHILD, _PHASE, _FORWARD_ERROR
 
     if not argv or argv[0] != "--" or len(argv) < 2:
         sys.stderr.write("usage: assert-owner-untouched.py -- <command> [arguments...]\n")
         return 2
     command = argv[1:]
-    allowed_profiles = _owner_launch_profiles(command)
-
-    # Installed for the whole of this function, not just around the child's
-    # wait: an owner Ctrl+C can land while this is still walking the watched
-    # paths, either before the child starts or during the fingerprint taken
-    # after it exits, and Python's default SIGINT handler would raise
-    # KeyboardInterrupt there just as readily, producing the exact traceback
-    # this exists to avoid.
-    previous_sigint = signal.signal(signal.SIGINT, _ignore_sigint)
+    _PHASE = "preflight"
+    _FORWARD_ERROR = None
+    completed_returncode = None
+    previous_sigint = signal.signal(signal.SIGINT, _handle_sigint)
     previous_sigterm = signal.signal(signal.SIGTERM, _forward_sigterm)
     try:
+        allowed_profiles = _owner_launch_profiles(command)
         before = fingerprint(allowed_profiles)
-        _CHILD = subprocess.Popen(command)
-        returncode = _CHILD.wait()
-        completed_returncode = returncode
+        _spawn_child(command)
+        completed_returncode = _CHILD.wait()
+        _PHASE = "postflight"
         changed = report(before, fingerprint(allowed_profiles), allowed_profiles)
+    except GuardCancelled as error:
+        child_status = "no child spawned" if completed_returncode is None else f"child exit {completed_returncode}"
+        sys.stderr.write(f"[fail] owner guard cancelled during {error.phase}; {child_status}; verification incomplete\n")
+        return 128 + error.signum
+    except (FingerprintError, OSError, subprocess.SubprocessError) as error:
+        child_status = "no child spawned" if completed_returncode is None else f"child exit {completed_returncode}"
+        sys.stderr.write(f"[fail] owner guard verification incomplete; {child_status}: {error}\n")
+        return 2
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
         signal.signal(signal.SIGTERM, previous_sigterm)
         _CHILD = None
+        _PHASE = "idle"
 
+    if _FORWARD_ERROR is not None:
+        sys.stderr.write(f"[fail] cancellation relay refused; child exit {completed_returncode}; errno {_FORWARD_ERROR}\n")
+        return 2
     if changed:
         sys.stderr.write(
             "\n[fail] that run modified the owner's live Farol installation:\n"
@@ -345,8 +456,7 @@ def main(argv: list[str]) -> int:
             "afterwards by reconciling profiles by hand.\n"
         )
         return 1
-    status = completed_returncode
-    return 128 - status if status < 0 else status
+    return 128 - completed_returncode if completed_returncode < 0 else completed_returncode
 
 
 if __name__ == "__main__":
