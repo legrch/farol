@@ -195,7 +195,9 @@ def _open_content(path: Path) -> int:
     # POSIX has no portable regular-only open. NONBLOCK protects FIFO races;
     # the alarm bounds an interruptible open after other type substitutions.
     # This is not a device-driver side-effect or uninterruptible-I/O guarantee.
-    if not hasattr(signal, "setitimer") or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+    if (not hasattr(signal, "setitimer") or not hasattr(signal, "pthread_sigmask")
+            or signal.SIGALRM in signal.pthread_sigmask(signal.SIG_BLOCK, set())
+            or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0)):
         raise FingerprintError("a dedicated bounded descriptor-open deadline is unavailable")
 
     def timed_out(signum, frame):

@@ -721,6 +721,33 @@ assert not calls
       );
     },
   );
+  it("refuses blocked SIGALRM before content open or command spawn", async () => {
+    const result = await probe(
+      fixture(),
+      `
+p = Path.home()/".farol/state/settings.json"
+p.parent.mkdir(parents=True)
+p.write_text("fixture")
+previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+before_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+before_timer = signal.getitimer(signal.ITIMER_REAL)
+calls = []
+def forbidden(*args, **kwargs):
+    calls.append(1)
+    raise AssertionError("deadline unavailable must refuse before open/spawn")
+guard.os.open = forbidden
+guard.subprocess.Popen = forbidden
+try:
+    assert guard.main(["--", "fixture-child"]) == 2
+    assert not calls
+    assert signal.pthread_sigmask(signal.SIG_BLOCK, set()) == before_mask
+    assert signal.getitimer(signal.ITIMER_REAL) == before_timer
+finally:
+    signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+`,
+    );
+    expect(result.stderr).toContain("deadline is unavailable");
+  });
   it("preserves a child signal exit", async () => {
     const result = await run(
       fixture(),

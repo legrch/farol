@@ -17,7 +17,9 @@ roots, profile allowances and narrow runtime churn exclusions remain in force.
   with identity and mutation metadata. This is not a full content hash of large
   files. Directory symlinks remain visible without recursive traversal.
 - An interruptible content open has a five-second SIGALRM deadline. A blocked
-  or unavailable deadline fails before command spawn. POSIX/Darwin does not
+  or unavailable deadline (including an inherited blocked SIGALRM) fails
+  before content open or command spawn, without changing the inherited mask.
+  POSIX/Darwin does not
   provide an atomic regular-only content open: a device substituted after lstat
   can reach open, but is rejected by fstat before any stream read. This does not
   prove absence of driver-side open effects or bound uninterruptible kernel I/O.
