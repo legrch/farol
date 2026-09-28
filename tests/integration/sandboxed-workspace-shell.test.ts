@@ -174,14 +174,43 @@ async function fixture(
   return { root, workspace, shell, approval, participant };
 }
 
-async function complete(shell: SandboxedWorkspaceShell, handle: string) {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+async function complete(
+  shell: SandboxedWorkspaceShell,
+  handle: string,
+  attempts = 100,
+) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     const read = shell.read({ handle, stdoutOffset: 0, stderrOffset: 0 });
     if (!read.ok) throw new Error(read.error.code);
     if (read.value.state === "exited") return read.value;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("SHELL_TEST_TIMEOUT");
+}
+
+async function runningMarker(shell: SandboxedWorkspaceShell, handle: string) {
+  const deadline = Date.now() + 5_000;
+  let observed = shell.read({ handle, stdoutOffset: 0, stderrOffset: 0 });
+  while (
+    observed.ok &&
+    observed.value.state === "running" &&
+    observed.value.errorCode === null &&
+    !observed.value.stdout.includes("deadline-ready") &&
+    Date.now() < deadline
+  ) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    observed = shell.read({ handle, stdoutOffset: 0, stderrOffset: 0 });
+  }
+  expect(observed, JSON.stringify(observed)).toMatchObject({
+    ok: true,
+    value: {
+      state: "running",
+      stdout: "deadline-ready",
+      errorCode: null,
+      timedOut: false,
+      authorityExpired: false,
+    },
+  });
 }
 
 describe("workspace shell authority", () => {
@@ -467,8 +496,10 @@ describe.skipIf(process.platform !== "darwin")(
         stdio: ["ignore", "ignore", "ignore", "ipc"],
       });
       const events: string[] = [];
+      const messages: unknown[] = [];
       watchdog.on("message", (message: unknown) => {
         events.push((message as { type: string }).type);
+        messages.push(message);
       });
       try {
         const exited = new Promise<void>((resolve) =>
@@ -488,6 +519,15 @@ describe.skipIf(process.platform !== "darwin")(
         expect(events).toContain("deadline");
         expect(events).toContain("close");
         expect(events).not.toContain("ready");
+        expect(messages).toContainEqual({
+          type: "close",
+          code: null,
+          signal: null,
+          reason: "deadline-before-spawn",
+        });
+        expect(watchdog.exitCode !== null || watchdog.signalCode !== null).toBe(
+          true,
+        );
         await expect(
           fs.stat(path.join(workspace, "missed-deadline.txt")),
         ).rejects.toMatchObject({ code: "ENOENT" });
@@ -1242,17 +1282,20 @@ describe.skipIf(process.platform !== "darwin")(
         operationId: "command-deadline",
         workspaceId: "fixture",
         relativeCwd: ".",
-        command: "sleep 20",
-        timeoutMs: 100,
+        command: "printf deadline-ready; exec sleep 20",
+        timeoutMs: 3_000,
         write: false,
       });
       if (!started.ok) throw new Error(started.error.code);
-      const timed = await complete(shell, started.value.handle);
+      await runningMarker(shell, started.value.handle);
+      const timed = await complete(shell, started.value.handle, 300);
       expect(timed.timedOut).toBe(true);
       expect(timed.authorityExpired).toBe(false);
+      expect(timed.exitCode).toBe(null);
       expect(timed.exitSignal).toBe("SIGTERM");
       expect(timed.groupCleanup).toBe("confirmed");
-    });
+      expect(timed.detachedCleanup).toBe("unverified");
+    }, 12_000);
 
     it("classifies an authority deadline separately from a command timeout", async () => {
       const { root, approval, participant } = await fixture(
@@ -1260,7 +1303,7 @@ describe.skipIf(process.platform !== "darwin")(
         false,
         "workspace",
         false,
-        Date.now() + 1_000,
+        Date.now() + 6_000,
       );
       const almostExpired = new SandboxedWorkspaceShell(
         approval,
@@ -1273,16 +1316,20 @@ describe.skipIf(process.platform !== "darwin")(
         operationId: "authority-deadline",
         workspaceId: "fixture",
         relativeCwd: ".",
-        command: "sleep 20",
+        command: "printf deadline-ready; exec sleep 20",
         timeoutMs: 30_000,
         write: false,
       });
       if (!started.ok) throw new Error(started.error.code);
-      const outcome = await complete(almostExpired, started.value.handle);
+      await runningMarker(almostExpired, started.value.handle);
+      const outcome = await complete(almostExpired, started.value.handle, 400);
       expect(outcome.authorityExpired).toBe(true);
       expect(outcome.timedOut).toBe(false);
+      expect(outcome.exitCode).toBe(null);
+      expect(outcome.exitSignal).toBe("SIGTERM");
       expect(outcome.groupCleanup).toBe("confirmed");
-    });
+      expect(outcome.detachedCleanup).toBe("unverified");
+    }, 15_000);
 
     it("bounds a fast producer before IPC output can grow without limit", async () => {
       const { shell } = await fixture();

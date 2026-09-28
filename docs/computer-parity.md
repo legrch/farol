@@ -239,3 +239,15 @@ This is `FIXTURE_APP` provider evidence. It proves the product composition and b
 contract, not that an authenticated owner account received the files. A real provider
 attachment row remains separately budgeted and must never be inferred from the
 fixture report.
+
+## Native deadline scenario evidence
+
+Deadline-before-spawn and deadline-after-observed-running are separate scenarios.
+A watchdog that rejects an already expired absolute authority reports no command
+exit code/signal, emits no ready event and leaves the command canary untouched.
+Tests of a running command first observe its stdout marker and live state, then
+require the real SIGTERM, terminal handle and confirmed owned-group cleanup after
+command timeout or authority expiry. Test admission windows allow setup to finish;
+production deadlines and cleanup remain unchanged. A passing isolated repeat does
+not erase a failed full gate or prove its original timing cause. These fixtures
+still do not qualify detached descendants or the owner's live connector.
