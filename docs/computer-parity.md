@@ -251,3 +251,30 @@ command timeout or authority expiry. Test admission windows allow setup to finis
 production deadlines and cleanup remain unchanged. A passing isolated repeat does
 not erase a failed full gate or prove its original timing cause. These fixtures
 still do not qualify detached descendants or the owner's live connector.
+
+## Owned watchdog signal refusal checkpoint
+
+A failed process-group signal is sticky for that owned command. The watchdog
+reports refusal, schedules no escalation after a refused TERM, and never repeats
+an attempted KILL from a later close callback. It continues observing the actual
+root command; successful signal submission alone is not a terminal outcome. After
+that command closes, its reserved controller exit status preserves the refusal
+when IPC acknowledgement is unavailable. The parent retains unverified cleanup
+without another signal or group probe after known refusal. Final controller close
+and disconnected IPC precede parent cleanup effects and terminal classification;
+exit alone cannot release a lease with pending receipts. Every group probe and
+final classification rechecks refusal, so a late receipt cannot become confirmed
+on a later ESRCH. An observed ESRCH on
+the parent's one lost-watchdog cleanup attempt is distinct from permission denial.
+The original root exit code/signal, when actually reported, remains separate from
+the controller's refusal status. Scratch and admission remain fail closed.
+
+The focused evidence executes the actual watchdog source in a VM with synthetic
+IPC, child, timers and signal functions, then the real shell service against a
+synthetic watchdog and disposable filesystem. A separate owned Node IPC fixture
+self-terminates, observes its actual exit84 and verifies both final receipts before
+public close with disconnected IPC. It uses no shell, OS signal, sandbox-exec,
+owner state or provider and has no kill/relaunch fallback. This does not repair a native EPERM,
+qualify native permissions, prove full detached-descendant cleanup or qualify the
+NEW connector. The full mandatory gate remains blocked; earlier source/package
+receipts do not apply to these new bytes.
