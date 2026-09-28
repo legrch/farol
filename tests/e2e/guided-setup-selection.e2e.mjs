@@ -10,7 +10,11 @@ import path from "node:path";
 import { _electron as electron } from "playwright-core";
 
 const packaged = process.argv.includes("--packaged");
-assert.deepEqual(process.argv.slice(2), packaged ? ["--packaged"] : []);
+const devOnly = process.argv.includes("--dev-only");
+assert.deepEqual(
+  process.argv.slice(2),
+  packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : [],
+);
 const root = process.cwd();
 const appRoot = path.join(root, "_output/package/Farol Next Preview.app");
 const executable = packaged
@@ -25,8 +29,8 @@ const executable = packaged
 const entry = packaged
   ? path.join(appRoot, "Contents/Resources/app/main.cjs")
   : path.join(root, "_output/build/app/main.cjs");
-const temporaryRoot = await fs.mkdtemp(
-  path.join(os.tmpdir(), "farol-guided-setup-"),
+const temporaryRoot = await fs.realpath(
+  await fs.mkdtemp(path.join(os.tmpdir(), "farol-guided-setup-")),
 );
 const proof = randomUUID();
 await fs.writeFile(path.join(temporaryRoot, ".farol-next-e2e-root"), proof, {
@@ -57,6 +61,7 @@ let cleanupUnknown = false;
 let application;
 let pendingLaunch;
 let closingLateLaunch = false;
+const childRecords = new Map();
 
 async function bounded(promise, label, milliseconds = 15000) {
   let timer;
@@ -84,19 +89,40 @@ async function closeOwned() {
     await bounded(owned.close(), "GUIDED_SETUP_CLOSE_TIMEOUT");
     await bounded(terminal, "GUIDED_SETUP_EXIT_TIMEOUT");
   } catch (error) {
-    cleanupUnknown = true;
-    observations.push({ kind: "cleanup-unknown", pid: child.pid });
+    // Observe the SAME pending child exit after a close timeout, never close
+    // or signal again. An unknown child stays held and prohibits another launch.
+    try {
+      await bounded(terminal, "GUIDED_SETUP_EXIT_RECONCILE_TIMEOUT");
+    } catch {
+      cleanupUnknown = true;
+      observations.push({
+        kind: "cleanup-unknown",
+        pid: child.pid,
+        ...childRecords.get(child.pid),
+      });
+      throw error;
+    }
+    application = undefined;
+    observations.push({
+      kind: "owned-process-terminal-after-close-error",
+      pid: child.pid,
+      exit: child.exitCode,
+      signal: child.signalCode,
+      ...childRecords.get(child.pid),
+    });
     throw error;
   }
-  assert.equal(child.signalCode, null);
-  assert.equal(child.exitCode, 0);
+  // A terminal nonzero/signal result is known, not an invitation to close again.
+  application = undefined;
   observations.push({
     kind: "owned-process-terminal",
     pid: child.pid,
     exit: child.exitCode,
     signal: child.signalCode,
+    ...childRecords.get(child.pid),
   });
-  application = undefined;
+  assert.equal(child.signalCode, null);
+  assert.equal(child.exitCode, 0);
 }
 
 async function launch(environment, mode = "normal", profile = mode) {
@@ -106,29 +132,36 @@ async function launch(environment, mode = "normal", profile = mode) {
     "GUIDED_SETUP_PRIOR_INSTANCE_NOT_CLOSED",
   );
   let profileRoot = profiles.get(profile);
+  const freshProfile = !profileRoot;
   if (!profileRoot) {
-    profileRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "farol-next-e2e-home-"),
+    profileRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-next-e2e-home-")),
     );
     await fs.writeFile(path.join(profileRoot, ".farol-next-e2e-root"), proof, {
       mode: 0o600,
     });
     profiles.set(profile, profileRoot);
   }
-  const home = path.join(profileRoot, "home");
+  // The existing startup receipt contract requires a direct OS-temp test HOME.
+  const home = profileRoot;
   const appData = path.join(profileRoot, "app-data");
+  const userData = path.join(profileRoot, "user-data");
   await fs.mkdir(home, { recursive: true, mode: 0o700 });
   await fs.mkdir(appData, { recursive: true, mode: 0o700 });
+  await fs.mkdir(userData, { recursive: true, mode: 0o700 });
+  const startupMarker = path.join(home, ".farol-next-startup-stage");
+  await fs.rm(startupMarker, { force: true });
   const pending = electron.launch({
     executablePath: executable,
     args: [
       entry,
+      `--user-data-dir=${userData}`,
       "--preview-window-mode=hidden",
       ...(mode === "demo" ? ["--demo"] : []),
     ],
     env: {
       HOME: home,
-      TMPDIR: temporaryRoot,
+      TMPDIR: os.tmpdir(),
       PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       LANG: "en_US.UTF-8",
       ...(environment === "dev" ? { FAROL_NEXT_ENVIRONMENT: "dev" } : {}),
@@ -146,20 +179,82 @@ async function launch(environment, mode = "normal", profile = mode) {
   closingLateLaunch = false;
   pendingLaunch = pending.then(async (value) => {
     application = value;
+    const child = value.process();
+    const record = { stdout: "", stderr: "" };
+    childRecords.set(child.pid, record);
+    for (const stream of ["stdout", "stderr"]) {
+      child[stream]?.on("data", (chunk) => {
+        record[stream] = (record[stream] + chunk.toString("utf8")).slice(
+          -32768,
+        );
+      });
+    }
+    child.once("exit", (exit, signal) => {
+      observations.push({
+        kind: "native-exit-observed",
+        pid: child.pid,
+        exit,
+        signal,
+        ...record,
+      });
+    });
     if (closingLateLaunch) await closeOwned();
     return value;
   });
   application = await bounded(pendingLaunch, "GUIDED_SETUP_LAUNCH_TIMEOUT");
+  // Preview intentionally ignores the Dev appData override. Prove native
+  // paths before touching UI; HOME alone does not select Electron's profile.
+  const nativePaths = await application.evaluate(({ app }) => ({
+    userData: app.getPath("userData"),
+    sessionData: app.getPath("sessionData"),
+  }));
+  for (const actual of Object.values(nativePaths)) {
+    const physical = await fs.realpath(actual);
+    assert.ok(
+      physical.startsWith(`${await fs.realpath(profileRoot)}${path.sep}`),
+      "GUIDED_SETUP_PROFILE_NOT_OWNED",
+    );
+  }
+  if (environment === "preview")
+    assert.equal(
+      await fs.realpath(nativePaths.userData),
+      await fs.realpath(userData),
+    );
+  observations.push({
+    kind: "native-profile-isolation",
+    environment,
+    profileRoot,
+    nativePaths,
+  });
   const window = await bounded(
     application.firstWindow(),
     "GUIDED_SETUP_WINDOW_TIMEOUT",
+    30000,
   );
   await window
     .locator("#sidebar")
     .waitFor({ state: "visible", timeout: 15000 });
+  const child = application.process();
+  const startupDeadline = Date.now() + 30000;
+  for (;;) {
+    if (child.exitCode !== null || child.signalCode !== null)
+      throw new Error("GUIDED_SETUP_EXIT_BEFORE_STARTUP_COMPLETE");
+    const stage = await fs.readFile(startupMarker, "utf8").catch(() => "");
+    if (stage.trim() === "startup-complete") break;
+    if (Date.now() >= startupDeadline)
+      throw new Error("GUIDED_SETUP_STARTUP_COMPLETE_TIMEOUT");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  observations.push({ kind: "startup-complete", pid: child.pid, environment });
   const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
   assert.equal(bootstrap.environment, environment);
   assert.equal(bootstrap.legacySetupTestMode, mode === "legacy");
+  if (freshProfile && mode === "normal")
+    assert.equal(
+      bootstrap.configuration.settings.computer.workspaces.length,
+      0,
+      "GUIDED_SETUP_PROFILE_NOT_EMPTY",
+    );
   const windows = await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows().map((window) => ({
       visible: window.isVisible(),
@@ -181,7 +276,13 @@ async function launch(environment, mode = "normal", profile = mode) {
 
 async function browserGeometry(window, environment, width) {
   await application.evaluate(({ BrowserWindow }, width) => {
-    BrowserWindow.getAllWindows()[0].setContentSize(width, 760);
+    BrowserWindow.getAllWindows()
+      .find(
+        (window) =>
+          window.webContents.getURL().startsWith("file:") &&
+          window.webContents.getURL().endsWith("/shell.html"),
+      )
+      .setContentSize(width, 760);
   }, width);
   await window.waitForFunction((width) => innerWidth === width, width);
   await window.locator("#browser-status-bar").waitFor({ state: "visible" });
@@ -221,7 +322,11 @@ async function browserGeometry(window, environment, width) {
   });
   const native = await application.evaluate(
     ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
-      const owned = BrowserWindow.getAllWindows()[0];
+      const owned = BrowserWindow.getAllWindows().find(
+        (window) =>
+          window.webContents.getURL().startsWith("file:") &&
+          window.webContents.getURL().endsWith("/shell.html"),
+      );
       const page = owned.contentView.children.find(
         (child) =>
           child instanceof WebContentsView &&
@@ -237,6 +342,13 @@ async function browserGeometry(window, environment, width) {
     },
     fixtureUrl,
   );
+  observations.push({
+    kind: "compact-browser-measurement",
+    environment,
+    width,
+    chrome,
+    native,
+  });
   assert.equal(chrome.tabs.y, 0);
   assert.equal(chrome.tabs.height, 52);
   assert.equal(chrome.footer.y, 735);
@@ -274,7 +386,11 @@ async function browserGeometry(window, environment, width) {
 }
 
 try {
-  for (const environment of packaged ? ["preview"] : ["preview", "dev"]) {
+  for (const environment of packaged
+    ? ["preview"]
+    : devOnly
+      ? ["dev"]
+      : ["preview", "dev"]) {
     const window = await launch(environment, "normal", environment);
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
@@ -286,6 +402,14 @@ try {
         document
           .querySelector("#onboarding-folder-list")
           ?.textContent?.includes("approved-folder"),
+      undefined,
+      { timeout: 15000 },
+    );
+    // Selection is saved before its access check settles. Do not send the
+    // next navigation click while Guided Setup is still deliberately busy.
+    await window.waitForFunction(
+      () => !document.querySelector("#onboarding-add-folder")?.disabled,
+      undefined,
       { timeout: 15000 },
     );
     const saved = await window.evaluate(() => window.farolNext.bootstrap());
@@ -388,7 +512,13 @@ try {
     await browserGeometry(window, environment, 1180);
     await browserGeometry(window, environment, 940);
     await application.evaluate(({ BrowserWindow }) =>
-      BrowserWindow.getAllWindows()[0].setContentSize(1180, 760),
+      BrowserWindow.getAllWindows()
+        .find(
+          (window) =>
+            window.webContents.getURL().startsWith("file:") &&
+            window.webContents.getURL().endsWith("/shell.html"),
+        )
+        .setContentSize(1180, 760),
     );
     await window.waitForFunction(() => innerWidth === 1180);
     await window.locator('#task-tabs [role="tab"]').first().click();
@@ -419,7 +549,7 @@ try {
     );
     await closeOwned();
   }
-  for (const mode of ["legacy", "demo"]) {
+  for (const mode of devOnly ? [] : ["legacy", "demo"]) {
     const window = await launch("preview", mode);
     await window.locator("#setup-dialog").waitFor({ state: "visible" });
     assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
@@ -427,6 +557,42 @@ try {
   }
 } catch (error) {
   primaryFailure = error;
+  if (application) {
+    try {
+      const windows = application.windows();
+      const shell = windows.find(
+        (window) =>
+          window.url().startsWith("file:") &&
+          window.url().endsWith("/shell.html"),
+      );
+      if (shell)
+        observations.push({
+          kind: "failure-ui-feedback",
+          ...(await bounded(
+            shell.evaluate(async () => {
+              const bootstrap = await window.farolNext.bootstrap();
+              return {
+                feedback: document.querySelector("#onboarding-feedback")
+                  ?.textContent,
+                folders: document.querySelector("#onboarding-folder-list")
+                  ?.textContent,
+                workspaces:
+                  bootstrap.configuration.settings.computer.workspaces.map(
+                    ({ root, access }) => ({ root, access }),
+                  ),
+                environment: bootstrap.environment,
+              };
+            }),
+            "GUIDED_SETUP_FAILURE_FEEDBACK_TIMEOUT",
+          )),
+        });
+    } catch (feedbackError) {
+      observations.push({
+        kind: "failure-feedback-unavailable",
+        error: String(feedbackError),
+      });
+    }
+  }
 } finally {
   closingLateLaunch = true;
   if (pendingLaunch) {
@@ -468,7 +634,7 @@ try {
   const destination = path.join(
     root,
     "_output/evidence/guided-setup-selection",
-    packaged ? "package.json" : "development.json",
+    packaged ? "package.json" : devOnly ? "dev-only.json" : "development.json",
   );
   await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -477,6 +643,7 @@ try {
       {
         schema: 1,
         packaged,
+        devOnly,
         observations,
         primaryFailure: primaryFailure ? String(primaryFailure) : null,
         cleanupFailures: cleanupFailures.map(String),

@@ -58,9 +58,17 @@ completing that optional step. Settings keeps the existing workspace write,
 Workspace shell and full Git/user-settings approvals.
 
 The retained five-stage qualification journey is exercised only by its explicit
-fixture lane. `npm run test:e2e:guided-setup:package` separately checks the normal
+fixture lane. `task test:e2e:guided-setup:package` separately checks the normal
 packaged sidebar, folder selection, navigation and reopen with disposable state
-and hidden windows. It is not a live account, native picker or NEW connector proof.
+and hidden windows. The guarded lane also checks compact Browser tabs, tab close,
+task-menu Setup, native page bounds and the bottom status strip at normal and compact
+widths, using only a local HTTP composer fixture. It proves native userData/sessionData
+is beneath the owned disposable root before UI actions. Preview uses an explicit
+user-data-dir; HOME and the Dev-only appData override alone are insufficient. It is
+not a live account, native picker or NEW connector proof.
+`task test:e2e:guided-setup` checks both environments; `-- --dev-only`
+selects a focused disposable Dev diagnostic. The fixture uses physical temporary
+paths and waits for the folder access check before the next navigation action.
 
 ## What the controls do
 
