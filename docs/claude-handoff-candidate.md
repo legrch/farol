@@ -27,7 +27,14 @@ claims one directory and publishes/fsyncs an intent before process submission.
 Missing directory is absence. Empty/partial/corrupt, unsafe permission, symlink,
 hardlink or FIFO records are unknown/refused; they never authorize another start.
 Concurrent claim and a lost start/publication acknowledgement cannot duplicate the
-process. `create` replay remains unknown rather than claiming another dispatch.
+process. Uncertain intent publication or authority loss after intent/start throws
+inside the mutation gate so its existing fail-closed lock stays retained. The
+public result remains `outcome_unknown`; it is not a normal gate completion and
+no age/PID-based lock stealing is added. Successful gate release is followed by
+current physical-authority/deadline readback before disclosing dispatch proof.
+Deadline checks also follow awaited authority snapshots. These tests prove gate
+retention, not full detached-descendant cleanup or live Claude qualification.
+`create` replay remains unknown rather than claiming another dispatch.
 Read status; never use another key to recover an uncertain send.
 
 ## Evidence and limitations

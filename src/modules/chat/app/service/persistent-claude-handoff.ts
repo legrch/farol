@@ -32,10 +32,13 @@ export class PersistentClaudeHandoff {
     private readonly gate: HandoffMutationGate,
     private readonly now: () => number,
   ) {}
+  private active() {
+    return this.now() < this.admission.expiresAt;
+  }
   private async authorized(record?: ClaudeIntent) {
-    if (this.now() >= this.admission.expiresAt) return null;
+    if (!this.active()) return null;
     const workspace = await this.authority.resolve(this.admission.workspaceId);
-    return this.now() < this.admission.expiresAt &&
+    return this.active() &&
       workspace &&
       (!record ||
         (record.workspaceId === this.admission.workspaceId &&
@@ -64,7 +67,7 @@ export class PersistentClaudeHandoff {
     let publicationPossible = false;
     try {
       const workspace = await this.authorized();
-      if (!workspace) return refused;
+      if (!workspace || !this.active()) return refused;
       let existing: ClaudeIntent | null;
       try {
         existing = await this.journal.read(key);
@@ -85,20 +88,26 @@ export class PersistentClaudeHandoff {
           : { status: "refused", code: "CLAUDE_DISPATCH_CONFLICT" };
       if (
         !(await this.host.supports(request.modelBinding)) ||
-        !(await this.authorized())
+        !(await this.authorized(intent)) ||
+        !this.active()
       )
         return refused;
-      return await this.gate.run(
+      const result = await this.gate.run(
         async () => {
-          if (!(await this.authorized())) throw Error("admission");
+          if (!(await this.authorized(intent)) || !this.active())
+            throw Error("admission");
         },
         async () => {
+          if (!this.active()) throw Error("admission");
           publicationPossible = true;
-          if (!(await this.journal.claim(key, intent))) return unknown;
-          if (!(await this.authorized(intent))) return unknown;
+          if (!(await this.journal.claim(key, intent)))
+            throw Error("CLAUDE_INTENT_CLAIM_UNKNOWN");
+          if (!(await this.authorized(intent)) || !this.active())
+            throw Error("CLAUDE_ADMISSION_CHANGED_AFTER_INTENT");
           const handle = await this.host.start({ ...request, key }, workspace);
           this.handles.set(key, handle);
-          if (!(await this.authorized(intent))) return unknown;
+          if (!(await this.authorized(intent)) || !this.active())
+            throw Error("CLAUDE_ADMISSION_CHANGED_AFTER_START");
           return {
             status: "dispatched" as const,
             dispatchId: key,
@@ -109,6 +118,9 @@ export class PersistentClaudeHandoff {
         },
         () => !publicationPossible,
       );
+      // Gate release is awaited too; its completion is not current authority proof.
+      if (!(await this.authorized(intent)) || !this.active()) return unknown;
+      return result;
     } catch {
       return publicationPossible ? unknown : refused;
     }
@@ -122,10 +134,10 @@ export class PersistentClaudeHandoff {
     const key = dispatchId.toLowerCase();
     const unknown = { status: "outcome_unknown" as const, dispatchId: key };
     try {
-      if (!(await this.authorized())) return refused;
+      if (!(await this.authorized()) || !this.active()) return refused;
       const intent = await this.journal.read(key);
       if (!intent) return { status: "unknown" };
-      if (!(await this.authorized(intent))) return refused;
+      if (!(await this.authorized(intent)) || !this.active()) return refused;
       let terminal = await this.journal.terminal(key);
       if (!terminal) {
         const handle = this.handles.get(key);
@@ -148,7 +160,8 @@ export class PersistentClaudeHandoff {
         );
         if (!observed) return unknown;
         if (snapshot.state === "running") {
-          if (!(await this.authorized(intent))) return refused;
+          if (!(await this.authorized(intent)) || !this.active())
+            return refused;
           return {
             status: "known",
             dispatchId: key,
@@ -169,7 +182,7 @@ export class PersistentClaudeHandoff {
           (observed.result.lifecycle !== "failed" && snapshot.exitCode !== 0)
         )
           return unknown;
-        if (!(await this.authorized(intent))) return refused;
+        if (!(await this.authorized(intent)) || !this.active()) return refused;
         const value = {
           ...observed.result,
           sessionId: key,
@@ -178,11 +191,13 @@ export class PersistentClaudeHandoff {
         };
         terminal = await this.gate.run(
           async () => {
-            if (!(await this.authorized(intent))) throw Error("admission");
+            if (!(await this.authorized(intent)) || !this.active())
+              throw Error("admission");
           },
           async () => {
             const recorded = await this.journal.finish(key, value);
-            if (!(await this.authorized(intent))) throw Error("late admission");
+            if (!(await this.authorized(intent)) || !this.active())
+              throw Error("late admission");
             return recorded;
           },
           () => true,
@@ -193,7 +208,7 @@ export class PersistentClaudeHandoff {
         terminal.actualModel !== intent.modelBinding.selection.model
       )
         return unknown;
-      if (!(await this.authorized(intent))) return refused;
+      if (!(await this.authorized(intent)) || !this.active()) return refused;
       return {
         ...terminal,
         status: "known",

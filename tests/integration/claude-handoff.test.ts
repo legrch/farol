@@ -1,3 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { PrivateExecutionFence } from "../../src/modules/computer/infra/mcp/execution-fence";
+import type { HandoffMutationGate } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 import { expect, it } from "vitest";
 import { PersistentClaudeHandoff } from "../../src/modules/chat/app/service/persistent-claude-handoff";
 import type {
@@ -38,13 +43,18 @@ const request = {
   message: "Read the fixture",
   modelBinding: binding,
 };
-function fixture() {
+function fixture(gate?: HandoffMutationGate) {
   let now = 1;
   let allowed = true;
   let fault = "";
   let calls = 0;
   let resolveCalls = 0;
   let refuseResolveAt = 0;
+  let gateReleased = 0;
+  let gateQuarantined = 0;
+  let gateReturnAction: (() => void) | null = null;
+  let effectStage = "before-intent";
+  let expireAtStage = "";
   const intents = new Map<string, ClaudeIntent>();
   const terminal = new Map<string, ClaudeTerminal>();
   let snapshot = {
@@ -68,6 +78,7 @@ function fixture() {
       }
       if (intents.has(id)) return false;
       intents.set(id, record);
+      effectStage = "intent";
       return true;
     },
     async terminal(id: string) {
@@ -84,7 +95,19 @@ function fixture() {
     {
       async resolve() {
         resolveCalls++;
-        return allowed && resolveCalls !== refuseResolveAt ? workspace : null;
+        const result =
+          allowed && resolveCalls !== refuseResolveAt ? workspace : null;
+        if (expireAtStage === effectStage) {
+          expireAtStage = "";
+          // Expire after authorized() has produced its snapshot, but before
+          // its caller resumes. Stage arming avoids numeric call-count coupling.
+          queueMicrotask(() =>
+            queueMicrotask(() => {
+              now = 100;
+            }),
+          );
+        }
+        return result;
       },
     },
     {
@@ -94,12 +117,14 @@ function fixture() {
       },
       async start() {
         calls++;
+        effectStage = "started";
         if (fault === "expire-start") now = 100;
         if (fault === "spawn") throw Error("lost start");
         return "owned-handle";
       },
       async read() {
         if (fault === "snapshot") throw Error("lost read");
+        effectStage = "read";
         return snapshot;
       },
     },
@@ -110,21 +135,26 @@ function fixture() {
       },
     },
     { workspaceId: "selected", projectId: "saved", expiresAt: 100 },
-    {
-      async run(
-        preflight: () => Promise<void>,
-        effect: () => Promise<unknown>,
-        safe: (error: unknown) => boolean,
-      ) {
-        try {
-          await preflight();
-          return await effect();
-        } catch (error) {
-          safe(error);
-          throw error;
-        }
-      },
-    } as never,
+    gate ??
+      ({
+        async run(
+          preflight: () => Promise<void>,
+          effect: () => Promise<unknown>,
+          safe: (error: unknown) => boolean,
+        ) {
+          try {
+            await preflight();
+            const result = await effect();
+            gateReleased++;
+            gateReturnAction?.();
+            return result;
+          } catch (error) {
+            if (safe(error)) gateReleased++;
+            else gateQuarantined++;
+            throw error;
+          }
+        },
+      } as never),
     () => now,
   );
   const init = JSON.stringify({
@@ -145,6 +175,18 @@ function fixture() {
   });
   return {
     service,
+    expireAfterSnapshot(stage: "intent" | "started" | "read") {
+      expireAtStage = stage;
+    },
+    get gateReleased() {
+      return gateReleased;
+    },
+    get gateQuarantined() {
+      return gateQuarantined;
+    },
+    onGateReturn(action: () => void) {
+      gateReturnAction = action;
+    },
     journal,
     intents,
     terminal,
@@ -538,4 +580,73 @@ it("unreadable intent after previous dispatch remains outcome-unknown", async ()
     dispatchId: key,
   });
   expect(f.calls).toBe(1);
+});
+
+it.each(["claim", "expire-start", "after-claim-authority"])(
+  "%s unknown publication retains the mutation gate instead of declaring safe completion",
+  async (fault) => {
+    const f = fixture();
+    if (fault === "after-claim-authority") f.refuseAt(4);
+    else f.setFault(fault);
+    expect(await f.service.create(request)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(f.gateReleased).toBe(0);
+    expect(f.gateQuarantined).toBe(1);
+    expect(f.calls).toBe(fault === "expire-start" ? 1 : 0);
+  },
+);
+it.each(["revoke", "expire"] as const)(
+  "%s while the gate returns cannot disclose a successful dispatch",
+  async (change) => {
+    const f = fixture();
+    f.onGateReturn(() => f[change]());
+    expect(await f.service.create(request)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(f.calls).toBe(1);
+    expect((await f.service.status(key)).status).toBe("refused");
+  },
+);
+
+it.each(["expire-start", "after-claim-authority"])(
+  "%s retains the actual filesystem mutation lock",
+  async (fault) => {
+    const root = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-claude-gate-")),
+    );
+    try {
+      const f = fixture(new PrivateExecutionFence({ root }));
+      if (fault === "after-claim-authority") f.refuseAt(4);
+      else f.setFault(fault);
+      expect((await f.service.create(request)).status).toBe("outcome_unknown");
+      const lock = await fs.lstat(
+        path.join(root, "execution-fence-mutation.lock"),
+      );
+      expect(lock.isDirectory()).toBe(true);
+      expect(lock.mode & 0o077).toBe(0);
+      expect(f.calls).toBe(fault === "expire-start" ? 1 : 0);
+      // This proves only the gate's own retained lock, not process-tree cleanup.
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  },
+);
+it.each(["intent", "started"] as const)(
+  "expiry after the %s authority snapshot cannot escape the gate",
+  async (stage) => {
+    const f = fixture();
+    f.expireAfterSnapshot(stage);
+    expect((await f.service.create(request)).status).toBe("outcome_unknown");
+    expect(f.gateReleased).toBe(0);
+    expect(f.gateQuarantined).toBe(1);
+    expect(f.calls).toBe(stage === "started" ? 1 : 0);
+  },
+);
+it("expiry after a running status authority snapshot cannot disclose it", async () => {
+  const f = fixture();
+  await f.service.create(request);
+  f.setSnapshot({ stdout: f.init + "\n" });
+  f.expireAfterSnapshot("read");
+  expect((await f.service.status(key)).status).toBe("refused");
 });
