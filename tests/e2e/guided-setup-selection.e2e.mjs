@@ -524,11 +524,19 @@ try {
     });
     await window.locator("#sign-in-return").click();
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
-    await window.waitForFunction(
-      async () =>
-        (await window.farolNext.bootstrap()).configuration.settings.setup
-          .chatgpt.verified !== null,
-    );
+    const readinessDeadline = Date.now() + 15000;
+    for (;;) {
+      const snapshot = await bounded(
+        window.evaluate(() => window.farolNext.bootstrap()),
+        "BROWSER_FIXTURE_READINESS_REPLY_TIMEOUT",
+        5000,
+      );
+      if (snapshot.configuration.settings.setup.chatgpt.verified !== null)
+        break;
+      if (Date.now() >= readinessDeadline)
+        throw new Error("BROWSER_FIXTURE_READINESS_TIMEOUT");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     observations.push({
       kind: "embedded-sign-in-return",
       environment,
