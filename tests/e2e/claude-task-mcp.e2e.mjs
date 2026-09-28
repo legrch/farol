@@ -1,3 +1,9 @@
+import {
+  ownedFixtureTransport,
+  requireOwnedFixtureExit,
+  closeOwnedFixture,
+  preserveFixtureFailure,
+} from "./owned-mcp-fixture-lifecycle.mjs";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import assert from "node:assert/strict";
@@ -8,8 +14,19 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
-const packaged = process.argv[2] === "--packaged";
-assert.equal(process.argv.length, packaged ? 3 : 2);
+const options = process.argv.slice(2);
+assert(
+  options.every((value) =>
+    ["--packaged", "--reconnect-failure"].includes(value),
+  ) && new Set(options).size === options.length,
+);
+const packaged = options.includes("--packaged");
+const reconnectFault = options.includes("--reconnect-failure");
+const reconnectFailure = new assert.AssertionError({
+  message: "CLAUDE_FIXTURE_RECONNECT_FAILURE",
+});
+const transports = [];
+let connections = 0;
 const app = path.resolve("_output/package/Farol Next Preview.app");
 const entry = packaged
   ? path.join(app, "Contents/Resources/app/computer-mcp.cjs")
@@ -62,55 +79,36 @@ function canonical(value) {
 }
 let client;
 let transport;
-let child;
-let childExit;
 let allPassed = false;
 async function connect() {
   client = new Client({ name: "claude-fixture", version: "1" });
-  transport = new StdioClientTransport({
-    command,
-    args: [
-      entry,
-      "--launch-contract",
-      path.join(launchRoot, "computer-launch.json"),
-    ],
-    env: {
-      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      HOME: home,
-      ELECTRON_RUN_AS_NODE: "1",
+  const attempt = ++connections;
+  transport = ownedFixtureTransport(
+    StdioClientTransport,
+    {
+      command,
+      args: [
+        entry,
+        "--launch-contract",
+        path.join(launchRoot, "computer-launch.json"),
+      ],
+      env: {
+        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: home,
+        ELECTRON_RUN_AS_NODE: "1",
+      },
+      stderr: "pipe",
     },
-    stderr: "pipe",
-  });
-  let stderr = "";
+    () => {
+      if (reconnectFault && attempt === 2) throw reconnectFailure;
+    },
+  );
+  transports.push(transport);
   await client.connect(transport);
-  child = transport._process;
-  assert.ok(child?.pid > 1, "OWNED_MCP_CHILD_REQUIRED");
-  childExit = new Promise((resolve) => {
-    child.once("exit", (code, signal) => resolve({ code, signal }));
-    if (child.exitCode !== null || child.signalCode !== null)
-      resolve({ code: child.exitCode, signal: child.signalCode });
-  });
-  transport.stderr?.on("data", (chunk) => {
-    stderr += chunk.toString();
-  });
-  assert.equal(stderr, "");
 }
 async function close() {
   if (!client) return;
-  await client.close();
-  let timer;
-  const result = await Promise.race([
-    childExit,
-    new Promise((resolve) => {
-      timer = setTimeout(() => resolve(null), 3000);
-    }),
-  ]);
-  clearTimeout(timer);
-  assert.deepEqual(
-    result,
-    { code: 0, signal: null },
-    "MCP_GRACEFUL_ACTUAL_EXIT_REQUIRED",
-  );
+  await closeOwnedFixture(client, transport);
   client = undefined;
 }
 async function call(name, args) {
@@ -127,13 +125,16 @@ async function terminal(dispatchId) {
   }
   throw Error("CLAUDE_FIXTURE_TERMINAL_NOT_OBSERVED");
 }
+const rootIdentity = await fs.lstat(root);
 try {
-  await fs.mkdir(home, { mode: 0o700 });
-  await fs.mkdir(launchRoot, { mode: 0o700 });
-  await git("init", project);
-  await git("-C", project, "commit", "--allow-empty", "-m", "fixture");
-  await git("-C", project, "worktree", "add", "--detach", writer, "HEAD");
-  const script = `#!/bin/sh
+  await preserveFixtureFailure(
+    async () => {
+      await fs.mkdir(home, { mode: 0o700 });
+      await fs.mkdir(launchRoot, { mode: 0o700 });
+      await git("init", project);
+      await git("-C", project, "commit", "--allow-empty", "-m", "fixture");
+      await git("-C", project, "worktree", "add", "--detach", writer, "HEAD");
+      const script = `#!/bin/sh
 session=''
 model=''
 mode=''
@@ -160,184 +161,209 @@ while [ "$#" -gt 0 ]; do
  fi
  exit 0
 `;
-  const binary = path.join(writer, "fixture-claude-host");
-  await fs.writeFile(binary, script, { mode: 0o700 });
-  const expiresAt = Date.now() + 120000;
-  const writerIdentity = await identity(writer);
-  const projectIdentity = await identity(project);
-  const commonDirectory = path.join(project, ".git");
-  const gitDirectory = (
-    await git("-C", writer, "rev-parse", "--absolute-git-dir")
-  ).stdout.trim();
-  const tasks = {
-    defaultHarness: "claude-code",
-    harnesses: {
-      "claude-code": {
-        defaultModel: "small",
-        models: { small: { model: "fixture-model", defaultEffort: "medium" } },
-      },
-    },
-  };
-  const configSha256 = createHash("sha256")
-    .update(
-      JSON.stringify([
-        "farol-task-policy/1",
-        "claude-code",
-        [["claude-code", "small", [["small", "fixture-model", "medium"]]]],
-      ]),
-    )
-    .digest("hex");
-  const launch = {
-    schema: 1,
-    gitSettingsHome: home,
-    approval: {
-      ownerId: "fixture-owner",
-      computerId: "fixture-computer",
-      generation: 1,
-      workspaces: [
-        {
-          workspaceId: "selected",
-          root: writer,
-          rootIdentity: writerIdentity,
-          access: "read",
-          shellVerified: true,
-          gitHistoryApproved: true,
-          gitMetadata: { gitDirectory, commonDirectory },
+      const binary = path.join(writer, "fixture-claude-host");
+      await fs.writeFile(binary, script, { mode: 0o700 });
+      const expiresAt = Date.now() + 120000;
+      const writerIdentity = await identity(writer);
+      const projectIdentity = await identity(project);
+      const commonDirectory = path.join(project, ".git");
+      const gitDirectory = (
+        await git("-C", writer, "rev-parse", "--absolute-git-dir")
+      ).stdout.trim();
+      const tasks = {
+        defaultHarness: "claude-code",
+        harnesses: {
+          "claude-code": {
+            defaultModel: "small",
+            models: {
+              small: { model: "fixture-model", defaultEffort: "medium" },
+            },
+          },
         },
-      ],
-      capabilities: ["workspace.list", "workspace.read", "workspace.shell"],
-      network: "none",
-      commands: "workspace",
-      expiresAt,
-    },
-    admission: {
-      authorityId: "fixture-authority",
-      ownerId: "fixture-owner",
-      computerId: "fixture-computer",
-      computerGeneration: 1,
-      sessionId: "fixture-session",
-      taskId: "fixture-task",
-      taskEpoch: 1,
-      workspaces: [
-        {
-          workspaceId: "selected",
-          root: writer,
-          mode: "subtree",
-          access: "read",
+      };
+      const configSha256 = createHash("sha256")
+        .update(
+          JSON.stringify([
+            "farol-task-policy/1",
+            "claude-code",
+            [["claude-code", "small", [["small", "fixture-model", "medium"]]]],
+          ]),
+        )
+        .digest("hex");
+      const launch = {
+        schema: 1,
+        gitSettingsHome: home,
+        approval: {
+          ownerId: "fixture-owner",
+          computerId: "fixture-computer",
+          generation: 1,
+          workspaces: [
+            {
+              workspaceId: "selected",
+              root: writer,
+              rootIdentity: writerIdentity,
+              access: "read",
+              shellVerified: true,
+              gitHistoryApproved: true,
+              gitMetadata: { gitDirectory, commonDirectory },
+            },
+          ],
+          capabilities: ["workspace.list", "workspace.read", "workspace.shell"],
+          network: "none",
+          commands: "workspace",
+          expiresAt,
         },
-      ],
-      capabilities: ["workspace.list", "workspace.read", "workspace.shell"],
-      network: "none",
-      commands: "workspace",
-      expiresAt,
-    },
-    delegationChain: [
-      {
-        participantId: "fixture-main",
-        role: "main",
-        mutationOwnership: "none",
-      },
-    ],
-    binding: {
-      participantId: "fixture-main",
-      turnId: "fixture-turn",
-      generation: 1,
-    },
-    claudeTasks: {
-      transport: "claude-sandboxed-print/v1",
-      host: {
-        qualification: "fixture-only",
-        executablePath: binary,
-        executableSha256: createHash("sha256").update(script).digest("hex"),
-        models: [{ model: "fixture-model", efforts: ["medium"] }],
-      },
-      grant: {
+        admission: {
+          authorityId: "fixture-authority",
+          ownerId: "fixture-owner",
+          computerId: "fixture-computer",
+          computerGeneration: 1,
+          sessionId: "fixture-session",
+          taskId: "fixture-task",
+          taskEpoch: 1,
+          workspaces: [
+            {
+              workspaceId: "selected",
+              root: writer,
+              mode: "subtree",
+              access: "read",
+            },
+          ],
+          capabilities: ["workspace.list", "workspace.read", "workspace.shell"],
+          network: "none",
+          commands: "workspace",
+          expiresAt,
+        },
+        delegationChain: [
+          {
+            participantId: "fixture-main",
+            role: "main",
+            mutationOwnership: "none",
+          },
+        ],
+        binding: {
+          participantId: "fixture-main",
+          turnId: "fixture-turn",
+          generation: 1,
+        },
+        claudeTasks: {
+          transport: "claude-sandboxed-print/v1",
+          host: {
+            qualification: "fixture-only",
+            executablePath: binary,
+            executableSha256: createHash("sha256").update(script).digest("hex"),
+            models: [{ model: "fixture-model", efforts: ["medium"] }],
+          },
+          grant: {
+            workspaceId: "selected",
+            writerRoot: writer,
+            writerIdentity,
+            projectId: "fixture-saved",
+            projectRoot: project,
+            projectIdentity,
+            gitCommonDirectory: commonDirectory,
+            execution: { sandbox: "read-only", approvalPolicy: "on-request" },
+            harness: "claude-code",
+            tasks,
+            configSha256,
+            expiresAt,
+          },
+        },
+      };
+      const launchFile = path.join(launchRoot, "computer-launch.json");
+      await fs.writeFile(launchFile, canonical(launch) + "\n", { mode: 0o600 });
+      await prepareMcpLifecycle(launchFile);
+      await connect();
+      const names = (await client.listTools()).tools.map((t) => t.name);
+      assert(
+        names.includes("claude_task_create") &&
+          names.includes("claude_task_status"),
+      );
+      assert(!names.includes("codex_task_create"));
+      const request = {
+        key,
         workspaceId: "selected",
-        writerRoot: writer,
-        writerIdentity,
         projectId: "fixture-saved",
-        projectRoot: project,
-        projectIdentity,
-        gitCommonDirectory: commonDirectory,
-        execution: { sandbox: "read-only", approvalPolicy: "on-request" },
-        harness: "claude-code",
-        tasks,
-        configSha256,
-        expiresAt,
-      },
+        message: "fixture",
+      };
+      for (const change of [
+        { workspaceId: "foreign" },
+        { projectId: "foreign" },
+        { model: "missing" },
+        { harness: "codex" },
+      ])
+        assert.equal(
+          (await call("claude_task_create", { ...request, ...change })).isError,
+          true,
+        );
+      assert.equal(
+        (await call("claude_task_create", request)).structuredContent?.status,
+        "dispatched",
+      );
+      assert.equal(
+        (await call("claude_task_create", request)).structuredContent?.status,
+        "outcome_unknown",
+      );
+      const complete = await terminal(key);
+      assert.equal(complete.lifecycle, "completed");
+      assert.equal(complete.actualModel, "fixture-model");
+      assert.equal(complete.proof, "recorded-terminal");
+      assert.equal(complete.nativeVisibility, "not-qualified");
+      assert.match(complete.text, /^Exact owned fixture PID [0-9]+$/u);
+      assert.equal(complete.exitCode, 0);
+      assert.equal(
+        (
+          await call("claude_task_create", {
+            ...request,
+            key: denyKey,
+            message: "deny",
+          })
+        ).structuredContent?.status,
+        "dispatched",
+      );
+      assert.equal((await terminal(denyKey)).lifecycle, "needs_input");
+      await close();
+      await connect();
+      assert.deepEqual(
+        (await call("claude_task_status", { dispatchId: key }))
+          .structuredContent,
+        complete,
+      );
+      assert.equal(
+        (await call("claude_task_create", request)).structuredContent?.status,
+        "outcome_unknown",
+      );
+      assert.equal(
+        (
+          await call("claude_task_status", {
+            dispatchId: "019b0000-0000-4000-8000-000000000022",
+          })
+        ).structuredContent?.status,
+        "unknown",
+      );
+      await close();
     },
-  };
-  const launchFile = path.join(launchRoot, "computer-launch.json");
-  await fs.writeFile(launchFile, canonical(launch) + "\n", { mode: 0o600 });
-  await prepareMcpLifecycle(launchFile);
-  await connect();
-  const names = (await client.listTools()).tools.map((t) => t.name);
-  assert(
-    names.includes("claude_task_create") &&
-      names.includes("claude_task_status"),
+    async () => {
+      try {
+        await close();
+      } catch (error) {
+        console.error("FIXTURE_ROOT_RETAINED_FOR_UNVERIFIED_SHUTDOWN", root);
+        throw error;
+      }
+      for (const owned of transports) await requireOwnedFixtureExit(owned);
+      const current = await fs.lstat(root);
+      assert(
+        current.isDirectory() &&
+          !current.isSymbolicLink() &&
+          current.dev === rootIdentity.dev &&
+          current.ino === rootIdentity.ino,
+        "FIXTURE_ROOT_IDENTITY_CHANGED",
+      );
+      await fs.rm(root, { recursive: true, force: true });
+    },
+    (error) =>
+      console.error("FIXTURE_SECONDARY_CLEANUP_FAILURE", String(error)),
   );
-  assert(!names.includes("codex_task_create"));
-  const request = {
-    key,
-    workspaceId: "selected",
-    projectId: "fixture-saved",
-    message: "fixture",
-  };
-  for (const change of [
-    { workspaceId: "foreign" },
-    { projectId: "foreign" },
-    { model: "missing" },
-    { harness: "codex" },
-  ])
-    assert.equal(
-      (await call("claude_task_create", { ...request, ...change })).isError,
-      true,
-    );
-  assert.equal(
-    (await call("claude_task_create", request)).structuredContent?.status,
-    "dispatched",
-  );
-  assert.equal(
-    (await call("claude_task_create", request)).structuredContent?.status,
-    "outcome_unknown",
-  );
-  const complete = await terminal(key);
-  assert.equal(complete.lifecycle, "completed");
-  assert.equal(complete.actualModel, "fixture-model");
-  assert.equal(complete.proof, "recorded-terminal");
-  assert.equal(complete.nativeVisibility, "not-qualified");
-  assert.match(complete.text, /^Exact owned fixture PID [0-9]+$/u);
-  assert.equal(complete.exitCode, 0);
-  assert.equal(
-    (
-      await call("claude_task_create", {
-        ...request,
-        key: denyKey,
-        message: "deny",
-      })
-    ).structuredContent?.status,
-    "dispatched",
-  );
-  assert.equal((await terminal(denyKey)).lifecycle, "needs_input");
-  await close();
-  await connect();
-  assert.deepEqual(
-    (await call("claude_task_status", { dispatchId: key })).structuredContent,
-    complete,
-  );
-  assert.equal(
-    (await call("claude_task_create", request)).structuredContent?.status,
-    "outcome_unknown",
-  );
-  assert.equal(
-    (
-      await call("claude_task_status", {
-        dispatchId: "019b0000-0000-4000-8000-000000000022",
-      })
-    ).structuredContent?.status,
-    "unknown",
-  );
-  await close();
   allPassed = true;
   console.log(
     JSON.stringify({
@@ -353,14 +379,24 @@ while [ "$#" -gt 0 ]; do
       modelInferenceCalls: 0,
     }),
   );
-} finally {
-  let closed = false;
-  try {
-    await close();
-    closed = true;
-  } finally {
-    if (closed) await fs.rm(root, { recursive: true, force: true });
-    else console.error("FIXTURE_ROOT_RETAINED_FOR_UNVERIFIED_SHUTDOWN", root);
+} catch (error) {
+  if (
+    reconnectFault &&
+    error === reconnectFailure &&
+    connections === 2 &&
+    transports[0].ownedPid !== transports[1].ownedPid
+  ) {
+    try {
+      for (const owned of transports) await requireOwnedFixtureExit(owned);
+      await assert.rejects(fs.stat(root), (value) => value.code === "ENOENT");
+      console.error(
+        "CLAUDE_RECONNECT_FIRST_ERROR_CURRENT_CHILD_EXIT_ROOT_REMOVED",
+      );
+    } catch (proofError) {
+      console.error("FAULT_CLEANUP_PROOF_UNVERIFIED", String(proofError));
+    }
   }
+  throw error;
+} finally {
   if (!allPassed) console.error("CLAUDE_MCP_FIXTURE_NOT_QUALIFIED");
 }

@@ -79,3 +79,14 @@ node tests/e2e/claude-task-mcp.e2e.mjs --packaged
 No fixture PASS is transferred to the actual ChatGPT/new connector or installed
 Farol. The frozen owner minimum and all prior failed/native receipts remain valid
 for their own exact artifacts.
+
+The MCP harness captures each transport's exact child before handshake. A failed
+reconnect cannot reuse a prior exit receipt. All captured children need actual
+exit 0/no signal before fixture-root identity readback and removal. Secondary
+cleanup/proof errors are reported without replacing the primary failure. The
+fault driver requires original assertion exit 1, no forced driver kill, distinct
+owned child receipts and a marker emitted only after verified root removal:
+
+```sh
+node tests/e2e/claude-task-mcp-fault.e2e.mjs --packaged
+```
