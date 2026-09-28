@@ -1,3 +1,8 @@
+import { readCodexProjectTasks } from "./read-codex-project-tasks";
+import type {
+  ProjectTaskDiscoveryRequest,
+  ProjectTaskDiscoveryResult,
+} from "../port/codex-project-tasks";
 import type { ProjectResolutionResult } from "../port/codex-project-catalogue";
 import { resolveCodexProjectCatalogue } from "./resolve-codex-project-catalogue";
 import type {
@@ -391,6 +396,76 @@ export class PersistentCodexHandoff {
     private readonly now: () => number = Date.now,
     private readonly selectedOwnerThreadId?: string,
   ) {}
+
+  async discoverTasks(
+    request: ProjectTaskDiscoveryRequest,
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ): Promise<ProjectTaskDiscoveryResult> {
+    const refused = (code: string): ProjectTaskDiscoveryResult => ({
+      status: "refused",
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      code,
+    });
+    const admitted = () =>
+      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+    if (!identifier(request.workspaceId) || !identifier(request.projectId))
+      return refused("HANDOFF_PROJECT_TASKS_INPUT_INVALID");
+    if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    try {
+      const workspace = await this.authority.resolve(request.workspaceId);
+      if (!validWorkspace(workspace))
+        return refused("HANDOFF_WORKSPACE_UNVERIFIED");
+      if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
+      const catalogue = await resolveCodexProjectCatalogue(
+        this.host,
+        workspace.project.root,
+        request.projectId,
+        this.mutationExpiresAt,
+        admitted,
+      );
+      if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
+      if (
+        catalogue.status !== "resolved" ||
+        catalogue.selectedProjectId !== request.projectId
+      )
+        return {
+          status: "unavailable",
+          workspaceId: request.workspaceId,
+          projectId: request.projectId,
+          code: "HANDOFF_PROJECT_TASKS_PROJECT_UNVERIFIED",
+        };
+      const beforeRead = await this.authority.resolve(request.workspaceId);
+      if (!validWorkspace(beforeRead) || !sameWorkspace(workspace, beforeRead))
+        return refused("HANDOFF_WORKSPACE_CHANGED");
+      if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
+      const result = await readCodexProjectTasks(
+        this.host,
+        {
+          projectId: request.projectId,
+          writerRoot: workspace.root,
+          ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
+        },
+        { deadlineAt: this.mutationExpiresAt, admitted },
+      );
+      const after = await this.authority.resolve(request.workspaceId);
+      if (!validWorkspace(after) || !sameWorkspace(workspace, after))
+        return refused("HANDOFF_WORKSPACE_CHANGED");
+      if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
+      return {
+        ...result,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+      };
+    } catch {
+      return {
+        status: "unavailable",
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        code: "HANDOFF_PROJECT_TASKS_UNAVAILABLE",
+      };
+    }
+  }
 
   async resolveProject(
     request: Readonly<{

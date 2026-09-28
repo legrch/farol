@@ -27,6 +27,7 @@ import type {
 } from "../native/sandboxed-workspace-shell";
 import {
   parseProjectResolution,
+  parseProjectTasks,
   parseTaskHistory,
   parseTaskTitle,
   type CodexTaskRoutePeer,
@@ -68,6 +69,16 @@ const CodexTaskCreateInputSchema = z.strictObject({
 const CodexProjectResolveInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   preferredProjectId: IdentifierSchema.optional(),
+});
+const CodexProjectTasksInputSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+  cursor: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
+    .optional(),
 });
 const CodexTaskReadInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
@@ -853,6 +864,38 @@ export function createReadonlyComputerMcpServer(
       structuredContent: value,
       ...(isError ? { isError: true } : {}),
     });
+    if (codexTasks.projectTasksEnabled === true && codexTasks.discoverTasks)
+      server.registerTool(
+        "codex_project_tasks",
+        {
+          title: "Read stored task metadata for the selected writer",
+          description:
+            "Read one stored, non-atomic metadata page in the exact approved saved project and writer cwd, with a separate sealed discovery grant. Up to 50 rows/32 KiB title/model text. No prompt preview or transcript. configuredModel is configuration metadata, not per-turn execution proof. This does not cover other writers, automatically select/adopt a thread, observe/resume/fork/start work or grant control. Follow nextCursor explicitly; complete applies only to an unpaginated terminal page.",
+          inputSchema: CodexProjectTasksInputSchema,
+          annotations: READONLY_ANNOTATIONS,
+        },
+        guarded(async (request, context) => {
+          try {
+            const result = parseProjectTasks(
+              await codexTasks.discoverTasks!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request,
+            );
+            return taskResponse(result, result.status !== "tasks");
+          } catch {
+            return taskResponse(
+              {
+                status: "unavailable",
+                workspaceId: request.workspaceId,
+                projectId: request.projectId,
+                code: "HANDOFF_PROJECT_TASKS_UNAVAILABLE",
+              },
+              true,
+            );
+          }
+        }),
+      );
     if (codexTasks.resolveProject)
       server.registerTool(
         "codex_project_resolve",

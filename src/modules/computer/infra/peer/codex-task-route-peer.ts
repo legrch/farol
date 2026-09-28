@@ -3,6 +3,7 @@ import {
   CodexProjectResolutionSchema,
   CodexTaskHistorySchema,
   CodexTaskTitleSchema,
+  CodexProjectTasksSchema,
 } from "../../../chat/contract/codex-task-route";
 
 export function parseTaskHistory(
@@ -31,6 +32,33 @@ export function parseTaskHistory(
         threadId: request.threadId,
         turnId: request.turnId,
         code: "HANDOFF_HISTORY_CORRELATION",
+      };
+}
+
+export function parseProjectTasks(
+  value: unknown,
+  request: {
+    workspaceId: string;
+    projectId: string;
+    cursor?: string | undefined;
+  },
+) {
+  const parsed = CodexProjectTasksSchema.safeParse(value);
+  return parsed.success &&
+    parsed.data.workspaceId === request.workspaceId &&
+    parsed.data.projectId === request.projectId &&
+    (parsed.data.status !== "tasks" ||
+      (!(request.cursor !== undefined && parsed.data.complete) &&
+        !(
+          parsed.data.nextCursor !== null &&
+          parsed.data.nextCursor === request.cursor
+        )))
+    ? parsed.data
+    : {
+        status: "unavailable" as const,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        code: "HANDOFF_PROJECT_TASKS_CORRELATION",
       };
 }
 

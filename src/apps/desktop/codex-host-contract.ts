@@ -728,3 +728,82 @@ export async function inspectCodexTaskTitleHostContract(
     schemaSha256: digest.digest("hex"),
   };
 }
+
+/** Optional local schema evidence only; never issues the separate serving/read grant. */
+export async function inspectCodexProjectTasksHostContract(
+  root: string,
+  versionOutput: string,
+) {
+  const base = await inspectCodexHandoffHostContract(root, versionOutput);
+  const client = await readSchemaFile(root, "ClientRequest.json");
+  const params = await readSchemaFile(root, "v2/ThreadListParams.json");
+  const response = await readSchemaFile(root, "v2/ThreadListResponse.json");
+  const fields = [
+    ["projectId", "string|null"],
+    ["cwd", "nullable-ref:ThreadListCwdFilter"],
+    ["useStateDbOnly", "boolean"],
+    ["archived", "boolean|null"],
+    ["cursor", "string|null"],
+    ["limit", "integer|null"],
+    ["sortKey", "nullable-ref:ThreadSortKey"],
+    ["sortDirection", "nullable-ref:SortDirection"],
+  ] as const;
+  const thread = child(response.value, "definitions", "Thread");
+  if (
+    !hasRequestMethod(
+      client.value,
+      "thread/list",
+      "ThreadListParams",
+      params.value,
+    ) ||
+    params.value.type !== "object" ||
+    !fields.every(([key, shape]) =>
+      hasShape(child(params.value, "properties", key), shape),
+    ) ||
+    !array(
+      child(params.value, "definitions", "ThreadListCwdFilter", "anyOf"),
+    ).some((candidate) => hasShape(candidate, "string")) ||
+    child(params.value, "definitions", "ThreadSortKey", "type") !== "string" ||
+    !array(
+      child(params.value, "definitions", "ThreadSortKey", "enum"),
+    ).includes("updated_at") ||
+    child(params.value, "definitions", "SortDirection", "type") !== "string" ||
+    !array(
+      child(params.value, "definitions", "SortDirection", "enum"),
+    ).includes("desc") ||
+    response.value.type !== "object" ||
+    !hasRequired(response.value, "data") ||
+    !hasShape(child(response.value, "properties", "data"), "array:Thread") ||
+    !hasShape(
+      child(response.value, "properties", "nextCursor"),
+      "string|null",
+    ) ||
+    child(thread, "type") !== "object" ||
+    !hasRequired(thread, "id", "projectId", "cwd", "updatedAt") ||
+    !(
+      [
+        ["id", "string"],
+        ["projectId", "string|null"],
+        ["cwd", "ref:AbsolutePathBuf"],
+        ["name", "string|null"],
+        ["model", "string|null"],
+        ["updatedAt", "integer"],
+      ] as const
+    ).every(([key, shape]) =>
+      hasShape(child(thread, "properties", key), shape),
+    ) ||
+    !hasShape(child(response.value, "definitions", "AbsolutePathBuf"), "string")
+  )
+    contractError("CODEX_HOST_PROJECT_TASKS_UNAVAILABLE");
+  const digest = createHash("sha256");
+  digest.update(base.schemaSha256);
+  for (const schema of [client, params, response]) {
+    digest.update("\0");
+    digest.update(schema.bytes);
+  }
+  return {
+    ...base,
+    projectTaskMetadata: true as const,
+    schemaSha256: digest.digest("hex"),
+  };
+}

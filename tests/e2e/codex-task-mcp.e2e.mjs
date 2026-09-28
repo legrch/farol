@@ -8,6 +8,10 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  fixtureSocketFrames,
+  fixtureFailureBoundary,
+} from "./fixture-socket-failures.mjs";
 import { prepareMcpLifecycle } from "./prepare-mcp-lifecycle.mjs";
 
 const executeFile = promisify(execFile);
@@ -15,7 +19,18 @@ const binary = process.env.FAROL_CODEX_PROXY_BINARY;
 if (!binary || !path.isAbsolute(binary)) {
   throw new Error("CODEX_PROXY_BINARY_REQUIRED");
 }
-const packaged = process.argv.slice(2).join(" ") === "--packaged";
+const options = process.argv.slice(2);
+assert(
+  options.every((option) =>
+    ["--packaged", "--callback-failure"].includes(option),
+  ),
+);
+const packaged = options.includes("--packaged");
+const callbackFailure = options.includes("--callback-failure");
+const callbackAssertion = new assert.AssertionError({
+  message: "FIXTURE_TASK_DISCOVERY_CALLBACK_FAILURE",
+});
+let injectedFailureObserved = false;
 const entry = packaged
   ? path.resolve(
       "_output/package/Farol Next Preview.app/Contents/Resources/app/computer-mcp.cjs",
@@ -90,6 +105,29 @@ function hostResult(method, params) {
   if (method === "project/list") {
     return {
       data: [{ id: projectId, roots: [{ path: projectRoot }] }],
+      nextCursor: null,
+    };
+  }
+  if (method === "thread/list") {
+    if (callbackFailure) throw callbackAssertion;
+    assert.equal(params.projectId, projectId);
+    assert.equal(params.cwd, writerRoot);
+    assert.equal(params.useStateDbOnly, true);
+    assert.equal(params.limit, 50);
+    assert.equal(params.archived, false);
+    assert.equal(params.sortKey, "updated_at");
+    return {
+      data: [
+        {
+          id: ownerThreadId,
+          projectId,
+          cwd: writerRoot,
+          name: "Farol · Native observer canary",
+          model: "gpt-6-luna",
+          updatedAt: 123,
+          preview: "PRIVATE FIXTURE PREVIEW",
+        },
+      ],
       nextCursor: null,
     };
   }
@@ -186,25 +224,24 @@ function hostResult(method, params) {
   throw new Error(`UNEXPECTED_HOST_METHOD:${method}`);
 }
 
+const fixtureFailure = fixtureFailureBoundary();
 const server = createServer((socket) => {
   sockets.add(socket);
   socket.on("close", () => sockets.delete(socket));
-  let pending = "";
   socket.setEncoding("utf8");
-  socket.on("data", (chunk) => {
-    pending += chunk;
-    for (;;) {
-      const end = pending.indexOf("\n");
-      if (end < 0) break;
-      const line = pending.slice(0, end);
-      pending = pending.slice(end + 1);
-      const request = JSON.parse(line);
-      if (request.id === undefined) continue;
-      socket.write(
-        `${JSON.stringify({ id: request.id, result: hostResult(request.method, request.params) })}\n`,
-      );
-    }
-  });
+  socket.on(
+    "data",
+    fixtureSocketFrames(
+      socket,
+      (request) => {
+        if (request.id === undefined) return;
+        socket.write(
+          `${JSON.stringify({ id: request.id, result: hostResult(request.method, request.params) })}\n`,
+        );
+      },
+      fixtureFailure.capture,
+    ),
+  );
 });
 
 // A local fake Browser endpoint proves built MCP routing only. It never
@@ -212,33 +249,33 @@ const server = createServer((socket) => {
 const savedChatServer = createServer((socket) => {
   sockets.add(socket);
   socket.once("close", () => sockets.delete(socket));
-  let input = "";
-  socket.on("data", (chunk) => {
-    input += String(chunk);
-    const newline = input.indexOf("\n");
-    if (newline < 0) return;
-    const request = JSON.parse(input.slice(0, newline));
-    if (request.token !== savedChatToken) {
-      socket.end(`${JSON.stringify({ status: "unknown" })}\n`);
-      return;
-    }
-    savedChatCalls.push(request.operation);
-    socket.end(
-      `${JSON.stringify(
-        request.operation === "create"
-          ? {
-              status: "refused",
-              code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
-              dispatchId: request.request.key,
-            }
-          : { status: "unknown" },
-      )}\n`,
-    );
-  });
+  let handled = false;
+  socket.on(
+    "data",
+    fixtureSocketFrames(
+      socket,
+      (request) => {
+        if (handled) return;
+        handled = true;
+        if (request.token !== savedChatToken) {
+          socket.end(`${JSON.stringify({ status: "unknown" })}\n`);
+          return;
+        }
+        savedChatCalls.push(request.operation);
+        socket.end(
+          `${JSON.stringify(request.operation === "create" ? { status: "refused", code: "SAVED_CHAT_BROWSER_UNAVAILABLE", dispatchId: request.request.key } : { status: "unknown" })}\n`,
+        );
+      },
+      fixtureFailure.capture,
+    ),
+  );
 });
 
 let client;
 let transport;
+async function callFixtureTool(request) {
+  return fixtureFailure.wait(client.callTool(request));
+}
 try {
   await fs.chmod(root, 0o700);
   await git("init", projectRoot);
@@ -342,6 +379,7 @@ try {
         writerIdentity,
         projectId,
         observeThreadId: ownerThreadId,
+        discoverProjectTasks: true,
         projectRoot,
         projectIdentity,
         gitCommonDirectory: commonDirectory,
@@ -398,21 +436,66 @@ try {
     stderr += String(chunk);
   });
   client = new Client({ name: "built-task-fixture", version: "1" });
-  await client.connect(transport);
-  const tools = (await client.listTools()).tools.map((tool) => tool.name);
+  await fixtureFailure.wait(client.connect(transport));
+  const tools = (await fixtureFailure.wait(client.listTools())).tools.map(
+    (tool) => tool.name,
+  );
   assert(tools.includes("codex_task_create"), stderr);
   assert(tools.includes("codex_task_status"), stderr);
   assert(tools.includes("codex_task_result"), stderr);
   assert(tools.includes("codex_task_observe"), stderr);
   assert(tools.includes("codex_task_adopt"), stderr);
   assert(tools.includes("codex_project_resolve"), stderr);
+  assert(tools.includes("codex_project_tasks"), stderr);
   assert(tools.includes("codex_task_history"), stderr);
   assert(tools.includes("chatgpt_chat_create"), stderr);
   assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
   assert(!tools.includes("codex_task_title"), stderr);
+  const beforeDiscovery = calls.length;
+  const taskMetadata = await callFixtureTool({
+    name: "codex_project_tasks",
+    arguments: { workspaceId: "approved-writer", projectId },
+  });
+  assert.equal(taskMetadata.isError, undefined);
+  assert.deepEqual(taskMetadata.structuredContent, {
+    status: "tasks",
+    workspaceId: "approved-writer",
+    projectId,
+    source: "stored",
+    snapshot: "non-atomic",
+    scope: "selected-writer",
+    coverage: "single-page-metadata",
+    controlGranted: false,
+    tasks: [
+      {
+        id: ownerThreadId,
+        title: "Farol · Native observer canary",
+        configuredModel: "gpt-6-luna",
+        updatedAt: 123,
+      },
+    ],
+    nextCursor: null,
+    complete: true,
+  });
+  assert(!JSON.stringify(taskMetadata).includes("PRIVATE FIXTURE PREVIEW"));
+  assert.deepEqual(calls.slice(beforeDiscovery), [
+    "project/list",
+    "thread/list",
+  ]);
+  const beforeForeignDiscovery = calls.length;
+  assert.equal(
+    (
+      await callFixtureTool({
+        name: "codex_project_tasks",
+        arguments: { workspaceId: "approved-writer", projectId: "foreign" },
+      })
+    ).isError,
+    true,
+  );
+  assert.equal(calls.length, beforeForeignDiscovery);
   const callsBeforeResolution = calls.length;
-  const resolvedProject = await client.callTool({
+  const resolvedProject = await callFixtureTool({
     name: "codex_project_resolve",
     arguments: { workspaceId: "approved-writer" },
   });
@@ -433,7 +516,7 @@ try {
     projectRoot,
   });
   assert.deepEqual(calls.slice(callsBeforeResolution), ["project/list"]);
-  const savedChatCreate = await client.callTool({
+  const savedChatCreate = await callFixtureTool({
     name: "chatgpt_chat_create",
     arguments: {
       key,
@@ -446,13 +529,13 @@ try {
     code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
     dispatchId: key,
   });
-  const savedChatStatus = await client.callTool({
+  const savedChatStatus = await callFixtureTool({
     name: "chatgpt_chat_status",
     arguments: { dispatchId: key },
   });
   assert.deepEqual(savedChatStatus.structuredContent, { status: "unknown" });
   assert.deepEqual(savedChatCalls, ["create", "status"]);
-  const observed = await client.callTool({
+  const observed = await callFixtureTool({
     name: "codex_task_observe",
     arguments: {
       threadId: ownerThreadId,
@@ -469,7 +552,7 @@ try {
     hasMoreTurns: false,
   });
   const historyBefore = calls.length;
-  const history = await client.callTool({
+  const history = await callFixtureTool({
     name: "codex_task_history",
     arguments: {
       threadId: ownerThreadId,
@@ -507,7 +590,7 @@ try {
     "thread/read",
   ]);
   const foreignHistoryBefore = calls.length;
-  const foreignHistory = await client.callTool({
+  const foreignHistory = await callFixtureTool({
     name: "codex_task_history",
     arguments: {
       threadId: "323c8bfa-806c-4bb0-b07e-9e90b3a6471a",
@@ -518,7 +601,7 @@ try {
   });
   assert.equal(foreignHistory.structuredContent.status, "refused");
   assert.equal(calls.length, foreignHistoryBefore);
-  const adopted = await client.callTool({
+  const adopted = await callFixtureTool({
     name: "codex_task_adopt",
     arguments: {
       threadId: ownerThreadId,
@@ -531,7 +614,7 @@ try {
     status: "adopted",
     dispatchId: ownerTurnId,
   });
-  const repeatedAdoption = await client.callTool({
+  const repeatedAdoption = await callFixtureTool({
     name: "codex_task_adopt",
     arguments: {
       threadId: ownerThreadId,
@@ -544,7 +627,7 @@ try {
     repeatedAdoption.structuredContent,
     adopted.structuredContent,
   );
-  const adoptedStatus = await client.callTool({
+  const adoptedStatus = await callFixtureTool({
     name: "codex_task_status",
     arguments: { dispatchId: ownerTurnId },
   });
@@ -553,7 +636,7 @@ try {
     dispatchId: ownerTurnId,
     turnStatus: "completed",
   });
-  const adoptedResult = await client.callTool({
+  const adoptedResult = await callFixtureTool({
     name: "codex_task_result",
     arguments: { dispatchId: ownerTurnId },
   });
@@ -567,7 +650,7 @@ try {
   const readsBeforeWrongThread = calls.filter(
     (method) => method === "thread/read",
   ).length;
-  const wrongThread = await client.callTool({
+  const wrongThread = await callFixtureTool({
     name: "codex_task_observe",
     arguments: {
       threadId: "323c8bfa-806c-4bb0-b07e-9e90b3a6471a",
@@ -583,7 +666,7 @@ try {
     calls.filter((method) => method === "thread/read").length,
     readsBeforeWrongThread,
   );
-  const wrongProject = await client.callTool({
+  const wrongProject = await callFixtureTool({
     name: "codex_task_observe",
     arguments: {
       threadId: ownerThreadId,
@@ -597,7 +680,7 @@ try {
   });
   assert.equal(calls.filter((method) => method === "thread/start").length, 0);
   assert.equal(calls.filter((method) => method === "turn/start").length, 0);
-  const created = await client.callTool({
+  const created = await callFixtureTool({
     name: "codex_task_create",
     arguments: {
       key,
@@ -612,7 +695,7 @@ try {
   });
   assert.equal(calls.filter((method) => method === "turn/steer").length, 0);
   turnStatus = "completed";
-  const status = await client.callTool({
+  const status = await callFixtureTool({
     name: "codex_task_status",
     arguments: { dispatchId: key },
   });
@@ -621,7 +704,7 @@ try {
     dispatchId: key,
     turnStatus: "completed",
   });
-  const result = await client.callTool({
+  const result = await callFixtureTool({
     name: "codex_task_result",
     arguments: { dispatchId: key },
   });
@@ -674,14 +757,14 @@ try {
       : {}),
   });
   client = new Client({ name: "built-task-host-down", version: "1" });
-  await client.connect(transport);
-  const remainingTools = (await client.listTools()).tools.map(
-    (tool) => tool.name,
-  );
+  await fixtureFailure.wait(client.connect(transport));
+  const remainingTools = (
+    await fixtureFailure.wait(client.listTools())
+  ).tools.map((tool) => tool.name);
   assert(remainingTools.includes("computer_workspace_list"));
   assert(!remainingTools.some((tool) => tool.startsWith("codex_task_")));
   assert(remainingTools.includes("chatgpt_chat_status"));
-  const listed = await client.callTool({
+  const listed = await callFixtureTool({
     name: "computer_workspace_list",
     arguments: { workspaceId: "approved-writer", relativePath: "." },
   });
@@ -689,6 +772,9 @@ try {
   process.stdout.write(
     `PASS: ${packaged ? "packaged" : "built"} Computer MCP project resolution/task route and fake saved-chat Browser endpoint used disposable sockets; unavailable task host left Computer working; no model or live ChatGPT turn.\n`,
   );
+} catch (error) {
+  injectedFailureObserved = error === callbackAssertion;
+  throw error;
 } finally {
   await client?.close().catch(() => undefined);
   await transport?.close().catch(() => undefined);
@@ -700,4 +786,13 @@ try {
     await new Promise((resolve) => savedChatServer.close(() => resolve()));
   }
   await fs.rm(root, { recursive: true, force: true });
+  if (callbackFailure && injectedFailureObserved) {
+    assert.equal(server.listening, false);
+    assert.equal(savedChatServer.listening, false);
+    assert.equal(sockets.size, 0);
+    await assert.rejects(fs.stat(root), { code: "ENOENT" });
+    process.stdout.write(
+      "PASS: injected callback failure unwound awaited teardown; disposable servers/sockets/root removed. Native descendants are not qualified.\n",
+    );
+  }
 }

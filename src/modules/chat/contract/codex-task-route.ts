@@ -180,8 +180,70 @@ export const CodexTaskTitleSchema = z.union([
 ]);
 export type CodexTaskTitle = z.infer<typeof CodexTaskTitleSchema>;
 
+const ProjectTaskMetadata = z.strictObject({
+  id: HistoryId,
+  title: StoredTitle.nullable(),
+  configuredModel: z
+    .string()
+    .max(120)
+    .refine((value) => !value.includes("\0"))
+    .nullable(),
+  updatedAt: z.number().int().nonnegative().safe(),
+});
+export const CodexProjectTasksSchema = z.union([
+  z
+    .strictObject({
+      status: z.literal("tasks"),
+      workspaceId: Identifier,
+      projectId: Identifier,
+      source: z.literal("stored"),
+      snapshot: z.literal("non-atomic"),
+      scope: z.literal("selected-writer"),
+      coverage: z.literal("single-page-metadata"),
+      controlGranted: z.literal(false),
+      tasks: z.array(ProjectTaskMetadata).max(50).readonly(),
+      nextCursor: z
+        .string()
+        .min(1)
+        .max(4096)
+        .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
+        .nullable(),
+      complete: z.boolean(),
+    })
+    .refine(
+      (value) =>
+        (!value.complete || value.nextCursor === null) &&
+        new Set(value.tasks.map((task) => task.id.toLowerCase())).size ===
+          value.tasks.length &&
+        value.tasks.reduce(
+          (bytes, task) =>
+            bytes +
+            new TextEncoder().encode(task.title ?? "").byteLength +
+            new TextEncoder().encode(task.configuredModel ?? "").byteLength,
+          0,
+        ) <= 32768,
+    ),
+  z.strictObject({
+    status: z.enum(["refused", "unavailable"]),
+    workspaceId: Identifier,
+    projectId: Identifier,
+    code: Identifier,
+  }),
+]);
+export type CodexProjectTasks = z.infer<typeof CodexProjectTasksSchema>;
+
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  /** Separate sealed permission to discover metadata; this never selects/control a thread. */
+  readonly projectTasksEnabled?: boolean;
+  discoverTasks?(
+    request: Readonly<{
+      workspaceId: string;
+      projectId: string;
+      cursor?: string | undefined;
+    }>,
+    context?: Readonly<{ signal?: AbortSignal | undefined }>,
+  ): Promise<CodexProjectTasks>;
   /** Read saved projects at the exact approved canonical root; no effects. */
   resolveProject?(
     request: Readonly<{

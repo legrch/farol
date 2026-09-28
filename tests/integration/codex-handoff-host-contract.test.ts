@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   inspectCodexHandoffHostContract,
   inspectCodexTaskTitleHostContract,
+  inspectCodexProjectTasksHostContract,
 } from "../../src/apps/desktop/codex-host-contract";
 
 const roots: string[] = [];
@@ -89,6 +90,7 @@ async function schemaRoot(
         "turn/start",
         "turn/steer",
         "thread/name/set",
+        "thread/list",
       ].map((method) => ({
         type: "object",
         required: ["id", "method", "params"],
@@ -104,13 +106,35 @@ async function schemaRoot(
               "turn/start": "TurnStartParams",
               "turn/steer": "TurnSteerParams",
               "thread/name/set": "ThreadSetNameParams",
+              "thread/list": "ThreadListParams",
             }[method] ?? "ThreadCompactStartParams",
           ),
         },
       })),
     },
     "v2/ThreadListParams.json": {
-      properties: fields("parentThreadId", "ancestorThreadId"),
+      properties: {
+        ...fields("parentThreadId", "ancestorThreadId"),
+        projectId: optional("string"),
+        cwd: nullableRef("ThreadListCwdFilter"),
+        useStateDbOnly: typed("boolean"),
+        archived: optional("boolean"),
+        cursor: optional("string"),
+        limit: optional("integer"),
+        sortKey: nullableRef("ThreadSortKey"),
+        sortDirection: nullableRef("SortDirection"),
+      },
+    },
+    "v2/ThreadListResponse.json": {
+      required: ["data"],
+      properties: { data: list("Thread"), nextCursor: optional("string") },
+      definitions: {
+        Thread: {
+          ...thread(),
+          required: ["id", "projectId", "cwd", "updatedAt"],
+          properties: { ...thread().properties, updatedAt: typed("integer") },
+        },
+      },
     },
     "v2/ProjectListResponse.json": {
       required: ["data"],
@@ -271,6 +295,11 @@ async function schemaRoot(
     }
   }
   const sharedDefinitions = {
+    ThreadListCwdFilter: {
+      anyOf: [typed("string"), { type: "array", items: typed("string") }],
+    },
+    ThreadSortKey: { type: "string", enum: ["updated_at", "created_at"] },
+    SortDirection: { type: "string", enum: ["asc", "desc"] },
     SandboxMode: { type: "string", enum: ["read-only", "workspace-write"] },
     AskForApproval: {
       oneOf: [{ type: "string", enum: ["untrusted", "on-request"] }],
@@ -334,6 +363,12 @@ async function schemaRoot(
     any
   >;
   turnsList.definitions = { TurnItemsView: sharedDefinitions.TurnItemsView };
+  const threadList = files["v2/ThreadListParams.json"] as Record<string, any>;
+  threadList.definitions = {
+    ThreadListCwdFilter: sharedDefinitions.ThreadListCwdFilter,
+    ThreadSortKey: sharedDefinitions.ThreadSortKey,
+    SortDirection: sharedDefinitions.SortDirection,
+  };
   const client = files["ClientRequest.json"] as Record<string, any>;
   client.definitions = Object.fromEntries(
     [
@@ -345,6 +380,7 @@ async function schemaRoot(
       "TurnStartParams",
       "TurnSteerParams",
       "ThreadSetNameParams",
+      "ThreadListParams",
     ].map((name) => {
       const { definitions: _definitions, ...shape } = files[
         `v2/${name}.json`
@@ -357,6 +393,7 @@ async function schemaRoot(
     "ProjectListResponse",
     "ThreadStartResponse",
     "ThreadReadResponse",
+    "ThreadListResponse",
   ]) {
     const response = files[`v2/${name}.json`] as Record<string, any>;
     response.definitions.AbsolutePathBuf = sharedDefinitions.AbsolutePathBuf;
@@ -379,6 +416,42 @@ async function schemaRoot(
 }
 
 describe("installed Codex saved-project handoff schema", () => {
+  it("checks optional database-only project task metadata without qualifying the serving host", async () => {
+    const root = await schemaRoot();
+    expect(
+      await inspectCodexProjectTasksHostContract(root, "codex-cli 0.153.4"),
+    ).toMatchObject({ projectTaskMetadata: true });
+  });
+  it.each(["state-db-only", "cwd", "updated-at", "method"])(
+    "refuses unqualified project task metadata shape: %s",
+    async (mode) => {
+      const root = await schemaRoot();
+      if (mode === "state-db-only")
+        await changeSchema(root, "v2/ThreadListParams.json", (schema) => {
+          delete schema.properties.useStateDbOnly;
+        });
+      if (mode === "cwd")
+        await changeSchema(root, "v2/ThreadListParams.json", (schema) => {
+          schema.definitions.ThreadListCwdFilter = {
+            type: "array",
+            items: typed("string"),
+          };
+        });
+      if (mode === "updated-at")
+        await changeSchema(root, "v2/ThreadListResponse.json", (schema) => {
+          schema.definitions.Thread.properties.updatedAt = typed("string");
+        });
+      if (mode === "method")
+        await changeSchema(root, "ClientRequest.json", (schema) => {
+          schema.oneOf = schema.oneOf.filter(
+            (entry: any) => entry.properties.method.enum[0] !== "thread/list",
+          );
+        });
+      await expect(
+        inspectCodexProjectTasksHostContract(root, "codex-cli 0.153.4"),
+      ).rejects.toThrow("CODEX_HOST_PROJECT_TASKS_UNAVAILABLE");
+    },
+  );
   it("checks the optional title setter without making it mandatory for ordinary tasks", async () => {
     const root = await schemaRoot();
     expect(
@@ -460,6 +533,9 @@ describe("installed Codex saved-project handoff schema", () => {
       await expect(
         inspectCodexTaskTitleHostContract(root, version),
       ).resolves.toMatchObject({ titleUpdate: true });
+      await expect(
+        inspectCodexProjectTasksHostContract(root, version),
+      ).resolves.toMatchObject({ projectTaskMetadata: true });
     },
   );
   it("recognizes the exact project-bound create and metadata-only status methods", async () => {

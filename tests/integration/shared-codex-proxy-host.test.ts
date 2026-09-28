@@ -94,6 +94,24 @@ function fixture(mode = "normal", timeoutMs = 1_000): SharedCodexProxyHost {
 }
 
 describe("shared Codex proxy transport fixture", () => {
+  it("forwards scoped database-only task metadata without creating work", async () => {
+    const host = fixture();
+    const params = {
+      projectId: "project",
+      cwd: "/fixture/writer",
+      cursor: null,
+      limit: 50,
+      sortKey: "updated_at",
+      sortDirection: "desc",
+      archived: false,
+      useStateDbOnly: true,
+    };
+    expect(await host.request("thread/list", params)).toEqual({
+      method: "thread/list",
+      params,
+    });
+    expect(await host.closeAndWait()).toBe(true);
+  });
   it("forwards only the supported title setter on the owned proxy fixture", async () => {
     const host = fixture();
     expect(

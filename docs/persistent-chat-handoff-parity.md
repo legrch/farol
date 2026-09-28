@@ -130,6 +130,39 @@ prove these limits without model tasks. Packaged default-off catalogue evidence
 must prove the title tool remains absent on unqualified bytes. There is no live
 native rename, shared Desktop identity or serving capability claim.
 
+## Separately granted stored task metadata discovery
+
+`codex_project_tasks` requires the separate sealed `discoverProjectTasks` grant
+for the exact saved project and physical writer. The ordinary create grant does
+not imply it; the production desktop issuer currently leaves it absent. Issuing
+that opt-in requires serving-host qualification for the database-only list shape,
+separate from the local generated-schema inspector. A generated local CLI schema
+cannot prove the serving endpoint honors the flag or grant it automatically.
+
+The route reads one `thread/list` page with explicit project ID, exact writer cwd,
+`useStateDbOnly=true`, non-archived filter, descending updated-time order and limit 50. The flag asks the supported host to avoid JSONL scan/repair; Farol does not
+open its private database or rollouts. Current canonical-root project membership,
+writer identity, expiry and cancellation are checked before and after reads.
+Missing/unverified projects and replaced/revoked roots never disclose metadata.
+
+The response labels stored, non-atomic, single-page metadata and selected-writer
+scope. `controlGranted=false` is invariant. It returns task ID, nullable name,
+configured-model metadata and update time only; no prompt preview, transcript,
+reasoning, private path or execution-status claim. configuredModel is not a
+per-turn execution binding. Titles/models have a 32 KiB aggregate UTF-8 ceiling,
+with at most 50 rows. Foreign or malformed entries, duplicate IDs, invalid/cyclic
+cursors and oversized pages fail closed instead of being silently filtered.
+`complete=true` requires an initial terminal page; it does not include other
+writers, archived tasks or all project history. An ID is an explicit selection
+candidate, never permission to observe, adopt or control it. Owner task selection
+and serving/native identity remain separate qualification steps.
+
+Pure policy/public MCP/proxy-process and packaged disposable-socket fixtures
+prove the source route. No model turn, real task discovery, private database
+access or provider mutation is performed in those fixtures. Ensure/persisted
+preferences, project-wide discovery across other writers and Claude history
+remain unimplemented; this is not complete V0 parity.
+
 ## Stored history read/tail for an exact selected turn
 
 When an exact owner-selected thread is sealed in the task admission,

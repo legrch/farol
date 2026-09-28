@@ -13,6 +13,7 @@ export type CodexTaskAdmission = Readonly<{
   workspaceId: string;
   projectId: string;
   observeThreadId?: string | undefined;
+  discoverProjectTasks?: boolean | undefined;
   harness: "codex";
   tasks: TaskExecutionSettings;
   configSha256: string;
@@ -28,6 +29,7 @@ type ResolvedTaskRoute = Pick<
   | "observe"
   | "adopt"
   | "resolveProject"
+  | "discoverTasks"
   | "history"
   | "title"
 > & {
@@ -38,6 +40,7 @@ type ResolvedTaskRoute = Pick<
 export class AdmittedCodexTaskRoute implements CodexTaskRoute {
   private readonly admission: CodexTaskAdmission;
   readonly observeEnabled: boolean;
+  readonly projectTasksEnabled: boolean;
 
   constructor(
     private readonly delegate: ResolvedTaskRoute,
@@ -66,6 +69,39 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
       throw new Error("HANDOFF_TITLE_UNAVAILABLE");
     this.admission = { ...admission, tasks };
     this.observeEnabled = admission.observeThreadId !== undefined;
+    this.projectTasksEnabled =
+      admission.discoverProjectTasks === true &&
+      delegate.discoverTasks !== undefined;
+  }
+
+  async discoverTasks(
+    request: Parameters<NonNullable<CodexTaskRoute["discoverTasks"]>>[0],
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ) {
+    const refused = (code: string) => ({
+      status: "refused" as const,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      code,
+    });
+    if (!this.projectTasksEnabled || !this.delegate.discoverTasks)
+      return refused("HANDOFF_PROJECT_TASKS_NOT_GRANTED");
+    if (
+      this.now() >= this.admission.expiresAt ||
+      context.signal?.aborted ||
+      request.workspaceId !== this.admission.workspaceId ||
+      request.projectId !== this.admission.projectId
+    )
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    const result = await this.delegate.discoverTasks(request, context);
+    if (this.now() >= this.admission.expiresAt || context.signal?.aborted)
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    if (
+      result.workspaceId !== request.workspaceId ||
+      result.projectId !== request.projectId
+    )
+      return refused("HANDOFF_PROJECT_TASKS_CORRELATION");
+    return result;
   }
 
   async resolveProject(
