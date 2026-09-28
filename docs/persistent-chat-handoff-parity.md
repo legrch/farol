@@ -502,9 +502,9 @@ not an attestation of the serving runtime.
 
 ## Fresh-project ensure contract checkpoint
 
-`ensureCodexProject` is a pure application/port contract with **in-memory tests only**.
-It is not wired into Computer MCP, Desktop admission, a native project mutation
-method, or a production filesystem journal. The refused experimental handshake
+`ensureCodexProject` is a pure application/port contract with in-memory policy tests
+and an **unwired private filesystem journal adapter**. Neither is wired into
+Computer MCP, Desktop admission or a native project mutation method. The refused experimental handshake
 and existing shared proxy remain unchanged; no new native capability is enabled.
 This is the independent Morning D2 foundation, not a serving ensure API or parity PASS.
 
@@ -514,8 +514,9 @@ preference are distinct. Creation additionally requires a separately qualified
 owner project-mutation admission and the existing mutation gate. The journal port
 requires one durable no-replace intent per canonical physical identity across
 **different keys** before the single create submission, using the provider's
-idempotency key. The in-memory journal tests this policy; it proves no actual
-fsync, cross-process lock, native method or provider idempotency implementation.
+idempotency key. The in-memory journal tests the policy; separate filesystem fixtures test the
+adapter's POSIX sync calls, cross-process reservation and restart readback. Neither
+qualifies a native provider method or server-side idempotency implementation.
 
 An exact create acknowledgement and a complete unique post-create catalogue are
 required before local confirmation. Every asynchronous boundary revalidates
@@ -537,5 +538,39 @@ project does not become permission to recreate it.
 Catalogue/create/readback are non-atomic. A concurrent native creation can still
 produce duplicate projects before readback; ambiguity is unknown, with no automatic
 delete/rename/retry. A real provider-side atomic ensure/CAS is not claimed. Actual
-journal adapter, exact serving methods/admission and owner qualification remain
-required before publication. The retained Computer-only candidate/trial is independent.
+journal-root lifetime integration, exact serving methods/admission and owner
+qualification remain required before publication. The retained Computer-only candidate/trial is independent.
+
+### Private ensure journal boundary
+
+`PrivateProjectEnsureJournal` stores an immutable pending intent and a separate
+no-replace confirmation under one atomic directory reservation per canonical
+**device/inode**, across different request keys and processes. A changed canonical
+path or Git common directory hits that same physical bucket and refuses its
+mismatched record; it cannot create an alias bucket. Distinct physical repositories
+remain separate. The caller must supply an existing canonical private 0700 root;
+reads never create or reset missing history. Root/entry identities are pinned for
+each adapter instance. A measured reservation disappearing or being replaced is
+an error, not another create opportunity. No claim is pruned, stolen by age/PID,
+renamed or overwritten after any partial write or sync failure.
+
+An intent is acknowledged only after file and directory sync/readback checks.
+Confirmation uses the original key and an immutable project ID; a concurrent
+conflicting acknowledgement refuses. Recovery can stabilize an already complete
+record with POSIX sync, but the app still reports current catalogue resolution,
+not a new creation PASS or control grant. Empty/partial claims, invalid UTF-8,
+unknown fields, path/policy mismatches, unsafe permissions, symlinks, hardlinks,
+FIFOs and oversized records fail closed. Files are private bounded JSON, with no
+prompts, provider transcripts, auth material or executable state.
+
+Native Node/filesystem fixtures use disposable private roots, four owned claim
+processes, observed terminal callbacks, injected sync failures and a fake provider
+for lost-ack/replay checks. Project identity fields are synthetic; current repository
+identity verification belongs to the consumer authority, not to this journal. They do not prove hardware power-loss survival,
+protection against a hostile same-owner process replacing paths between Node
+pathname operations, persistence after deletion/rebinding of the private root,
+serving host method support, native project creation or Desktop/connector parity.
+The caller must preserve and bind the stable journal root across actual runtime
+reconnect/restart; that lifetime and admission remain unwired/unqualified. The
+original refused handshake is untouched and `codex_project_ensure` remains absent
+from the product catalogue. Do not use this adapter as an alternate provider route.
