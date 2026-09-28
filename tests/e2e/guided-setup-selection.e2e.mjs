@@ -177,7 +177,7 @@ const chatFixture = createServer(async (request, response) => {
   if (behavior) {
     response.end(`<!doctype html><html><head><title>Owned Setup fixture</title></head><body style="margin:24px;font:18px sans-serif">
       <h1>Owned Setup fixture</h1>
-      <button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1)">Toggle fixture sidebar</button>
+      <button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1);this.setAttribute('aria-label',this.getAttribute('aria-label')==='Close sidebar'?'Open sidebar':'Close sidebar')">Toggle fixture sidebar</button>
       <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button aria-label="Select ChatGPT model">Instant</button><input type="range" min="0" max="5" value="0" aria-label="Fixture Instant effort" />
       <div id="messages"></div><form onsubmit="return false"><span data-testid="composer-app-chip">${fixtureApp}</span><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea><button type="button" data-testid="send-button" onclick="sendFixture()">Send to owned fixture</button></form>
       <script>
@@ -196,7 +196,7 @@ const chatFixture = createServer(async (request, response) => {
     return;
   }
   response.end(
-    '<!doctype html><html><head><title>Local Browser fixture</title></head><body style="margin:24px;font:18px sans-serif"><h1>Local Browser fixture</h1><button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1)">Toggle fixture sidebar</button><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>',
+    `<!doctype html><html><head><title>Local Browser fixture</title></head><body style="margin:24px;font:18px sans-serif"><h1>Local Browser fixture</h1><button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1);this.setAttribute('aria-label',this.getAttribute('aria-label')==='Close sidebar'?'Open sidebar':'Close sidebar')">Toggle fixture sidebar</button><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>`,
   );
 });
 await bounded(
@@ -940,15 +940,29 @@ try {
               clicks: await page.webContents.executeJavaScript(
                 "Number(document.body.dataset.sidebarClicks || 0)",
               ),
+              sidebar: await page.webContents.executeJavaScript(
+                "document.querySelector('button[aria-label]')?.getAttribute('aria-label')",
+              ),
             })),
           );
         },
         fixtureUrl,
       );
-    const sidebarBefore = await bounded(
-      sidebarSnapshot(),
-      "SIDEBAR_BASELINE_TIMEOUT",
-    );
+    // Model the provider control changing state after automatic collapse.
+    // Wait for every owned page's initial collapse before measuring the owner
+    // toggle; asynchronous initialization is not a manual route effect.
+    let sidebarBefore;
+    const collapseDeadline = Date.now() + 5000;
+    for (;;) {
+      sidebarBefore = await bounded(
+        sidebarSnapshot(),
+        "SIDEBAR_BASELINE_TIMEOUT",
+      );
+      if (sidebarBefore.every((page) => page.sidebar === "Open sidebar")) break;
+      if (Date.now() >= collapseDeadline)
+        throw new Error("INITIAL_PAGE_SIDEBAR_NOT_COLLAPSED");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     assert.equal(sidebarBefore.filter((page) => page.visible).length, 1);
     await window.locator("#browser-sidebar-toggle").click();
     let sidebarPages;
