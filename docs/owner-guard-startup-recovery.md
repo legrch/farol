@@ -16,6 +16,15 @@ roots, profile allowances and narrow runtime churn exclusions remain in force.
 - Larger regular files retain the existing bounded metadata policy, strengthened
   with identity and mutation metadata. This is not a full content hash of large
   files. Directory symlinks remain visible without recursive traversal.
+- An interruptible content open has a five-second SIGALRM deadline. A blocked
+  or unavailable deadline fails before command spawn. POSIX/Darwin does not
+  provide an atomic regular-only content open: a device substituted after lstat
+  can reach open, but is rejected by fstat before any stream read. This does not
+  prove absence of driver-side open effects or bound uninterruptible kernel I/O.
+  Device-race atomicity remains a stated platform limit, not a passed guarantee.
+  Apple XNU's [vnode open implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/vfs/vfs_vnops.c)
+  invokes the vnode open operation; `O_EVTONLY` is not used as an invented
+  regular-only filter. No live devices are opened to test this limit.
 - Unreadable or unstable objects fail with an explicit incomplete verification.
   Do not ignore protected tmp/runtime trees or retire live fixtures to get PASS.
 
@@ -36,8 +45,12 @@ facility is added by this fix.
 
 ## Verification and candidate boundaries
 
-`tests/integration/owner-protection.test.mjs` uses disposable HOME only. All probe
-processes have a hard five-second deadline and exact-process reaping. External
+`tests/integration/owner-protection.test.mjs` uses disposable HOME only. A native
+Node supervisor owns an isolated fixture process group; fixture children must
+not escape that group. At the five-second deadline it signals only that owned
+group and observes actual root termination and group absence. Pipe EOF and group
+cleanup each have an additional two-second bound. Unverified cleanup retains
+HOME and fails the test; signal delivery alone is never cleanup PASS. External
 preflight cancellation tests correlate the readiness PID and reap the same
 owned process; no application child may create its marker. Race tests deliberately
 replace regular objects with FIFO, symlink or a different regular inode.

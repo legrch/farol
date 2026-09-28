@@ -150,6 +150,7 @@ STAGING_SUFFIX = ".tmp"
 # `something-else.reservation` still fails, which is the whole point.
 RESERVATION_SUFFIX = ".reservation"
 MAX_FINGERPRINT_BYTES = 4 * 1024 * 1024
+OPEN_TIMEOUT_SECONDS = 5.0
 
 
 def _stages_for_churn(name: str) -> bool:
@@ -190,6 +191,26 @@ def _require_stable(path: Path, before: os.stat_result, after: os.stat_result) -
         raise FingerprintError(f"filesystem object changed while fingerprinting: {path}")
 
 
+def _open_content(path: Path) -> int:
+    # POSIX has no portable regular-only open. NONBLOCK protects FIFO races;
+    # the alarm bounds an interruptible open after other type substitutions.
+    # This is not a device-driver side-effect or uninterruptible-I/O guarantee.
+    if not hasattr(signal, "setitimer") or signal.getitimer(signal.ITIMER_REAL) != (0.0, 0.0):
+        raise FingerprintError("a dedicated bounded descriptor-open deadline is unavailable")
+
+    def timed_out(signum, frame):
+        del signum, frame
+        raise FingerprintError(f"descriptor open deadline exceeded: {path}")
+
+    previous = signal.signal(signal.SIGALRM, timed_out)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, OPEN_TIMEOUT_SECONDS)
+        return os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def _digest(path: Path) -> str:
     try:
         before = path.lstat()
@@ -205,7 +226,7 @@ def _digest(path: Path) -> str:
             return f"special:{metadata}"
         if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_NONBLOCK"):
             raise FingerprintError("safe no-follow nonblocking file opens are unavailable")
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = _open_content(path)
         try:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode):
@@ -406,6 +427,9 @@ def _spawn_child(command: list[str]) -> None:
         # A group signal received during spawn predates the child's membership.
         # Relay it to the now-known child instead of losing cancellation.
         for signum in signal.sigpending() & cancelled_signals:
+            # sigpending is observational. Consume before relay so restoring
+            # the mask cannot forward the same SIGTERM a second time.
+            signal.sigwait({signum})
             _signal_child(signum)
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)

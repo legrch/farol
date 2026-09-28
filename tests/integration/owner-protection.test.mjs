@@ -1,18 +1,93 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
 
 const root = path.resolve(import.meta.dirname, "../..");
 const homes = [];
+const activeGroups = new Set();
+// Each fixture has one isolated, still-supervised group. Fixture commands must
+// not detach from it. The supervisor owns the deadline even if a child holds IO.
+async function ownedRun(executable, args, options, deadlineMs = 5000) {
+  const child = spawn(executable, args, {
+    cwd: options.cwd,
+    env: options.env,
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  let error;
+  let signalSent = false;
+  const collect = (current, chunk) =>
+    (current + chunk.toString("utf8")).slice(-1048576);
+  child.stdout.on("data", (chunk) => {
+    stdout = collect(stdout, chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr = collect(stderr, chunk);
+  });
+  child.on("spawn", () => activeGroups.add(child.pid));
+  const result = await new Promise((resolve) => {
+    const deadline = setTimeout(() => {
+      error = new Error("owned fixture deadline exceeded");
+      if (!child.pid || !activeGroups.has(child.pid)) return;
+      signalSent = true;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch (failure) {
+        if (failure.code !== "ESRCH") error = failure;
+      }
+    }, deadlineMs);
+    const pipeDeadline = setTimeout(() => {
+      child.stdout.destroy();
+      child.stderr.destroy();
+      resolve({ status: child.exitCode, signal: child.signalCode });
+    }, deadlineMs + 2000);
+    child.once("error", (failure) => {
+      error = failure;
+    });
+    child.once("close", (status, signal) => {
+      clearTimeout(deadline);
+      clearTimeout(pipeDeadline);
+      resolve({ status, signal });
+    });
+  });
+  if (child.pid && activeGroups.has(child.pid)) {
+    const until = performance.now() + 2000;
+    let gone = false;
+    while (performance.now() < until) {
+      try {
+        process.kill(-child.pid, 0);
+      } catch (failure) {
+        if (failure.code === "ESRCH") {
+          gone = true;
+          break;
+        }
+        throw new Error(
+          `fixture group ${child.pid} cleanup unknown: ${failure.code}`,
+        );
+      }
+      await delay(20);
+    }
+    if (!gone || (child.exitCode === null && child.signalCode === null)) {
+      throw new Error(
+        `fixture group ${child.pid} cleanup unverified; retain HOME`,
+      );
+    }
+    activeGroups.delete(child.pid);
+  }
+  return { ...result, error, stdout, stderr, groupCleanup: true, signalSent };
+}
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "farol-owner-guard-"));
   homes.push(home);
   return home;
 }
 function run(home, code) {
-  return spawnSync(
+  return ownedRun(
     "/usr/bin/python3",
     [
       "-I",
@@ -27,8 +102,6 @@ function run(home, code) {
       cwd: root,
       env: { HOME: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
       encoding: "utf8",
-      timeout: 5000,
-      killSignal: "SIGKILL",
     },
   );
 }
@@ -41,7 +114,7 @@ function runOwnerLaunch(home, script, args, code, extraEnvironment = {}) {
     '#!/bin/sh\nexec /usr/bin/python3 -I -c "$FAKE_NODE_CODE"\n',
     { mode: 0o700 },
   );
-  return spawnSync(
+  return ownedRun(
     "/usr/bin/python3",
     [
       "-I",
@@ -61,15 +134,12 @@ function runOwnerLaunch(home, script, args, code, extraEnvironment = {}) {
         ...extraEnvironment,
       },
       encoding: "utf8",
-      timeout: 5000,
-      killSignal: "SIGKILL",
     },
   );
 }
-// Every probe has a hard deadline and spawnSync reaps its exact owned process.
-// Probes use disposable HOME only; fixture children are finite and never detach.
-function probe(home, code) {
-  const result = spawnSync(
+// Probes use disposable HOME only and the same bounded fixture supervisor.
+async function probe(home, code) {
+  const result = await ownedRun(
     "/usr/bin/python3",
     [
       "-I",
@@ -88,8 +158,6 @@ ${code}
       cwd: root,
       env: { HOME: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
       encoding: "utf8",
-      timeout: 5000,
-      killSignal: "SIGKILL",
     },
   );
   expect(result.error, result.stderr).toBeUndefined();
@@ -110,13 +178,17 @@ function fifo(home) {
   return file;
 }
 afterEach(() => {
+  expect(
+    activeGroups.size,
+    "retain fixture HOME while cleanup is unverified",
+  ).toBe(0);
   for (const home of homes.splice(0))
     fs.rmSync(home, { recursive: true, force: true });
 });
 describe("standalone owner protection", () => {
-  it("detects writes to a synthetic protected path without any V0 imports", () => {
+  it("detects writes to a synthetic protected path without any V0 imports", async () => {
     const home = fixture();
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; p=Path.home()/'.farol/state/settings.json'; p.parent.mkdir(parents=True); p.write_text('changed')",
     );
@@ -126,54 +198,56 @@ describe("standalone owner protection", () => {
       "modified the owner's live Farol installation",
     );
   });
-  it("permits declared runtime churn and its atomic staging siblings", () => {
-    const result = run(
+  it("permits declared runtime churn and its atomic staging siblings", async () => {
+    const result = await run(
       fixture(),
       "from pathlib import Path; p=Path.home()/'.farol/runtime/hub/farol-full'; p.mkdir(parents=True); [(p/n).write_text('churn') for n in ['codex-route-activity.json','.codex-route-activity.json.tmp','hub-actions.jsonl.reservation']]",
     );
     expect(result.status).toBe(0);
   });
-  it("catches an undeclared profile but allows the separately owned V0 development profiles", () => {
+  it("catches an undeclared profile but allows the separately owned V0 development profiles", async () => {
     const home = fixture();
     expect(
-      run(
-        home,
-        "from pathlib import Path; p=Path.home()/'.config/tunnel-client'; p.mkdir(parents=True); (p/'farol-dev-full.yaml').write_text('fixture')",
+      (
+        await run(
+          home,
+          "from pathlib import Path; p=Path.home()/'.config/tunnel-client'; p.mkdir(parents=True); (p/'farol-dev-full.yaml').write_text('fixture')",
+        )
       ).status,
     ).toBe(0);
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; (Path.home()/'.config/tunnel-client/unowned.yaml').write_text('fixture')",
     );
     expect(result.status).toBe(1);
   });
-  it("catches browser-profile replacement without reading browser content", () => {
+  it("catches browser-profile replacement without reading browser content", async () => {
     const home = fixture();
     const profile = path.join(home, ".farol/runtime/browser/browser-profile");
     fs.mkdirSync(profile, { recursive: true });
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; p=Path.home()/'.farol/runtime/browser/browser-profile'; p.rename(p.with_name('old')); p.mkdir()",
     );
     expect(result.status).toBe(1);
   });
-  it("catches new-product startup markers without scanning profile content", () => {
+  it("catches new-product startup markers without scanning profile content", async () => {
     const home = fixture();
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Dev/farol-next-state/running.json'; p.parent.mkdir(parents=True); p.write_text('synthetic marker')",
     );
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Farol Dev/farol-next-state/running.json");
   });
-  it("catches replacement of a new-product profile directory by identity", () => {
+  it("catches replacement of a new-product profile directory by identity", async () => {
     const home = fixture();
     const profile = path.join(
       home,
       "Library/Application Support/Farol Next Preview",
     );
     fs.mkdirSync(profile, { recursive: true });
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; p=Path.home()/'Library/Application Support/Farol Next Preview'; p.rename(p.with_name('old')); p.mkdir()",
     );
@@ -199,11 +273,11 @@ describe("standalone owner protection", () => {
     ],
   ])(
     "allows %s startup markers but still catches another profile",
-    (_label, script, args, allowed, denied, environment) => {
+    async (_label, script, args, allowed, denied, environment) => {
       const home = fixture();
       const writeMarker = (profile) =>
         `from pathlib import Path; p=Path.home()/'Library/Application Support/${profile}/farol-next-state/running.json'; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('synthetic marker')`;
-      const allowedResult = runOwnerLaunch(
+      const allowedResult = await runOwnerLaunch(
         home,
         script,
         args,
@@ -211,7 +285,7 @@ describe("standalone owner protection", () => {
         environment,
       );
       expect(allowedResult.status, allowedResult.stderr).toBe(0);
-      const deniedResult = runOwnerLaunch(
+      const deniedResult = await runOwnerLaunch(
         home,
         script,
         args,
@@ -224,11 +298,11 @@ describe("standalone owner protection", () => {
       );
     },
   );
-  it("still catches replacement of the selected owner-launch profile", () => {
+  it("still catches replacement of the selected owner-launch profile", async () => {
     const home = fixture();
     const profile = path.join(home, "Library/Application Support/Farol Dev");
     fs.mkdirSync(profile, { recursive: true });
-    const result = runOwnerLaunch(
+    const result = await runOwnerLaunch(
       home,
       "tooling/dev.mjs",
       [],
@@ -237,9 +311,9 @@ describe("standalone owner protection", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Farol Dev");
   });
-  it("keeps the full guard for check-only Dev commands that never launch", () => {
+  it("keeps the full guard for check-only Dev commands that never launch", async () => {
     const home = fixture();
-    const result = runOwnerLaunch(
+    const result = await runOwnerLaunch(
       home,
       "tooling/dev.mjs",
       ["--check"],
@@ -248,16 +322,16 @@ describe("standalone owner protection", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Farol Dev/farol-next-state/running.json");
   });
-  it("preserves a failing child exit code", () => {
-    expect(run(fixture(), "raise SystemExit(17)").status).toBe(17);
+  it("preserves a failing child exit code", async () => {
+    expect((await run(fixture(), "raise SystemExit(17)")).status).toBe(17);
   });
 });
 
 describe("bounded owner guard startup recovery", () => {
-  it("fingerprints an unchanged FIFO without a writer or stream read", () => {
+  it("fingerprints an unchanged FIFO without a writer or stream read", async () => {
     const home = fixture();
     fifo(home);
-    const result = run(home, "raise SystemExit(0)");
+    const result = await run(home, "raise SystemExit(0)");
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.signal, result.stderr).toBeNull();
     expect(result.status, result.stderr).toBe(0);
@@ -267,10 +341,10 @@ describe("bounded owner guard startup recovery", () => {
     ["replacement", "p.rename(p.with_name('old.fifo')); os.mkfifo(p)"],
     ["type substitution", "p.unlink(); p.write_text('regular')"],
     ["deletion", "p.unlink()"],
-  ])("detects FIFO %s without consuming it", (_name, mutation) => {
+  ])("detects FIFO %s without consuming it", async (_name, mutation) => {
     const home = fixture();
     fifo(home);
-    const result = run(
+    const result = await run(
       home,
       `import os; from pathlib import Path; p=Path.home()/'.farol/runtime/hub/fixture/proof.fifo'; ${mutation}`,
     );
@@ -278,19 +352,19 @@ describe("bounded owner guard startup recovery", () => {
     expect(result.status, result.stderr).toBe(1);
     expect(result.stderr).toContain("proof.fifo");
   });
-  it("keeps ordinary file content protection", () => {
+  it("keeps ordinary file content protection", async () => {
     const home = fixture();
     const file = path.join(home, ".farol/state/settings.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, "before");
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; (Path.home()/'.farol/state/settings.json').write_text('after!')",
     );
     expect(result.status, result.stderr).toBe(1);
   });
-  it("does not follow symlink content and detects target replacement", () => {
-    probe(
+  it("does not follow symlink content and detects target replacement", async () => {
+    await probe(
       fixture(),
       `
 p = Path.home()/"link"
@@ -308,8 +382,8 @@ assert guard._digest(p) != before
   });
   it.each(["fifo", "symlink", "regular"])(
     "rejects a regular-to-%s swap between lstat and open",
-    (kind) => {
-      probe(
+    async (kind) => {
+      await probe(
         fixture(),
         `
 p = Path.home()/"watched"
@@ -336,8 +410,8 @@ assert calls[0] & os.O_NOFOLLOW
       );
     },
   );
-  it("bounds regular reads and detects mutation during a read", () => {
-    probe(
+  it("bounds regular reads and detects mutation during a read", async () => {
+    await probe(
       fixture(),
       `
 p = Path.home()/"watched"
@@ -363,8 +437,8 @@ assert sum(read_sizes) <= guard.MAX_FINGERPRINT_BYTES + 1
   });
   it.each(["SIGINT", "SIGTERM"])(
     "cancels %s during preflight with zero children",
-    (name) => {
-      const result = probe(
+    async (name) => {
+      const result = await probe(
         fixture(),
         `
 marker = Path.home()/"child-started"
@@ -381,8 +455,8 @@ assert guard._CHILD is None
       expect(result.stderr).toContain("cancelled during preflight");
     },
   );
-  it("does not report interrupted postflight as successful verification", () => {
-    const result = probe(
+  it("does not report interrupted postflight as successful verification", async () => {
+    const result = await probe(
       fixture(),
       `
 calls = []
@@ -402,8 +476,8 @@ assert guard._CHILD is None
   });
   it.each(["SIGINT", "SIGTERM"])(
     "reaps an externally cancelled %s preflight process before any child starts",
-    (name) => {
-      probe(
+    async (name) => {
+      await probe(
         fixture(),
         `
 import select, subprocess, textwrap
@@ -442,8 +516,8 @@ assert owned.poll() is not None, "exact owned process was not reaped"
   );
   it.each(["S_IFSOCK", "S_IFCHR", "S_IFBLK"])(
     "fingerprints %s metadata without opening a stream",
-    (kind) => {
-      probe(
+    async (kind) => {
+      await probe(
         fixture(),
         `
 from types import SimpleNamespace
@@ -465,8 +539,8 @@ assert guard._digest(p) != before
       );
     },
   );
-  it("fails closed on unreadable preflight without spawning a child", () => {
-    const result = probe(
+  it("fails closed on unreadable preflight without spawning a child", async () => {
+    const result = await probe(
       fixture(),
       `
 marker = Path.home()/"child-started"
@@ -481,20 +555,20 @@ assert not marker.exists()
       "verification incomplete; no child spawned",
     );
   });
-  it("retains directory symlinks in a protected recursive tree", () => {
+  it("retains directory symlinks in a protected recursive tree", async () => {
     const home = fixture();
     const dir = path.join(home, ".farol/state");
     fs.mkdirSync(dir, { recursive: true });
     fs.symlinkSync("missing-directory", path.join(dir, "link"));
-    const result = run(
+    const result = await run(
       home,
       "from pathlib import Path; p=Path.home()/'.farol/state/link'; p.unlink(); p.symlink_to('different-directory')",
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(1);
   });
-  it("prevents spawn for an already pending preflight signal", () => {
-    probe(
+  it("prevents spawn for an already pending preflight signal", async () => {
+    await probe(
       fixture(),
       `
 marker = Path.home()/"child-started"
@@ -512,16 +586,16 @@ finally:
 `,
     );
   });
-  it("restores the original signal mask in the actual command child", () => {
-    const result = run(
+  it("restores the original signal mask in the actual command child", async () => {
+    const result = await run(
       fixture(),
       "import signal; blocked=signal.pthread_sigmask(signal.SIG_BLOCK, set()); assert signal.SIGINT not in blocked and signal.SIGTERM not in blocked",
     );
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
   });
-  it("retains a refused signal relay until the exact child is reaped", () => {
-    const result = probe(
+  it("retains a refused signal relay until the exact child is reaped", async () => {
+    const result = await probe(
       fixture(),
       `
 import errno
@@ -543,8 +617,112 @@ assert guard._CHILD is None
     );
     expect(result.stderr).toContain("cancellation relay refused; child exit 0");
   });
-  it("preserves a child signal exit", () => {
-    const result = run(
+  it("bounds timeout with a child holding stdio and confirms group absence", async () => {
+    const home = fixture();
+    const started = performance.now();
+    const result = await ownedRun(
+      "/usr/bin/python3",
+      [
+        "-I",
+        "scripts/assert-owner-untouched.py",
+        "--",
+        "/usr/bin/python3",
+        "-I",
+        "-c",
+        "import time; print('child-running',flush=True); time.sleep(30)",
+      ],
+      {
+        cwd: root,
+        env: { HOME: home, PATH: "/usr/bin:/bin", LANG: "en_US.UTF-8" },
+      },
+      1000,
+    );
+    expect(result.stdout).toContain("child-running");
+    expect(result.error?.message).toContain("deadline exceeded");
+    expect(result.groupCleanup).toBe(true);
+    expect(activeGroups.size).toBe(0);
+    expect(performance.now() - started).toBeLessThan(5000);
+  });
+  it("forwards one queued spawn SIGTERM exactly once and waits for exit", async () => {
+    await probe(
+      fixture(),
+      `
+class Child:
+    def __init__(self, *args, **kwargs):
+        self.sent = []
+        self.returncode = None
+        os.kill(os.getpid(), signal.SIGTERM)
+    def poll(self): return self.returncode
+    def send_signal(self, signum): self.sent.append(signum)
+    def wait(self):
+        assert self.sent == [signal.SIGTERM], self.sent
+        self.returncode = 17
+        return self.returncode
+guard.subprocess.Popen = Child
+guard.fingerprint = lambda *args: {}
+assert guard.main(["--", "fixture-child"]) == 17
+`,
+    );
+  });
+  it("bounds an interruptible content-open stall and restores the alarm", async () => {
+    await probe(
+      fixture(),
+      `
+import time
+p = Path.home()/"regular"
+p.write_text("fixture")
+guard.OPEN_TIMEOUT_SECONDS = 0.05
+previous = signal.getsignal(signal.SIGALRM)
+def stalled(*args, **kwargs): time.sleep(30)
+guard.os.open = stalled
+started = time.monotonic()
+try:
+    guard._digest(p)
+except guard.FingerprintError as error:
+    assert "deadline exceeded" in str(error)
+else:
+    raise AssertionError("blocking open was accepted")
+assert time.monotonic() - started < 1
+assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+assert signal.getsignal(signal.SIGALRM) == previous
+`,
+    );
+  });
+  it.each(["S_IFCHR", "S_IFBLK"])(
+    "rejects a substituted %s descriptor before any stream read",
+    async (kind) => {
+      await probe(
+        fixture(),
+        `
+from types import SimpleNamespace
+p = Path.home()/"regular"
+p.write_text("fixture")
+original_fstat = os.fstat
+calls = []
+def device(fd):
+    regular = original_fstat(fd)
+    fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_rdev", "st_size", "st_mtime_ns", "st_ctime_ns")
+    info = SimpleNamespace(**{key: getattr(regular, key) for key in fields})
+    info.st_mode = stat.${kind} | 0o600
+    return info
+def forbidden(*args):
+    calls.append(1)
+    raise AssertionError("a substituted device stream was read")
+guard.os.fstat = device
+guard.os.read = forbidden
+try:
+    guard._digest(p)
+except guard.FingerprintError:
+    pass
+else:
+    raise AssertionError("a device descriptor was accepted")
+assert not calls
+`,
+      );
+    },
+  );
+  it("preserves a child signal exit", async () => {
+    const result = await run(
       fixture(),
       "import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
     );
