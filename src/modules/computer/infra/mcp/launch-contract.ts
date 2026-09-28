@@ -257,6 +257,33 @@ export const CodexTaskRouteLaunchSchema = z.strictObject({
 });
 export type CodexTaskRouteLaunch = z.infer<typeof CodexTaskRouteLaunchSchema>;
 
+export const ClaudeTaskRouteLaunchSchema = z.strictObject({
+  transport: z.literal("claude-sandboxed-print/v1"),
+  host: z.strictObject({
+    qualification: z.literal("fixture-only"),
+    executablePath: AbsolutePathSchema,
+    executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
+    models: z
+      .array(
+        z.strictObject({
+          model: z.string().min(1).max(120),
+          efforts: z.array(z.string().min(1).max(40)).max(20),
+        }),
+      )
+      .min(1)
+      .max(20),
+  }),
+  grant: CodexTaskRouteLaunchSchema.shape.grant
+    .omit({ observeThreadId: true, discoverProjectTasks: true, harness: true })
+    .extend({
+      harness: z.literal("claude-code"),
+      execution: z.strictObject({
+        sandbox: z.literal("read-only"),
+        approvalPolicy: z.literal("on-request"),
+      }),
+    }),
+});
+
 function validateChain(
   value: Readonly<{
     delegationChain: readonly Readonly<{
@@ -266,7 +293,9 @@ function validateChain(
     }>[];
     binding: Readonly<{ participantId: string }>;
     codexTasks?: z.infer<typeof CodexTaskRouteLaunchSchema> | undefined;
+    claudeTasks?: z.infer<typeof ClaudeTaskRouteLaunchSchema> | undefined;
     approval: Readonly<{
+      commands: string;
       expiresAt: number;
       workspaces: readonly Readonly<{
         workspaceId: string;
@@ -274,6 +303,7 @@ function validateChain(
         access: "read" | "write";
         rootIdentity: Readonly<{ device: string; inode: string }>;
         gitMetadata?: Readonly<{ commonDirectory: string }> | undefined;
+        shellVerified?: boolean | undefined;
       }>[];
     }>;
   }>,
@@ -306,8 +336,8 @@ function validateChain(
       message: "Participant identifiers must be unique.",
     });
   }
-  const task = value.codexTasks?.grant;
-  if (task) {
+  for (const task of [value.codexTasks?.grant, value.claudeTasks?.grant]) {
+    if (!task) continue;
     const workspace = value.approval.workspaces.find(
       (entry) => entry.workspaceId === task.workspaceId,
     );
@@ -319,12 +349,18 @@ function validateChain(
       workspace.gitMetadata?.commonDirectory !== task.gitCommonDirectory ||
       (task.execution.sandbox === "workspace-write" &&
         workspace.access !== "write") ||
+      (task.harness === "claude-code" &&
+        (value.approval.commands !== "workspace" ||
+          workspace.shellVerified !== true)) ||
       task.expiresAt > value.approval.expiresAt
     ) {
       context.addIssue({
         code: "custom",
-        path: ["codexTasks", "grant"],
-        message: "Codex task admission must match one approved Git workspace.",
+        path: [
+          task.harness === "codex" ? "codexTasks" : "claudeTasks",
+          "grant",
+        ],
+        message: "Task admission must match one approved Git workspace.",
       });
     }
   }
@@ -343,6 +379,7 @@ const ReadonlyLaunchContractSchema = z
     callerRelay: CallerRelayEndpointSchema.optional(),
     savedChat: SavedChatEndpointSchema.optional(),
     codexTasks: CodexTaskRouteLaunchSchema.optional(),
+    claudeTasks: ClaudeTaskRouteLaunchSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -361,6 +398,7 @@ const MutableLaunchContractSchema = z
     callerRelay: CallerRelayEndpointSchema.optional(),
     savedChat: SavedChatEndpointSchema.optional(),
     codexTasks: CodexTaskRouteLaunchSchema.optional(),
+    claudeTasks: ClaudeTaskRouteLaunchSchema.optional(),
   })
   .superRefine(validateChain);
 
@@ -502,6 +540,7 @@ export type MaterializedReadonlyComputerLaunch = Readonly<{
   callerRelay: CodexCallerRelayEndpoint | null;
   savedChat: SavedChatBridgeEndpoint | null;
   codexTasks: z.infer<typeof CodexTaskRouteLaunchSchema> | null;
+  claudeTasks: z.infer<typeof ClaudeTaskRouteLaunchSchema> | null;
   gitSettingsHome: string | null;
 }>;
 
@@ -573,6 +612,7 @@ export function materializeReadonlyComputerLaunch(
     callerRelay: launch.callerRelay ?? null,
     savedChat: launch.savedChat ?? null,
     codexTasks: launch.codexTasks ?? null,
+    claudeTasks: launch.claudeTasks ?? null,
     gitSettingsHome: launch.gitSettingsHome ?? null,
   };
 }

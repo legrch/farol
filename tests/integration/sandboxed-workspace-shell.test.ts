@@ -2062,3 +2062,72 @@ describe.skipIf(process.platform !== "darwin")(
     });
   },
 );
+
+it("preserves an absolute host deadline after asynchronous dispatch reservation", async () => {
+  const { root, workspace, approval, participant } = await fixture();
+  let now = Date.now();
+  const deadline = now + 100;
+  const shell = new SandboxedWorkspaceShell(
+    approval,
+    participant,
+    binding,
+    path.join(root, "absolute-deadline"),
+    () => now,
+  );
+  shells.push(shell);
+  const result = await shell.start(
+    {
+      operationId: "absolute-host-reservation",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "printf forbidden > absolute-forbidden.txt",
+      timeoutMs: 5000,
+      write: true,
+    },
+    undefined,
+    async () => true,
+    undefined,
+    async () => {
+      now = deadline;
+    },
+    deadline,
+  );
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "SHELL_AUTHORITY_EXPIRED" },
+  });
+  await expect(
+    fs.stat(path.join(workspace, "absolute-forbidden.txt")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+});
+it("watchdog enforces absolute host lifetime instead of resetting relative timeout", async () => {
+  const { shell } = await fixture();
+  const deadline = Date.now() + 600;
+  const result = await shell.start(
+    {
+      operationId: "absolute-host-running",
+      workspaceId: "fixture",
+      relativeCwd: ".",
+      command: "sleep 5",
+      timeoutMs: 5000,
+      write: false,
+    },
+    undefined,
+    async () => true,
+    undefined,
+    async () => {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    },
+    deadline,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw Error(result.error.code);
+  const terminal = await complete(shell, result.value.handle);
+  expect(terminal).toMatchObject({
+    state: "exited",
+    authorityExpired: true,
+    timedOut: false,
+    groupCleanup: "confirmed",
+  });
+  expect(await shell.waitForTerminal(result.value.handle)).toBe("confirmed");
+});

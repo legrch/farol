@@ -1,3 +1,8 @@
+import { PersistentClaudeHandoff } from "../../modules/chat/app/service/persistent-claude-handoff";
+import { AdmittedClaudeTaskRoute } from "../../modules/chat/infra/native/admitted-claude-task-route";
+import { SandboxedClaudePrintHost } from "../../modules/chat/infra/native/sandboxed-claude-print-host";
+import { PrivateClaudeHandoffJournal } from "../../modules/chat/infra/repo/private-claude-handoff-journal";
+import { ClaudeTaskProcessPeer } from "../../modules/computer/infra/peer/claude-task-process-peer";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -161,6 +166,51 @@ async function main(): Promise<void> {
           launch.gitSettingsHome ?? undefined,
         )
       : undefined;
+  const claudeLaunch = launch.claudeTasks;
+  const claudeAuthority = claudeLaunch
+    ? new PhysicalCodexHandoffAuthority(claudeLaunch.grant)
+    : undefined;
+  // No desktop issuer emits this fixture-only grant. Native Claude remains unqualified.
+  const claudeTasks =
+    claudeLaunch && claudeAuthority && shell
+      ? new AdmittedClaudeTaskRoute(
+          new PersistentClaudeHandoff(
+            claudeAuthority,
+            new SandboxedClaudePrintHost(
+              claudeLaunch.host,
+              new ClaudeTaskProcessPeer(
+                shell,
+                fence,
+                claudeLaunch.grant.expiresAt,
+                async () => {
+                  const current = await claudeAuthority.resolve(
+                    claudeLaunch.grant.workspaceId,
+                  );
+                  return (
+                    Date.now() < claudeLaunch.grant.expiresAt &&
+                    current !== null
+                  );
+                },
+              ),
+              claudeLaunch.grant.expiresAt,
+            ),
+            new PrivateClaudeHandoffJournal(
+              path.join(path.dirname(launchFile), "claude-task-journal"),
+            ),
+            {
+              digest(value: unknown) {
+                return createHash("sha256")
+                  .update(JSON.stringify(value))
+                  .digest("hex");
+              },
+            },
+            claudeLaunch.grant,
+            fence,
+            Date.now,
+          ),
+          claudeLaunch.grant,
+        )
+      : undefined;
   const handle = serveStdio(
     () =>
       createReadonlyComputerMcpServer(
@@ -175,6 +225,7 @@ async function main(): Promise<void> {
         shell,
         lifecycle,
         savedChat,
+        claudeTasks,
       ),
     {
       legacy: "serve",

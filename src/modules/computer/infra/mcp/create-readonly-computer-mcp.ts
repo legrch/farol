@@ -1,3 +1,8 @@
+import {
+  parseClaudeCreate,
+  parseClaudeStatus,
+  type ClaudeTaskRoutePeer,
+} from "../peer/claude-task-route-peer";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import {
@@ -750,6 +755,7 @@ export function createReadonlyComputerMcpServer(
       operation: SavedChatBridgeOperation,
     ): Promise<SavedChatBridgeResponse>;
   }>,
+  claudeTasks?: ClaudeTaskRoutePeer,
 ): McpServer {
   const server = new McpServer({
     name: "farol-next-computer",
@@ -801,6 +807,71 @@ export function createReadonlyComputerMcpServer(
         await admission.release();
       }
     });
+
+  const taskResponse = (value: object, isError = false): CallToolResult => ({
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    structuredContent: value,
+    ...(isError ? { isError: true } : {}),
+  });
+  if (claudeTasks) {
+    server.registerTool(
+      "claude_task_create",
+      {
+        title: "Dispatch one approved Claude print session",
+        description:
+          "Fixture-qualified sandboxed host only. One UUID key, exact approved target and tasks.harnesses alias. Process startup is not a terminal result or native UI visibility. An unknown acknowledgement never permits another create or a fresh key. No implicit Codex fallback, permission bypass, automatic approval or live qualification.",
+        inputSchema: CodexTaskCreateInputSchema,
+        annotations: CODEX_TASK_CREATE_ANNOTATIONS,
+      },
+      guarded(async (request) => {
+        try {
+          const result = parseClaudeCreate(
+            await claudeTasks.create(request),
+            request.key,
+          );
+          return taskResponse(result, result.status !== "dispatched");
+        } catch {
+          return taskResponse(
+            {
+              status: "outcome_unknown",
+              dispatchId: request.key.toLowerCase(),
+            },
+            true,
+          );
+        }
+      }),
+    );
+    server.registerTool(
+      "claude_task_status",
+      {
+        title: "Read one Claude dispatch receipt",
+        description:
+          "Read the exact local session/process or recorded terminal result. No spawn, resume, continuation or permission grant. Native visibility remains not-qualified. Restart without a recorded terminal result is outcome_unknown, never authority to relaunch.",
+        inputSchema: CodexTaskReadInputSchema,
+        annotations: READONLY_ANNOTATIONS,
+      },
+      guarded(async (request) => {
+        try {
+          const result = parseClaudeStatus(
+            await claudeTasks.status(request.dispatchId),
+            request.dispatchId,
+          );
+          return taskResponse(
+            result,
+            result.status === "refused" || result.status === "outcome_unknown",
+          );
+        } catch {
+          return taskResponse(
+            {
+              status: "outcome_unknown",
+              dispatchId: request.dispatchId.toLowerCase(),
+            },
+            true,
+          );
+        }
+      }),
+    );
+  }
 
   if (savedChat) {
     const result = (value: object, isError: boolean): CallToolResult => ({
@@ -866,11 +937,6 @@ export function createReadonlyComputerMcpServer(
   }
 
   if (codexTasks) {
-    const taskResponse = (value: object, isError = false): CallToolResult => ({
-      content: [{ type: "text", text: JSON.stringify(value) }],
-      structuredContent: value,
-      ...(isError ? { isError: true } : {}),
-    });
     if (
       codexTasks.projectPreferenceEnabled === true &&
       codexTasks.projectPreference

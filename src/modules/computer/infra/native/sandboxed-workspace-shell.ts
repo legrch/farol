@@ -517,6 +517,7 @@ export class SandboxedWorkspaceShell {
     dispatchAllowed?: () => Promise<boolean>,
     admissionFd?: number,
     reserveBeforeDispatch?: () => Promise<void>,
+    absoluteDeadlineAt?: number,
   ): Promise<ShellResponse> {
     if (this.closing) return refusal("SHELL_CLOSED");
     if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
@@ -528,12 +529,20 @@ export class SandboxedWorkspaceShell {
       Buffer.byteLength(input.stdin ?? "") > 1024 * 1024 ||
       !Number.isSafeInteger(input.timeoutMs) ||
       input.timeoutMs < 1 ||
-      input.timeoutMs > 600_000
+      input.timeoutMs > 600_000 ||
+      (absoluteDeadlineAt !== undefined &&
+        (!Number.isSafeInteger(absoluteDeadlineAt) || absoluteDeadlineAt <= 0))
     ) {
       return refusal("SHELL_INPUT_INVALID");
     }
     const fingerprint = createHash("sha256")
-      .update(JSON.stringify(input))
+      .update(
+        JSON.stringify(
+          absoluteDeadlineAt === undefined
+            ? input
+            : { input, absoluteDeadlineAt },
+        ),
+      )
       .digest("hex");
     const previous = this.byOperation.get(input.operationId);
     if (previous) {
@@ -682,8 +691,11 @@ export class SandboxedWorkspaceShell {
       return abandonReserved(dispatchAuthority);
     }
     const authorityRemaining =
-      Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) -
-      this.now();
+      Math.min(
+        this.approval.expiresAt,
+        this.participant.grant.expiresAt,
+        absoluteDeadlineAt ?? Infinity,
+      ) - this.now();
     if (authorityRemaining <= 0) {
       return abandonReserved("SHELL_AUTHORITY_EXPIRED");
     }
@@ -736,8 +748,11 @@ export class SandboxedWorkspaceShell {
     );
     if (finalAuthority) return abandonReserved(finalAuthority);
     if (
-      Math.min(this.approval.expiresAt, this.participant.grant.expiresAt) <=
-      this.now()
+      Math.min(
+        this.approval.expiresAt,
+        this.participant.grant.expiresAt,
+        absoluteDeadlineAt ?? Infinity,
+      ) <= this.now()
     ) {
       return abandonReserved("SHELL_AUTHORITY_EXPIRED");
     }
@@ -895,8 +910,12 @@ export class SandboxedWorkspaceShell {
     const authorityDeadlineAt = Math.min(
       this.approval.expiresAt,
       this.participant.grant.expiresAt,
+      absoluteDeadlineAt ?? Infinity,
     );
-    const commandDeadlineAt = Date.now() + input.timeoutMs;
+    const commandDeadlineAt = Math.min(
+      Date.now() + input.timeoutMs,
+      absoluteDeadlineAt ?? Infinity,
+    );
     child.send({
       type: "start",
       executable: SANDBOX_EXEC,
