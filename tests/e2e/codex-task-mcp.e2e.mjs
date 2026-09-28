@@ -58,6 +58,12 @@ const ownerTurnId = "d7b554c6-6603-4404-b376-7c77b618a242";
 const turnId = "issued-fixture-turn";
 const calls = [];
 let turnStatus = "inProgress";
+let runtimeStatus = { type: "active", activeFlags: ["waitingOnApproval"] };
+const runtimeSnapshot = {
+  scope: "thread",
+  source: "thread/read",
+  snapshot: "non-atomic",
+};
 let canonicalMetadataCwdFault = false;
 const sockets = new Set();
 const savedChatCalls = [];
@@ -133,6 +139,7 @@ function hostResult(method, params) {
             : writerRoot,
           name: "Farol · Native observer canary",
           model: "gpt-6-luna",
+          status: { type: "active", activeFlags: ["waitingOnUserInput"] },
           updatedAt: 123,
           preview: "PRIVATE FIXTURE PREVIEW",
         },
@@ -185,6 +192,7 @@ function hostResult(method, params) {
         projectId,
         cwd: writerRoot,
         model: "gpt-6-luna",
+        status: runtimeStatus,
       },
     };
   }
@@ -748,6 +756,11 @@ try {
     model: "gpt-6-luna",
     turns: [{ id: ownerTurnId, status: "completed" }],
     hasMoreTurns: false,
+    threadRuntime: {
+      ...runtimeSnapshot,
+      state: "active",
+      activeFlags: ["waitingOnUserInput"],
+    },
   });
   const historyBefore = calls.length;
   const history = await callFixtureTool({
@@ -833,6 +846,11 @@ try {
     status: "known",
     dispatchId: ownerTurnId,
     turnStatus: "completed",
+    threadRuntime: {
+      ...runtimeSnapshot,
+      state: "active",
+      activeFlags: ["waitingOnUserInput"],
+    },
   });
   const adoptedResult = await callFixtureTool({
     name: "codex_task_result",
@@ -892,6 +910,47 @@ try {
     dispatchId: key,
   });
   assert.equal(calls.filter((method) => method === "turn/steer").length, 0);
+  const beforeRuntime = calls.length;
+  const waiting = await callFixtureTool({
+    name: "codex_task_result",
+    arguments: { dispatchId: key },
+  });
+  assert.deepEqual(waiting.structuredContent, {
+    status: "running",
+    dispatchId: key,
+    threadRuntime: {
+      ...runtimeSnapshot,
+      state: "active",
+      activeFlags: ["waitingOnApproval"],
+    },
+  });
+  runtimeStatus = { type: "active", activeFlags: ["unknown-future-flag"] };
+  const malformedRuntime = await callFixtureTool({
+    name: "codex_task_status",
+    arguments: { dispatchId: key },
+  });
+  assert.equal(malformedRuntime.isError, true);
+  assert.deepEqual(malformedRuntime.structuredContent, {
+    status: "outcome_unknown",
+    dispatchId: key,
+  });
+  runtimeStatus = { type: "active", activeFlags: [] };
+  const clearedRuntime = await callFixtureTool({
+    name: "codex_task_result",
+    arguments: { dispatchId: key },
+  });
+  assert.deepEqual(clearedRuntime.structuredContent, {
+    status: "running",
+    dispatchId: key,
+    threadRuntime: { ...runtimeSnapshot, state: "active", activeFlags: [] },
+  });
+  assert.deepEqual(calls.slice(beforeRuntime), [
+    "thread/read",
+    "thread/turns/list",
+    "thread/read",
+    "thread/read",
+    "thread/turns/list",
+  ]);
   turnStatus = "completed";
   const status = await callFixtureTool({
     name: "codex_task_status",
@@ -901,6 +960,7 @@ try {
     status: "known",
     dispatchId: key,
     turnStatus: "completed",
+    threadRuntime: { ...runtimeSnapshot, state: "active", activeFlags: [] },
   });
   const result = await callFixtureTool({
     name: "codex_task_result",
@@ -953,6 +1013,7 @@ try {
     status: "known",
     dispatchId: key,
     turnStatus: "completed",
+    threadRuntime: { ...runtimeSnapshot, state: "active", activeFlags: [] },
   });
   assert.deepEqual(calls.slice(beforeReconnect), [
     "project/list",

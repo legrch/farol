@@ -37,6 +37,7 @@ import {
   parseProjectPreferenceLookup,
   parseTaskHistory,
   parseTaskTitle,
+  parseThreadRuntime,
   type CodexTaskRoutePeer,
 } from "../peer/codex-task-route-peer";
 import { bootstrapWorkspace } from "./workspace-bootstrap";
@@ -1096,14 +1097,21 @@ export function createReadonlyComputerMcpServer(
         {
           title: "Observe one selected Codex task",
           description:
-            "Read only the exact owner-selected thread in the approved saved project and physical workspace. This never starts, resumes, forks or controls a task; repeat the same read to refresh. Turns are bounded to one page and hasMoreTurns reports truncation.",
+            "Read only the exact owner-selected thread in the approved saved project and physical workspace. This never starts, resumes, forks or controls a task; repeat the same read to refresh. Turns are bounded to one page and hasMoreTurns reports truncation. threadRuntime is a separate, non-atomic thread-wide snapshot; waiting flags never grant approval/control or prove that this issued turn is waiting.",
           inputSchema: CodexTaskObserveInputSchema,
           annotations: READONLY_ANNOTATIONS,
         },
         guarded(async (request) => {
           try {
             const result = await codexTasks.observe!(request);
-            return taskResponse(result, result.status !== "observed");
+            if (result.status !== "observed") return taskResponse(result, true);
+            const threadRuntime = parseThreadRuntime(result.threadRuntime);
+            if (!threadRuntime)
+              return taskResponse(
+                { status: "outcome_unknown", threadId: request.threadId },
+                true,
+              );
+            return taskResponse({ ...result, threadRuntime }, false);
           } catch {
             return taskResponse(
               { status: "outcome_unknown", threadId: request.threadId },
@@ -1288,19 +1296,29 @@ export function createReadonlyComputerMcpServer(
       {
         title: "Read persistent Codex task status",
         description:
-          "Read the issued task's current turn without starting, resuming or cloning work.",
+          "Read the issued task's current turn without starting, resuming or cloning work. threadRuntime is a separate non-atomic thread-wide snapshot: waitingOnApproval/waitingOnUserInput do not identify a pending request or grant control. Unavailable is not idle.",
         inputSchema: CodexTaskReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
       guarded(async ({ dispatchId }) => {
         try {
           const result = await codexTasks.status(dispatchId);
+          const threadRuntime =
+            result.status === "known"
+              ? parseThreadRuntime(result.threadRuntime)
+              : null;
+          if (result.status === "known" && !threadRuntime)
+            return taskResponse(
+              { status: "outcome_unknown", dispatchId },
+              true,
+            );
           const publicResult =
             result.status === "known"
               ? {
                   status: "known",
                   dispatchId,
                   turnStatus: result.turnStatus,
+                  threadRuntime,
                 }
               : result;
           return taskResponse(
@@ -1317,21 +1335,30 @@ export function createReadonlyComputerMcpServer(
       {
         title: "Read exact Codex task result",
         description:
-          "Read the issued turn's exact final answer after completion; this never creates another turn.",
+          "Read the issued turn's exact final answer after completion; this never creates another turn. A running turn includes separate threadRuntime; thread-wide waiting flags do not identify or authorize an approval for this turn.",
         inputSchema: CodexTaskReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
       guarded(async ({ dispatchId }) => {
         try {
           const result = await codexTasks.result(dispatchId);
+          const threadRuntime =
+            result.status === "running"
+              ? parseThreadRuntime(result.threadRuntime)
+              : null;
+          if (result.status === "running" && !threadRuntime)
+            return taskResponse(
+              { status: "outcome_unknown", dispatchId },
+              true,
+            );
           const publicResult =
             result.status === "completed"
               ? { status: "completed", dispatchId, text: result.text }
-              : result.status === "running" ||
-                  result.status === "failed" ||
-                  result.status === "interrupted"
-                ? { status: result.status, dispatchId }
-                : result;
+              : result.status === "running"
+                ? { status: result.status, dispatchId, threadRuntime }
+                : result.status === "failed" || result.status === "interrupted"
+                  ? { status: result.status, dispatchId }
+                  : result;
           return taskResponse(
             publicResult,
             result.status === "outcome_unknown",

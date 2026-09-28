@@ -3,6 +3,7 @@ import {
   CodexProjectResolutionSchema,
   CodexTaskHistorySchema,
   CodexTaskTitleSchema,
+  CodexThreadRuntimeSchema,
   CodexProjectTasksSchema,
   CodexProjectPreferenceSchema,
   CodexProjectPreferenceLookupSchema,
@@ -140,3 +141,18 @@ export function parseProjectResolution(value: unknown, workspaceId: string) {
 }
 
 export type CodexTaskRoutePeer = CodexTaskRoute;
+
+/** Legacy ports may omit runtime; omission must never imply idle or no approvals. */
+export function parseThreadRuntime(value: unknown) {
+  const parsed = CodexThreadRuntimeSchema.safeParse(
+    value === undefined
+      ? {
+          scope: "thread",
+          source: "thread/read",
+          snapshot: "non-atomic",
+          state: "unavailable",
+        }
+      : value,
+  );
+  return parsed.success ? parsed.data : null;
+}

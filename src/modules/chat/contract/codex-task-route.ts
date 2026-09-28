@@ -1,5 +1,30 @@
 import { z } from "zod";
 
+const ThreadRuntimeSnapshot = {
+  scope: z.literal("thread"),
+  source: z.literal("thread/read"),
+  snapshot: z.literal("non-atomic"),
+};
+export const CodexThreadRuntimeSchema = z.union([
+  z.strictObject({
+    ...ThreadRuntimeSnapshot,
+    state: z.enum(["unavailable", "notLoaded", "idle", "systemError"]),
+  }),
+  z
+    .strictObject({
+      ...ThreadRuntimeSnapshot,
+      state: z.literal("active"),
+      activeFlags: z
+        .array(z.enum(["waitingOnApproval", "waitingOnUserInput"]))
+        .max(2)
+        .readonly(),
+    })
+    .refine(
+      (value) => new Set(value.activeFlags).size === value.activeFlags.length,
+    ),
+]);
+export type CodexThreadRuntime = z.infer<typeof CodexThreadRuntimeSchema>;
+
 const Identifier = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/u);
 const AbsolutePath = z
   .string()
@@ -345,6 +370,7 @@ export interface CodexTaskRoute {
         model: string | null;
         turns: ReadonlyArray<Readonly<{ id: string; status: string }>>;
         hasMoreTurns: boolean;
+        threadRuntime?: CodexThreadRuntime | undefined;
       }>
     | Readonly<{ status: "refused"; code: string }>
     | Readonly<{ status: "outcome_unknown"; threadId: string }>
@@ -433,6 +459,7 @@ export interface CodexTaskRoute {
         threadId: string;
         turnId: string;
         turnStatus: string;
+        threadRuntime?: CodexThreadRuntime | undefined;
       }>
   >;
   result(dispatchId: string): Promise<
@@ -440,6 +467,7 @@ export interface CodexTaskRoute {
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
     | Readonly<{
         status: "running" | "failed" | "interrupted";
+        threadRuntime?: CodexThreadRuntime | undefined;
         dispatchId: string;
         threadId: string;
         turnId: string;

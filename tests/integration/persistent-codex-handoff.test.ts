@@ -1826,7 +1826,9 @@ describe("persistent Codex handoff core", () => {
     const lateRevocation = new PersistentCodexHandoff(
       {
         resolve: async () =>
-          ++authorityReads < 3 ? workspace : { ...workspace, inode: "changed" },
+          // status now includes its own final physical readback; revoke at the
+          // following mutation preflight, rather than inside that read.
+          ++authorityReads < 4 ? workspace : { ...workspace, inode: "changed" },
       },
       host,
       journal,
@@ -2341,6 +2343,12 @@ describe("persistent Codex handoff core", () => {
       threadId: "issued-thread",
       turnId: "issued-turn",
       turnStatus: "completed",
+      threadRuntime: {
+        scope: "thread",
+        source: "thread/read",
+        snapshot: "non-atomic",
+        state: "unavailable",
+      },
     });
     expect(await service().create(request)).toMatchObject({
       status: "dispatched",
@@ -2873,5 +2881,248 @@ describe("persistent Codex handoff core", () => {
     expect(await service().status("../not-a-dispatch")).toEqual({
       status: "unknown",
     });
+  });
+});
+
+// Deterministic host fixtures; no approval decision or live provider call.
+describe("thread runtime observation", () => {
+  const snapshot = {
+    scope: "thread",
+    source: "thread/read",
+    snapshot: "non-atomic",
+  };
+  it("surfaces waiting flags without attributing them to the issued turn", async () => {
+    const { host, service } = await fixture();
+    await service().create(request);
+    host.readResponse = {
+      thread: {
+        id: "issued-thread",
+        projectId: request.projectId,
+        cwd: workspace.root,
+        model: request.model,
+        status: {
+          type: "active",
+          activeFlags: ["waitingOnApproval", "waitingOnUserInput"],
+        },
+      },
+    };
+    const before = host.calls.length;
+    const threadRuntime = {
+      ...snapshot,
+      state: "active",
+      activeFlags: ["waitingOnApproval", "waitingOnUserInput"],
+    };
+    expect(await service().status(key)).toMatchObject({
+      status: "known",
+      turnStatus: "inProgress",
+      threadRuntime,
+    });
+    expect(await service().result(key)).toMatchObject({
+      status: "running",
+      threadRuntime,
+    });
+    host.turnStatus = "completed";
+    expect(await service().status(key)).toMatchObject({
+      status: "known",
+      turnStatus: "completed",
+      threadRuntime,
+    });
+    expect(await service().result(key)).toMatchObject({
+      status: "completed",
+      text: "Exact result",
+    });
+    expect(
+      host.calls
+        .slice(before)
+        .every((method) =>
+          ["thread/read", "thread/turns/list", "thread/items/list"].includes(
+            method,
+          ),
+        ),
+    ).toBe(true);
+  });
+  it("reports missing runtime as unavailable rather than idle or approval-free", async () => {
+    const { service } = await fixture();
+    await service().create(request);
+    expect(await service().status(key)).toMatchObject({
+      status: "known",
+      threadRuntime: { ...snapshot, state: "unavailable" },
+    });
+    expect(await service().result(key)).toMatchObject({
+      status: "running",
+      threadRuntime: { ...snapshot, state: "unavailable" },
+    });
+  });
+  it.each([
+    null,
+    "idle",
+    {},
+    { type: "queued" },
+    { type: "active" },
+    { type: "active", activeFlags: ["unknown"] },
+    { type: "active", activeFlags: ["waitingOnApproval", "waitingOnApproval"] },
+    { type: "idle", activeFlags: ["waitingOnApproval"] },
+  ])(
+    "refuses malformed runtime %j before reading more pages",
+    async (status) => {
+      const { host, service } = await fixture();
+      await service().create(request);
+      host.readResponse = {
+        thread: {
+          id: "issued-thread",
+          projectId: request.projectId,
+          cwd: workspace.root,
+          model: request.model,
+          status,
+        },
+      };
+      const before = host.calls.length;
+      expect(await service().status(key)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: key,
+      });
+      expect(host.calls.slice(before)).toEqual(["thread/read"]);
+      expect(await service().result(key)).toEqual({
+        status: "outcome_unknown",
+        dispatchId: key,
+      });
+    },
+  );
+  it("does not publish runtime after physical revocation during a turn read", async () => {
+    const { host, service, setWorkspace } = await fixture();
+    await service().create(request);
+    host.onTurnsList = () => {
+      setWorkspace(null);
+      return {
+        data: [{ id: "issued-turn", status: "inProgress" }],
+        nextCursor: null,
+      };
+    };
+    expect(await service().status(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+  });
+  it("observes owner-selected waiting state without adopting, starting or responding", async () => {
+    const { host, service } = await fixture();
+    const threadId = randomUUID();
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+        status: { type: "active", activeFlags: ["waitingOnApproval"] },
+      },
+    };
+    expect(
+      await service(threadId).observe({
+        threadId,
+        projectId: request.projectId,
+        workspaceId: request.workspaceId,
+      }),
+    ).toMatchObject({
+      status: "observed",
+      threadRuntime: {
+        ...snapshot,
+        state: "active",
+        activeFlags: ["waitingOnApproval"],
+      },
+    });
+    expect(host.calls).toEqual([
+      "project/list",
+      "thread/read",
+      "thread/turns/list",
+    ]);
+    host.readResponse = {
+      thread: {
+        id: threadId,
+        projectId: request.projectId,
+        cwd: workspace.root,
+        status: { type: "active", activeFlags: ["new-private-field"] },
+      },
+    };
+    expect(
+      await service(threadId).observe({
+        threadId,
+        projectId: request.projectId,
+        workspaceId: request.workspaceId,
+      }),
+    ).toEqual({ status: "outcome_unknown", threadId });
+  });
+});
+
+describe("thread runtime review boundaries", () => {
+  it("keeps result unknown after a journal read revokes created-handle authority", async () => {
+    const f = await fixture();
+    await f.service().create(request);
+    const journal = new PrivateCodexHandoffJournal(f.journalRoot);
+    const original = journal.read.bind(journal);
+    let reads = 0;
+    journal.read = async (id) => {
+      const value = await original(id);
+      if (++reads === 2) f.setWorkspace(null);
+      return value;
+    };
+    const service = new PersistentCodexHandoff(
+      f.authority,
+      f.host,
+      journal,
+      new Sha256HandoffRequestDigester(),
+      Date.now() + 60_000,
+      mutationGate,
+    );
+    expect(await service.result(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    expect(reads).toBe(2);
+  });
+  it("does not skip an unsupported exact-turn state to accept a later page", async () => {
+    const f = await fixture();
+    await f.service().create(request);
+    let pages = 0;
+    f.host.onTurnsList = () =>
+      ++pages === 1
+        ? {
+            data: [{ id: "issued-turn", status: "future-state" }],
+            nextCursor: "next",
+          }
+        : {
+            data: [{ id: "issued-turn", status: "completed" }],
+            nextCursor: null,
+          };
+    expect(await f.service().status(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    expect(pages).toBe(1);
+  });
+  it("refuses duplicate exact-turn identities in a bounded page", async () => {
+    const f = await fixture();
+    await f.service().create(request);
+    f.host.turnsResponse = {
+      data: [
+        { id: "issued-turn", status: "completed" },
+        { id: "issued-turn", status: "inProgress" },
+      ],
+      nextCursor: null,
+    };
+    expect(await f.service().status(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+  });
+  it("does not disclose a final result revoked during the item read", async () => {
+    const f = await fixture();
+    await f.service().create(request);
+    f.host.turnStatus = "completed";
+    f.host.onItemsList = () => f.setWorkspace(null);
+    expect(await f.service().result(key)).toEqual({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    expect(
+      f.host.calls.filter((method) => method === "turn/start"),
+    ).toHaveLength(1);
   });
 });

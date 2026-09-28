@@ -262,6 +262,12 @@ describe("settings edit through MCP to the resolved task model", () => {
           status: "known",
           dispatchId: firstKey,
           turnStatus: "completed",
+          threadRuntime: {
+            scope: "thread",
+            source: "thread/read",
+            snapshot: "non-atomic",
+            state: "unavailable",
+          },
         });
         expect((await journal.read(firstKey))?.modelBinding).toEqual(
           first?.modelBinding,

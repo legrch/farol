@@ -1,3 +1,5 @@
+import type { CodexThreadRuntime } from "../port/codex-thread-runtime";
+import { readCodexThreadRuntime } from "./read-codex-thread-runtime";
 import type {
   LatestProjectPreference,
   ProjectPreferenceLookupRequest,
@@ -229,13 +231,21 @@ export type HandoffStatusResult =
       threadId: string;
       turnId: string;
       turnStatus: string;
+      threadRuntime: CodexThreadRuntime;
     }>;
 
 export type HandoffResult =
   | Readonly<{ status: "unknown" }>
   | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
   | Readonly<{
-      status: "running" | "failed" | "interrupted";
+      status: "running";
+      threadRuntime: CodexThreadRuntime;
+      dispatchId: string;
+      threadId: string;
+      turnId: string;
+    }>
+  | Readonly<{
+      status: "failed" | "interrupted";
       dispatchId: string;
       threadId: string;
       turnId: string;
@@ -1190,6 +1200,12 @@ export class PersistentCodexHandoff {
           status: "outcome_unknown" as const,
           threadId: request.threadId,
         };
+      const threadRuntime = readCodexThreadRuntime(thread.status);
+      if (!threadRuntime)
+        return {
+          status: "outcome_unknown" as const,
+          threadId: request.threadId,
+        };
       const page = object(
         await this.host.request("thread/turns/list", {
           threadId: request.threadId,
@@ -1244,6 +1260,7 @@ export class PersistentCodexHandoff {
           status: turn!.status as string,
         })),
         hasMoreTurns: page.nextCursor !== null,
+        threadRuntime,
       };
     } catch {
       // Read failure cannot authorize a retry with a new task or turn.
@@ -2051,6 +2068,8 @@ export class PersistentCodexHandoff {
       ) {
         return { status: "outcome_unknown", dispatchId };
       }
+      const threadRuntime = readCodexThreadRuntime(thread.status);
+      if (!threadRuntime) return { status: "outcome_unknown", dispatchId };
       let cursor: string | null = null;
       const seen = new Set<string>();
       for (let page = 0; page < 32; page += 1) {
@@ -2062,11 +2081,28 @@ export class PersistentCodexHandoff {
             itemsView: "notLoaded",
           }),
         );
-        if (!turns || !Array.isArray(turns.data)) break;
-        const match = turns.data
+        if (!turns || !Array.isArray(turns.data) || turns.data.length > 100)
+          return { status: "outcome_unknown", dispatchId };
+        const matches = turns.data
           .map(object)
-          .find((item) => item?.id === record.turnId);
-        if (match && typeof match.status === "string") {
+          .filter((item) => item?.id === record.turnId);
+        if (matches.length > 1)
+          return { status: "outcome_unknown", dispatchId };
+        const match = matches[0];
+        if (match) {
+          if (
+            typeof match.status !== "string" ||
+            !["inProgress", "completed", "failed", "interrupted"].includes(
+              match.status,
+            )
+          )
+            return { status: "outcome_unknown", dispatchId };
+          const current = await this.authority.resolve(record.workspaceId);
+          if (
+            !validWorkspace(current) ||
+            !samePhysicalWorkspace(current, record.workspace)
+          )
+            return { status: "outcome_unknown", dispatchId };
           if (record.adopted && !(await this.adoptedReadStillAllowed(record)))
             return { status: "outcome_unknown", dispatchId };
           return {
@@ -2075,6 +2111,7 @@ export class PersistentCodexHandoff {
             threadId: record.threadId,
             turnId: record.turnId,
             turnStatus: match.status,
+            threadRuntime,
           };
         }
         if (
@@ -2098,10 +2135,7 @@ export class PersistentCodexHandoff {
     let record: HandoffRecord | null;
     try {
       record = await this.journal.read(dispatchId);
-      if (
-        !record ||
-        (record.adopted && !(await this.adoptedReadStillAllowed(record)))
-      )
+      if (!record || !(await this.resultReadStillAllowed(record)))
         return { status: "outcome_unknown", dispatchId };
     } catch {
       return { status: "outcome_unknown", dispatchId };
@@ -2112,7 +2146,11 @@ export class PersistentCodexHandoff {
       turnId: status.turnId,
     };
     if (status.turnStatus === "inProgress") {
-      return { status: "running", ...identity };
+      return {
+        status: "running",
+        ...identity,
+        threadRuntime: status.threadRuntime,
+      };
     }
     if (status.turnStatus === "failed" || status.turnStatus === "interrupted") {
       return { status: status.turnStatus, ...identity };
@@ -2165,7 +2203,7 @@ export class PersistentCodexHandoff {
           }
         }
         if (response.nextCursor === null) {
-          if (record.adopted && !(await this.adoptedReadStillAllowed(record)))
+          if (!(await this.resultReadStillAllowed(record)))
             return { status: "outcome_unknown", dispatchId };
           return final
             ? {
@@ -2190,6 +2228,17 @@ export class PersistentCodexHandoff {
       // Result reads never create a replacement task or a model turn.
     }
     return { status: "outcome_unknown", dispatchId };
+  }
+
+  private async resultReadStillAllowed(
+    record: HandoffRecord,
+  ): Promise<boolean> {
+    if (record.adopted) return this.adoptedReadStillAllowed(record);
+    const current = await this.authority.resolve(record.workspaceId);
+    return (
+      validWorkspace(current) &&
+      samePhysicalWorkspace(current, record.workspace)
+    );
   }
 
   private async adoptedReadStillAllowed(

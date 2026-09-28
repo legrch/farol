@@ -472,3 +472,30 @@ candidate evidence, and the corresponding regression remains a visible todo.
 No private handle internals, foreign pathname moves, or unsandboxed fallback is
 used to disguise that limitation. A supported identity-preserving close path is
 required before claiming full socket-ownership cleanup.
+
+## Thread-wide waiting state
+
+`codex_task_status`, `codex_task_observe`, and a running `codex_task_result`
+include `threadRuntime`, decoded from the supported `Thread.status` union. Its
+`scope: thread`, `source: thread/read`, and `snapshot: non-atomic` separate it
+from the issued turn status. An active thread reports only the closed
+`waitingOnApproval` and `waitingOnUserInput` flags. Idle, notLoaded, and
+systemError are runtime states, not terminal turn outcomes. Omitted runtime
+is explicitly unavailable; malformed, duplicate or unknown flags remain
+outcome-unknown. A later read can report resolved waiting without starting,
+resuming, approving, steering or forking work. Physical authority is remeasured
+after the turn read, including for Farol-created handles. Result reads recheck
+authority after their journal read and before disclosing final text. An exact turn
+with an unsupported status or duplicate identity refuses immediately; a later
+page cannot replace that unknown snapshot.
+
+A completed old turn can share a thread with a different waiting active turn.
+These flags do not identify that active turn, a server request, its permissions
+or an approval decision. Exact terminal results remain bound to the issued turn.
+The snapshot does not make an owner-created task controllable. Interactive
+approval request correlation/decisions, event subscription and shared native
+Desktop identity still require separate qualification. The original blocked
+experimental initialize change is not included. Tests use deterministic host
+data and a packaged disposable socket; no live provider or account proof is
+claimed. The selected saved CLI schema is supplemental contract evidence,
+not an attestation of the serving runtime.

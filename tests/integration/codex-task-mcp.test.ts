@@ -367,6 +367,12 @@ describe("Codex task Computer MCP surface", () => {
         status: "known",
         dispatchId: key,
         turnStatus: "completed",
+        threadRuntime: {
+          scope: "thread",
+          source: "thread/read",
+          snapshot: "non-atomic",
+          state: "unavailable",
+        },
       });
       const result = await client.callTool({
         name: "codex_task_result",
@@ -422,6 +428,116 @@ describe("Codex task Computer MCP surface", () => {
       });
       expect(response.isError).toBe(true);
       expect(count).toBe(1);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});
+
+describe("thread-wide runtime through the actual MCP boundary", () => {
+  it("preserves waiting flags and refuses malformed runtime without another task effect", async () => {
+    const snapshot = {
+      scope: "thread" as const,
+      source: "thread/read" as const,
+      snapshot: "non-atomic" as const,
+    };
+    let threadRuntime: any = {
+      ...snapshot,
+      state: "active",
+      activeFlags: ["waitingOnApproval", "waitingOnUserInput"],
+    };
+    const calls: string[] = [];
+    const route: CodexTaskRoute = {
+      observeEnabled: true,
+      async observe(request) {
+        calls.push("observe");
+        return {
+          status: "observed",
+          threadId: request.threadId,
+          title: null,
+          model: null,
+          turns: [],
+          hasMoreTurns: false,
+          threadRuntime,
+        };
+      },
+      async create() {
+        throw new Error("NO_TASK_START_ALLOWED");
+      },
+      async message() {
+        throw new Error("NO_CONTROL_ALLOWED");
+      },
+      async status(dispatchId) {
+        calls.push("status");
+        return {
+          status: "known",
+          dispatchId,
+          threadId: "private",
+          turnId: "private",
+          turnStatus: "inProgress",
+          threadRuntime,
+        };
+      },
+      async result(dispatchId) {
+        calls.push("result");
+        return {
+          status: "running",
+          dispatchId,
+          threadId: "private",
+          turnId: "private",
+          threadRuntime,
+        };
+      },
+    };
+    const { client, server } = await connected(route);
+    const operations = [
+      { name: "codex_task_status", arguments: { dispatchId: key } },
+      { name: "codex_task_result", arguments: { dispatchId: key } },
+      {
+        name: "codex_task_observe",
+        arguments: { threadId: key, projectId: "saved", workspaceId: "writer" },
+      },
+    ];
+    try {
+      for (const operation of operations) {
+        const result = await client.callTool(operation);
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({ threadRuntime });
+        expect(JSON.stringify(result.structuredContent)).not.toContain(
+          "private",
+        );
+      }
+      for (const malformed of [
+        { ...snapshot, state: "active", activeFlags: ["unknown"] },
+        {
+          ...snapshot,
+          state: "active",
+          activeFlags: ["waitingOnApproval"],
+          payload: "private",
+        },
+        { ...snapshot, scope: "turn", state: "idle" },
+      ]) {
+        threadRuntime = malformed;
+        for (const operation of operations) {
+          const result = await client.callTool(operation);
+          expect(result.isError).toBe(true);
+          expect(result.structuredContent).toMatchObject({
+            status: "outcome_unknown",
+          });
+          expect(result.structuredContent).not.toHaveProperty("threadRuntime");
+        }
+      }
+      threadRuntime = undefined;
+      for (const operation of operations) {
+        const result = await client.callTool(operation);
+        expect(result.structuredContent).toMatchObject({
+          threadRuntime: { ...snapshot, state: "unavailable" },
+        });
+      }
+      expect(calls).toEqual(
+        Array.from({ length: 5 }, () => ["status", "result", "observe"]).flat(),
+      );
     } finally {
       await client.close();
       await server.close();
