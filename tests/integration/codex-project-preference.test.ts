@@ -4,7 +4,7 @@ import {
   type HandoffWorkspace,
 } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 import { Sha256HandoffRequestDigester } from "../../src/modules/chat/infra/native/sha256-handoff-request-digester";
-const key = "a6c11016-b7b7-4d32-a5ec-8bd1e57ee521";
+const key = "019b0000-0000-4000-8000-000000000017";
 const workspace: HandoffWorkspace = {
   root: "/fixture/writer",
   device: "1",

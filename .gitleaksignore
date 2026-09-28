@@ -8,3 +8,10 @@
 aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/integration/admitted-codex-task-route.test.ts:generic-api-key:64
 aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/e2e/codex-task-mcp.e2e.mjs:generic-api-key:326
 aebe84b6a6c669d5920e8bf1e421b55bb00ee0d7:tests/integration/codex-task-mcp.test.ts:generic-api-key:73
+
+# Exact historical false positives for the owned project-preference synthetic
+# UUID fixtures. Source now uses obvious fixture IDs; no credential was present.
+# Preserve history, all-ref scanning and every upstream detection rule.
+06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference-journal.test.ts:generic-api-key:9
+06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference-mcp.test.ts:generic-api-key:7
+06bc6e49dc26562502ab995fd200a0a3d4dcf380:tests/integration/codex-project-preference.test.ts:generic-api-key:7

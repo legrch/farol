@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { PrivateCodexHandoffJournal } from "../../src/modules/chat/infra/repo/private-codex-handoff-journal";
-const key = "a6c11016-b7b7-4d32-a5ec-8bd1e57ee521";
+const key = "019b0000-0000-4000-8000-000000000017";
 const record = {
   projectId: "saved",
   project: {

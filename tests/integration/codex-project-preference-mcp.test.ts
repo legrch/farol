@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { AdmittedCodexTaskRoute } from "../../src/modules/chat/infra/native/admitted-codex-task-route";
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
 import { taskGrantPolicy } from "../fixtures/task-policy";
-const key = "a6c11016-b7b7-4d32-a5ec-8bd1e57ee521";
+const key = "019b0000-0000-4000-8000-000000000017";
 const input = {
   key,
   workspaceId: "selected",
@@ -23,7 +23,7 @@ async function fixture() {
         status: request.operation === "remember" ? "remembered" : "resolved",
         key:
           mode === "foreign"
-            ? "b6c11016-b7b7-4d32-a5ec-8bd1e57ee521"
+            ? "019b0000-0000-4000-8000-000000000018"
             : request.key,
         workspaceId: request.workspaceId,
         projectId: request.projectId,
