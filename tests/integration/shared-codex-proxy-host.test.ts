@@ -339,7 +339,7 @@ describe("shared Codex proxy transport fixture", () => {
     ).rejects.toThrow("CODEX_SHARED_HOST_UNAVAILABLE");
   });
 
-  it("refuses provider approval requests instead of approving them", async () => {
+  it("refuses an unsupported provider method without approving it", async () => {
     const host = fixture("server-request");
     expect(await host.request("project/list", { cursor: null })).toEqual({
       approval: "refused",

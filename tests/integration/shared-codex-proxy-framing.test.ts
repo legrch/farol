@@ -30,7 +30,7 @@ process.stdin.on("data", chunk => {
     } else if (value.method === "thread/read") {
       selected = value.id;
       if (spec.kind === "request") {
-        reply({id:spec.id,method:"item/commandExecution/requestApproval",params:{command:"NEVER_EXECUTE"}});
+        reply({id:spec.id,method:"unsupported/request",params:{command:"NEVER_EXECUTE"}});
       } else if (spec.kind === "ambiguous") {
         reply({...spec.frame,id:spec.id === "pending" ? selected : spec.id});
       } else if (spec.kind === "reply-size") {
@@ -138,6 +138,8 @@ describe("shared proxy inbound framing, no approval capability", () => {
   it.each([
     { method: "approval", result: {} },
     { method: "approval", error: {} },
+    { method: "item/commandExecution/requestApproval", result: {} },
+    { method: "item/tool/requestUserInput", error: {} },
     { method: null, result: {} },
     { method: 5, result: {} },
   ])("rejects ambiguous request/response envelope %j", async (frame) => {

@@ -13,7 +13,10 @@ import {
 import { DEFAULT_DENIED_PATHS } from "./native-readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
 import { matchesApprovedGitMetadata } from "./native-verification-command";
-import { SHELL_WATCHDOG_SOURCE } from "./shell-watchdog-source";
+import {
+  SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE,
+  SHELL_WATCHDOG_SOURCE,
+} from "./shell-watchdog-source";
 
 const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -77,6 +80,7 @@ type RunningCommand = {
   stderrBytes: number;
   state: "running" | "exited";
   rootExitReported: boolean;
+  signalRefused: boolean;
   groupCleanup: "pending" | "confirmed" | "unverified";
   exitCode: number | null;
   exitSignal: NodeJS.Signals | null;
@@ -782,6 +786,7 @@ export class SandboxedWorkspaceShell {
       stderrBytes: 0,
       state: "running",
       rootExitReported: false,
+      signalRefused: false,
       groupCleanup: "pending",
       exitCode: null,
       exitSignal: null,
@@ -812,6 +817,12 @@ export class SandboxedWorkspaceShell {
       record[stream].push(chunk);
       record[`${stream}Bytes`] += chunk.length;
     };
+    const markSignalRefused = () => {
+      record.signalRefused = true;
+      record.groupCleanup = "unverified";
+      record.errorCode = "SHELL_GROUP_CLEANUP_UNVERIFIED";
+      this.groupCleanupUnverified = true;
+    };
     child.on("message", (message: unknown) => {
       if (!message || typeof message !== "object") return;
       const event = message as {
@@ -836,6 +847,8 @@ export class SandboxedWorkspaceShell {
       } else if (event.type === "deadline") {
         record.authorityExpired = event.reason === "authority";
         record.timedOut = !record.authorityExpired;
+      } else if (event.type === "signal-refused") {
+        markSignalRefused();
       } else if (event.type === "error") {
         record.errorCode = "SHELL_SPAWN_FAILED";
       } else if (event.type === "output-limit") {
@@ -864,26 +877,45 @@ export class SandboxedWorkspaceShell {
       record.errorCode = "SHELL_SPAWN_FAILED";
       record.settleTerminal("unverified");
     });
-    child.once("exit", () => {
+    child.once("close", (code) => {
       signal?.removeEventListener("abort", onAbort);
-      if (!record.rootExitReported && record.state === "running") {
-        try {
-          process.kill(-child.pid!, "SIGKILL");
-        } catch {
-          // The detached watchdog's group is already gone.
-        }
-        record.errorCode = "SHELL_WATCHDOG_LOST";
-      }
+      if (code === SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE) markSignalRefused();
       void (async () => {
-        // An exit notification for the watchdog proves only that the leader
+        // Exit alone does not drain controller IPC. Keep the lease until
+        // final close and disconnect before acting on missing receipts.
+        if (child.connected)
+          await new Promise<void>((resolve) =>
+            child.once("disconnect", resolve),
+          );
+        if (!record.rootExitReported && record.state === "running") {
+          if (!record.signalRefused) {
+            try {
+              process.kill(-child.pid!, "SIGKILL");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code === "ESRCH")
+                record.groupCleanup = "confirmed";
+              else markSignalRefused();
+            }
+          }
+          record.errorCode ??= "SHELL_WATCHDOG_LOST";
+        }
+        // A close notification for the watchdog proves only that the leader
         // exited. Do not report a terminal handle until the owned group is
         // gone, or its cleanup has been classified as unverified.
-        if (child.pid) {
+        if (
+          child.pid &&
+          !record.signalRefused &&
+          record.groupCleanup === "pending"
+        ) {
           for (let attempt = 0; attempt < 20; attempt += 1) {
+            if (record.signalRefused) break;
             try {
               process.kill(-child.pid, 0);
             } catch (error) {
-              if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+              if (
+                !record.signalRefused &&
+                (error as NodeJS.ErrnoException).code === "ESRCH"
+              ) {
                 record.groupCleanup = "confirmed";
               }
               break;
@@ -891,7 +923,7 @@ export class SandboxedWorkspaceShell {
             await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
-        if (record.groupCleanup === "pending") {
+        if (record.signalRefused || record.groupCleanup === "pending") {
           record.groupCleanup = "unverified";
         }
         if (record.groupCleanup === "unverified") {

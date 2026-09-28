@@ -272,8 +272,9 @@ digest, socket ownership/canonical path and serving Codex home; it never starts
 or stops the daemon. The proxy child gets a private disposable `HOME` and a
 fixed executable search path; the selected socket determines which serving
 profile it reaches. A dropped proxy rejects pending calls and cannot silently
-reconnect/replay them. Provider approval requests are refused until an explicit
-owner-facing approval path exists. Its local fixture uses the installed CLI
+reconnect/replay them. Known provider consent requests receive no reply from this unqualified client;
+other unsupported methods receive an explicit refusal. Request ownership and an
+owner-facing approval path remain absent. Its local fixture uses the installed CLI
 against a disposable fake socket; this is not a connection to the owner's
 running daemon or proof that native Desktop shares that runtime.
 The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
@@ -577,8 +578,9 @@ from the product catalogue. Do not use this adapter as an alternate provider rou
 
 ## Shared proxy inbound framing
 
-The existing proxy keeps server requests unqualified and returns an explicit
-method-unavailable refusal with the exact string or safe-integer request ID.
+The existing proxy keeps server requests unqualified. Unsupported non-consent
+methods receive an explicit method-unavailable refusal with the exact string or
+safe-integer request ID.
 Request and client-response ID namespaces are separate; a server request matching
 an issued client ID cannot complete that pending client request. Fractional/unsafe
 numeric IDs, ambiguous request/response envelopes, invalid UTF-8 and oversized
@@ -591,3 +593,73 @@ are not native App Server, approval decisions, event subscriptions or Desktop
 acceptance. The initialize payload, experimental handshake refusal, selected host
 and qualification gates are unchanged. Interactive approvals remain open; this
 framing correction neither grants permission nor implements an owner reply path.
+
+## Unqualified shared observer and consent prompts
+
+After envelope validation, the proxy leaves these exact server-request methods
+unanswered: command execution, file change and permissions requestApproval,
+requestUserInput, MCP elicitation, and legacy execCommandApproval/applyPatchApproval.
+It does not claim a request, retain/disclose its params, issue a decision, create a
+pending approval ledger, reply on timeout/resolved, or accept input from a caller.
+Unknown methods, auth refresh, dynamic tool calls and other unrelated requests
+remain unsupported and receive the exact method-unavailable error. Malformed
+request envelopes still fail the client lifetime closed. Params are not fully
+schema-validated by this transport; recognized methods do not prove thread/turn
+ownership. Client request deadlines and lost-outcome behavior are unchanged.
+
+Two owned Node protocol clients use one deterministic fixture server state.
+A subsequent actual stdin request establishes a causal barrier for measuring zero
+Farol replies; a fixture-only native peer replies once and broadcasts resolution.
+This proves local wire non-interference, including numeric client/server ID
+collision. It does not prove real server fan-out, another native client's ability
+to resolve, provider timeout/disconnect semantics, Desktop identity, approvals or
+live compatibility. A provider may still require the requesting client to reply.
+The initializer, experimentalApi boundary and qualification gates are unchanged.
+Actual correlated approval lifecycle and an owner decision route remain open.
+
+## Owned proxy cleanup refusal checkpoint
+
+A failed signal to the exact proxy child is not successful cleanup. A thrown
+signal error or `kill()` returning false leaves cleanup unverified and prevents
+another signal for that client instance. Concurrent cleanup reads share at most
+one normal SIGKILL escalation after a successfully sent SIGTERM. An independently
+observed exit can subsequently establish that this exact child terminated;
+signal delivery alone cannot. A child already observed to exit by signal is not
+signalled again. Transport requests are rejected before stopping the proxy, and
+connection loss still cannot reconnect or replay a task mutation.
+
+The focused regressions use EventEmitter/stream fake children and fake timers.
+They do not issue native signals, repair an EPERM refusal, prove native permissions,
+qualify a shared Desktop host, or establish detached descendant cleanup. The
+original native cleanup refusal and mandatory-gate failures remain retained.
+
+## Read admission lifetime checkpoint
+
+Task status, result and selected-thread observation receive the actual MCP request
+AbortSignal. The admitted route bounds the trusted read deadline by its own
+immutable admission expiry; a caller cannot extend that lease through internal
+context or connector tool arguments. Expired/aborted reads do not invoke the
+delegate. Late delegate success is discarded after expiry or cancellation.
+
+The existing handoff service checks this lifetime before and after every provider
+read, including project/turn/item pagination, and again after journal/physical
+identity revalidation before publishing status or final content. The actual
+admitted route also supplies a synchronous trusted reply predicate, checked after
+the last awaited Computer fence release, without another provider read. This
+closes expiry during release; the installed MCP SDK separately suppresses replies
+to cancelled requests. Legacy test ports without this predicate have no task-lease
+expiry proof at the final reply boundary. Each submitted read carries the same
+absolute deadline. A read already submitted still waits for
+its provider response or the transport's bounded timeout: this is not provider
+query cancellation or an atomic remote snapshot. No new page is submitted and no
+late content is returned after admission ends. Revocation does not create a task,
+resume, fork, steer, answer a consent prompt or enable a control capability.
+
+The regressions use in-memory authority/journal/provider ports and actual linked
+in-memory MCP transports. MCP cancellation waits for the service's terminal
+outcome before asserting no further provider read; it does not infer completion
+from cancellation notification delivery. Exact admitted final-result delivery,
+private-ID filtering, deadline clipping, invalid lifetime refusal, late
+revocation and page boundaries are covered. This source evidence does not qualify
+a native serving host, packaged connector, live provider or owner trial. The
+required full source gate remains blocked by its retained execution boundary.

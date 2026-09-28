@@ -130,18 +130,21 @@ describe("settings edit through MCP to the resolved task model", () => {
             throw new Error("unexpected fixture method: " + method);
           },
         };
+        // Admission and service deadlines must use the same injected clock.
+        const now = () => 1000;
         const service = new PersistentCodexHandoff(
           authority,
           host,
           journal,
           new Sha256HandoffRequestDigester(),
-          Date.now() + 60_000,
+          2000,
           {
             run: async (preflight, effect) => {
               await preflight();
               return effect();
             },
           },
+          now,
         );
         async function connect(continueQualified = false) {
           const loaded = (await store.load())!;
@@ -158,7 +161,7 @@ describe("settings edit through MCP to the resolved task model", () => {
               configSha256: resolved.configSha256,
               expiresAt: 2000,
             },
-            () => 1000,
+            now,
             { message: false, continue: continueQualified },
           );
           const server = createReadonlyComputerMcpServer(

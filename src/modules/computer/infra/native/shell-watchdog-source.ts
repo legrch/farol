@@ -1,6 +1,9 @@
 // A separate, bounded controller owns one sandboxed command. Its IPC channel
 // closes when the Computer MCP process disappears, including an abrupt crash;
 // then it terminates its own process group. It is not a task App Server.
+// Reserved watchdog exit status preserves refusal if its IPC report is lost.
+export const SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE = 84;
+
 export const SHELL_WATCHDOG_SOURCE = String.raw`
 "use strict";
 const { spawn } = require("node:child_process");
@@ -9,6 +12,8 @@ let deadline = null;
 let escalation = null;
 let stopped = false;
 let stopReason = null;
+let signalRefused = false;
+let killSent = false;
 const outputBytes = { stdout: 0, stderr: 0 };
 function report(value) {
   if (process.connected) {
@@ -20,7 +25,17 @@ function report(value) {
 function signalGroup(signal) {
   // The watchdog is the detached group leader. Its child joins that group,
   // so the parent can stop the whole owned group even before the ready IPC.
-  try { process.kill(-process.pid, signal); } catch { /* already exited */ }
+  if (signalRefused || killSent) return false;
+  if (signal === "SIGKILL") killSent = true;
+  try {
+    process.kill(-process.pid, signal);
+    return true;
+  } catch {
+    // A refusal is not evidence of exit and never permits another signal.
+    signalRefused = true;
+    report({ type: "signal-refused" });
+    return false;
+  }
 }
 function stop(reason) {
   if (stopped) return;
@@ -34,7 +49,7 @@ function stop(reason) {
     }
     return;
   }
-  signalGroup("SIGTERM");
+  if (!signalGroup("SIGTERM")) return;
   escalation = setTimeout(() => signalGroup("SIGKILL"), 1000);
 }
 function output(stream, chunk) {
@@ -48,6 +63,8 @@ function output(stream, chunk) {
   report({ type: stream, data: chunk.toString("base64") });
 }
 process.on("disconnect", () => stop("disconnect"));
+// IPC send failures can arrive asynchronously on the process emitter.
+process.on("error", () => stop("ipc-error"));
 process.on("SIGTERM", () => stop("signal"));
 process.on("SIGINT", () => stop("signal"));
 process.on("message", (message) => {
@@ -88,12 +105,16 @@ process.on("message", (message) => {
     if (deadline) clearTimeout(deadline);
     if (escalation) clearTimeout(escalation);
     // A shell can exit while a background child in the same group survives.
+    const finish = () => {
+      if (!signalRefused) signalGroup("SIGKILL");
+      if (signalRefused) process.exit(${SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE});
+    };
     if (process.connected) {
-      process.send({ type: "close", code, signal, reason: stopReason }, () => {
-        signalGroup("SIGKILL");
-      });
+      try {
+        process.send({ type: "close", code, signal, reason: stopReason }, finish);
+      } catch { finish(); }
     } else {
-      signalGroup("SIGKILL");
+      finish();
     }
   });
   deadline = setTimeout(() => {
