@@ -476,7 +476,9 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     }
     try {
       const info = await handle.stat();
-      this.assertPrivateFile(info);
+      const publishedPair =
+        info.nlink === 2 && (await this.isPublishedPair(file, info));
+      this.assertPrivateFile(info, publishedPair);
       const serialized = await handle.readFile("utf8");
       let value: unknown;
       try {
@@ -614,10 +616,40 @@ export class PrivateAssignmentStore implements AssignmentRepository {
     if ((info.mode & 0o077) !== 0) await fs.chmod(directory, 0o700);
   }
 
-  private assertPrivateFile(info: Stats): void {
+  private async isPublishedPair(file: string, info: Stats): Promise<boolean> {
+    const directory = path.dirname(file);
+    const prefix = `.${path.basename(file)}.tmp-`;
+    for (const name of await fs.readdir(directory)) {
+      if (
+        !name.startsWith(prefix) ||
+        !/^[a-f0-9]{16}$/u.test(name.slice(prefix.length))
+      )
+        continue;
+      let alias: Stats;
+      try {
+        alias = await fs.lstat(path.join(directory, name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      if (
+        alias.isFile() &&
+        !alias.isSymbolicLink() &&
+        alias.dev === info.dev &&
+        alias.ino === info.ino &&
+        alias.nlink === 2 &&
+        (alias.mode & 0o077) === 0 &&
+        (process.geteuid?.() === undefined || alias.uid === process.geteuid())
+      )
+        return true;
+    }
+    return false;
+  }
+
+  private assertPrivateFile(info: Stats, publishedPair = false): void {
     if (
       !info.isFile() ||
-      info.nlink !== 1 ||
+      (info.nlink !== 1 && !publishedPair) ||
       info.size < 1 ||
       info.size > this.maximumRecordBytes ||
       (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||

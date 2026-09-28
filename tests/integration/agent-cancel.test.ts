@@ -367,6 +367,81 @@ describe("Agent cancellation", () => {
     });
   });
 
+  it.each(["terminal", "delivery-ack"] as const)(
+    "reads the exact %s publication pair left by a crash before temporary unlink",
+    async (sidecar) => {
+      const { root, repository } = await durableRepository();
+      const initial = await repository.load(identity);
+      if (!initial) throw new Error("SYNTHETIC_ASSIGNMENT_MISSING");
+      const completed = completeAssignment(initial.assignment, correlation);
+      if (!completed.ok) throw new Error(completed.error.code);
+      const record = {
+        assignment: completed.value,
+        resultRef: "fixture-crash-result",
+        parentDelivery: "pending" as const,
+        workspaceEnforcement: "verified" as const,
+      };
+      await repository.save(record);
+      if (sidecar === "delivery-ack")
+        await repository.save({ ...record, parentDelivery: "acknowledged" });
+      const directory = path.join(root, "assignments");
+      const filename = (await fs.readdir(directory)).find((entry) =>
+        entry.endsWith(`.${sidecar}`),
+      );
+      if (!filename) throw new Error("SYNTHETIC_SIDECAR_MISSING");
+      // Exact filesystem aftermath of link publication before temporary unlink.
+      // This fixture does not claim an actual power-loss or kill experiment.
+      const temporary = path.join(
+        directory,
+        `.${filename}.tmp-0123456789abcdef`,
+      );
+      await fs.link(path.join(directory, filename), temporary);
+      await expect(
+        new PrivateAssignmentStore({ root }).load(identity),
+      ).resolves.toMatchObject({
+        assignment: { phase: "completed" },
+        resultRef: "fixture-crash-result",
+        parentDelivery: sidecar === "delivery-ack" ? "acknowledged" : "pending",
+      });
+    },
+  );
+
+  it.each(["symlink", "foreign-inode", "third-link"] as const)(
+    "rejects a %s in place of an exact terminal publication pair",
+    async (fault) => {
+      const { root, repository } = await durableRepository();
+      const initial = await repository.load(identity);
+      if (!initial) throw new Error("SYNTHETIC_ASSIGNMENT_MISSING");
+      const completed = completeAssignment(initial.assignment, correlation);
+      if (!completed.ok) throw new Error(completed.error.code);
+      await repository.save({
+        assignment: completed.value,
+        resultRef: "fixture-result",
+        parentDelivery: "pending",
+        workspaceEnforcement: "verified",
+      });
+      const directory = path.join(root, "assignments");
+      const filename = (await fs.readdir(directory)).find((entry) =>
+        entry.endsWith(".terminal"),
+      );
+      if (!filename) throw new Error("SYNTHETIC_SIDECAR_MISSING");
+      const terminal = path.join(directory, filename);
+      const unrelated = path.join(root, "unrelated-hardlink");
+      const temporary = path.join(
+        directory,
+        `.${filename}.tmp-0123456789abcdef`,
+      );
+      await fs.link(terminal, unrelated);
+      if (fault === "symlink") await fs.symlink(unrelated, temporary);
+      else if (fault === "foreign-inode")
+        await fs.writeFile(temporary, "different inode", { mode: 0o600 });
+      else await fs.link(terminal, temporary);
+      await expect(
+        new PrivateAssignmentStore({ root }).load(identity),
+      ).rejects.toThrow("AGENT_ASSIGNMENT_STATE_UNSAFE");
+    },
+  );
+
   it("preserves raced durable completion before submitting a claimed cancel", async () => {
     const repository = await runningRepository();
     const initial = await repository.load(identity);
