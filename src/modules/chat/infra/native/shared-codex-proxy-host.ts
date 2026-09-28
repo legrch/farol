@@ -362,7 +362,11 @@ export class SharedCodexProxyHost implements HandoffHost {
           this.fail();
           return;
         }
-        // Request IDs can be opaque strings. Refuse with the exact ID, without
+        // This client has no request ownership or owner decision route. An
+        // error reply could settle another client's consent prompt. Leave
+        // these exact methods unanswered, without retaining/disclosing params.
+        if (UNQUALIFIED_CONSENT_METHODS.has(value.method)) continue;
+        // Other requests are unsupported. Preserve the exact ID without
         // coercion, admission, payload disclosure or implicit approval.
         const frame = `${JSON.stringify({ id: value.id, error: { code: -32601, message: "Method not available" } })}\n`;
         if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
@@ -392,3 +396,15 @@ export class SharedCodexProxyHost implements HandoffHost {
     }
   }
 }
+
+// Saved ServerRequest contract: exact variants only, never a method-prefix gate.
+// Auth refresh, tool execution and unrelated requests are not consent prompts.
+const UNQUALIFIED_CONSENT_METHODS = new Set([
+  "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval",
+  "item/permissions/requestApproval",
+  "item/tool/requestUserInput",
+  "mcpServer/elicitation/request",
+  "execCommandApproval",
+  "applyPatchApproval",
+]);

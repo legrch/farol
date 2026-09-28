@@ -272,8 +272,9 @@ digest, socket ownership/canonical path and serving Codex home; it never starts
 or stops the daemon. The proxy child gets a private disposable `HOME` and a
 fixed executable search path; the selected socket determines which serving
 profile it reaches. A dropped proxy rejects pending calls and cannot silently
-reconnect/replay them. Provider approval requests are refused until an explicit
-owner-facing approval path exists. Its local fixture uses the installed CLI
+reconnect/replay them. Known provider consent requests receive no reply from this unqualified client;
+other unsupported methods receive an explicit refusal. Request ownership and an
+owner-facing approval path remain absent. Its local fixture uses the installed CLI
 against a disposable fake socket; this is not a connection to the owner's
 running daemon or proof that native Desktop shares that runtime.
 The source-only `inspectCodexHandoffHostContract` gate now checks the relevant
@@ -577,8 +578,9 @@ from the product catalogue. Do not use this adapter as an alternate provider rou
 
 ## Shared proxy inbound framing
 
-The existing proxy keeps server requests unqualified and returns an explicit
-method-unavailable refusal with the exact string or safe-integer request ID.
+The existing proxy keeps server requests unqualified. Unsupported non-consent
+methods receive an explicit method-unavailable refusal with the exact string or
+safe-integer request ID.
 Request and client-response ID namespaces are separate; a server request matching
 an issued client ID cannot complete that pending client request. Fractional/unsafe
 numeric IDs, ambiguous request/response envelopes, invalid UTF-8 and oversized
@@ -591,3 +593,26 @@ are not native App Server, approval decisions, event subscriptions or Desktop
 acceptance. The initialize payload, experimental handshake refusal, selected host
 and qualification gates are unchanged. Interactive approvals remain open; this
 framing correction neither grants permission nor implements an owner reply path.
+
+## Unqualified shared observer and consent prompts
+
+After envelope validation, the proxy leaves these exact server-request methods
+unanswered: command execution, file change and permissions requestApproval,
+requestUserInput, MCP elicitation, and legacy execCommandApproval/applyPatchApproval.
+It does not claim a request, retain/disclose its params, issue a decision, create a
+pending approval ledger, reply on timeout/resolved, or accept input from a caller.
+Unknown methods, auth refresh, dynamic tool calls and other unrelated requests
+remain unsupported and receive the exact method-unavailable error. Malformed
+request envelopes still fail the client lifetime closed. Params are not fully
+schema-validated by this transport; recognized methods do not prove thread/turn
+ownership. Client request deadlines and lost-outcome behavior are unchanged.
+
+Two owned Node protocol clients use one deterministic fixture server state.
+A subsequent actual stdin request establishes a causal barrier for measuring zero
+Farol replies; a fixture-only native peer replies once and broadcasts resolution.
+This proves local wire non-interference, including numeric client/server ID
+collision. It does not prove real server fan-out, another native client's ability
+to resolve, provider timeout/disconnect semantics, Desktop identity, approvals or
+live compatibility. A provider may still require the requesting client to reply.
+The initializer, experimentalApi boundary and qualification gates are unchanged.
+Actual correlated approval lifecycle and an owner decision route remain open.
