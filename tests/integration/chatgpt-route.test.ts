@@ -406,14 +406,15 @@ function routedExecutor(
   executeJavaScript: ReturnType<typeof vi.fn>,
   activity: unknown,
 ) {
-  return vi.fn((script: string, userGesture: boolean) =>
-    script.includes("const running = [")
-      ? Promise.resolve(activity)
-      : Reflect.apply(executeJavaScript as unknown as Function, undefined, [
-          script,
-          userGesture,
-        ]),
-  );
+  return vi.fn((script: string, userGesture: boolean) => {
+    if (script.includes("return { composerVisible: composer, signInVisible:"))
+      return Promise.resolve({ composerVisible: true, signInVisible: false });
+    if (script.includes("const running = [")) return Promise.resolve(activity);
+    return Reflect.apply(executeJavaScript as unknown as Function, undefined, [
+      script,
+      userGesture,
+    ]);
+  });
 }
 
 function taskRoute(
@@ -422,10 +423,7 @@ function taskRoute(
 ): ChatGptRoute {
   const candidate = route();
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-  vi.spyOn(candidate, "observe").mockResolvedValue({
-    state: "authenticated",
-    code: null,
-  });
+  Reflect.set(candidate, "load", "loaded");
   Reflect.set(candidate, "routeWindow", {
     isDestroyed: () => false,
     webContents: {
@@ -448,10 +446,7 @@ function devTaskRoute(
     requiredAppName: "Farol DEV",
   });
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-  vi.spyOn(candidate, "observe").mockResolvedValue({
-    state: "authenticated",
-    code: null,
-  });
+  Reflect.set(candidate, "load", "loaded");
   Reflect.set(candidate, "routeWindow", {
     isDestroyed: () => false,
     webContents: {
@@ -478,10 +473,7 @@ function streamingTaskRoute(
     ...(publicOutputProfile ? { publicOutputProfile } : {}),
   });
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-  vi.spyOn(candidate, "observe").mockResolvedValue({
-    state: "authenticated",
-    code: null,
-  });
+  Reflect.set(candidate, "load", "loaded");
   Reflect.set(candidate, "routeWindow", {
     isDestroyed: () => false,
     webContents: {
@@ -650,6 +642,343 @@ describe("ChatGPT test-window presentation", () => {
   });
 });
 
+describe("readiness ordering and document identity (local surface fixtures)", () => {
+  const ready = { composerVisible: true, signInVisible: false };
+  const signedOut = { composerVisible: false, signInVisible: true };
+  function readinessRoute() {
+    const candidate = route();
+    const pending: ((value: unknown) => void)[] = [];
+    let currentUrl = "https://chatgpt.com/c/fixture-readiness";
+    const execute = vi.fn((script: string, _gesture: boolean) => {
+      if (!script.includes("const labelledSignIn"))
+        return Promise.reject(new Error("UNEXPECTED_NON_READINESS_EFFECT"));
+      return new Promise((resolve) => pending.push(resolve));
+    });
+    const surface = {
+      isDestroyed: () => false,
+      webContents: { getURL: () => currentUrl, executeJavaScript: execute },
+    };
+    Reflect.set(candidate, "routeWindow", surface);
+    Reflect.set(candidate, "load", "loaded");
+    return {
+      candidate,
+      pending,
+      execute,
+      surface,
+      setUrl: (url: string) => {
+        currentUrl = url;
+      },
+    };
+  }
+  it("does not let an older ready answer overwrite a newer sign-in requirement", async () => {
+    const { candidate, pending } = readinessRoute();
+    const older = candidate.observe();
+    const newer = candidate.observe();
+    pending[1]!(signedOut);
+    await expect(newer).resolves.toMatchObject({
+      state: "signed_out",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+    });
+    pending[0]!(ready);
+    await expect(older).resolves.toMatchObject({
+      state: "signed_out",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+    });
+  });
+  it("accepts a current recovery and does not let an older sign-out override it", async () => {
+    const { candidate, pending } = readinessRoute();
+    const older = candidate.observe();
+    const newer = candidate.observe();
+    pending[1]!(ready);
+    await expect(newer).resolves.toMatchObject({ state: "authenticated" });
+    pending[0]!(signedOut);
+    await expect(older).resolves.toMatchObject({ state: "authenticated" });
+  });
+  it.each([
+    "same-URL generation",
+    "changed URL",
+    "replacement surface",
+    "disposed",
+  ])("does not use a readiness answer after %s", async (change) => {
+    const { candidate, pending, surface, setUrl } = readinessRoute();
+    const observation = candidate.observe();
+    if (change === "same-URL generation")
+      Reflect.set(candidate, "routeDocumentGeneration", 1);
+    if (change === "changed URL") setUrl("https://chatgpt.com/c/new-document");
+    if (change === "replacement surface")
+      Reflect.set(candidate, "routeWindow", { ...surface });
+    if (change === "disposed") Reflect.set(candidate, "disposing", true);
+    pending[0]!(ready);
+    await expect(observation).resolves.toMatchObject({
+      state: "unsupported",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    });
+  });
+  it("keeps sign-in-required when a newer same-document probe is unrecognized", async () => {
+    const { candidate, pending } = readinessRoute();
+    const initial = candidate.observe();
+    pending[0]!(signedOut);
+    await initial;
+    const unknown = candidate.observe();
+    pending[1]!({ unexpected: true });
+    await expect(unknown).resolves.toMatchObject({
+      state: "signed_out",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+    });
+    const recovered = candidate.observe();
+    pending[2]!(ready);
+    await expect(recovered).resolves.toMatchObject({ state: "authenticated" });
+  });
+  it("retains a known sign-in barrier while a newer observation is pending", async () => {
+    const { candidate, pending } = readinessRoute();
+    const initial = candidate.observe();
+    pending[0]!(signedOut);
+    await initial;
+    const older = candidate.observe();
+    const newer = candidate.observe();
+    pending[1]!(ready);
+    await expect(older).resolves.toMatchObject({
+      state: "signed_out",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+    });
+    pending[2]!(ready);
+    await expect(newer).resolves.toMatchObject({ state: "authenticated" });
+  });
+  it("does not authorize an old ready observation while a later read is still pending", async () => {
+    const { candidate, pending } = readinessRoute();
+    const older = candidate.observe();
+    const newer = candidate.observe();
+    pending[0]!(ready);
+    await expect(older).resolves.toMatchObject({ state: "unsupported" });
+    pending[1]!(signedOut);
+    await expect(newer).resolves.toMatchObject({ state: "signed_out" });
+  });
+  it.each([
+    ["signed out", signedOut, "not_authenticated", "CHATGPT_SIGN_IN_REQUIRED"],
+    [
+      "unrecognized",
+      { unexpected: true },
+      "failed_before_submit",
+      "CHATGPT_UI_UNRECOGNIZED",
+    ],
+  ])(
+    "refuses Send after a newer %s read during dispatch-intent persistence",
+    async (_label, laterRead, state, code) => {
+      const candidate = route();
+      let page: unknown = ready;
+      let sends = 0;
+      const execute = vi.fn(async (script: string) => {
+        if (script.includes("const labelledSignIn")) return page;
+        if (script.includes("const running = [")) return { running: false };
+        if (script.includes("const baselineAssistantCount")) return prepared;
+        if (script.includes("send.click()")) {
+          sends += 1;
+          return { activated: true };
+        }
+        return { invalidFixtureProbe: true };
+      });
+      Reflect.set(candidate, "routeWindow", {
+        isDestroyed: () => false,
+        webContents: {
+          getURL: () => "https://chatgpt.com/c/fixture-readiness",
+          executeJavaScript: execute,
+        },
+      });
+      Reflect.set(candidate, "load", "loaded");
+      vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+      const result = await candidate.runReadonlyTask(
+        "fixture prompt only",
+        [],
+        {
+          onDispatchIntent: async () => {
+            page = laterRead;
+            await candidate.observe();
+          },
+        },
+      );
+      expect(result).toMatchObject({ state, code });
+      expect(sends).toBe(0);
+    },
+  );
+  it("requires scoped readiness even when an overridden observation claims success", async () => {
+    const execute = vi.fn().mockResolvedValue(prepared);
+    const candidate = taskRoute(execute);
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    await expect(
+      candidate.runReadonlyTask("fixture prompt only"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it("re-observes the new profile document before preparing its composer", async () => {
+    let url = "https://chatgpt.com/c/fixture-document-a";
+    const probes: string[] = [];
+    const candidate = route();
+    const execute = vi.fn(async (script: string) => {
+      if (
+        script.includes("return { composerVisible: composer, signInVisible:")
+      ) {
+        probes.push(url);
+        return ready;
+      }
+      if (script.includes("const running = [")) return { running: false };
+      if (script.includes("const baselineAssistantCount")) {
+        expect(probes).toEqual([
+          "https://chatgpt.com/c/fixture-document-a",
+          "https://chatgpt.com/?temporary-chat=true",
+        ]);
+        return { navigated: true };
+      }
+      throw new Error("UNEXPECTED_EFFECT");
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      webContents: { getURL: () => url, executeJavaScript: execute },
+    });
+    Reflect.set(candidate, "load", "loaded");
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    Reflect.set(candidate, "prepareTemporaryInstantProfile", async () => {
+      url = "https://chatgpt.com/?temporary-chat=true";
+      Reflect.set(candidate, "routeDocumentGeneration", 1);
+      return null;
+    });
+    await expect(
+      candidate.runReadonlyTask(
+        "fixture prompt only",
+        [],
+        {},
+        "temporary-instant",
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(
+      execute.mock.calls.some(([script]) => script.includes("send.click()")),
+    ).toBe(false);
+  });
+  it("refuses Send while the new profile document has a pending readiness read", async () => {
+    const candidate = route();
+    let url = "https://chatgpt.com/c/fixture-document-a";
+    let pendingRead: Promise<unknown> | null = null;
+    let resolvePending!: (value: unknown) => void;
+    let sends = 0;
+    const execute = vi.fn(async (script: string) => {
+      if (script.includes("const labelledSignIn")) return pendingRead ?? ready;
+      if (script.includes("const running = [")) return { running: false };
+      if (script.includes("const baselineAssistantCount")) return prepared;
+      if (script.includes("send.click()")) {
+        sends += 1;
+        return { navigated: true };
+      }
+      return { invalidFixtureProbe: true };
+    });
+    Reflect.set(candidate, "routeWindow", {
+      isDestroyed: () => false,
+      webContents: { getURL: () => url, executeJavaScript: execute },
+    });
+    Reflect.set(candidate, "load", "loaded");
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    Reflect.set(candidate, "prepareTemporaryInstantProfile", async () => {
+      url = "https://chatgpt.com/?temporary-chat=true";
+      Reflect.set(candidate, "routeDocumentGeneration", 1);
+      return null;
+    });
+    let pendingObservation: Promise<unknown> | undefined;
+    const result = await candidate.runReadonlyTask(
+      "fixture prompt only",
+      [],
+      {
+        onDispatchIntent: async () => {
+          pendingRead = new Promise((resolve) => {
+            resolvePending = resolve;
+          });
+          pendingObservation = candidate.observe();
+        },
+      },
+      "temporary-instant",
+    );
+    resolvePending(signedOut);
+    await pendingObservation;
+    expect(result).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    });
+    expect(sends).toBe(0);
+  });
+  it("does not return an intermediate ready cache while the latest third read is pending", async () => {
+    const { candidate, pending } = readinessRoute();
+    const oldest = candidate.observe();
+    const middle = candidate.observe();
+    pending[1]!(ready);
+    await middle;
+    const newest = candidate.observe();
+    pending[0]!(ready);
+    await expect(oldest).resolves.toMatchObject({
+      state: "unsupported",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    });
+    pending[2]!(signedOut);
+    await expect(newest).resolves.toMatchObject({ state: "signed_out" });
+  });
+  it("does not prepare the composer after a same-URL replacement during app binding", async () => {
+    const execute = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        Reflect.set(candidate, "routeDocumentGeneration", 1);
+        return { state: "bound" };
+      })
+      .mockResolvedValue(prepared);
+    const candidate = devTaskRoute(execute);
+    await expect(
+      candidate.runReadonlyTask("fixture prompt only"),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(
+      execute.mock.calls.some(([script]) =>
+        (script as string).includes("const baselineAssistantCount"),
+      ),
+    ).toBe(false);
+  });
+  it("does not reuse a sign-in latch in a different document", async () => {
+    const { candidate, pending } = readinessRoute();
+    const first = candidate.observe();
+    pending[0]!(signedOut);
+    await first;
+    Reflect.set(candidate, "routeDocumentGeneration", 1);
+    const next = candidate.observe();
+    pending[1]!({ unexpected: true });
+    await expect(next).resolves.toMatchObject({ state: "unsupported" });
+  });
+  it("does not prepare or Send when an older task readiness read loses to sign-in-required", async () => {
+    const { candidate, pending, execute } = readinessRoute();
+    vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+    const task = candidate.runReadonlyTask("fixture prompt only");
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    const current = candidate.observe();
+    pending[1]!(signedOut);
+    await current;
+    pending[0]!(ready);
+    await expect(task).resolves.toMatchObject({
+      state: "not_authenticated",
+      code: "CHATGPT_SIGN_IN_REQUIRED",
+    });
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      execute.mock.calls.every(
+        ([script]) => !(script as string).includes("send.click()"),
+      ),
+    ).toBe(true);
+  });
+});
+
 describe("ChatGPT route submission boundary", () => {
   it("does not Send into a replacement document at the same URL after app verification", async () => {
     const execute = vi
@@ -684,12 +1013,13 @@ describe("ChatGPT route submission boundary", () => {
         await candidate.cancelActiveTask();
         return { state: "bound" };
       })
-      .mockResolvedValue({ activated: true });
+      .mockResolvedValue({ activated: false });
     const candidate = devTaskRoute(execute);
     expect(await candidate.runReadonlyTask("cancel before Send")).toMatchObject(
       { state: "failed_before_submit" },
     );
-    expect(execute).toHaveBeenCalledTimes(3);
+    // Three app/composer probes plus the owned cancellation control read.
+    expect(execute).toHaveBeenCalledTimes(4);
     expect(
       execute.mock.calls.some(([script]) => script.includes("send.click()")),
     ).toBe(false);
@@ -2004,10 +2334,7 @@ describe("ChatGPT route submission boundary", () => {
     });
     const candidate = route();
     vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-    vi.spyOn(candidate, "observe").mockResolvedValue({
-      state: "authenticated",
-      code: null,
-    });
+    Reflect.set(candidate, "load", "loaded");
     Reflect.set(candidate, "routeWindow", {
       isDestroyed: () => false,
       webContents: {
@@ -2047,10 +2374,7 @@ describe("ChatGPT route submission boundary", () => {
       .mockReturnValue(9_000);
     const candidate = route();
     vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-    vi.spyOn(candidate, "observe").mockResolvedValue({
-      state: "authenticated",
-      code: null,
-    });
+    Reflect.set(candidate, "load", "loaded");
     Reflect.set(candidate, "routeWindow", {
       isDestroyed: () => false,
       webContents: {
@@ -2130,10 +2454,7 @@ describe("ChatGPT route submission boundary", () => {
       .mockResolvedValue({ activated: true });
     const candidate = route();
     vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-    vi.spyOn(candidate, "observe").mockResolvedValue({
-      state: "authenticated",
-      code: null,
-    });
+    Reflect.set(candidate, "load", "loaded");
     Reflect.set(candidate, "routeWindow", {
       isDestroyed: () => false,
       webContents: {
@@ -2488,10 +2809,7 @@ describe("ChatGPT route streaming observation", () => {
       taskTimeoutMs: 1_000,
     });
     vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
-    vi.spyOn(candidate, "observe").mockResolvedValue({
-      state: "authenticated",
-      code: null,
-    });
+    Reflect.set(candidate, "load", "loaded");
     Reflect.set(candidate, "routeWindow", {
       isDestroyed: () => false,
       webContents: {

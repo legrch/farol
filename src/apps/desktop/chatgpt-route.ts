@@ -1389,6 +1389,14 @@ export class ChatGptRoute {
   private signInMode = false;
   private signInReported = false;
   private pendingSignInObservation: Promise<SignInObservation> | null = null;
+  private readinessReadSequence = 0;
+  private latestReadiness: Readonly<{
+    surface: ChatGptRouteSurface;
+    documentGeneration: number;
+    url: string;
+    sequence: number;
+    observation: ChatGptPageObservation;
+  }> | null = null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.entryUrl = options.initialUrl;
@@ -1857,14 +1865,64 @@ export class ChatGptRoute {
   }
 
   async observe(): Promise<ChatGptPageObservation> {
-    return (await this.observeForSignIn()).observation;
+    const sequence = ++this.readinessReadSequence;
+    const surface = this.routeWindow;
+    const documentGeneration = this.routeDocumentGeneration;
+    const url =
+      surface && !surface.isDestroyed() ? surface.webContents.getURL() : null;
+    const read = await this.observeForSignIn();
+    const unknown: ChatGptPageObservation = {
+      state: "unsupported",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    };
+    if (!surface || url === null) return read.observation;
+    // A page answer is readiness only for the exact document it read. Closing
+    // diagnostics intentionally retain their separate pre-close snapshot path.
+    if (
+      this.disposing ||
+      this.routeWindow !== surface ||
+      surface.isDestroyed() ||
+      this.routeDocumentGeneration !== documentGeneration ||
+      surface.webContents.getURL() !== url ||
+      this.load !== "loaded"
+    )
+      return unknown;
+    const latest = this.latestReadiness;
+    const current =
+      latest &&
+      latest.surface === surface &&
+      latest.documentGeneration === documentGeneration &&
+      latest.url === url
+        ? latest
+        : null;
+    if (sequence !== this.readinessReadSequence) {
+      // A later pending read cannot be authorized by an old positive answer.
+      // A later settled read supplies the current state, never the old result.
+      return current &&
+        (current.sequence === this.readinessReadSequence ||
+          current.observation.state === "signed_out")
+        ? current.observation
+        : unknown;
+    }
+    const observation =
+      read.observation.state !== "authenticated" &&
+      read.observation.state !== "signed_out" &&
+      current?.observation.state === "signed_out"
+        ? current.observation
+        : read.observation;
+    this.latestReadiness = {
+      surface,
+      documentGeneration,
+      url,
+      sequence,
+      observation,
+    };
+    return observation;
   }
 
   /**
-   * `observe()` plus the reason it reached its answer. The observation is
-   * byte for byte what `observe()` returns — several distinct causes
-   * legitimately classify the same way — so this adds an explanation
-   * without changing a single verdict.
+   * Diagnostic page snapshot for a sign-in close. Public observe() adds current
+   * identity/order checks; a pre-close diagnostic is never Send authority.
    */
   private async observeForSignIn(): Promise<SignInRead> {
     const unreachable = classifyChatGptPage({
@@ -2151,6 +2209,26 @@ export class ChatGptRoute {
           };
         }
       }
+      if (profile === "temporary-instant") {
+        // Profile preparation may navigate. Its composer/model probes are not
+        // authentication evidence for the new document's dispatch.
+        const currentReadiness = await this.observe();
+        if (currentReadiness.state !== "authenticated") {
+          return {
+            state:
+              currentReadiness.state === "signed_out"
+                ? "not_authenticated"
+                : "failed_before_submit",
+            code:
+              currentReadiness.state === "signed_out"
+                ? "CHATGPT_SIGN_IN_REQUIRED"
+                : "CHATGPT_UI_UNRECOGNIZED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+      }
       // The page identity `observe()` just validated, checked once before
       // dispatch. Every remaining step before the click that actually
       // submits (the activity read, typing the prompt, an attachment
@@ -2171,6 +2249,35 @@ export class ChatGptRoute {
           dispatchDocumentGeneration !== this.routeDocumentGeneration ||
           active.webContents.getURL() !== dispatchIdentityUrl
         );
+      };
+      const dispatchReadinessRefusal = (): ChatGptReadonlyTaskResult | null => {
+        const latest = this.latestReadiness;
+        if (dispatchIdentityLost()) return null;
+        const current =
+          latest &&
+          latest.surface === candidate &&
+          latest.documentGeneration === dispatchDocumentGeneration &&
+          latest.url === dispatchIdentityUrl
+            ? latest
+            : null;
+        if (
+          current?.observation.state === "authenticated" &&
+          current.sequence === this.readinessReadSequence
+        )
+          return null;
+        return {
+          state:
+            current?.observation.state === "signed_out"
+              ? "not_authenticated"
+              : "failed_before_submit",
+          code:
+            current?.observation.state === "signed_out"
+              ? "CHATGPT_SIGN_IN_REQUIRED"
+              : "CHATGPT_UI_UNRECOGNIZED",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
       };
       let activityCandidate: unknown;
       try {
@@ -2207,6 +2314,8 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      const beforeBinding = dispatchReadinessRefusal();
+      if (beforeBinding) return beforeBinding;
       if (dispatchIdentityLost()) {
         return {
           state: "failed_before_submit",
@@ -2263,6 +2372,17 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+      }
+      const beforePrepare = dispatchReadinessRefusal();
+      if (beforePrepare) return beforePrepare;
+      if (dispatchIdentityLost()) {
+        return {
+          state: "failed_before_submit",
+          code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+          deltaCount,
+          observedCharacters,
+          outputText: observedText,
+        };
       }
       const prepared = preparedTaskSchema.safeParse(
         await candidate.webContents.executeJavaScript(
@@ -2322,6 +2442,8 @@ export class ChatGptRoute {
         };
       }
       if (attachments.length > 0) {
+        const beforeUpload = dispatchReadinessRefusal();
+        if (beforeUpload) return beforeUpload;
         if (dispatchIdentityLost()) {
           return {
             state: "failed_before_submit",
@@ -2354,6 +2476,8 @@ export class ChatGptRoute {
         // The script then compares the page's own location once more,
         // in-page, before it clicks.
         await observer.onDispatchIntent?.();
+        const beforeAppVerification = dispatchReadinessRefusal();
+        if (beforeAppVerification) return beforeAppVerification;
         if (dispatchIdentityLost()) {
           return {
             state: "failed_before_submit",
@@ -2408,6 +2532,8 @@ export class ChatGptRoute {
         }
         // App verification above awaits the browser. Recheck cancellation and
         // identity after that final await, immediately before dispatching Send.
+        const beforeSend = dispatchReadinessRefusal();
+        if (beforeSend) return beforeSend;
         if (dispatchIdentityLost()) {
           return {
             state: "failed_before_submit",

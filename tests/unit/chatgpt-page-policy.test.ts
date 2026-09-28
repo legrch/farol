@@ -7,6 +7,15 @@ import {
 } from "../../src/apps/desktop/chatgpt-page-policy";
 
 describe("Farol Next ChatGPT page policy", () => {
+  it("keeps an explicit visible sign-in requirement even if a guest composer exists", () => {
+    expect(
+      classifyChatGptPage({
+        load: "loaded",
+        composerVisible: true,
+        signInVisible: true,
+      }),
+    ).toEqual({ state: "signed_out", code: "CHATGPT_SIGN_IN_REQUIRED" });
+  });
   it("owns a partition distinct from both preview tasks and Legacy", () => {
     expect(CHATGPT_PARTITION).toBe("persist:farol-next-chatgpt");
     expect(CHATGPT_PARTITION).not.toBe("persist:farol-next-preview");

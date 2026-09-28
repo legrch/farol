@@ -103,11 +103,12 @@ export function classifyChatGptPage(
   if (signals.load === "failed") {
     return { state: "unreachable", code: "CHATGPT_PAGE_UNREACHABLE" };
   }
-  if (signals.composerVisible) {
-    return { state: "authenticated", code: null };
-  }
+  // A guest composer is not authenticated while a visible sign-in barrier exists.
   if (signals.signInVisible) {
     return { state: "signed_out", code: "CHATGPT_SIGN_IN_REQUIRED" };
+  }
+  if (signals.composerVisible) {
+    return { state: "authenticated", code: null };
   }
   return { state: "unsupported", code: "CHATGPT_UI_UNRECOGNIZED" };
 }

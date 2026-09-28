@@ -204,3 +204,27 @@ node tests/e2e/chatgpt-public-source.e2e.mjs --build-only
 Its `--run-native` lane requires the already established native authority boundary;
 build-only never counts as a native PASS. Model and Product Agent remain disabled.
 No account/profile/Send operation or imported upstream bridge is part of this fix.
+
+## Readiness ordering regression
+
+Public readiness is scoped to the exact route surface, URL and document generation.
+After an asynchronous public page read, replacement/disposal/navigation invalidates
+that answer. An older read cannot replace a newer settled observation or authorize
+work while a newer read is pending. A same-document unrecognized probe retains an
+already observed sign-in requirement; only a current positive probe clears it.
+Navigation does not reuse that sign-in latch. Profile preparation re-observes
+the new document; missing or differently scoped readiness is never permission. A cached positive result is usable
+only if it belongs to the latest started read, including three-read interleavings;
+an intermediate settled success cannot override a newer pending probe. A visible sign-in barrier takes
+precedence over a guest composer. These are ephemeral page observations, not
+credential/account verification or persistent authentication authority.
+
+Local surface fixtures prove ordered recovery, stale same-URL document refusal and
+zero composer/Send effects when an older task readiness read loses to a new sign-in
+requirement. Existing admission points also recheck this current public evidence
+after asynchronous preparation/intent/app verification: a new negative or pending
+read refuses before upload/Send with the proper no-submit classification. This
+never rewrites an acknowledgement or makes an unknown submission retryable. The existing closing diagnostics remain a separate pre-close snapshot;
+they are not reusable public readiness or Send permission. No automatic retry or
+replay is introduced after an unknown submission. Native/account/replacement proof
+and Model enablement remain separate and unqualified.
