@@ -251,6 +251,7 @@ const HANDOFF_DEFINITION_FIELDS: readonly SchemaField[] = (
     ["ThreadReadResponse", "Thread", "projectId", "string|null"],
     ["ThreadReadResponse", "Thread", "cwd", "ref:AbsolutePathBuf"],
     ["ThreadReadResponse", "Thread", "model", "string|null"],
+    ["ThreadReadResponse", "Thread", "name", "string|null"],
     ["ThreadTurnsListResponse", "Turn", "id", "string"],
     ["ThreadTurnsListResponse", "Turn", "status", "ref:TurnStatus"],
     ["ThreadItemsListResponse", "ThreadItemEntry", "turnId", "string"],

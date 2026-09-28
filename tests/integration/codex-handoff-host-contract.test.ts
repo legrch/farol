@@ -29,6 +29,7 @@ const thread = () => ({
     projectId: optional("string"),
     cwd: { allOf: [ref("AbsolutePathBuf")] },
     model: optional("string"),
+    name: optional("string"),
     parentThreadId: optional("string"),
   },
 });
@@ -367,6 +368,21 @@ async function schemaRoot(
 }
 
 describe("installed Codex saved-project handoff schema", () => {
+  it.each(["missing", "wrong-type"])(
+    "requires the supported nullable Thread.name readback field: %s",
+    async (mode) => {
+      const root = await schemaRoot();
+      await changeSchema(root, "v2/ThreadReadResponse.json", (schema) => {
+        if (mode === "missing")
+          delete schema.definitions.Thread.properties.name;
+        else schema.definitions.Thread.properties.name = typed("integer");
+        schema.definitions.Thread.properties.title = optional("string");
+      });
+      await expect(
+        inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+      ).rejects.toThrow("CODEX_HOST_HANDOFF_UNAVAILABLE");
+    },
+  );
   it.skipIf(
     !process.env.FAROL_CODEX_SCHEMA_ROOT ||
       !process.env.FAROL_CODEX_SCHEMA_VERSION,

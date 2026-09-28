@@ -553,6 +553,17 @@ export class PersistentCodexHandoff {
           status: "refused" as const,
           code: "HANDOFF_OBSERVE_THREAD_BINDING_CHANGED",
         };
+      if (
+        thread.name !== undefined &&
+        thread.name !== null &&
+        (typeof thread.name !== "string" ||
+          thread.name.length > 1_000 ||
+          thread.name.includes("\0"))
+      )
+        return {
+          status: "outcome_unknown" as const,
+          threadId: request.threadId,
+        };
       const page = object(
         await this.host.request("thread/turns/list", {
           threadId: request.threadId,
@@ -597,10 +608,7 @@ export class PersistentCodexHandoff {
       return {
         status: "observed" as const,
         threadId: request.threadId,
-        title:
-          typeof thread.title === "string" && thread.title.length <= 1_000
-            ? thread.title
-            : null,
+        title: typeof thread.name === "string" ? thread.name : null,
         model:
           typeof thread.model === "string" && thread.model.length <= 120
             ? thread.model

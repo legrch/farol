@@ -128,7 +128,7 @@ function hostResult(method, params) {
           id: ownerThreadId,
           projectId,
           cwd: writerRoot,
-          title: "Farol · Native observer canary",
+          name: "Farol · Native observer canary",
           model: "gpt-6-luna",
         },
       };

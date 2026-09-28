@@ -844,7 +844,8 @@ describe("persistent Codex handoff core", () => {
         id: threadId,
         projectId: request.projectId,
         cwd: workspace.root,
-        title: "Owner-selected task",
+        name: "Owner-selected task",
+        title: "Wrong legacy field must not win",
         model: "gpt-6-luna",
       },
     };
@@ -914,6 +915,54 @@ describe("persistent Codex handoff core", () => {
     });
     expect(host.calls).toEqual([]);
   });
+
+  it.each([null, undefined])(
+    "reads an explicitly absent optional host name as null: %j",
+    async (name) => {
+      const { service, host } = await fixture();
+      const threadId = randomUUID();
+      host.readResponse = {
+        thread: {
+          id: threadId,
+          projectId: request.projectId,
+          cwd: workspace.root,
+          name,
+        },
+      };
+      host.turnsResponse = { data: [], nextCursor: null };
+      expect(
+        await service().observe({
+          threadId,
+          workspaceId: request.workspaceId,
+          projectId: request.projectId,
+        }),
+      ).toMatchObject({ status: "observed", title: null });
+    },
+  );
+  it.each([42, {}, "x".repeat(1001), "Invalid\0name"])(
+    "does not present malformed host name as missing: %j",
+    async (name) => {
+      const { service, host } = await fixture();
+      const threadId = randomUUID();
+      host.readResponse = {
+        thread: {
+          id: threadId,
+          projectId: request.projectId,
+          cwd: workspace.root,
+          name,
+        },
+      };
+      host.turnsResponse = { data: [], nextCursor: null };
+      expect(
+        await service().observe({
+          threadId,
+          workspaceId: request.workspaceId,
+          projectId: request.projectId,
+        }),
+      ).toEqual({ status: "outcome_unknown", threadId });
+      expect(host.calls).toEqual(["project/list", "thread/read"]);
+    },
+  );
 
   it("keeps ambiguous, unavailable, malformed and physically changed observation unknown or refused", async () => {
     const { service, host, setWorkspace } = await fixture();

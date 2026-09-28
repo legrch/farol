@@ -85,6 +85,12 @@ behind its recorded platform-blocked commit operation; this slice neither moves
 that patch nor bypasses the refusal. No real model/provider task is used merely
 to resolve a project.
 
+Observer metadata maps the supported optional nullable host Thread.name field to
+the public title field. It does not fall back to an unrelated title-shaped host
+property. Malformed names remain unknown; omitted/null names return null. The
+local host-contract inspector requires the supported name field shape. This
+does not add title mutation or prove the serving native host's field support.
+
 ## Stored history read/tail for an exact selected turn
 
 When an exact owner-selected thread is sealed in the task admission,
