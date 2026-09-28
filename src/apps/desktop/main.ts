@@ -1209,7 +1209,7 @@ function createLiveChatGptRoute(
     parent: () => window,
     ...chatGptWindowPresentationOption(),
     surfaceFactory: liveChatGptSurfaceFactory(taskId),
-    collapseSidebarByDefault: runtimeEnvironment === "dev",
+    collapseSidebarByDefault: embeddedBrowserEnabled(),
     title: `${label} · ${displayProductName}`,
     onClosed: (conversationUrl, taskRunning) => {
       recordConversationUrl(conversationUrl);
@@ -1755,6 +1755,10 @@ async function openLiveTaskSurface(taskId: string): Promise<boolean> {
       setLiveTaskLifecycle(taskId, "failed");
       return false;
     }
+    // Live ChatGPT surfaces also publish their observed load result. Without
+    // this, renderer controls requiring a ready selected page never appear.
+    taskSurfaceFailures.delete(taskId);
+    publishTaskSurfaceStatus({ taskId, state: "ready", error: null });
     const current = liveTaskRegistry.get(taskId);
     if (current?.lifecycle === "failed") {
       setLiveTaskLifecycle(taskId, "idle");

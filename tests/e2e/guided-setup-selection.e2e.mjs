@@ -917,37 +917,68 @@ try {
     await window
       .locator("#browser-sidebar-toggle")
       .waitFor({ state: "visible" });
+    const sidebarSnapshot = () =>
+      application.evaluate(
+        async ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
+          const shell = BrowserWindow.getAllWindows().find((window) =>
+            window.webContents.getURL().endsWith("/shell.html"),
+          );
+          const fixture = new URL(fixtureUrl);
+          const pages = shell.contentView.children.filter((child) => {
+            if (!(child instanceof WebContentsView)) return false;
+            const page = new URL(child.webContents.getURL());
+            return (
+              page.origin === fixture.origin &&
+              page.pathname === fixture.pathname
+            );
+          });
+          return Promise.all(
+            pages.map(async (page) => ({
+              id: page.webContents.id,
+              visible: page.getVisible(),
+              url: page.webContents.getURL(),
+              clicks: await page.webContents.executeJavaScript(
+                "Number(document.body.dataset.sidebarClicks || 0)",
+              ),
+            })),
+          );
+        },
+        fixtureUrl,
+      );
+    const sidebarBefore = await bounded(
+      sidebarSnapshot(),
+      "SIDEBAR_BASELINE_TIMEOUT",
+    );
+    assert.equal(sidebarBefore.filter((page) => page.visible).length, 1);
     await window.locator("#browser-sidebar-toggle").click();
-    const sidebarPages = await application.evaluate(
-      async ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
-        const shell = BrowserWindow.getAllWindows().find((window) =>
-          window.webContents.getURL().endsWith("/shell.html"),
-        );
-        const pages = shell.contentView.children.filter(
-          (child) =>
-            child instanceof WebContentsView &&
-            child.webContents.getURL() === fixtureUrl,
-        );
-        return Promise.all(
-          pages.map(async (page) => ({
-            visible: page.getVisible(),
-            clicks: await page.webContents.executeJavaScript(
-              "Number(document.body.dataset.sidebarClicks || 0)",
-            ),
-          })),
-        );
-      },
-      fixtureUrl,
-    );
-    assert.equal(
-      sidebarPages.filter((page) => page.visible && page.clicks === 1).length,
-      1,
-    );
-    assert.ok(
-      sidebarPages
-        .filter((page) => !page.visible)
-        .every((page) => page.clicks === 0),
-    );
+    let sidebarPages;
+    const sidebarDeadline = Date.now() + 5000;
+    for (;;) {
+      sidebarPages = await bounded(
+        sidebarSnapshot(),
+        "SIDEBAR_READBACK_TIMEOUT",
+        5000,
+      );
+      if (
+        sidebarPages.some(
+          (page) =>
+            page.visible &&
+            page.clicks ===
+              sidebarBefore.find((before) => before.id === page.id).clicks + 1,
+        )
+      )
+        break;
+      if (Date.now() >= sidebarDeadline)
+        throw new Error("SELECTED_PAGE_SIDEBAR_UNCHANGED");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    for (const page of sidebarPages) {
+      const before = sidebarBefore.find(
+        (candidate) => candidate.id === page.id,
+      );
+      assert.ok(before);
+      assert.equal(page.clicks - before.clicks, page.visible ? 1 : 0);
+    }
     observations.push({
       kind: "selected-page-sidebar",
       environment,
