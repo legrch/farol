@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SharedCodexProxyHost } from "../../src/modules/chat/infra/native/shared-codex-proxy-host";
 import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/persistent-codex-handoff";
@@ -94,6 +94,36 @@ function fixture(mode = "normal", timeoutMs = 1_000): SharedCodexProxyHost {
 }
 
 describe("shared Codex proxy transport fixture", () => {
+  it("does not write a read frame when admission expires while connection completes", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    let child: ChildProcessWithoutNullStreams | undefined;
+    const host = new SharedCodexProxyHost(() => {
+      child = spawn(process.execPath, ["-e", PROXY_FIXTURE], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { FIXTURE_MODE: "normal" },
+      });
+      return child;
+    }, EXPECTED_HOME);
+    hosts.push(host);
+    try {
+      await host.connect();
+      if (!child) throw new Error("Owned fixture process missing");
+      const writes = vi.spyOn(child.stdin, "write");
+      const connect = host.connect.bind(host);
+      vi.spyOn(host, "connect").mockImplementation(async () => {
+        await connect();
+        clock.mockReturnValue(3000);
+      });
+      await expect(
+        host.request("thread/read", { threadId: "selected" }, 2000),
+      ).rejects.toThrow("CODEX_SHARED_DEADLINE_EXPIRED");
+      expect(writes).not.toHaveBeenCalled();
+      expect(await host.closeAndWait()).toBe(true);
+    } finally {
+      clock.mockRestore();
+      await host.closeAndWait();
+    }
+  });
   it.skipIf(!process.env.FAROL_CODEX_PROXY_BINARY)(
     "uses the installed CLI proxy against only a disposable owned socket",
     async () => {

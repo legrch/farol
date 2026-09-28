@@ -27,6 +27,7 @@ import type {
 } from "../native/sandboxed-workspace-shell";
 import {
   parseProjectResolution,
+  parseTaskHistory,
   type CodexTaskRoutePeer,
 } from "../peer/codex-task-route-peer";
 import { bootstrapWorkspace } from "./workspace-bootstrap";
@@ -77,6 +78,15 @@ const CodexTaskObserveInputSchema = z.strictObject({
 });
 const CodexTaskAdoptInputSchema = CodexTaskObserveInputSchema.extend({
   turnId: DispatchIdSchema,
+});
+const CodexTaskHistoryInputSchema = CodexTaskAdoptInputSchema.extend({
+  cursor: z
+    .string()
+    .min(1)
+    .max(4096)
+    .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
+    .optional(),
+  tail: z.boolean().optional(),
 });
 const CodexTaskContinueInputSchema = z.strictObject({
   key: DispatchIdSchema,
@@ -872,6 +882,38 @@ export function createReadonlyComputerMcpServer(
           } catch {
             return taskResponse(
               { status: "outcome_unknown", threadId: request.threadId },
+              true,
+            );
+          }
+        }),
+      );
+    if (codexTasks.observeEnabled === true && codexTasks.history)
+      server.registerTool(
+        "codex_task_history",
+        {
+          title: "Read stored history of one selected Codex turn",
+          description:
+            "Read or tail one text-only page (50 items, 32 KiB text) from the exact owner-selected thread and verified turn. Stored, non-atomic history is not live task state. Reasoning, tool payloads and non-text content are omitted explicitly. nextCursor reports more items; complete is true only for an unpaginated terminal page. This never starts/resumes/forks/adopts a task or makes it controllable.",
+          inputSchema: CodexTaskHistoryInputSchema,
+          annotations: READONLY_ANNOTATIONS,
+        },
+        guarded(async (request, context) => {
+          try {
+            const result = parseTaskHistory(
+              await codexTasks.history!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request,
+            );
+            return taskResponse(result, result.status !== "history");
+          } catch {
+            return taskResponse(
+              {
+                status: "unavailable",
+                threadId: request.threadId,
+                turnId: request.turnId,
+                code: "HANDOFF_HISTORY_UNAVAILABLE",
+              },
               true,
             );
           }

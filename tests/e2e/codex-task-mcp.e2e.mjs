@@ -406,6 +406,7 @@ try {
   assert(tools.includes("codex_task_observe"), stderr);
   assert(tools.includes("codex_task_adopt"), stderr);
   assert(tools.includes("codex_project_resolve"), stderr);
+  assert(tools.includes("codex_task_history"), stderr);
   assert(tools.includes("chatgpt_chat_create"), stderr);
   assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
@@ -466,6 +467,56 @@ try {
     turns: [{ id: ownerTurnId, status: "completed" }],
     hasMoreTurns: false,
   });
+  const historyBefore = calls.length;
+  const history = await client.callTool({
+    name: "codex_task_history",
+    arguments: {
+      threadId: ownerThreadId,
+      turnId: ownerTurnId,
+      workspaceId: "approved-writer",
+      projectId,
+      tail: true,
+    },
+  });
+  assert.deepEqual(history.structuredContent, {
+    status: "history",
+    source: "stored",
+    snapshot: "non-atomic",
+    coverage: "single-page-text-only",
+    threadId: ownerThreadId,
+    turnId: ownerTurnId,
+    turnStatus: "completed",
+    sortDirection: "desc",
+    items: [
+      {
+        id: "owner-answer",
+        kind: "agent_message",
+        phase: "final_answer",
+        text: "Exact owner-created fixture answer",
+      },
+    ],
+    nextCursor: null,
+    complete: true,
+  });
+  assert.deepEqual(calls.slice(historyBefore), [
+    "project/list",
+    "thread/read",
+    "thread/turns/list",
+    "thread/items/list",
+    "thread/read",
+  ]);
+  const foreignHistoryBefore = calls.length;
+  const foreignHistory = await client.callTool({
+    name: "codex_task_history",
+    arguments: {
+      threadId,
+      turnId: ownerTurnId,
+      workspaceId: "approved-writer",
+      projectId,
+    },
+  });
+  assert.equal(foreignHistory.structuredContent.status, "refused");
+  assert.equal(calls.length, foreignHistoryBefore);
   const adopted = await client.callTool({
     name: "codex_task_adopt",
     arguments: {

@@ -28,6 +28,7 @@ type ResolvedTaskRoute = Pick<
   | "observe"
   | "adopt"
   | "resolveProject"
+  | "history"
 > & {
   create(request: HandoffRequest): ReturnType<CodexTaskRoute["create"]>;
 };
@@ -99,6 +100,37 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
         result.selectedProjectId !== this.admission.projectId)
     )
       return refused("HANDOFF_PROJECT_RESOLVE_CORRELATION");
+    return result;
+  }
+
+  async history(
+    request: Parameters<NonNullable<CodexTaskRoute["history"]>>[0],
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ) {
+    const refused = (code: string) => ({
+      status: "refused" as const,
+      threadId: request.threadId,
+      turnId: request.turnId,
+      code,
+    });
+    if (
+      this.now() >= this.admission.expiresAt ||
+      request.workspaceId !== this.admission.workspaceId ||
+      request.projectId !== this.admission.projectId ||
+      request.threadId !== this.admission.observeThreadId
+    )
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    if (!this.delegate.history) return refused("HANDOFF_HISTORY_UNAVAILABLE");
+    if (context.signal?.aborted) return refused("HANDOFF_HISTORY_CANCELLED");
+    const result = await this.delegate.history(request, context);
+    if (this.now() >= this.admission.expiresAt)
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    if (context.signal?.aborted) return refused("HANDOFF_HISTORY_CANCELLED");
+    if (
+      result.threadId !== request.threadId ||
+      result.turnId !== request.turnId
+    )
+      return refused("HANDOFF_HISTORY_CORRELATION");
     return result;
   }
 

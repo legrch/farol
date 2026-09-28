@@ -1,5 +1,10 @@
 import type { ProjectResolutionResult } from "../port/codex-project-catalogue";
 import { resolveCodexProjectCatalogue } from "./resolve-codex-project-catalogue";
+import type {
+  TaskHistoryRequest,
+  TaskHistoryResult,
+} from "../port/codex-task-history";
+import { historyCursor, readCodexTaskHistory } from "./read-codex-task-history";
 
 export type HandoffModelBinding = Readonly<{
   selection: Readonly<{
@@ -402,6 +407,98 @@ export class PersistentCodexHandoff {
       writerRoot: workspace.root,
       projectRoot: workspace.project.root,
     };
+  }
+
+  async history(
+    request: TaskHistoryRequest,
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ): Promise<TaskHistoryResult> {
+    const refused = (code: string): TaskHistoryResult => ({
+      status: "refused",
+      threadId: request.threadId,
+      turnId: request.turnId,
+      code,
+    });
+    if (
+      request.threadId !== this.selectedOwnerThreadId ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        request.threadId,
+      ) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        request.turnId,
+      ) ||
+      !identifier(request.workspaceId) ||
+      !identifier(request.projectId) ||
+      (request.cursor !== undefined && !historyCursor(request.cursor)) ||
+      (request.tail !== undefined && typeof request.tail !== "boolean")
+    )
+      return refused("HANDOFF_HISTORY_INPUT_INVALID");
+    const isAdmitted = () =>
+      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+    const revoke = () =>
+      refused(
+        context.signal?.aborted
+          ? "HANDOFF_HISTORY_CANCELLED"
+          : "HANDOFF_TASK_ADMISSION_DENIED",
+      );
+    if (!isAdmitted()) return revoke();
+    try {
+      const workspace = await this.authority.resolve(request.workspaceId);
+      if (!validWorkspace(workspace))
+        return refused("HANDOFF_WORKSPACE_UNVERIFIED");
+      if (!isAdmitted()) return revoke();
+      const project = await resolveCodexProjectCatalogue(
+        this.host,
+        workspace.project.root,
+        request.projectId,
+        this.mutationExpiresAt,
+        isAdmitted,
+      );
+      if (!isAdmitted()) return revoke();
+      if (project.status === "unavailable")
+        return {
+          status: "unavailable",
+          threadId: request.threadId,
+          turnId: request.turnId,
+          code: project.code,
+        };
+      if (
+        project.status !== "resolved" ||
+        project.selectedProjectId !== request.projectId
+      )
+        return refused("HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING");
+      const beforeRead = await this.authority.resolve(request.workspaceId);
+      if (
+        !validWorkspace(beforeRead) ||
+        !samePhysicalWorkspace(beforeRead, workspace)
+      )
+        return refused("HANDOFF_WORKSPACE_CHANGED");
+      if (!isAdmitted()) return revoke();
+      const result = await readCodexTaskHistory(
+        this.host,
+        request,
+        workspace.root,
+        this.mutationExpiresAt,
+        isAdmitted,
+      );
+      if (!isAdmitted()) return revoke();
+      const afterRead = await this.authority.resolve(request.workspaceId);
+      if (
+        !validWorkspace(afterRead) ||
+        !samePhysicalWorkspace(afterRead, workspace)
+      )
+        return refused("HANDOFF_WORKSPACE_CHANGED");
+      return isAdmitted() ? result : revoke();
+    } catch {
+      return isAdmitted()
+        ? {
+            status: "unavailable",
+            threadId: request.threadId,
+            turnId: request.turnId,
+            code: "HANDOFF_HISTORY_UNAVAILABLE",
+          }
+        : revoke();
+    }
   }
 
   async observe(

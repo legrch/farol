@@ -70,8 +70,8 @@ The sealed task admission keeps its existing exact project ID. The MCP does not
 take a root path, create a project, persist a preference, edit a title, read
 history or launch/resume/fork a task. It remeasures the writer/canonical repository
 binding and checks expiry/cancellation before returning. Project creation with
-unknown-outcome reconciliation, persisted preferences, title readback and bounded
-scoped history remain separate unimplemented N3 rows. Cancellation/deadline stops
+unknown-outcome reconciliation, persisted preferences, title readback and broader
+project-scoped history discovery remain separate unimplemented N3 rows. Cancellation/deadline stops
 further catalogue pages; an already sent read remains bounded by its transport
 response/timeout, and Farol does not kill the shared server to cancel observation.
 Fresh-install project
@@ -84,6 +84,36 @@ negotiation. The separately prepared initialize/experimentalApi patch remains
 behind its recorded platform-blocked commit operation; this slice neither moves
 that patch nor bypasses the refusal. No real model/provider task is used merely
 to resolve a project.
+
+## Stored history read/tail for an exact selected turn
+
+When an exact owner-selected thread is sealed in the task admission,
+codex_task_history reads a single text-only page for an explicitly supplied,
+verified turn in that thread. The physical writer and canonical project roots are
+remeasured. Saved-project membership and exact thread/project/cwd are checked;
+the latter is read again after item retrieval. No task start/resume/fork, adoption,
+message, mutation fence or journal effect is made. Selection does not grant control.
+
+The response labels source as stored, snapshot as non-atomic and coverage as
+single-page-text-only. The read proves provider history, not live execution or
+native Desktop identity. One page has at most 50 items and 32 KiB of aggregate
+UTF-8 message text. tail=true asks for descending order; a continuation keeps the
+same direction and exact thread/turn. nextCursor explicitly reports more items.
+complete is true only when no input cursor was supplied and the page has no next
+cursor; it never means all raw transcript content was returned. User text parts
+preserve their boundaries, assistant commentary/final-answer text is explicit,
+and non-text user content, reasoning and tool payloads are omitted with counts or
+type-only records. Foreign/duplicate entries, oversized text, malformed/looping
+cursors and partial turn scans cannot disclose a successful history page. The
+turn lookup is bounded to 32 pages of 100 records.
+
+Cancellation/deadline is checked between reads and before output, including after
+authority awaits. Revoked or replaced physical authority cannot disclose text.
+An already submitted read still waits for response/transport timeout. Reads are
+not an atomic snapshot and never imply permission to control another owner task.
+This does not yet provide project-wide thread discovery/search or Claude history.
+Synthetic and packaged disposable-socket evidence is separate from the pending
+owner-created observer canary.
 
 ## First Codex saved-project task slice
 

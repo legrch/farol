@@ -82,6 +82,74 @@ export type CodexProjectResolution = z.infer<
   typeof CodexProjectResolutionSchema
 >;
 
+const HistoryId = z.string().uuid();
+const HistoryItem = z.union([
+  z.strictObject({
+    id: Identifier,
+    kind: z.literal("user_message"),
+    parts: z.array(z.string()).max(100).readonly(),
+    omittedContent: z.number().int().min(0).max(100),
+  }),
+  z.strictObject({
+    id: Identifier,
+    kind: z.literal("agent_message"),
+    text: z.string(),
+    phase: z.enum(["commentary", "final_answer"]).nullable(),
+  }),
+  z.strictObject({
+    id: Identifier,
+    kind: z.literal("omitted"),
+    type: z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,79}$/u),
+  }),
+]);
+export const CodexTaskHistorySchema = z.union([
+  z
+    .strictObject({
+      status: z.literal("history"),
+      source: z.literal("stored"),
+      snapshot: z.literal("non-atomic"),
+      coverage: z.literal("single-page-text-only"),
+      threadId: HistoryId,
+      turnId: HistoryId,
+      turnStatus: z.enum(["inProgress", "completed", "failed", "interrupted"]),
+      sortDirection: z.enum(["asc", "desc"]),
+      items: z.array(HistoryItem).max(50).readonly(),
+      nextCursor: z
+        .string()
+        .min(1)
+        .max(4096)
+        .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
+        .nullable(),
+      complete: z.boolean(),
+    })
+    .refine((value) => {
+      const text = value.items.flatMap((item) =>
+        item.kind === "user_message"
+          ? item.parts
+          : item.kind === "agent_message"
+            ? [item.text]
+            : [],
+      );
+      return (
+        (!value.complete || value.nextCursor === null) &&
+        new Set(value.items.map((item) => item.id)).size ===
+          value.items.length &&
+        text.every((part) => !part.includes("\0")) &&
+        text.reduce(
+          (bytes, part) => bytes + new TextEncoder().encode(part).byteLength,
+          0,
+        ) <= 32768
+      );
+    }),
+  z.strictObject({
+    status: z.enum(["refused", "unavailable"]),
+    threadId: HistoryId,
+    turnId: HistoryId,
+    code: Identifier,
+  }),
+]);
+export type CodexTaskHistory = z.infer<typeof CodexTaskHistorySchema>;
+
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
   /** Read saved projects at the exact approved canonical root; no effects. */
@@ -93,6 +161,18 @@ export interface CodexTaskRoute {
     context?: Readonly<{ signal?: AbortSignal | undefined }>,
   ): Promise<CodexProjectResolution>;
   readonly observeEnabled?: boolean;
+  /** Stored text-only history for the exact selected thread and turn; no effects. */
+  history?(
+    request: Readonly<{
+      threadId: string;
+      turnId: string;
+      workspaceId: string;
+      projectId: string;
+      cursor?: string | undefined;
+      tail?: boolean | undefined;
+    }>,
+    context?: Readonly<{ signal?: AbortSignal | undefined }>,
+  ): Promise<CodexTaskHistory>;
   /** Inspect only the exact owner-selected thread in the approved project. */
   observe?(
     request: Readonly<{
