@@ -7,6 +7,7 @@ import type {
   ReadonlyWorkspaceExecutionContext,
   ReadonlyWorkspaceOperation,
   ReadonlyWorkspaceOutput,
+  WorkspaceApprovedRoot,
 } from "../port/readonly-workspace";
 import {
   approvedWorkspaceBinding,
@@ -18,6 +19,17 @@ import {
   type WorkspaceScope,
 } from "../../domain/execution-authority";
 
+export type ReadonlyComputerOperation =
+  | ReadonlyWorkspaceOperation
+  | Readonly<{ kind: "workspace.context"; relativePath: string }>;
+
+export type WorkspaceContext = Readonly<{
+  kind: "workspace.context";
+  root: string;
+  approvedRoot: WorkspaceApprovedRoot;
+  scope: "subtree";
+}>;
+
 export type ReadonlyComputerActionRequest = Readonly<{
   ownerId: string;
   sessionId: string;
@@ -28,7 +40,7 @@ export type ReadonlyComputerActionRequest = Readonly<{
   generation: number;
   callId: string;
   workspaceId: string;
-  operation: ReadonlyWorkspaceOperation;
+  operation: ReadonlyComputerOperation;
 }>;
 
 export type ReadonlyComputerActionOutput = Readonly<{
@@ -42,8 +54,8 @@ export type ReadonlyComputerActionOutput = Readonly<{
   callId: string;
   workspaceId: string;
   relativePath: string;
-  operation: ReadonlyWorkspaceOperation;
-  output: ReadonlyWorkspaceOutput;
+  operation: ReadonlyComputerOperation;
+  output: ReadonlyWorkspaceOutput | WorkspaceContext;
 }>;
 
 export type ReadonlyComputerActionErrorCode =
@@ -179,7 +191,10 @@ export class RunReadonlyComputerAction {
         taskId: request.taskId,
         taskEpoch: request.taskEpoch,
         operation: {
-          kind: request.operation.kind,
+          kind:
+            request.operation.kind === "workspace.context"
+              ? "workspace.list"
+              : request.operation.kind,
           workspaceId: request.workspaceId,
           path: target,
         },
@@ -187,7 +202,11 @@ export class RunReadonlyComputerAction {
       this.clock.now(),
     );
     if (!authorized.ok) return authorized;
-    if (scope.mode === "exact" && request.operation.kind === "workspace.list") {
+    if (
+      scope.mode === "exact" &&
+      (request.operation.kind === "workspace.list" ||
+        request.operation.kind === "workspace.context")
+    ) {
       return failure("AUTHORITY_PATH_DENIED", "task-grant");
     }
 
@@ -209,7 +228,13 @@ export class RunReadonlyComputerAction {
             : {}),
           ...binding,
         },
-        operation: request.operation,
+        operation:
+          request.operation.kind === "workspace.context"
+            ? {
+                kind: "workspace.list" as const,
+                relativePath: request.operation.relativePath,
+              }
+            : request.operation,
       };
       result = context.signal
         ? await this.workspace.execute(workspaceRequest, context)
@@ -220,6 +245,66 @@ export class RunReadonlyComputerAction {
     if (!result.ok) {
       return failure(result.error.code, "native-workspace");
     }
+    if (context.signal?.aborted)
+      return failure("WORKSPACE_REQUEST_CANCELLED", "native-workspace");
+    // The helper may have yielded to native work. Do not disclose its output
+    // after a revoked grant or approval, even when the read itself succeeded.
+    let currentParticipant;
+    let currentApproval;
+    try {
+      currentParticipant = await this.authorities.get(request.participantId);
+    } catch {
+      return failure("COMPUTER_AUTHORITY_STORE_UNAVAILABLE", "authority-store");
+    }
+    if (!currentParticipant)
+      return failure("COMPUTER_PARTICIPANT_NOT_FOUND", "authority-store");
+    try {
+      currentApproval = await this.approvals.get(
+        currentParticipant.grant.computerId,
+      );
+    } catch {
+      return failure("COMPUTER_APPROVAL_STORE_UNAVAILABLE", "authority-store");
+    }
+    if (!currentApproval)
+      return failure("COMPUTER_APPROVAL_NOT_FOUND", "computer-policy");
+    const currentDecision = authorizeComputerAction(
+      currentParticipant,
+      currentApproval,
+      {
+        ...request,
+        operation: {
+          kind:
+            request.operation.kind === "workspace.context"
+              ? "workspace.list"
+              : request.operation.kind,
+          workspaceId: request.workspaceId,
+          path: target,
+        },
+      },
+      this.clock.now(),
+    );
+    if (!currentDecision.ok) return currentDecision;
+    const currentScope = workspaceScope(
+      currentParticipant.grant.workspaces,
+      request.workspaceId,
+    );
+    const currentBinding = approvedWorkspaceBinding(
+      currentApproval,
+      request.workspaceId,
+    );
+    if (
+      !currentScope ||
+      currentScope.root !== scope.root ||
+      currentScope.mode !== scope.mode ||
+      !currentBinding ||
+      currentBinding.approvedRoot.path !== binding.approvedRoot.path ||
+      currentBinding.approvedRoot.device !== binding.approvedRoot.device ||
+      currentBinding.approvedRoot.inode !== binding.approvedRoot.inode
+    ) {
+      return failure("WORKSPACE_ROOT_CHANGED", "native-workspace");
+    }
+    if (context.signal?.aborted)
+      return failure("WORKSPACE_REQUEST_CANCELLED", "native-workspace");
     return {
       ok: true,
       value: {
@@ -234,7 +319,15 @@ export class RunReadonlyComputerAction {
         workspaceId: request.workspaceId,
         relativePath: request.operation.relativePath,
         operation: { ...request.operation },
-        output: result.value,
+        output:
+          request.operation.kind === "workspace.context"
+            ? {
+                kind: "workspace.context",
+                root: scope.root,
+                approvedRoot: binding.approvedRoot,
+                scope: "subtree",
+              }
+            : result.value,
       },
     };
   }

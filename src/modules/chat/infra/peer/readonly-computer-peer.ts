@@ -2,13 +2,14 @@ import { success } from "../../../../pkg/kernel/domain/result";
 import type {
   ChatComputerFailureSource,
   ChatComputerOperation,
-  ChatComputerOutputValue,
   ChatComputerRequest,
   ChatComputerResult,
   ComputerCapability,
 } from "../../app/port/computer-capability";
 import {
   ReadonlyComputerCallResponseSchema,
+  type ReadonlyComputerCallRequest,
+  type ReadonlyComputerCallResponse,
   type ReadonlyComputerContract,
 } from "../../../computer/contract/readonly-computer-contract";
 
@@ -42,7 +43,7 @@ function correlationMatches(
     callId: string;
     workspaceId: string;
     relativePath: string;
-    operation: ChatComputerOperation;
+    operation: ReadonlyComputerCallRequest["operation"];
   }>,
 ): boolean {
   return (
@@ -61,7 +62,7 @@ function correlationMatches(
 }
 
 function operationsMatch(
-  left: ChatComputerOperation,
+  left: ReadonlyComputerCallRequest["operation"],
   right: ChatComputerOperation,
 ): boolean {
   return (
@@ -76,7 +77,10 @@ function operationsMatch(
 
 function outputMatchesOperation(
   operation: ChatComputerOperation,
-  output: ChatComputerOutputValue,
+  output: Extract<
+    ReadonlyComputerCallResponse,
+    { ok: true }
+  >["value"]["output"],
 ): boolean {
   return (
     (operation.kind === "workspace.read" && output.kind === "workspace.text") ||
@@ -133,10 +137,21 @@ export class ReadonlyComputerPeer implements ComputerCapability {
       return computerFailure(parsed.data.error.code, parsed.data.error.source);
     }
     const value = parsed.data.value;
+    if (
+      value.operation.kind === "workspace.context" ||
+      value.output.kind === "workspace.context"
+    ) {
+      return computerFailure(
+        "COMPUTER_CONTRACT_CORRELATION",
+        "contract",
+        "outcome_unknown",
+      );
+    }
     return correlationMatches(request, this.binding, value) &&
       outputMatchesOperation(request.operation, value.output)
       ? success({
           ...value,
+          operation: value.operation,
           output:
             value.output.kind === "workspace.entries"
               ? { ...value.output, entries: [...value.output.entries] }

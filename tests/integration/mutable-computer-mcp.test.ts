@@ -161,6 +161,9 @@ describe("mutable Computer MCP adapter", () => {
     try {
       const tools = await client.listTools();
       expect(tools.tools.map((tool) => tool.name)).toEqual([
+        "computer_workspace_bootstrap",
+        "computer_guidance_search",
+        "computer_guidance_fetch",
         "computer_workspace_list",
         "computer_workspace_read",
         "computer_workspace_search",

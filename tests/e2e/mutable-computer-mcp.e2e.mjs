@@ -177,6 +177,9 @@ try {
     assert.deepEqual(
       tools.tools.map((tool) => tool.name),
       [
+        "computer_workspace_bootstrap",
+        "computer_guidance_search",
+        "computer_guidance_fetch",
         "computer_workspace_list",
         "computer_workspace_read",
         "computer_workspace_search",

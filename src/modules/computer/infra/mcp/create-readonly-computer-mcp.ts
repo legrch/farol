@@ -26,6 +26,8 @@ import type {
   ShellResponse,
 } from "../native/sandboxed-workspace-shell";
 import type { CodexTaskRoutePeer } from "../peer/codex-task-route-peer";
+import { bootstrapWorkspace } from "./workspace-bootstrap";
+import { PublishedGuidance } from "./published-guidance";
 import type {
   SavedChatBridgeOperation,
   SavedChatBridgeResponse,
@@ -138,6 +140,17 @@ const SearchPatternSchema = z
 const ListInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   relativePath: ScopeRelativePathSchema,
+});
+const BootstrapInputSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  relativeDirectory: ScopeRelativePathSchema,
+});
+const GuidanceSearchInputSchema = z.strictObject({
+  query: z.string().min(1).max(500),
+  limit: z.number().int().min(1).max(16).optional(),
+});
+const GuidanceFetchInputSchema = z.strictObject({
+  id: z.string().min(1).max(120),
 });
 // A file over the whole-read ceiling is read window by window. Either field
 // asks for a window; the other then takes its default.
@@ -423,6 +436,8 @@ async function execute(
   // A page answers a ranged read and only a ranged read: text without one
   // would read as the whole file.
   const outputMatchesOperation =
+    (request.operation.kind === "workspace.context" &&
+      value.output.kind === "workspace.context") ||
     (request.operation.kind === "workspace.read" &&
       value.output.kind === "workspace.text" &&
       (request.operation.range === undefined) ===
@@ -990,6 +1005,62 @@ export function createReadonlyComputerMcpServer(
     );
   }
 
+  server.registerTool(
+    "computer_workspace_bootstrap",
+    {
+      title: "Discover approved workspace instructions",
+      description:
+        "Read applicable root-to-directory AGENTS.md through current workspace authority. Returns selected scope and approved physical root identity, precedence and explicit missing/unavailable instructions. Does not inspect ancestors outside the task scope or other descendants; unavailable instructions make complete false. Instructions never grant additional authority.",
+      inputSchema: BootstrapInputSchema,
+      annotations: READONLY_ANNOTATIONS,
+    },
+    guarded(async ({ workspaceId, relativeDirectory }, context) =>
+      bootstrapWorkspace(relativeDirectory, (operation) =>
+        execute(
+          contract,
+          binding,
+          String(context.mcpReq.id),
+          workspaceId,
+          operation,
+          context.mcpReq.signal,
+        ),
+      ),
+    ),
+  );
+  const guidance = new PublishedGuidance();
+  const guidanceResult = (
+    value:
+      | ReturnType<PublishedGuidance["search"]>
+      | ReturnType<PublishedGuidance["fetch"]>,
+  ): CallToolResult => ({
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    structuredContent: value,
+    ...(value.ok ? {} : { isError: true }),
+  });
+  server.registerTool(
+    "computer_guidance_search",
+    {
+      title: "Search published Computer guidance",
+      description:
+        "Search the sealed package guidance manifest. Returns only published IDs and references, not owner files or instructions. resultLimited reports a bounded result; an unavailable catalogue is explicit.",
+      inputSchema: GuidanceSearchInputSchema,
+      annotations: READONLY_ANNOTATIONS,
+    },
+    guarded(async ({ query, limit }) =>
+      guidanceResult(guidance.search(query, limit)),
+    ),
+  );
+  server.registerTool(
+    "computer_guidance_fetch",
+    {
+      title: "Read published Computer guidance",
+      description:
+        "Fetch one manifest-listed guidance ID. Arbitrary file paths and invented IDs are unavailable; this cannot grant workspace authority.",
+      inputSchema: GuidanceFetchInputSchema,
+      annotations: READONLY_ANNOTATIONS,
+    },
+    guarded(async ({ id }) => guidanceResult(guidance.fetch(id))),
+  );
   server.registerTool(
     "computer_workspace_list",
     {

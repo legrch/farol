@@ -28,6 +28,15 @@ const FileRelativePathSchema = z
 const ScopeRelativePathSchema = z
   .string()
   .refine((value) => relativePath(value, true));
+const AbsolutePathSchema = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine(
+    (value) =>
+      value === "/" ||
+      (value.startsWith("/") && relativePath(value.slice(1), false)),
+  );
 
 const MAX_READ_BYTES = 256 * 1_024;
 
@@ -40,6 +49,10 @@ const ReadRangeSchema = z.strictObject({
 });
 
 const OperationSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("workspace.context"),
+    relativePath: ScopeRelativePathSchema,
+  }),
   z.strictObject({
     kind: z.literal("workspace.read"),
     relativePath: FileRelativePathSchema,
@@ -84,6 +97,24 @@ export const ReadonlyComputerCallRequestSchema = z.strictObject({
 });
 
 const WorkspaceOutputSchema = z.discriminatedUnion("kind", [
+  z
+    .strictObject({
+      kind: z.literal("workspace.context"),
+      root: AbsolutePathSchema,
+      approvedRoot: z.strictObject({
+        path: AbsolutePathSchema,
+        device: z.string().regex(/^[0-9]+$/u),
+        inode: z.string().regex(/^[0-9]+$/u),
+      }),
+      scope: z.literal("subtree"),
+    })
+    .refine(
+      (value) =>
+        value.root === value.approvedRoot.path ||
+        value.root.startsWith(
+          value.approvedRoot.path === "/" ? "/" : `${value.approvedRoot.path}/`,
+        ),
+    ),
   z.strictObject({
     kind: z.literal("workspace.text"),
     text: z.string(),

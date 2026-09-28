@@ -351,6 +351,12 @@ export class CodexAgentWorkspaceProbe
     if (!result.ok) {
       return computerFailure(result.error.code, result.error.source);
     }
+    if (result.value.output.kind === "workspace.context") {
+      return computerFailure(
+        "AGENT_COMPUTER_OUTPUT_UNEXPECTED",
+        "native-workspace",
+      );
+    }
     return { status: "completed", output: result.value.output };
   }
 }

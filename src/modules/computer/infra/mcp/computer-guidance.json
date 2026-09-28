@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "id": "computer-start",
+      "title": "Start with an approved workspace",
+      "summary": "Discover applicable instructions before local work.",
+      "keywords": ["workspace", "instructions", "AGENTS", "bootstrap", "Brain"],
+      "text": "Use computer_workspace_bootstrap with the selected workspace ID and relative working directory before changing files. It returns the task scope root, the approved physical root identity and root-to-directory AGENTS.md instructions. Apply root rules before nested rules. Unavailable instructions make completeness false; do not interpret missing authority as permission. The chain excludes ancestors outside the approved task scope. Brain is an ordinary approved workspace. File and shell operations do not require Model, Product Agent or a ChatGPT browser login.",
+      "references": ["computer-files", "computer-shell", "computer-outcomes"]
+    },
+    {
+      "id": "computer-files",
+      "title": "Read, discover and change ordinary files",
+      "summary": "Use bounded file tools or an approved shell with explicit search coverage.",
+      "keywords": [
+        "files",
+        "search",
+        "filename",
+        "include",
+        "list",
+        "edit",
+        "rename",
+        "delete"
+      ],
+      "text": "computer_workspace_list lists one directory and reports truncation. computer_workspace_search searches text and reports scanLimited and resultLimited; neither means a complete recursive filename inventory. For filename/include filtering use ordinary approved shell, for example rg --files --glob '*.ts' --glob '!_output/**'. rg follows its ignore rules by default; report those exclusions and the real command exit status rather than claiming all physical files were scanned. Never request denied secret paths to widen coverage. Read large text files in windows using page.nextOffset. Guard edits with the expected SHA-256; rename and delete require the normal mutation approval and exact preconditions.",
+      "references": ["computer-start", "computer-shell"]
+    },
+    {
+      "id": "computer-shell",
+      "title": "Run sandboxed shell and standard Git",
+      "summary": "Keep workspace, Git metadata and process ownership explicit.",
+      "keywords": [
+        "shell",
+        "Git",
+        "worktree",
+        "config",
+        "stdout",
+        "stderr",
+        "cancel"
+      ],
+      "text": "Use ordinary Git commands through the approved sandboxed shell; no special Git API is needed for normal work. A linked worktree needs its exact Git metadata approval, and permitted global Git settings must be explicitly admitted. Do not substitute an empty HOME and claim owner configuration parity. Long commands return an owned handle: read stdout and stderr independently, then inspect actual exit code or signal. Cancellation only controls the command's own processes; successful signal submission is not proof of complete descendant cleanup. Keep any unqualified detached-process limitation visible. Do not use a broader shell, unsandboxed fallback or another workspace after refusal.",
+      "references": ["computer-outcomes"]
+    },
+    {
+      "id": "computer-outcomes",
+      "title": "Handle revocation and uncertain outcomes",
+      "summary": "Inspect an existing operation instead of blindly replaying effects.",
+      "keywords": [
+        "unknown",
+        "replay",
+        "reconnect",
+        "revocation",
+        "restart",
+        "deadline",
+        "approval"
+      ],
+      "text": "Approval is limited to the selected workspace and generation. Revoked, expired or changed bindings fail closed. A timeout, disconnect or lost acknowledgement can leave outcome_unknown: inspect the existing operation key or handle and preserve the uncertainty. Do not invent a new key to repeat a possibly completed write, task creation or browser Send. Restart/reconnect must recover the original identity or explicitly report that it cannot. Read-only observation does not start, resume, fork or clone a task. Treat source fixtures, packaged local execution and live connector proof as separate evidence.",
+      "references": ["computer-start"]
+    }
+  ]
+}

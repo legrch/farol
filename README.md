@@ -4,6 +4,13 @@ Farol is a standalone TypeScript/Electron product. All source, tooling, tests,
 and resources live at the repository root. It does not install, activate, register, update, or replace the legacy
 Farol product. It also does not use the installed `codex-chatgpt-web` profile.
 
+Computer exposes approved workspace instruction bootstrap and published read-only
+guidance through MCP. Root/nested `AGENTS.md` are read within the selected task
+scope, with explicit missing/unavailable results and current authority checks.
+See [Computer workspace context](docs/computer-workspace-context.md) for bounds,
+ordinary shell filename discovery and the distinction between local/package
+fixtures and a refreshed live connector.
+
 The source has two explicit local identities. `task dev` from the repository root
 launches **Farol Dev** (`local.farol.dev`) with persistent private state, dedicated
 browser/runtime partitions and an app-owned `CODEX_HOME`; rebuilding does not clear

@@ -877,6 +877,158 @@ describe("real read-only Computer action", () => {
     expect(calls).toBe(1);
   });
 
+  it.each([
+    ["authority-missing", "COMPUTER_PARTICIPANT_NOT_FOUND"],
+    ["authority-throw", "COMPUTER_AUTHORITY_STORE_UNAVAILABLE"],
+    ["approval-missing", "COMPUTER_APPROVAL_NOT_FOUND"],
+    ["approval-throw", "COMPUTER_APPROVAL_STORE_UNAVAILABLE"],
+    ["root-changed", "WORKSPACE_ROOT_CHANGED"],
+    ["scope-changed", "WORKSPACE_ROOT_CHANGED"],
+    ["capability-revoked", "AUTHORITY_CAPABILITY_DENIED"],
+    ["identity-changed", "AUTHORITY_TASK_MISMATCH"],
+    ["expired", "AUTHORITY_EXPIRED"],
+    ["cancelled", "WORKSPACE_REQUEST_CANCELLED"],
+  ])(
+    "does not disclose read output after %s during native work",
+    async (mode, code) => {
+      const chain = participants();
+      const participant = chain.critic;
+      const approved = approval();
+      let afterRead = false;
+      const controller = new AbortController();
+      const execute = vi.fn(async () => {
+        afterRead = true;
+        if (mode === "cancelled") controller.abort();
+        return {
+          ok: true as const,
+          value: {
+            kind: "workspace.text" as const,
+            text: "must not disclose",
+            bytes: 17,
+          },
+        };
+      });
+      const action = new RunReadonlyComputerAction(
+        {
+          async get() {
+            if (afterRead && mode === "authority-throw")
+              throw new Error("unreadable");
+            if (afterRead && mode === "authority-missing") return null;
+            if (afterRead && mode === "identity-changed")
+              return {
+                ...participant,
+                grant: { ...participant.grant, taskId: "foreign-task" },
+              };
+            if (afterRead && mode === "scope-changed")
+              return {
+                ...participant,
+                grant: {
+                  ...participant.grant,
+                  workspaces: [
+                    {
+                      workspaceId: "farol",
+                      root,
+                      mode: "exact" as const,
+                      paths: [path.join(root, "README.md")],
+                      access: "read" as const,
+                      restrictionSource: "task-grant" as const,
+                    },
+                  ],
+                },
+              };
+            return participant;
+          },
+          async admit() {
+            throw new Error("unused");
+          },
+        },
+        {
+          async get() {
+            if (afterRead && mode === "approval-throw")
+              throw new Error("unreadable");
+            if (afterRead && mode === "approval-missing") return null;
+            if (afterRead && mode === "capability-revoked")
+              return { ...approved, capabilities: [] };
+            if (afterRead && mode === "root-changed")
+              return {
+                ...approved,
+                workspaces: approved.workspaces.map((workspace) => ({
+                  ...workspace,
+                  rootIdentity: { ...workspace.rootIdentity, inode: "0" },
+                })),
+              };
+            return approved;
+          },
+        },
+        { execute },
+        { now: () => (afterRead && mode === "expired" ? 30000 : 1000) },
+      );
+      const result = await action.execute(
+        request({ kind: "workspace.read", relativePath: "README.md" }),
+        { signal: controller.signal },
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code, retry: "never" },
+      });
+      expect(JSON.stringify(result)).not.toContain("must not disclose");
+      expect(execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("discards output when cancellation arrives during the final approval lookup", async () => {
+    const chain = participants();
+    const approved = approval();
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let lookups = 0;
+    const controller = new AbortController();
+    const action = new RunReadonlyComputerAction(
+      new InMemoryAuthorityRepository(Object.values(chain)),
+      {
+        async get() {
+          if (++lookups === 2) {
+            entered();
+            await gate;
+          }
+          return approved;
+        },
+      },
+      {
+        async execute() {
+          return {
+            ok: true,
+            value: {
+              kind: "workspace.text",
+              text: "must not disclose",
+              bytes: 17,
+            },
+          };
+        },
+      },
+      clock,
+    );
+    const pending = action.execute(
+      request({ kind: "workspace.read", relativePath: "README.md" }),
+      { signal: controller.signal },
+    );
+    await reached;
+    controller.abort();
+    release();
+    const result = await pending;
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "WORKSPACE_REQUEST_CANCELLED" },
+    });
+    expect(JSON.stringify(result)).not.toContain("must not disclose");
+  });
+
   it("classifies authority stores, missing policy, invalid targets and native refusals", async () => {
     const chain = participants();
     const available = new InMemoryAuthorityRepository(Object.values(chain));

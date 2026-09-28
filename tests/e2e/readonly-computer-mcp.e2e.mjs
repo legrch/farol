@@ -68,14 +68,52 @@ await fs.mkdir(path.join(workspaceRoot, "notes"), {
 const git = (
   await executeFile("/usr/bin/xcrun", ["--find", "git"])
 ).stdout.trim();
-await executeFile(git, ["init", "--quiet", workspaceRoot]);
+const templates = path.join(root, "empty-templates");
+await fs.mkdir(templates, { mode: 0o700 });
+const fixtureGit = (args) =>
+  executeFile(
+    git,
+    [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgSign=false",
+      "-c",
+      "tag.gpgSign=false",
+      ...args,
+    ],
+    {
+      env: {
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: root,
+        LANG: "C",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_TEMPLATE_DIR: templates,
+        GIT_TERMINAL_PROMPT: "0",
+      },
+    },
+  );
+await fixtureGit(["init", "--quiet", workspaceRoot]);
 await fs.writeFile(
   path.join(workspaceRoot, "notes", "review.txt"),
   "delegated critic reached the native workspace\n",
   { mode: 0o600 },
 );
-await executeFile(git, ["-C", workspaceRoot, "add", "notes/review.txt"]);
-await executeFile(git, [
+await fs.writeFile(
+  path.join(workspaceRoot, "notes", "AGENTS.md"),
+  "# Notes instructions\nPreserve exact evidence.\n",
+  { mode: 0o600 },
+);
+await fixtureGit([
+  "-C",
+  workspaceRoot,
+  "add",
+  "notes/review.txt",
+  "notes/AGENTS.md",
+]);
+await fixtureGit([
   "-C",
   workspaceRoot,
   "-c",
@@ -87,9 +125,8 @@ await executeFile(git, [
   "-m",
   "fixture",
 ]);
-const head = (
-  await executeFile(git, ["-C", workspaceRoot, "rev-parse", "HEAD"])
-).stdout;
+const head = (await fixtureGit(["-C", workspaceRoot, "rev-parse", "HEAD"]))
+  .stdout;
 
 const now = Date.now();
 // F1-1: an admitted workspace is bound to its folder's device/inode identity.
@@ -200,6 +237,9 @@ try {
   assert.deepEqual(
     tools.tools.map((tool) => tool.name),
     [
+      "computer_workspace_bootstrap",
+      "computer_guidance_search",
+      "computer_guidance_fetch",
       "computer_workspace_list",
       "computer_workspace_read",
       "computer_workspace_search",
@@ -229,6 +269,48 @@ try {
     },
   );
 
+  const bootstrap = await client.callTool({
+    name: "computer_workspace_bootstrap",
+    arguments: { workspaceId: "fixture", relativeDirectory: "notes" },
+  });
+  assert.equal(bootstrap.isError, undefined, JSON.stringify(bootstrap));
+  assert.equal(bootstrap.structuredContent?.root, workspaceRoot);
+  assert.deepEqual(bootstrap.structuredContent?.approvedRoot, {
+    path: workspaceRoot,
+    ...workspaceRootIdentity,
+  });
+  assert.equal(bootstrap.structuredContent?.complete, true);
+  assert.deepEqual(bootstrap.structuredContent?.instructions, [
+    { relativePath: "AGENTS.md", status: "not_found" },
+    {
+      relativePath: "notes/AGENTS.md",
+      status: "read",
+      text: "# Notes instructions\nPreserve exact evidence.\n",
+      bytes: 46,
+    },
+  ]);
+  const guidance = await client.callTool({
+    name: "computer_guidance_search",
+    arguments: { query: "instructions workspace", limit: 1 },
+  });
+  assert.equal(guidance.isError, undefined);
+  assert.equal(guidance.structuredContent?.source, "sealed-package-manifest");
+  assert.equal(guidance.structuredContent?.entries?.[0]?.id, "computer-start");
+  const fetched = await client.callTool({
+    name: "computer_guidance_fetch",
+    arguments: { id: "computer-start" },
+  });
+  assert.equal(fetched.isError, undefined);
+  assert.equal(fetched.structuredContent?.entry?.id, "computer-start");
+  const invented = await client.callTool({
+    name: "computer_guidance_fetch",
+    arguments: { id: "../../AGENTS.md" },
+  });
+  assert.equal(invented.isError, true);
+  assert.equal(
+    invented.structuredContent?.error?.code,
+    "GUIDANCE_NOT_PUBLISHED",
+  );
   const searched = await client.callTool({
     name: "computer_workspace_search",
     arguments: {
@@ -280,13 +362,7 @@ try {
     { mode: 0o600 },
   );
   const branch = (
-    await executeFile(git, [
-      "-C",
-      workspaceRoot,
-      "symbolic-ref",
-      "--short",
-      "HEAD",
-    ])
+    await fixtureGit(["-C", workspaceRoot, "symbolic-ref", "--short", "HEAD"])
   ).stdout.trim();
   const status = await client.callTool({
     name: "computer_workspace_git_status",
