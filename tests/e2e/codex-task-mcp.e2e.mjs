@@ -509,7 +509,7 @@ try {
   const foreignHistory = await client.callTool({
     name: "codex_task_history",
     arguments: {
-      threadId,
+      threadId: "323c8bfa-806c-4bb0-b07e-9e90b3a6471a",
       turnId: ownerTurnId,
       workspaceId: "approved-writer",
       projectId,
