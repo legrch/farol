@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 
 import type { HandoffRequest } from "../../app/service/persistent-codex-handoff";
-import type { CodexTaskRoute } from "../../contract/codex-task-route";
+import type {
+  CodexTaskRoute,
+  CodexTaskReadContext,
+} from "../../contract/codex-task-route";
 import {
   resolveTaskModel,
   taskPolicyIdentity,
@@ -272,9 +275,11 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
 
   async observe(
     request: Parameters<NonNullable<CodexTaskRoute["observe"]>>[0],
+    context: CodexTaskReadContext = {},
   ) {
+    const bounded = this.readContext(context);
     if (
-      this.now() >= this.admission.expiresAt ||
+      !bounded ||
       request.workspaceId !== this.admission.workspaceId ||
       request.projectId !== this.admission.projectId ||
       request.threadId !== this.admission.observeThreadId
@@ -288,8 +293,8 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
         status: "refused" as const,
         code: "HANDOFF_OBSERVE_UNAVAILABLE",
       };
-    const result = await this.delegate.observe(request);
-    return this.now() >= this.admission.expiresAt
+    const result = await this.delegate.observe(request, bounded);
+    return !this.readContext(bounded)
       ? { status: "refused" as const, code: "HANDOFF_TASK_ADMISSION_DENIED" }
       : result;
   }
@@ -411,11 +416,43 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     return this.delegate.continue(request);
   }
 
-  status(dispatchId: string) {
-    return this.delegate.status(dispatchId);
+  private readContext(
+    context: CodexTaskReadContext,
+  ): CodexTaskReadContext | null {
+    if (
+      context.signal?.aborted ||
+      (context.deadlineAt !== undefined &&
+        (!Number.isSafeInteger(context.deadlineAt) || context.deadlineAt < 0))
+    )
+      return null;
+    const deadlineAt = Math.min(
+      this.admission.expiresAt,
+      context.deadlineAt ?? this.admission.expiresAt,
+    );
+    if (!Number.isSafeInteger(deadlineAt) || this.now() >= deadlineAt)
+      return null;
+    return { signal: context.signal, deadlineAt };
   }
 
-  result(dispatchId: string) {
-    return this.delegate.result(dispatchId);
+  isReadAdmitted(context: CodexTaskReadContext = {}): boolean {
+    return this.readContext(context) !== null;
+  }
+
+  async status(dispatchId: string, context: CodexTaskReadContext = {}) {
+    const bounded = this.readContext(context);
+    if (!bounded) return { status: "outcome_unknown" as const, dispatchId };
+    const result = await this.delegate.status(dispatchId, bounded);
+    return this.readContext(bounded)
+      ? result
+      : { status: "outcome_unknown" as const, dispatchId };
+  }
+
+  async result(dispatchId: string, context: CodexTaskReadContext = {}) {
+    const bounded = this.readContext(context);
+    if (!bounded) return { status: "outcome_unknown" as const, dispatchId };
+    const result = await this.delegate.result(dispatchId, bounded);
+    return this.readContext(bounded)
+      ? result
+      : { status: "outcome_unknown" as const, dispatchId };
   }
 }

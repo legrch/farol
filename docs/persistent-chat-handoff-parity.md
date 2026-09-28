@@ -632,3 +632,34 @@ The focused regressions use EventEmitter/stream fake children and fake timers.
 They do not issue native signals, repair an EPERM refusal, prove native permissions,
 qualify a shared Desktop host, or establish detached descendant cleanup. The
 original native cleanup refusal and mandatory-gate failures remain retained.
+
+## Read admission lifetime checkpoint
+
+Task status, result and selected-thread observation receive the actual MCP request
+AbortSignal. The admitted route bounds the trusted read deadline by its own
+immutable admission expiry; a caller cannot extend that lease through internal
+context or connector tool arguments. Expired/aborted reads do not invoke the
+delegate. Late delegate success is discarded after expiry or cancellation.
+
+The existing handoff service checks this lifetime before and after every provider
+read, including project/turn/item pagination, and again after journal/physical
+identity revalidation before publishing status or final content. The actual
+admitted route also supplies a synchronous trusted reply predicate, checked after
+the last awaited Computer fence release, without another provider read. This
+closes expiry during release; the installed MCP SDK separately suppresses replies
+to cancelled requests. Legacy test ports without this predicate have no task-lease
+expiry proof at the final reply boundary. Each submitted read carries the same
+absolute deadline. A read already submitted still waits for
+its provider response or the transport's bounded timeout: this is not provider
+query cancellation or an atomic remote snapshot. No new page is submitted and no
+late content is returned after admission ends. Revocation does not create a task,
+resume, fork, steer, answer a consent prompt or enable a control capability.
+
+The regressions use in-memory authority/journal/provider ports and actual linked
+in-memory MCP transports. MCP cancellation waits for the service's terminal
+outcome before asserting no further provider read; it does not infer completion
+from cancellation notification delivery. Exact admitted final-result delivery,
+private-ID filtering, deadline clipping, invalid lifetime refusal, late
+revocation and page boundaries are covered. This source evidence does not qualify
+a native serving host, packaged connector, live provider or owner trial. The
+required full source gate remains blocked by its retained execution boundary.

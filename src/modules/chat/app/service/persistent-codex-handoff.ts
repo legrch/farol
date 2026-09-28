@@ -186,6 +186,11 @@ export interface HandoffAuthority {
   resolve(workspaceId: string): Promise<HandoffWorkspace | null>;
 }
 
+export type HandoffReadContext = Readonly<{
+  signal?: AbortSignal | undefined;
+  deadlineAt?: number | undefined;
+}>;
+
 export interface HandoffHost {
   request(
     method: string,
@@ -1143,7 +1148,14 @@ export class PersistentCodexHandoff {
       workspaceId: string;
       projectId: string;
     }>,
+    context: HandoffReadContext = {},
   ) {
+    const denied = () => ({
+      status: "refused" as const,
+      code: "HANDOFF_TASK_ADMISSION_DENIED",
+    });
+    if (!this.readStillAllowed(context)) return denied();
+    const host = this.readHost(context);
     if (
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
         request.threadId,
@@ -1156,6 +1168,7 @@ export class PersistentCodexHandoff {
         code: "HANDOFF_OBSERVE_INPUT_INVALID",
       };
     const workspace = await this.authority.resolve(request.workspaceId);
+    if (!this.readStillAllowed(context)) return denied();
     if (!validWorkspace(workspace))
       return {
         status: "refused" as const,
@@ -1163,18 +1176,14 @@ export class PersistentCodexHandoff {
       };
     try {
       if (
-        !(await exactProject(
-          this.host,
-          request.projectId,
-          workspace.project.root,
-        ))
+        !(await exactProject(host, request.projectId, workspace.project.root))
       )
         return {
           status: "refused" as const,
           code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
         };
       const response = object(
-        await this.host.request("thread/read", {
+        await host.request("thread/read", {
           threadId: request.threadId,
           includeTurns: false,
         }),
@@ -1207,7 +1216,7 @@ export class PersistentCodexHandoff {
           threadId: request.threadId,
         };
       const page = object(
-        await this.host.request("thread/turns/list", {
+        await host.request("thread/turns/list", {
           threadId: request.threadId,
           cursor: null,
           limit: 100,
@@ -1239,6 +1248,7 @@ export class PersistentCodexHandoff {
           threadId: request.threadId,
         };
       const current = await this.authority.resolve(request.workspaceId);
+      if (!this.readStillAllowed(context)) return denied();
       if (
         !validWorkspace(current) ||
         !samePhysicalWorkspace(current, workspace)
@@ -1263,6 +1273,7 @@ export class PersistentCodexHandoff {
         threadRuntime,
       };
     } catch {
+      if (!this.readStillAllowed(context)) return denied();
       // Read failure cannot authorize a retry with a new task or turn.
       return { status: "outcome_unknown" as const, threadId: request.threadId };
     }
@@ -2025,7 +2036,13 @@ export class PersistentCodexHandoff {
     }
   }
 
-  async status(dispatchId: string): Promise<HandoffStatusResult> {
+  async status(
+    dispatchId: string,
+    context: HandoffReadContext = {},
+  ): Promise<HandoffStatusResult> {
+    if (!this.readStillAllowed(context))
+      return { status: "outcome_unknown", dispatchId };
+    const host = this.readHost(context);
     if (!/^[0-9a-f-]{36}$/iu.test(dispatchId)) return { status: "unknown" };
     let record: HandoffRecord | null;
     try {
@@ -2033,6 +2050,8 @@ export class PersistentCodexHandoff {
     } catch {
       return { status: "outcome_unknown", dispatchId };
     }
+    if (!this.readStillAllowed(context))
+      return { status: "outcome_unknown", dispatchId };
     if (!record) return { status: "unknown" };
     if (
       record.adopted &&
@@ -2044,6 +2063,7 @@ export class PersistentCodexHandoff {
       return { status: "outcome_unknown", dispatchId };
     const workspace = await this.authority.resolve(record.workspaceId);
     if (
+      !this.readStillAllowed(context) ||
       !validWorkspace(workspace) ||
       !samePhysicalWorkspace(workspace, record.workspace)
     ) {
@@ -2054,7 +2074,7 @@ export class PersistentCodexHandoff {
     }
     try {
       const response = object(
-        await this.host.request("thread/read", {
+        await host.request("thread/read", {
           threadId: record.threadId,
           includeTurns: false,
         }),
@@ -2074,7 +2094,7 @@ export class PersistentCodexHandoff {
       const seen = new Set<string>();
       for (let page = 0; page < 32; page += 1) {
         const turns = object(
-          await this.host.request("thread/turns/list", {
+          await host.request("thread/turns/list", {
             threadId: record.threadId,
             cursor,
             limit: 100,
@@ -2105,6 +2125,8 @@ export class PersistentCodexHandoff {
             return { status: "outcome_unknown", dispatchId };
           if (record.adopted && !(await this.adoptedReadStillAllowed(record)))
             return { status: "outcome_unknown", dispatchId };
+          if (!this.readStillAllowed(context))
+            return { status: "outcome_unknown", dispatchId };
           return {
             status: "known",
             dispatchId,
@@ -2129,17 +2151,29 @@ export class PersistentCodexHandoff {
     return { status: "outcome_unknown", dispatchId };
   }
 
-  async result(dispatchId: string): Promise<HandoffResult> {
-    const status = await this.status(dispatchId);
+  async result(
+    dispatchId: string,
+    context: HandoffReadContext = {},
+  ): Promise<HandoffResult> {
+    const host = this.readHost(context);
+    const status = await this.status(dispatchId, context);
+    if (!this.readStillAllowed(context))
+      return { status: "outcome_unknown", dispatchId };
     if (status.status !== "known") return status;
     let record: HandoffRecord | null;
     try {
       record = await this.journal.read(dispatchId);
-      if (!record || !(await this.resultReadStillAllowed(record)))
+      if (
+        !this.readStillAllowed(context) ||
+        !record ||
+        !(await this.resultReadStillAllowed(record))
+      )
         return { status: "outcome_unknown", dispatchId };
     } catch {
       return { status: "outcome_unknown", dispatchId };
     }
+    if (!this.readStillAllowed(context))
+      return { status: "outcome_unknown", dispatchId };
     const identity = {
       dispatchId,
       threadId: status.threadId,
@@ -2166,7 +2200,7 @@ export class PersistentCodexHandoff {
     try {
       for (let page = 0; page < 32; page += 1) {
         const response = object(
-          await this.host.request("thread/items/list", {
+          await host.request("thread/items/list", {
             threadId: status.threadId,
             turnId: status.turnId,
             cursor,
@@ -2203,7 +2237,10 @@ export class PersistentCodexHandoff {
           }
         }
         if (response.nextCursor === null) {
-          if (!(await this.resultReadStillAllowed(record)))
+          if (
+            !(await this.resultReadStillAllowed(record)) ||
+            !this.readStillAllowed(context)
+          )
             return { status: "outcome_unknown", dispatchId };
           return final
             ? {
@@ -2228,6 +2265,33 @@ export class PersistentCodexHandoff {
       // Result reads never create a replacement task or a model turn.
     }
     return { status: "outcome_unknown", dispatchId };
+  }
+
+  private readStillAllowed(context: HandoffReadContext): boolean {
+    return (
+      !context.signal?.aborted &&
+      (context.deadlineAt === undefined ||
+        (Number.isSafeInteger(context.deadlineAt) &&
+          context.deadlineAt >= 0 &&
+          this.now() < context.deadlineAt))
+    );
+  }
+
+  private readHost(context: HandoffReadContext): HandoffHost {
+    return {
+      request: async (method, params) => {
+        if (!this.readStillAllowed(context))
+          throw new Error("HANDOFF_READ_ADMISSION_ENDED");
+        const response = await this.host.request(
+          method,
+          params,
+          context.deadlineAt,
+        );
+        if (!this.readStillAllowed(context))
+          throw new Error("HANDOFF_READ_ADMISSION_ENDED");
+        return response;
+      },
+    };
   }
 
   private async resultReadStillAllowed(

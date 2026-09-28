@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+/** Trusted request lifetime; never accepted as a connector tool argument. */
+export type CodexTaskReadContext = Readonly<{
+  signal?: AbortSignal | undefined;
+  deadlineAt?: number | undefined;
+}>;
+
 const ThreadRuntimeSnapshot = {
   scope: z.literal("thread"),
   source: z.literal("thread/read"),
@@ -362,6 +368,7 @@ export interface CodexTaskRoute {
       workspaceId: string;
       projectId: string;
     }>,
+    context?: CodexTaskReadContext,
   ): Promise<
     | Readonly<{
         status: "observed";
@@ -450,7 +457,12 @@ export interface CodexTaskRoute {
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
     | Readonly<{ status: "refused"; code: string }>
   >;
-  status(dispatchId: string): Promise<
+  /** Synchronous trusted reply check after Computer fence release; no provider I/O. */
+  isReadAdmitted?(context?: CodexTaskReadContext): boolean;
+  status(
+    dispatchId: string,
+    context?: CodexTaskReadContext,
+  ): Promise<
     | Readonly<{ status: "unknown" }>
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
     | Readonly<{
@@ -462,7 +474,10 @@ export interface CodexTaskRoute {
         threadRuntime?: CodexThreadRuntime | undefined;
       }>
   >;
-  result(dispatchId: string): Promise<
+  result(
+    dispatchId: string,
+    context?: CodexTaskReadContext,
+  ): Promise<
     | Readonly<{ status: "unknown" }>
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
     | Readonly<{

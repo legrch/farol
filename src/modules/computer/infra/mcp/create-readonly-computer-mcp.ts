@@ -792,11 +792,15 @@ export function createReadonlyComputerMcpServer(
     };
   const guarded = <Arguments extends unknown[]>(
     run: (...arguments_: Arguments) => Promise<CallToolResult>,
+    afterRelease?: (...arguments_: Arguments) => CallToolResult | null,
   ) =>
     tracked(async (...arguments_: Arguments): Promise<CallToolResult> => {
       if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
         return fenced("COMPUTER_MCP_STOPPING");
-      if (!fence) return run(...arguments_);
+      if (!fence) {
+        const result = await run(...arguments_);
+        return afterRelease?.(...arguments_) ?? result;
+      }
       let admission;
       try {
         admission = await fence.acquireAdmission();
@@ -804,13 +808,15 @@ export function createReadonlyComputerMcpServer(
         return fenced("COMPUTER_EXECUTION_FENCE_UNREADABLE");
       }
       if (!admission.admitted) return fenced(admission.code);
+      let result: CallToolResult;
       try {
         if (lifecycle && (await lifecycle.isStopping().catch(() => true)))
           return fenced("COMPUTER_MCP_STOPPING");
-        return await run(...arguments_);
+        result = await run(...arguments_);
       } finally {
         await admission.release();
       }
+      return afterRelease?.(...arguments_) ?? result;
     });
 
   const taskResponse = (value: object, isError = false): CallToolResult => ({
@@ -818,6 +824,17 @@ export function createReadonlyComputerMcpServer(
     structuredContent: value,
     ...(isError ? { isError: true } : {}),
   });
+  const codexReadAdmitted = (signal: AbortSignal): boolean => {
+    try {
+      return (
+        !signal.aborted &&
+        (codexTasks?.isReadAdmitted === undefined ||
+          codexTasks.isReadAdmitted({ signal }) === true)
+      );
+    } catch {
+      return false;
+    }
+  };
   if (claudeTasks) {
     server.registerTool(
       "claude_task_create",
@@ -1101,24 +1118,36 @@ export function createReadonlyComputerMcpServer(
           inputSchema: CodexTaskObserveInputSchema,
           annotations: READONLY_ANNOTATIONS,
         },
-        guarded(async (request) => {
-          try {
-            const result = await codexTasks.observe!(request);
-            if (result.status !== "observed") return taskResponse(result, true);
-            const threadRuntime = parseThreadRuntime(result.threadRuntime);
-            if (!threadRuntime)
+        guarded(
+          async (request, context) => {
+            try {
+              const result = await codexTasks.observe!(request, {
+                signal: context.mcpReq.signal,
+              });
+              if (result.status !== "observed")
+                return taskResponse(result, true);
+              const threadRuntime = parseThreadRuntime(result.threadRuntime);
+              if (!threadRuntime)
+                return taskResponse(
+                  { status: "outcome_unknown", threadId: request.threadId },
+                  true,
+                );
+              return taskResponse({ ...result, threadRuntime }, false);
+            } catch {
               return taskResponse(
                 { status: "outcome_unknown", threadId: request.threadId },
                 true,
               );
-            return taskResponse({ ...result, threadRuntime }, false);
-          } catch {
-            return taskResponse(
-              { status: "outcome_unknown", threadId: request.threadId },
-              true,
-            );
-          }
-        }),
+            }
+          },
+          (_request, context) =>
+            codexReadAdmitted(context.mcpReq.signal)
+              ? null
+              : taskResponse(
+                  { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" },
+                  true,
+                ),
+        ),
       );
     if (codexTasks.observeEnabled === true && codexTasks.history)
       server.registerTool(
@@ -1300,35 +1329,46 @@ export function createReadonlyComputerMcpServer(
         inputSchema: CodexTaskReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
-      guarded(async ({ dispatchId }) => {
-        try {
-          const result = await codexTasks.status(dispatchId);
-          const threadRuntime =
-            result.status === "known"
-              ? parseThreadRuntime(result.threadRuntime)
-              : null;
-          if (result.status === "known" && !threadRuntime)
+      guarded(
+        async ({ dispatchId }, context) => {
+          try {
+            const result = await codexTasks.status(dispatchId, {
+              signal: context.mcpReq.signal,
+            });
+            const threadRuntime =
+              result.status === "known"
+                ? parseThreadRuntime(result.threadRuntime)
+                : null;
+            if (result.status === "known" && !threadRuntime)
+              return taskResponse(
+                { status: "outcome_unknown", dispatchId },
+                true,
+              );
+            const publicResult =
+              result.status === "known"
+                ? {
+                    status: "known",
+                    dispatchId,
+                    turnStatus: result.turnStatus,
+                    threadRuntime,
+                  }
+                : result;
+            return taskResponse(
+              publicResult,
+              result.status === "outcome_unknown",
+            );
+          } catch {
             return taskResponse(
               { status: "outcome_unknown", dispatchId },
               true,
             );
-          const publicResult =
-            result.status === "known"
-              ? {
-                  status: "known",
-                  dispatchId,
-                  turnStatus: result.turnStatus,
-                  threadRuntime,
-                }
-              : result;
-          return taskResponse(
-            publicResult,
-            result.status === "outcome_unknown",
-          );
-        } catch {
-          return taskResponse({ status: "outcome_unknown", dispatchId }, true);
-        }
-      }),
+          }
+        },
+        ({ dispatchId }, context) =>
+          codexReadAdmitted(context.mcpReq.signal)
+            ? null
+            : taskResponse({ status: "outcome_unknown", dispatchId }, true),
+      ),
     );
     server.registerTool(
       "codex_task_result",
@@ -1339,34 +1379,46 @@ export function createReadonlyComputerMcpServer(
         inputSchema: CodexTaskReadInputSchema,
         annotations: READONLY_ANNOTATIONS,
       },
-      guarded(async ({ dispatchId }) => {
-        try {
-          const result = await codexTasks.result(dispatchId);
-          const threadRuntime =
-            result.status === "running"
-              ? parseThreadRuntime(result.threadRuntime)
-              : null;
-          if (result.status === "running" && !threadRuntime)
+      guarded(
+        async ({ dispatchId }, context) => {
+          try {
+            const result = await codexTasks.result(dispatchId, {
+              signal: context.mcpReq.signal,
+            });
+            const threadRuntime =
+              result.status === "running"
+                ? parseThreadRuntime(result.threadRuntime)
+                : null;
+            if (result.status === "running" && !threadRuntime)
+              return taskResponse(
+                { status: "outcome_unknown", dispatchId },
+                true,
+              );
+            const publicResult =
+              result.status === "completed"
+                ? { status: "completed", dispatchId, text: result.text }
+                : result.status === "running"
+                  ? { status: result.status, dispatchId, threadRuntime }
+                  : result.status === "failed" ||
+                      result.status === "interrupted"
+                    ? { status: result.status, dispatchId }
+                    : result;
+            return taskResponse(
+              publicResult,
+              result.status === "outcome_unknown",
+            );
+          } catch {
             return taskResponse(
               { status: "outcome_unknown", dispatchId },
               true,
             );
-          const publicResult =
-            result.status === "completed"
-              ? { status: "completed", dispatchId, text: result.text }
-              : result.status === "running"
-                ? { status: result.status, dispatchId, threadRuntime }
-                : result.status === "failed" || result.status === "interrupted"
-                  ? { status: result.status, dispatchId }
-                  : result;
-          return taskResponse(
-            publicResult,
-            result.status === "outcome_unknown",
-          );
-        } catch {
-          return taskResponse({ status: "outcome_unknown", dispatchId }, true);
-        }
-      }),
+          }
+        },
+        ({ dispatchId }, context) =>
+          codexReadAdmitted(context.mcpReq.signal)
+            ? null
+            : taskResponse({ status: "outcome_unknown", dispatchId }, true),
+      ),
     );
   }
 
