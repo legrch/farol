@@ -4886,3 +4886,64 @@ describe("serialized task probe correlation (synthetic DOM)", () => {
     });
   });
 });
+
+describe("per-operation NEW app verification target", () => {
+  it.each(["missing", "ambiguous", "conflict", "draft_present"] as const)(
+    "fails closed for %s without typing or sending",
+    async (reason) => {
+      const execute = vi.fn().mockResolvedValue({ state: "blocked", reason });
+      const candidate = devTaskRoute(execute);
+      const result = await candidate.runReadonlyTask(
+        "local fixture",
+        [],
+        {},
+        "ordinary",
+        { name: "NEW fixture" },
+      );
+      expect(result.state).toBe("failed_before_submit");
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(execute.mock.calls[0]?.[0]).toContain('"NEW fixture"');
+      expect(execute.mock.calls[0]?.[0]).not.toContain('"Farol DEV"');
+      expect(execute.mock.calls[0]?.[0]).not.toContain("send.click()");
+      execute.mockClear();
+      await candidate.runReadonlyTask("old default unchanged");
+      expect(execute.mock.calls[0]?.[0]).toContain('"Farol DEV"');
+    },
+  );
+  it("refuses an invalid target before opening or navigating a page", async () => {
+    const execute = vi.fn();
+    const candidate = devTaskRoute(execute);
+    expect(
+      await candidate.runReadonlyTask("local fixture", [], {}, "ordinary", {
+        name: "NEW\nfixture",
+      }),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_APP_TARGET_INVALID",
+    });
+    expect(candidate.open).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it("carries the same target through prepare and the final pre-Send app fence", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ state: "blocked", reason: "missing" });
+    const candidate = devTaskRoute(execute);
+    expect(
+      await candidate.runReadonlyTask("local fixture", [], {}, "ordinary", {
+        name: "NEW fixture",
+      }),
+    ).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_APP_SELECTION_LOST",
+    });
+    expect(execute).toHaveBeenCalledTimes(3);
+    for (const [script] of execute.mock.calls) {
+      expect(script).toContain('"NEW fixture"');
+      expect(script).not.toContain('"Farol DEV"');
+      expect(script).not.toContain("send.click()");
+    }
+  });
+});

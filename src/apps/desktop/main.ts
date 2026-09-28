@@ -1,3 +1,4 @@
+import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
 import { resolveOwnerTaskModel } from "./owner-config";
 import {
   app,
@@ -3871,6 +3872,7 @@ type ConnectorAppVerificationBinding = Readonly<{
   challengeSha256: string;
   buildId: string;
   workspaceId: string;
+  appName?: string;
 }>;
 
 function connectorAppBindingCurrent(
@@ -3885,7 +3887,9 @@ function connectorAppBindingCurrent(
     connector.generation === expected.connectorGeneration &&
     connector.runtime?.runtimeGeneration === expected.runtimeGeneration &&
     connector.runtime?.buildId === expected.buildId &&
-    connector.challenge?.challengeSha256 === expected.challengeSha256
+    connector.challenge?.challengeSha256 === expected.challengeSha256 &&
+    (expected.appName === undefined ||
+      selectedConnectorApp(connector) === expected.appName)
   );
 }
 
@@ -4021,8 +4025,8 @@ async function checkSecureMcpAttachment(
 // existing route proves the exact selected app before submit; only the local
 // Computer MCP receipt can complete the attachment, never the model's prose.
 async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
-  if (runtimeEnvironment !== "dev") {
-    return configurationFailure("CONNECTOR_APP_VERIFICATION_DEV_ONLY");
+  if (!embeddedBrowserEnabled()) {
+    return configurationFailure("CONNECTOR_APP_VERIFICATION_UNAVAILABLE");
   }
   if (!configuration || !chatGptRoute || !secureMcpConnectorRuntime) {
     return configurationFailure("SETTINGS_UNAVAILABLE");
@@ -4045,6 +4049,9 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
     const connector = settings.connectors.secureMcp;
     const runtime = connector.runtime;
     const challenge = connector.challenge;
+    const appName = selectedConnectorApp(connector);
+    if (appName === null)
+      return configurationFailure("CONNECTOR_APP_TARGET_REQUIRED");
     const workspaceId = settings.setup.computer.verified?.workspaceId;
     if (
       !chatGptTaskAdmissionReady() ||
@@ -4078,6 +4085,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
       challengeSha256: challenge.challengeSha256,
       buildId: runtime.buildId,
       workspaceId,
+      appName,
     };
     if (settings.setup.connect.outcomeUnknown) {
       return configurationFailure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
@@ -4099,7 +4107,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
         "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",
       );
     }
-    const prompt = `Use the selected Farol Dev app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
+    const prompt = `Use the selected ${appName} app to call farol_next_connector_verify once with challenge "${challenge.value}" and workspaceId "${workspaceId}". Do not read file contents. Reply briefly with the result.`;
     let claimed = false;
     const result = await chatGptRoute.runReadonlyTask(
       prompt,
@@ -4107,6 +4115,13 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
       {
         onDispatchIntent: async () => {
           if (claimed) return;
+          const admitted = configuration!.snapshot();
+          if (
+            admitted.status !== "ready" ||
+            expectedBinding === null ||
+            !connectorAppBindingCurrent(admitted.settings, expectedBinding)
+          )
+            throw new Error("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
           await prepareConnectorAppVerificationAttempt(
             stateRoot,
             challenge.challengeSha256,
@@ -4121,6 +4136,7 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
         },
       },
       "temporary-instant",
+      { name: appName },
     );
     if (
       result.state === "failed_before_submit" ||
@@ -4812,6 +4828,22 @@ async function configureAdmittedProduct(
         );
       } catch {
         return configurationFailure("CONNECTOR_CREDENTIAL_STORE_FAILED");
+      }
+    }
+    case "connector.select-chatgpt-app": {
+      if (chatGptTaskAdmission || connectorTaskAdmission)
+        return configurationFailure("CHATGPT_TASK_IN_PROGRESS");
+      connectorTaskAdmission = true;
+      try {
+        return ProductConfigurationResultSchema.parse(
+          await configuration.selectSecureMcpChatGptApp({
+            name: command.name,
+            tunnelId: command.tunnelId,
+            connectorGeneration: command.connectorGeneration,
+          }),
+        );
+      } finally {
+        connectorTaskAdmission = false;
       }
     }
     case "connector.start":
@@ -5793,10 +5825,15 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.toggle-sidebar": {
-      if (!embeddedBrowserEnabled() || !chatGptRoute) {
+      const visibleRoute =
+        signInSurfaceOpen ||
+        (browserHomeSurfaceOpen && productTasksState().tasks.length === 0)
+          ? chatGptRoute
+          : liveTaskRoutes.get(selectedTaskId);
+      if (!embeddedBrowserEnabled() || !visibleRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
-      if (!(await chatGptRoute.toggleSidebar())) {
+      if (!(await visibleRoute.toggleSidebar())) {
         return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
       }
       return ProductConfigurationResultSchema.parse({

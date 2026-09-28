@@ -2582,3 +2582,74 @@ describe("Farol Next product configuration", () => {
     ).toBe(true);
   });
 });
+
+describe("owner-selected embedded app binding", () => {
+  it("preserves selection through reload but invalidates it after connector generation changes", async () => {
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    await service.configureSecureMcpTunnel({ tunnelId: "new-fixture" });
+    let snapshot = service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    const binding = {
+      name: "NEW fixture",
+      tunnelId: "new-fixture",
+      connectorGeneration: snapshot.settings.connectors.secureMcp.generation,
+    };
+    expect((await service.selectSecureMcpChatGptApp(binding)).ok).toBe(true);
+    const reloaded = new ProductConfigurationService(store, dependencies());
+    await reloaded.initialize();
+    snapshot = reloaded.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.connectors.secureMcp.chatgptApp).toEqual(binding);
+    const revision = snapshot.settings.revision;
+    expect(
+      await reloaded.selectSecureMcpChatGptApp({
+        ...binding,
+        connectorGeneration: binding.connectorGeneration + 1,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+    });
+    expect(reloaded.snapshot()).toEqual(snapshot);
+    await reloaded.configureSecureMcpTunnel({ tunnelId: "replacement" });
+    expect(await reloaded.selectSecureMcpChatGptApp(binding)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_APP_VERIFICATION_STATE_CHANGED",
+    });
+    const replacement = reloaded.snapshot();
+    if (replacement.status !== "ready") throw new Error("settings missing");
+    expect(replacement.settings.revision).toBe(revision + 1);
+  });
+  it("refuses changing the target after an unknown submission without clearing uncertainty", async () => {
+    const store = new ProductSettingsStore({ root: await stateRoot() });
+    const seed = new ProductConfigurationService(store, dependencies());
+    await seed.initialize();
+    await seed.configureSecureMcpTunnel({ tunnelId: "new-fixture" });
+    const snapshot = seed.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    await store.save({
+      ...snapshot.settings,
+      setup: {
+        ...snapshot.settings.setup,
+        connect: { ...snapshot.settings.setup.connect, outcomeUnknown: true },
+      },
+    });
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    const before = service.snapshot();
+    expect(
+      await service.selectSecureMcpChatGptApp({
+        name: "NEW fixture",
+        tunnelId: "new-fixture",
+        connectorGeneration: snapshot.settings.connectors.secureMcp.generation,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+    });
+    expect(service.snapshot()).toEqual(before);
+  });
+});

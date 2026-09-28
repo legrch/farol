@@ -103,7 +103,7 @@ tasks:
   test:e2e:guided-setup:package:
     desc: Check normal packaged Setup/Browser using owned hidden fixtures
     cmds:
-      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:guided-setup:package
+      - /usr/bin/python3 -I ./scripts/assert-owner-untouched.py -- npm run test:e2e:guided-setup:package -- {{.CLI_ARGS}}
 
   ci:fast:
     desc: Complete deterministic standalone gate without native UI

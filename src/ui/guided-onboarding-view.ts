@@ -1,3 +1,4 @@
+import { selectedConnectorApp } from "../pkg/product-settings/connector-app-selection";
 import type {
   ProductConfigurationCommand,
   ProductSettings,
@@ -76,6 +77,8 @@ type FolderAction = Readonly<{
 // access or substitutes for the exact backend connection receipt.
 export class GuidedOnboardingView {
   private step = 4;
+  private mode: "embedded" | "external";
+  private appNameEdited = false;
   private busy = false;
   private busyLabel = "Checking…";
   private tunnelEdited = false;
@@ -93,6 +96,53 @@ export class GuidedOnboardingView {
   private readonly freshAppVerification = new GuidedFreshAppVerification();
 
   constructor(private readonly port: GuidedOnboardingPort) {
+    this.mode = port.mode;
+    element<HTMLSelectElement>(
+      "#onboarding-verification-method",
+    ).addEventListener("change", () => {
+      if (this.busy) return;
+      this.mode =
+        element<HTMLSelectElement>("#onboarding-verification-method").value ===
+        "external"
+          ? "external"
+          : "embedded";
+      this.confirmNewCheck = false;
+      this.message = "";
+      port.render();
+    });
+    element<HTMLInputElement>("#onboarding-app-name").addEventListener(
+      "input",
+      () => {
+        this.appNameEdited = true;
+        port.render();
+      },
+    );
+    this.click("#onboarding-save-app", () => {
+      void this.perform("Saving the selected app…", async () => {
+        const connector = port.settings()?.connectors.secureMcp;
+        if (!connector?.tunnelId) {
+          this.message =
+            "Save the current tunnel on Connection first. No message was sent.";
+          return;
+        }
+        const saved = await port.configure(
+          {
+            kind: "connector.select-chatgpt-app",
+            name: element<HTMLInputElement>(
+              "#onboarding-app-name",
+            ).value.trim(),
+            tunnelId: connector.tunnelId,
+            connectorGeneration: connector.generation,
+          },
+          "App selection saved for this connection. No message was sent.",
+        );
+        if (saved) {
+          this.appNameEdited = false;
+          this.message =
+            "App selection saved. Run the check explicitly when ready.";
+        }
+      });
+    });
     element<HTMLFormElement>("#onboarding-form").addEventListener(
       "submit",
       (event) => {
@@ -243,12 +293,11 @@ export class GuidedOnboardingView {
   }
   private progress(): readonly boolean[] {
     const facts = this.facts();
-    const progress = [...onboardingProgress(facts, this.port.mode)];
+    const progress = [...onboardingProgress(facts, this.mode)];
     for (const index of this.failedChecks) {
       // A folder check can fail without undoing the owner's optional choice.
       // The folder card reports the access problem; connection stays unready.
-      if (index === 1 || (index === 0 && this.port.mode === "external"))
-        continue;
+      if (index === 1 || (index === 0 && this.mode === "external")) continue;
       progress[index] = false;
       if (index < 3) progress[3] = false;
     }
@@ -303,11 +352,27 @@ export class GuidedOnboardingView {
     element("#onboarding-nav").hidden = !active;
     element("#nav").hidden = active;
     if (!enabled) return;
-    const external = this.port.mode === "external";
+    const external = this.mode === "external";
+    const method = element<HTMLSelectElement>(
+      "#onboarding-verification-method",
+    );
+    method.value = this.mode;
+    method.disabled = this.busy;
+    const connector = this.port.settings()?.connectors.secureMcp;
+    const appName = element<HTMLInputElement>("#onboarding-app-name");
+    if (!this.appNameEdited && document.activeElement !== appName)
+      appName.value = connector ? (selectedConnectorApp(connector) ?? "") : "";
+    appName.disabled = this.busy;
+    element<HTMLButtonElement>("#onboarding-save-app").disabled =
+      this.busy || !connector?.tunnelId || this.facts().outcomeUnknown;
+    element("#onboarding-app-selection-status").textContent =
+      connector && selectedConnectorApp(connector)
+        ? `Selected app: ${selectedConnectorApp(connector)} · tunnel ${connector.tunnelId}`
+        : "Choose the exact name of your NEW ChatGPT app for this tunnel. Nothing is selected automatically.";
     document
       .querySelectorAll<HTMLElement>("[data-onboarding-verification]")
       .forEach((node) => {
-        node.hidden = node.dataset.onboardingVerification !== this.port.mode;
+        node.hidden = node.dataset.onboardingVerification !== this.mode;
       });
     const challenge =
       external && externalConnectorChallengeAllowed(this.facts())
@@ -352,7 +417,7 @@ export class GuidedOnboardingView {
       tunnel.value = facts.tunnelId ?? "";
     const changed = editing && connectionDraftChanged(facts, this.draft());
     const currentProgress = this.progress();
-    const completed = onboardingCompletedSteps(settings, this.port.mode);
+    const completed = onboardingCompletedSteps(settings, this.mode);
     const progress = currentProgress.map(
       (ready, index) => ready || completed[index],
     );
@@ -503,7 +568,7 @@ export class GuidedOnboardingView {
       "✓ Tunnel connection verified",
       external
         ? "✓ Attachment receipt verified for this connector"
-        : "✓ End-to-end check passed through Farol Dev",
+        : "✓ End-to-end check passed through the selected app",
       "✓ All four setup checks complete",
     ];
     status.hidden =
@@ -1034,7 +1099,7 @@ export class GuidedOnboardingView {
           },
           { tunnelId: facts.tunnelId ?? "", runtimeKey: "" },
           reconnect,
-          this.port.mode,
+          "external",
         );
         if (result.ok) {
           ready = true;
@@ -1072,7 +1137,7 @@ export class GuidedOnboardingView {
     });
   }
   private async verifyApp(fresh: boolean): Promise<void> {
-    if (this.port.mode === "external") {
+    if (this.mode === "external") {
       await this.checkAttachment();
       return;
     }
@@ -1120,6 +1185,12 @@ export class GuidedOnboardingView {
         }
       }
       const ready = this.facts();
+      const connector = this.port.settings()?.connectors.secureMcp;
+      if (!connector || selectedConnectorApp(connector) === null) {
+        this.message =
+          "Save the exact NEW app name for the current tunnel before running the embedded check. No message was sent.";
+        return;
+      }
       if (
         !ready.available ||
         ready.chat !== "ready" ||
@@ -1155,7 +1226,7 @@ export class GuidedOnboardingView {
           ? freshResult.ok
           : await this.port.configure(
               { kind: "connector.verify-app" },
-              "Farol Dev connection verified.",
+              "Selected app connection verified.",
             );
       if (ok) {
         this.failedChecks.delete(3);
@@ -1222,7 +1293,7 @@ export class GuidedOnboardingView {
         this.port.openChat();
         return;
       }
-      if (onboardingCompletedSteps(this.port.settings(), this.port.mode)[4]) {
+      if (onboardingCompletedSteps(this.port.settings(), this.mode)[4]) {
         this.port.openChat();
         return;
       }
@@ -1260,10 +1331,7 @@ export class GuidedOnboardingView {
       await this.saveCredentials();
       return;
     }
-    const completed = onboardingCompletedSteps(
-      this.port.settings(),
-      this.port.mode,
-    );
+    const completed = onboardingCompletedSteps(this.port.settings(), this.mode);
     const completedAction = completedStepAction(this.step, progress, completed);
     if (this.step === 3 && completedAction === "continue") {
       this.select(4);

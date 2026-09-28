@@ -1,6 +1,8 @@
 // Owned hidden Electron windows and disposable state only. This proves Setup
 // selection and IPC/UI integration, never a live account or NEW connector.
 import assert from "node:assert/strict";
+import { Client } from "@modelcontextprotocol/client";
+import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -11,10 +13,12 @@ import { _electron as electron } from "playwright-core";
 
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
-assert.deepEqual(
-  process.argv.slice(2),
-  packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : [],
-);
+const behavior = process.argv.includes("--behavior");
+assert.deepEqual(process.argv.slice(2), [
+  ...(packaged ? ["--packaged"] : devOnly ? ["--dev-only"] : []),
+  ...(behavior ? ["--behavior"] : []),
+]);
+assert.ok(!(behavior && devOnly));
 const root = process.cwd();
 const appRoot = path.join(root, "_output/package/Farol Next Preview.app");
 const executable = packaged
@@ -40,11 +44,159 @@ const workspace = path.join(temporaryRoot, "approved-folder");
 await fs.mkdir(workspace, { mode: 0o700 });
 const observations = [];
 let nonReadRequests = 0;
-const chatFixture = createServer((request, response) => {
+let fixtureMode = "receipt";
+let activeFixtureProfile;
+const mcpChildren = [];
+const fixtureApp = "NEW fixture";
+const tunnelFixture = path.join(temporaryRoot, "tunnel-client.cjs");
+await fs.writeFile(
+  tunnelFixture,
+  `#!${process.execPath}\n${await fs.readFile(new URL("./tunnel-client.fixture.cjs", import.meta.url), "utf8")}`,
+  { mode: 0o700 },
+);
+async function fixtureVerification(prompt) {
+  const challenge = /with challenge "([^"]+)" and workspaceId "([^"]+)"/.exec(
+    prompt,
+  );
+  assert.ok(challenge, "FIXTURE_VERIFICATION_PROMPT_INVALID");
+  assert.ok(activeFixtureProfile, "FIXTURE_PROFILE_UNCONFIRMED");
+  const launchFile = path.join(
+    activeFixtureProfile.userData,
+    "farol-next-state/secure-mcp-connector/computer-authority/computer-launch.json",
+  );
+  const transport = new StdioClientTransport({
+    command: executable,
+    args: [
+      path.join(path.dirname(entry), "computer-mcp.cjs"),
+      "--launch-contract",
+      launchFile,
+    ],
+    cwd: root,
+    env: {
+      HOME: activeFixtureProfile.home,
+      TMPDIR: os.tmpdir(),
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+      ELECTRON_RUN_AS_NODE: "1",
+    },
+    stderr: "pipe",
+  });
+  const client = new Client({
+    name: "owned-embedded-setup-fixture",
+    version: "1.0.0",
+  });
+  const start = transport.start.bind(transport);
+  let owned;
+  transport.start = async () => {
+    const started = start();
+    // Only the SDK child created by this disposable fixture. Keep its actual
+    // terminal event independently of SDK close's bounded signal attempts.
+    const child = transport._process;
+    assert.ok(child && child.pid === transport.pid);
+    owned = { child, terminal: once(child, "exit") };
+    mcpChildren.push(owned);
+    await started;
+  };
+  try {
+    await bounded(client.connect(transport), "FIXTURE_MCP_CONNECT_TIMEOUT");
+    const result = await bounded(
+      client.callTool({
+        name: "farol_next_connector_verify",
+        arguments: { challenge: challenge[1], workspaceId: challenge[2] },
+      }),
+      "FIXTURE_MCP_VERIFY_TIMEOUT",
+    );
+    assert.equal(result.isError, undefined, JSON.stringify(result));
+    assert.equal(result.structuredContent?.workspaceId, challenge[2]);
+    return "Owned fixture receipt recorded";
+  } finally {
+    const failures = [];
+    try {
+      await bounded(client.close(), "FIXTURE_MCP_CLOSE_TIMEOUT");
+    } catch (error) {
+      failures.push(error);
+    }
+    if (owned) {
+      try {
+        if (owned.child.exitCode === null && owned.child.signalCode === null)
+          await bounded(owned.terminal, "FIXTURE_MCP_EXIT_TIMEOUT");
+        observations.push({
+          kind: "owned-mcp-terminal",
+          pid: owned.child.pid,
+          exit: owned.child.exitCode,
+          signal: owned.child.signalCode,
+        });
+        owned.observed = true;
+        assert.equal(owned.child.exitCode, 0);
+        assert.equal(owned.child.signalCode, null);
+      } catch (error) {
+        if (owned.child.exitCode === null && owned.child.signalCode === null) {
+          cleanupUnknown = true;
+          observations.push({
+            kind: "owned-mcp-cleanup-unknown",
+            pid: owned.child.pid,
+          });
+        }
+        failures.push(error);
+      }
+    }
+    // A receipt is not cleanup proof. Preserve close failure separately even
+    // when the exact same owned child later has a known terminal result.
+    cleanupFailures.push(...failures);
+    if (failures.length)
+      throw new AggregateError(failures, "FIXTURE_MCP_CLEANUP_FAILED");
+  }
+}
+const chatFixture = createServer(async (request, response) => {
+  if (
+    behavior &&
+    request.method === "POST" &&
+    request.url === "/fixture-send"
+  ) {
+    nonReadRequests += 1;
+    try {
+      let body = "";
+      for await (const chunk of request) {
+        body += chunk;
+        assert.ok(body.length < 8192);
+      }
+      const result =
+        fixtureMode === "receipt"
+          ? await fixtureVerification(JSON.parse(body).prompt)
+          : "Owned fixture reply without a receipt";
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ result }));
+    } catch (error) {
+      response.writeHead(500);
+      response.end(JSON.stringify({ error: String(error) }));
+    }
+    return;
+  }
+
   if (request.method !== "GET") nonReadRequests += 1;
   response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  if (behavior) {
+    response.end(`<!doctype html><html><head><title>Owned Setup fixture</title></head><body style="margin:24px;font:18px sans-serif">
+      <h1>Owned Setup fixture</h1>
+      <button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1)">Toggle fixture sidebar</button>
+      <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button aria-label="Select ChatGPT model">Instant</button>
+      <div id="messages"></div><form onsubmit="return false"><span data-testid="composer-app-chip">${fixtureApp}</span><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea><button type="button" data-testid="send-button" onclick="sendFixture()">Send to owned fixture</button></form>
+      <script>
+      async function sendFixture() {
+        const composer = document.querySelector('#prompt-textarea');
+        const prompt = composer.value;
+        const user = document.createElement('div');
+        user.dataset.messageAuthorRole='user'; user.dataset.messageId='fixture-user-'+Date.now(); user.textContent=prompt;
+        document.querySelector('#messages').append(user); composer.value='';
+        const stop=document.createElement('button');stop.dataset.testid='stop-button';stop.textContent='Fixture pending';document.body.append(stop);
+        const response=await fetch('/fixture-send',{method:'POST',body:JSON.stringify({prompt})});
+        const reply=await response.json();stop.remove();
+        const assistant=document.createElement('div');assistant.dataset.messageAuthorRole='assistant';assistant.dataset.messageId='fixture-assistant-'+Date.now();assistant.dataset.parentMessageId=user.dataset.messageId;assistant.textContent=reply.result||reply.error;document.querySelector('#messages').append(assistant);
+      }
+      </script></body></html>`);
+    return;
+  }
   response.end(
-    '<!doctype html><html><head><title>Local Browser fixture</title></head><body style="margin:24px;font:18px sans-serif"><h1>Local Browser fixture</h1><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>',
+    '<!doctype html><html><head><title>Local Browser fixture</title></head><body style="margin:24px;font:18px sans-serif"><h1>Local Browser fixture</h1><button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1)">Toggle fixture sidebar</button><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>',
   );
 });
 await bounded(
@@ -173,6 +325,7 @@ async function launch(environment, mode = "normal", profile = mode) {
       FAROL_NEXT_E2E_TEST_PROOF: proof,
       FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
       FAROL_NEXT_E2E_CHATGPT_URL: fixtureUrl,
+      ...(behavior ? { FAROL_NEXT_E2E_TUNNEL_CLIENT: tunnelFixture } : {}),
       ...(mode === "legacy" ? { FAROL_NEXT_E2E_LEGACY_SETUP: "1" } : {}),
     },
     timeout: 15000,
@@ -223,6 +376,7 @@ async function launch(environment, mode = "normal", profile = mode) {
       await fs.realpath(userData),
     );
   profileIsolationConfirmed = true;
+  activeFixtureProfile = { home, userData: nativePaths.userData };
   observations.push({
     kind: "native-profile-isolation",
     environment,
@@ -389,11 +543,13 @@ async function browserGeometry(window, environment, width) {
 }
 
 try {
-  for (const environment of packaged
+  for (const environment of behavior
     ? ["preview"]
-    : devOnly
-      ? ["dev"]
-      : ["preview", "dev"]) {
+    : packaged
+      ? ["preview"]
+      : devOnly
+        ? ["dev"]
+        : ["preview", "dev"]) {
     const window = await launch(environment, "normal", environment);
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
@@ -432,25 +588,35 @@ try {
       await window.locator('[data-onboarding-step="app"]').click();
       assert.match(
         await window.locator("#onboarding-copy").innerText(),
-        /does not send a message/,
+        /sends one short message/,
       );
       assert.equal(
         await window.locator("#onboarding-verify-again").isVisible(),
         false,
       );
       await window
+        .locator("#onboarding-verification-method")
+        .selectOption("external");
+      assert.match(
+        await window.locator("#onboarding-copy").innerText(),
+        /does not send a message/,
+      );
+      await window
+        .locator("#onboarding-verification-method")
+        .selectOption("embedded");
+      await window
         .locator('.nav-utility .nav-item[data-section="settings"]')
         .click();
       await window.locator('[data-panel="settings"].active').waitFor();
+      await window
+        .locator("#computer-command-policy")
+        .waitFor({ state: "visible" });
       await window
         .locator('#settings-nav [data-settings-category="diagnostics"]')
         .click();
       const connection = window.locator("#connection-diagnostics");
       if (!(await connection.evaluate((details) => details.open)))
         await connection.locator("summary").click();
-      await window
-        .locator("#computer-command-policy")
-        .waitFor({ state: "visible" });
     }
     if (environment === "preview")
       await window.locator("#review-setup").click();
@@ -480,6 +646,75 @@ try {
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
     observations.push({ kind: "task-menu-setup", environment });
 
+    if (behavior) {
+      // Real configuration IPC and owned tunnel health, with no embedded login
+      // witness yet. Save does not start a process or expose its saved key.
+      await window.locator('[data-onboarding-step="tunnel"]').click();
+      await window.locator("#onboarding-tunnel-id").fill("new_fixture_tunnel");
+      await window
+        .locator("#onboarding-runtime-key")
+        .fill("synthetic-owned-fixture-runtime-key");
+      await window.locator("#onboarding-primary").click();
+      await window
+        .locator("#onboarding-credentials-saved")
+        .waitFor({ state: "visible" });
+      let state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime,
+        null,
+      );
+      assert.equal(state.configuration.settings.setup.chatgpt.verified, null);
+      await window.locator("#onboarding-replace-credentials").click();
+      assert.equal(
+        await window.locator("#onboarding-runtime-key").inputValue(),
+        "",
+      );
+      await window
+        .locator("#onboarding-runtime-key")
+        .fill("unused-fixture-replacement-runtime-key");
+      await window.locator("#onboarding-keep-credentials").click();
+      assert.deepEqual(
+        (await window.evaluate(() => window.farolNext.bootstrap()))
+          .configuration,
+        state.configuration,
+      );
+      await window.locator("#onboarding-primary").click();
+      await window
+        .locator('[data-onboarding-step="tunnel"].complete')
+        .waitFor({ timeout: 30000 });
+      state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(state.configuration.settings.setup.chatgpt.verified, null);
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime.state,
+        "ready",
+      );
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.attachment,
+        null,
+      );
+      const noTarget = await window.evaluate(() =>
+        window.farolNext.configure({ kind: "connector.verify-app" }),
+      );
+      assert.equal(noTarget.error, "CONNECTOR_APP_TARGET_REQUIRED");
+      assert.equal(nonReadRequests, 0);
+      await window.locator('[data-onboarding-step="app"]').click();
+      await window.locator("#onboarding-app-name").fill(fixtureApp);
+      await window.locator("#onboarding-save-app").click();
+      await window
+        .locator('#onboarding-form[aria-busy="false"]')
+        .waitFor({ state: "attached" });
+      state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.chatgptApp.name,
+        fixtureApp,
+      );
+      observations.push({
+        kind: "activation-without-embedded-login",
+        noTarget: noTarget.error,
+        runtime: "ready",
+        sends: nonReadRequests,
+      });
+    }
     // Readiness and task views use only the local composer fixture. No Send,
     // external account, Codex task or inference is performed.
     await window.locator('[data-onboarding-step="chatgpt"]').click();
@@ -543,6 +778,118 @@ try {
       taskCount: (await window.evaluate(() => window.farolNext.bootstrap()))
         .tasks.length,
     });
+    if (behavior) {
+      await window.locator('[data-onboarding-step="app"]').click();
+      await window.locator("#onboarding-primary").click();
+      await window
+        .locator('#browser-check-banner[data-tone="complete"]')
+        .waitFor({ state: "visible", timeout: 30000 });
+      assert.equal(nonReadRequests, 1);
+      let state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.ok(state.configuration.settings.connectors.secureMcp.attachment);
+      assert.equal(
+        state.configuration.settings.setup.connect.outcomeUnknown,
+        false,
+      );
+      const visibleReply = await application.evaluate(
+        async ({ BrowserWindow, WebContentsView }) => {
+          const shell = BrowserWindow.getAllWindows().find((window) =>
+            window.webContents.getURL().endsWith("/shell.html"),
+          );
+          const page = shell.contentView.children.find(
+            (child) => child instanceof WebContentsView && child.getVisible(),
+          );
+          return {
+            url: page.webContents.getURL(),
+            reply: await page.webContents.executeJavaScript(
+              "document.querySelector('[data-message-author-role=assistant]')?.innerText",
+            ),
+          };
+        },
+      );
+      assert.match(visibleReply.url, /temporary-chat=true/);
+      assert.equal(visibleReply.reply, "Owned fixture receipt recorded");
+      await window.locator("#browser-check-return").click();
+      await window.locator("#onboarding-nav").waitFor({ state: "visible" });
+      await window.locator('[data-onboarding-step="app"]').click();
+      assert.equal(
+        await window.locator("#onboarding-verify-again").isVisible(),
+        true,
+      );
+      observations.push({
+        kind: "embedded-current-receipt-and-visible-reply",
+        sends: nonReadRequests,
+        ...visibleReply,
+      });
+      // Preserve a completed profile, then re-open it. Runtime shutdown makes
+      // live attachment stale; no implicit Send may restore it.
+      await closeOwned();
+      const returning = await launch(environment, "normal", environment);
+      await returning.locator('[data-onboarding-step="app"]').click();
+      assert.equal(
+        await returning.locator("#onboarding-app-name").inputValue(),
+        fixtureApp,
+      );
+      assert.equal(nonReadRequests, 1);
+      fixtureMode = "no-receipt";
+      await returning.locator("#onboarding-verify-again").click();
+      await returning.locator("#onboarding-confirm-new-check").click();
+      await returning
+        .locator('#browser-check-banner[data-tone="failed"]')
+        .waitFor({ state: "visible", timeout: 65000 });
+      state = await returning.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(
+        state.configuration.settings.setup.connect.outcomeUnknown,
+        true,
+      );
+      assert.equal(nonReadRequests, 2);
+      const noReplay = await returning.evaluate(() =>
+        window.farolNext.configure({ kind: "connector.verify-app" }),
+      );
+      assert.equal(
+        noReplay.error,
+        "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+      );
+      const noRetarget = await returning.evaluate((name) => {
+        return window.farolNext.bootstrap().then(({ configuration }) =>
+          window.farolNext.configure({
+            kind: "connector.select-chatgpt-app",
+            name,
+            tunnelId: configuration.settings.connectors.secureMcp.tunnelId,
+            connectorGeneration:
+              configuration.settings.connectors.secureMcp.generation,
+          }),
+        );
+      }, "Another fixture");
+      assert.equal(
+        noRetarget.error,
+        "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN",
+      );
+      await returning.locator("#browser-check-return").click();
+      await returning.locator("#onboarding-nav").waitFor({ state: "visible" });
+      await returning.locator('[data-onboarding-step="app"]').click();
+      await returning.locator("#onboarding-diagnostics").click();
+      await returning
+        .locator(
+          '#settings-nav [data-settings-category="diagnostics"][aria-current="page"]',
+        )
+        .waitFor({ state: "visible" });
+      assert.equal(
+        await returning
+          .locator("#connection-diagnostics")
+          .evaluate((details) => details.open),
+        true,
+      );
+      assert.equal(nonReadRequests, 2);
+      observations.push({
+        kind: "returning-stale-then-pending-no-replay",
+        sends: nonReadRequests,
+        noReplay: noReplay.error,
+        noRetarget: noRetarget.error,
+      });
+      await closeOwned();
+      break;
+    }
     await window.locator("#onboarding-return").click();
     for (let index = 0; index < 4; index += 1) {
       const created = await bounded(
@@ -558,6 +905,47 @@ try {
       .locator('#task-tabs [role="tab"]')
       .nth(3)
       .waitFor({ state: "visible" });
+    // The shell control must operate the visible selected page, not the
+    // retained (hidden) home/sign-in route. The fixture has no Send control.
+    await window
+      .locator("#browser-sidebar-toggle")
+      .waitFor({ state: "visible" });
+    await window.locator("#browser-sidebar-toggle").click();
+    const sidebarPages = await application.evaluate(
+      async ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
+        const shell = BrowserWindow.getAllWindows().find((window) =>
+          window.webContents.getURL().endsWith("/shell.html"),
+        );
+        const pages = shell.contentView.children.filter(
+          (child) =>
+            child instanceof WebContentsView &&
+            child.webContents.getURL() === fixtureUrl,
+        );
+        return Promise.all(
+          pages.map(async (page) => ({
+            visible: page.getVisible(),
+            clicks: await page.webContents.executeJavaScript(
+              "Number(document.body.dataset.sidebarClicks || 0)",
+            ),
+          })),
+        );
+      },
+      fixtureUrl,
+    );
+    assert.equal(
+      sidebarPages.filter((page) => page.visible && page.clicks === 1).length,
+      1,
+    );
+    assert.ok(
+      sidebarPages
+        .filter((page) => !page.visible)
+        .every((page) => page.clicks === 0),
+    );
+    observations.push({
+      kind: "selected-page-sidebar",
+      environment,
+      pages: sidebarPages,
+    });
     await browserGeometry(window, environment, 1180);
     await browserGeometry(window, environment, 940);
     await application.evaluate(({ BrowserWindow }) =>
@@ -598,7 +986,7 @@ try {
     );
     await closeOwned();
   }
-  for (const mode of devOnly ? [] : ["legacy", "demo"]) {
+  for (const mode of devOnly || behavior ? [] : ["legacy", "demo"]) {
     const window = await launch("preview", mode);
     await window.locator("#setup-dialog").waitFor({ state: "visible" });
     assert.equal(await window.locator("#onboarding-nav").isVisible(), false);
@@ -682,10 +1070,36 @@ try {
     cleanupFailures.push(error);
     observations.push({ kind: "local-http-fixture-cleanup-unknown" });
   }
+  for (const owned of mcpChildren) {
+    if (owned.observed) continue;
+    if (owned.child.exitCode !== null || owned.child.signalCode !== null) {
+      observations.push({
+        kind: "owned-mcp-terminal-final-readback",
+        pid: owned.child.pid,
+        exit: owned.child.exitCode,
+        signal: owned.child.signalCode,
+      });
+      owned.observed = true;
+    } else {
+      cleanupUnknown = true;
+      observations.push({
+        kind: "owned-mcp-cleanup-unknown-final-readback",
+        pid: owned.child.pid,
+      });
+    }
+  }
   const destination = path.join(
     root,
     "_output/evidence/guided-setup-selection",
-    packaged ? "package.json" : devOnly ? "dev-only.json" : "development.json",
+    behavior
+      ? packaged
+        ? "behavior-package.json"
+        : "behavior-development.json"
+      : packaged
+        ? "package.json"
+        : devOnly
+          ? "dev-only.json"
+          : "development.json",
   );
   await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
   await fs.writeFile(
@@ -695,15 +1109,18 @@ try {
         schema: 1,
         packaged,
         devOnly,
+        behavior,
         observations,
         primaryFailure: primaryFailure ? String(primaryFailure) : null,
         cleanupFailures: cleanupFailures.map(String),
         cleanupUnknown,
         limits: [
           "Hidden renderer, native page bounds and disposable IPC fixtures only",
-          "Browser readiness and task pages are local HTTP fixtures, not live ChatGPT",
+          behavior
+            ? "Embedded Send, app chip and provider reply are owned local HTTP fixtures; no live ChatGPT"
+            : "Browser readiness and task pages are local HTTP fixtures, not live ChatGPT",
           "Native folder picker is replaced by the explicit E2E selection",
-          "No live account, Browser Send, model inference or NEW connector",
+          "No live account, provider Send, model inference or live NEW connector",
         ],
       },
       null,

@@ -513,8 +513,8 @@
                       <div>
                         <strong>Create a tunnel</strong>
                         <p>
-                          Name it Farol Dev and associate it with the ChatGPT
-                          workspace you use.
+                          Give it a distinct name and associate it with the
+                          ChatGPT workspace you use.
                         </p>
                         <button type="button" data-onboarding-help="tunnels">
                           Open Tunnels ↗
@@ -549,7 +549,7 @@
                     class="onboarding-note"
                     data-onboarding-verification="embedded"
                   >
-                    Already added Farol Dev in ChatGPT? Choose
+                    Already added the NEW app for this tunnel in ChatGPT? Choose
                     <strong>Run end-to-end check</strong> below. Farol will
                     select the app, send one short message and check the local
                     result.
@@ -567,7 +567,7 @@
                     id="onboarding-app-guide"
                     data-onboarding-verification="embedded"
                   >
-                    <h3>How to add Farol Dev in ChatGPT</h3>
+                    <h3>How to add this Farol in ChatGPT</h3>
                     <ol class="onboarding-instructions onboarding-short-guide">
                       <li>
                         In ChatGPT, open
@@ -579,11 +579,12 @@
                       </li>
                       <li>
                         Select <strong>＋</strong>, name the app
-                        <strong>Farol Dev</strong>, and choose
+                        <strong>your separate NEW app</strong>, and choose
                         <strong>Connection → Tunnel</strong>. Select your tunnel
                         and <strong>No authentication</strong>. Keep your
                         runtime key in Farol, not in this form. Reuse an
-                        existing Farol Dev app instead of creating a duplicate.
+                        separate NEW app for the current tunnel instead of
+                        creating a duplicate.
                       </li>
                       <li>
                         Return here and select
@@ -597,6 +598,34 @@
                     <button type="button" data-onboarding-help="setup-guide">
                       Connection guide ↗
                     </button>
+                  </div>
+                  <label class="field">
+                    <span>Connection check method</span>
+                    <select id="onboarding-verification-method">
+                      <option value="embedded">Check inside Farol</option>
+                      <option value="external">
+                        Check manually in external ChatGPT
+                      </option>
+                    </select>
+                  </label>
+                  <div data-onboarding-verification="embedded">
+                    <label class="field">
+                      <span>Exact NEW app name in ChatGPT</span>
+                      <input
+                        id="onboarding-app-name"
+                        type="text"
+                        maxlength="64"
+                        autocomplete="off"
+                        placeholder="Your separate NEW app"
+                      />
+                    </label>
+                    <button type="button" id="onboarding-save-app">
+                      Use this app for the current tunnel
+                    </button>
+                    <p
+                      id="onboarding-app-selection-status"
+                      class="onboarding-note"
+                    ></p>
                   </div>
                   <div data-onboarding-verification="external" hidden>
                     <p>

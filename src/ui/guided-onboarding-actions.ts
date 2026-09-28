@@ -39,7 +39,7 @@ export function onboardingPrerequisite(
 ): number | null {
   // Pages remain open for inspection and editing. Their primary action takes
   // the owner to a missing prerequisite instead of becoming a disabled dead end.
-  const prerequisites = step === 2 ? [0, 1] : step === 3 ? [0, 1, 2] : [];
+  const prerequisites = step === 2 ? [1] : step === 3 ? [0, 1, 2] : [];
   return prerequisites.find((index) => progress[index] !== true) ?? null;
 }
 

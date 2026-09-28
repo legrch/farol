@@ -128,6 +128,20 @@ const SecureMcpAttachmentSchema = z.strictObject({
   verifiedAt: CanonicalTimestampSchema,
 });
 
+export const SecureMcpAppSelectionSchema = z.strictObject({
+  name: z
+    .string()
+    .min(1)
+    .max(64)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u),
+  tunnelId: z
+    .string()
+    .min(1)
+    .max(160)
+    .regex(/^[0-9A-Za-z._:-]+$/u),
+  connectorGeneration: z.number().int().positive(),
+});
+
 export const SecureMcpConnectorSchema = z.strictObject({
   generation: z.number().int().positive(),
   profile: z.literal("farol-next"),
@@ -139,6 +153,9 @@ export const SecureMcpConnectorSchema = z.strictObject({
     .nullable(),
   tunnelClient: SecureMcpTunnelClientSchema.nullable(),
   credential: z.enum(["missing", "stored"]),
+  // Explicit owner choice for embedded checks, never inferred from the build
+  // environment or a legacy product name. Old settings have no app selection.
+  chatgptApp: SecureMcpAppSelectionSchema.nullable().optional(),
   runtime: SecureMcpRuntimeSchema.nullable(),
   challenge: SecureMcpChallengeSchema.nullable().default(null),
   attachment: SecureMcpAttachmentSchema.nullable(),
@@ -511,6 +528,9 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("connector.check-attachment") }),
   z.strictObject({ kind: z.literal("connector.check-health") }),
   z.strictObject({ kind: z.literal("connector.verify-app") }),
+  SecureMcpAppSelectionSchema.extend({
+    kind: z.literal("connector.select-chatgpt-app"),
+  }),
   z.strictObject({ kind: z.literal("dev-proof.prepare") }),
   z.strictObject({ kind: z.literal("dev-proof.run") }),
   z.strictObject({ kind: z.literal("chatgpt.prepare-attachment-task") }),
@@ -1258,6 +1278,8 @@ export const ProductConfigurationResultSchema = z.discriminatedUnion("ok", [
       "CONNECTOR_ATTACHMENT_NOT_FOUND",
       "CONNECTOR_ATTACHMENT_INVALID",
       "CONNECTOR_APP_VERIFICATION_DEV_ONLY",
+      "CONNECTOR_APP_VERIFICATION_UNAVAILABLE",
+      "CONNECTOR_APP_TARGET_REQUIRED",
       "CONNECTOR_APP_VERIFICATION_NOT_READY",
       "CONNECTOR_APP_VERIFICATION_ALREADY_ATTEMPTED",
       "CONNECTOR_APP_VERIFICATION_STATE_UNAVAILABLE",

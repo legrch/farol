@@ -43,39 +43,51 @@ is not evidence about the packaged candidate.
 
 ## Setup inside the app
 
-Normal packaged Preview and Dev use the sidebar Guided Setup. Opening, returning
-to, restarting or reviewing Setup selects that same surface; first run does not
-open the legacy modal. The shared selection predicate controls only Setup. Dev's
-Codex home, diagnostics and automatic app-verification guard remain Dev-only.
-The explicit `--demo` surface and the isolated E2E legacy-journey mode are separate.
+Normal packaged Preview and Dev use sidebar Guided Setup, the compact Browser
+with top tabs and a bottom status bar, and the same owned embedded home/sign-in
+surface. Return, Restart, Review and task-menu Setup use the shared selection
+predicate. Explicit demo and isolated legacy test mode remain separate. Private
+Dev homes, native shortcuts and host diagnostic authority remain Dev-only.
 
-Packaged Preview checks the NEW connector from an ordinary ChatGPT conversation.
-Use the current unused challenge shown on Add to ChatGPT, then choose **Check
-attachment** to inspect the local receipt. This action never sends a browser
-message. A consumed, stale or unknown challenge is not offered as a fresh check.
-Embedded sign-in is optional for Computer and is never claimed as verified by
-completing that optional step. Settings keeps the existing workspace write,
-Workspace shell and full Git/user-settings approvals.
+**Check inside Farol** is the default connection-check method. Add a separate NEW
+ChatGPT app for the current tunnel and explicitly save its exact name on Add to
+ChatGPT. Farol never guesses a target from its build environment or an old app name.
+The selection is stored in the existing `product-settings.json`, bound to the
+current tunnel and connector generation. A changed generation requires a new
+selection; a pending/unknown check cannot be retargeted.
 
-The retained five-stage qualification journey is exercised only by its explicit
-fixture lane. `task test:e2e:guided-setup:package` separately checks the normal
-packaged sidebar, folder selection, navigation and reopen with disposable state
-and hidden windows. The guarded lane also checks compact Browser tabs, tab close,
-task-menu Setup, native page bounds and the bottom status strip at normal and compact
-widths, using only a local HTTP composer fixture. It proves native userData/sessionData
-is beneath the owned disposable root before UI actions. Preview uses an explicit
-user-data-dir; HOME and the Dev-only appData override alone are insufficient. It is
-not a live account, native picker or NEW connector proof.
-`task test:e2e:guided-setup` checks both environments; `-- --dev-only`
-selects a focused disposable Dev diagnostic. The fixture uses physical temporary
-paths and waits for the folder access check before the next navigation action.
+Run the embedded check only when ready to send one message. The existing route
+uses a temporary Instant conversation, checks the exact app before typing and
+again before Send, and keeps the result visible until **Return to Setup**. Missing,
+ambiguous, conflicting or lost app selection and owner drafts fail before Send.
+Only the correlated local MCP receipt for the current build/runtime/workspace and
+challenge proves attachment. A chip label or a provider reply is not that proof.
+The durable attempted/pending journal prohibits blindly replaying an unknown send.
 
-Normal Preview also retains the owned embedded ChatGPT home and sign-in surface.
-Opening it creates no task; **Return to Setup** stays inside the same app window.
-Settings uses its own sidebar while open. Native shortcuts, private Dev homes and
-automatic app-verification remain under their separate Dev gates. Restoring the
-optional embedded app-bound check with qualified NEW-app selection is a follow-up;
-the current manual attachment check is not claimed as that earlier workflow.
+**Check manually in external ChatGPT** remains a separate, explicitly chosen
+method. It shows the current unused challenge and reads the local receipt; it
+never sends a browser message. Activating Computer and its tunnel does not require
+embedded login. The embedded check itself does require a verified embedded account.
+Skipping optional login never writes sign-in evidence or grants workspace access.
+Settings retains workspace write, Workspace shell and full Git/user-settings grants.
+
+`task test:e2e:guided-setup` checks normal Preview and Dev navigation, folder
+selection, the selected page's sidebar, compact native geometry, close and reopen
+with owned hidden windows. `-- --dev-only` is the focused Dev lane.
+`task test:e2e:guided-setup -- --behavior` checks fresh/returning normal Preview:
+credentials save/cancel, activation without embedded login, explicit app selection,
+one embedded fixture submission, an actual built MCP receipt, visible reply,
+Return to Setup, stale runtime recovery and pending no-replay/retarget refusal.
+The packaged equivalents use `task test:e2e:guided-setup:package` and
+`task test:e2e:guided-setup:package -- --behavior`.
+
+Every native lane proves physical userData/sessionData is beneath its owned
+profile before UI actions, uses finite waits and records actual owned child exits.
+The folder picker, tunnel control plane, app chip, account and model reply are
+local fixtures. The behavior lane sends only to its owned loopback page; it does
+not qualify a live account, provider selection, native picker or NEW connector.
+A live embedded verification still needs the owner's explicit action and current
+permission; these fixtures do not authorize a provider Send.
 
 ## What the controls do
 

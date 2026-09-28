@@ -1,3 +1,4 @@
+import { selectedConnectorApp } from "../pkg/product-settings/connector-app-selection";
 import {
   ProductConfigurationCommandSchema,
   type ProductConfigurationCommand,
@@ -84,6 +85,7 @@ export function onboardingFacts(
       connector.tunnelId,
       connector.credential,
       connector.tunnelClient?.executableSha256 ?? null,
+      selectedConnectorApp(connector),
     ]),
     verificationIdentity:
       runtime !== null &&
@@ -144,8 +146,8 @@ export const onboardingSteps = [
   {
     id: "app",
     label: "Add to ChatGPT",
-    title: "Add Farol Dev to ChatGPT",
-    copy: "Add Farol Dev in ChatGPT once. Then run an end-to-end check: Farol selects the app, sends one short message, and checks the local receipt. Read the reply before returning to Setup.",
+    title: "Add this Farol to ChatGPT",
+    copy: "Add a separate NEW app for the current tunnel, then choose its exact name below. Run the check explicitly: Farol selects that app, sends one short message, and checks the local receipt. Read the reply before returning to Setup. The manual external check remains a separate option.",
   },
   {
     id: "finish",

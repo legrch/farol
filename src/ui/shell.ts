@@ -3576,7 +3576,7 @@ function renderSettingsNavigation(): void {
     )
     .forEach((group) => {
       group.hidden = enabled
-        ? group.dataset.settingsPage !== settingsCategory
+        ? (group.dataset.settingsPage ?? "preferences") !== settingsCategory
         : group.dataset.settingsPage === "shortcuts";
     });
   if (enabled && settingsCategory === "diagnostics") {
@@ -5305,7 +5305,10 @@ function render(notify = true): void {
     embeddedBrowserSelected(bootstrap) &&
     section === "browser" &&
     !setupJourney.open &&
-    browserHomeStatus === "ready"
+    (chatGptSignInOpened || bootstrap.tasks.length === 0
+      ? browserHomeStatus === "ready"
+      : taskById(selectedTaskId)?.provider === "chatgpt" &&
+        taskSurfaceStatuses.get(selectedTaskId)?.state === "ready")
   );
   const browserMenu = required<HTMLButtonElement>("#browser-task-menu");
   const browserMenuLabel =
@@ -5959,7 +5962,7 @@ async function start(): Promise<void> {
   }
 
   guidedOnboarding = new GuidedOnboardingView({
-    mode: bootstrap.environment === "preview" ? "external" : "embedded",
+    mode: "embedded",
     verificationCard: () =>
       bootstrap.configuration.status === "ready"
         ? connectorChallengeCard(bootstrap.configuration.settings)
@@ -5997,10 +6000,6 @@ async function start(): Promise<void> {
     },
     openSettings: () => selectSection("settings"),
     openDiagnostics: () => {
-      if (bootstrap.environment !== "dev") {
-        selectSection("settings");
-        return;
-      }
       settingsCategory = "diagnostics";
       selectSection("settings");
       const diagnostics = required<HTMLDetailsElement>(

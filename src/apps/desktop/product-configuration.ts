@@ -11,6 +11,7 @@ import {
   ProductGeneralSettingsSchema,
   PendingWorkspaceEditDeliverySchema,
   ProductSettingsSchema,
+  SecureMcpAppSelectionSchema,
   SetupStepIdSchema,
   WorkspaceGitMetadataSchema,
   WorkspaceRootIdentitySchema,
@@ -98,6 +99,8 @@ type MutationResult = Readonly<
         | "SETTINGS_UNAVAILABLE"
         | "SETTINGS_INPUT_INVALID"
         | "SETTINGS_WRITE_FAILED"
+        | "CONNECTOR_APP_VERIFICATION_STATE_CHANGED"
+        | "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
         | "WORKSPACE_NOT_FOUND"
         | "WORKSPACE_SELECTION_PROTECTED"
         | "WORKSPACE_ROOT_CHANGED"
@@ -771,6 +774,36 @@ export class ProductConfigurationService {
           connect: pendingConnectorReadiness(settings.setup.connect, next),
         },
       };
+    });
+  }
+
+  async selectSecureMcpChatGptApp(input: unknown): Promise<MutationResult> {
+    const parsed = SecureMcpAppSelectionSchema.safeParse(input);
+    if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
+      const connector = this.current.connectors.secureMcp;
+      if (
+        this.current.setup.connect.outcomeUnknown ||
+        connector.runtime?.state === "outcome_unknown"
+      )
+        return this.failure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
+      if (
+        connector.tunnelId !== parsed.data.tunnelId ||
+        connector.generation !== parsed.data.connectorGeneration
+      )
+        return this.failure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
+      return this.commit((settings) => ({
+        ...settings,
+        revision: settings.revision + 1,
+        connectors: {
+          ...settings.connectors,
+          secureMcp: {
+            ...settings.connectors.secureMcp,
+            chatgptApp: parsed.data,
+          },
+        },
+      }));
     });
   }
 

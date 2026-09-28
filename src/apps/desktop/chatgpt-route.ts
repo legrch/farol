@@ -1310,6 +1310,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_COMPOSER_UNAVAILABLE"
     | "CHATGPT_SUBMIT_UNAVAILABLE"
     | "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
+    | "CHATGPT_APP_TARGET_INVALID"
     | "CHATGPT_APP_SELECTION_MISSING"
     | "CHATGPT_APP_SELECTION_AMBIGUOUS"
     | "CHATGPT_APP_SELECTION_CONFLICT"
@@ -2108,7 +2109,23 @@ export class ChatGptRoute {
     attachments: readonly StagedChatGptAttachment[] = [],
     observer: ChatGptTaskObserver = {},
     profile: "ordinary" | "temporary-instant" = "ordinary",
+    appTarget?: Readonly<{ name: string }>,
   ): Promise<ChatGptReadonlyTaskResult> {
+    // Capture this operation's explicit target before any navigation. Never
+    // mutate the route's default/manual-message binding for a one-shot check.
+    const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
+    if (
+      requiredAppName !== undefined &&
+      !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u.test(requiredAppName)
+    ) {
+      return {
+        state: "failed_before_submit",
+        code: "CHATGPT_APP_TARGET_INVALID",
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: "",
+      };
+    }
     if (this.taskInFlight) {
       return {
         state: "failed_before_submit",
@@ -2325,14 +2342,11 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      if (this.options.requiredAppName !== undefined) {
+      if (requiredAppName !== undefined) {
         let appBindingCandidate: unknown;
         try {
           appBindingCandidate = await candidate.webContents.executeJavaScript(
-            bindChatGptAppScript(
-              this.options.requiredAppName,
-              dispatchIdentityUrl,
-            ),
+            bindChatGptAppScript(requiredAppName, dispatchIdentityUrl),
             true,
           );
         } catch {
@@ -2386,11 +2400,7 @@ export class ChatGptRoute {
       }
       const prepared = preparedTaskSchema.safeParse(
         await candidate.webContents.executeJavaScript(
-          prepareTaskScript(
-            prompt,
-            dispatchIdentityUrl,
-            this.options.requiredAppName,
-          ),
+          prepareTaskScript(prompt, dispatchIdentityUrl, requiredAppName),
           true,
         ),
       );
@@ -2487,13 +2497,10 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        if (this.options.requiredAppName !== undefined) {
+        if (requiredAppName !== undefined) {
           const selected = appBindingSchema.safeParse(
             await candidate.webContents.executeJavaScript(
-              verifyChatGptAppScript(
-                this.options.requiredAppName,
-                dispatchIdentityUrl,
-              ),
+              verifyChatGptAppScript(requiredAppName, dispatchIdentityUrl),
               true,
             ),
           );
@@ -2548,7 +2555,7 @@ export class ChatGptRoute {
           await candidate.webContents.executeJavaScript(
             activateTaskScript(
               dispatchIdentityUrl,
-              this.options.requiredAppName,
+              requiredAppName,
               profile === "temporary-instant",
             ),
             true,
@@ -2676,7 +2683,7 @@ export class ChatGptRoute {
                 userId: correlatedUserId,
                 assistantId: correlatedAssistantId,
               },
-              this.options.requiredAppName,
+              requiredAppName,
             ),
             true,
           ),
