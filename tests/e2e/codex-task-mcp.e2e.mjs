@@ -405,9 +405,32 @@ try {
   assert(tools.includes("codex_task_result"), stderr);
   assert(tools.includes("codex_task_observe"), stderr);
   assert(tools.includes("codex_task_adopt"), stderr);
+  assert(tools.includes("codex_project_resolve"), stderr);
   assert(tools.includes("chatgpt_chat_create"), stderr);
   assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
+  const callsBeforeResolution = calls.length;
+  const resolvedProject = await client.callTool({
+    name: "codex_project_resolve",
+    arguments: { workspaceId: "approved-writer" },
+  });
+  assert.equal(
+    resolvedProject.isError,
+    undefined,
+    JSON.stringify(resolvedProject),
+  );
+  assert.deepEqual(resolvedProject.structuredContent, {
+    status: "resolved",
+    complete: true,
+    pages: 1,
+    matches: [{ projectId, name: null }],
+    selectedProjectId: projectId,
+    selection: "requested-id",
+    workspaceId: "approved-writer",
+    writerRoot,
+    projectRoot,
+  });
+  assert.deepEqual(calls.slice(callsBeforeResolution), ["project/list"]);
   const savedChatCreate = await client.callTool({
     name: "chatgpt_chat_create",
     arguments: {
@@ -612,7 +635,7 @@ try {
   });
   assert.notEqual(listed.isError, true);
   process.stdout.write(
-    `PASS: ${packaged ? "packaged" : "built"} Computer MCP task route and fake saved-chat Browser endpoint used disposable sockets; unavailable task host left Computer working; no model or live ChatGPT turn.\n`,
+    `PASS: ${packaged ? "packaged" : "built"} Computer MCP project resolution/task route and fake saved-chat Browser endpoint used disposable sockets; unavailable task host left Computer working; no model or live ChatGPT turn.\n`,
   );
 } finally {
   await client?.close().catch(() => undefined);

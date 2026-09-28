@@ -25,7 +25,10 @@ import type {
   SandboxedWorkspaceShell,
   ShellResponse,
 } from "../native/sandboxed-workspace-shell";
-import type { CodexTaskRoutePeer } from "../peer/codex-task-route-peer";
+import {
+  parseProjectResolution,
+  type CodexTaskRoutePeer,
+} from "../peer/codex-task-route-peer";
 import { bootstrapWorkspace } from "./workspace-bootstrap";
 import { PublishedGuidance } from "./published-guidance";
 import type {
@@ -59,6 +62,10 @@ const CodexTaskCreateInputSchema = z.strictObject({
   harness: TaskNameSchema.optional(),
   model: TaskNameSchema.optional(),
   effort: TaskEffortSchema.optional(),
+});
+const CodexProjectResolveInputSchema = z.strictObject({
+  workspaceId: IdentifierSchema,
+  preferredProjectId: IdentifierSchema.optional(),
 });
 const CodexTaskReadInputSchema = z.strictObject({
   dispatchId: DispatchIdSchema,
@@ -814,6 +821,40 @@ export function createReadonlyComputerMcpServer(
       structuredContent: value,
       ...(isError ? { isError: true } : {}),
     });
+    if (codexTasks.resolveProject)
+      server.registerTool(
+        "codex_project_resolve",
+        {
+          title: "Resolve the approved saved Codex project",
+          description:
+            "Read a bounded saved-project catalogue for the approved canonical repository separately from writer cwd. Reports resolved, missing, ambiguous, stale_preference or unavailable explicitly; incomplete scans never prove absence. The sealed task grant's exact project ID remains the selection. This does not create a project, save a preference or start/resume/fork a task.",
+          inputSchema: CodexProjectResolveInputSchema,
+          annotations: READONLY_ANNOTATIONS,
+        },
+        guarded(async (request, context) => {
+          try {
+            const value = parseProjectResolution(
+              await codexTasks.resolveProject!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request.workspaceId,
+            );
+            return taskResponse(
+              value,
+              value.status === "refused" || value.status === "unavailable",
+            );
+          } catch {
+            return taskResponse(
+              {
+                status: "refused",
+                workspaceId: request.workspaceId,
+                code: "HANDOFF_PROJECT_RESOLVE_UNAVAILABLE",
+              },
+              true,
+            );
+          }
+        }),
+      );
     if (codexTasks.observeEnabled === true && codexTasks.observe)
       server.registerTool(
         "codex_task_observe",

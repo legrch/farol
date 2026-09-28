@@ -21,7 +21,13 @@ export type CodexTaskAdmission = Readonly<{
 
 type ResolvedTaskRoute = Pick<
   CodexTaskRoute,
-  "status" | "result" | "message" | "continue" | "observe" | "adopt"
+  | "status"
+  | "result"
+  | "message"
+  | "continue"
+  | "observe"
+  | "adopt"
+  | "resolveProject"
 > & {
   create(request: HandoffRequest): ReturnType<CodexTaskRoute["create"]>;
 };
@@ -54,6 +60,46 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
       throw new Error("HANDOFF_CONTINUE_UNAVAILABLE");
     this.admission = { ...admission, tasks };
     this.observeEnabled = admission.observeThreadId !== undefined;
+  }
+
+  async resolveProject(
+    request: Parameters<NonNullable<CodexTaskRoute["resolveProject"]>>[0],
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ) {
+    const refused = (code: string) => ({
+      status: "refused" as const,
+      workspaceId: request.workspaceId,
+      code,
+    });
+    if (
+      this.now() >= this.admission.expiresAt ||
+      request.workspaceId !== this.admission.workspaceId ||
+      (request.preferredProjectId !== undefined &&
+        request.preferredProjectId !== this.admission.projectId)
+    )
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    if (!this.delegate.resolveProject)
+      return refused("HANDOFF_PROJECT_RESOLVE_UNAVAILABLE");
+    if (context.signal?.aborted)
+      return refused("HANDOFF_PROJECT_READ_CANCELLED");
+    const result = await this.delegate.resolveProject(
+      {
+        workspaceId: request.workspaceId,
+        preferredProjectId: this.admission.projectId,
+      },
+      context,
+    );
+    if (this.now() >= this.admission.expiresAt)
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    if (context.signal?.aborted)
+      return refused("HANDOFF_PROJECT_READ_CANCELLED");
+    if (
+      result.workspaceId !== request.workspaceId ||
+      (result.status === "resolved" &&
+        result.selectedProjectId !== this.admission.projectId)
+    )
+      return refused("HANDOFF_PROJECT_RESOLVE_CORRELATION");
+    return result;
   }
 
   async observe(

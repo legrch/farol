@@ -1,3 +1,6 @@
+import type { ProjectResolutionResult } from "../port/codex-project-catalogue";
+import { resolveCodexProjectCatalogue } from "./resolve-codex-project-catalogue";
+
 export type HandoffModelBinding = Readonly<{
   selection: Readonly<{
     harness: string;
@@ -339,6 +342,67 @@ export class PersistentCodexHandoff {
     private readonly now: () => number = Date.now,
     private readonly selectedOwnerThreadId?: string,
   ) {}
+
+  async resolveProject(
+    request: Readonly<{
+      workspaceId: string;
+      preferredProjectId?: string | undefined;
+    }>,
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ): Promise<ProjectResolutionResult> {
+    const refused = (code: string): ProjectResolutionResult => ({
+      status: "refused",
+      workspaceId: request.workspaceId,
+      code,
+    });
+    if (
+      !identifier(request.workspaceId) ||
+      (request.preferredProjectId !== undefined &&
+        !identifier(request.preferredProjectId))
+    )
+      return refused("HANDOFF_PROJECT_RESOLVE_INPUT_INVALID");
+    if (this.now() >= this.mutationExpiresAt)
+      return refused("HANDOFF_PROJECT_ADMISSION_EXPIRED");
+    if (context.signal?.aborted)
+      return refused("HANDOFF_PROJECT_READ_CANCELLED");
+    let workspace;
+    try {
+      workspace = await this.authority.resolve(request.workspaceId);
+    } catch {
+      return refused("HANDOFF_AUTHORITY_UNAVAILABLE");
+    }
+    if (!validWorkspace(workspace))
+      return refused("HANDOFF_WORKSPACE_UNVERIFIED");
+    if (this.now() >= this.mutationExpiresAt)
+      return refused("HANDOFF_PROJECT_ADMISSION_EXPIRED");
+    if (context.signal?.aborted)
+      return refused("HANDOFF_PROJECT_READ_CANCELLED");
+    const result = await resolveCodexProjectCatalogue(
+      this.host,
+      workspace.project.root,
+      request.preferredProjectId,
+      this.mutationExpiresAt,
+      () => !context.signal?.aborted && this.now() < this.mutationExpiresAt,
+    );
+    let current;
+    try {
+      current = await this.authority.resolve(request.workspaceId);
+    } catch {
+      return refused("HANDOFF_AUTHORITY_UNAVAILABLE");
+    }
+    if (!validWorkspace(current) || !sameWorkspace(workspace, current))
+      return refused("HANDOFF_WORKSPACE_BINDING_CHANGED");
+    if (this.now() >= this.mutationExpiresAt)
+      return refused("HANDOFF_PROJECT_ADMISSION_EXPIRED");
+    if (context.signal?.aborted)
+      return refused("HANDOFF_PROJECT_READ_CANCELLED");
+    return {
+      ...result,
+      workspaceId: request.workspaceId,
+      writerRoot: workspace.root,
+      projectRoot: workspace.project.root,
+    };
+  }
 
   async observe(
     request: Readonly<{

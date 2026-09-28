@@ -1,5 +1,97 @@
+import { z } from "zod";
+
+const Identifier = z.string().regex(/^[A-Za-z0-9_-]{1,120}$/u);
+const AbsolutePath = z
+  .string()
+  .min(2)
+  .max(4096)
+  .refine(
+    (value) =>
+      value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.includes("\\") &&
+      value
+        .split("/")
+        .slice(1)
+        .every(
+          (part) =>
+            part !== "" &&
+            part !== "." &&
+            part !== ".." &&
+            !/[\u0000-\u001f\u007f]/u.test(part),
+        ),
+  );
+const Match = z.strictObject({
+  projectId: Identifier,
+  name: z.string().max(200).nullable(),
+});
+const Known = z
+  .strictObject({
+    status: z.enum(["resolved", "missing", "ambiguous", "stale_preference"]),
+    workspaceId: Identifier,
+    writerRoot: AbsolutePath,
+    projectRoot: AbsolutePath,
+    complete: z.literal(true),
+    pages: z.number().int().min(1).max(32),
+    matches: z.array(Match).max(32).readonly(),
+    selectedProjectId: Identifier.nullable(),
+    selection: z.enum(["unique-root", "requested-id"]).nullable(),
+  })
+  .refine((value) => {
+    if (
+      new Set(value.matches.map((match) => match.projectId)).size !==
+      value.matches.length
+    )
+      return false;
+    if (value.status === "resolved")
+      return (
+        value.selectedProjectId !== null &&
+        value.selection !== null &&
+        value.matches.some(
+          (match) => match.projectId === value.selectedProjectId,
+        ) &&
+        (value.selection !== "unique-root" || value.matches.length === 1)
+      );
+    return (
+      value.selectedProjectId === null &&
+      value.selection === null &&
+      (value.status === "missing"
+        ? value.matches.length === 0
+        : value.status === "ambiguous"
+          ? value.matches.length > 1
+          : true)
+    );
+  });
+export const CodexProjectResolutionSchema = z.union([
+  Known,
+  z.strictObject({
+    status: z.literal("unavailable"),
+    workspaceId: Identifier,
+    writerRoot: AbsolutePath,
+    projectRoot: AbsolutePath,
+    complete: z.literal(false),
+    code: Identifier,
+  }),
+  z.strictObject({
+    status: z.literal("refused"),
+    workspaceId: Identifier,
+    code: Identifier,
+  }),
+]);
+export type CodexProjectResolution = z.infer<
+  typeof CodexProjectResolutionSchema
+>;
+
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  /** Read saved projects at the exact approved canonical root; no effects. */
+  resolveProject?(
+    request: Readonly<{
+      workspaceId: string;
+      preferredProjectId?: string | undefined;
+    }>,
+    context?: Readonly<{ signal?: AbortSignal | undefined }>,
+  ): Promise<CodexProjectResolution>;
   readonly observeEnabled?: boolean;
   /** Inspect only the exact owner-selected thread in the approved project. */
   observe?(

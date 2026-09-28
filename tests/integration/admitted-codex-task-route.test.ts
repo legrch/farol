@@ -14,6 +14,111 @@ const request = {
 };
 
 describe("separate Codex task admission", () => {
+  it("keeps project resolution on the sealed selected ID and refuses drift or cancellation", async () => {
+    const known = {
+      status: "resolved" as const,
+      workspaceId: "writer",
+      writerRoot: "/fixture/writer",
+      projectRoot: "/fixture/project",
+      complete: true as const,
+      pages: 1,
+      matches: [{ projectId: "saved-project", name: null }],
+      selectedProjectId: "saved-project",
+      selection: "requested-id" as const,
+    };
+    let now = 1000;
+    let mode = "known";
+    let calls = 0;
+    const controller = new AbortController();
+    const seen: unknown[] = [];
+    const delegate = {
+      async resolveProject(input: unknown) {
+        calls++;
+        seen.push(input);
+        if (mode === "expire") now = 2000;
+        if (mode === "abort") controller.abort();
+        return mode === "foreign"
+          ? { ...known, selectedProjectId: "foreign" }
+          : known;
+      },
+      async create(input: HandoffRequest) {
+        return { status: "outcome_unknown" as const, dispatchId: input.key };
+      },
+      async message() {
+        return { status: "refused" as const, code: "not-selected" };
+      },
+      async status() {
+        return { status: "unknown" as const };
+      },
+      async result() {
+        return { status: "unknown" as const };
+      },
+    };
+    const admission = {
+      workspaceId: "writer",
+      projectId: "saved-project",
+      ...taskGrantPolicy(),
+      expiresAt: 2000,
+    };
+    const route = new AdmittedCodexTaskRoute(delegate, admission, () => now);
+    expect(await route.resolveProject({ workspaceId: "writer" })).toEqual(
+      known,
+    );
+    expect(seen).toEqual([
+      { workspaceId: "writer", preferredProjectId: "saved-project" },
+    ]);
+    for (const input of [
+      { workspaceId: "foreign" },
+      { workspaceId: "writer", preferredProjectId: "other" },
+    ])
+      expect(await route.resolveProject(input)).toMatchObject({
+        status: "refused",
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      });
+    expect(calls).toBe(1);
+    mode = "foreign";
+    expect(await route.resolveProject({ workspaceId: "writer" })).toMatchObject(
+      { status: "refused", code: "HANDOFF_PROJECT_RESOLVE_CORRELATION" },
+    );
+    mode = "abort";
+    expect(
+      await route.resolveProject(
+        { workspaceId: "writer" },
+        { signal: controller.signal },
+      ),
+    ).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_PROJECT_READ_CANCELLED",
+    });
+    expect(
+      await route.resolveProject(
+        { workspaceId: "writer" },
+        { signal: controller.signal },
+      ),
+    ).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_PROJECT_READ_CANCELLED",
+    });
+    mode = "expire";
+    expect(await route.resolveProject({ workspaceId: "writer" })).toMatchObject(
+      { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" },
+    );
+    expect(await route.resolveProject({ workspaceId: "writer" })).toMatchObject(
+      { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" },
+    );
+    const { resolveProject: _unused, ...without } = delegate;
+    expect(
+      await new AdmittedCodexTaskRoute(
+        without,
+        admission,
+        () => 1000,
+      ).resolveProject({ workspaceId: "writer" }),
+    ).toMatchObject({
+      status: "refused",
+      code: "HANDOFF_PROJECT_RESOLVE_UNAVAILABLE",
+    });
+  });
+
   it("admits one selected native turn for a local read-only handle and rechecks expiry", async () => {
     const threadId = randomUUID();
     const turnId = randomUUID();

@@ -45,6 +45,92 @@ async function connected(route?: CodexTaskRoute) {
 }
 
 describe("Codex task Computer MCP surface", () => {
+  it("exposes bounded project resolution only through a configured task port and rejects foreign/malformed readback", async () => {
+    const known = {
+      status: "resolved" as const,
+      workspaceId: "writer",
+      writerRoot: "/fixture/writer",
+      projectRoot: "/fixture/project",
+      complete: true as const,
+      pages: 1,
+      matches: [{ projectId: "saved-project", name: "Project" }],
+      selectedProjectId: "saved-project",
+      selection: "requested-id" as const,
+    };
+    let mode = "known";
+    let signal: AbortSignal | undefined;
+    const route: CodexTaskRoute = {
+      async resolveProject(_input, context) {
+        signal = context?.signal;
+        if (mode === "throw") throw new Error("No reply");
+        if (mode === "foreign") return { ...known, workspaceId: "foreign" };
+        if (mode === "malformed")
+          return {
+            ...known,
+            status: "missing",
+            selectedProjectId: null,
+            selection: null,
+          };
+        return known;
+      },
+      async create() {
+        throw new Error("unexpected create");
+      },
+      async message() {
+        throw new Error("unexpected message");
+      },
+      async status() {
+        return { status: "unknown" };
+      },
+      async result() {
+        return { status: "unknown" };
+      },
+    };
+    const { client, server } = await connected(route);
+    try {
+      const call = () =>
+        client.callTool({
+          name: "codex_project_resolve",
+          arguments: { workspaceId: "writer" },
+        });
+      expect(
+        (await client.listTools()).tools.some(
+          (tool) =>
+            tool.name === "codex_project_resolve" &&
+            tool.annotations?.readOnlyHint === true,
+        ),
+      ).toBe(true);
+      expect((await call()).structuredContent).toEqual(known);
+      expect(signal).toBeDefined();
+      for (const changed of ["foreign", "malformed"]) {
+        mode = changed;
+        expect((await call()).structuredContent).toMatchObject({
+          status: "refused",
+          code: "HANDOFF_PROJECT_RESOLVE_CORRELATION",
+        });
+      }
+      mode = "throw";
+      expect((await call()).structuredContent).toMatchObject({
+        status: "refused",
+        code: "HANDOFF_PROJECT_RESOLVE_UNAVAILABLE",
+      });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+    const absent = await connected();
+    try {
+      expect(
+        (await absent.client.listTools()).tools.some(
+          (tool) => tool.name === "codex_project_resolve",
+        ),
+      ).toBe(false);
+    } finally {
+      await absent.client.close();
+      await absent.server.close();
+    }
+  });
+
   it("validates active message bytes before delegate and exposes exact steer receipt", async () => {
     const messages: Array<{
       message: string;

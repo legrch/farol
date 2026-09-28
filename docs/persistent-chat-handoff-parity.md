@@ -3,18 +3,18 @@
 Status: saved-project create/status/exact-result, active-turn message,
 same-thread continuation, neutral task-model policy and read-only adopted-turn
 status are integrated on standalone main. Their control tools remain gated by
-serving-host qualification. The saved ChatGPT Browser create/status route is a
-separate source candidate with synthetic page, IPC and MCP fixtures; packaged
-and live account proof are still required. No native shared-runtime or
+serving-host qualification. The saved ChatGPT Browser create/status source is
+integrated with synthetic page/IPC/MCP and packaged fake-endpoint transport
+fixtures; live Browser/account proof is still required. No native shared-runtime or
 live-model qualification has been completed.
 
 ## Two different destinations
 
-| Route                      | Owner-visible result                                                                            | Current standalone state                                                                                                     |
-| -------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Standalone Browser create/status source candidate; synthetic page and local IPC/MCP fixtures only; no packaged or live proof |
-| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Integrated create/status/result; disposable connector fixtures; no live task                                                 |
-| Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                            |
+| Route                      | Owner-visible result                                                                            | Current standalone state                                                                                           |
+| -------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Saved ChatGPT conversation | A normal-history browser conversation with an exact first message and later reopen proof        | Integrated source; synthetic page/local IPC/MCP and packaged fake endpoint fixtures; no live Browser/account proof |
+| Persistent Codex task      | One task in an **existing saved Codex project**, one issued turn, status and exact final answer | Integrated create/status/result; disposable connector fixtures; no live task                                       |
+| Product Agent              | A correlated child of the current host task                                                     | Intentionally disabled; it is neither of the handoff routes above                                                  |
 
 The V0 browser route is documented in the V0 repository's
 `docs/persistent-chat-handoff.md`. Its Legacy browser partition, Hub bridge,
@@ -54,6 +54,38 @@ transport only; current selectors, owner account selection, connector schema
 refresh and persistence still need one bounded live canary. A Computer folder
 grant alone never authorizes the external send, and an outcome-unknown response
 must not be retried under another key.
+
+## Read-only target-bound project resolution
+
+`codex_project_resolve` reads the saved-project catalogue through the existing
+task route and its approved physical authority. It returns `writerRoot` separately
+from the canonical `projectRoot`, plus explicit resolved/missing/ambiguous/stale
+selection or unavailable outcomes. Only matching canonical-root project IDs/names
+are disclosed. A complete scan is bounded to 32 pages of at most 100 entries and
+32 matches; malformed, duplicate, cyclic or partial pages never prove absence.
+The supported optional omitted `nextCursor` is terminal. A matching requested ID
+can disambiguate; a stale ID never falls back to a different project.
+
+The sealed task admission keeps its existing exact project ID. The MCP does not
+take a root path, create a project, persist a preference, edit a title, read
+history or launch/resume/fork a task. It remeasures the writer/canonical repository
+binding and checks expiry/cancellation before returning. Project creation with
+unknown-outcome reconciliation, persisted preferences, title readback and bounded
+scoped history remain separate unimplemented N3 rows. Cancellation/deadline stops
+further catalogue pages; an already sent read remains bounded by its transport
+response/timeout, and Farol does not kill the shared server to cancel observation.
+Project creation with
+unknown-outcome reconciliation, persisted preferences, title readback and bounded
+scoped history remain separate unimplemented N3 rows. Fresh-install project
+creation is not qualified by this read-only slice; existing task-create ambiguity
+rules are unchanged.
+
+Public MCP and packaged disposable-socket fixtures qualify this source route.
+They do not qualify the serving native Desktop identity or experimental protocol
+negotiation. The separately prepared initialize/experimentalApi patch remains
+behind its recorded platform-blocked commit operation; this slice neither moves
+that patch nor bypasses the refusal. No real model/provider task is used merely
+to resolve a project.
 
 ## First Codex saved-project task slice
 
