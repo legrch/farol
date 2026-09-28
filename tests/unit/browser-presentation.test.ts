@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { compactBrowserSelected } from "../../src/pkg/product-settings/browser-presentation";
+import {
+  compactBrowserSelected,
+  embeddedBrowserSelected,
+} from "../../src/pkg/product-settings/browser-presentation";
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout";
 
 describe("Browser presentation selection", () => {
@@ -31,6 +34,21 @@ describe("Browser presentation selection", () => {
       );
       expect(
         compactBrowserSelected({ environment, legacySetupTestMode: true }),
+      ).toBe(false);
+    },
+  );
+});
+
+describe("Embedded Browser selection", () => {
+  it.each(["preview", "dev"] as const)(
+    "uses the owned embedded surface in normal %s",
+    (environment) => {
+      expect(embeddedBrowserSelected({ environment })).toBe(true);
+      expect(embeddedBrowserSelected({ environment, demoMode: true })).toBe(
+        false,
+      );
+      expect(
+        embeddedBrowserSelected({ environment, legacySetupTestMode: true }),
       ).toBe(false);
     },
   );

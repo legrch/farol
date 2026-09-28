@@ -443,18 +443,24 @@ try {
         .click();
       await window.locator('[data-panel="settings"].active').waitFor();
       await window
+        .locator('#settings-nav [data-settings-category="diagnostics"]')
+        .click();
+      const connection = window.locator("#connection-diagnostics");
+      if (!(await connection.evaluate((details) => details.open)))
+        await connection.locator("summary").click();
+      await window
         .locator("#computer-command-policy")
         .waitFor({ state: "visible" });
     }
     if (environment === "preview")
-      await window.locator('.nav-item[data-section="computer"]').click();
+      await window.locator("#review-setup").click();
     await window.locator("#onboarding-return").click();
     await window.locator('[data-panel="browser"].active').waitFor();
     // Review Setup must remain reachable in an empty profile.
     await window
       .locator('.nav-utility .nav-item[data-section="settings"]')
       .click();
-    if (environment === "dev") {
+    {
       await window
         .locator('#settings-nav [data-settings-category="diagnostics"]')
         .click();
@@ -476,27 +482,59 @@ try {
 
     // Readiness and task views use only the local composer fixture. No Send,
     // external account, Codex task or inference is performed.
-    const opened = await bounded(
-      window.evaluate(() =>
-        window.farolNext.configure({ kind: "chatgpt.open-sign-in" }),
-      ),
-      "BROWSER_FIXTURE_OPEN_TIMEOUT",
+    await window.locator('[data-onboarding-step="chatgpt"]').click();
+    await window.locator("#onboarding-open-account").click();
+    await window.locator("#sign-in-return").waitFor({ state: "visible" });
+    await window.waitForFunction(
+      () => document.documentElement.dataset.section === "browser",
     );
-    assert.equal(opened.ok, true);
-    const verified = await bounded(
-      window.evaluate(() =>
-        window.farolNext.configure({ kind: "chatgpt.verify" }),
-      ),
-      "BROWSER_FIXTURE_VERIFY_TIMEOUT",
+    const embedded = await application.evaluate(
+      ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
+        const windows = BrowserWindow.getAllWindows();
+        const shell = windows.find(
+          (window) =>
+            window.webContents.getURL().startsWith("file:") &&
+            window.webContents.getURL().endsWith("/shell.html"),
+        );
+        return {
+          windowCount: windows.length,
+          hidden: windows.every(
+            (window) => !window.isVisible() && !window.isFocused(),
+          ),
+          pageVisible:
+            shell?.contentView.children.some(
+              (child) =>
+                child instanceof WebContentsView &&
+                child.webContents.getURL() === fixtureUrl &&
+                child.getVisible(),
+            ) ?? false,
+        };
+      },
+      fixtureUrl,
     );
-    assert.equal(verified.ok, true);
-    const returned = await bounded(
-      window.evaluate(() =>
-        window.farolNext.configure({ kind: "chatgpt.sign-in-return" }),
-      ),
-      "BROWSER_FIXTURE_RETURN_TIMEOUT",
+    assert.deepEqual(embedded, {
+      windowCount: 1,
+      hidden: true,
+      pageVisible: true,
+    });
+    observations.push({
+      kind: "embedded-sign-in-surface",
+      environment,
+      ...embedded,
+    });
+    await window.locator("#sign-in-return").click();
+    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
+    await window.waitForFunction(
+      async () =>
+        (await window.farolNext.bootstrap()).configuration.settings.setup
+          .chatgpt.verified !== null,
     );
-    assert.equal(returned.ok, true);
+    observations.push({
+      kind: "embedded-sign-in-return",
+      environment,
+      taskCount: (await window.evaluate(() => window.farolNext.bootstrap()))
+        .tasks.length,
+    });
     await window.locator("#onboarding-return").click();
     for (let index = 0; index < 4; index += 1) {
       const created = await bounded(

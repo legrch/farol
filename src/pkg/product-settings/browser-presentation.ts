@@ -10,3 +10,11 @@ export function compactBrowserSelected(
 ): boolean {
   return input.demoMode !== true && input.legacySetupTestMode !== true;
 }
+
+// Normal product navigation uses the app-owned surface and the existing
+// isolated partition. This does not select a host, grant access or send.
+export function embeddedBrowserSelected(
+  input: BrowserPresentationSelection,
+): boolean {
+  return input.demoMode !== true && input.legacySetupTestMode !== true;
+}

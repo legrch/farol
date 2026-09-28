@@ -112,7 +112,10 @@ import {
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
 import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
-import { compactBrowserSelected } from "../../pkg/product-settings/browser-presentation";
+import {
+  compactBrowserSelected,
+  embeddedBrowserSelected,
+} from "../../pkg/product-settings/browser-presentation";
 import {
   ShellLayoutSchema,
   type ShellOverlay,
@@ -5718,7 +5721,7 @@ async function configureAdmittedProduct(
       chatGptSignInOutcome = null;
       chatGptSignInGeneration += 1;
       chatGptSignInOpenGeneration = chatGptSignInGeneration;
-      if (runtimeEnvironment === "dev") {
+      if (embeddedBrowserEnabled()) {
         browserHomeSurfaceOpen = false;
         if (!signInSurfaceOpen || section !== "browser" || setupOpen) {
           signInReturnLayout = { section, setupOpen, taskId: selectedTaskId };
@@ -5735,7 +5738,7 @@ async function configureAdmittedProduct(
       } catch {
         opened = { status: "unreachable" };
       }
-      if (opened.status !== "opened" && runtimeEnvironment === "dev") {
+      if (opened.status !== "opened" && embeddedBrowserEnabled()) {
         chatGptRoute.returnFromSignIn();
         restoreEmbeddedSignInLayout();
       }
@@ -5759,7 +5762,7 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.open-browser": {
-      if (runtimeEnvironment !== "dev" || !chatGptRoute) {
+      if (!embeddedBrowserEnabled() || !chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
       if (chatGptSignInOpenGeneration !== null) {
@@ -5790,7 +5793,7 @@ async function configureAdmittedProduct(
       });
     }
     case "chatgpt.toggle-sidebar": {
-      if (runtimeEnvironment !== "dev" || !chatGptRoute) {
+      if (!embeddedBrowserEnabled() || !chatGptRoute) {
         return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
       }
       if (!(await chatGptRoute.toggleSidebar())) {
@@ -5824,7 +5827,7 @@ async function configureAdmittedProduct(
     }
     case "chatgpt.sign-in-return":
     case "chatgpt.verification-return": {
-      if (runtimeEnvironment === "dev") {
+      if (embeddedBrowserEnabled()) {
         // A readonly app check leaves sign-in mode before it dispatches. The
         // embedded page still occupies the browser surface, so Return must
         // restore Setup even when there is no sign-in observation to finish.
@@ -7609,6 +7612,14 @@ function liveChatGptSurfaceFactory(taskId: string): ChatGptRouteSurfaceFactory {
   };
 }
 
+function embeddedBrowserEnabled(): boolean {
+  return embeddedBrowserSelected({
+    environment: runtimeEnvironment,
+    demoMode,
+    legacySetupTestMode,
+  });
+}
+
 function signInChatGptSurfaceFactory(): ChatGptRouteSurfaceFactory {
   const create = liveChatGptSurfaceFactory(SIGN_IN_SURFACE_ID);
   return (options) => {
@@ -8673,18 +8684,18 @@ async function main(): Promise<void> {
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
-    collapseSidebarByDefault: runtimeEnvironment === "dev",
+    collapseSidebarByDefault: embeddedBrowserEnabled(),
     e2eOrigin: e2eChatGptOrigin,
     parent: () => window,
     ...chatGptWindowPresentationOption(),
-    ...(runtimeEnvironment === "dev"
+    ...(embeddedBrowserEnabled()
       ? { surfaceFactory: signInChatGptSurfaceFactory() }
       : {}),
     ...(process.env.FAROL_NEXT_E2E === "1"
       ? { taskTimeoutMs: 5_000, taskPollMs: 50 }
       : {}),
     onSignInOutcome: (status, diagnostic) => {
-      if (runtimeEnvironment === "dev") {
+      if (embeddedBrowserEnabled()) {
         restoreEmbeddedSignInLayout();
       }
       chatGptSignInOutcome = diagnostic;
@@ -8696,7 +8707,7 @@ async function main(): Promise<void> {
       chatGptSignInBlocked.record(diagnostic);
     },
     onLoadStateChanged: (state) => {
-      if (runtimeEnvironment !== "dev") return;
+      if (!embeddedBrowserEnabled()) return;
       if (
         !signInSurfaceOpen &&
         section === "browser" &&

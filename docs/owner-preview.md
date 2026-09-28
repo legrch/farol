@@ -70,6 +70,13 @@ not a live account, native picker or NEW connector proof.
 selects a focused disposable Dev diagnostic. The fixture uses physical temporary
 paths and waits for the folder access check before the next navigation action.
 
+Normal Preview also retains the owned embedded ChatGPT home and sign-in surface.
+Opening it creates no task; **Return to Setup** stays inside the same app window.
+Settings uses its own sidebar while open. Native shortcuts, private Dev homes and
+automatic app-verification remain under their separate Dev gates. Restoring the
+optional embedded app-bound check with qualified NEW-app selection is a follow-up;
+the current manual attachment check is not claimed as that earlier workflow.
+
 ## What the controls do
 
 - Setup and Settings can open the isolated ChatGPT sign-in surface, persist approved

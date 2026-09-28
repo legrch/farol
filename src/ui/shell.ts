@@ -43,7 +43,10 @@ import {
   guidedSetupSelected,
   initialSetupPresentation,
 } from "../pkg/product-settings/setup-entry";
-import { compactBrowserSelected } from "../pkg/product-settings/browser-presentation";
+import {
+  compactBrowserSelected,
+  embeddedBrowserSelected,
+} from "../pkg/product-settings/browser-presentation";
 import { GuidedOnboardingView } from "./guided-onboarding-view";
 import {
   advanceSetup,
@@ -849,7 +852,7 @@ function currentLayout() {
     taskId: selectedTaskId,
     setupOpen: setupJourney.open,
     checkFeedbackVisible:
-      bootstrap.environment === "dev" &&
+      embeddedBrowserSelected(bootstrap) &&
       section === "browser" &&
       chatGptSignInOpened &&
       Boolean(connectionCheckFeedback),
@@ -969,7 +972,7 @@ function renderBrowser(): void {
   const surfaceFailed =
     taskSurfaceStatuses.get(selectedTaskId)?.state === "failed";
   if (
-    bootstrap.environment === "dev" &&
+    embeddedBrowserSelected(bootstrap) &&
     section === "browser" &&
     bootstrap.tasks.length === 0
   ) {
@@ -1048,7 +1051,7 @@ function renderBrowser(): void {
 function renderTabs(): void {
   const tabs = required<HTMLDivElement>("#task-tabs");
   if (
-    bootstrap.environment === "dev" &&
+    embeddedBrowserSelected(bootstrap) &&
     (chatGptSignInOpened || bootstrap.tasks.length === 0)
   ) {
     const item = document.createElement("div");
@@ -3550,15 +3553,19 @@ function connectorChallengeCard(
 }
 
 function renderSettingsNavigation(): void {
-  const enabled = bootstrap.environment === "dev" && !bootstrap.demoMode;
-  required<HTMLElement>("#settings-description").textContent = enabled
-    ? "Preferences are saved in this Farol Dev profile."
-    : "Changes are saved to Farol Next state only and read back before they are shown as applied.";
+  const enabled = guidedSetupSelected(bootstrap);
+  required<HTMLElement>("#settings-description").textContent =
+    enabled && bootstrap.environment === "dev"
+      ? "Preferences are saved in this Farol Dev profile."
+      : "Changes are saved to Farol Next state only and read back before they are shown as applied.";
   required<HTMLElement>("#settings-nav").hidden =
     !enabled || section !== "settings" || setupJourney.open;
   document
     .querySelectorAll<HTMLButtonElement>("#settings-nav button")
     .forEach((button) => {
+      button.hidden =
+        button.dataset.settingsCategory === "shortcuts" &&
+        bootstrap.environment !== "dev";
       if (enabled && button.dataset.settingsCategory === settingsCategory)
         button.setAttribute("aria-current", "page");
       else button.removeAttribute("aria-current");
@@ -5295,7 +5302,7 @@ function render(notify = true): void {
       (compactBrowser && section === "browser" && !setupJourney.open),
   );
   required<HTMLButtonElement>("#browser-sidebar-toggle").hidden = !(
-    bootstrap.environment === "dev" &&
+    embeddedBrowserSelected(bootstrap) &&
     section === "browser" &&
     !setupJourney.open &&
     browserHomeStatus === "ready"
@@ -5313,7 +5320,7 @@ function render(notify = true): void {
     chatGptReady,
   });
   if (
-    bootstrap.environment === "dev" &&
+    embeddedBrowserSelected(bootstrap) &&
     section === "browser" &&
     bootstrap.tasks.length === 0
   ) {
@@ -5369,8 +5376,7 @@ function render(notify = true): void {
   if (guidedEnabled) {
     // Settings and Setup each own the rail while open. Keep the product
     // sections in the app rail, not alongside either journey's navigation.
-    const settingsOwnsRail =
-      section === "settings" && bootstrap.environment === "dev";
+    const settingsOwnsRail = section === "settings" && guidedEnabled;
     required<HTMLElement>("#nav").hidden =
       section === "computer" || settingsOwnsRail;
     required<HTMLButtonElement>(
@@ -5637,7 +5643,7 @@ function selectSection(next: SurfaceSection): void {
   render();
   if (
     next === "browser" &&
-    bootstrap.environment === "dev" &&
+    embeddedBrowserSelected(bootstrap) &&
     bootstrap.tasks.length === 0 &&
     !chatGptSignInOpened
   ) {
@@ -5648,7 +5654,7 @@ function selectSection(next: SurfaceSection): void {
 async function openBrowserHome(): Promise<void> {
   if (
     browserHomeOpening ||
-    bootstrap.environment !== "dev" ||
+    !embeddedBrowserSelected(bootstrap) ||
     bootstrap.tasks.length !== 0 ||
     chatGptSignInOpened
   )
@@ -5659,7 +5665,7 @@ async function openBrowserHome(): Promise<void> {
   try {
     const opened = await configureProduct(
       { kind: "chatgpt.open-browser" },
-      "ChatGPT opened inside Farol Dev.",
+      "ChatGPT opened inside Farol.",
     );
     browserHomeStatus = opened ? "ready" : "failed";
   } finally {
@@ -6009,7 +6015,7 @@ async function start(): Promise<void> {
   });
   // Diagnostic and optional model/Agent controls are available in Settings,
   // not a second setup journey beneath the guided steps.
-  if (bootstrap.environment === "dev" && !bootstrap.demoMode) {
+  if (guidedSetupSelected(bootstrap)) {
     const diagnostics = required<HTMLDetailsElement>("#connection-diagnostics");
     diagnostics.open = false;
     diagnostics.dataset.settingsPage = "diagnostics";
@@ -6742,7 +6748,7 @@ async function start(): Promise<void> {
   }
   if (
     section === "browser" &&
-    bootstrap.environment === "dev" &&
+    embeddedBrowserSelected(bootstrap) &&
     bootstrap.tasks.length === 0 &&
     !setupJourney.open
   ) {
