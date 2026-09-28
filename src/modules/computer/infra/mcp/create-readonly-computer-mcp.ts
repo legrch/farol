@@ -85,6 +85,9 @@ const CodexProjectPreferenceInputSchema = z.strictObject({
 const CodexProjectTasksInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   projectId: IdentifierSchema,
+  scope: z
+    .enum(["selected-writer", "canonical-and-selected-writer"])
+    .optional(),
   cursor: z
     .string()
     .min(1)
@@ -983,9 +986,9 @@ export function createReadonlyComputerMcpServer(
       server.registerTool(
         "codex_project_tasks",
         {
-          title: "Read stored task metadata for the selected writer",
+          title: "Read stored task metadata for exact approved roots",
           description:
-            "Read one stored, non-atomic metadata page in the exact approved saved project and writer cwd, with a separate sealed discovery grant. Up to 50 rows/32 KiB title/model text. No prompt preview or transcript. configuredModel is configuration metadata, not per-turn execution proof. This does not cover other writers, automatically select/adopt a thread, observe/resume/fork/start work or grant control. Follow nextCursor explicitly; complete applies only to an unpaginated terminal page.",
+            "Read one stored, non-atomic metadata page in the exact approved saved project and writer cwd, with a separate sealed discovery grant. Up to 50 rows/32 KiB title/model text. No prompt preview or transcript. configuredModel is configuration metadata, not per-turn execution proof. Scope defaults to selected-writer. canonical-and-selected-writer requires a separate sealed opt-in and queries only the exact physical canonical checkout plus selected writer; root paths cannot be supplied by the caller. This does not cover additional writers, automatically select/adopt a thread, observe/resume/fork/start work or grant control. Follow nextCursor explicitly; complete applies only to an unpaginated terminal page.",
           inputSchema: CodexProjectTasksInputSchema,
           annotations: READONLY_ANNOTATIONS,
         },

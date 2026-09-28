@@ -9,6 +9,22 @@ const object = (value: unknown): Record<string, unknown> | null =>
   value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+const normalizedPath = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length <= 4096 &&
+  value.startsWith("/") &&
+  !value.endsWith("/") &&
+  !value.includes("\\") &&
+  value
+    .split("/")
+    .slice(1)
+    .every(
+      (part) =>
+        part !== "" &&
+        part !== "." &&
+        part !== ".." &&
+        !/[\u0000-\u001f\u007f]/u.test(part),
+    );
 const identifier = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9_-]{1,120}$/u.test(value);
 const cursor = (value: unknown): value is string =>
@@ -39,26 +55,21 @@ export async function readCodexProjectTasks(
     status: "unavailable",
     code,
   });
+  const scope = request.scope ?? "selected-writer";
   if (
     !identifier(request.projectId) ||
-    typeof request.writerRoot !== "string" ||
-    request.writerRoot.length > 4096 ||
-    !request.writerRoot.startsWith("/") ||
-    request.writerRoot.endsWith("/") ||
-    request.writerRoot.includes("\\") ||
-    request.writerRoot
-      .split("/")
-      .slice(1)
-      .some(
-        (part) =>
-          part === "" ||
-          part === "." ||
-          part === ".." ||
-          /[\u0000-\u001f\u007f]/u.test(part),
-      ) ||
+    !normalizedPath(request.writerRoot) ||
+    !["selected-writer", "canonical-and-selected-writer"].includes(scope) ||
+    (scope === "canonical-and-selected-writer"
+      ? !normalizedPath(request.canonicalRoot)
+      : request.canonicalRoot !== undefined) ||
     (request.cursor !== undefined && !cursor(request.cursor))
   )
     return unavailable("HANDOFF_PROJECT_TASKS_INPUT_INVALID");
+  const roots =
+    scope === "canonical-and-selected-writer"
+      ? [...new Set([request.writerRoot, request.canonicalRoot!])]
+      : [request.writerRoot];
   if (!context.admitted())
     return unavailable("HANDOFF_PROJECT_TASKS_ADMISSION_DENIED");
   try {
@@ -67,7 +78,7 @@ export async function readCodexProjectTasks(
         "thread/list",
         {
           projectId: request.projectId,
-          cwd: request.writerRoot,
+          cwd: roots.length === 1 ? roots[0]! : roots,
           cursor: request.cursor ?? null,
           limit: 50,
           sortKey: "updated_at",
@@ -99,7 +110,7 @@ export async function readCodexProjectTasks(
         !uuid(row.id) ||
         seen.has(row.id.toLowerCase()) ||
         row.projectId !== request.projectId ||
-        row.cwd !== request.writerRoot ||
+        !roots.includes(row.cwd as string) ||
         !nullableText(row.name, 1000) ||
         !nullableText(row.model, 120) ||
         typeof row.updatedAt !== "number" ||
@@ -128,7 +139,7 @@ export async function readCodexProjectTasks(
       status: "tasks",
       source: "stored",
       snapshot: "non-atomic",
-      scope: "selected-writer",
+      scope,
       coverage: "single-page-metadata",
       controlGranted: false,
       tasks,

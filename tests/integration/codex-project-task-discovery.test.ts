@@ -180,3 +180,65 @@ describe("read-only scoped stored task discovery", () => {
     expect(f.calls).toHaveLength(1);
   });
 });
+
+describe("canonical checkout and selected writer metadata scope", () => {
+  const scope = "canonical-and-selected-writer";
+  const canonicalRoot = "/fixture/project";
+  it("requests only the two exact roots and keeps stored no-control metadata", async () => {
+    const second = {
+      ...row,
+      id: "019b0000-0000-4000-8000-000000000002",
+      cwd: canonicalRoot,
+    };
+    const f = await fixture({
+      input: { scope, canonicalRoot },
+      page: { data: [row, second], nextCursor: null },
+    });
+    expect(f.result).toMatchObject({
+      status: "tasks",
+      scope,
+      controlGranted: false,
+      complete: true,
+      tasks: [{ id }, { id: second.id }],
+    });
+    expect(f.calls).toMatchObject([
+      {
+        method: "thread/list",
+        params: {
+          projectId: "project",
+          cwd: [request.writerRoot, canonicalRoot],
+          useStateDbOnly: true,
+        },
+      },
+    ]);
+  });
+  it.each([
+    { scope },
+    { scope, canonicalRoot: "/fixture/../project" },
+    { scope: "all-project", canonicalRoot },
+  ])(
+    "refuses invalid or missing internal root scope before host I/O: %j",
+    async (input) => {
+      const f = await fixture({ input });
+      expect(f.result.status).toBe("unavailable");
+      expect(f.calls).toEqual([]);
+    },
+  );
+  it("refuses an unselected third writer instead of filtering it out", async () => {
+    const f = await fixture({
+      input: { scope, canonicalRoot },
+      page: {
+        data: [{ ...row, cwd: "/fixture/another-writer" }],
+        nextCursor: null,
+      },
+    });
+    expect(f.result.status).toBe("unavailable");
+  });
+  it("uses one exact cwd if the canonical checkout is also the selected writer", async () => {
+    const f = await fixture({
+      input: { scope, canonicalRoot: request.writerRoot },
+    });
+    expect(f.result).toMatchObject({ status: "tasks", scope });
+    expect(f.calls).toMatchObject([{ params: { cwd: request.writerRoot } }]);
+  });
+});

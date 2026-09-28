@@ -225,7 +225,7 @@ export const CodexProjectTasksSchema = z.union([
       projectId: Identifier,
       source: z.literal("stored"),
       snapshot: z.literal("non-atomic"),
-      scope: z.literal("selected-writer"),
+      scope: z.enum(["selected-writer", "canonical-and-selected-writer"]),
       coverage: z.literal("single-page-metadata"),
       controlGranted: z.literal(false),
       tasks: z.array(ProjectTaskMetadata).max(50).readonly(),
@@ -277,6 +277,7 @@ export interface CodexTaskRoute {
     request: Readonly<{
       workspaceId: string;
       projectId: string;
+      scope?: "selected-writer" | "canonical-and-selected-writer" | undefined;
       cursor?: string | undefined;
     }>,
     context?: Readonly<{ signal?: AbortSignal | undefined }>,

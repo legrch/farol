@@ -561,7 +561,14 @@ export class PersistentCodexHandoff {
     });
     const admitted = () =>
       !context.signal?.aborted && this.now() < this.mutationExpiresAt;
-    if (!identifier(request.workspaceId) || !identifier(request.projectId))
+    if (
+      !identifier(request.workspaceId) ||
+      !identifier(request.projectId) ||
+      (request.scope !== undefined &&
+        !["selected-writer", "canonical-and-selected-writer"].includes(
+          request.scope,
+        ))
+    )
       return refused("HANDOFF_PROJECT_TASKS_INPUT_INVALID");
     if (!admitted()) return refused("HANDOFF_TASK_ADMISSION_DENIED");
     try {
@@ -596,6 +603,10 @@ export class PersistentCodexHandoff {
         {
           projectId: request.projectId,
           writerRoot: workspace.root,
+          scope: request.scope,
+          ...(request.scope === "canonical-and-selected-writer"
+            ? { canonicalRoot: workspace.project.root }
+            : {}),
           ...(request.cursor === undefined ? {} : { cursor: request.cursor }),
         },
         { deadlineAt: this.mutationExpiresAt, admitted },

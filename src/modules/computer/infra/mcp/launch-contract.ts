@@ -242,6 +242,7 @@ export const CodexTaskRouteLaunchSchema = z.strictObject({
     projectId: IdentifierSchema,
     observeThreadId: z.string().uuid().optional(),
     discoverProjectTasks: z.boolean().optional(),
+    discoverCanonicalProjectTasks: z.boolean().optional(),
     projectRoot: AbsolutePathSchema,
     projectIdentity: RootIdentitySchema,
     gitCommonDirectory: AbsolutePathSchema,
@@ -274,7 +275,12 @@ export const ClaudeTaskRouteLaunchSchema = z.strictObject({
       .max(20),
   }),
   grant: CodexTaskRouteLaunchSchema.shape.grant
-    .omit({ observeThreadId: true, discoverProjectTasks: true, harness: true })
+    .omit({
+      observeThreadId: true,
+      discoverProjectTasks: true,
+      discoverCanonicalProjectTasks: true,
+      harness: true,
+    })
     .extend({
       harness: z.literal("claude-code"),
       execution: z.strictObject({

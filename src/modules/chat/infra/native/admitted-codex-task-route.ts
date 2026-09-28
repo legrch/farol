@@ -14,6 +14,7 @@ export type CodexTaskAdmission = Readonly<{
   projectId: string;
   observeThreadId?: string | undefined;
   discoverProjectTasks?: boolean | undefined;
+  discoverCanonicalProjectTasks?: boolean | undefined;
   harness: "codex";
   tasks: TaskExecutionSettings;
   configSha256: string;
@@ -134,12 +135,26 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
       request.projectId !== this.admission.projectId
     )
       return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    if (
+      request.scope !== undefined &&
+      !["selected-writer", "canonical-and-selected-writer"].includes(
+        request.scope,
+      )
+    )
+      return refused("HANDOFF_PROJECT_TASKS_INPUT_INVALID");
+    if (
+      request.scope === "canonical-and-selected-writer" &&
+      this.admission.discoverCanonicalProjectTasks !== true
+    )
+      return refused("HANDOFF_CANONICAL_TASKS_NOT_GRANTED");
     const result = await this.delegate.discoverTasks(request, context);
     if (this.now() >= this.admission.expiresAt || context.signal?.aborted)
       return refused("HANDOFF_TASK_ADMISSION_DENIED");
     if (
       result.workspaceId !== request.workspaceId ||
-      result.projectId !== request.projectId
+      result.projectId !== request.projectId ||
+      (result.status === "tasks" &&
+        result.scope !== (request.scope ?? "selected-writer"))
     )
       return refused("HANDOFF_PROJECT_TASKS_CORRELATION");
     return result;

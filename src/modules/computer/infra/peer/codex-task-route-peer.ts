@@ -72,6 +72,7 @@ export function parseProjectTasks(
   request: {
     workspaceId: string;
     projectId: string;
+    scope?: "selected-writer" | "canonical-and-selected-writer" | undefined;
     cursor?: string | undefined;
   },
 ) {
@@ -80,7 +81,8 @@ export function parseProjectTasks(
     parsed.data.workspaceId === request.workspaceId &&
     parsed.data.projectId === request.projectId &&
     (parsed.data.status !== "tasks" ||
-      (!(request.cursor !== undefined && parsed.data.complete) &&
+      (parsed.data.scope === (request.scope ?? "selected-writer") &&
+        !(request.cursor !== undefined && parsed.data.complete) &&
         !(
           parsed.data.nextCursor !== null &&
           parsed.data.nextCursor === request.cursor

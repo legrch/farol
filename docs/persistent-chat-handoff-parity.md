@@ -139,7 +139,7 @@ that opt-in requires serving-host qualification for the database-only list shape
 separate from the local generated-schema inspector. A generated local CLI schema
 cannot prove the serving endpoint honors the flag or grant it automatically.
 
-The route reads one `thread/list` page with explicit project ID, exact writer cwd,
+The default route reads one `thread/list` page with explicit project ID, exact writer cwd,
 `useStateDbOnly=true`, non-archived filter, descending updated-time order and limit 50. The flag asks the supported host to avoid JSONL scan/repair; Farol does not
 open its private database or rollouts. Current canonical-root project membership,
 writer identity, expiry and cancellation are checked before and after reads.
@@ -162,6 +162,26 @@ prove the source route. No model turn, real task discovery, private database
 access or provider mutation is performed in those fixtures. Ensure/persisted
 automatic latest-preference lookup, project-wide discovery across other writers and Claude history
 remain unimplemented; this is not complete V0 parity.
+
+### Canonical checkout plus selected writer opt-in
+
+The optional canonical-and-selected-writer scope additionally requires sealed
+`discoverCanonicalProjectTasks=true`; existing discovery grants stay narrow.
+The production desktop issuer leaves both discovery opt-ins absent until the
+serving list contract is qualified. No owner profile is edited by this source
+change. A granted fixture uses one supported cwd-filter array containing only
+the physically verified canonical checkout and current writer; equal paths
+collapse to one string filter. The caller cannot submit root paths. No fallback
+to an unfiltered project scan or two repeated host calls is permitted.
+
+The scope is correlated through the public MCP request, admitted route and
+response parser. Metadata from any third cwd refuses the whole page. Canonical
+and writer identities are remeasured before and after provider I/O; revocation,
+expiry or replacement cannot disclose rows. The response remains stored,
+non-atomic, bounded metadata with controlGranted=false. This enables an explicit
+primary-checkout discovery fixture; it does not cover all linked writers,
+transcript history, owner-task adoption/control or live Desktop compatibility.
+Real host support for the array filter and the separate opt-in remain unqualified.
 
 ## Stored history read/tail for an exact selected turn
 

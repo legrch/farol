@@ -1,6 +1,11 @@
+export type ProjectTaskScope =
+  "selected-writer" | "canonical-and-selected-writer";
+
 export type ProjectTasksRequest = Readonly<{
   projectId: string;
   writerRoot: string;
+  canonicalRoot?: string | undefined;
+  scope?: ProjectTaskScope | undefined;
   cursor?: string | undefined;
 }>;
 export type ProjectTaskMetadata = Readonly<{
@@ -14,7 +19,7 @@ export type ProjectTasksResult =
       status: "tasks";
       source: "stored";
       snapshot: "non-atomic";
-      scope: "selected-writer";
+      scope: ProjectTaskScope;
       coverage: "single-page-metadata";
       controlGranted: false;
       tasks: readonly ProjectTaskMetadata[];
@@ -27,7 +32,7 @@ export interface CodexProjectTasksHost {
     method: "thread/list",
     params: Readonly<{
       projectId: string;
-      cwd: string;
+      cwd: string | readonly string[];
       cursor: string | null;
       limit: 50;
       sortKey: "updated_at";
@@ -42,6 +47,7 @@ export interface CodexProjectTasksHost {
 export type ProjectTaskDiscoveryRequest = Readonly<{
   workspaceId: string;
   projectId: string;
+  scope?: ProjectTaskScope | undefined;
   cursor?: string | undefined;
 }>;
 export type ProjectTaskDiscoveryResult = (

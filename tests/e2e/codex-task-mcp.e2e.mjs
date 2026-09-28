@@ -58,6 +58,7 @@ const ownerTurnId = "d7b554c6-6603-4404-b376-7c77b618a242";
 const turnId = "issued-fixture-turn";
 const calls = [];
 let turnStatus = "inProgress";
+let canonicalMetadataCwdFault = false;
 const sockets = new Set();
 const savedChatCalls = [];
 const savedChatNegative = new Map();
@@ -113,7 +114,9 @@ function hostResult(method, params) {
   if (method === "thread/list") {
     if (callbackFailure) throw callbackAssertion;
     assert.equal(params.projectId, projectId);
-    assert.equal(params.cwd, writerRoot);
+    const wide = Array.isArray(params.cwd);
+    if (wide) assert.deepEqual(params.cwd, [writerRoot, projectRoot]);
+    else assert.equal(params.cwd, writerRoot);
     assert.equal(params.useStateDbOnly, true);
     assert.equal(params.limit, 50);
     assert.equal(params.archived, false);
@@ -123,7 +126,11 @@ function hostResult(method, params) {
         {
           id: ownerThreadId,
           projectId,
-          cwd: writerRoot,
+          cwd: wide
+            ? canonicalMetadataCwdFault
+              ? path.join(root, "third-writer")
+              : projectRoot
+            : writerRoot,
           name: "Farol · Native observer canary",
           model: "gpt-6-luna",
           updatedAt: 123,
@@ -424,6 +431,7 @@ try {
         projectId,
         observeThreadId: ownerThreadId,
         discoverProjectTasks: true,
+        discoverCanonicalProjectTasks: true,
         projectRoot,
         projectIdentity,
         gitCommonDirectory: commonDirectory,
@@ -565,6 +573,45 @@ try {
     "project/list",
     "thread/list",
   ]);
+  const beforeCanonicalMetadata = calls.length;
+  const canonicalMetadata = await callFixtureTool({
+    name: "codex_project_tasks",
+    arguments: {
+      workspaceId: "approved-writer",
+      projectId,
+      scope: "canonical-and-selected-writer",
+    },
+  });
+  assert.equal(canonicalMetadata.isError, undefined);
+  assert.equal(
+    canonicalMetadata.structuredContent.scope,
+    "canonical-and-selected-writer",
+  );
+  assert.equal(canonicalMetadata.structuredContent.controlGranted, false);
+  assert.equal(canonicalMetadata.structuredContent.tasks[0].id, ownerThreadId);
+  assert(
+    !JSON.stringify(canonicalMetadata).includes("PRIVATE FIXTURE PREVIEW"),
+  );
+  assert.deepEqual(calls.slice(beforeCanonicalMetadata), [
+    "project/list",
+    "thread/list",
+  ]);
+  canonicalMetadataCwdFault = true;
+  try {
+    const foreignCwd = await callFixtureTool({
+      name: "codex_project_tasks",
+      arguments: {
+        workspaceId: "approved-writer",
+        projectId,
+        scope: "canonical-and-selected-writer",
+      },
+    });
+    assert.equal(foreignCwd.isError, true);
+    assert.equal(foreignCwd.structuredContent.status, "unavailable");
+    assert(!JSON.stringify(foreignCwd).includes("Native observer canary"));
+  } finally {
+    canonicalMetadataCwdFault = false;
+  }
   const beforeForeignDiscovery = calls.length;
   assert.equal(
     (

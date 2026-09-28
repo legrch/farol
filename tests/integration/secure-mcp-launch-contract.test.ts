@@ -336,6 +336,10 @@ describe("secure MCP Computer launch contract", () => {
       challengeSha256: "f".repeat(64),
     });
     expect(automatic.codexTasks).toMatchObject(codexTasks);
+    expect(automatic.codexTasks?.grant.discoverProjectTasks).toBeUndefined();
+    expect(
+      automatic.codexTasks?.grant.discoverCanonicalProjectTasks,
+    ).toBeUndefined();
     expect(automatic.codexTasks?.grant).toMatchObject({
       harness: "codex",
       observeThreadId: "0e4b2463-5506-47d5-a1a0-b4b84e941301",
