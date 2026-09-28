@@ -60,6 +60,8 @@ const calls = [];
 let turnStatus = "inProgress";
 const sockets = new Set();
 const savedChatCalls = [];
+const savedChatNegative = new Map();
+const savedChatClosed = new Set();
 
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -262,6 +264,48 @@ const savedChatServer = createServer((socket) => {
           return;
         }
         savedChatCalls.push(request.operation);
+        const dispatchId =
+          request.operation === "create"
+            ? request.request.key
+            : request.dispatchId;
+        const mode = savedChatNegative.get(dispatchId);
+        if (mode) {
+          socket.once("close", () => savedChatClosed.add(dispatchId));
+          const foreignId = "22345678-1234-4123-8123-123456789abc";
+          const verified = {
+            status: "verified",
+            dispatchId,
+            conversationUrl:
+              "https://chatgpt.com/c/12345678-1234-4123-8123-123456789abc",
+            titleVerified: false,
+          };
+          if (mode === "abrupt-close") {
+            socket.destroy();
+            return;
+          }
+          const reply =
+            mode === "foreign-verified"
+              ? { ...verified, dispatchId: foreignId }
+              : mode === "foreign-refused"
+                ? {
+                    status: "refused",
+                    dispatchId: foreignId,
+                    code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
+                  }
+                : mode === "foreign-unknown"
+                  ? { status: "outcome_unknown", dispatchId: foreignId }
+                  : mode === "mixed-frame"
+                    ? { ...verified, error: { message: "mixed fixture" } }
+                    : {
+                        status: "refused",
+                        dispatchId,
+                        code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
+                      };
+          // Deliberately keep the peer open after a complete frame. The
+          // packaged client must settle and close its own connection.
+          socket.write(JSON.stringify(reply) + "\n");
+          return;
+        }
         socket.end(
           `${JSON.stringify(request.operation === "create" ? { status: "refused", code: "SAVED_CHAT_BROWSER_UNAVAILABLE", dispatchId: request.request.key } : { status: "unknown" })}\n`,
         );
@@ -573,6 +617,48 @@ try {
   });
   assert.deepEqual(savedChatStatus.structuredContent, { status: "unknown" });
   assert.deepEqual(savedChatCalls, ["create", "status"]);
+  const negativeModes = [
+    "foreign-verified",
+    "foreign-refused",
+    "foreign-unknown",
+    "mixed-frame",
+    "complete-frame-peer-open",
+    "abrupt-close",
+  ];
+  for (const [index, mode] of negativeModes.entries()) {
+    const dispatchId =
+      "12345678-1234-4123-8123-" + String(index + 1).padStart(12, "0");
+    savedChatNegative.set(dispatchId, mode);
+    const count = savedChatCalls.length;
+    const statusOnly = mode === "foreign-unknown";
+    const result = await callFixtureTool({
+      name: statusOnly ? "chatgpt_chat_status" : "chatgpt_chat_create",
+      arguments: statusOnly
+        ? { dispatchId }
+        : {
+            key: dispatchId,
+            title: "Synthetic transport negative",
+            firstMessage: "No account or Send",
+          },
+    });
+    assert.deepEqual(
+      result.structuredContent,
+      mode === "complete-frame-peer-open"
+        ? {
+            status: "refused",
+            code: "SAVED_CHAT_BROWSER_UNAVAILABLE",
+            dispatchId,
+          }
+        : { status: "outcome_unknown", dispatchId },
+    );
+    assert.equal(savedChatCalls.length, count + 1, mode + ": no retry");
+    // Bounded current-connection cleanup proof; not descendant process proof.
+    const deadline = Date.now() + 2_000;
+    while (!savedChatClosed.has(dispatchId) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert(savedChatClosed.has(dispatchId), mode + ": owned connection closed");
+  }
+
   const observed = await callFixtureTool({
     name: "codex_task_observe",
     arguments: {
@@ -856,7 +942,7 @@ try {
   });
   assert.notEqual(listed.isError, true);
   process.stdout.write(
-    `PASS: ${packaged ? "packaged" : "built"} Computer MCP project resolution/task route and fake saved-chat Browser endpoint used disposable sockets; unavailable task host left Computer working; no model or live ChatGPT turn.\n`,
+    `PASS: ${packaged ? "packaged" : "built"} Computer MCP project resolution/task route and fake saved-chat Browser endpoint including six frame/close negatives used disposable sockets; unavailable task host left Computer working; no model or live ChatGPT turn.\n`,
   );
 } catch (error) {
   injectedFailureObserved = error === callbackAssertion;

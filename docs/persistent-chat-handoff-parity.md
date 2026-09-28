@@ -409,7 +409,11 @@ without retaining the full timeout. A connect event after settlement/deadline
 never writes a request. The bridge uses one owned connection per
 request and ignores late frames after settlement.
 
-Controlled socket fixtures qualify these client rules. Disposable native socket
+Controlled socket fixtures qualify these client rules. The packaged MCP fixture
+also exercises six disposable peer cases: foreign verified/refused/unknown IDs,
+mixed frame, complete-frame/peer-open, and abrupt close. Each request has one
+transport write and a bounded current-connection close proof; there is no account
+operation, actual Send or descendant-process qualification. Disposable native socket
 fixtures continue to prove existing lease draining and disconnect behavior, not
 account/Send or shared Desktop parity. Replacement-inode cleanup is explicitly
 NOT_QUALIFIED on the current Node host: a preserved RED shows public
