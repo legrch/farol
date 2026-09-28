@@ -228,3 +228,30 @@ never rewrites an acknowledgement or makes an unknown submission retryable. The 
 they are not reusable public readiness or Send permission. No automatic retry or
 replay is introduced after an unknown submission. Native/account/replacement proof
 and Model enablement remain separate and unqualified.
+
+## Assembled source transport fixture
+
+route-b-provider-assembly.test.ts composes the real ChatGptRoute text-profile
+admission/poll path, chatGptTaskConversation adapter, Responses/SSE provider and
+caller relay on disposable local transports with controlled page answers.
+A tool round preserves the committed prefix and appends the exact tool result
+in the next response, with one route run and one mock Send. Wire assertions
+require the exact ordered deltas, matching message/response identity and one
+terminal frame per response. Foreign and repeated
+continuations refuse. A second synthetic turn proves the public server-side
+ServerResponse.destroyed state before advancing page output after client loss;
+the route settles outcome-unknown and an initial-request replay cannot send again.
+
+The fixture executes no command, browser Send, account operation or model request.
+Page probe answers are synthetic; there is no native DOM or installed/live parity.
+It covers the text profile, not the candidate rich visible-output profile.
+It proves fail-closed loss behavior, not automatic recovery of a lost initial
+stream. Runtime loss/recovery for a real provider remains NOT_QUALIFIED.
+Model and Product Agent remain disabled. Fixture cleanup retains an original
+assertion while attempting every owned transport/root cleanup, including setup
+failures after relay creation. An injected provider-start rejection verifies the
+original error, completion of the real relay close and removal of the already-
+created socket/root. A second fault fixture aborts before tool continuation and
+requires the original assertion with awaited cleanup and no unhandled rejection;
+its pending invoke has an immediate handler without replacing the promise used
+by positive assertions.
