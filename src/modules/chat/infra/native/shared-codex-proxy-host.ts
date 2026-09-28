@@ -330,11 +330,17 @@ export class SharedCodexProxyHost implements HandoffHost {
     for (;;) {
       const end = this.received.indexOf(0x0a);
       if (end < 0) return;
-      const line = this.received.subarray(0, end).toString("utf8");
+      const line = this.received.subarray(0, end);
       this.received = this.received.subarray(end + 1);
       let value: Record<string, unknown> | null;
       try {
-        value = object(JSON.parse(line));
+        value = object(
+          JSON.parse(
+            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+              line,
+            ),
+          ),
+        );
       } catch {
         this.fail();
         return;
@@ -343,14 +349,29 @@ export class SharedCodexProxyHost implements HandoffHost {
         this.fail();
         return;
       }
-      if (typeof value.id === "number" && typeof value.method === "string") {
-        // A server request may be an approval. Never approve it implicitly.
-        this.child?.stdin.write(
-          `${JSON.stringify({ id: value.id, error: { code: -32601, message: "Method not available" } })}\n`,
-          (error) => {
-            if (error) this.fail();
-          },
-        );
+      if (Object.hasOwn(value, "id") && Object.hasOwn(value, "method")) {
+        if (
+          (typeof value.id !== "string" &&
+            !(
+              typeof value.id === "number" && Number.isSafeInteger(value.id)
+            )) ||
+          typeof value.method !== "string" ||
+          Object.hasOwn(value, "result") ||
+          Object.hasOwn(value, "error")
+        ) {
+          this.fail();
+          return;
+        }
+        // Request IDs can be opaque strings. Refuse with the exact ID, without
+        // coercion, admission, payload disclosure or implicit approval.
+        const frame = `${JSON.stringify({ id: value.id, error: { code: -32601, message: "Method not available" } })}\n`;
+        if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
+          this.fail();
+          return;
+        }
+        this.child?.stdin.write(frame, (error) => {
+          if (error) this.fail();
+        });
         continue;
       }
       if (value.id === undefined) continue; // provider notification

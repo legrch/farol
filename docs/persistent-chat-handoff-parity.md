@@ -574,3 +574,20 @@ The caller must preserve and bind the stable journal root across actual runtime
 reconnect/restart; that lifetime and admission remain unwired/unqualified. The
 original refused handshake is untouched and `codex_project_ensure` remains absent
 from the product catalogue. Do not use this adapter as an alternate provider route.
+
+## Shared proxy inbound framing
+
+The existing proxy keeps server requests unqualified and returns an explicit
+method-unavailable refusal with the exact string or safe-integer request ID.
+Request and client-response ID namespaces are separate; a server request matching
+an issued client ID cannot complete that pending client request. Fractional/unsafe
+numeric IDs, ambiguous request/response envelopes, invalid UTF-8 and oversized
+refusal frames fail the current client lifetime closed, without reconnect/replay.
+A numeric issued client response is never matched by coercing a string ID.
+Valid UTF-8 can cross chunk boundaries; decoding happens after the complete line.
+
+Owned Node protocol fixtures measure refusal frames and exact child exit. These
+are not native App Server, approval decisions, event subscriptions or Desktop
+acceptance. The initialize payload, experimental handshake refusal, selected host
+and qualification gates are unchanged. Interactive approvals remain open; this
+framing correction neither grants permission nor implements an owner reply path.
