@@ -343,10 +343,26 @@ export function collapseChatGptSidebarScript(): string {
   return `(() => {
     const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar"]);
     const openLabels = new Set(["Open sidebar", "Show sidebar", "Expand sidebar"]);
+    const cancelKey = "__farolDefaultSidebarCollapse";
+    const previous = globalThis[cancelKey];
+    if (typeof previous === "function") previous();
     const deadline = Date.now() + 12000;
     let lastAttempt = 0;
-    const timer = setInterval(() => {
-      if (Date.now() > deadline) { clearInterval(timer); return; }
+    let stopped = false;
+    let timer;
+    const ownerInput = (event) => { if (event.isTrusted) stop(); };
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      clearInterval(timer);
+      document.removeEventListener("pointerdown", ownerInput, true);
+      if (globalThis[cancelKey] === stop) delete globalThis[cancelKey];
+    };
+    globalThis[cancelKey] = stop;
+    document.addEventListener("pointerdown", ownerInput, true);
+    timer = setInterval(() => {
+      if (stopped) return;
+      if (Date.now() > deadline) { stop(); return; }
       const close = [...document.querySelectorAll("button[aria-label]")].find(
         (candidate) => labels.has(candidate.getAttribute("aria-label")) &&
           candidate.getAttribute("aria-expanded") !== "false" &&
@@ -361,7 +377,7 @@ export function collapseChatGptSidebarScript(): string {
           (candidate) => openLabels.has(candidate.getAttribute("aria-label")) &&
             candidate.getClientRects().length > 0
         );
-        if (open || lastAttempt > 0) clearInterval(timer);
+        if (open || lastAttempt > 0) stop();
         return;
       }
       // The first click can happen before ChatGPT hydrates its handler. Only
@@ -369,11 +385,20 @@ export function collapseChatGptSidebarScript(): string {
       if (Date.now() - lastAttempt < 500) return;
       lastAttempt = Date.now();
       close.click();
+      // A synchronous provider update ends this timer immediately. Hydration
+      // may still need a later tick, but any owner input cancels that retry.
+      const collapsed = [...document.querySelectorAll("button[aria-label]")].some(
+        (candidate) => openLabels.has(candidate.getAttribute("aria-label")) &&
+          candidate.getClientRects().length > 0
+      );
+      if (collapsed) stop();
     }, 250);
   })()`;
 }
 
 export const toggleChatGptSidebarScript = `(() => {
+  const cancel = globalThis.__farolDefaultSidebarCollapse;
+  if (typeof cancel === "function") cancel();
   const labels = new Set(["Close sidebar", "Collapse sidebar", "Hide sidebar",
     "Open sidebar", "Show sidebar", "Expand sidebar"]);
   const button = [...document.querySelectorAll("button[aria-label]")].find(

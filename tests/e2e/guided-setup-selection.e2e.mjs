@@ -986,6 +986,10 @@ try {
         throw new Error("SELECTED_PAGE_SIDEBAR_UNCHANGED");
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+    // Observe beyond the next hydration retry ticks: the owner's opening
+    // must remain in place, not be undone after an initially successful click.
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    sidebarPages = await bounded(sidebarSnapshot(), "SIDEBAR_SETTLED_TIMEOUT");
     for (const page of sidebarPages) {
       const before = sidebarBefore.find(
         (candidate) => candidate.id === page.id,

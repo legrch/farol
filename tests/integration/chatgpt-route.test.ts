@@ -347,7 +347,11 @@ it("stops the initial sidebar collapse after ChatGPT exposes Show sidebar", () =
     },
   };
   vm.runInNewContext(collapseChatGptSidebarScript(), {
-    document: { querySelectorAll: () => [control] },
+    document: {
+      querySelectorAll: () => [control],
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    },
     setInterval: (callback: () => void) => {
       tick = callback;
       return 1;
@@ -363,6 +367,89 @@ it("stops the initial sidebar collapse after ChatGPT exposes Show sidebar", () =
   expect(clicks).toBe(1);
   tick!();
   expect(clears).toBe(1);
+});
+
+it.each([false, true])(
+  "cancels pending default collapse when the owner toggles (initial collapse=%s)",
+  (initialCollapse) => {
+    let tick: (() => void) | null = null;
+    let collapsed = false;
+    let clicks = 0;
+    let now = 1000;
+    const control = {
+      disabled: false,
+      getAttribute: (name: string) =>
+        name === "aria-label"
+          ? collapsed
+            ? "Open sidebar"
+            : "Close sidebar"
+          : null,
+      getClientRects: () => [1],
+      click: () => {
+        collapsed = !collapsed;
+        clicks += 1;
+      },
+    };
+    const context = vm.createContext({
+      document: {
+        querySelectorAll: () => [control],
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      },
+      setInterval: (callback: () => void) => {
+        tick = callback;
+        return 1;
+      },
+      clearInterval: () => {
+        tick = null;
+      },
+      Date: { now: () => now },
+      Set,
+    });
+    vm.runInContext(collapseChatGptSidebarScript(), context);
+    if (initialCollapse) {
+      tick!();
+      expect(clicks).toBe(1);
+    }
+    now = 1020;
+    expect(vm.runInContext(toggleChatGptSidebarScript, context)).toBe(true);
+    const ownerChoice = collapsed;
+    const afterOwnerClicks = clicks;
+    expect(tick).toBeNull();
+    now = 1500;
+    (tick as (() => void) | null)?.();
+    expect(collapsed).toBe(ownerChoice);
+    expect(clicks).toBe(afterOwnerClicks);
+  },
+);
+
+it("stops delayed hydration collapse on trusted owner input", () => {
+  let tick: (() => void) | null = null;
+  let pointer: ((event: { isTrusted: boolean }) => void) | null = null;
+  const remove = vi.fn();
+  vm.runInNewContext(collapseChatGptSidebarScript(), {
+    document: {
+      querySelectorAll: () => [],
+      addEventListener: (_name: string, listener: typeof pointer) => {
+        pointer = listener;
+      },
+      removeEventListener: remove,
+    },
+    setInterval: (callback: () => void) => {
+      tick = callback;
+      return 1;
+    },
+    clearInterval: () => {
+      tick = null;
+    },
+    Date,
+    Set,
+  });
+  pointer!({ isTrusted: false });
+  expect(tick).not.toBeNull();
+  pointer!({ isTrusted: true });
+  expect(tick).toBeNull();
+  expect(remove).toHaveBeenCalledWith("pointerdown", pointer, true);
 });
 
 it("toggles the provider sidebar through its own visible control", () => {
