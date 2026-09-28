@@ -19,6 +19,11 @@ const admit = async () => ({
 });
 
 describe("app-owned saved-chat bridge", () => {
+  // The preserved native owned-socket RED proves Node's public server.close()
+  // can unlink a replacement pathname before application cleanup. No private
+  // handle internals or pathname juggling is accepted as a workaround.
+  it.todo("replacement-inode cleanup remains NOT_QUALIFIED on this Node host");
+
   it("routes one create and a separate status over the exact endpoint", async () => {
     const key = randomUUID();
     let creates = 0;

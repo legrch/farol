@@ -44,8 +44,11 @@ export class SavedChatBridgeClient {
         TIMEOUT_MS,
       );
       timer.unref?.();
-      socket.once("connect", () => socket.write(encoded));
+      socket.once("connect", () => {
+        if (!settled) socket.write(encoded);
+      });
       socket.on("data", (chunk: Buffer) => {
+        if (settled) return;
         input = Buffer.concat([input, chunk]);
         if (input.length > SAVED_CHAT_BRIDGE_MAX_FRAME_BYTES) {
           finish(new Error("SAVED_CHAT_BRIDGE_RESPONSE_TOO_LARGE"));
@@ -58,11 +61,18 @@ export class SavedChatBridgeClient {
           return;
         }
         try {
-          finish(
-            SavedChatBridgeResponseSchema.parse(
-              JSON.parse(input.subarray(0, newline).toString("utf8")),
-            ),
+          const response = SavedChatBridgeResponseSchema.parse(
+            JSON.parse(input.subarray(0, newline).toString("utf8")),
           );
+          const dispatchId =
+            parsed.operation === "create"
+              ? parsed.request.key
+              : parsed.dispatchId;
+          if ("dispatchId" in response && response.dispatchId !== dispatchId) {
+            finish(new Error("SAVED_CHAT_BRIDGE_RESPONSE_INVALID"));
+            return;
+          }
+          finish(response);
         } catch {
           finish(new Error("SAVED_CHAT_BRIDGE_RESPONSE_INVALID"));
         }
@@ -72,6 +82,9 @@ export class SavedChatBridgeClient {
       );
       socket.once("end", () => {
         if (!settled) finish(new Error("SAVED_CHAT_BRIDGE_RESPONSE_INVALID"));
+      });
+      socket.once("close", () => {
+        if (!settled) finish(new Error("SAVED_CHAT_BRIDGE_UNAVAILABLE"));
       });
     });
   }

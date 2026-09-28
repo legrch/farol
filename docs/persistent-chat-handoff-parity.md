@@ -398,3 +398,24 @@ records prevent concurrent overwrite. The local receipt has no model, prompt, tu
 or transcript. No provider mutation or task execution occurs. Source/filesystem and
 sealed packaged fixtures do not qualify live project API or native Desktop parity.
 Project ensure, cross-writer discovery and serving interactive approvals remain open.
+
+## Saved-chat local frame and cleanup boundaries
+
+A response with a dispatch ID must match the exact create key or status target.
+A foreign verified/refused/outcome-unknown response is invalid; no automatic retry
+or new dispatch follows it. Strict frames reject mixed result/error-shaped data.
+A complete frame settles without waiting for peer end; an abrupt close refuses
+without retaining the full timeout. A connect event after settlement/deadline
+never writes a request. The bridge uses one owned connection per
+request and ignores late frames after settlement.
+
+Controlled socket fixtures qualify these client rules. Disposable native socket
+fixtures continue to prove existing lease draining and disconnect behavior, not
+account/Send or shared Desktop parity. Replacement-inode cleanup is explicitly
+NOT_QUALIFIED on the current Node host: a preserved RED shows public
+server.close() can unlink a later resource at the same pathname before an
+application lstat guard runs. The attempted guard and reproducer are retained in
+candidate evidence, and the corresponding regression remains a visible todo.
+No private handle internals, foreign pathname moves, or unsandboxed fallback is
+used to disguise that limitation. A supported identity-preserving close path is
+required before claiming full socket-ownership cleanup.
