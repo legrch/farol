@@ -314,6 +314,10 @@ function childMain({
           "<code>a</code><code>b</code>",
           "<code><code>nested</code></code>",
           "<code>a</code><p>unqualified prose</p>",
+          "<div><pre>Do not run without a backup.</pre><button>Copy code</button></div><code>deleteData()</code>",
+          "<div><div>Do not run without a backup.</div><button>Copy code</button></div><code>deleteData()</code>",
+          "<div>outside prose<div><button>Copy</button></div></div><code>a</code>",
+          "<div><pre>outside prose</pre><div><button>Copy</button></div></div><code>a</code>",
           '<div data-markdown-copy="code-block"><code>nested wrapper</code></div>',
         ])
           await expectCode(

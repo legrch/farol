@@ -152,15 +152,21 @@ export function publicMarkdownBlock(
   }
 
   // Only this explicit public wrapper can project a CODE as a block. A toolbar
-  // is a DIV/SPAN subtree with a visible button and no code, not a label match.
+  // is a DIV/SPAN with a direct visible button and no code, not a label match.
   // Unknown structures or multiple/nested CODE nodes cannot be silently lost.
   function qualifiedCodeWrapper(wrapper: Element, depth: number): string {
     type Shape = {
       codes: { element: Element; depth: number }[];
       text: boolean;
       button: boolean;
+      labelOnly: boolean;
     };
-    const empty = (): Shape => ({ codes: [], text: false, button: false });
+    const empty = (): Shape => ({
+      codes: [],
+      text: false,
+      button: false,
+      labelOnly: true,
+    });
     function inspect(node: Node, level: number, literal = false): Shape {
       if (++visited > 8_192 || level > 64) fail("CHATGPT_MARKDOWN_LIMIT");
       if (node.nodeType === 3) {
@@ -190,7 +196,11 @@ export function publicMarkdownBlock(
       }
       if (tag === "CODE") {
         for (const child of element.childNodes) inspect(child, level + 1, true);
-        return { ...empty(), codes: [{ element, depth: level }] };
+        return {
+          ...empty(),
+          codes: [{ element, depth: level }],
+          labelOnly: false,
+        };
       }
       if (
         !["DIV", "SPAN", "PRE"].includes(tag) ||
@@ -206,9 +216,21 @@ export function publicMarkdownBlock(
           return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
         shape.text ||= part.text;
         shape.button ||= part.button;
+        shape.labelOnly &&= part.labelOnly;
       }
-      if (shape.codes.length === 0 && shape.button && tag !== "PRE")
+      if (
+        shape.codes.length === 0 &&
+        shape.button &&
+        tag !== "PRE" &&
+        shape.labelOnly
+      )
         shape.text = false;
+      // Header labels may contain text/SPAN only. PRE or generic DIV content
+      // remains visible prose and cannot be removed by a sibling control.
+      shape.labelOnly &&= tag === "SPAN";
+      // A control qualifies only its immediate container. Do not let that
+      // evidence propagate and erase unrelated prose in an outer ancestor.
+      shape.button = false;
       return shape;
     }
     const shape = empty();

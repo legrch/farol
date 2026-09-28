@@ -323,6 +323,60 @@ describe("public Markdown block conversion (synthetic DOM)", () => {
       ),
     ).toThrow("CHATGPT_MARKDOWN_LIMIT");
   });
+  it("does not let a descendant button qualify an outer prose container as toolbar", () => {
+    expect(() =>
+      render(
+        element(
+          "div",
+          [
+            element("div", [
+              "visible outside prose",
+              element("div", [element("button", ["Copy"])]),
+            ]),
+            element("code", ["code"]),
+          ],
+          { "data-markdown-copy": "code-block" },
+        ),
+      ),
+    ).toThrow("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+  });
+  it("refuses a PRE prose sibling even when a different subtree has a button", () => {
+    expect(() =>
+      render(
+        element(
+          "div",
+          [
+            element("div", [
+              element("pre", ["outside literal prose"]),
+              element("div", [element("button", ["Copy"])]),
+            ]),
+            element("code", ["code"]),
+          ],
+          { "data-markdown-copy": "code-block" },
+        ),
+      ),
+    ).toThrow("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+  });
+  it.each(["pre", "div"])(
+    "does not let a direct toolbar button hide visible %s content",
+    (tag) => {
+      expect(() =>
+        render(
+          element(
+            "div",
+            [
+              element("div", [
+                element(tag, ["Do not run without a backup."]),
+                element("button", ["Copy code"]),
+              ]),
+              element("code", ["deleteData()"]),
+            ],
+            { "data-markdown-copy": "code-block" },
+          ),
+        ),
+      ).toThrow("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+    },
+  );
   it("preserves multiline nested lists and ordered start numbers", () => {
     expect(
       render(

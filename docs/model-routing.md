@@ -182,9 +182,10 @@ The candidate message-anchor parser now recognizes only the explicit public
 `DIV[data-markdown-copy="code-block"]` shape as a code block. One visible CODE
 is projected into the existing fenced-code serialization, preserving newlines,
 indentation and fence/language escaping. DIV/SPAN/PRE content containers must
-contain no outside prose. A toolbar is a DIV/SPAN subtree containing a visible
-button and no CODE; its transient localized label never identifies or fingerprints
-answer content. Hidden/control descendants are not traversed. Unknown elements,
+contain no outside prose. A toolbar is a DIV/SPAN containing a direct visible
+button, text/SPAN-only labels and no CODE. PRE or generic DIV content cannot be
+removed as a label; button evidence stays local to its container. Transient
+localized label text never identifies or fingerprints answer content. Hidden/control descendants are not traversed. Unknown elements,
 multiple or nested CODE nodes, nested qualified wrappers and visible outside prose
 are refused. A not-yet-mounted CODE buffers as pending; an empty CODE is preserved
 as an empty fenced block. Shared traversal, depth and character limits still apply.
