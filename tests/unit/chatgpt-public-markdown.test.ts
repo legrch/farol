@@ -224,6 +224,105 @@ describe("public Markdown block conversion (synthetic DOM)", () => {
       ),
     ).toBe("````ts\nconst s = `x`;\n```\n````");
   });
+  it.each(["Copy code", "Копировать код", "Copiar código"])(
+    "normalizes one qualified DIV code block independently of toolbar %s",
+    (label) => {
+      const code = element("code", ["  const x = `a`;\n\n\treturn x;\n"], {
+        class: "language-ts",
+      });
+      const wrapper = (toolbar: boolean) =>
+        element(
+          "div",
+          [
+            ...(toolbar
+              ? [
+                  element("div", [
+                    element("span", ["TypeScript"]),
+                    element("button", [label]),
+                  ]),
+                ]
+              : []),
+            element("div", [element("pre", [code])]),
+          ],
+          { "data-markdown-copy": "code-block" },
+        );
+      const expected = "```ts\n  const x = `a`;\n\n\treturn x;\n```";
+      expect(render(wrapper(true))).toBe(expected);
+      expect(render(wrapper(false))).toBe(expected);
+      expect(
+        render(element("section", [element("div", [wrapper(true)])])),
+      ).toBe(expected);
+    },
+  );
+  it("keeps unqualified DIV CODE inline and refuses ambiguous qualified shapes", () => {
+    expect(render(element("div", [element("code", ["a\nb"])]))).toBe("`a b`");
+    for (const children of [
+      [element("code", ["one"]), element("code", ["two"])],
+      [element("code", [element("code", ["nested"])])],
+      [element("code", ["one"]), element("p", ["outside prose"])],
+      [
+        element("div", [element("code", ["nested wrapper"])], {
+          "data-markdown-copy": "code-block",
+        }),
+      ],
+      [element("code", [element("div", ["unknown literal"])])],
+    ]) {
+      expect(() =>
+        render(
+          element("div", children, { "data-markdown-copy": "code-block" }),
+        ),
+      ).toThrow("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+    }
+  });
+  it("does not traverse hidden or control descendants in a qualified code wrapper", () => {
+    const hidden = element("div", [], { hidden: "" });
+    const button = element("button", []);
+    for (const node of [hidden, button])
+      Object.defineProperty(node, "childNodes", {
+        get() {
+          throw new Error("EXCLUDED_READ");
+        },
+      });
+    expect(
+      render(
+        element("div", [hidden, button, element("code", ["visible\ncode"])], {
+          "data-markdown-copy": "code-block",
+        }),
+      ),
+    ).toBe("```\nvisible\ncode\n```");
+  });
+  it("buffers a qualified wrapper without a mounted CODE and preserves empty CODE", () => {
+    expect(() =>
+      render(element("div", [], { "data-markdown-copy": "code-block" })),
+    ).toThrow("CHATGPT_MARKDOWN_PENDING_CODE");
+    expect(
+      render(
+        element("div", [element("code", [])], {
+          "data-markdown-copy": "code-block",
+        }),
+      ),
+    ).toBe("```\n\n```");
+  });
+  it("keeps shared depth, traversal and code character limits in qualified wrappers", () => {
+    const marked = (child: Element) =>
+      element("div", [child], { "data-markdown-copy": "code-block" });
+    expect(() =>
+      render(marked(element("code", ["x".repeat(256 * 1_024 + 1)]))),
+    ).toThrow("CHATGPT_MARKDOWN_LIMIT");
+    let deep = element("code", ["bounded"]);
+    for (let index = 0; index < 65; index++) deep = element("div", [deep]);
+    expect(() => render(marked(deep))).toThrow("CHATGPT_MARKDOWN_LIMIT");
+    expect(() =>
+      render(
+        marked(
+          element(
+            "code",
+            Array.from({ length: 8_192 }, () => element("span", ["x"])),
+          ),
+        ),
+      ),
+    ).toThrow("CHATGPT_MARKDOWN_LIMIT");
+  });
   it("preserves multiline nested lists and ordered start numbers", () => {
     expect(
       render(

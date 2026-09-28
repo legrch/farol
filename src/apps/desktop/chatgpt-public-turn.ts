@@ -231,6 +231,7 @@ export function readPublicAssistantMessages(
       if (
         error instanceof Error &&
         (error.message === "CHATGPT_MARKDOWN_PENDING_LINK" ||
+          error.message === "CHATGPT_MARKDOWN_PENDING_CODE" ||
           (!complete && error.message === "CHATGPT_MARKDOWN_TABLE_UNSUPPORTED"))
       )
         text = null;

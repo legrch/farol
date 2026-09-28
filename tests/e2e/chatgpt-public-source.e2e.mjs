@@ -276,6 +276,109 @@ function childMain({
         assert.equal(direct, expected);
         assert.equal(await execute("typeof window.require"), "undefined");
       });
+      await row(
+        "qualified-div-code-toolbar-and-committed-fingerprint",
+        async () => {
+          const code = "  const value = `literal`;\n\n\treturn value;\n";
+          const expected = "```ts\n" + code + "```";
+          const source = new ChatGptPublicTurn("u", "a", 0);
+          const labels = ["Copy code", "Копировать код", "Copiar código", null];
+          for (const [index, label] of labels.entries()) {
+            const toolbar =
+              label === null
+                ? ""
+                : `<div><span>TypeScript</span><button>${label}</button></div>`;
+            const block = `<div data-markdown-copy="code-block">${toolbar}<div><pre><code class="language-ts">${code}</code></pre></div></div>`;
+            const result = await probe(user() + assistant("a", block) + send);
+            assert.equal(result.publicFrame.messages[0].text, expected);
+            const observed = source.observe(
+              { ...result.publicFrame, terminal: index === labels.length - 1 },
+              index,
+            );
+            assert.equal(observed.answer, expected);
+            assert.equal(observed.items.length, index === 0 ? 1 : 0);
+          }
+        },
+      );
+      await row("qualified-code-mounting-and-ambiguous-shapes", async () => {
+        const pending = await probe(
+          user() +
+            assistant("a", '<div data-markdown-copy="code-block"></div>', {
+              action: false,
+            }) +
+            send,
+        );
+        assert.equal(pending.publicFrame.messages[0].text, null);
+        assert.equal(pending.publicFrame.terminal, false);
+        for (const contents of [
+          "<code>a</code><code>b</code>",
+          "<code><code>nested</code></code>",
+          "<code>a</code><p>unqualified prose</p>",
+          '<div data-markdown-copy="code-block"><code>nested wrapper</code></div>',
+        ])
+          await expectCode(
+            () =>
+              probe(
+                user() +
+                  assistant(
+                    "a",
+                    `<div data-markdown-copy="code-block">${contents}</div>`,
+                  ) +
+                  send,
+              ),
+            "CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED",
+          );
+        const hidden = await probe(
+          user() +
+            assistant(
+              "a",
+              '<div data-markdown-copy="code-block"><div hidden><code>EXCLUDED</code></div><button>EXCLUDED</button><code>public\ncode</code></div>',
+            ) +
+            send,
+        );
+        assert.equal(
+          hidden.publicFrame.messages[0].text,
+          "```\npublic\ncode\n```",
+        );
+      });
+      await row("equal-code-blocks-and-two-horizontal-rules", async () => {
+        const block =
+          '<div data-markdown-copy="code-block"><code>same\ncode</code></div>';
+        const result = await probe(
+          user() + assistant("a", block + block + "<hr><hr>") + send,
+        );
+        assert.equal(
+          new ChatGptPublicTurn("u", "a", 0).observe(result.publicFrame, 0)
+            .answer,
+          "```\nsame\ncode\n```\n\n```\nsame\ncode\n```\n\n---\n\n---",
+        );
+        const source = new ChatGptPublicTurn("u", "a", 0);
+        const initial = await probe(
+          user() +
+            assistant("a", "<hr>") +
+            assistant("b", "<hr>", {
+              action: false,
+              attrs: 'data-parent-message-id="a"',
+            }) +
+            send,
+        );
+        assert.deepEqual(
+          source.observe(initial.publicFrame, 0).items.map((item) => item.id),
+          ["a"],
+        );
+        const final = await probe(
+          user() +
+            assistant("b", "<hr>", { attrs: 'data-parent-message-id="a"' }) +
+            send,
+          { assistantId: "a" },
+        );
+        const observed = source.observe(final.publicFrame, 1);
+        assert.deepEqual(
+          observed.items.map((item) => item.id),
+          ["b"],
+        );
+        assert.equal(observed.answer, "---\n\n---");
+      });
       await row("emphasis-edge-whitespace", async () => {
         const result = await probe(
           user() +

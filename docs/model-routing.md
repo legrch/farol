@@ -175,3 +175,31 @@ The host contract is described in the primary documentation:
 
 These references describe the host fields, not Farol's floating-alias policy or a
 promise that every host version supports the same native child overrides.
+
+## Qualified public code wrapper regression
+
+The candidate message-anchor parser now recognizes only the explicit public
+`DIV[data-markdown-copy="code-block"]` shape as a code block. One visible CODE
+is projected into the existing fenced-code serialization, preserving newlines,
+indentation and fence/language escaping. DIV/SPAN/PRE content containers must
+contain no outside prose. A toolbar is a DIV/SPAN subtree containing a visible
+button and no CODE; its transient localized label never identifies or fingerprints
+answer content. Hidden/control descendants are not traversed. Unknown elements,
+multiple or nested CODE nodes, nested qualified wrappers and visible outside prose
+are refused. A not-yet-mounted CODE buffers as pending; an empty CODE is preserved
+as an empty fenced block. Shared traversal, depth and character limits still apply.
+
+Synthetic source/reducer fixtures cover toolbar removal after content is committed,
+real code mutation refusal, two equal code blocks, two horizontal rules and exact
+message IDs through prefix virtualization. Serialized production functions are
+exercised in those fixtures. They do not prove native layout, current live ChatGPT
+selectors or Model availability. The prepared exact-source hidden Electron fixture
+is built with the pinned Node runtime by:
+
+```sh
+node tests/e2e/chatgpt-public-source.e2e.mjs --build-only
+```
+
+Its `--run-native` lane requires the already established native authority boundary;
+build-only never counts as a native PASS. Model and Product Agent remain disabled.
+No account/profile/Send operation or imported upstream bridge is part of this fix.

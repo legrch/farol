@@ -128,6 +128,77 @@ const message = (
 };
 
 describe("candidate public assistant DOM profile", () => {
+  it("keeps committed code fingerprints stable across localized toolbar removal", () => {
+    const code = "  line one\n\tline two\n";
+    const wrapper = (label: string | null) =>
+      el("div", { "data-markdown-copy": "code-block" }, [
+        ...(label === null
+          ? []
+          : [
+              el("div", {}, [
+                el("span", {}, ["Python"]),
+                el("button", {}, [label]),
+              ]),
+            ]),
+        el("div", {}, [el("code", { class: "language-python" }, [code])]),
+      ]);
+    const turn = new ChatGptPublicTurn("u", "a", 0);
+    for (const [index, label] of [
+      "Copy code",
+      "Копировать код",
+      "Copiar código",
+      null,
+    ].entries()) {
+      const assistants = [message([wrapper(label)])];
+      const frame = {
+        userId: "u",
+        messages: read(assistants),
+        terminal: index === 3,
+      };
+      const result = turn.observe(frame, index);
+      expect(result.answer).toBe("```python\n" + code + "```");
+      expect(result.items).toHaveLength(index === 0 ? 1 : 0);
+      const serialized = vm.runInNewContext(
+        `(${readPublicAssistantMessages.toString()})(assistants, visible, ${publicMarkdownBlock.toString()})`,
+        { assistants, visible },
+      );
+      expect(serialized).toEqual(frame.messages);
+    }
+  });
+  it("buffers mounting code and refuses a complete ambiguous code wrapper", () => {
+    const marked = (children: ElementFixture[]) =>
+      el("div", { "data-markdown-copy": "code-block" }, children);
+    expect(read([message([marked([])], false)])[0]).toMatchObject({
+      text: null,
+      complete: false,
+    });
+    expect(() =>
+      read([message([marked([el("code", {}, ["a"]), el("code", {}, ["b"])])])]),
+    ).toThrow("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+  });
+  it("refuses a real code mutation after committing the normalized wrapper", () => {
+    const messages = (code: string) =>
+      read([
+        message([
+          el("div", { "data-markdown-copy": "code-block" }, [
+            el("code", {}, [code]),
+          ]),
+        ]),
+      ]);
+    const turn = new ChatGptPublicTurn("u", "a", 0);
+    expect(
+      turn.observe(
+        { userId: "u", messages: messages("original\ncode"), terminal: false },
+        0,
+      ).items,
+    ).toHaveLength(1);
+    expect(() =>
+      turn.observe(
+        { userId: "u", messages: messages("changed\ncode"), terminal: true },
+        1,
+      ),
+    ).toThrow("CHATGPT_VISIBLE_OUTPUT_COMMITTED_CHANGED");
+  });
   it("buffers a mounting Markdown root and an unfinished table", () => {
     const mounting = el("div", {
       "data-message-id": "a",
@@ -313,6 +384,51 @@ describe("complete serialized semantic probe (synthetic layout)", () => {
       expect(completed.terminal).toBe(true);
     },
   );
+  it("preserves equal code blocks and two horizontal rules through the serialized probe", () => {
+    const marked = () =>
+      el("div", { "data-markdown-copy": "code-block" }, [
+        el("code", {}, ["same\ncode"]),
+      ]);
+    const assistant = message([marked(), marked(), el("hr"), el("hr")]);
+    const body = el("body", {}, [
+      user(),
+      assistant.parentElement!,
+      el("button", { "data-testid": "send-button" }),
+    ]);
+    const source = new ChatGptPublicTurn("u", "a", 0);
+    const initial = probe(body).publicFrame;
+    const result = source.observe({ ...initial, terminal: false }, 0);
+    expect(result.answer).toBe(
+      "```\nsame\ncode\n```\n\n```\nsame\ncode\n```\n\n---\n\n---",
+    );
+    expect(source.observe(probe(body).publicFrame, 1).items).toEqual([]);
+  });
+  it("does not identify equal-text messages by their text after prefix virtualization", () => {
+    const source = new ChatGptPublicTurn("u", "a", 0);
+    const first = message([el("hr")], true, { "data-parent-message-id": "u" });
+    const second = message([el("hr")], false, {
+      "data-message-id": "b",
+      "data-parent-message-id": "a",
+    });
+    const frame = (assistants: ElementFixture[], terminal: boolean) => ({
+      userId: "u",
+      messages: read(assistants),
+      terminal,
+    });
+    expect(
+      source
+        .observe(frame([first, second], false), 0)
+        .items.map((item) => item.id),
+    ).toEqual(["a"]);
+    const final = message([el("hr")], true, {
+      "data-message-id": "b",
+      "data-parent-message-id": "a",
+    });
+    const result = source.observe(frame([final], true), 1);
+    expect(result.items.map((item) => item.id)).toEqual(["b"]);
+    expect(result.answer).toBe("---\n\n---");
+    expect(result.completed).toBe(true);
+  });
   it("retains parent ancestry across disappearance of a delivered prefix", () => {
     const a = message([el("p", {}, ["A"])], true, {
       "data-parent-message-id": "u",

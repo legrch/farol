@@ -138,6 +138,93 @@ export function publicMarkdownBlock(
     );
   }
 
+  function fencedCode(code: string, codeNode: Element | undefined): string {
+    const fence = "`".repeat(
+      Math.max(3, ...(code.match(/`+/gu) ?? []).map((run) => run.length + 1)),
+    );
+    const language =
+      codeNode
+        ?.getAttribute("class")
+        ?.match(/(?:^|\s)language-([A-Za-z0-9_+-]+)(?:\s|$)/u)?.[1] ?? "";
+    return bounded(
+      `${fence}${language}\n${code}${code.endsWith("\n") ? "" : "\n"}${fence}`,
+    );
+  }
+
+  // Only this explicit public wrapper can project a CODE as a block. A toolbar
+  // is a DIV/SPAN subtree with a visible button and no code, not a label match.
+  // Unknown structures or multiple/nested CODE nodes cannot be silently lost.
+  function qualifiedCodeWrapper(wrapper: Element, depth: number): string {
+    type Shape = {
+      codes: { element: Element; depth: number }[];
+      text: boolean;
+      button: boolean;
+    };
+    const empty = (): Shape => ({ codes: [], text: false, button: false });
+    function inspect(node: Node, level: number, literal = false): Shape {
+      if (++visited > 8_192 || level > 64) fail("CHATGPT_MARKDOWN_LIMIT");
+      if (node.nodeType === 3) {
+        const value = node.nodeValue ?? "";
+        if (!literal) {
+          characters += value.length;
+          if (characters > maximumCharacters) fail("CHATGPT_MARKDOWN_LIMIT");
+        }
+        return { ...empty(), text: !literal && /\S/u.test(value) };
+      }
+      if (node.nodeType === 8) return empty();
+      if (node.nodeType !== 1)
+        return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+      const element = node as Element;
+      const tag = element.tagName;
+      if (!visible(element)) return empty();
+      if (omitted.has(tag))
+        return { ...empty(), button: tag === "BUTTON" && !literal };
+      if (rich.has(tag))
+        return fail("CHATGPT_MARKDOWN_RICH_OUTPUT_UNSUPPORTED");
+      if (literal) {
+        if (tag === "BR") return empty();
+        if (tag !== "SPAN")
+          return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+        for (const child of element.childNodes) inspect(child, level + 1, true);
+        return empty();
+      }
+      if (tag === "CODE") {
+        for (const child of element.childNodes) inspect(child, level + 1, true);
+        return { ...empty(), codes: [{ element, depth: level }] };
+      }
+      if (
+        !["DIV", "SPAN", "PRE"].includes(tag) ||
+        element.getAttribute("data-markdown-copy") === "code-block"
+      ) {
+        return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+      }
+      const shape = empty();
+      for (const child of element.childNodes) {
+        const part = inspect(child, level + 1);
+        shape.codes.push(...part.codes);
+        if (shape.codes.length > 1)
+          return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+        shape.text ||= part.text;
+        shape.button ||= part.button;
+      }
+      if (shape.codes.length === 0 && shape.button && tag !== "PRE")
+        shape.text = false;
+      return shape;
+    }
+    const shape = empty();
+    for (const child of wrapper.childNodes) {
+      const part = inspect(child, depth + 1);
+      shape.codes.push(...part.codes);
+      if (shape.codes.length > 1)
+        return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+      shape.text ||= part.text;
+    }
+    if (shape.text) return fail("CHATGPT_MARKDOWN_CODE_WRAPPER_UNSUPPORTED");
+    const code = shape.codes[0];
+    if (!code) return fail("CHATGPT_MARKDOWN_PENDING_CODE");
+    return fencedCode(children(code.element, code.depth, true), code.element);
+  }
+
   function render(node: Node, depth: number, literal = false): string {
     if (++visited > 8_192 || depth > 64) fail("CHATGPT_MARKDOWN_LIMIT");
     if (node.nodeType === 3) {
@@ -160,25 +247,21 @@ export function publicMarkdownBlock(
         return fail("CHATGPT_MARKDOWN_STRUCTURE_UNSUPPORTED");
       return children(element, depth, true);
     }
+    if (
+      tag === "DIV" &&
+      element.getAttribute("data-markdown-copy") === "code-block"
+    ) {
+      return qualifiedCodeWrapper(element, depth);
+    }
     if (tag === "PRE") {
       const code = children(element, depth, true);
-      const runs = code.match(/`+/gu) ?? [];
-      const fence = "`".repeat(
-        Math.max(3, ...runs.map((run) => run.length + 1)),
-      );
       const codeNode = [...element.childNodes].find(
         (child) =>
           child.nodeType === 1 &&
           (child as Element).tagName === "CODE" &&
           visible(child as Element),
       ) as Element | undefined;
-      const language =
-        codeNode
-          ?.getAttribute("class")
-          ?.match(/(?:^|\s)language-([A-Za-z0-9_+-]+)(?:\s|$)/u)?.[1] ?? "";
-      return bounded(
-        `${fence}${language}\n${code}${code.endsWith("\n") ? "" : "\n"}${fence}`,
-      );
+      return fencedCode(code, codeNode);
     }
     if (tag === "TABLE") return table(element, depth);
     if (tag === "HR") return "---";
