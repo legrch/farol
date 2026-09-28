@@ -595,6 +595,53 @@ describe("fresh saved-project ensure contract (in-memory ports only)", () => {
       expect(f.creates).toHaveLength(1);
     },
   );
+  it.each([
+    { boundary: "before-create", fault: "revoked" },
+    { boundary: "before-create", fault: "expired" },
+    { boundary: "before-disclosure", fault: "revoked" },
+    { boundary: "before-disclosure", fault: "expired" },
+  ])(
+    "refuses queued $fault after the $boundary authority snapshot",
+    async ({ boundary, fault }) => {
+      const f = fixture();
+      let armed = false;
+      const claim = f.state.claim;
+      f.state.claim = async (intent) => {
+        const result = await claim(intent);
+        if (boundary === "before-create") armed = true;
+        return result;
+      };
+      const gate: ProjectEnsureContext["gate"] = {
+        run: async (preflight, effect) => {
+          await preflight();
+          const result = await effect();
+          if (boundary === "before-disclosure") armed = true;
+          return result;
+        },
+      };
+      const authority: ProjectEnsureContext["authority"] = {
+        resolve: async () => {
+          if (armed) {
+            armed = false;
+            // The first microtask precedes the helper continuation. The second
+            // runs after its snapshot, before the caller uses that snapshot.
+            queueMicrotask(() =>
+              queueMicrotask(() => {
+                if (fault === "revoked") f.revoke();
+                else f.setTime(100);
+              }),
+            );
+          }
+          return workspace;
+        },
+      };
+      expect(
+        await ensureCodexProject({ ...f.context, authority, gate }, request),
+      ).toMatchObject({ status: "outcome_unknown" });
+      expect(f.creates).toHaveLength(boundary === "before-create" ? 0 : 1);
+      expect(armed).toBe(false);
+    },
+  );
   it("cannot confirm when concurrent native creation makes re-list ambiguous", async () => {
     const f = fixture();
     f.state.create = async (input) => {

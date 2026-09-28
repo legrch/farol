@@ -519,7 +519,9 @@ fsync, cross-process lock, native method or provider idempotency implementation.
 
 An exact create acknowledgement and a complete unique post-create catalogue are
 required before local confirmation. Every asynchronous boundary revalidates
-current physical roots, admission and absolute deadline. Unknown mutation paths
+current physical roots, admission and absolute deadline, including a synchronous
+admission/deadline check immediately after each awaited authority snapshot and
+a final physical check after asynchronous gate release. Unknown mutation paths
 throw through the gate so its error policy can quarantine; returning an unknown
 value alone cannot release the mutation lease. No user profile, model, task,
 preference or execution permission is changed or automatically granted.

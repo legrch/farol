@@ -131,7 +131,7 @@ export async function ensureCodexProject(
       return !!physical && admitted() && sameWorkspace(physical, workspace);
     };
     const stored = await context.journal.read(workspace.project);
-    if (!(await authorized()))
+    if (!(await authorized()) || !admitted())
       return refused("PROJECT_ENSURE_ADMISSION_DENIED");
     const prior = stored === null ? null : intent(stored, workspace.project);
     if (stored !== null && !prior)
@@ -143,7 +143,7 @@ export async function ensureCodexProject(
       context.expiresAt,
       admitted,
     );
-    if (!(await authorized()))
+    if (!(await authorized()) || !admitted())
       return refused("PROJECT_ENSURE_ADMISSION_DENIED");
     if (catalogue.status === "unavailable")
       return {
@@ -191,7 +191,7 @@ export async function ensureCodexProject(
     };
     const result = await context.gate.run<ProjectEnsureResult>(
       async () => {
-        if (!(await authorized()))
+        if (!(await authorized()) || !admitted())
           throw Error("PROJECT_ENSURE_ADMISSION_DENIED");
       },
       async () => {
@@ -199,7 +199,7 @@ export async function ensureCodexProject(
         claimed = true;
         if (!(await context.journal.claim(pending)))
           throw Error("PROJECT_ENSURE_CLAIM_CONFLICT");
-        if (!(await authorized()))
+        if (!(await authorized()) || !admitted())
           throw Error("PROJECT_ENSURE_ADMISSION_CHANGED_AFTER_INTENT");
         const response = await context.host.create(
           {
@@ -211,7 +211,7 @@ export async function ensureCodexProject(
         );
         const projectId = acknowledged(response, pending);
         if (!projectId) throw Error("PROJECT_CREATE_ACK_INVALID");
-        if (!(await authorized()))
+        if (!(await authorized()) || !admitted())
           throw Error("PROJECT_ENSURE_ADMISSION_CHANGED_AFTER_CREATE");
         const after = await resolveCodexProjectCatalogue(
           context.host.catalogue,
@@ -220,7 +220,7 @@ export async function ensureCodexProject(
           context.expiresAt,
           admitted,
         );
-        if (!(await authorized()))
+        if (!(await authorized()) || !admitted())
           throw Error("PROJECT_ENSURE_ADMISSION_CHANGED_AFTER_CREATE");
         if (
           after.status !== "resolved" ||
@@ -233,7 +233,7 @@ export async function ensureCodexProject(
           pending.key,
           projectId,
         );
-        if (!(await authorized()))
+        if (!(await authorized()) || !admitted())
           throw Error("PROJECT_ENSURE_ADMISSION_CHANGED_AFTER_CONFIRM");
         return {
           status: "created",
@@ -246,7 +246,7 @@ export async function ensureCodexProject(
     );
     // Releasing a gate is asynchronous too; its earlier snapshot is not final
     // authority for disclosure after revocation, expiry or physical replacement.
-    if (!(await authorized()))
+    if (!(await authorized()) || !admitted())
       return unknown("PROJECT_ENSURE_ADMISSION_CHANGED_AFTER_GATE");
     return result;
   } catch {
