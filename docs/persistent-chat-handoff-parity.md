@@ -74,9 +74,7 @@ unknown-outcome reconciliation, persisted preferences, title readback and bounde
 scoped history remain separate unimplemented N3 rows. Cancellation/deadline stops
 further catalogue pages; an already sent read remains bounded by its transport
 response/timeout, and Farol does not kill the shared server to cancel observation.
-Project creation with
-unknown-outcome reconciliation, persisted preferences, title readback and bounded
-scoped history remain separate unimplemented N3 rows. Fresh-install project
+Fresh-install project
 creation is not qualified by this read-only slice; existing task-create ambiguity
 rules are unchanged.
 
