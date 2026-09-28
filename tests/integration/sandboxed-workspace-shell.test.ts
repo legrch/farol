@@ -2093,7 +2093,9 @@ describe.skipIf(process.platform !== "darwin")(
         write: true,
       });
       if (!started.ok) throw new Error(started.error.code);
-      const failed = await complete(shell, started.value.handle);
+      // Observe through the command deadline and cleanup; the earlier two-second
+      // harness budget could expire while the ten-second operation was running.
+      const failed = await complete(shell, started.value.handle, 600);
       expect(failed.exitCode).toBe(1);
       expect(await fs.readFile(path.join(workspace, "daily.md"), "utf8")).toBe(
         "draft",

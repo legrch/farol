@@ -1656,7 +1656,7 @@ int main(void) {
       await fs.appendFile(path.join(root, last), "changed\n");
 
       const result = await workspace().execute(request());
-      expect(result).toMatchObject({
+      expect(result, JSON.stringify(result)).toMatchObject({
         ok: true,
         value: { kind: "workspace.command", command: "git.status" },
       });
