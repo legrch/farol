@@ -290,13 +290,18 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  if (root) await fs.rm(root, { recursive: true, force: true });
-  if (runtimeDirectory) {
-    await fs.rm(runtimeDirectory, { recursive: true, force: true });
-  }
-  if (fixturesDirectory) {
-    await fs.rm(fixturesDirectory, { recursive: true, force: true });
-  }
+  // Commands above have reached execFile completion. Bound retries for
+  // incidental directory metadata churn (.DS_Store observed in a failed
+  // cleanup); exhaustion still fails. This is not generic process cleanup proof.
+  const cleanup = {
+    recursive: true,
+    force: true,
+    maxRetries: 3,
+    retryDelay: 100,
+  };
+  if (root) await fs.rm(root, cleanup);
+  if (runtimeDirectory) await fs.rm(runtimeDirectory, cleanup);
+  if (fixturesDirectory) await fs.rm(fixturesDirectory, cleanup);
 });
 
 describe("native verification command", () => {
