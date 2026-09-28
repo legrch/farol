@@ -112,6 +112,7 @@ import {
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
 import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
+import { compactBrowserSelected } from "../../pkg/product-settings/browser-presentation";
 import {
   ShellLayoutSchema,
   type ShellOverlay,
@@ -7872,7 +7873,11 @@ function applyLayout(): void {
     selectedTaskPresent: showBrowserHome || taskViews.has(selectedTaskId),
     browserChromeVisible:
       showBrowserHome || productTasksState().tasks.length > 0,
-    compactDevBrowser: runtimeEnvironment === "dev",
+    compactBrowser: compactBrowserSelected({
+      environment: runtimeEnvironment,
+      demoMode,
+      legacySetupTestMode,
+    }),
     checkFeedbackVisible,
   });
   for (const [taskId, view] of taskViews) {

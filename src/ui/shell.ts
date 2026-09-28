@@ -43,6 +43,7 @@ import {
   guidedSetupSelected,
   initialSetupPresentation,
 } from "../pkg/product-settings/setup-entry";
+import { compactBrowserSelected } from "../pkg/product-settings/browser-presentation";
 import { GuidedOnboardingView } from "./guided-onboarding-view";
 import {
   advanceSetup,
@@ -1098,7 +1099,7 @@ function renderTabs(): void {
       button.append(label, lamp, status);
       button.addEventListener("click", () => selectTask(task.taskId));
       item.append(button);
-      if (bootstrap.environment === "dev" && task.provider === "chatgpt") {
+      if (compactBrowserSelected(bootstrap) && task.provider === "chatgpt") {
         const close = document.createElement("button");
         close.type = "button";
         close.className = "task-tab-close";
@@ -5286,12 +5287,12 @@ function render(notify = true): void {
   const root = document.documentElement;
   root.dataset.section = section;
   root.dataset.hasTasks = String(bootstrap.tasks.length > 0);
+  const compactBrowser = compactBrowserSelected(bootstrap);
+  root.dataset.compactBrowser = String(compactBrowser);
   root.dataset.browserChrome = String(
-    (bootstrap.environment !== "dev" && !chatGptSignInOpened) ||
+    (!compactBrowser && !chatGptSignInOpened) ||
       (bootstrap.tasks.length > 0 && !chatGptSignInOpened) ||
-      (bootstrap.environment === "dev" &&
-        section === "browser" &&
-        !setupJourney.open),
+      (compactBrowser && section === "browser" && !setupJourney.open),
   );
   required<HTMLButtonElement>("#browser-sidebar-toggle").hidden = !(
     bootstrap.environment === "dev" &&
@@ -5299,6 +5300,11 @@ function render(notify = true): void {
     !setupJourney.open &&
     browserHomeStatus === "ready"
   );
+  const browserMenu = required<HTMLButtonElement>("#browser-task-menu");
+  const browserMenuLabel =
+    bootstrap.tasks.length > 0 ? "Selected task options" : "Browser options";
+  browserMenu.setAttribute("aria-label", browserMenuLabel);
+  browserMenu.title = browserMenuLabel;
   const newTask = required<HTMLButtonElement>("#new-task");
   const chatGptReady = chatGptRouteState() === "ready";
   required("#window-mode").textContent = windowModeLabel({

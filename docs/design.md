@@ -23,7 +23,8 @@ Geist typeface. Production uses the same graphite hierarchy:
 
 - a 216 px full-height sidebar that collapses to a 72 px watching rail;
 - automatic rail mode below 980 px, with the full sidebar available as an overlay;
-- task tabs above a 72 px dossier row, followed by the task-bound Browser page;
+- compact task tabs in the 52 px window toolbar and a 25 px bottom status strip;
+- the original dossier row remains only in explicit demo/legacy fixture mode;
 - shape-and-text lifecycle lamps for running, Computer wait, complete, failed,
   outcome unknown, and unavailable states;
 - Iris only for selection, keyboard focus, and the next action. Iris never encodes a
@@ -81,3 +82,10 @@ failure/offline states, and honest unavailable capabilities are part of acceptan
 The owner choice is recorded by the design-lab report. Production acceptance still
 requires built-app interaction, focus, inactive-window, fullscreen, compact overlay,
 and visual evidence rather than inheriting proof from synthetic lab screenshots.
+
+Normal Preview and Dev use the same Browser presentation predicate in main and
+renderer. CSS reserves the same native-page bounds beside the full sidebar or
+compact rail. The task menu remains reachable from the toolbar, including an empty
+profile; closing a ChatGPT tab uses the existing task lifecycle. This presentation
+selection does not enable Dev private homes, automatic Send, embedded browser-home
+commands, Codex diagnostics or host permissions in Preview.

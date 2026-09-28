@@ -46,16 +46,16 @@ describe("native Browser surface layout", () => {
     });
   });
 
-  it("gives the DEV browser a compact tab strip and a status strip", () => {
+  it("gives the normal Browser a compact tab strip and a status strip", () => {
     expect(
-      deriveSurfaceLayout({ ...base, compactDevBrowser: true }),
+      deriveSurfaceLayout({ ...base, compactBrowser: true }),
     ).toMatchObject({
       pageBounds: { x: 216, y: 52, width: 964, height: 683 },
     });
     expect(
       deriveSurfaceLayout({
         ...base,
-        compactDevBrowser: true,
+        compactBrowser: true,
         browserChromeVisible: false,
       }),
     ).toMatchObject({
@@ -67,7 +67,7 @@ describe("native Browser surface layout", () => {
     expect(
       deriveSurfaceLayout({
         ...base,
-        compactDevBrowser: true,
+        compactBrowser: true,
         checkFeedbackVisible: true,
       }),
     ).toMatchObject({

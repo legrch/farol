@@ -946,20 +946,22 @@ html[data-section="browser"][data-has-tasks="false"] .dossier {
   display: none;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"] {
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"] {
   --task-height: 0px;
   --dossier-height: 0px;
 }
 
-html[data-environment="dev"] .window-identity {
+html[data-environment="dev"] .window-identity,
+html[data-compact-browser="true"][data-section="browser"] .window-identity {
   display: none;
 }
 
-html[data-environment="dev"] .window-bar {
+html[data-environment="dev"] .window-bar,
+html[data-compact-browser="true"][data-section="browser"] .window-bar {
   justify-content: flex-end;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-bar {
   z-index: 20;
   top: 0;
@@ -973,54 +975,54 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
 
 html:not(
     [data-full-screen="true"]
-  )[data-sidebar="rail"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  )[data-sidebar="rail"][data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-bar,
 html:not(
     [data-full-screen="true"]
-  )[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+  )[data-sidebar="overlay"][data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-bar {
   padding-left: 50px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .window-bar {
   justify-content: flex-end;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab,
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab-close,
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .browser-task-menu {
   -webkit-app-region: no-drag;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .new-task {
   -webkit-app-region: no-drag;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab-item {
   flex: 0 1 176px;
   max-width: 200px;
   min-width: 80px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tabs {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tabs::-webkit-scrollbar {
   display: none;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab {
   display: flex;
   align-items: center;
@@ -1030,41 +1032,41 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   padding: 0 32px 0 10px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab-home {
   cursor: default;
   padding-right: 12px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab-home:hover {
   background: var(--surface-soft);
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab.active {
   background: rgba(255, 255, 255, 0.045);
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab.active::before {
   height: 2px;
   background: color-mix(in srgb, var(--iris) 72%, transparent);
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab
   > span:not(.state-lamp) {
   flex: 1 1 auto;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .task-tab
   small {
   display: none;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .dossier {
   display: none;
 }
@@ -1073,18 +1075,35 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   display: none;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .browser-task-menu {
-  display: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
+  .browser-task-menu:hover {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .surface {
   top: var(--window-height);
   bottom: 25px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .browser-status-bar {
   position: fixed;
   z-index: 19;
@@ -1103,12 +1122,12 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   font-size: 11px;
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
   .surface {
   top: calc(var(--window-height) + 58px);
 }
 
-html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
+html[data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"][data-check-feedback="true"]
   .browser-check-banner:not([hidden]) {
   position: fixed;
   z-index: 19;
@@ -1125,7 +1144,7 @@ html[data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
   -webkit-app-region: no-drag;
 }
 
-html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"]
+html[data-sidebar="overlay"][data-compact-browser="true"][data-section="browser"]
   .browser-check-banner {
   left: var(--sidebar-full);
 }
@@ -1183,7 +1202,7 @@ html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"]
   background: rgba(120, 103, 255, 0.3);
 }
 
-html[data-sidebar="overlay"][data-environment="dev"][data-section="browser"][data-browser-chrome="true"]
+html[data-sidebar="overlay"][data-compact-browser="true"][data-section="browser"][data-browser-chrome="true"]
   .browser-status-bar {
   left: var(--sidebar-full);
 }

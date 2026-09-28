@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
@@ -34,6 +35,21 @@ await fs.writeFile(path.join(temporaryRoot, ".farol-next-e2e-root"), proof, {
 const workspace = path.join(temporaryRoot, "approved-folder");
 await fs.mkdir(workspace, { mode: 0o700 });
 const observations = [];
+let nonReadRequests = 0;
+const chatFixture = createServer((request, response) => {
+  if (request.method !== "GET") nonReadRequests += 1;
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+  response.end(
+    '<!doctype html><html><head><title>Local Browser fixture</title></head><body style="margin:24px;font:18px sans-serif"><h1>Local Browser fixture</h1><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea></body></html>',
+  );
+});
+await bounded(
+  new Promise((resolve) => chatFixture.listen(0, "127.0.0.1", resolve)),
+  "BROWSER_FIXTURE_LISTEN_TIMEOUT",
+);
+const chatAddress = chatFixture.address();
+assert.ok(chatAddress && typeof chatAddress !== "string");
+const fixtureUrl = `http://127.0.0.1:${chatAddress.port}/`;
 const profiles = new Map();
 let cleanupUnknown = false;
 let application;
@@ -119,6 +135,7 @@ async function launch(environment, mode = "normal", profile = mode) {
       FAROL_NEXT_E2E_TEST_ROOT: profileRoot,
       FAROL_NEXT_E2E_TEST_PROOF: proof,
       FAROL_NEXT_E2E_WORKSPACE_ROOT: workspace,
+      FAROL_NEXT_E2E_CHATGPT_URL: fixtureUrl,
       ...(mode === "legacy" ? { FAROL_NEXT_E2E_LEGACY_SETUP: "1" } : {}),
     },
     timeout: 15000,
@@ -158,6 +175,100 @@ async function launch(environment, mode = "normal", profile = mode) {
     windows,
   });
   return window;
+}
+
+async function browserGeometry(window, environment, width) {
+  await application.evaluate(({ BrowserWindow }, width) => {
+    BrowserWindow.getAllWindows()[0].setContentSize(width, 760);
+  }, width);
+  await window.waitForFunction((width) => innerWidth === width, width);
+  await window.locator("#browser-status-bar").waitFor({ state: "visible" });
+  await window.locator("#task-dossier").waitFor({ state: "hidden" });
+  await window.waitForFunction(
+    () => document.documentElement.dataset.compactBrowser === "true",
+  );
+  const chrome = await window.evaluate(() => {
+    const rect = (selector) => {
+      const box = document.querySelector(selector).getBoundingClientRect();
+      return {
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        right: box.right,
+      };
+    };
+    const firstTab = document.querySelector("#task-tabs .task-tab");
+    const box = firstTab.getBoundingClientRect();
+    const menu = document.querySelector("#browser-task-menu");
+    const menuBox = menu.getBoundingClientRect();
+    return {
+      tabs: rect(".task-bar"),
+      footer: rect("#browser-status-bar"),
+      surface: rect(".surface"),
+      sidebar: rect("#sidebar"),
+      toggle: rect("#sidebar-toggle"),
+      firstTab: rect("#task-tabs .task-tab"),
+      firstTabHittable: firstTab.contains(
+        document.elementFromPoint(box.x + 10, box.y + 20),
+      ),
+      menuHittable: menu.contains(
+        document.elementFromPoint(menuBox.x + 16, menuBox.y + 16),
+      ),
+    };
+  });
+  const native = await application.evaluate(
+    ({ BrowserWindow, WebContentsView }, fixtureUrl) => {
+      const owned = BrowserWindow.getAllWindows()[0];
+      const page = owned.contentView.children.find(
+        (child) =>
+          child instanceof WebContentsView &&
+          child.getVisible() &&
+          child.webContents.getURL().startsWith(fixtureUrl),
+      );
+      return {
+        visible: Boolean(page),
+        bounds: page?.getBounds() ?? null,
+        focused: owned.isFocused(),
+        windowVisible: owned.isVisible(),
+      };
+    },
+    fixtureUrl,
+  );
+  assert.equal(chrome.tabs.y, 0);
+  assert.equal(chrome.tabs.height, 52);
+  assert.equal(chrome.footer.y, 735);
+  assert.equal(chrome.footer.height, 25);
+  assert.equal(chrome.footer.x, chrome.sidebar.width);
+  assert.equal(chrome.surface.y, 52);
+  assert.equal(chrome.surface.height, 683);
+  assert.ok(chrome.firstTab.x >= chrome.toggle.right);
+  assert.equal(chrome.firstTabHittable, true);
+  assert.equal(chrome.menuHittable, true);
+  assert.equal(native.visible, true);
+  assert.equal(native.focused, false);
+  assert.equal(native.windowVisible, false);
+  assert.deepEqual(native.bounds, {
+    x: width < 980 ? 72 : 216,
+    y: 52,
+    width: width - (width < 980 ? 72 : 216),
+    height: 683,
+  });
+  observations.push({
+    kind: "compact-browser",
+    environment,
+    width,
+    chrome,
+    native,
+  });
+  const output = path.join(root, "_output/evidence/guided-setup-selection");
+  await fs.mkdir(output, { recursive: true, mode: 0o700 });
+  await window.screenshot({
+    path: path.join(
+      output,
+      `${packaged ? "package" : "development"}-${environment}-browser-${width}.png`,
+    ),
+  });
 }
 
 try {
@@ -210,17 +321,78 @@ try {
       await window.locator('.nav-item[data-section="computer"]').click();
     await window.locator("#onboarding-return").click();
     await window.locator('[data-panel="browser"].active').waitFor();
+    // Review Setup must remain reachable in an empty profile.
     await window
-      .locator("#task-menu-button:visible, #browser-task-menu:visible")
-      .first()
+      .locator('.nav-utility .nav-item[data-section="settings"]')
       .click();
-    await window.locator("#task-menu-setup").click();
+    await window.locator("#review-setup").click();
+    observations.push({ kind: "review-setup", environment });
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
     await window.locator("#setup-dialog").waitFor({ state: "hidden" });
     await window.locator("#onboarding-return").click();
     await window.locator('[data-panel="browser"].active').waitFor();
+    await window.locator("#browser-task-menu").click();
+    await window.locator("#task-menu-setup").click();
+    await window.locator("#onboarding-nav").waitFor({ state: "visible" });
+    await window.locator("#setup-dialog").waitFor({ state: "hidden" });
+    observations.push({ kind: "task-menu-setup", environment });
+
+    // Readiness and task views use only the local composer fixture. No Send,
+    // external account, Codex task or inference is performed.
+    const opened = await bounded(
+      window.evaluate(() =>
+        window.farolNext.configure({ kind: "chatgpt.open-sign-in" }),
+      ),
+      "BROWSER_FIXTURE_OPEN_TIMEOUT",
+    );
+    assert.equal(opened.ok, true);
+    const verified = await bounded(
+      window.evaluate(() =>
+        window.farolNext.configure({ kind: "chatgpt.verify" }),
+      ),
+      "BROWSER_FIXTURE_VERIFY_TIMEOUT",
+    );
+    assert.equal(verified.ok, true);
+    const returned = await bounded(
+      window.evaluate(() =>
+        window.farolNext.configure({ kind: "chatgpt.sign-in-return" }),
+      ),
+      "BROWSER_FIXTURE_RETURN_TIMEOUT",
+    );
+    assert.equal(returned.ok, true);
+    await window.locator("#onboarding-return").click();
+    for (let index = 0; index < 4; index += 1) {
+      const created = await bounded(
+        window.evaluate(() =>
+          window.farolNext.task({ kind: "task.create-chatgpt" }),
+        ),
+        "BROWSER_FIXTURE_CREATE_TIMEOUT",
+      );
+      assert.equal(created.ok, true);
+      assert.ok(created.selectedTaskId);
+    }
+    await window
+      .locator('#task-tabs [role="tab"]')
+      .nth(3)
+      .waitFor({ state: "visible" });
+    await browserGeometry(window, environment, 1180);
+    await browserGeometry(window, environment, 940);
+    await application.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows()[0].setContentSize(1180, 760),
+    );
+    await window.waitForFunction(() => innerWidth === 1180);
+    await window.locator('#task-tabs [role="tab"]').first().click();
+    assert.equal(
+      await window.locator('#task-tabs [aria-selected="true"]').count(),
+      1,
+    );
+    await window.locator("#task-tabs .task-tab-close").last().click();
+    await window.waitForFunction(
+      () => document.querySelectorAll('#task-tabs [role="tab"]').length === 3,
+    );
     await window.locator('.nav-item[data-section="computer"]').click();
     await window.locator("#onboarding-nav").waitFor({ state: "visible" });
+    assert.equal(nonReadRequests, 0);
     await closeOwned();
     const reopened = await launch(environment, "normal", environment);
     await reopened.locator("#onboarding-nav").waitFor({ state: "visible" });
@@ -261,6 +433,13 @@ try {
     }
   }
   if (!cleanupUnknown) await closeOwned();
+  await bounded(
+    new Promise((resolve, reject) =>
+      chatFixture.close((error) => (error ? reject(error) : resolve())),
+    ),
+    "BROWSER_FIXTURE_CLOSE_TIMEOUT",
+  );
+  observations.push({ kind: "local-http-fixture-closed", nonReadRequests });
   const destination = path.join(
     root,
     "_output/evidence/guided-setup-selection",
@@ -275,7 +454,8 @@ try {
         packaged,
         observations,
         limits: [
-          "Hidden renderer and disposable IPC fixtures only",
+          "Hidden renderer, native page bounds and disposable IPC fixtures only",
+          "Browser readiness and task pages are local HTTP fixtures, not live ChatGPT",
           "Native folder picker is replaced by the explicit E2E selection",
           "No live account, Browser Send, model inference or NEW connector",
         ],

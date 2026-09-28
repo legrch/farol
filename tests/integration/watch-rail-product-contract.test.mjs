@@ -40,14 +40,14 @@ describe("Watch Rail product contract", () => {
     expect(css).toContain('html:not([data-section="browser"]) .surface');
   });
 
-  it("keeps New task available and hit-testable in dev browser chrome", async () => {
+  it("keeps New task available and hit-testable in normal compact Browser chrome", async () => {
     const css = await source("src/ui/shell.css");
 
     expect(css).not.toMatch(
-      /html\[data-environment="dev"\]\[data-section="browser"\]\[data-browser-chrome="true"\](?:\[data-has-tasks="true"\])?\s+\.new-task,/u,
+      /html\[data-compact-browser="true"\]\[data-section="browser"\]\[data-browser-chrome="true"\](?:\[data-has-tasks="true"\])?\s+\.new-task,/u,
     );
     expect(css).toMatch(
-      /html\[data-environment="dev"\]\[data-section="browser"\]\[data-browser-chrome="true"\]\s+\.new-task\s*\{\s*-webkit-app-region:\s*no-drag;/u,
+      /html\[data-compact-browser="true"\]\[data-section="browser"\]\[data-browser-chrome="true"\]\s+\.new-task\s*\{\s*-webkit-app-region:\s*no-drag;/u,
     );
   });
 
