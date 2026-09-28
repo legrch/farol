@@ -34,6 +34,7 @@ import {
   parseProjectResolution,
   parseProjectTasks,
   parseProjectPreference,
+  parseProjectPreferenceLookup,
   parseTaskHistory,
   parseTaskTitle,
   type CodexTaskRoutePeer,
@@ -940,6 +941,47 @@ export function createReadonlyComputerMcpServer(
   }
 
   if (codexTasks) {
+    if (
+      codexTasks.projectPreferenceLookupEnabled === true &&
+      codexTasks.lookupProjectPreference
+    )
+      server.registerTool(
+        "codex_project_preferred",
+        {
+          title: "Read the latest recorded exact saved project choice",
+          description:
+            "Look up the last fully published local preference for the approved physical canonical repository without a UUID input. The selected sealed project must still match a fresh complete catalogue. Missing, stale, interrupted or corrupt selection never chooses a replacement. Old handle replay never becomes latest. No project/task creation, resume, inference, permission grant or preference mutation. This is a bounded non-atomic read, not automatic project selection.",
+          inputSchema: z.strictObject({
+            workspaceId: IdentifierSchema,
+            projectId: IdentifierSchema,
+          }),
+          annotations: READONLY_ANNOTATIONS,
+        },
+        guarded(async (request, context) => {
+          try {
+            const result = parseProjectPreferenceLookup(
+              await codexTasks.lookupProjectPreference!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request,
+            );
+            return taskResponse(
+              result,
+              result.status !== "resolved" && result.status !== "missing",
+            );
+          } catch {
+            return taskResponse(
+              {
+                status: "unavailable",
+                ...request,
+                code: "HANDOFF_PROJECT_PREFERENCE_LOOKUP_UNAVAILABLE",
+              },
+              true,
+            );
+          }
+        }),
+      );
+
     if (
       codexTasks.projectPreferenceEnabled === true &&
       codexTasks.projectPreference

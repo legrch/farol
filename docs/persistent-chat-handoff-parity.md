@@ -70,7 +70,7 @@ The sealed task admission keeps its existing exact project ID. The MCP does not
 take a root path, create a project, persist a preference, edit a title, read
 history or launch/resume/fork a task. It remeasures the writer/canonical repository
 binding and checks expiry/cancellation before returning. Project creation with
-unknown-outcome reconciliation, automatic latest-preference lookup and broader
+unknown-outcome reconciliation, automatic preference-based admission and broader
 project-scoped history discovery remain separate unimplemented N3 rows. Cancellation/deadline stops
 further catalogue pages; an already sent read remains bounded by its transport
 response/timeout, and Farol does not kill the shared server to cancel observation.
@@ -160,7 +160,7 @@ and serving/native identity remain separate qualification steps.
 Pure policy/public MCP/proxy-process and packaged disposable-socket fixtures
 prove the source route. No model turn, real task discovery, private database
 access or provider mutation is performed in those fixtures. Ensure/persisted
-automatic latest-preference lookup, project-wide discovery across other writers and Claude history
+automatic project selection, project-wide discovery across other writers and Claude history
 remain unimplemented; this is not complete V0 parity.
 
 ### Canonical checkout plus selected writer opt-in
@@ -418,6 +418,35 @@ records prevent concurrent overwrite. The local receipt has no model, prompt, tu
 or transcript. No provider mutation or task execution occurs. Source/filesystem and
 sealed packaged fixtures do not qualify live project API or native Desktop parity.
 Project ensure, cross-writer discovery and serving interactive approvals remain open.
+
+`codex_project_preferred` reads the latest locally published choice for the exact
+physical canonical repository without requiring the caller to retain a handle.
+It still requires the existing sealed project ID; it cannot pick a different
+project or supply authority for one. Missing local selection is `missing`, not a
+unique-project fallback. A different/removed project is `stale_preference`.
+Every result revalidates the physical canonical/writer identities, the complete
+bounded provider catalogue and the local selection before disclosure. Cancellation,
+revocation, expiry, changing selection or unreadable state refuses disclosure.
+These reads are non-atomic, stored preference evidence, not native/live acceptance.
+
+New remembers append a private, bounded 256-slot no-replace publication log per
+canonical physical identity. Each slot and its independent no-replace witness
+contain only the receipt UUID; a lost tail slot or witness cannot silently make
+an older choice latest. Both namespaces must match before disclosure. This is
+not protection against wholesale rollback/removal of all private state copies. The old
+immutable receipt format is unchanged. Intent is durable before receipt publication:
+a missing/corrupt receipt blocks lookup and further selection, never falls back to
+an older choice or repairs itself by retry. Concurrent slot contention is unknown;
+there is no automatic retry. Successful readback of complete local bytes reconciles
+publication, without claiming the original acknowledgement was delivered. Replaying
+an old handle never changes latest ordering. Existing receipts remain readable;
+legacy handles without a publication slot are not silently imported or ordered by
+mtime. The limit is explicit and has no automatic pruning or truncation. No task,
+model, native project, user configuration or execution policy is modified.
+
+Source and disposable filesystem/MCP fixtures exercise this path. Actual packaged
+MCP qualification is recorded separately for exact clean committed bytes. Serving
+project API, current NEW connector and native Desktop visibility remain unqualified.
 
 ## Saved-chat local frame and cleanup boundaries
 

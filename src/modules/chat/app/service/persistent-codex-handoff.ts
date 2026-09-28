@@ -1,4 +1,7 @@
 import type {
+  LatestProjectPreference,
+  ProjectPreferenceLookupRequest,
+  ProjectPreferenceLookupResult,
   ProjectPreferenceRecord,
   ProjectPreferenceRequest,
   ProjectPreferenceResult,
@@ -127,6 +130,9 @@ export type HandoffRecord = Readonly<{
 }>;
 
 export interface HandoffJournal {
+  readLatestProjectPreference?(
+    project: ProjectPreferenceRecord["project"],
+  ): Promise<LatestProjectPreference | null>;
   readProjectPreference?(key: string): Promise<ProjectPreferenceRecord | null>;
   rememberProjectPreference?(
     key: string,
@@ -406,6 +412,118 @@ export class PersistentCodexHandoff {
     private readonly now: () => number = Date.now,
     private readonly selectedOwnerThreadId?: string,
   ) {}
+
+  async lookupProjectPreference(
+    request: ProjectPreferenceLookupRequest,
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ): Promise<ProjectPreferenceLookupResult> {
+    const result = (
+      status: "missing" | "refused" | "unavailable" | "stale_preference",
+      code: string,
+    ): ProjectPreferenceLookupResult => ({ ...request, status, code });
+    const admitted = () =>
+      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+    if (
+      !identifier(request.workspaceId) ||
+      !identifier(request.projectId) ||
+      !admitted()
+    )
+      return result("refused", "HANDOFF_TASK_ADMISSION_DENIED");
+    if (!this.journal.readLatestProjectPreference)
+      return result(
+        "unavailable",
+        "HANDOFF_PROJECT_PREFERENCE_LOOKUP_UNAVAILABLE",
+      );
+    try {
+      const workspace = await this.authority.resolve(request.workspaceId);
+      if (!validWorkspace(workspace))
+        return result("refused", "HANDOFF_WORKSPACE_UNVERIFIED");
+      const verify = async () => {
+        const current = await this.authority.resolve(request.workspaceId);
+        if (
+          !admitted() ||
+          !validWorkspace(current) ||
+          !sameWorkspace(current, workspace)
+        )
+          throw new HandoffNotSubmittedError(
+            "HANDOFF_PROJECT_PREFERENCE_ADMISSION_CHANGED",
+          );
+      };
+      await verify();
+      const latest = await this.journal.readLatestProjectPreference(
+        workspace.project,
+      );
+      await verify();
+      if (!latest)
+        return result("missing", "HANDOFF_PROJECT_PREFERENCE_NOT_RECORDED");
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+          latest.key,
+        )
+      )
+        return result(
+          "unavailable",
+          "HANDOFF_PROJECT_PREFERENCE_LOOKUP_INVALID",
+        );
+      const matches = (value: LatestProjectPreference) =>
+        value.key === latest.key &&
+        value.record.projectId === request.projectId &&
+        value.record.project.root === workspace.project.root &&
+        value.record.project.device === workspace.project.device &&
+        value.record.project.inode === workspace.project.inode &&
+        value.record.project.gitCommonDirectory ===
+          workspace.project.gitCommonDirectory;
+      if (!matches(latest))
+        return result(
+          "stale_preference",
+          "HANDOFF_PROJECT_PREFERENCE_PROJECT_UNVERIFIED",
+        );
+      const catalogue = await resolveCodexProjectCatalogue(
+        this.host,
+        workspace.project.root,
+        request.projectId,
+        this.mutationExpiresAt,
+        admitted,
+      );
+      await verify();
+      if (catalogue.status === "unavailable")
+        return result(
+          "unavailable",
+          "HANDOFF_PROJECT_PREFERENCE_CATALOGUE_UNAVAILABLE",
+        );
+      if (
+        catalogue.status !== "resolved" ||
+        catalogue.selectedProjectId !== request.projectId
+      )
+        return result(
+          "stale_preference",
+          "HANDOFF_PROJECT_PREFERENCE_PROJECT_UNVERIFIED",
+        );
+      const readback = await this.journal.readLatestProjectPreference(
+        workspace.project,
+      );
+      await verify();
+      if (!readback || !matches(readback))
+        return result(
+          "unavailable",
+          "HANDOFF_PROJECT_PREFERENCE_SELECTION_CHANGED",
+        );
+      return {
+        ...request,
+        status: "resolved",
+        key: latest.key,
+        persistence: "immutable-local-receipt",
+        selection: "latest-local-publication",
+        snapshot: "non-atomic",
+        controlGranted: false,
+      };
+    } catch (error) {
+      return result(
+        error instanceof HandoffNotSubmittedError ? "refused" : "unavailable",
+        "HANDOFF_PROJECT_PREFERENCE_LOOKUP_UNAVAILABLE",
+      );
+    }
+  }
 
   async projectPreference(
     request: ProjectPreferenceRequest,

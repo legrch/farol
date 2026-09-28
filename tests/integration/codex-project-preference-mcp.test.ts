@@ -16,6 +16,24 @@ async function fixture() {
   let mode = "valid";
   let calls = 0;
   const delegate = {
+    async lookupProjectPreference(request: {
+      workspaceId: string;
+      projectId: string;
+    }) {
+      calls++;
+      if (mode === "expire") now = 100;
+      return {
+        status: "resolved",
+        ...request,
+        projectId: mode === "foreign" ? "foreign" : request.projectId,
+        key,
+        persistence: "immutable-local-receipt",
+        selection: "latest-local-publication",
+        snapshot: "non-atomic",
+        controlGranted: false,
+        ...(mode === "extra" ? { preview: "private" } : {}),
+      };
+    },
     async projectPreference(request: typeof input) {
       calls++;
       if (mode === "expire") now = 100;
@@ -171,3 +189,63 @@ it("expiry before delegation is refused; after remember is outcome-unknown", asy
     await close(f);
   }
 });
+
+it("preferred lookup is read-only and accepts no arbitrary handle/root", async () => {
+  const f = await fixture();
+  try {
+    const tool = (await f.client.listTools()).tools.find(
+      (item) => item.name === "codex_project_preferred",
+    );
+    expect(tool?.annotations?.readOnlyHint).toBe(true);
+    expect(
+      (
+        await f.client.callTool({
+          name: "codex_project_preferred",
+          arguments: { workspaceId: "selected", projectId: "saved" },
+        })
+      ).structuredContent,
+    ).toMatchObject({ status: "resolved", key });
+    const before = f.calls;
+    expect(
+      (
+        await f.client.callTool({
+          name: "codex_project_preferred",
+          arguments: { workspaceId: "selected", projectId: "foreign" },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(f.calls).toBe(before);
+    expect(
+      (
+        await f.client.callTool({
+          name: "codex_project_preferred",
+          arguments: {
+            workspaceId: "selected",
+            projectId: "saved",
+            root: "/outside",
+          },
+        })
+      ).isError,
+    ).toBe(true);
+    expect(f.calls).toBe(before);
+  } finally {
+    await close(f);
+  }
+});
+it.each(["foreign", "extra", "expire"])(
+  "preferred %s response never discloses a handle or claims resolved",
+  async (mode) => {
+    const f = await fixture();
+    try {
+      f.setMode(mode);
+      const result = await f.client.callTool({
+        name: "codex_project_preferred",
+        arguments: { workspaceId: "selected", projectId: "saved" },
+      });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).not.toHaveProperty("key");
+    } finally {
+      await close(f);
+    }
+  },
+);

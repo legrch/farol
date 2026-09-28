@@ -32,6 +32,7 @@ type ResolvedTaskRoute = Pick<
   | "resolveProject"
   | "discoverTasks"
   | "projectPreference"
+  | "lookupProjectPreference"
   | "history"
   | "title"
 > & {
@@ -44,6 +45,7 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
   readonly observeEnabled: boolean;
   readonly projectTasksEnabled: boolean;
   readonly projectPreferenceEnabled: boolean;
+  readonly projectPreferenceLookupEnabled: boolean;
 
   constructor(
     private readonly delegate: ResolvedTaskRoute,
@@ -73,9 +75,46 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     this.admission = { ...admission, tasks };
     this.observeEnabled = admission.observeThreadId !== undefined;
     this.projectPreferenceEnabled = delegate.projectPreference !== undefined;
+    this.projectPreferenceLookupEnabled =
+      delegate.lookupProjectPreference !== undefined;
     this.projectTasksEnabled =
       admission.discoverProjectTasks === true &&
       delegate.discoverTasks !== undefined;
+  }
+
+  async lookupProjectPreference(
+    request: Parameters<
+      NonNullable<CodexTaskRoute["lookupProjectPreference"]>
+    >[0],
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ) {
+    const refused = (code: string) => ({
+      status: "refused" as const,
+      ...request,
+      code,
+    });
+    const admitted = () =>
+      request.workspaceId === this.admission.workspaceId &&
+      request.projectId === this.admission.projectId &&
+      this.now() < this.admission.expiresAt &&
+      !context.signal?.aborted;
+    if (
+      !this.projectPreferenceLookupEnabled ||
+      !this.delegate.lookupProjectPreference ||
+      !admitted()
+    )
+      return refused("HANDOFF_TASK_ADMISSION_DENIED");
+    const result = await this.delegate.lookupProjectPreference(
+      request,
+      context,
+    );
+    if (
+      !admitted() ||
+      result.workspaceId !== request.workspaceId ||
+      result.projectId !== request.projectId
+    )
+      return refused("HANDOFF_PROJECT_PREFERENCE_UNVERIFIED");
+    return result;
   }
 
   async projectPreference(

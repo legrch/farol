@@ -207,6 +207,28 @@ export type CodexProjectPreference = z.infer<
   typeof CodexProjectPreferenceSchema
 >;
 
+export const CodexProjectPreferenceLookupSchema = z.union([
+  z.strictObject({
+    status: z.literal("resolved"),
+    workspaceId: Identifier,
+    projectId: Identifier,
+    key: HistoryId,
+    persistence: z.literal("immutable-local-receipt"),
+    selection: z.literal("latest-local-publication"),
+    snapshot: z.literal("non-atomic"),
+    controlGranted: z.literal(false),
+  }),
+  z.strictObject({
+    status: z.enum(["missing", "refused", "unavailable", "stale_preference"]),
+    workspaceId: Identifier,
+    projectId: Identifier,
+    code: Identifier,
+  }),
+]);
+export type CodexProjectPreferenceLookup = z.infer<
+  typeof CodexProjectPreferenceLookupSchema
+>;
+
 const ProjectTaskMetadata = z.strictObject({
   id: HistoryId,
   title: StoredTitle.nullable(),
@@ -261,6 +283,11 @@ export type CodexProjectTasks = z.infer<typeof CodexProjectTasksSchema>;
 
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  readonly projectPreferenceLookupEnabled?: boolean;
+  lookupProjectPreference?(
+    request: Readonly<{ workspaceId: string; projectId: string }>,
+    context?: Readonly<{ signal?: AbortSignal | undefined }>,
+  ): Promise<CodexProjectPreferenceLookup>;
   readonly projectPreferenceEnabled?: boolean;
   projectPreference?(
     request: Readonly<{

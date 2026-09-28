@@ -500,6 +500,7 @@ try {
   assert(tools.includes("codex_project_resolve"), stderr);
   assert(tools.includes("codex_project_tasks"), stderr);
   assert(tools.includes("codex_project_preference"), stderr);
+  assert(tools.includes("codex_project_preferred"), stderr);
   assert(tools.includes("codex_task_history"), stderr);
   assert(tools.includes("chatgpt_chat_create"), stderr);
   assert(tools.includes("chatgpt_chat_status"), stderr);
@@ -531,6 +532,32 @@ try {
     arguments: { ...preferenceInput, operation: "read" },
   });
   assert.equal(preferenceRead.structuredContent.status, "resolved");
+  const beforePreferred = calls.length;
+  const preferred = await callFixtureTool({
+    name: "codex_project_preferred",
+    arguments: { workspaceId: "approved-writer", projectId },
+  });
+  assert.deepEqual(preferred.structuredContent, {
+    status: "resolved",
+    workspaceId: "approved-writer",
+    projectId,
+    key,
+    persistence: "immutable-local-receipt",
+    selection: "latest-local-publication",
+    snapshot: "non-atomic",
+    controlGranted: false,
+  });
+  assert.deepEqual(calls.slice(beforePreferred), ["project/list"]);
+  assert.equal(
+    (
+      await callFixtureTool({
+        name: "codex_project_preferred",
+        arguments: { workspaceId: "approved-writer", projectId: "foreign" },
+      })
+    ).isError,
+    true,
+  );
+  assert.deepEqual(calls.slice(beforePreferred), ["project/list"]);
   const beforeForeignPreference = calls.length;
   assert.equal(
     (

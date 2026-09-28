@@ -31,3 +31,27 @@ export type ProjectPreferenceResult = Readonly<{
         code: string;
       }>
   );
+
+export type ProjectPreferenceLookupRequest = Readonly<{
+  workspaceId: string;
+  projectId: string;
+}>;
+export type ProjectPreferenceLookupResult = ProjectPreferenceLookupRequest &
+  (
+    | Readonly<{
+        status: "resolved";
+        key: string;
+        persistence: "immutable-local-receipt";
+        selection: "latest-local-publication";
+        snapshot: "non-atomic";
+        controlGranted: false;
+      }>
+    | Readonly<{
+        status: "missing" | "refused" | "unavailable" | "stale_preference";
+        code: string;
+      }>
+  );
+export type LatestProjectPreference = Readonly<{
+  key: string;
+  record: ProjectPreferenceRecord;
+}>;

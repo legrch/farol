@@ -3,7 +3,7 @@ import { z } from "zod";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { TaskModelBindingSchema } from "../../../../pkg/owner-config/contract";
 
 import type {
@@ -38,6 +38,14 @@ const ProjectPreferenceRecordSchema = z.strictObject({
     inode: z.string().regex(/^[0-9]+$/u),
     gitCommonDirectory: PreferencePath,
   }),
+});
+
+const ProjectPreferenceSelectionSchema = z.strictObject({
+  key: z
+    .string()
+    .regex(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    ),
 });
 
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
@@ -181,6 +189,12 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     if (!validKey(key))
       throw new Error("HANDOFF_PROJECT_PREFERENCE_KEY_INVALID");
     await this.ensureRoot();
+    return this.readExistingProjectPreference(key);
+  }
+
+  private async readExistingProjectPreference(
+    key: string,
+  ): Promise<ProjectPreferenceRecord | null> {
     const value = await readPrivate(
       path.join(this.root, `project-preference-${key.toLowerCase()}.json`),
       true,
@@ -199,14 +213,160 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > 4000)
       throw new Error("HANDOFF_PROJECT_PREFERENCE_TOO_LARGE");
     await this.ensureRoot();
+    const prior = await this.readProjectPreference(key);
+    if (prior) return prior; // Reading an old handle never reorders preference.
+    const head = await this.readPreferenceSelection(parsed.project);
+    const sequence = (head?.sequence ?? 0) + 1;
+    if (sequence > 256)
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_LIMIT");
+    const directory = this.preferenceSelectionDirectory(parsed.project);
+    try {
+      await fs.mkdir(directory, { mode: 0o700 });
+      await syncDirectory(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await this.verifyPreferenceDirectory(directory);
+    const slot = path.join(
+      directory,
+      `${String(sequence).padStart(6, "0")}.json`,
+    );
+    // Publish intent first. Missing/corrupt receipt blocks lookup and further
+    // selections; it can never turn into an implicit fallback to an old choice.
+    if (!(await writeOnce(slot, { key: key.toLowerCase() })))
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_CONFLICT");
+    const witness = path.join(
+      directory,
+      `witness-${String(sequence).padStart(6, "0")}.json`,
+    );
+    if (!(await writeOnce(witness, { key: key.toLowerCase() })))
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_WITNESS_CONFLICT");
     await writeOnce(
       path.join(this.root, `project-preference-${key.toLowerCase()}.json`),
       parsed,
     );
+    await this.readPreferenceSelection(parsed.project);
     const stored = await this.readProjectPreference(key);
     if (!stored)
       throw new Error("HANDOFF_PROJECT_PREFERENCE_PUBLICATION_UNKNOWN");
     return stored;
+  }
+
+  async readLatestProjectPreference(
+    project: ProjectPreferenceRecord["project"],
+  ) {
+    if (!(await this.verifyRoot())) return null;
+    const selected = await this.readPreferenceSelection(
+      ProjectPreferenceRecordSchema.shape.project.parse(project),
+    );
+    return selected === null
+      ? null
+      : { key: selected.key, record: selected.record };
+  }
+
+  private preferenceSelectionDirectory(
+    project: ProjectPreferenceRecord["project"],
+  ): string {
+    const canonical =
+      ProjectPreferenceRecordSchema.shape.project.parse(project);
+    const digest = createHash("sha256")
+      .update(JSON.stringify(canonical), "utf8")
+      .digest("hex");
+    return path.join(this.root, `project-preference-selections-${digest}`);
+  }
+
+  private async verifyPreferenceDirectory(directory: string) {
+    const stat = await fs.lstat(directory);
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      (stat.mode & 0o077) !== 0 ||
+      (process.geteuid?.() !== undefined && stat.uid !== process.geteuid?.())
+    )
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_UNSAFE");
+    return stat;
+  }
+
+  private async readPreferenceSelection(
+    project: ProjectPreferenceRecord["project"],
+  ): Promise<{
+    sequence: number;
+    key: string;
+    record: ProjectPreferenceRecord;
+  } | null> {
+    const directory = this.preferenceSelectionDirectory(project);
+    let before;
+    try {
+      before = await this.verifyPreferenceDirectory(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    const entries = await fs.readdir(directory);
+    const slots = entries
+      .filter((name) => /^[0-9]{6}\.json$/u.test(name))
+      .sort();
+    const witnesses = entries
+      .filter((name) => /^witness-[0-9]{6}\.json$/u.test(name))
+      .sort();
+    if (
+      slots.length > 256 ||
+      witnesses.length !== slots.length ||
+      entries.length > 1024 ||
+      entries.some(
+        (name) =>
+          !/^(?:witness-)?[0-9]{6}\.json(?:\.[0-9a-f-]{36}\.tmp)?$/iu.test(
+            name,
+          ),
+      )
+    )
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_INVALID");
+    const keys = new Set<string>();
+    let latest = null;
+    for (let index = 0; index < slots.length; index++) {
+      const sequence = index + 1;
+      if (slots[index] !== `${String(sequence).padStart(6, "0")}.json`)
+        throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_GAP");
+      const { key } = ProjectPreferenceSelectionSchema.parse(
+        await readPrivate(path.join(directory, slots[index]!), true, true),
+      );
+      if (
+        witnesses[index] !== `witness-${slots[index]}` ||
+        ProjectPreferenceSelectionSchema.parse(
+          await readPrivate(
+            path.join(directory, witnesses[index]!),
+            true,
+            true,
+          ),
+        ).key !== key
+      )
+        throw new Error("HANDOFF_PROJECT_PREFERENCE_WITNESS_UNVERIFIED");
+      if (keys.has(key))
+        throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_DUPLICATE");
+      keys.add(key);
+      const record = await this.readExistingProjectPreference(key);
+      if (
+        !record ||
+        JSON.stringify(record.project) !==
+          JSON.stringify(
+            ProjectPreferenceRecordSchema.shape.project.parse(project),
+          )
+      )
+        throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_UNVERIFIED");
+      latest = { sequence, key, record };
+    }
+    const after = await this.verifyPreferenceDirectory(directory);
+    const finalSlots = (await fs.readdir(directory))
+      .filter((name) => /^(?:witness-)?[0-9]{6}\.json$/u.test(name))
+      .sort();
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      JSON.stringify([...slots, ...witnesses].sort()) !==
+        JSON.stringify(finalSlots)
+    )
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_SELECTION_CHANGED");
+    return latest;
   }
 
   async reserve(key: string, record: HandoffRecord): Promise<HandoffRecord> {
@@ -625,7 +785,18 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
 
   private async ensureRoot(): Promise<void> {
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 });
-    const stat = await fs.lstat(this.root);
+    if (!(await this.verifyRoot()))
+      throw new Error("HANDOFF_JOURNAL_ROOT_UNSAFE");
+  }
+
+  private async verifyRoot(): Promise<boolean> {
+    let stat;
+    try {
+      stat = await fs.lstat(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
     if (
       !stat.isDirectory() ||
       stat.isSymbolicLink() ||
@@ -634,5 +805,6 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     ) {
       throw new Error("HANDOFF_JOURNAL_ROOT_UNSAFE");
     }
+    return true;
   }
 }
