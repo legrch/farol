@@ -297,17 +297,15 @@ describe("exact dispatch title mutation", () => {
     );
     const before = f.calls.length;
     expect(
-      await f
-        .create()
-        .message({
-          key: randomUUID(),
-          dispatchId,
-          workspaceId: "writer",
-          projectId: "project",
-          message: "One steer",
-          model: "fixture-model",
-          reasoningEffort: "medium",
-        }),
+      await f.create().message({
+        key: randomUUID(),
+        dispatchId,
+        workspaceId: "writer",
+        projectId: "project",
+        message: "One steer",
+        model: "fixture-model",
+        reasoningEffort: "medium",
+      }),
     ).toMatchObject({ status: "outcome_unknown" });
     expect(f.calls.length).toBe(before);
     expect(f.effects()).toBe(1);
