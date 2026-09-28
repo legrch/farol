@@ -184,6 +184,7 @@ function hostResult(method, params) {
           cwd: writerRoot,
           name: "Farol · Native observer canary",
           model: "gpt-6-luna",
+          status: { type: "active", activeFlags: ["waitingOnUserInput"] },
         },
       };
     return {
