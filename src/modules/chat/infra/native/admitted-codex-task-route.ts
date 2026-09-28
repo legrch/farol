@@ -30,6 +30,7 @@ type ResolvedTaskRoute = Pick<
   | "adopt"
   | "resolveProject"
   | "discoverTasks"
+  | "projectPreference"
   | "history"
   | "title"
 > & {
@@ -41,6 +42,7 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
   private readonly admission: CodexTaskAdmission;
   readonly observeEnabled: boolean;
   readonly projectTasksEnabled: boolean;
+  readonly projectPreferenceEnabled: boolean;
 
   constructor(
     private readonly delegate: ResolvedTaskRoute,
@@ -69,9 +71,48 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
       throw new Error("HANDOFF_TITLE_UNAVAILABLE");
     this.admission = { ...admission, tasks };
     this.observeEnabled = admission.observeThreadId !== undefined;
+    this.projectPreferenceEnabled = delegate.projectPreference !== undefined;
     this.projectTasksEnabled =
       admission.discoverProjectTasks === true &&
       delegate.discoverTasks !== undefined;
+  }
+
+  async projectPreference(
+    request: Parameters<NonNullable<CodexTaskRoute["projectPreference"]>>[0],
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ) {
+    const failed = (
+      status: "refused" | "outcome_unknown" | "unavailable",
+      code: string,
+    ) => ({
+      status,
+      key: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      code,
+    });
+    if (!this.projectPreferenceEnabled || !this.delegate.projectPreference)
+      return failed("refused", "HANDOFF_PROJECT_PREFERENCE_UNAVAILABLE");
+    if (
+      request.workspaceId !== this.admission.workspaceId ||
+      request.projectId !== this.admission.projectId ||
+      this.now() >= this.admission.expiresAt ||
+      context.signal?.aborted
+    )
+      return failed("refused", "HANDOFF_TASK_ADMISSION_DENIED");
+    const result = await this.delegate.projectPreference(request, context);
+    if (
+      this.now() >= this.admission.expiresAt ||
+      context.signal?.aborted ||
+      result.key !== request.key ||
+      result.workspaceId !== request.workspaceId ||
+      result.projectId !== request.projectId
+    )
+      return failed(
+        request.operation === "remember" ? "outcome_unknown" : "unavailable",
+        "HANDOFF_PROJECT_PREFERENCE_UNVERIFIED",
+      );
+    return result;
   }
 
   async discoverTasks(

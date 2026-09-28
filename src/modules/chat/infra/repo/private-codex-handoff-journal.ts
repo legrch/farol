@@ -1,3 +1,5 @@
+import type { ProjectPreferenceRecord } from "../../app/port/codex-project-preference";
+import { z } from "zod";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +10,35 @@ import type {
   HandoffJournal,
   HandoffRecord,
 } from "../../app/service/persistent-codex-handoff";
+
+const PreferencePath = z
+  .string()
+  .max(4096)
+  .refine(
+    (value) =>
+      value.startsWith("/") &&
+      !value.endsWith("/") &&
+      !value.includes("\\") &&
+      value
+        .split("/")
+        .slice(1)
+        .every(
+          (part) =>
+            part !== "" &&
+            part !== "." &&
+            part !== ".." &&
+            !/[\u0000-\u001f\u007f]/u.test(part),
+        ),
+  );
+const ProjectPreferenceRecordSchema = z.strictObject({
+  projectId: z.string().regex(/^[A-Za-z0-9_-]{1,120}$/u),
+  project: z.strictObject({
+    root: PreferencePath,
+    device: z.string().regex(/^[0-9]+$/u),
+    inode: z.string().regex(/^[0-9]+$/u),
+    gitCommonDirectory: PreferencePath,
+  }),
+});
 
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 
@@ -70,10 +101,19 @@ async function writeOnce(file: string, value: unknown): Promise<boolean> {
 async function readPrivate(
   file: string,
   rejectJsonNull = false,
+  nonBlocking = false,
 ): Promise<unknown | null> {
+  if (
+    nonBlocking &&
+    (!Number.isInteger(constants.O_NONBLOCK) || constants.O_NONBLOCK <= 0)
+  )
+    throw new Error("HANDOFF_JOURNAL_NONBLOCK_UNAVAILABLE");
   let handle;
   try {
-    handle = await fs.open(file, constants.O_RDONLY | NO_FOLLOW);
+    handle = await fs.open(
+      file,
+      constants.O_RDONLY | NO_FOLLOW | (nonBlocking ? constants.O_NONBLOCK : 0),
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
@@ -133,6 +173,40 @@ function stringRecord(value: unknown): string {
 export class PrivateCodexHandoffJournal implements HandoffJournal {
   constructor(private readonly root: string) {
     if (!path.isAbsolute(root)) throw new Error("HANDOFF_JOURNAL_ROOT_INVALID");
+  }
+
+  async readProjectPreference(
+    key: string,
+  ): Promise<ProjectPreferenceRecord | null> {
+    if (!validKey(key))
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_KEY_INVALID");
+    await this.ensureRoot();
+    const value = await readPrivate(
+      path.join(this.root, `project-preference-${key.toLowerCase()}.json`),
+      true,
+      true,
+    );
+    return value === null ? null : ProjectPreferenceRecordSchema.parse(value);
+  }
+
+  async rememberProjectPreference(
+    key: string,
+    record: ProjectPreferenceRecord,
+  ): Promise<ProjectPreferenceRecord> {
+    if (!validKey(key))
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_KEY_INVALID");
+    const parsed = ProjectPreferenceRecordSchema.parse(record);
+    if (Buffer.byteLength(JSON.stringify(parsed), "utf8") > 4000)
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_TOO_LARGE");
+    await this.ensureRoot();
+    await writeOnce(
+      path.join(this.root, `project-preference-${key.toLowerCase()}.json`),
+      parsed,
+    );
+    const stored = await this.readProjectPreference(key);
+    if (!stored)
+      throw new Error("HANDOFF_PROJECT_PREFERENCE_PUBLICATION_UNKNOWN");
+    return stored;
   }
 
   async reserve(key: string, record: HandoffRecord): Promise<HandoffRecord> {

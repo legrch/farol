@@ -70,7 +70,7 @@ The sealed task admission keeps its existing exact project ID. The MCP does not
 take a root path, create a project, persist a preference, edit a title, read
 history or launch/resume/fork a task. It remeasures the writer/canonical repository
 binding and checks expiry/cancellation before returning. Project creation with
-unknown-outcome reconciliation, persisted preferences and broader
+unknown-outcome reconciliation, automatic latest-preference lookup and broader
 project-scoped history discovery remain separate unimplemented N3 rows. Cancellation/deadline stops
 further catalogue pages; an already sent read remains bounded by its transport
 response/timeout, and Farol does not kill the shared server to cancel observation.
@@ -160,7 +160,7 @@ and serving/native identity remain separate qualification steps.
 Pure policy/public MCP/proxy-process and packaged disposable-socket fixtures
 prove the source route. No model turn, real task discovery, private database
 access or provider mutation is performed in those fixtures. Ensure/persisted
-preferences, project-wide discovery across other writers and Claude history
+automatic latest-preference lookup, project-wide discovery across other writers and Claude history
 remain unimplemented; this is not complete V0 parity.
 
 ## Stored history read/tail for an exact selected turn
@@ -374,3 +374,27 @@ Keep pure policy in Chat domain/app, concrete host/browser and journal adapters
 in infrastructure, and lifecycle wiring in boot. Peer access must use the
 owning module's published contract. Do not add an extra model or permanent
 supervisor merely to make the two handoffs look alike.
+
+## Immutable saved-project preference handles
+
+`codex_project_preference` remembers or reads an explicit saved project already
+selected in the sealed task admission. It publishes a local private receipt under
+one UUID handle; the handle cannot be changed to another choice. This is not an
+automatic "latest project" setting, a project creation request, a new owner profile
+or an authority grant. Clients retain the handle and explicitly read it before
+using the choice. The existing public resolver remains unchanged.
+
+The receipt binds the canonical project path, device/inode and Git common directory,
+separately from the active writer cwd. An independently approved writer of the same
+physical project may read the handle. Each operation revalidates physical authority,
+expiry/cancellation and a bounded complete saved-project catalogue. Missing, stale,
+partial or corrupt proof never selects a replacement. Catalogue checks are non-atomic.
+Only the exact project selected in current task admission is accessible.
+
+Remembering takes the existing Computer mutation fence. An uncertain publication or
+post-write revocation remains `outcome_unknown`; read the same handle to reconcile,
+never blindly retry with a new key. Atomic no-replace publication and private closed
+records prevent concurrent overwrite. The local receipt has no model, prompt, turn
+or transcript. No provider mutation or task execution occurs. Source/filesystem and
+sealed packaged fixtures do not qualify live project API or native Desktop parity.
+Project ensure, cross-writer discovery and serving interactive approvals remain open.

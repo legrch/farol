@@ -4,6 +4,7 @@ import {
   CodexTaskHistorySchema,
   CodexTaskTitleSchema,
   CodexProjectTasksSchema,
+  CodexProjectPreferenceSchema,
 } from "../../../chat/contract/codex-task-route";
 
 export function parseTaskHistory(
@@ -32,6 +33,37 @@ export function parseTaskHistory(
         threadId: request.threadId,
         turnId: request.turnId,
         code: "HANDOFF_HISTORY_CORRELATION",
+      };
+}
+
+export function parseProjectPreference(
+  value: unknown,
+  request: {
+    key: string;
+    workspaceId: string;
+    projectId: string;
+    operation: "remember" | "read";
+  },
+) {
+  const parsed = CodexProjectPreferenceSchema.safeParse(value);
+  return parsed.success &&
+    parsed.data.key === request.key &&
+    parsed.data.workspaceId === request.workspaceId &&
+    parsed.data.projectId === request.projectId &&
+    ((parsed.data.status !== "remembered" &&
+      parsed.data.status !== "resolved") ||
+      parsed.data.status ===
+        (request.operation === "remember" ? "remembered" : "resolved"))
+    ? parsed.data
+    : {
+        status:
+          request.operation === "remember"
+            ? ("outcome_unknown" as const)
+            : ("unavailable" as const),
+        key: request.key,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        code: "HANDOFF_PROJECT_PREFERENCE_CORRELATION",
       };
 }
 

@@ -1,3 +1,8 @@
+import type {
+  ProjectPreferenceRecord,
+  ProjectPreferenceRequest,
+  ProjectPreferenceResult,
+} from "../port/codex-project-preference";
 import { readCodexProjectTasks } from "./read-codex-project-tasks";
 import type {
   ProjectTaskDiscoveryRequest,
@@ -122,6 +127,11 @@ export type HandoffRecord = Readonly<{
 }>;
 
 export interface HandoffJournal {
+  readProjectPreference?(key: string): Promise<ProjectPreferenceRecord | null>;
+  rememberProjectPreference?(
+    key: string,
+    record: ProjectPreferenceRecord,
+  ): Promise<ProjectPreferenceRecord>;
   hasUnconfirmedTitle?(dispatchId: string): Promise<boolean>;
   claimTitle?(
     dispatchId: string,
@@ -396,6 +406,148 @@ export class PersistentCodexHandoff {
     private readonly now: () => number = Date.now,
     private readonly selectedOwnerThreadId?: string,
   ) {}
+
+  async projectPreference(
+    request: ProjectPreferenceRequest,
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ): Promise<ProjectPreferenceResult> {
+    const result = (
+      status:
+        "refused" | "unavailable" | "stale_preference" | "outcome_unknown",
+      code: string,
+    ): ProjectPreferenceResult => ({
+      status,
+      key: request.key,
+      workspaceId: request.workspaceId,
+      projectId: request.projectId,
+      code,
+    });
+    const admitted = () =>
+      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        request.key,
+      ) ||
+      !identifier(request.workspaceId) ||
+      !identifier(request.projectId) ||
+      !["remember", "read"].includes(request.operation)
+    )
+      return result("refused", "HANDOFF_PROJECT_PREFERENCE_INPUT_INVALID");
+    if (!admitted()) return result("refused", "HANDOFF_TASK_ADMISSION_DENIED");
+    if (
+      !this.journal.readProjectPreference ||
+      !this.journal.rememberProjectPreference
+    )
+      return result("refused", "HANDOFF_PROJECT_PREFERENCE_UNAVAILABLE");
+    let publicationPossible = false;
+    try {
+      const workspace = await this.authority.resolve(request.workspaceId);
+      if (!validWorkspace(workspace))
+        return result("refused", "HANDOFF_WORKSPACE_UNVERIFIED");
+      const verify = async () => {
+        const current = await this.authority.resolve(request.workspaceId);
+        if (
+          !admitted() ||
+          !validWorkspace(current) ||
+          !sameWorkspace(current, workspace)
+        )
+          throw new HandoffNotSubmittedError(
+            "HANDOFF_PROJECT_PREFERENCE_ADMISSION_CHANGED",
+          );
+      };
+      await verify();
+      const prior = await this.journal.readProjectPreference(request.key);
+      await verify();
+      const record: ProjectPreferenceRecord = {
+        projectId: request.projectId,
+        project: workspace.project,
+      };
+      const sameRecord = (value: ProjectPreferenceRecord) =>
+        value.projectId === record.projectId &&
+        value.project.root === record.project.root &&
+        value.project.device === record.project.device &&
+        value.project.inode === record.project.inode &&
+        value.project.gitCommonDirectory === record.project.gitCommonDirectory;
+      if (prior && !sameRecord(prior))
+        return result(
+          request.operation === "read" ? "stale_preference" : "refused",
+          "HANDOFF_PROJECT_PREFERENCE_KEY_CONFLICT",
+        );
+      if (!prior && request.operation === "read")
+        return result("refused", "HANDOFF_PROJECT_PREFERENCE_UNKNOWN");
+      const catalogue = await resolveCodexProjectCatalogue(
+        this.host,
+        workspace.project.root,
+        request.projectId,
+        this.mutationExpiresAt,
+        admitted,
+      );
+      await verify();
+      if (catalogue.status === "unavailable")
+        return result(
+          "unavailable",
+          "HANDOFF_PROJECT_PREFERENCE_CATALOGUE_UNAVAILABLE",
+        );
+      if (
+        catalogue.status !== "resolved" ||
+        catalogue.selectedProjectId !== request.projectId
+      )
+        return result(
+          "stale_preference",
+          "HANDOFF_PROJECT_PREFERENCE_PROJECT_UNVERIFIED",
+        );
+      if (!prior) {
+        await this.mutationGate.run(
+          verify,
+          async () => {
+            if (!admitted())
+              throw new HandoffNotSubmittedError(
+                "HANDOFF_TASK_ADMISSION_DENIED",
+              );
+            publicationPossible = true;
+            const stored = await this.journal.rememberProjectPreference!(
+              request.key,
+              record,
+            );
+            if (!sameRecord(stored))
+              throw new Error(
+                "HANDOFF_PROJECT_PREFERENCE_PUBLICATION_CONFLICT",
+              );
+            const readback = await this.journal.readProjectPreference!(
+              request.key,
+            );
+            if (!readback || !sameRecord(readback))
+              throw new Error("HANDOFF_PROJECT_PREFERENCE_READBACK_UNVERIFIED");
+            await verify();
+          },
+          (error) =>
+            !publicationPossible && error instanceof HandoffNotSubmittedError,
+        );
+      } else {
+        // No new publication. Validate historical receipt use without a mutation.
+        await verify();
+      }
+      return {
+        status: request.operation === "remember" ? "remembered" : "resolved",
+        key: request.key,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        persistence: "immutable-local-receipt",
+        catalogue: "current-non-atomic",
+        controlGranted: false,
+      };
+    } catch (error) {
+      if (publicationPossible)
+        return result(
+          "outcome_unknown",
+          "HANDOFF_PROJECT_PREFERENCE_PUBLICATION_UNKNOWN",
+        );
+      return result(
+        error instanceof HandoffNotSubmittedError ? "refused" : "unavailable",
+        "HANDOFF_PROJECT_PREFERENCE_UNAVAILABLE",
+      );
+    }
+  }
 
   async discoverTasks(
     request: ProjectTaskDiscoveryRequest,

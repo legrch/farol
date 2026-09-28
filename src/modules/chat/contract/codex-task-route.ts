@@ -180,6 +180,33 @@ export const CodexTaskTitleSchema = z.union([
 ]);
 export type CodexTaskTitle = z.infer<typeof CodexTaskTitleSchema>;
 
+export const CodexProjectPreferenceSchema = z.union([
+  z.strictObject({
+    status: z.enum(["remembered", "resolved"]),
+    key: HistoryId,
+    workspaceId: Identifier,
+    projectId: Identifier,
+    persistence: z.literal("immutable-local-receipt"),
+    catalogue: z.literal("current-non-atomic"),
+    controlGranted: z.literal(false),
+  }),
+  z.strictObject({
+    status: z.enum([
+      "refused",
+      "unavailable",
+      "stale_preference",
+      "outcome_unknown",
+    ]),
+    key: HistoryId,
+    workspaceId: Identifier,
+    projectId: Identifier,
+    code: Identifier,
+  }),
+]);
+export type CodexProjectPreference = z.infer<
+  typeof CodexProjectPreferenceSchema
+>;
+
 const ProjectTaskMetadata = z.strictObject({
   id: HistoryId,
   title: StoredTitle.nullable(),
@@ -234,6 +261,16 @@ export type CodexProjectTasks = z.infer<typeof CodexProjectTasksSchema>;
 
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
+  readonly projectPreferenceEnabled?: boolean;
+  projectPreference?(
+    request: Readonly<{
+      key: string;
+      workspaceId: string;
+      projectId: string;
+      operation: "remember" | "read";
+    }>,
+    context?: Readonly<{ signal?: AbortSignal | undefined }>,
+  ): Promise<CodexProjectPreference>;
   /** Separate sealed permission to discover metadata; this never selects/control a thread. */
   readonly projectTasksEnabled?: boolean;
   discoverTasks?(

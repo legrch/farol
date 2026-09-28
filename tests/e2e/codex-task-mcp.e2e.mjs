@@ -447,11 +447,49 @@ try {
   assert(tools.includes("codex_task_adopt"), stderr);
   assert(tools.includes("codex_project_resolve"), stderr);
   assert(tools.includes("codex_project_tasks"), stderr);
+  assert(tools.includes("codex_project_preference"), stderr);
   assert(tools.includes("codex_task_history"), stderr);
   assert(tools.includes("chatgpt_chat_create"), stderr);
   assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
   assert(!tools.includes("codex_task_title"), stderr);
+  const preferenceInput = {
+    key,
+    workspaceId: "approved-writer",
+    projectId,
+    operation: "remember",
+  };
+  const beforePreference = calls.length;
+  const preference = await callFixtureTool({
+    name: "codex_project_preference",
+    arguments: preferenceInput,
+  });
+  assert.deepEqual(preference.structuredContent, {
+    status: "remembered",
+    key,
+    workspaceId: "approved-writer",
+    projectId,
+    persistence: "immutable-local-receipt",
+    catalogue: "current-non-atomic",
+    controlGranted: false,
+  });
+  assert.deepEqual(calls.slice(beforePreference), ["project/list"]);
+  const preferenceRead = await callFixtureTool({
+    name: "codex_project_preference",
+    arguments: { ...preferenceInput, operation: "read" },
+  });
+  assert.equal(preferenceRead.structuredContent.status, "resolved");
+  const beforeForeignPreference = calls.length;
+  assert.equal(
+    (
+      await callFixtureTool({
+        name: "codex_project_preference",
+        arguments: { ...preferenceInput, projectId: "foreign" },
+      })
+    ).isError,
+    true,
+  );
+  assert.equal(calls.length, beforeForeignPreference);
   const beforeDiscovery = calls.length;
   const taskMetadata = await callFixtureTool({
     name: "codex_project_tasks",
@@ -713,6 +751,54 @@ try {
     dispatchId: key,
     text: "Exact built-byte fixture answer",
   });
+  assert.equal(calls.filter((method) => method === "thread/start").length, 1);
+  assert.equal(calls.filter((method) => method === "turn/start").length, 1);
+  await client.close();
+  await transport.close();
+  client = undefined;
+  transport = undefined;
+
+  // Reopen the same sealed launch: durable project choice and task identity
+  // survive MCP process disconnect; observation must not create another turn.
+  await prepareMcpLifecycle(launchFile);
+  transport = new StdioClientTransport({
+    command,
+    args: [entry, "--launch-contract", launchFile],
+    cwd: process.cwd(),
+    stderr: "pipe",
+    ...(packaged
+      ? {
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            PATH: process.env.PATH ?? "/usr/bin:/bin",
+            HOME: process.env.HOME ?? root,
+            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          },
+        }
+      : {}),
+  });
+  client = new Client({ name: "reconnected-task-fixture", version: "1" });
+  await fixtureFailure.wait(client.connect(transport));
+  const beforeReconnect = calls.length;
+  const restoredPreference = await callFixtureTool({
+    name: "codex_project_preference",
+    arguments: { ...preferenceInput, operation: "read" },
+  });
+  assert.equal(restoredPreference.structuredContent.status, "resolved");
+  const restoredStatus = await callFixtureTool({
+    name: "codex_task_status",
+    arguments: { dispatchId: key },
+  });
+  assert.deepEqual(restoredStatus.structuredContent, {
+    status: "known",
+    dispatchId: key,
+    turnStatus: "completed",
+  });
+  assert.deepEqual(calls.slice(beforeReconnect), [
+    "project/list",
+    "thread/read",
+    "thread/turns/list",
+  ]);
   assert.equal(calls.filter((method) => method === "thread/start").length, 1);
   assert.equal(calls.filter((method) => method === "turn/start").length, 1);
   await client.close();

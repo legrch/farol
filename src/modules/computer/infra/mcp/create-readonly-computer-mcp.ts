@@ -28,6 +28,7 @@ import type {
 import {
   parseProjectResolution,
   parseProjectTasks,
+  parseProjectPreference,
   parseTaskHistory,
   parseTaskTitle,
   type CodexTaskRoutePeer,
@@ -69,6 +70,12 @@ const CodexTaskCreateInputSchema = z.strictObject({
 const CodexProjectResolveInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
   preferredProjectId: IdentifierSchema.optional(),
+});
+const CodexProjectPreferenceInputSchema = z.strictObject({
+  key: z.string().uuid(),
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+  operation: z.enum(["remember", "read"]),
 });
 const CodexProjectTasksInputSchema = z.strictObject({
   workspaceId: IdentifierSchema,
@@ -864,6 +871,48 @@ export function createReadonlyComputerMcpServer(
       structuredContent: value,
       ...(isError ? { isError: true } : {}),
     });
+    if (
+      codexTasks.projectPreferenceEnabled === true &&
+      codexTasks.projectPreference
+    )
+      server.registerTool(
+        "codex_project_preference",
+        {
+          title: "Remember or read one exact saved project preference",
+          description:
+            "Remember an explicit saved project already selected in the sealed task admission using one immutable UUID handle, or revalidate that handle. The physical canonical repository is distinct from writer cwd. A fresh bounded non-atomic catalogue validates every use. This does not select another project, alter host permissions, create a project/task, change model or control a thread. Stale choice has no fallback. After unknown publication, read the same handle; never blindly resend or replace it with a new key.",
+          inputSchema: CodexProjectPreferenceInputSchema,
+          annotations: LOCAL_RECORD_ANNOTATIONS,
+        },
+        guarded(async (request, context) => {
+          try {
+            const result = parseProjectPreference(
+              await codexTasks.projectPreference!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request,
+            );
+            return taskResponse(
+              result,
+              !["remembered", "resolved"].includes(result.status),
+            );
+          } catch {
+            return taskResponse(
+              {
+                status:
+                  request.operation === "remember"
+                    ? "outcome_unknown"
+                    : "unavailable",
+                key: request.key,
+                workspaceId: request.workspaceId,
+                projectId: request.projectId,
+                code: "HANDOFF_PROJECT_PREFERENCE_UNAVAILABLE",
+              },
+              true,
+            );
+          }
+        }),
+      );
     if (codexTasks.projectTasksEnabled === true && codexTasks.discoverTasks)
       server.registerTool(
         "codex_project_tasks",
