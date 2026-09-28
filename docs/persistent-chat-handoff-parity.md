@@ -70,7 +70,7 @@ The sealed task admission keeps its existing exact project ID. The MCP does not
 take a root path, create a project, persist a preference, edit a title, read
 history or launch/resume/fork a task. It remeasures the writer/canonical repository
 binding and checks expiry/cancellation before returning. Project creation with
-unknown-outcome reconciliation, persisted preferences, title readback and broader
+unknown-outcome reconciliation, persisted preferences and broader
 project-scoped history discovery remain separate unimplemented N3 rows. Cancellation/deadline stops
 further catalogue pages; an already sent read remains bounded by its transport
 response/timeout, and Farol does not kill the shared server to cancel observation.
@@ -89,7 +89,46 @@ Observer metadata maps the supported optional nullable host Thread.name field to
 the public title field. It does not fall back to an unrelated title-shaped host
 property. Malformed names remain unknown; omitted/null names return null. The
 local host-contract inspector requires the supported name field shape. This
-does not add title mutation or prove the serving native host's field support.
+does not itself qualify title mutation or prove the serving native host's field support.
+
+## Qualified one-shot task name update
+
+`codex_task_title` is wired through the published task contract, admission and
+Computer MCP only when the serving host's explicit title control capability is
+selected. Ordinary production construction leaves it off. Local schema evidence
+for `thread/name/set` is optional and separate from ordinary create/status
+qualification; it cannot enable serving control. The proxy allowlist adds only
+this method and leaves the separately refused initialize/experimentalApi change
+untouched.
+
+The caller supplies the issued dispatch handle, exact workspace/project IDs,
+one UUID key, expected nullable name and a nonblank new name of at most 1,000
+UTF-8 bytes without NUL. Only a verified Farol-created dispatch is controllable;
+an adopted owner task remains read-only. Current canonical project, physical
+writer, policy, thread, model and admission are rechecked. A changed initial
+name returns `title_changed` without a durable intent or provider mutation.
+A private dispatch-scoped immutable intent precedes the one setter. The name
+and text are not persisted in the journal, only the digest and key-correlated thread receipt. An orphan or mismatched
+confirmation fails closed and cannot confirm a new operation.
+Concurrent requests cannot send a second setter, including a different key.
+
+Expected-name preflight and supported Thread.name readback are not a native
+atomic compare-and-set: a native client can rename between them. A late changed
+readback, lost acknowledgement, expired/revoked admission or failed receipt
+publication stays `outcome_unknown`. An unconfirmed title blocks further steer
+and continuation, including an intent appearing between initial checks and the
+mutation-fence preflight. Unconfirmed steer similarly blocks a title effect.
+Post-mutation read failures cannot release the fence as a no-submit error.
+Matching replay returns `recorded`/`historical`; it proves the old acknowledged
+update, not the current name. `renamed`/`readback` is the current observation at
+that read, not an enduring title guarantee. Exactly one update is permitted per
+dispatch, including after confirmation; arbitrary repeated V0 rename parity is
+not claimed. Broader native owner-task control remains separate.
+
+Real private-journal and proxy-process fixtures plus in-memory public MCP tests
+prove these limits without model tasks. Packaged default-off catalogue evidence
+must prove the title tool remains absent on unqualified bytes. There is no live
+native rename, shared Desktop identity or serving capability claim.
 
 ## Stored history read/tail for an exact selected turn
 

@@ -67,7 +67,10 @@ async function writeOnce(file: string, value: unknown): Promise<boolean> {
   }
 }
 
-async function readPrivate(file: string): Promise<unknown | null> {
+async function readPrivate(
+  file: string,
+  rejectJsonNull = false,
+): Promise<unknown | null> {
   let handle;
   try {
     handle = await fs.open(file, constants.O_RDONLY | NO_FOLLOW);
@@ -110,7 +113,11 @@ async function readPrivate(file: string): Promise<unknown | null> {
     ) {
       throw new Error("HANDOFF_JOURNAL_UNSAFE");
     }
-    return JSON.parse(await handle.readFile("utf8")) as unknown;
+    const value = JSON.parse(await handle.readFile("utf8")) as unknown;
+    // Missing file is the only absence proof for the new title records.
+    if (rejectJsonNull && value === null)
+      throw new Error("HANDOFF_JOURNAL_INVALID");
+    return value;
   } finally {
     await handle.close();
   }
@@ -242,6 +249,114 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     if (!parent?.turnId || stringRecord(receipt) !== parent.turnId)
       throw new Error("HANDOFF_MESSAGE_UNVERIFIED");
     return false;
+  }
+
+  async hasUnconfirmedTitle(dispatchId: string): Promise<boolean> {
+    const intent = await readPrivate(
+      path.join(this.directory(dispatchId), "title-intent.json"),
+      true,
+    );
+    if (intent === null) {
+      if (
+        (await readPrivate(
+          path.join(this.directory(dispatchId), "title.json"),
+          true,
+        )) !== null
+      )
+        throw new Error("HANDOFF_TITLE_ORPHAN_RECEIPT");
+      return false;
+    }
+    if (!intent || typeof intent !== "object" || Array.isArray(intent))
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const value = intent as Record<string, unknown>;
+    if (typeof value.key !== "string" || !validKey(value.key))
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const receipt = await this.readTitle(dispatchId, value.key);
+    if (!receipt || receipt.digest === "")
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    if (receipt.threadId === null) return true;
+    const parent = await this.read(dispatchId);
+    if (receipt.threadId !== parent?.threadId)
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    return false;
+  }
+
+  async claimTitle(
+    dispatchId: string,
+    key: string,
+    digest: string,
+  ): Promise<"claimed" | "existing" | "conflict"> {
+    if (!validKey(key) || !/^[a-f0-9]{64}$/u.test(digest))
+      throw new Error("HANDOFF_TITLE_INVALID");
+    // Validate absence before publishing an intent; an orphan receipt is not a fresh operation.
+    const before = await this.readTitle(dispatchId, key);
+    if (before) return before.digest === digest ? "existing" : "conflict";
+    const file = path.join(this.directory(dispatchId), "title-intent.json");
+    if (await writeOnce(file, { key, digest })) return "claimed";
+    const prior = await this.readTitle(dispatchId, key);
+    return prior?.digest === digest ? "existing" : "conflict";
+  }
+
+  async readTitle(
+    dispatchId: string,
+    key: string,
+  ): Promise<Readonly<{ digest: string; threadId: string | null }> | null> {
+    if (!validKey(key)) throw new Error("HANDOFF_TITLE_INVALID");
+    const directory = this.directory(dispatchId);
+    const intent = await readPrivate(
+      path.join(directory, "title-intent.json"),
+      true,
+    );
+    if (intent === null) {
+      if (
+        (await readPrivate(path.join(directory, "title.json"), true)) !== null
+      )
+        throw new Error("HANDOFF_TITLE_ORPHAN_RECEIPT");
+      return null;
+    }
+    if (typeof intent !== "object" || Array.isArray(intent))
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const prior = intent as Record<string, unknown>;
+    if (
+      !validKey(String(prior.key)) ||
+      typeof prior.digest !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(prior.digest)
+    )
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    if (prior.key !== key) return { digest: "", threadId: null };
+    const receipt = await readPrivate(path.join(directory, "title.json"), true);
+    if (receipt === null) return { digest: prior.digest, threadId: null };
+    if (typeof receipt !== "object" || Array.isArray(receipt))
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const confirmed = receipt as Record<string, unknown>;
+    if (
+      confirmed.key !== prior.key ||
+      confirmed.digest !== prior.digest ||
+      Object.keys(confirmed).length !== 3
+    )
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    return { digest: prior.digest, threadId: stringRecord(confirmed.threadId) };
+  }
+
+  async recordTitle(
+    dispatchId: string,
+    key: string,
+    threadId: string,
+  ): Promise<void> {
+    const prior = await this.readTitle(dispatchId, key);
+    if (!prior || prior.digest === "" || prior.threadId !== null)
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    const record = await this.read(dispatchId);
+    if (record?.threadId !== threadId)
+      throw new Error("HANDOFF_TITLE_UNVERIFIED");
+    if (
+      !(await writeOnce(path.join(this.directory(dispatchId), "title.json"), {
+        key,
+        digest: prior.digest,
+        threadId: stringRecord(threadId),
+      }))
+    )
+      throw new Error("HANDOFF_TITLE_CONFLICT");
   }
 
   async claimMessage(

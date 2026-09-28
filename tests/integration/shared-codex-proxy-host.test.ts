@@ -94,6 +94,19 @@ function fixture(mode = "normal", timeoutMs = 1_000): SharedCodexProxyHost {
 }
 
 describe("shared Codex proxy transport fixture", () => {
+  it("forwards only the supported title setter on the owned proxy fixture", async () => {
+    const host = fixture();
+    expect(
+      await host.request("thread/name/set", {
+        threadId: "fixture",
+        name: "Title",
+      }),
+    ).toEqual({
+      method: "thread/name/set",
+      params: { threadId: "fixture", name: "Title" },
+    });
+    expect(await host.closeAndWait()).toBe(true);
+  });
   it("does not write a read frame when admission expires while connection completes", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     let child: ChildProcessWithoutNullStreams | undefined;

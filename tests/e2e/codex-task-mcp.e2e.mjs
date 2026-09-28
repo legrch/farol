@@ -410,6 +410,7 @@ try {
   assert(tools.includes("chatgpt_chat_create"), stderr);
   assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
+  assert(!tools.includes("codex_task_title"), stderr);
   const callsBeforeResolution = calls.length;
   const resolvedProject = await client.callTool({
     name: "codex_project_resolve",

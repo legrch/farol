@@ -18,6 +18,7 @@ const METHODS = new Set([
   "project/list",
   "thread/start",
   "thread/read",
+  "thread/name/set",
   "thread/turns/list",
   "thread/items/list",
   "turn/start",

@@ -692,3 +692,39 @@ export async function inspectCodexHandoffHostContract(
     projectBoundCreateStatus: true,
   };
 }
+
+/** Local schema evidence only; never enables a serving host's control capability. */
+export async function inspectCodexTaskTitleHostContract(
+  root: string,
+  versionOutput: string,
+) {
+  const base = await inspectCodexHandoffHostContract(root, versionOutput);
+  const client = await readSchemaFile(root, "ClientRequest.json");
+  const params = await readSchemaFile(root, "v2/ThreadSetNameParams.json");
+  const response = await readSchemaFile(root, "v2/ThreadSetNameResponse.json");
+  if (
+    !hasRequestMethod(
+      client.value,
+      "thread/name/set",
+      "ThreadSetNameParams",
+      params.value,
+    ) ||
+    params.value.type !== "object" ||
+    !hasRequired(params.value, "threadId", "name") ||
+    child(params.value, "properties", "threadId", "type") !== "string" ||
+    child(params.value, "properties", "name", "type") !== "string" ||
+    response.value.type !== "object"
+  )
+    contractError("CODEX_HOST_TITLE_UNAVAILABLE");
+  const digest = createHash("sha256");
+  digest.update(base.schemaSha256);
+  for (const schema of [client, params, response]) {
+    digest.update("\0");
+    digest.update(schema.bytes);
+  }
+  return {
+    ...base,
+    titleUpdate: true as const,
+    schemaSha256: digest.digest("hex"),
+  };
+}

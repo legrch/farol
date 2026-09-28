@@ -150,6 +150,36 @@ export const CodexTaskHistorySchema = z.union([
 ]);
 export type CodexTaskHistory = z.infer<typeof CodexTaskHistorySchema>;
 
+const StoredTitle = z
+  .string()
+  .max(1000)
+  .refine((value) => !value.includes("\0"));
+export const CodexTaskTitleSchema = z.union([
+  z.strictObject({
+    status: z.literal("renamed"),
+    dispatchId: HistoryId,
+    title: StoredTitle,
+    proof: z.literal("readback"),
+  }),
+  z.strictObject({
+    status: z.literal("recorded"),
+    dispatchId: HistoryId,
+    title: StoredTitle,
+    proof: z.literal("historical"),
+  }),
+  z.strictObject({
+    status: z.literal("title_changed"),
+    dispatchId: HistoryId,
+    title: StoredTitle.nullable(),
+  }),
+  z.strictObject({
+    status: z.literal("outcome_unknown"),
+    dispatchId: HistoryId,
+  }),
+  z.strictObject({ status: z.literal("refused"), code: Identifier }),
+]);
+export type CodexTaskTitle = z.infer<typeof CodexTaskTitleSchema>;
+
 /** Published task route; a folder-read grant does not construct this port. */
 export interface CodexTaskRoute {
   /** Read saved projects at the exact approved canonical root; no effects. */
@@ -209,7 +239,20 @@ export interface CodexTaskRoute {
   readonly controlCapabilities?: Readonly<{
     message: boolean;
     continue?: boolean;
+    title?: boolean;
   }>;
+  /** One dispatch-scoped name update; replay is historical proof, never current state. */
+  title?(
+    request: Readonly<{
+      key: string;
+      dispatchId: string;
+      workspaceId: string;
+      projectId: string;
+      expectedTitle: string | null;
+      title: string;
+    }>,
+    context?: Readonly<{ signal?: AbortSignal | undefined }>,
+  ): Promise<CodexTaskTitle>;
   message(
     request: Readonly<{
       key: string;

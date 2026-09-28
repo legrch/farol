@@ -28,6 +28,7 @@ import type {
 import {
   parseProjectResolution,
   parseTaskHistory,
+  parseTaskTitle,
   type CodexTaskRoutePeer,
 } from "../peer/codex-task-route-peer";
 import { bootstrapWorkspace } from "./workspace-bootstrap";
@@ -101,6 +102,27 @@ const CodexTaskMessageInputSchema = z.strictObject({
   message: CodexTaskTextSchema,
   model: z.string().min(1).max(120),
   reasoningEffort: z.string().min(1).max(40).optional(),
+});
+const CodexTaskTitleInputSchema = z.strictObject({
+  key: DispatchIdSchema,
+  dispatchId: DispatchIdSchema,
+  workspaceId: IdentifierSchema,
+  projectId: IdentifierSchema,
+  expectedTitle: z
+    .string()
+    .max(1000)
+    .refine((value) => !value.includes("\0"))
+    .nullable(),
+  title: z
+    .string()
+    .min(1)
+    .max(1000)
+    .refine(
+      (value) =>
+        value.trim().length > 0 &&
+        !value.includes("\0") &&
+        new TextEncoder().encode(value).byteLength <= 1000,
+    ),
 });
 const SavedChatCreateInputSchema = z.strictObject({
   key: DispatchIdSchema,
@@ -969,6 +991,36 @@ export function createReadonlyComputerMcpServer(
         }
       }),
     );
+    if (codexTasks.controlCapabilities?.title === true && codexTasks.title)
+      server.registerTool(
+        "codex_task_title",
+        {
+          title: "Update one issued Codex task name",
+          description:
+            "Update the exact Farol-created dispatch's name once, with expectedTitle preflight and fresh readback. This is not an atomic native compare-and-set. A recorded replay proves the historical update only, not the current title. A title_changed result made no mutation. Unknown acknowledgement/readback must never be retried with a new key. Adopted owner tasks remain read-only.",
+          inputSchema: CodexTaskTitleInputSchema,
+          annotations: CODEX_TASK_CREATE_ANNOTATIONS,
+        },
+        guarded(async (request, context) => {
+          try {
+            const result = parseTaskTitle(
+              await codexTasks.title!(request, {
+                signal: context.mcpReq.signal,
+              }),
+              request,
+            );
+            return taskResponse(
+              result,
+              result.status !== "renamed" && result.status !== "recorded",
+            );
+          } catch {
+            return taskResponse(
+              { status: "outcome_unknown", dispatchId: request.dispatchId },
+              true,
+            );
+          }
+        }),
+      );
     if (codexTasks.controlCapabilities?.message === true)
       server.registerTool(
         "codex_task_message",

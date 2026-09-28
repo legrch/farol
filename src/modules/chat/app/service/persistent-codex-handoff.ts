@@ -41,6 +41,34 @@ export type HandoffContinue = Readonly<{
   dispatchId: string;
   message: string;
 }>;
+export type HandoffTitleRequest = Readonly<{
+  key: string;
+  dispatchId: string;
+  workspaceId: string;
+  projectId: string;
+  expectedTitle: string | null;
+  title: string;
+}>;
+export type HandoffTitleResult =
+  | Readonly<{
+      status: "renamed";
+      dispatchId: string;
+      title: string;
+      proof: "readback";
+    }>
+  | Readonly<{
+      status: "recorded";
+      dispatchId: string;
+      title: string;
+      proof: "historical";
+    }>
+  | Readonly<{
+      status: "title_changed";
+      dispatchId: string;
+      title: string | null;
+    }>
+  | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
+  | Readonly<{ status: "refused"; code: string }>;
 
 export type HandoffAdopt = Readonly<{
   threadId: string;
@@ -89,6 +117,21 @@ export type HandoffRecord = Readonly<{
 }>;
 
 export interface HandoffJournal {
+  hasUnconfirmedTitle?(dispatchId: string): Promise<boolean>;
+  claimTitle?(
+    dispatchId: string,
+    key: string,
+    digest: string,
+  ): Promise<"claimed" | "existing" | "conflict">;
+  readTitle?(
+    dispatchId: string,
+    key: string,
+  ): Promise<Readonly<{ digest: string; threadId: string | null }> | null>;
+  recordTitle?(
+    dispatchId: string,
+    key: string,
+    threadId: string,
+  ): Promise<void>;
   reserve(key: string, record: HandoffRecord): Promise<HandoffRecord>;
   claimThread(key: string): Promise<boolean>;
   recordThread(key: string, threadId: string): Promise<void>;
@@ -131,6 +174,7 @@ export interface HandoffHost {
 export class HandoffNotSubmittedError extends Error {}
 
 export interface HandoffRequestDigester {
+  digestTitle?(request: HandoffTitleRequest): string;
   digest(request: HandoffRequest): string;
   digestMessage(request: HandoffMessage): string;
   digestContinue?(request: HandoffContinue): string;
@@ -407,6 +451,232 @@ export class PersistentCodexHandoff {
       writerRoot: workspace.root,
       projectRoot: workspace.project.root,
     };
+  }
+
+  async title(
+    request: HandoffTitleRequest,
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ): Promise<HandoffTitleResult> {
+    const unknown: HandoffTitleResult = {
+      status: "outcome_unknown",
+      dispatchId: request.dispatchId,
+    };
+    const uuid = (value: unknown) =>
+      typeof value === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        value,
+      );
+    const name = (value: unknown): value is string =>
+      typeof value === "string" &&
+      value.length <= 1000 &&
+      !value.includes("\0");
+    if (
+      !uuid(request.key) ||
+      !uuid(request.dispatchId) ||
+      !identifier(request.workspaceId) ||
+      !identifier(request.projectId) ||
+      !name(request.title) ||
+      request.title.trim().length === 0 ||
+      new TextEncoder().encode(request.title).byteLength > 1000 ||
+      (request.expectedTitle !== null && !name(request.expectedTitle))
+    )
+      return { status: "refused", code: "HANDOFF_TITLE_INPUT_INVALID" };
+    const admitted = () =>
+      !context.signal?.aborted && this.now() < this.mutationExpiresAt;
+    if (!admitted())
+      return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+    if (
+      !this.journal.claimTitle ||
+      !this.journal.readTitle ||
+      !this.journal.recordTitle ||
+      !this.digester.digestTitle
+    )
+      return { status: "refused", code: "HANDOFF_TITLE_UNAVAILABLE" };
+    const digest = this.digester.digestTitle(request);
+    if (!/^[a-f0-9]{64}$/u.test(digest))
+      return { status: "refused", code: "HANDOFF_DIGEST_INVALID" };
+    try {
+      const record = await this.journal.read(request.dispatchId);
+      if (!record?.threadId || !record.turnId)
+        return { status: "refused", code: "HANDOFF_DISPATCH_UNKNOWN" };
+      if (record.adopted)
+        return { status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" };
+      if (record.continuedFrom && record.continuationVerified !== true)
+        return unknown;
+      if (
+        record.workspaceId !== request.workspaceId ||
+        record.projectId !== request.projectId
+      )
+        return { status: "refused", code: "HANDOFF_DISPATCH_BINDING_CHANGED" };
+      const workspace = await this.authority.resolve(record.workspaceId);
+      if (
+        !validWorkspace(workspace) ||
+        !sameWorkspace(workspace, record.workspace)
+      )
+        return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
+      if (!admitted())
+        return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+      const prior = await this.journal.readTitle(
+        request.dispatchId,
+        request.key,
+      );
+      if (!admitted())
+        return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+      if (prior) {
+        if (prior.digest !== digest)
+          return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
+        return prior.threadId === record.threadId
+          ? {
+              status: "recorded",
+              dispatchId: request.dispatchId,
+              title: request.title,
+              proof: "historical",
+            }
+          : unknown;
+      }
+      if (
+        this.journal.hasUnconfirmedMessage &&
+        (await this.journal.hasUnconfirmedMessage(request.dispatchId))
+      )
+        return unknown;
+      const catalogue = await resolveCodexProjectCatalogue(
+        this.host,
+        workspace.project.root,
+        record.projectId,
+        this.mutationExpiresAt,
+        admitted,
+      );
+      if (!admitted())
+        return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+      if (catalogue.status === "unavailable") return unknown;
+      if (
+        catalogue.status !== "resolved" ||
+        catalogue.selectedProjectId !== record.projectId
+      )
+        return {
+          status: "refused",
+          code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
+        };
+      const readName = async () => {
+        if (!admitted())
+          throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
+        const response = object(
+          await this.host.request(
+            "thread/read",
+            { threadId: record.threadId, includeTurns: false },
+            this.mutationExpiresAt,
+          ),
+        );
+        const thread = object(response?.thread);
+        if (
+          !record.model ||
+          !thread ||
+          thread?.id !== record.threadId ||
+          thread.projectId !== record.projectId ||
+          thread.cwd !== workspace.root ||
+          thread.model !== record.model ||
+          (thread.name !== undefined &&
+            thread.name !== null &&
+            !name(thread.name))
+        )
+          throw new Error("HANDOFF_TITLE_THREAD_UNVERIFIED");
+        if (!admitted())
+          throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
+        return typeof thread.name === "string" ? thread.name : null;
+      };
+      const currentName = await readName();
+      const current = await this.authority.resolve(record.workspaceId);
+      if (!validWorkspace(current) || !sameWorkspace(current, workspace))
+        return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
+      if (!admitted())
+        return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+      if (currentName !== request.expectedTitle)
+        return {
+          status: "title_changed",
+          dispatchId: request.dispatchId,
+          title: currentName,
+        };
+      const claim = await this.journal.claimTitle(
+        request.dispatchId,
+        request.key,
+        digest,
+      );
+      if (claim === "conflict")
+        return { status: "refused", code: "HANDOFF_KEY_CONFLICT" };
+      if (claim !== "claimed") return unknown;
+      // One durable dispatch-scoped intent, before the only provider mutation.
+      // An uncertain acknowledgement/readback/publication can never be resent.
+      await this.mutationGate.run(
+        async () => {
+          if ((await readName()) !== request.expectedTitle)
+            throw new HandoffNotSubmittedError("HANDOFF_TITLE_CHANGED");
+          if (
+            this.journal.hasUnconfirmedMessage &&
+            (await this.journal.hasUnconfirmedMessage(request.dispatchId))
+          )
+            throw new HandoffNotSubmittedError("HANDOFF_MESSAGE_UNCONFIRMED");
+          const atSend = await this.authority.resolve(record.workspaceId);
+          if (
+            !admitted() ||
+            !validWorkspace(atSend) ||
+            !sameWorkspace(atSend, workspace)
+          )
+            throw new HandoffNotSubmittedError(
+              "HANDOFF_TITLE_PREFLIGHT_DENIED",
+            );
+        },
+        async () => {
+          if (!admitted())
+            throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
+          if (
+            !object(
+              await this.host.request(
+                "thread/name/set",
+                { threadId: record.threadId, name: request.title },
+                this.mutationExpiresAt,
+              ),
+            )
+          )
+            throw new Error("HANDOFF_TITLE_ACK_UNVERIFIED");
+          try {
+            if ((await readName()) !== request.title)
+              throw new Error("HANDOFF_TITLE_READBACK_CHANGED");
+            const after = await this.authority.resolve(record.workspaceId);
+            if (
+              !admitted() ||
+              !validWorkspace(after) ||
+              !sameWorkspace(after, workspace)
+            )
+              throw new Error("HANDOFF_TITLE_READBACK_REVOKED");
+            await this.journal.recordTitle!(
+              request.dispatchId,
+              request.key,
+              record.threadId!,
+            );
+            const published = await this.authority.resolve(record.workspaceId);
+            if (
+              !admitted() ||
+              !validWorkspace(published) ||
+              !sameWorkspace(published, workspace)
+            )
+              throw new Error("HANDOFF_TITLE_RECEIPT_ADMISSION_EXPIRED");
+          } catch {
+            // The mutation has been acknowledged. A later read/publication failure
+            // is not a no-submit error, even if the read deadline then expires.
+            throw new Error("HANDOFF_TITLE_POST_MUTATION_UNVERIFIED");
+          }
+        },
+        (error) => error instanceof HandoffNotSubmittedError,
+      );
+      return {
+        status: "renamed",
+        dispatchId: request.dispatchId,
+        title: request.title,
+        proof: "readback",
+      };
+    } catch {
+      return unknown;
+    }
   }
 
   async history(
@@ -737,6 +1007,11 @@ export class PersistentCodexHandoff {
         return { status: "refused", code: "HANDOFF_ADOPTED_READ_ONLY" };
       if (record.continuedFrom && record.continuationVerified !== true)
         return { status: "outcome_unknown", dispatchId: request.dispatchId };
+      if (
+        this.journal.hasUnconfirmedTitle &&
+        (await this.journal.hasUnconfirmedTitle(request.dispatchId))
+      )
+        return { status: "outcome_unknown", dispatchId: request.dispatchId };
       prior = await this.journal.readMessage(request.dispatchId, request.key);
     } catch {
       return { status: "outcome_unknown", dispatchId: request.dispatchId };
@@ -833,6 +1108,11 @@ export class PersistentCodexHandoff {
         return { status: "outcome_unknown", dispatchId: request.dispatchId };
       await this.mutationGate.run(
         async () => {
+          if (
+            this.journal.hasUnconfirmedTitle &&
+            (await this.journal.hasUnconfirmedTitle(request.dispatchId))
+          )
+            throw new Error("HANDOFF_TITLE_UNCONFIRMED");
           const stillCurrent = await this.authority.resolve(record.workspaceId);
           if (
             this.now() >= this.mutationExpiresAt ||
@@ -919,6 +1199,11 @@ export class PersistentCodexHandoff {
       return unknown;
     try {
       if (await this.journal.hasUnconfirmedMessage(request.dispatchId))
+        return unknown;
+      if (
+        this.journal.hasUnconfirmedTitle &&
+        (await this.journal.hasUnconfirmedTitle(request.dispatchId))
+      )
         return unknown;
     } catch {
       return unknown;
@@ -1066,7 +1351,9 @@ export class PersistentCodexHandoff {
             this.now() >= this.mutationExpiresAt ||
             !validWorkspace(stillApproved) ||
             !sameWorkspace(stillApproved, workspace) ||
-            (await this.journal.hasUnconfirmedMessage!(request.dispatchId))
+            (await this.journal.hasUnconfirmedMessage!(request.dispatchId)) ||
+            (this.journal.hasUnconfirmedTitle &&
+              (await this.journal.hasUnconfirmedTitle(request.dispatchId)))
           )
             throw new Error("HANDOFF_CONTINUE_PREFLIGHT_DENIED");
           const latest = object(

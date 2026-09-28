@@ -2,6 +2,7 @@ import type { CodexTaskRoute } from "../../../chat/contract/codex-task-route";
 import {
   CodexProjectResolutionSchema,
   CodexTaskHistorySchema,
+  CodexTaskTitleSchema,
 } from "../../../chat/contract/codex-task-route";
 
 export function parseTaskHistory(
@@ -31,6 +32,21 @@ export function parseTaskHistory(
         turnId: request.turnId,
         code: "HANDOFF_HISTORY_CORRELATION",
       };
+}
+
+export function parseTaskTitle(
+  value: unknown,
+  request: { dispatchId: string; title: string },
+) {
+  const parsed = CodexTaskTitleSchema.safeParse(value);
+  return parsed.success &&
+    (parsed.data.status === "refused" ||
+      (parsed.data.dispatchId === request.dispatchId &&
+        ((parsed.data.status !== "renamed" &&
+          parsed.data.status !== "recorded") ||
+          parsed.data.title === request.title)))
+    ? parsed.data
+    : { status: "outcome_unknown" as const, dispatchId: request.dispatchId };
 }
 
 export function parseProjectResolution(value: unknown, workspaceId: string) {

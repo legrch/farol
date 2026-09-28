@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { inspectCodexHandoffHostContract } from "../../src/apps/desktop/codex-host-contract";
+import {
+  inspectCodexHandoffHostContract,
+  inspectCodexTaskTitleHostContract,
+} from "../../src/apps/desktop/codex-host-contract";
 
 const roots: string[] = [];
 
@@ -85,6 +88,7 @@ async function schemaRoot(
         "thread/items/list",
         "turn/start",
         "turn/steer",
+        "thread/name/set",
       ].map((method) => ({
         type: "object",
         required: ["id", "method", "params"],
@@ -99,6 +103,7 @@ async function schemaRoot(
               "thread/items/list": "ThreadItemsListParams",
               "turn/start": "TurnStartParams",
               "turn/steer": "TurnSteerParams",
+              "thread/name/set": "ThreadSetNameParams",
             }[method] ?? "ThreadCompactStartParams",
           ),
         },
@@ -154,6 +159,11 @@ async function schemaRoot(
         Turn: { required: ["id"], properties: { id: typed("string") } },
       },
     },
+    "v2/ThreadSetNameParams.json": {
+      required: ["threadId", "name"],
+      properties: { threadId: typed("string"), name: typed("string") },
+    },
+    "v2/ThreadSetNameResponse.json": {},
     "v2/TurnSteerParams.json": {
       required: ["threadId", "expectedTurnId", "input"],
       properties: {
@@ -334,6 +344,7 @@ async function schemaRoot(
       "ThreadItemsListParams",
       "TurnStartParams",
       "TurnSteerParams",
+      "ThreadSetNameParams",
     ].map((name) => {
       const { definitions: _definitions, ...shape } = files[
         `v2/${name}.json`
@@ -368,6 +379,57 @@ async function schemaRoot(
 }
 
 describe("installed Codex saved-project handoff schema", () => {
+  it("checks the optional title setter without making it mandatory for ordinary tasks", async () => {
+    const root = await schemaRoot();
+    expect(
+      await inspectCodexTaskTitleHostContract(root, "codex-cli 0.153.4"),
+    ).toMatchObject({
+      titleUpdate: true,
+      schemaSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    await changeSchema(root, "v2/ThreadSetNameParams.json", (schema) => {
+      schema.properties.name = typed("integer");
+    });
+    await expect(
+      inspectCodexTaskTitleHostContract(root, "codex-cli 0.153.4"),
+    ).rejects.toThrow("CODEX_HOST_TITLE_UNAVAILABLE");
+    await expect(
+      inspectCodexHandoffHostContract(root, "codex-cli 0.153.4"),
+    ).resolves.toMatchObject({ projectBoundCreateStatus: true });
+  });
+  it.each(["method", "required", "response", "definition"])(
+    "refuses unverified optional title contract: %s",
+    async (mode) => {
+      const root = await schemaRoot();
+      if (mode === "method")
+        await changeSchema(root, "ClientRequest.json", (schema) => {
+          schema.oneOf = schema.oneOf.filter(
+            (entry: any) =>
+              entry.properties.method.enum[0] !== "thread/name/set",
+          );
+        });
+      if (mode === "required") {
+        await changeSchema(root, "v2/ThreadSetNameParams.json", (schema) => {
+          schema.required = ["threadId"];
+        });
+        await changeSchema(root, "ClientRequest.json", (schema) => {
+          schema.definitions.ThreadSetNameParams.required = ["threadId"];
+        });
+      }
+      if (mode === "response")
+        await changeSchema(root, "v2/ThreadSetNameResponse.json", (schema) => {
+          schema.type = "string";
+        });
+      if (mode === "definition")
+        await changeSchema(root, "ClientRequest.json", (schema) => {
+          schema.definitions.ThreadSetNameParams.properties.name =
+            typed("integer");
+        });
+      await expect(
+        inspectCodexTaskTitleHostContract(root, "codex-cli 0.153.4"),
+      ).rejects.toThrow("CODEX_HOST_TITLE_UNAVAILABLE");
+    },
+  );
   it.each(["missing", "wrong-type"])(
     "requires the supported nullable Thread.name readback field: %s",
     async (mode) => {
@@ -395,6 +457,9 @@ describe("installed Codex saved-project handoff schema", () => {
       await expect(
         inspectCodexHandoffHostContract(root, version),
       ).resolves.toMatchObject({ projectBoundCreateStatus: true });
+      await expect(
+        inspectCodexTaskTitleHostContract(root, version),
+      ).resolves.toMatchObject({ titleUpdate: true });
     },
   );
   it("recognizes the exact project-bound create and metadata-only status methods", async () => {

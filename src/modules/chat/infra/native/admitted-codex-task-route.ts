@@ -29,6 +29,7 @@ type ResolvedTaskRoute = Pick<
   | "adopt"
   | "resolveProject"
   | "history"
+  | "title"
 > & {
   create(request: HandoffRequest): ReturnType<CodexTaskRoute["create"]>;
 };
@@ -45,9 +46,11 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     readonly controlCapabilities: Readonly<{
       message: boolean;
       continue?: boolean;
+      title?: boolean;
     }> = {
       message: false,
       continue: false,
+      title: false,
     },
   ) {
     const tasks = TaskExecutionSettingsSchema.parse(admission.tasks);
@@ -59,6 +62,8 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     }
     if (controlCapabilities.continue && !delegate.continue)
       throw new Error("HANDOFF_CONTINUE_UNAVAILABLE");
+    if (controlCapabilities.title && !delegate.title)
+      throw new Error("HANDOFF_TITLE_UNAVAILABLE");
     this.admission = { ...admission, tasks };
     this.observeEnabled = admission.observeThreadId !== undefined;
   }
@@ -218,6 +223,29 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
         configSha256: this.admission.configSha256,
       },
     });
+  }
+
+  async title(
+    request: Parameters<NonNullable<CodexTaskRoute["title"]>>[0],
+    context: Readonly<{ signal?: AbortSignal | undefined }> = {},
+  ) {
+    if (!this.controlCapabilities.title || !this.delegate.title)
+      return { status: "refused" as const, code: "TASK_CONTROL_NOT_QUALIFIED" };
+    if (
+      this.now() >= this.admission.expiresAt ||
+      context.signal?.aborted ||
+      request.workspaceId !== this.admission.workspaceId ||
+      request.projectId !== this.admission.projectId
+    )
+      return {
+        status: "refused" as const,
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      };
+    const result = await this.delegate.title(request, context);
+    // The delegated mutation may already have happened; late admission loss is unknown.
+    return this.now() >= this.admission.expiresAt || context.signal?.aborted
+      ? { status: "outcome_unknown" as const, dispatchId: request.dispatchId }
+      : result;
   }
 
   async message(request: Parameters<CodexTaskRoute["message"]>[0]) {
