@@ -10,6 +10,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright-core";
+import {
+  assertOwnerPreviewIdle,
+  readOwnedStartupMarker,
+} from "./native-preview-admission.mjs";
 
 const packaged = process.argv.includes("--packaged");
 const devOnly = process.argv.includes("--dev-only");
@@ -206,6 +210,10 @@ await bounded(
 const chatAddress = chatFixture.address();
 assert.ok(chatAddress && typeof chatAddress !== "string");
 const fixtureUrl = `http://127.0.0.1:${chatAddress.port}/`;
+const ownerPreviewStateRoot = path.join(
+  os.homedir(),
+  "Library/Application Support/Farol Next Preview/farol-next-state",
+);
 const profiles = new Map();
 let primaryFailure;
 const cleanupFailures = [];
@@ -291,6 +299,10 @@ async function launch(environment, mode = "normal", profile = mode) {
     undefined,
     "GUIDED_SETUP_PRIOR_INSTANCE_NOT_CLOSED",
   );
+  observations.push({
+    kind: "owner-preview-idle-preflight",
+    ...(await assertOwnerPreviewIdle(ownerPreviewStateRoot)),
+  });
   profileIsolationConfirmed = false;
   let profileRoot = profiles.get(profile);
   const freshProfile = !profileRoot;
@@ -354,6 +366,7 @@ async function launch(environment, mode = "normal", profile = mode) {
     child.once("exit", (exit, signal) => {
       observations.push({
         kind: "native-exit-observed",
+        at: new Date().toISOString(),
         pid: child.pid,
         exit,
         signal,
@@ -410,6 +423,24 @@ async function launch(environment, mode = "normal", profile = mode) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   observations.push({ kind: "startup-complete", pid: child.pid, environment });
+  const ownedStateRoot = path.join(nativePaths.userData, "farol-next-state");
+  const runMarker = await readOwnedStartupMarker(
+    ownedStateRoot,
+    profileRoot,
+    child.pid,
+  );
+  observations.push({
+    kind: "owned-startup-marker",
+    stateRoot: ownedStateRoot,
+    ...runMarker,
+  });
+  await application.evaluate(({ app }) => {
+    app.on("before-quit", () => {
+      process.stderr.write(
+        `FAROL_E2E_OWNED_BEFORE_QUIT:${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, userData: app.getPath("userData") })}\n`,
+      );
+    });
+  });
   const bootstrap = await window.evaluate(() => window.farolNext.bootstrap());
   assert.equal(bootstrap.environment, environment);
   assert.equal(bootstrap.legacySetupTestMode, mode === "legacy");
