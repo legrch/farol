@@ -41,6 +41,27 @@ authentication or same-owner security boundary.
 `task preview` is the separate development command. It may rebuild `_output/build/app` and
 is not evidence about the packaged candidate.
 
+## Setup inside the app
+
+Normal packaged Preview and Dev use the sidebar Guided Setup. Opening, returning
+to, restarting or reviewing Setup selects that same surface; first run does not
+open the legacy modal. The shared selection predicate controls only Setup. Dev's
+Codex home, diagnostics and automatic app-verification guard remain Dev-only.
+The explicit `--demo` surface and the isolated E2E legacy-journey mode are separate.
+
+Packaged Preview checks the NEW connector from an ordinary ChatGPT conversation.
+Use the current unused challenge shown on Add to ChatGPT, then choose **Check
+attachment** to inspect the local receipt. This action never sends a browser
+message. A consumed, stale or unknown challenge is not offered as a fresh check.
+Embedded sign-in is optional for Computer and is never claimed as verified by
+completing that optional step. Settings keeps the existing workspace write,
+Workspace shell and full Git/user-settings approvals.
+
+The retained five-stage qualification journey is exercised only by its explicit
+fixture lane. `npm run test:e2e:guided-setup:package` separately checks the normal
+packaged sidebar, folder selection, navigation and reopen with disposable state
+and hidden windows. It is not a live account, native picker or NEW connector proof.
+
 ## What the controls do
 
 - Setup and Settings can open the isolated ChatGPT sign-in surface, persist approved

@@ -545,18 +545,28 @@
                   </p>
                 </section>
                 <section data-onboarding-content="app" hidden>
-                  <p class="onboarding-note">
+                  <p
+                    class="onboarding-note"
+                    data-onboarding-verification="embedded"
+                  >
                     Already added Farol Dev in ChatGPT? Choose
                     <strong>Run end-to-end check</strong> below. Farol will
                     select the app, send one short message and check the local
                     result.
                   </p>
-                  <div class="onboarding-link-actions">
+                  <div
+                    class="onboarding-link-actions"
+                    data-onboarding-verification="embedded"
+                  >
                     <button type="button" data-onboarding-help="chatgpt">
                       Open ChatGPT Plugins ↗
                     </button>
                   </div>
-                  <div class="onboarding-help" id="onboarding-app-guide">
+                  <div
+                    class="onboarding-help"
+                    id="onboarding-app-guide"
+                    data-onboarding-verification="embedded"
+                  >
                     <h3>How to add Farol Dev in ChatGPT</h3>
                     <ol class="onboarding-instructions onboarding-short-guide">
                       <li>
@@ -588,11 +598,23 @@
                       Connection guide ↗
                     </button>
                   </div>
+                  <div data-onboarding-verification="external" hidden>
+                    <p>
+                      Use a separate NEW connector in your ordinary ChatGPT
+                      conversation. Keep V0 as fallback. Select the current
+                      tunnel and run the unused challenge exactly once; unknown
+                      outcomes must be inspected before any new check.
+                    </p>
+                    <div id="onboarding-external-challenge"></div>
+                  </div>
                   <p class="onboarding-note">
                     This check reads no file contents. Opening the page or
                     saving the app does not count as verification.
                   </p>
-                  <div class="onboarding-link-actions">
+                  <div
+                    class="onboarding-link-actions"
+                    data-onboarding-verification="embedded"
+                  >
                     <button id="onboarding-open-chatgpt" type="button">
                       Open ChatGPT inside Farol
                     </button>
@@ -625,7 +647,7 @@
                   ></ul>
                   <p class="onboarding-note">
                     This overview shows your saved setup. The end-to-end check
-                    confirms ChatGPT can reach Farol Dev; Model and Agent tool
+                    confirms ChatGPT can reach this Farol; Model and Agent tool
                     tests are separate.
                   </p>
                 </section>
@@ -743,7 +765,9 @@
                 >Local checks use no model turns. Live reply and Agent checks
                 are separate owner actions.</span
               >
-              <button id="review-setup" type="button">Review setup</button>
+              <button id="review-setup" type="button">
+                Open setup overview
+              </button>
               <button id="connections-open-chatgpt" type="button">
                 Return to ChatGPT
               </button>

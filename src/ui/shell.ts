@@ -39,7 +39,10 @@ import {
   type ProductConfigurationEvidence,
   type ProductDiscoveryCandidate,
 } from "../pkg/product-settings/contract";
-import { initialSetupPresentation } from "../pkg/product-settings/setup-entry";
+import {
+  guidedSetupSelected,
+  initialSetupPresentation,
+} from "../pkg/product-settings/setup-entry";
 import { GuidedOnboardingView } from "./guided-onboarding-view";
 import {
   advanceSetup,
@@ -241,6 +244,7 @@ const bootstrapSchema = z.strictObject({
   applicationId: z.enum(["local.farol.next.preview", "local.farol.dev"]),
   build: BuildIdentitySchema,
   demoMode: z.boolean(),
+  legacySetupTestMode: z.boolean().default(false),
   configuration: ProductConfigurationSnapshotSchema,
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   runtimeError: z.string().nullable(),
@@ -3583,6 +3587,13 @@ function shortcutSelects(): HTMLSelectElement[] {
 function setShortcutDraft(shortcuts: NavigationShortcuts): void {
   required<HTMLSelectElement>("#setting-sidebar-shortcut").value =
     shortcuts.sidebar;
+  if (guidedSetupSelected(bootstrap) && bootstrap.environment === "preview") {
+    // Preview keeps its existing diagnostic commands and presentation. Moving
+    // this panel leaves the sidebar Setup as the sole primary journey.
+    required('[data-panel="settings"]').append(
+      required("#connection-diagnostics"),
+    );
+  }
   for (const select of shortcutSelects()) {
     const section = select.dataset.shortcutSection as keyof NavigationShortcuts;
     select.value = String(shortcuts[section]);
@@ -5330,7 +5341,7 @@ function render(notify = true): void {
     panel.classList.toggle("active", panel.dataset.panel === section);
   });
   required<HTMLButtonElement>("#sign-in-return").hidden =
-    !chatGptSignInOpened || bootstrap.environment !== "dev";
+    !chatGptSignInOpened || !guidedSetupSelected(bootstrap);
   renderWindowState();
   renderBuildIdentity();
   renderRuntime();
@@ -5343,7 +5354,7 @@ function render(notify = true): void {
   renderComputer();
   renderActivity();
   renderSettings();
-  const guidedEnabled = bootstrap.environment === "dev" && !bootstrap.demoMode;
+  const guidedEnabled = guidedSetupSelected(bootstrap);
   guidedOnboarding?.render(
     guidedEnabled,
     settingsFeedback,
@@ -5352,11 +5363,13 @@ function render(notify = true): void {
   if (guidedEnabled) {
     // Settings and Setup each own the rail while open. Keep the product
     // sections in the app rail, not alongside either journey's navigation.
+    const settingsOwnsRail =
+      section === "settings" && bootstrap.environment === "dev";
     required<HTMLElement>("#nav").hidden =
-      section === "computer" || section === "settings";
+      section === "computer" || settingsOwnsRail;
     required<HTMLButtonElement>(
       '.nav-utility .nav-item[data-section="settings"]',
-    ).hidden = section === "settings";
+    ).hidden = settingsOwnsRail;
     const pendingApproval = pendingComputerTask() !== null;
     required<HTMLElement>("#connection-permission").hidden = !pendingApproval;
     required<HTMLElement>("#connection-scope").hidden = true;
@@ -5831,7 +5844,7 @@ async function start(): Promise<void> {
         taskMenuReturnOffered = false;
         if (parsed.data.action === "open-settings") {
           setupJourney = { ...setupJourney, open: false };
-          if (bootstrap.environment === "dev") selectSection("computer");
+          if (guidedSetupSelected(bootstrap)) selectSection("computer");
           else selectSection("settings");
         }
       } else if (decision.offerReturn) {
@@ -5919,6 +5932,8 @@ async function start(): Promise<void> {
     const settings = bootstrap.configuration.settings;
     const initialSetup = initialSetupPresentation({
       environment: bootstrap.environment,
+      demoMode: bootstrap.demoMode,
+      legacySetupTestMode: bootstrap.legacySetupTestMode,
       dismissed: settings.setup.journey.dismissed,
       currentStep: settings.setup.journey.currentStep,
       openAtLaunch: settings.general.openAtLaunch,
@@ -5932,6 +5947,11 @@ async function start(): Promise<void> {
   }
 
   guidedOnboarding = new GuidedOnboardingView({
+    mode: bootstrap.environment === "preview" ? "external" : "embedded",
+    verificationCard: () =>
+      bootstrap.configuration.status === "ready"
+        ? connectorChallengeCard(bootstrap.configuration.settings)
+        : null,
     settings: () =>
       bootstrap.configuration.status === "ready"
         ? bootstrap.configuration.settings
@@ -5965,6 +5985,10 @@ async function start(): Promise<void> {
     },
     openSettings: () => selectSection("settings"),
     openDiagnostics: () => {
+      if (bootstrap.environment !== "dev") {
+        selectSection("settings");
+        return;
+      }
       settingsCategory = "diagnostics";
       selectSection("settings");
       const diagnostics = required<HTMLDetailsElement>(
@@ -6168,7 +6192,7 @@ async function start(): Promise<void> {
     "click",
     () => {
       setShellOverlay("none");
-      if (bootstrap.environment === "dev") {
+      if (guidedSetupSelected(bootstrap)) {
         setupJourney = { ...setupJourney, open: false };
         selectSection("computer");
         guidedOnboarding?.restart();
@@ -6578,7 +6602,7 @@ async function start(): Promise<void> {
     render();
   });
   required<HTMLButtonElement>("#review-setup").addEventListener("click", () => {
-    if (bootstrap.environment === "dev") {
+    if (guidedSetupSelected(bootstrap)) {
       setupJourney = { ...setupJourney, open: false };
       selectSection("computer");
       guidedOnboarding?.restart();

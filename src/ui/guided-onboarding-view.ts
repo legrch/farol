@@ -3,6 +3,7 @@ import type {
   ProductSettings,
 } from "../pkg/product-settings/contract";
 import {
+  externalConnectorChallengeAllowed,
   onboardingCompletedSteps,
   onboardingFacts,
   onboardingProgress,
@@ -24,6 +25,8 @@ import {
 import { folderAccessChecked, folderDisplayName } from "./folder-access-state";
 
 export interface GuidedOnboardingPort {
+  readonly mode: "embedded" | "external";
+  readonly verificationCard: () => HTMLElement | null;
   readonly settings: () => ProductSettings | null;
   readonly buildId: () => string;
   readonly isActive: () => boolean;
@@ -240,11 +243,12 @@ export class GuidedOnboardingView {
   }
   private progress(): readonly boolean[] {
     const facts = this.facts();
-    const progress = [...onboardingProgress(facts)];
+    const progress = [...onboardingProgress(facts, this.port.mode)];
     for (const index of this.failedChecks) {
       // A folder check can fail without undoing the owner's optional choice.
       // The folder card reports the access problem; connection stays unready.
-      if (index === 1) continue;
+      if (index === 1 || (index === 0 && this.port.mode === "external"))
+        continue;
       progress[index] = false;
       if (index < 3) progress[3] = false;
     }
@@ -299,6 +303,19 @@ export class GuidedOnboardingView {
     element("#onboarding-nav").hidden = !active;
     element("#nav").hidden = active;
     if (!enabled) return;
+    const external = this.port.mode === "external";
+    document
+      .querySelectorAll<HTMLElement>("[data-onboarding-verification]")
+      .forEach((node) => {
+        node.hidden = node.dataset.onboardingVerification !== this.port.mode;
+      });
+    const challenge =
+      external && externalConnectorChallengeAllowed(this.facts())
+        ? this.port.verificationCard()
+        : null;
+    element("#onboarding-external-challenge").replaceChildren(
+      ...(challenge ? [challenge] : []),
+    );
     const facts = this.facts();
     const settings = this.port.settings();
     if (active && settings && !this.busy) {
@@ -335,7 +352,7 @@ export class GuidedOnboardingView {
       tunnel.value = facts.tunnelId ?? "";
     const changed = editing && connectionDraftChanged(facts, this.draft());
     const currentProgress = this.progress();
-    const completed = onboardingCompletedSteps(settings);
+    const completed = onboardingCompletedSteps(settings, this.port.mode);
     const progress = currentProgress.map(
       (ready, index) => ready || completed[index],
     );
@@ -380,7 +397,10 @@ export class GuidedOnboardingView {
           : index === 4
             ? "◫"
             : String(index + 1);
-        button.querySelector("b")!.textContent = onboardingSteps[index]!.label;
+        button.querySelector("b")!.textContent =
+          external && index === 0
+            ? "Sign in (optional)"
+            : onboardingSteps[index]!.label;
         button.setAttribute(
           "aria-label",
           `${index === 4 ? "" : `${index + 1}. `}${onboardingSteps[index]!.label}${progress[index] ? ", completed" : ""}`,
@@ -394,16 +414,28 @@ export class GuidedOnboardingView {
         : this.step === 4 && complete
           ? "You're connected"
           : this.step === 4 && localAccessOff && progress[0]
-            ? "ChatGPT is ready"
-            : step.title;
+            ? external
+              ? "Computer access is off"
+              : "ChatGPT is ready"
+            : external && this.step === 0
+              ? "Embedded ChatGPT is optional"
+              : external && this.step === 3
+                ? "Connect Farol in your ChatGPT conversation"
+                : step.title;
     element("#onboarding-copy").textContent =
       this.step === 4 && savedCompletion
-        ? "You completed setup before this update. ChatGPT is available; check the connection again before using this computer from ChatGPT."
+        ? external
+          ? "Your setup is saved. Check the current NEW connection before using this computer from ChatGPT."
+          : "You completed setup before this update. ChatGPT is available; check the connection again before using this computer from ChatGPT."
         : this.step === 4 && complete
           ? "Your connection is verified. Review a step any time to check it again or change your settings."
           : this.step === 4 && localAccessOff && progress[0]
             ? "No folders are shared, so local Computer access is off. Add a folder later if you want to connect this computer to ChatGPT."
-            : step.copy;
+            : external && this.step === 0
+              ? "Computer works from your ordinary ChatGPT conversation through the new connector. Sign-in inside Farol is optional and grants no workspace access."
+              : external && this.step === 3
+                ? "Select the separate NEW connector in ordinary ChatGPT, run the current one-time challenge below, then check its local receipt. Farol does not send a message for this check."
+                : step.copy;
     document
       .querySelectorAll<HTMLElement>("[data-onboarding-content]")
       .forEach((panel) => {
@@ -446,7 +478,9 @@ export class GuidedOnboardingView {
                           ? facts.runtime === "stopped"
                             ? "Activate and check"
                             : "Reconnect and check"
-                          : "Run end-to-end check";
+                          : external
+                            ? "Check attachment"
+                            : "Run end-to-end check";
     const back = element<HTMLButtonElement>("#onboarding-back");
     back.disabled = this.busy;
     back.hidden = this.step === 4;
@@ -460,12 +494,16 @@ export class GuidedOnboardingView {
           ? "attention"
           : "pending";
     const successes = [
-      "✓ Signed in to ChatGPT",
+      external
+        ? "✓ Embedded sign-in is optional for Computer"
+        : "✓ Signed in to ChatGPT",
       localAccessOff
         ? "✓ No folders shared (optional)"
         : "✓ Folder choice saved. Farol checks access in the background.",
       "✓ Tunnel connection verified",
-      "✓ End-to-end check passed through Farol Dev",
+      external
+        ? "✓ Attachment receipt verified for this connector"
+        : "✓ End-to-end check passed through Farol Dev",
       "✓ All four setup checks complete",
     ];
     status.hidden =
@@ -511,9 +549,11 @@ export class GuidedOnboardingView {
     feedbackNode.classList.toggle("error", feedbackError);
     element("#computer-feedback").hidden = active;
     element("#review-setup").textContent = "Open setup overview";
-    element("#onboarding-chat-copy").textContent = progress[0]
-      ? "Your sign-in is verified. Check it again, or open ChatGPT to review or change your account."
-      : "Sign in inside Farol, then choose Return to Setup. Your everyday browser and Codex remain unchanged.";
+    element("#onboarding-chat-copy").textContent = external
+      ? "Embedded sign-in is optional. Computer uses the separate connector selected in your ordinary ChatGPT conversation."
+      : progress[0]
+        ? "Your sign-in is verified. Check it again, or open ChatGPT to review or change your account."
+        : "Sign in inside Farol, then choose Return to Setup. Your everyday browser and Codex remain unchanged.";
 
     this.renderFolders(settings);
     element("#onboarding-credentials-saved").hidden =
@@ -542,7 +582,7 @@ export class GuidedOnboardingView {
           ? "The tunnel is ready. Check connection probes it without restarting or sending a ChatGPT message."
           : saved
             ? "Your credentials are stored. The connection still needs to be activated or checked."
-            : "Use a separate Farol Dev tunnel, not the one running another Farol installation.";
+            : "Use a separate tunnel for this Farol, not the one running another Farol installation.";
     element<HTMLButtonElement>("#onboarding-copy-tunnel").disabled =
       this.busy || !saved;
     element("#onboarding-app-tunnel").textContent = facts.tunnelId
@@ -576,10 +616,10 @@ export class GuidedOnboardingView {
     element<HTMLButtonElement>("#onboarding-reconnect").disabled =
       this.busy || prerequisite !== null;
     element<HTMLButtonElement>("#onboarding-verify-again").hidden =
-      !progress[3] || unknown;
+      external || !progress[3] || unknown;
     element<HTMLButtonElement>("#onboarding-verify-again").disabled = this.busy;
     element("#onboarding-new-check-confirmation").hidden =
-      !this.confirmNewCheck;
+      external || !this.confirmNewCheck;
     element("#onboarding-recovery").hidden = !(
       unknown ||
       (this.step >= 2 && this.step < 4 && facts.runtime === "unreachable")
@@ -994,6 +1034,7 @@ export class GuidedOnboardingView {
           },
           { tunnelId: facts.tunnelId ?? "", runtimeKey: "" },
           reconnect,
+          this.port.mode,
         );
         if (result.ok) {
           ready = true;
@@ -1031,6 +1072,10 @@ export class GuidedOnboardingView {
     });
   }
   private async verifyApp(fresh: boolean): Promise<void> {
+    if (this.port.mode === "external") {
+      await this.checkAttachment();
+      return;
+    }
     await this.perform("Checking through ChatGPT…", async () => {
       if (this.facts().outcomeUnknown) {
         this.message = failureMessages["inspect-existing-operation"];
@@ -1177,7 +1222,7 @@ export class GuidedOnboardingView {
         this.port.openChat();
         return;
       }
-      if (onboardingCompletedSteps(this.port.settings())[4]) {
+      if (onboardingCompletedSteps(this.port.settings(), this.port.mode)[4]) {
         this.port.openChat();
         return;
       }
@@ -1215,7 +1260,10 @@ export class GuidedOnboardingView {
       await this.saveCredentials();
       return;
     }
-    const completed = onboardingCompletedSteps(this.port.settings());
+    const completed = onboardingCompletedSteps(
+      this.port.settings(),
+      this.port.mode,
+    );
     const completedAction = completedStepAction(this.step, progress, completed);
     if (this.step === 3 && completedAction === "continue") {
       this.select(4);

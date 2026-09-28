@@ -6,7 +6,10 @@ import {
   retreatSetup,
   setupSteps,
 } from "../../src/ui/setup-journey";
-import { initialSetupPresentation } from "../../src/pkg/product-settings/setup-entry";
+import {
+  guidedSetupSelected,
+  initialSetupPresentation,
+} from "../../src/pkg/product-settings/setup-entry";
 
 describe("setup journey", () => {
   it("keeps the five product-level stages in the required order", () => {
@@ -59,7 +62,7 @@ describe("setup journey", () => {
     });
   });
 
-  it("preserves the packaged Preview wizard and completed DEV preference", () => {
+  it("opens packaged Preview setup inside the app and preserves completed DEV preference", () => {
     expect(
       initialSetupPresentation({
         environment: "preview",
@@ -68,9 +71,9 @@ describe("setup journey", () => {
         openAtLaunch: "activity",
       }),
     ).toEqual({
-      setupOpen: true,
+      setupOpen: false,
       setupStep: 1,
-      section: "activity",
+      section: "computer",
     });
     expect(
       initialSetupPresentation({
@@ -85,4 +88,45 @@ describe("setup journey", () => {
       section: "settings",
     });
   });
+});
+
+describe("guided Setup selection", () => {
+  it.each(["preview", "dev"] as const)(
+    "selects sidebar Setup in normal %s",
+    (environment) => {
+      expect(guidedSetupSelected({ environment, demoMode: false })).toBe(true);
+      expect(
+        initialSetupPresentation({
+          environment,
+          demoMode: false,
+          dismissed: false,
+          currentStep: "computer",
+          openAtLaunch: "browser",
+        }),
+      ).toEqual({ setupOpen: false, setupStep: 1, section: "computer" });
+    },
+  );
+  it.each(["preview", "dev"] as const)(
+    "keeps explicit demo and legacy fixture modes separate in %s",
+    (environment) => {
+      expect(guidedSetupSelected({ environment, demoMode: true })).toBe(false);
+      expect(
+        guidedSetupSelected({
+          environment,
+          demoMode: false,
+          legacySetupTestMode: true,
+        }),
+      ).toBe(false);
+      expect(
+        initialSetupPresentation({
+          environment,
+          demoMode: false,
+          legacySetupTestMode: true,
+          dismissed: false,
+          currentStep: "chatgpt",
+          openAtLaunch: "browser",
+        }),
+      ).toEqual({ setupOpen: true, setupStep: 0, section: "browser" });
+    },
+  );
 });

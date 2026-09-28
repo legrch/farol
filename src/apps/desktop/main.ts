@@ -526,6 +526,11 @@ const startupDelayMs = previewStartupDelay(
   process.env.FAROL_NEXT_E2E === "1",
 );
 const demoMode = process.argv.includes("--demo");
+// Only the fixture lane can exercise the retained legacy journey explicitly.
+// A normal packaged preview always selects the integrated Setup.
+const legacySetupTestMode =
+  process.env.FAROL_NEXT_E2E === "1" &&
+  process.env.FAROL_NEXT_E2E_LEGACY_SETUP === "1";
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-next";
 const contextModel = ROUTE_B_MODEL;
@@ -1002,6 +1007,7 @@ function bootstrap() {
     applicationId: activeDesktopIdentity.applicationId,
     build: buildIdentity,
     demoMode,
+    legacySetupTestMode,
     configuration: configuration?.snapshot() ?? {
       status: "error",
       error: "SETTINGS_READ_FAILED",
@@ -8710,6 +8716,8 @@ async function main(): Promise<void> {
   if (configured.status === "ready") {
     const initialSetup = initialSetupPresentation({
       environment: activeDesktopIdentity.environment,
+      demoMode,
+      legacySetupTestMode,
       dismissed: configured.settings.setup.journey.dismissed,
       currentStep: configured.settings.setup.journey.currentStep,
       openAtLaunch: configured.settings.general.openAtLaunch,

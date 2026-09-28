@@ -362,3 +362,54 @@ describe("setup navigation and truthful draft states", () => {
     );
   });
 });
+
+it.each([false, true])(
+  "external Computer activation/reconnect works without an embedded sign-in (%s)",
+  async (reconnect) => {
+    let facts = {
+      ...saved(),
+      chat: "not-configured" as const,
+      runtime: reconnect ? ("ready" as const) : ("stopped" as const),
+      runtimeCurrent: reconnect,
+    };
+    const commands: string[] = [];
+    const result = await new GuidedConnectionUpdate().run(
+      {
+        read: () => facts,
+        run: async (command) => {
+          commands.push(command.kind);
+          if (command.kind === "connector.stop")
+            facts = { ...facts, runtime: "stopped", runtimeCurrent: false };
+          if (command.kind === "connector.start")
+            facts = { ...facts, runtime: "ready", runtimeCurrent: true };
+          return true;
+        },
+      },
+      { tunnelId: facts.tunnelId!, runtimeKey: "" },
+      reconnect,
+      "external",
+    );
+    expect(result).toEqual({ ok: true });
+    expect(commands).toEqual(
+      reconnect ? ["connector.stop", "connector.start"] : ["connector.start"],
+    );
+    expect(facts.chat).toBe("not-configured");
+  },
+);
+
+it("keeps embedded sign-in required in Dev activation", async () => {
+  const facts = {
+    ...saved(),
+    chat: "not-configured" as const,
+    runtime: "stopped" as const,
+    runtimeCurrent: false,
+  };
+  const run = vi.fn(async () => true);
+  expect(
+    await new GuidedConnectionUpdate().run(
+      { read: () => facts, run },
+      { tunnelId: facts.tunnelId!, runtimeKey: "" },
+    ),
+  ).toEqual({ ok: false, reason: "prerequisite" });
+  expect(run).not.toHaveBeenCalled();
+});

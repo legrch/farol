@@ -1823,6 +1823,11 @@ if (args[0] === "app-server" && args[1] === "--stdio") {
         }
       : {}),
     FAROL_NEXT_E2E: "1",
+    // This lane intentionally tests the retained five-stage qualification
+    // journey. Normal packaged sidebar Setup has a separate native regression.
+    ...(options.environment?.FAROL_NEXT_ENVIRONMENT === "dev"
+      ? {}
+      : { FAROL_NEXT_E2E_LEGACY_SETUP: "1" }),
     FAROL_NEXT_E2E_WORKSPACE_FILE: workspaceFile,
     FAROL_NEXT_E2E_WORKSPACE_ROOT: workspaceRoot,
     FAROL_NEXT_E2E_SUPPORT_EXPORT: supportExport,

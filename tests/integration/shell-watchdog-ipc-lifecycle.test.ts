@@ -5,7 +5,7 @@ import { SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE } from "../../src/modules/compu
 
 // One owned Node IPC fixture, no shell, OS signal, sandbox, provider or owner state.
 // It self-terminates; no kill/relaunch cleanup fallback exists.
-it("drains actual owned-child IPC before the public close boundary", async () => {
+it("observes owned-child exit, close and IPC drain without assuming disconnect order", async () => {
   const child = spawn(
     process.execPath,
     [
@@ -36,7 +36,12 @@ it("drains actual owned-child IPC before the public close boundary", async () =>
     messages.push(message);
     events.push("message");
   });
-  child.once("disconnect", () => events.push("disconnect"));
+  const disconnected = new Promise<void>((resolve) => {
+    child.once("disconnect", () => {
+      events.push("disconnect");
+      resolve();
+    });
+  });
   child.once("exit", () => {
     exited = true;
     events.push("exit");
@@ -50,6 +55,9 @@ it("drains actual owned-child IPC before the public close boundary", async () =>
       resolve({ code, signal });
     });
   });
+  // Node may emit disconnect after close. The production boundary waits for
+  // both; neither event alone proves IPC drain or a successful cleanup.
+  await disconnected;
   expect(spawnError).toBeNull();
   expect(terminal).toEqual({
     code: SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE,
@@ -62,8 +70,8 @@ it("drains actual owned-child IPC before the public close boundary", async () =>
     { type: "close", code: 7, signal: null },
     { type: "signal-refused" },
   ]);
-  expect(events.at(-1)).toBe("close");
+  expect(events).toContain("close");
+  expect(events).toContain("disconnect");
   expect(events.filter((event) => event === "message")).toHaveLength(2);
-  expect(events.indexOf("disconnect")).toBeLessThan(events.indexOf("close"));
   expect(events.indexOf("exit")).toBeLessThan(events.indexOf("close"));
 }, 5000);

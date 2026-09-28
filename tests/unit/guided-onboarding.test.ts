@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   GuidedActivation,
   defaultOnboardingFolderChoice,
+  externalConnectorChallengeAllowed,
   onboardingCompletedSteps,
   onboardingProgress,
   onboardingProgressForFolderChoice,
@@ -472,5 +473,73 @@ describe("single-action tunnel activation", () => {
         runtimeKey: "",
       }),
     ).toEqual({ ok: false, reason: "runtime-not-ready" });
+  });
+});
+
+describe("ordinary ChatGPT Computer setup", () => {
+  it("allows Computer setup without claiming an embedded ChatGPT sign-in", () => {
+    const settings = guidedSettingsFixture();
+    settings.setup.chatgpt.verified = null;
+    settings.setup.chatgpt.configured = false;
+    settings.setup.chatgpt.reachable = "unknown";
+    const facts = onboardingFacts(settings, fixtureBuildId);
+    expect(facts.chat).not.toBe("ready");
+    expect(onboardingProgress(facts, "external")).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
+    expect(onboardingProgress(facts)[0]).toBe(false);
+    expect(onboardingCompletedSteps(settings, "external")[4]).toBe(true);
+    expect(settings.setup.chatgpt.verified).toBeNull();
+  });
+  it("keeps external attachment unverified without the current receipt", () => {
+    const settings = guidedSettingsFixture();
+    settings.connectors.secureMcp.attachment = null;
+    settings.setup.connect.verified = null;
+    expect(
+      onboardingProgress(onboardingFacts(settings, fixtureBuildId), "external"),
+    ).toEqual([true, true, true, false, false]);
+    settings.setup.connect.outcomeUnknown = true;
+    expect(
+      onboardingProgress(
+        onboardingFacts(settings, fixtureBuildId),
+        "external",
+      )[2],
+    ).toBe(false);
+  });
+});
+
+describe("external connector challenge presentation", () => {
+  const current = {
+    ...prepared,
+    runtime: "ready" as const,
+    runtimeCurrent: true,
+    verificationIdentity: "current-challenge",
+  };
+  it("offers only the current unused challenge", () => {
+    expect(externalConnectorChallengeAllowed(current)).toBe(true);
+    expect(
+      externalConnectorChallengeAllowed({
+        ...current,
+        attachmentCurrent: true,
+      }),
+    ).toBe(false);
+  });
+  it("withholds stale or unknown challenges", () => {
+    expect(
+      externalConnectorChallengeAllowed({ ...current, runtimeCurrent: false }),
+    ).toBe(false);
+    expect(
+      externalConnectorChallengeAllowed({ ...current, outcomeUnknown: true }),
+    ).toBe(false);
+    expect(
+      externalConnectorChallengeAllowed({
+        ...current,
+        verificationIdentity: null,
+      }),
+    ).toBe(false);
   });
 });

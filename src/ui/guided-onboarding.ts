@@ -156,9 +156,30 @@ export const onboardingSteps = [
 ] as const;
 export type OnboardingStep = (typeof onboardingSteps)[number]["id"];
 
-export function onboardingProgress(facts: OnboardingFacts): readonly boolean[] {
+export type OnboardingMode = "embedded" | "external";
+
+export function externalConnectorChallengeAllowed(
+  facts: OnboardingFacts,
+): boolean {
+  return (
+    facts.available &&
+    facts.hasFolder &&
+    facts.folder === "ready" &&
+    facts.runtimeCurrent &&
+    facts.verificationIdentity !== null &&
+    !facts.attachmentCurrent &&
+    !facts.outcomeUnknown
+  );
+}
+
+export function onboardingProgress(
+  facts: OnboardingFacts,
+  mode: OnboardingMode = "embedded",
+): readonly boolean[] {
   if (!facts.available) return [false, false, false, false, false];
-  const chat = facts.chat === "ready";
+  // External Computer access does not depend on the embedded browser account.
+  // This completes an optional step; it never changes sign-in evidence.
+  const chat = mode === "external" || facts.chat === "ready";
   // Choosing whether to share folders is optional and complete as soon as
   // setup is available. Access and connector proof remain separate.
   const folder = true;
@@ -178,13 +199,15 @@ export function onboardingProgress(facts: OnboardingFacts): readonly boolean[] {
 // the still-approved folder and connection before showing a past completion.
 export function onboardingCompletedSteps(
   settings: ProductSettings | null,
+  mode: OnboardingMode = "embedded",
 ): readonly boolean[] {
   if (!settings) return [false, false, false, false, false];
   const connector = settings.connectors.secureMcp;
   const workspaceIds = new Set(
     settings.computer.workspaces.map((item) => item.workspaceId),
   );
-  const chat = routeReadiness(settings.setup.chatgpt) === "ready";
+  const chat =
+    mode === "external" || routeReadiness(settings.setup.chatgpt) === "ready";
   const witness = settings.setup.computer.verified;
   const folder =
     workspaceIds.size === 0 ||
@@ -326,6 +349,7 @@ export class GuidedActivation {
   async run(
     port: ActivationPort,
     values: Readonly<{ tunnelId: string; runtimeKey: string }>,
+    mode: OnboardingMode = "embedded",
   ): Promise<ActivationResult> {
     if (this.active) return { ok: false, reason: "busy" };
     this.active = true;
@@ -335,7 +359,7 @@ export class GuidedActivation {
         return { ok: false, reason: "inspect-existing-operation" };
       if (
         !initial.available ||
-        initial.chat !== "ready" ||
+        (mode === "embedded" && initial.chat !== "ready") ||
         initial.folder !== "ready" ||
         !initial.hasFolder
       )
@@ -361,7 +385,7 @@ export class GuidedActivation {
         return (
           current.available &&
           current.authority === initial.authority &&
-          current.chat === "ready" &&
+          (mode === "external" || current.chat === "ready") &&
           current.folder === "ready" &&
           !current.outcomeUnknown &&
           current.runtime === "stopped"
@@ -399,7 +423,7 @@ export class GuidedActivation {
       if (
         started.authority !== initial.authority ||
         started.tunnelId !== tunnelId ||
-        started.chat !== "ready" ||
+        (mode === "embedded" && started.chat !== "ready") ||
         started.folder !== "ready"
       )
         return { ok: false, reason: "state-changed" };

@@ -8,12 +8,12 @@ Computer explains the exact capability waiting for consent, Activity shows a qui
 sanitized evidence trail, and Settings reports isolation and unavailable live
 integrations without pretending they are configured.
 
-The first launch opens a required five-step Setup journey for ChatGPT, Computer,
-Connect, Hosts, and Verify. Visiting a step changes no readiness claim. Owner actions
-open the isolated ChatGPT sign-in surface, persist Computer approval, attest a selected
-Codex host, and run bounded host/Agent checks without reading or storing credentials.
-Unavailable connector work remains explicit. Settings can reopen the same journey so
-the boundary and current evidence remain inspectable after dismissal.
+The first normal launch opens Guided Setup in the app sidebar in both Dev and
+packaged Preview. Folder sharing and embedded ChatGPT sign-in are optional;
+ordinary Computer access requires an approved folder and current connector
+receipts, not Model or Agent. Preview checks attachment from an ordinary ChatGPT
+conversation without automatic Send. The retained five-step qualification modal
+belongs to explicit demo/legacy fixture mode, not normal first-run Setup.
 
 ## Owner-selected visual direction: Watch Rail
 

@@ -8,6 +8,7 @@ import {
   type ActivationPort,
   type ActivationResult,
   type OnboardingFacts,
+  type OnboardingMode,
 } from "./guided-onboarding";
 
 export interface ConnectionDraft {
@@ -220,6 +221,7 @@ export class GuidedConnectionUpdate {
     port: ActivationPort,
     values: ConnectionDraft,
     reconnect = false,
+    mode: OnboardingMode = "embedded",
   ): Promise<ActivationResult> {
     if (this.active) return { ok: false, reason: "busy" };
     this.active = true;
@@ -229,7 +231,7 @@ export class GuidedConnectionUpdate {
         return { ok: false, reason: "inspect-existing-operation" };
       if (
         !initial.available ||
-        initial.chat !== "ready" ||
+        (mode === "embedded" && initial.chat !== "ready") ||
         initial.folder !== "ready" ||
         !initial.hasFolder
       )
@@ -264,17 +266,21 @@ export class GuidedConnectionUpdate {
           stopped.connectionIdentity !== initial.connectionIdentity ||
           stopped.tunnelId !== initial.tunnelId ||
           stopped.credentialStored !== initial.credentialStored ||
-          stopped.chat !== "ready" ||
+          (mode === "embedded" && stopped.chat !== "ready") ||
           stopped.folder !== "ready" ||
           stopped.runtime !== "stopped" ||
           stopped.outcomeUnknown
         )
           return { ok: false, reason: "state-changed" };
       }
-      return await this.activation.run(port, {
-        tunnelId,
-        runtimeKey: values.runtimeKey,
-      });
+      return await this.activation.run(
+        port,
+        {
+          tunnelId,
+          runtimeKey: values.runtimeKey,
+        },
+        mode,
+      );
     } catch {
       return { ok: false, reason: "inspect-existing-operation" };
     } finally {

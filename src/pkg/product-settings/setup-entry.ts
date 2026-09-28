@@ -9,9 +9,23 @@ const setupStepOrder: readonly SetupStepId[] = [
   "verify",
 ];
 
+export interface GuidedSetupSelection {
+  readonly environment: "preview" | "dev";
+  readonly demoMode?: boolean;
+  readonly legacySetupTestMode?: boolean;
+}
+
+// Selects only the Setup surface. Runtime identity, private homes and Dev
+// diagnostics retain their own environment boundaries.
+export function guidedSetupSelected(input: GuidedSetupSelection): boolean {
+  return input.demoMode !== true && input.legacySetupTestMode !== true;
+}
+
 export function initialSetupPresentation(
   input: Readonly<{
     environment: "preview" | "dev";
+    demoMode?: boolean;
+    legacySetupTestMode?: boolean;
     dismissed: boolean;
     currentStep: SetupStepId;
     openAtLaunch: ProductGeneralSettings["openAtLaunch"];
@@ -22,7 +36,7 @@ export function initialSetupPresentation(
   section: SurfaceSection;
 }> {
   const setupStep = Math.max(0, setupStepOrder.indexOf(input.currentStep));
-  const connectionsFirst = input.environment === "dev" && !input.dismissed;
+  const connectionsFirst = guidedSetupSelected(input) && !input.dismissed;
   return {
     setupOpen: !input.dismissed && !connectionsFirst,
     setupStep,
