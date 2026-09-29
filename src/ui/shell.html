@@ -201,6 +201,65 @@
           </span>
         </button>
 
+        <section
+          class="installed-update-notice"
+          id="installed-update-notice"
+          aria-labelledby="installed-update-notice-title"
+          hidden
+        >
+          <span
+            id="installed-update-notice-mark"
+            class="installed-update-notice-mark"
+            aria-hidden="true"
+            >↑</span
+          >
+          <div
+            class="installed-update-notice-copy"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            <strong id="installed-update-notice-title">Update ready</strong>
+            <p id="installed-update-notice-copy"></p>
+          </div>
+          <div class="installed-update-actions">
+            <button
+              id="installed-update-notice-restart"
+              type="button"
+              aria-label="Restart & Update"
+              aria-describedby="installed-update-notice-copy"
+              disabled
+            >
+              <svg
+                class="installed-update-action-icon"
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <path d="M15.5 7A6 6 0 1 0 16 12M15.5 3v4h-4" />
+              </svg>
+              <span class="installed-update-action-label"
+                >Restart &amp; Update</span
+              >
+            </button>
+            <button
+              id="installed-update-notice-later"
+              type="button"
+              aria-label="Later"
+              disabled
+            >
+              <svg
+                class="installed-update-action-icon"
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+              >
+                <circle cx="10" cy="10" r="6.5" />
+                <path d="M10 6v4l3 2" />
+              </svg>
+              <span class="installed-update-action-label">Later</span>
+            </button>
+          </div>
+        </section>
+
         <div class="runtime-pill" id="runtime-pill" aria-live="polite">
           <i class="state-lamp starting" aria-hidden="true"></i>
           <span><b>Starting</b><small>No live provider</small></span>
@@ -870,6 +929,50 @@
           <div class="settings-group-actions">
             <span>Applies now where possible and on the next launch.</span>
             <button id="apply-general-settings" type="button">Apply</button>
+          </div>
+        </section>
+
+        <section
+          class="settings-group installed-update-preferences"
+          data-settings-page="preferences"
+          aria-labelledby="installed-update-title"
+        >
+          <header>
+            <div>
+              <p>Preferences</p>
+              <h2 id="installed-update-title">Updates</h2>
+            </div>
+          </header>
+          <p
+            class="settings-link-copy"
+            id="installed-update-summary"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            Update status is loading.
+          </p>
+          <div class="installed-update-actions">
+            <button
+              id="installed-update-check"
+              type="button"
+              aria-describedby="installed-update-summary"
+              disabled
+            >
+              Check for Updates…
+            </button>
+            <button
+              id="installed-update-restart"
+              type="button"
+              aria-describedby="installed-update-summary"
+              disabled
+              hidden
+            >
+              Restart &amp; Update
+            </button>
+            <button id="installed-update-later" type="button" disabled hidden>
+              Later
+            </button>
           </div>
         </section>
 

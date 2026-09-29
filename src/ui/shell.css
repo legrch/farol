@@ -367,6 +367,104 @@ html[data-window-active="false"] .nav-item.active {
   white-space: nowrap;
 }
 
+.installed-update-notice {
+  min-width: 0;
+  margin: 6px 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-raised);
+}
+
+.installed-update-notice-copy strong {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.installed-update-notice-copy p {
+  margin: 5px 0 9px;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.installed-update-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.installed-update-notice button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 4px 7px;
+  background: var(--surface-soft);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.installed-update-notice button:hover:not(:disabled) {
+  border-color: var(--iris-bright);
+  background: var(--iris-soft);
+}
+
+.installed-update-notice button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.installed-update-notice-mark,
+.installed-update-action-icon {
+  display: none;
+}
+
+.installed-update-preferences .installed-update-actions {
+  margin-top: 14px;
+}
+
+html[data-sidebar="rail"] .installed-update-notice {
+  padding: 5px;
+}
+
+html[data-sidebar="rail"] .installed-update-notice-copy {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+html[data-sidebar="rail"] .installed-update-notice-mark {
+  display: block;
+  text-align: center;
+  color: var(--iris-bright);
+  font-size: 14px;
+}
+
+html[data-sidebar="rail"]
+  .installed-update-notice[data-update-state="failed"]
+  .installed-update-notice-mark {
+  color: var(--waiting);
+}
+
+html[data-sidebar="rail"] .installed-update-notice button {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px;
+}
+
+html[data-sidebar="rail"] .installed-update-action-label {
+  display: none;
+}
+
+html[data-sidebar="rail"] .installed-update-action-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+}
+
 .build-identity span,
 .build-identity small {
   overflow: hidden;
