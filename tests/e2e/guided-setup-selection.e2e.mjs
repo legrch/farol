@@ -1156,6 +1156,15 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     assert.equal(sidebarBefore.filter((page) => page.visible).length, 1);
+    assert.equal(
+      await window
+        .locator("#browser-sidebar-toggle")
+        .evaluate((button) =>
+          getComputedStyle(button).getPropertyValue("-webkit-app-region"),
+        ),
+      "no-drag",
+      "BROWSER_SIDEBAR_TOGGLE_IS_DRAGGABLE",
+    );
     await window.locator("#browser-sidebar-toggle").click();
     let sidebarPages;
     const sidebarDeadline = Date.now() + 5000;

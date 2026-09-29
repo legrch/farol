@@ -651,6 +651,7 @@ html:not([data-full-screen="true"])[data-sidebar="overlay"] .window-bar {
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
+  -webkit-app-region: no-drag;
 }
 
 .browser-sidebar-toggle:hover,
