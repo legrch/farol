@@ -40,6 +40,19 @@ function scopeIdentity(settings: ProductSettings): string {
   ]);
 }
 
+function reconnectedRuntimeCurrent(
+  settings: ProductSettings,
+  buildId: string,
+  previousRuntimeGeneration: string | null,
+): boolean {
+  const runtime = settings.connectors.secureMcp.runtime;
+  return (
+    onboardingFacts(settings, buildId).runtimeCurrent &&
+    runtime !== null &&
+    runtime.runtimeGeneration !== previousRuntimeGeneration
+  );
+}
+
 // An explicit UI approval is a plan, not a grant. Every effect still goes
 // through the existing backend admission, verification and settings owner.
 export class GuidedWorkspaceAccess {
@@ -49,6 +62,7 @@ export class GuidedWorkspaceAccess {
     generation: number;
     scope: string;
     connectionIdentity: string;
+    previousRuntimeGeneration: string | null;
   }> | null = null;
 
   requiresReadback(): boolean {
@@ -79,11 +93,11 @@ export class GuidedWorkspaceAccess {
     if (command.kind === "connector.stop")
       confirmed = onboardingFacts(settings, buildId).runtime === "stopped";
     if (command.kind === "connector.start")
-      confirmed =
-        settings.connectors.secureMcp.runtime?.state === "ready" &&
-        settings.connectors.secureMcp.runtime.buildId === buildId &&
-        settings.connectors.secureMcp.runtime.computerGeneration ===
-          pending.generation;
+      confirmed = reconnectedRuntimeCurrent(
+        settings,
+        buildId,
+        pending.previousRuntimeGeneration,
+      );
     if (command.kind === "computer.update-access")
       confirmed = target?.access === command.access;
     if (command.kind === "computer.update-commands")
@@ -131,6 +145,8 @@ export class GuidedWorkspaceAccess {
       return { ok: false, reason: "changed" };
     if (facts.outcomeUnknown) return { ok: false, reason: "unknown" };
     const scope = scopeIdentity(initial);
+    const previousRuntimeGeneration =
+      initial.connectors.secureMcp.runtime?.runtimeGeneration ?? null;
     let generation = initial.computer.generation;
     const current = (): ProductSettings | null => {
       const settings = port.settings();
@@ -155,6 +171,7 @@ export class GuidedWorkspaceAccess {
         generation: generation + delta,
         scope,
         connectionIdentity: consent.connectionIdentity,
+        previousRuntimeGeneration,
       };
       let outcome: WorkspaceCommandOutcome;
       try {
@@ -312,11 +329,18 @@ export class GuidedWorkspaceAccess {
           };
       }
       if (facts.runtime === "ready") {
-        if (
-          !(await run({ kind: "connector.start" })) ||
-          onboardingFacts(current(), port.buildId()).runtime !== "ready"
-        )
+        if (!(await run({ kind: "connector.start" })))
           return { ok: false, reason: this.unconfirmed ? "unknown" : "failed" };
+        const reconnected = current();
+        if (
+          !reconnected ||
+          !reconnectedRuntimeCurrent(
+            reconnected,
+            port.buildId(),
+            previousRuntimeGeneration,
+          )
+        )
+          return { ok: false, reason: "failed" };
         return { ok: true, reconnected: true };
       }
       return { ok: true, reconnected: false };

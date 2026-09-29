@@ -32,7 +32,7 @@ function fixture() {
         state: "ready",
         computerGeneration: computer.generation,
         connectorGeneration: 1,
-        runtimeGeneration: "b".repeat(64),
+        runtimeGeneration: "f".repeat(64),
         buildId: fixtureBuildId,
         observedAt: "2026-01-01T00:00:00.000Z",
       };
@@ -107,6 +107,79 @@ describe("one explicit Setup workspace access transition", () => {
     });
     expect(f.settings.computer.commands).toBe("workspace");
   });
+
+  it.each(["build", "computer", "connector", "instance"] as const)(
+    "does not report reconnect success from a stale %s witness",
+    async (stale) => {
+      const f = fixture();
+      const previous = f.settings.connectors.secureMcp.runtime!;
+      const original = f.run.getMockImplementation()!;
+      f.run.mockImplementation(async (command) => {
+        const result = await original(command);
+        if (command.kind === "connector.start") {
+          const runtime = f.settings.connectors.secureMcp.runtime!;
+          if (stale === "build") runtime.buildId = "9".repeat(64);
+          if (stale === "computer") runtime.computerGeneration = 1;
+          if (stale === "connector") runtime.connectorGeneration = 2;
+          if (stale === "instance")
+            runtime.runtimeGeneration = previous.runtimeGeneration;
+        }
+        return result;
+      });
+      expect(await f.controller.run(f.port, f.plan, f.consent)).toEqual({
+        ok: false,
+        reason: "failed",
+      });
+      expect(f.settings.computer.workspaces[0]!.access).toBe("write");
+      expect(
+        f.run.mock.calls.filter(([c]) => c.kind === "connector.start"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["connector", "instance"] as const)(
+    "keeps an unknown reconnect fenced until a fresh matching %s witness is read",
+    async (stale) => {
+      const f = fixture();
+      const previous = f.settings.connectors.secureMcp.runtime!;
+      const original = f.run.getMockImplementation()!;
+      f.run.mockImplementation(async (command) => {
+        const result = await original(command);
+        if (command.kind !== "connector.start") return result;
+        const runtime = f.settings.connectors.secureMcp.runtime!;
+        if (stale === "connector") runtime.connectorGeneration = 2;
+        else runtime.runtimeGeneration = previous.runtimeGeneration;
+        return "unknown";
+      });
+      expect(await f.controller.run(f.port, f.plan, f.consent)).toEqual({
+        ok: false,
+        reason: "unknown",
+      });
+      const calls = f.run.mock.calls.length;
+      expect(f.controller.requiresReadback()).toBe(true);
+      expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
+        false,
+      );
+      expect(
+        await f.controller.run(
+          f.port,
+          f.plan,
+          onboardingFacts(f.settings, fixtureBuildId),
+        ),
+      ).toEqual({
+        ok: false,
+        reason: "unknown",
+      });
+      expect(f.run).toHaveBeenCalledTimes(calls);
+      const runtime = f.settings.connectors.secureMcp.runtime!;
+      runtime.connectorGeneration = 1;
+      runtime.runtimeGeneration = "f".repeat(64);
+      expect(f.controller.reconcileReadback(f.settings, fixtureBuildId)).toBe(
+        true,
+      );
+      expect(f.run).toHaveBeenCalledTimes(calls);
+    },
+  );
 
   it("does not start a previously stopped connection", async () => {
     const f = fixture();
