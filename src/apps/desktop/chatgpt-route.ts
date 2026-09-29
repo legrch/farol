@@ -1359,6 +1359,12 @@ export type ChatGptReadonlyTaskResult = Readonly<{
   turnAssistantId?: string | null;
 }>;
 
+export type ChatGptConnectorCheckResult =
+  | ChatGptReadonlyTaskResult
+  | Readonly<
+      Omit<ChatGptReadonlyTaskResult, "state"> & { state: "receipt_confirmed" }
+    >;
+
 export type ChatGptTaskTextDelta = Readonly<{
   sequence: number;
   delta: string;
@@ -1372,6 +1378,9 @@ export type ChatGptTaskObserver = Readonly<{
   // one turn, never both. Items describe visible output, not tool execution.
   onVisibleItem?: (item: VisibleOutputItem) => void | Promise<void>;
   onDispatchIntent?: () => void | Promise<void>;
+  // Only an app-bound temporary connector check may finish from its exact
+  // local receipt. This proves the connector effect, never a model answer.
+  readConnectorReceipt?: () => Promise<boolean>;
   onCorrelation?: (
     correlation: Readonly<{
       turnUserId: string;
@@ -2131,11 +2140,27 @@ export class ChatGptRoute {
 
   async runReadonlyTask(
     prompt: string,
+    attachments: readonly StagedChatGptAttachment[],
+    observer: ChatGptTaskObserver & {
+      readConnectorReceipt: () => Promise<boolean>;
+    },
+    profile: "temporary-instant",
+    appTarget: Readonly<{ name: string }>,
+  ): Promise<ChatGptConnectorCheckResult>;
+  async runReadonlyTask(
+    prompt: string,
+    attachments?: readonly StagedChatGptAttachment[],
+    observer?: ChatGptTaskObserver,
+    profile?: "ordinary" | "temporary-instant",
+    appTarget?: Readonly<{ name: string }>,
+  ): Promise<ChatGptReadonlyTaskResult>;
+  async runReadonlyTask(
+    prompt: string,
     attachments: readonly StagedChatGptAttachment[] = [],
     observer: ChatGptTaskObserver = {},
     profile: "ordinary" | "temporary-instant" = "ordinary",
     appTarget?: Readonly<{ name: string }>,
-  ): Promise<ChatGptReadonlyTaskResult> {
+  ): Promise<ChatGptConnectorCheckResult> {
     // Capture this operation's explicit target before any navigation. Never
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
@@ -2671,7 +2696,7 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        const currentUrl = active.webContents.getURL();
+        let currentUrl = active.webContents.getURL();
         if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
           return {
             state: "outcome_unknown",
@@ -2697,6 +2722,83 @@ export class ChatGptRoute {
             outputText: observedText,
             ...correlation(),
           };
+        }
+        if (
+          profile === "temporary-instant" &&
+          appTarget !== undefined &&
+          observer.readConnectorReceipt
+        ) {
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          let invalidation: ReturnType<typeof setInterval> | undefined;
+          const receipt = await Promise.race([
+            observer.readConnectorReceipt(),
+            new Promise<null>((resolve) => {
+              timeout = setTimeout(
+                () => resolve(null),
+                Math.max(0, deadline - Date.now()),
+              );
+            }),
+            new Promise<"invalidated">((resolve) => {
+              invalidation = setInterval(() => {
+                if (
+                  observationGeneration !== this.taskObservationGeneration ||
+                  this.routeWindow !== active ||
+                  active.isDestroyed()
+                )
+                  resolve("invalidated");
+              }, 25);
+            }),
+          ]).finally(() => {
+            if (timeout !== undefined) clearTimeout(timeout);
+            if (invalidation !== undefined) clearInterval(invalidation);
+          });
+          if (receipt === null || Date.now() >= deadline) break;
+          if (
+            receipt === "invalidated" ||
+            observationGeneration !== this.taskObservationGeneration ||
+            this.routeWindow !== active ||
+            active.isDestroyed()
+          ) {
+            return {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_PAGE_LOST",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+              ...correlation(),
+            };
+          }
+          const afterReceiptUrl = active.webContents.getURL();
+          const createdConversation = canonicalChatGptConversationUrl(
+            afterReceiptUrl,
+            this.options.e2eOrigin,
+          );
+          const createdByReceipt =
+            pinnedConversationUrl === null &&
+            createdConversation !== null &&
+            allowedChatGptPageUrl(afterReceiptUrl, this.options.e2eOrigin);
+          if (afterReceiptUrl !== currentUrl && !createdByReceipt) {
+            return {
+              state: "outcome_unknown",
+              code: "CHATGPT_TASK_PAGE_LOST",
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+              ...correlation(),
+            };
+          }
+          if (createdByReceipt) pinnedConversationUrl = createdConversation;
+          currentUrl = afterReceiptUrl;
+          if (receipt === true) {
+            return {
+              state: "receipt_confirmed",
+              code: null,
+              deltaCount,
+              observedCharacters,
+              outputText: observedText,
+              ...correlation(),
+            };
+          }
         }
         const probe = taskProbeSchema.safeParse(
           await active.webContents.executeJavaScript(

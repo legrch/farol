@@ -4117,6 +4117,38 @@ async function verifySecureMcpApp(): Promise<ProductConfigurationResult> {
       prompt,
       [],
       {
+        readConnectorReceipt: async () => {
+          const current = configuration!.snapshot();
+          if (
+            !claimed ||
+            current.status !== "ready" ||
+            expectedBinding === null ||
+            !connectorAppBindingCurrent(current.settings, expectedBinding)
+          )
+            return false;
+          const receipt = await readPendingConnectorReceipt(() =>
+            readConnectorVerificationReceipt(stateRoot, { readOnly: true }),
+          );
+          if (receipt === null) return false;
+          const afterRead = configuration!.snapshot();
+          if (
+            afterRead.status !== "ready" ||
+            !connectorAppBindingCurrent(afterRead.settings, expectedBinding)
+          )
+            return false;
+          return checkConnectorAttachment({
+            receipt,
+            challenge: {
+              challengeSha256: challenge.challengeSha256,
+              preparedAt: challenge.preparedAt,
+            },
+            computerGeneration: expectedBinding.computerGeneration,
+            approvedWorkspaceIds: afterRead.settings.computer.workspaces.map(
+              (workspace) => workspace.workspaceId,
+            ),
+            expectedWorkspaceId: expectedBinding.workspaceId,
+          }).attached;
+        },
         onDispatchIntent: async () => {
           if (claimed) return;
           const admitted = configuration!.snapshot();

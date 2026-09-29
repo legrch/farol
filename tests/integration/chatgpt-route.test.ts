@@ -5034,3 +5034,175 @@ describe("per-operation NEW app verification target", () => {
     }
   });
 });
+
+describe("connector receipt completion before provider output", () => {
+  function fixture(activation: unknown = { activated: true }) {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockImplementationOnce(async () => {
+        if (activation instanceof Error) throw activation;
+        return activation;
+      })
+      .mockResolvedValue({
+        assistantCount: 1,
+        assistantCharacters: 0,
+        assistantText: "",
+        userCount: 1,
+        turnUserId: "user-current",
+        turnAssistantId: "assistant-current",
+        busy: true,
+        sendVisible: false,
+        signInVisible: false,
+        errorVisible: false,
+      });
+    const candidate = streamingTaskRoute(execute, 50);
+    Reflect.set(
+      candidate,
+      "prepareTemporaryInstantProfile",
+      vi.fn(async () => null),
+    );
+    return { execute, candidate };
+  }
+
+  it("releases the route on an exact local receipt without claiming a model answer", async () => {
+    const { execute, candidate } = fixture();
+    const readConnectorReceipt = vi.fn(async () => true);
+    expect(
+      await candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      ),
+    ).toMatchObject({
+      state: "receipt_confirmed",
+      code: null,
+      observedCharacters: 0,
+      outputText: "",
+    });
+    expect(execute).toHaveBeenCalledTimes(4);
+    expect(readConnectorReceipt).toHaveBeenCalledTimes(1);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+  });
+
+  it("keeps a missing or rejected proof unknown without a second send", async () => {
+    const { execute, candidate } = fixture();
+    const readConnectorReceipt = vi.fn(async () => false);
+    expect(
+      await candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      ),
+    ).toMatchObject({ state: "outcome_unknown", code: "CHATGPT_TASK_TIMEOUT" });
+    expect(readConnectorReceipt).toHaveBeenCalled();
+    expect(
+      execute.mock.calls.filter(([script]) =>
+        String(script).includes("send.click()"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("never invokes receipt completion after a lost send acknowledgement", async () => {
+    const { execute, candidate } = fixture(new Error("ack lost"));
+    const readConnectorReceipt = vi.fn(async () => true);
+    expect(
+      await candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      ),
+    ).toMatchObject({ state: "outcome_unknown" });
+    expect(readConnectorReceipt).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledTimes(4);
+  });
+
+  it("bounds a stalled read-only receipt probe and releases its route", async () => {
+    const { candidate } = fixture();
+    const readConnectorReceipt = vi.fn(() => new Promise<boolean>(() => {}));
+    expect(
+      await candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      ),
+    ).toMatchObject({ state: "outcome_unknown", code: "CHATGPT_TASK_TIMEOUT" });
+    expect(readConnectorReceipt).toHaveBeenCalledTimes(1);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+  });
+
+  it("preserves the first created conversation while waiting for its receipt", async () => {
+    const { candidate } = fixture();
+    let url = "https://chatgpt.com/";
+    Reflect.get(candidate, "routeWindow").webContents.getURL = () => url;
+    const readConnectorReceipt = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        url = "https://chatgpt.com/c/00000000-0000-4000-8000-000000000007";
+        return false;
+      })
+      .mockResolvedValue(true);
+    expect(
+      await candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      ),
+    ).toMatchObject({ state: "receipt_confirmed" });
+    expect(readConnectorReceipt).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["cancel", "close"] as const)(
+    "releases a stalled receipt observation on %s without another send",
+    async (reason) => {
+      const { candidate } = fixture();
+      Reflect.get(candidate, "options").taskTimeoutMs = 5_000;
+      const readConnectorReceipt = vi.fn(() => new Promise<boolean>(() => {}));
+      const result = candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      );
+      await vi.waitFor(() =>
+        expect(readConnectorReceipt).toHaveBeenCalledTimes(1),
+      );
+      if (reason === "cancel") candidate.cancelActiveTask();
+      else Reflect.set(candidate, "routeWindow", null);
+      expect(await result).toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_PAGE_LOST",
+      });
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+      expect(readConnectorReceipt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not grant receipt completion to an ordinary task", async () => {
+    const { candidate } = fixture();
+    const readConnectorReceipt = vi.fn(async () => true);
+    expect(
+      await candidate.runReadonlyTask(
+        "ordinary fixture",
+        [],
+        { readConnectorReceipt },
+        "ordinary",
+        { name: "NEW fixture" },
+      ),
+    ).toMatchObject({ state: "outcome_unknown" });
+    expect(readConnectorReceipt).not.toHaveBeenCalled();
+  });
+});
