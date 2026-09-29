@@ -1,0 +1,390 @@
+import {
+  FAROL_BUNDLE_ID,
+  GITHUB_RELEASES_API,
+  GITHUB_RELEASE_REPOSITORY,
+  MAX_ARCHIVE_BYTES,
+  MAX_MANIFEST_BYTES,
+  MAX_RELEASES_JSON_BYTES,
+  RELEASE_MANIFEST_ASSET,
+  type GithubReleaseErrorCode,
+  type GithubReleasePorts,
+  type InstalledReleaseIdentity,
+  type Outcome,
+  type PackageIdentity,
+  type ReleaseAsset,
+  type ReleaseManifest,
+  type UpdateCandidate,
+} from "../domain/github-release-contract";
+import {
+  compareReleaseVersions,
+  parseReleaseVersion,
+  versionBelongsToChannel,
+  type ReleaseChannel,
+} from "../domain/github-version";
+
+const SHA256 = /^[a-f0-9]{64}$/u;
+const SHA1 = /^[a-f0-9]{40}$/u;
+const BUILD_VERSION = /^[1-9][0-9]*$/u;
+
+type RecordValue = Record<string, unknown>;
+type Release = Readonly<{
+  tag: string;
+  version: string;
+  assets: readonly ReleaseAsset[];
+}>;
+
+function object(value: unknown): RecordValue | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as RecordValue)
+    : null;
+}
+
+function hasExactKeys(value: RecordValue, keys: readonly string[]): boolean {
+  const found = Object.keys(value);
+  return (
+    found.length === keys.length && found.every((key) => keys.includes(key))
+  );
+}
+
+function failure<T>(code: GithubReleaseErrorCode): Outcome<T> {
+  return { ok: false, code };
+}
+
+function assetUrl(tag: string, name: string): string {
+  return `https://github.com/${GITHUB_RELEASE_REPOSITORY}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+}
+
+function validAssetName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(value) &&
+    !value.includes("..")
+  );
+}
+
+function parseAsset(value: unknown, tag: string): ReleaseAsset | null {
+  const data = object(value);
+  if (
+    !data ||
+    !validAssetName(data.name) ||
+    data.browser_download_url !== assetUrl(tag, data.name) ||
+    !Number.isSafeInteger(data.size) ||
+    (data.size as number) < 1 ||
+    (data.size as number) > MAX_ARCHIVE_BYTES ||
+    data.state !== "uploaded"
+  )
+    return null;
+  return {
+    name: data.name,
+    url: data.browser_download_url,
+    size: data.size as number,
+  };
+}
+
+function parseRelease(value: unknown): Outcome<Release | null> {
+  const data = object(value);
+  if (
+    !data ||
+    typeof data.tag_name !== "string" ||
+    !/^v[0-9][0-9A-Za-z.-]{0,128}$/u.test(data.tag_name) ||
+    typeof data.draft !== "boolean" ||
+    typeof data.prerelease !== "boolean" ||
+    !Array.isArray(data.assets) ||
+    data.assets.length > 32 ||
+    data.html_url !==
+      `https://github.com/${GITHUB_RELEASE_REPOSITORY}/releases/tag/${encodeURIComponent(data.tag_name)}`
+  )
+    return failure("invalid_release_metadata");
+  const version = data.tag_name.slice(1);
+  if (!parseReleaseVersion(version)) return failure("invalid_release_metadata");
+  if (data.draft) return { ok: true, value: null };
+  // A stable release must not advertise a prerelease version or vice versa.
+  if (data.prerelease !== version.includes("-"))
+    return failure("invalid_release_metadata");
+  const assets: ReleaseAsset[] = [];
+  for (const raw of data.assets) {
+    const asset = parseAsset(raw, data.tag_name);
+    if (!asset || assets.some((existing) => existing.name === asset.name))
+      return failure("wrong_provenance");
+    assets.push(asset);
+  }
+  return { ok: true, value: { tag: data.tag_name, version, assets } };
+}
+
+export function parseGithubReleaseManifest(
+  value: unknown,
+): Outcome<ReleaseManifest> {
+  const data = object(value);
+  const keys = [
+    "schema",
+    "repository",
+    "channel",
+    "product",
+    "bundleId",
+    "version",
+    "buildVersion",
+    "sourceCommit",
+    "sourceTreeDigest",
+    "buildId",
+    "artifactSha256",
+    "archiveSha256",
+    "archiveName",
+    "archiveSize",
+    "platform",
+    "arch",
+    "signing",
+    "notarized",
+    "sourceDirty",
+  ];
+  if (
+    !data ||
+    !hasExactKeys(data, keys) ||
+    data.schema !== "farol.github-release/1" ||
+    data.repository !== GITHUB_RELEASE_REPOSITORY ||
+    !["stable", "owner-beta"].includes(data.channel as string) ||
+    data.product !== "Farol Next Preview" ||
+    data.bundleId !== FAROL_BUNDLE_ID ||
+    typeof data.version !== "string" ||
+    !parseReleaseVersion(data.version) ||
+    !versionBelongsToChannel(data.version, data.channel as ReleaseChannel) ||
+    typeof data.buildVersion !== "string" ||
+    !BUILD_VERSION.test(data.buildVersion) ||
+    typeof data.sourceCommit !== "string" ||
+    !SHA1.test(data.sourceCommit) ||
+    typeof data.sourceTreeDigest !== "string" ||
+    !SHA256.test(data.sourceTreeDigest) ||
+    typeof data.buildId !== "string" ||
+    !SHA256.test(data.buildId) ||
+    typeof data.artifactSha256 !== "string" ||
+    !SHA256.test(data.artifactSha256) ||
+    typeof data.archiveSha256 !== "string" ||
+    !SHA256.test(data.archiveSha256) ||
+    !validAssetName(data.archiveName) ||
+    data.archiveName !== `Farol-${data.version}-darwin-arm64.zip` ||
+    !Number.isSafeInteger(data.archiveSize) ||
+    (data.archiveSize as number) < 1 ||
+    (data.archiveSize as number) > MAX_ARCHIVE_BYTES ||
+    data.platform !== "darwin" ||
+    data.arch !== "arm64" ||
+    data.signing !== "unsigned" ||
+    data.notarized !== false ||
+    data.sourceDirty !== false
+  )
+    return failure("invalid_manifest");
+  return { ok: true, value: data as ReleaseManifest };
+}
+
+function validResponseUrl(
+  expected: string,
+  finalUrl: string,
+  redirects: readonly string[],
+  allowAssetRedirect: boolean,
+): boolean {
+  if (!allowAssetRedirect)
+    return redirects.length === 0 && finalUrl === expected;
+  if (redirects.length === 0) return finalUrl === expected;
+  if (
+    redirects.length !== 2 ||
+    redirects[0] !== expected ||
+    redirects[1] !== finalUrl
+  )
+    return false;
+  return (
+    allowedUrl(finalUrl, true) &&
+    new URL(finalUrl).hostname === "release-assets.githubusercontent.com"
+  );
+}
+
+function allowedUrl(value: string, allowAssetRedirect: boolean): boolean {
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.port ||
+      url.hash
+    )
+      return false;
+    if (url.hostname === "github.com")
+      return url.pathname.startsWith(
+        `/${GITHUB_RELEASE_REPOSITORY}/releases/download/`,
+      );
+    return (
+      allowAssetRedirect &&
+      url.hostname === "release-assets.githubusercontent.com"
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function discoverGithubUpdate(
+  installed: InstalledReleaseIdentity,
+  channel: ReleaseChannel,
+  ports: Pick<GithubReleasePorts, "fetchJson">,
+): Promise<Outcome<UpdateCandidate | null>> {
+  if (
+    !parseReleaseVersion(installed.version) ||
+    !BUILD_VERSION.test(installed.buildVersion)
+  )
+    return failure("invalid_installed_version");
+  let fetched;
+  try {
+    fetched = await ports.fetchJson(
+      GITHUB_RELEASES_API,
+      MAX_RELEASES_JSON_BYTES,
+    );
+  } catch {
+    return failure("network_failure");
+  }
+  if (!fetched.ok) return failure(fetched.kind);
+  if (
+    !validResponseUrl(
+      GITHUB_RELEASES_API,
+      fetched.value.finalUrl,
+      fetched.value.redirects,
+      false,
+    )
+  )
+    return failure("wrong_provenance");
+  if (!Array.isArray(fetched.value.value) || fetched.value.value.length > 100)
+    return failure("invalid_release_metadata");
+  let chosen: Release | null = null;
+  for (const raw of fetched.value.value) {
+    const parsed = parseRelease(raw);
+    if (!parsed.ok) return parsed;
+    const release = parsed.value;
+    if (!release || !versionBelongsToChannel(release.version, channel))
+      continue;
+    const comparison = compareReleaseVersions(
+      release.version,
+      installed.version,
+    );
+    if (comparison === null) return failure("invalid_release_metadata");
+    if (comparison <= 0) continue;
+    if (!chosen || compareReleaseVersions(release.version, chosen.version)! > 0)
+      chosen = release;
+    else if (compareReleaseVersions(release.version, chosen.version) === 0)
+      return failure("invalid_release_metadata");
+  }
+  if (!chosen) return { ok: true, value: null };
+  const manifestAsset = chosen.assets.find(
+    (asset) => asset.name === RELEASE_MANIFEST_ASSET,
+  );
+  if (!manifestAsset || manifestAsset.size > MAX_MANIFEST_BYTES)
+    return failure(manifestAsset ? "oversize" : "missing_asset");
+  let manifestResponse;
+  try {
+    manifestResponse = await ports.fetchJson(
+      manifestAsset.url,
+      MAX_MANIFEST_BYTES,
+    );
+  } catch {
+    return failure("network_failure");
+  }
+  if (!manifestResponse.ok) return failure(manifestResponse.kind);
+  if (
+    !validResponseUrl(
+      manifestAsset.url,
+      manifestResponse.value.finalUrl,
+      manifestResponse.value.redirects,
+      true,
+    )
+  )
+    return failure("wrong_provenance");
+  const manifest = parseGithubReleaseManifest(manifestResponse.value.value);
+  if (!manifest.ok) return manifest;
+  if (
+    manifest.value.version !== chosen.version ||
+    manifest.value.channel !== channel
+  )
+    return failure("release_mismatch");
+  if (BigInt(manifest.value.buildVersion) <= BigInt(installed.buildVersion))
+    return failure("release_mismatch");
+  const archiveAsset = chosen.assets.find(
+    (asset) => asset.name === manifest.value.archiveName,
+  );
+  if (!archiveAsset) return failure("missing_asset");
+  if (archiveAsset.size !== manifest.value.archiveSize)
+    return failure("release_mismatch");
+  return {
+    ok: true,
+    value: {
+      manifest: manifest.value,
+      manifestAsset,
+      archiveAsset,
+      tag: chosen.tag,
+    },
+  };
+}
+
+function samePackage(
+  actual: PackageIdentity,
+  expected: ReleaseManifest,
+): boolean {
+  return (
+    actual.product === expected.product &&
+    actual.bundleId === expected.bundleId &&
+    actual.version === expected.version &&
+    actual.buildId === expected.buildId &&
+    actual.sourceCommit === expected.sourceCommit &&
+    actual.sourceTreeDigest === expected.sourceTreeDigest &&
+    actual.artifactSha256 === expected.artifactSha256 &&
+    actual.signing === expected.signing &&
+    actual.notarized === expected.notarized
+  );
+}
+
+export async function downloadAndVerifyGithubUpdate(
+  candidate: UpdateCandidate,
+  ports: Pick<GithubReleasePorts, "download" | "verifyPackage">,
+): Promise<Outcome<Readonly<{ handle: string; manifest: ReleaseManifest }>>> {
+  const checked = parseGithubReleaseManifest(candidate.manifest);
+  if (!checked.ok) return checked;
+  if (
+    candidate.tag !== `v${candidate.manifest.version}` ||
+    candidate.archiveAsset.name !== candidate.manifest.archiveName ||
+    candidate.archiveAsset.size !== candidate.manifest.archiveSize ||
+    candidate.archiveAsset.url !==
+      assetUrl(candidate.tag, candidate.archiveAsset.name)
+  )
+    return failure("release_mismatch");
+  let downloaded;
+  try {
+    downloaded = await ports.download(
+      candidate.archiveAsset.url,
+      candidate.manifest.archiveSize,
+    );
+  } catch {
+    return failure("network_failure");
+  }
+  if (!downloaded.ok) return failure(downloaded.kind);
+  const archive = downloaded.value;
+  if (
+    !validResponseUrl(
+      candidate.archiveAsset.url,
+      archive.finalUrl,
+      archive.redirects,
+      true,
+    )
+  )
+    return failure("wrong_provenance");
+  if (archive.size !== candidate.manifest.archiveSize)
+    return failure("release_mismatch");
+  if (archive.sha256 !== candidate.manifest.archiveSha256)
+    return failure("checksum_mismatch");
+  let verified;
+  try {
+    verified = await ports.verifyPackage(archive.handle);
+  } catch {
+    return failure("package_mismatch");
+  }
+  if (!verified.ok) return failure(verified.kind);
+  if (!samePackage(verified.value, candidate.manifest))
+    return failure("package_mismatch");
+  return {
+    ok: true,
+    value: { handle: archive.handle, manifest: candidate.manifest },
+  };
+}
