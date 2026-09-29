@@ -88,7 +88,11 @@ bounded deadline travel through the admitted route and catalogue read; a cancell
 request cannot reserve new work after discovery. Physical authority is checked
 again after each awaited durable claim, immediately before thread/start or
 turn/start. Cancellation, revocation or root replacement after a durable intent
-leaves an outcome-unknown consumed operation, never permission to dispatch again. An absent model or unsupported
+leaves an outcome-unknown consumed operation, never permission to dispatch again.
+Once a thread binding is durable, create consumes turn intent before awaited
+preflight. Continuation consumes a cancelled intent before returning unknown,
+while preserving known pre-effect fence recovery for non-cancelled requests.
+A failed journal write remains unknown, never permission to send. An absent model or unsupported
 effort reports the configured values and bounded reported alternatives. A failed
 or partial catalogue is availability **unknown**, never absence and never a
 reason to use a fallback model.

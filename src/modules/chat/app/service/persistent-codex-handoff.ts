@@ -1826,7 +1826,7 @@ export class PersistentCodexHandoff {
       )
         return { status: "refused", code: "HANDOFF_CONTINUE_PARENT_RESERVED" };
     } catch {
-      return unknown;
+      return this.consumeCancelledTurn(request.key, context);
     }
 
     let turnId: string;
@@ -1927,7 +1927,7 @@ export class PersistentCodexHandoff {
         (error) => error instanceof HandoffNotSubmittedError,
       );
     } catch {
-      return unknown;
+      return this.consumeCancelledTurn(request.key, context);
     }
 
     try {
@@ -2210,15 +2210,8 @@ export class PersistentCodexHandoff {
     context: HandoffReadContext,
   ): Promise<HandoffCreateResult> {
     const host = this.readHost(context);
-    const current = await this.authority.resolve(request.workspaceId);
-    if (!validWorkspace(current) || !sameWorkspace(current, workspace)) {
-      return { status: "outcome_unknown", dispatchId: request.key };
-    }
-    if (
-      !this.dispatchStillAllowed(context) ||
-      !this.modelCatalogue.isCurrent(modelCheck.scope, modelCheck.observedAt)
-    )
-      return { status: "outcome_unknown", dispatchId: request.key };
+    // recordThread has already made the operation durable. Consume the turn
+    // before awaiting authority so cancellation cannot make it replayable.
     let claimedTurn: boolean;
     try {
       claimedTurn = await this.journal.claimTurn(request.key);
@@ -2502,6 +2495,22 @@ export class PersistentCodexHandoff {
       // Result reads never create a replacement task or a model turn.
     }
     return { status: "outcome_unknown", dispatchId };
+  }
+
+  private async consumeCancelledTurn(
+    key: string,
+    context: HandoffReadContext,
+  ): Promise<HandoffCreateResult> {
+    if (context.signal?.aborted) {
+      try {
+        // After durable binding, cancellation is terminal even when the gate
+        // refused before its effect. Keep ordinary pre-effect fence recovery.
+        await this.journal.claimTurn(key);
+      } catch {
+        // A failed durable write is still unknown; no provider call is allowed.
+      }
+    }
+    return { status: "outcome_unknown", dispatchId: key };
   }
 
   private dispatchStillAllowed(context: HandoffReadContext): boolean {

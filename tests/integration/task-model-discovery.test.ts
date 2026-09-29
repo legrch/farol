@@ -53,6 +53,7 @@ async function fixture() {
   let approved = true;
   let epoch = "test-client-1";
   let onCatalogue: (() => void | Promise<void>) | undefined;
+  let beforeEffect: (() => void | Promise<void>) | undefined;
   const host = {
     modelCatalogueScope: () => epoch,
     async request(method: string, raw: unknown) {
@@ -113,6 +114,7 @@ async function fixture() {
     {
       run: async (preflight, effect) => {
         await preflight();
+        await beforeEffect?.();
         return effect();
       },
     },
@@ -158,6 +160,9 @@ async function fixture() {
     },
     set onCatalogue(value: () => void | Promise<void>) {
       onCatalogue = value;
+    },
+    set beforeEffect(value: () => void | Promise<void>) {
+      beforeEffect = value;
     },
     revoke() {
       approved = false;
@@ -599,6 +604,78 @@ it("cancellation inside a continuation claim leaves an unknown consumed intent w
   ).toMatchObject({ status: "outcome_unknown", dispatchId: request.key });
   expect((await f.journal.read(request.key))?.turnIntent).toBe(true);
   expect(f.effects()).toHaveLength(count);
+  expect(await f.route().continue(request)).toMatchObject({
+    status: "outcome_unknown",
+  });
+  expect(f.effects()).toHaveLength(count);
+});
+
+it.each(["create", "continue"] as const)(
+  "cancellation after %s binding is durable cannot resume on same-key replay",
+  async (kind) => {
+    const f = await fixture();
+    const route = f.route();
+    const parent = f.request();
+    if (kind === "continue") await route.create(parent);
+    const controller = new AbortController();
+    const key = randomUUID();
+    if (kind === "create") {
+      const original = f.journal.recordThread.bind(f.journal);
+      f.journal.recordThread = async (id, thread) => {
+        await original(id, thread);
+        if (id === key) controller.abort();
+      };
+    } else {
+      const original = f.journal.claimContinuation.bind(f.journal);
+      f.journal.claimContinuation = async (...args) => {
+        const claimed = await original(...args);
+        if (args[2] === key && claimed) controller.abort();
+        return claimed;
+      };
+    }
+    const createdRequest = { ...f.request(), key };
+    const continuedRequest = {
+      key,
+      dispatchId: parent.key,
+      message: "Continue fixture",
+    };
+    const first =
+      kind === "create"
+        ? await route.create(createdRequest, { signal: controller.signal })
+        : await route.continue(continuedRequest, { signal: controller.signal });
+    expect(first).toMatchObject({ status: "outcome_unknown", dispatchId: key });
+    const count = f.effects().length;
+    const replay =
+      kind === "create"
+        ? await f.route().create(createdRequest)
+        : await f.route().continue(continuedRequest);
+    expect(replay).toMatchObject({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    expect(f.effects()).toHaveLength(count);
+    expect((await f.journal.read(key))?.turnIntent).toBe(true);
+  },
+);
+
+it("cancellation after continuation preflight consumes its intent without stranding ordinary fence recovery", async () => {
+  const f = await fixture();
+  const parent = f.request();
+  await f.route().create(parent);
+  const count = f.effects().length;
+  const controller = new AbortController();
+  f.beforeEffect = () => controller.abort();
+  const request = {
+    key: randomUUID(),
+    dispatchId: parent.key,
+    message: "Continue fixture",
+  };
+  expect(
+    await f.route().continue(request, { signal: controller.signal }),
+  ).toMatchObject({ status: "outcome_unknown", dispatchId: request.key });
+  expect((await f.journal.read(request.key))?.turnIntent).toBe(true);
+  expect(f.effects()).toHaveLength(count);
+  f.beforeEffect = () => {};
   expect(await f.route().continue(request)).toMatchObject({
     status: "outcome_unknown",
   });
