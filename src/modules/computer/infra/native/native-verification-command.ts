@@ -1288,12 +1288,24 @@ async function approvedRootUnchanged(
 export async function discoverLinkedGitMetadata(
   root: string,
 ): Promise<WorkspaceGitMetadataGrant | null> {
+  return discoverWorkspaceGitMetadata(root, false);
+}
+
+/**
+ * Bind a primary checkout's internal metadata only after explicit full-Git
+ * approval. Linked worktrees retain their separately verified external grant.
+ * Admission still re-measures the physical Git layout on every task.
+ */
+export async function discoverWorkspaceGitMetadata(
+  root: string,
+  gitHistoryApproved: boolean,
+): Promise<WorkspaceGitMetadataGrant | null> {
   const metadata = await resolveWorkspaceGitMetadata(root, "discover");
   if (
     metadata === null ||
     metadata === "not-repository" ||
     metadata === "not-approved" ||
-    metadata.gitDirectory === path.join(root, ".git")
+    (!gitHistoryApproved && metadata.gitDirectory === path.join(root, ".git"))
   ) {
     return null;
   }

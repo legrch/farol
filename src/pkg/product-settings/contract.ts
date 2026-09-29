@@ -267,8 +267,9 @@ export const WorkspaceRootIdentitySchema = z.strictObject({
 
 export type WorkspaceRootIdentity = z.infer<typeof WorkspaceRootIdentitySchema>;
 
-// A linked worktree's Git metadata outside its root, approved when the owner
-// verified the workspace. Git verification opens no other external metadata.
+// Exact metadata measured during owner workspace verification. Linked
+// worktrees require this external grant; a primary checkout records its internal
+// .git only with full-Git approval so persistent tasks can bind the same layout.
 export const WorkspaceGitMetadataSchema = z.strictObject({
   gitDirectory: CanonicalAbsolutePathSchema,
   commonDirectory: CanonicalAbsolutePathSchema,

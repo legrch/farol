@@ -172,7 +172,7 @@ import {
   NativeReadonlyWorkspace,
   NEXT_SAFE_OPEN_HELPER,
 } from "../../modules/computer/infra/native/native-readonly-workspace";
-import { discoverLinkedGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
+import { discoverWorkspaceGitMetadata } from "../../modules/computer/infra/native/native-verification-command";
 import {
   CHATGPT_HOME,
   canonicalChatGptConversationUrl,
@@ -6874,9 +6874,12 @@ async function configureAdmittedProduct(
       if (result.value.kind !== "workspace.entries") {
         return configurationFailure("WORKSPACE_VERIFICATION_FAILED");
       }
-      // Verifying the workspace approves the linked Git metadata it has now,
-      // and only that; a primary checkout needs no grant.
-      const gitMetadata = await discoverLinkedGitMetadata(workspace.root);
+      // Preserve the measured layout for task selection. Primary metadata is
+      // bound only with explicit full-Git approval; linked grants stay exact.
+      const gitMetadata = await discoverWorkspaceGitMetadata(
+        workspace.root,
+        workspace.gitHistoryApproved === true,
+      );
       // The listing takes a moment, and a connector or Agent may have started
       // meanwhile; a re-verification rebinds the authority either would carry,
       // so it is admitted again right before it commits.
