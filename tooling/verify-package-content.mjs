@@ -41,6 +41,25 @@ function requireValue(condition, code) {
   if (!condition) throw new Error(code);
 }
 
+export function assertPackageResourceManifest(
+  resourceManifest,
+  artifact,
+  expectedVersion,
+  expectedChannel,
+) {
+  assertResourceManifest(resourceManifest);
+  requireValue(
+    resourceManifest.product.version === artifact.version &&
+      resourceManifest.product.version === expectedVersion,
+    "PACKAGE_RESOURCE_VERSION_MISMATCH",
+  );
+  requireValue(
+    resourceManifest.product.updateChannel === artifact.updateChannel &&
+      resourceManifest.product.updateChannel === expectedChannel,
+    "PACKAGE_RESOURCE_CHANNEL_MISMATCH",
+  );
+}
+
 export async function verifyPackageContent({
   artifact,
   appPath,
@@ -242,8 +261,18 @@ export async function verifyPackageContent({
     await fs.readFile(path.join(resources, "resource-manifest.json"), "utf8"),
   );
   if (sourceResourceManifest !== undefined)
-    assertResourceManifest(sourceResourceManifest);
-  assertResourceManifest(resourceManifest);
+    assertPackageResourceManifest(
+      sourceResourceManifest,
+      artifact,
+      expectedVersion,
+      expectedChannel,
+    );
+  assertPackageResourceManifest(
+    resourceManifest,
+    artifact,
+    expectedVersion,
+    expectedChannel,
+  );
 
   const mainPlist = path.join(appPath, "Contents/Info.plist");
   requireValue(

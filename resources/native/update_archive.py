@@ -152,6 +152,20 @@ def extract(archive, root, entries):
             os.chmod(root.joinpath(*parts), mode or 0o755, follow_symlinks=False)
 
 
+def file_identity(value):
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_uid, value.st_gid, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns)
+
+
+def unchanged_archive(archive_path, fd, before):
+    after = os.fstat(fd)
+    current = os.lstat(archive_path)
+    check(stat.S_ISREG(after.st_mode) and
+          file_identity(before) == file_identity(after) == file_identity(current),
+          "ARCHIVE_CHANGED")
+
+
 def main():
     check(len(sys.argv) == 5, "ARCHIVE_ARGUMENTS_INVALID")
     archive_path, root_path, expected_size, expected_sha = sys.argv[1:]
@@ -161,25 +175,30 @@ def main():
     root = pathlib.Path(root_path).resolve(strict=True)
     root_stat = root.lstat()
     check(stat.S_ISDIR(root_stat.st_mode) and root_stat.st_uid == os.getuid() and root_stat.st_mode & 0o077 == 0, "ARCHIVE_STAGE_INVALID")
-    fd = os.open(archive_path, os.O_RDONLY | os.O_NOFOLLOW)
+    expected_size = int(expected_size)
+    named = os.lstat(archive_path)
+    check(stat.S_ISREG(named.st_mode), "ARCHIVE_TYPE_INVALID")
+    check(named.st_nlink == 1 and named.st_size == expected_size, "ARCHIVE_SIZE_MISMATCH")
+    fd = os.open(archive_path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
         before = os.fstat(fd)
-        check(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and before.st_size == int(expected_size), "ARCHIVE_SIZE_MISMATCH")
+        check(stat.S_ISREG(before.st_mode) and file_identity(named) == file_identity(before), "ARCHIVE_CHANGED")
         digest = hashlib.sha256()
-        with os.fdopen(os.dup(fd), "rb") as stream:
-            while True:
-                chunk = stream.read(CHUNK)
-                if not chunk:
-                    break
-                digest.update(chunk)
-        after = os.fstat(fd)
-        check((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns), "ARCHIVE_CHANGED")
+        total = 0
+        while True:
+            chunk = os.read(fd, min(CHUNK, expected_size - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            check(total <= expected_size, "ARCHIVE_SIZE_MISMATCH")
+            digest.update(chunk)
+        check(total == expected_size, "ARCHIVE_SIZE_MISMATCH")
+        unchanged_archive(archive_path, fd, before)
         check(digest.hexdigest() == expected_sha, "ARCHIVE_DIGEST_MISMATCH")
         with os.fdopen(os.dup(fd), "rb") as stream, zipfile.ZipFile(stream) as archive:
             entries = preflight(archive)
             extract(archive, root, entries)
-        final = os.fstat(fd)
-        check((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) == (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns), "ARCHIVE_CHANGED")
+        unchanged_archive(archive_path, fd, before)
         print(json.dumps({"appPath": str(root / "Farol Next Preview.app"), "artifactPath": str(root / "artifact.json")}))
     finally:
         os.close(fd)

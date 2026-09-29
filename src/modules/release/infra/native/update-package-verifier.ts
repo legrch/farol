@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ import type {
 const execFileAsync = promisify(execFile);
 // Update only after reviewing update_archive.py and its focused tests.
 export const UPDATE_ARCHIVE_HELPER_SHA256 =
-  "cf31cfb3c6006e4d96a2e9f9e9dd5c274825f687dd716ce5a5bbb2bf8c12c638";
+  "b9097be9dfb53c4cc8a3cdae7d083fde41226e77b0cd4e039b8b59b36d07d0fb";
 type MeasuredIdentity = PackageIdentity & Readonly<{ buildVersion: string }>;
 export type VerifiedStagedPackage = Readonly<{
   identity: MeasuredIdentity;
@@ -33,21 +33,67 @@ export class PackageVerificationError extends Error {
   }
 }
 
+function sameRegularFile(before: BigIntStats, after: BigIntStats): boolean {
+  return (
+    after.isFile() &&
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.mode === after.mode &&
+    before.nlink === after.nlink &&
+    before.uid === after.uid &&
+    before.gid === after.gid &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  );
+}
+
 async function pinnedHelper(file: string): Promise<Buffer> {
-  const handle = await fs.open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
-    const stat = await handle.stat();
-    const bytes = await handle.readFile();
-    if (
-      !stat.isFile() ||
-      stat.size > 256 * 1024 ||
-      createHash("sha256").update(bytes).digest("hex") !==
-        UPDATE_ARCHIVE_HELPER_SHA256
-    )
+    const before = await fs.lstat(file, { bigint: true });
+    if (!before.isFile() || before.size < 1n || before.size > 262144n)
       throw new PackageVerificationError("invalid_stage");
-    return bytes;
-  } finally {
-    await handle.close();
+    const handle = await fs.open(
+      file,
+      constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+    );
+    try {
+      const opened = await handle.stat({ bigint: true });
+      if (!sameRegularFile(before, opened))
+        throw new PackageVerificationError("invalid_stage");
+      // One sentinel byte detects growth without ever allocating or reading
+      // beyond the checked helper size plus one.
+      const buffer = Buffer.alloc(Number(opened.size) + 1);
+      let total = 0;
+      while (total < buffer.length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          total,
+          buffer.length - total,
+          total,
+        );
+        if (bytesRead === 0) break;
+        total += bytesRead;
+      }
+      if (
+        total !== Number(opened.size) ||
+        !sameRegularFile(opened, await handle.stat({ bigint: true })) ||
+        !sameRegularFile(opened, await fs.lstat(file, { bigint: true }))
+      )
+        throw new PackageVerificationError("invalid_stage");
+      const bytes = buffer.subarray(0, total);
+      if (
+        createHash("sha256").update(bytes).digest("hex") !==
+        UPDATE_ARCHIVE_HELPER_SHA256
+      )
+        throw new PackageVerificationError("invalid_stage");
+      return bytes;
+    } finally {
+      await handle.close();
+    }
+  } catch (cause) {
+    if (cause instanceof PackageVerificationError) throw cause;
+    throw new PackageVerificationError("invalid_stage", cause);
   }
 }
 async function privateParent(directory: string): Promise<void> {
