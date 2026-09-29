@@ -1,0 +1,31 @@
+import { z } from "zod";
+
+const Code = z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u);
+export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
+  z.strictObject({ phase: z.literal("unavailable"), code: Code }),
+  z.strictObject({
+    phase: z.literal("idle"),
+    checkedAt: z.number().nonnegative().nullable(),
+  }),
+  z.strictObject({ phase: z.literal("checking") }),
+  z.strictObject({ phase: z.literal("downloading") }),
+  z.strictObject({
+    phase: z.literal("ready"),
+    version: z.string().max(128),
+    deferred: z.boolean(),
+    blockedBy: Code.nullable(),
+  }),
+  z.strictObject({
+    phase: z.literal("applying"),
+    version: z.string().max(128),
+  }),
+  z.strictObject({
+    phase: z.literal("failed"),
+    code: Code,
+    recoveryRequired: z.boolean(),
+  }),
+]);
+export type InstalledUpdateView = z.infer<typeof InstalledUpdateViewSchema>;
+export const InstalledUpdateCommandSchema = z.strictObject({
+  kind: z.enum(["status", "check", "later", "restart"]),
+});

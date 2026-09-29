@@ -6,17 +6,8 @@ export type ReadyUpdate = Readonly<{
   handle: string;
   manifest: ReleaseManifest;
 }>;
-export type UpdateView =
-  | Readonly<{ phase: "idle"; checkedAt: number | null }>
-  | Readonly<{ phase: "checking" | "downloading" }>
-  | Readonly<{
-      phase: "ready";
-      version: string;
-      deferred: boolean;
-      blockedBy: string | null;
-    }>
-  | Readonly<{ phase: "applying"; version: string }>
-  | Readonly<{ phase: "failed"; code: string; recoveryRequired: boolean }>;
+export type { InstalledUpdateView as UpdateView } from "../contract/installed-update";
+import type { InstalledUpdateView as UpdateView } from "../contract/installed-update";
 
 type KnownFailure = Readonly<{ ok: false; code: string }>;
 export type InstalledUpdaterPorts = Readonly<{
