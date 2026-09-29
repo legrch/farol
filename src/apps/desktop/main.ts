@@ -233,6 +233,10 @@ import {
   type OwnedCloser,
   type QuitDrainReceipt,
 } from "./quit-drain";
+import {
+  createGracefulQuitSignals,
+  type GracefulQuitSignals,
+} from "./quit-signal";
 import { writeQuitReceipt } from "./quit-receipt-store";
 import { isTrustedIpcSender } from "./ipc-sender";
 import {
@@ -8670,7 +8674,7 @@ function disposeChatGptRoutes(): void {
   liveTaskRoutes.clear();
 }
 
-async function main(): Promise<void> {
+async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   app.on(
     "second-instance",
     (_event, _commandLine, _workingDirectory, candidate) => {
@@ -9023,6 +9027,7 @@ async function main(): Promise<void> {
   app.on("window-all-closed", () => {
     if (windowAllClosedAction(process.platform) === "quit") app.quit();
   });
+  quitSignals.ready();
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
@@ -9069,7 +9074,12 @@ if (!primaryInstanceLock) {
       app.quit();
     });
 } else {
-  const initialization = main();
+  const quitSignals = createGracefulQuitSignals({
+    signals: process,
+    requestQuit: () => app.quit(),
+    isQuitting: () => quitInProgress,
+  });
+  const initialization = main(quitSignals);
   const readiness = initialization.then(() => {
     if (!isPrimaryReady()) throw new Error("PRIMARY_STARTUP_INCOMPLETE");
   });
