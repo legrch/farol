@@ -68,6 +68,17 @@ export class CodexProxyFailure extends Error {
   }
 }
 
+/** Pre-send refusal with closed transport evidence, preserving effect safety. */
+export class CodexProxyNotSubmittedFailure extends HandoffNotSubmittedError {
+  readonly diagnostic: CodexProxyDiagnostic;
+
+  constructor(diagnostic: CodexProxyDiagnostic) {
+    super("CODEX_SHARED_HOST_UNAVAILABLE");
+    this.name = "CodexProxyNotSubmittedFailure";
+    this.diagnostic = Object.freeze({ ...diagnostic });
+  }
+}
+
 export type CodexSocketAdmissionCode =
   | "CODEX_SHARED_SOCKET_NOT_FOUND"
   | "CODEX_SHARED_SOCKET_ACCESS_DENIED"
@@ -299,7 +310,10 @@ export class SharedCodexProxyHost implements HandoffHost {
   }
 
   async connect(): Promise<void> {
-    if (this.lost) throw unavailable();
+    if (this.lost)
+      throw new CodexProxyFailure(
+        this.terminal ?? { phase: "idle", method: "none", result: "closed" },
+      );
     if (this.ready) return this.ready;
     let child: ChildProcessWithoutNullStreams;
     try {
@@ -368,9 +382,11 @@ export class SharedCodexProxyHost implements HandoffHost {
     if (!METHODS.has(method)) throw new Error("CODEX_SHARED_METHOD_DENIED");
     try {
       await this.connect();
-    } catch {
+    } catch (error) {
       // This request has not reached send(); no steer frame exists. Errors
       // after send() keep their original unknown-submission classification.
+      if (error instanceof CodexProxyFailure)
+        throw new CodexProxyNotSubmittedFailure(error.diagnostic);
       throw new HandoffNotSubmittedError("CODEX_SHARED_HOST_UNAVAILABLE");
     }
     // Capacity is checked synchronously before send() can write a frame.

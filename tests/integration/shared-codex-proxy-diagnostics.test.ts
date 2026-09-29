@@ -189,6 +189,31 @@ describe("shared proxy closed diagnostics", () => {
     },
   );
 
+  it("surfaces an idle child exit without submitting or relaunching", async () => {
+    const f = fixture("hang-request");
+    await f.host.connect();
+    const child = f.child();
+    if (!child) throw new Error("Disposable child missing");
+    const writes = vi.spyOn(child.stdin, "write");
+    const exited = new Promise<void>((resolve) =>
+      child.once("exit", () => resolve()),
+    );
+    child.kill("SIGTERM");
+    await exited;
+    const error = await f.host
+      .request("project/list", {})
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(HandoffNotSubmittedError);
+    expect(JSON.parse(codexTaskRouteFailureRecord(error))).toEqual({
+      code: "CODEX_SHARED_PROXY_EXITED",
+      phase: "idle",
+      method: "none",
+      result: "exited",
+    });
+    expect(writes).not.toHaveBeenCalled();
+    expect(f.launches()).toBe(1);
+  });
+
   it("keeps a sent RPC refusal distinct from a pre-send refusal", async () => {
     const f = fixture("rpc-request");
     const error = await f.host

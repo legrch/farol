@@ -1,5 +1,6 @@
 import {
   CodexProxyFailure,
+  CodexProxyNotSubmittedFailure,
   CodexSocketAdmissionError,
 } from "../../modules/chat/infra/native/shared-codex-proxy-host";
 import type { ProductConfigurationResult } from "../../pkg/product-settings/contract";
@@ -9,7 +10,10 @@ export function codexTaskRouteFailureCode(
   error: unknown,
 ): Extract<ProductConfigurationResult, { ok: false }>["error"] {
   if (error instanceof CodexSocketAdmissionError) return error.code;
-  if (error instanceof CodexProxyFailure) {
+  if (
+    error instanceof CodexProxyFailure ||
+    error instanceof CodexProxyNotSubmittedFailure
+  ) {
     switch (error.diagnostic.result) {
       case "launch_failed":
         return "CODEX_SHARED_PROXY_LAUNCH_FAILED";
@@ -35,7 +39,10 @@ export function codexTaskRouteFailureCode(
 /** Non-secret, bounded terminal record for the owning launch handle. */
 export function codexTaskRouteFailureRecord(error: unknown): string {
   const code = codexTaskRouteFailureCode(error);
-  if (error instanceof CodexProxyFailure) {
+  if (
+    error instanceof CodexProxyFailure ||
+    error instanceof CodexProxyNotSubmittedFailure
+  ) {
     const { phase, method, result, rpcCode } = error.diagnostic;
     // Methods originate in the fixed proxy method catalogue, never a payload.
     const safeMethod =
