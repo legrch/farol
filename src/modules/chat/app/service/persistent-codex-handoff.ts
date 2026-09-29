@@ -121,6 +121,7 @@ export type HandoffWorkspace = Readonly<{
 
 export type HandoffRecord = Readonly<{
   requestDigest: string;
+  dispatchProtocol?: 1 | undefined;
   modelCatalogue?:
     | Readonly<{ modelId: string; observedAt: number; scope: string }>
     | undefined;
@@ -165,6 +166,12 @@ export interface HandoffJournal {
   ): Promise<void>;
   reserve(key: string, record: HandoffRecord): Promise<HandoffRecord>;
   claimThread(key: string): Promise<boolean>;
+  claimDispatchAttempt?(key: string, initial: boolean): Promise<number | null>;
+  recordPreEffectRefusal?(
+    key: string,
+    attempt: number,
+    canPublish: () => boolean,
+  ): Promise<void>;
   recordThread(key: string, threadId: string): Promise<void>;
   claimTurn(key: string): Promise<boolean>;
   recordTurn(key: string, turnId: string): Promise<void>;
@@ -1707,6 +1714,9 @@ export class PersistentCodexHandoff {
 
     const expected = {
       requestDigest: digest,
+      ...(this.supportsDispatchAttempts()
+        ? { dispatchProtocol: 1 as const }
+        : {}),
       workspaceId: parent.workspaceId,
       workspace,
       projectId: parent.projectId,
@@ -1812,9 +1822,27 @@ export class PersistentCodexHandoff {
           code: "HANDOFF_CONTINUE_RESERVATION_CONFLICT",
         };
     }
+    let dispatchAttempt: number | undefined;
+    let effectPossible = false;
+    let turnClaimAttempted = false;
     try {
+      const initial = !child.threadIntent;
+      if (
+        child.threadIntent &&
+        this.supportsDispatchAttempts() &&
+        child.dispatchProtocol !== 1
+      )
+        return unknown;
       if (!child.threadIntent && !(await this.journal.claimThread(request.key)))
         return unknown;
+      if (child.dispatchProtocol === 1) {
+        const claimed = await this.journal.claimDispatchAttempt?.(
+          request.key,
+          initial,
+        );
+        if (claimed === null || claimed === undefined) return unknown;
+        dispatchAttempt = claimed;
+      }
       if (!child.threadId)
         await this.journal.recordThread(request.key, parent.threadId);
       if (
@@ -1826,7 +1854,13 @@ export class PersistentCodexHandoff {
       )
         return { status: "refused", code: "HANDOFF_CONTINUE_PARENT_RESERVED" };
     } catch {
-      return this.consumeCancelledTurn(request.key, context);
+      return this.finishUnsubmittedAttempt(
+        request.key,
+        context,
+        dispatchAttempt,
+        effectPossible,
+        !turnClaimAttempted,
+      );
     }
 
     let turnId: string;
@@ -1877,6 +1911,7 @@ export class PersistentCodexHandoff {
         async () => {
           if (!this.dispatchStillAllowed(context))
             throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
+          turnClaimAttempted = true;
           if (!(await this.journal.claimTurn(request.key)))
             throw new HandoffNotSubmittedError(
               "HANDOFF_CONTINUE_ALREADY_CLAIMED",
@@ -1894,6 +1929,7 @@ export class PersistentCodexHandoff {
             throw new HandoffNotSubmittedError(
               "HANDOFF_CONTINUE_AUTHORITY_CHANGED",
             );
+          effectPossible = true;
           const started = object(
             await host.request(
               "turn/start",
@@ -1927,7 +1963,13 @@ export class PersistentCodexHandoff {
         (error) => error instanceof HandoffNotSubmittedError,
       );
     } catch {
-      return this.consumeCancelledTurn(request.key, context);
+      return this.finishUnsubmittedAttempt(
+        request.key,
+        context,
+        dispatchAttempt,
+        effectPossible,
+        !turnClaimAttempted,
+      );
     }
 
     try {
@@ -2000,6 +2042,18 @@ export class PersistentCodexHandoff {
     if (current?.threadIntent) {
       if (current.threadId && !current.turnIntent) {
         try {
+          let dispatchAttempt: number | undefined;
+          if (this.supportsDispatchAttempts() && current.dispatchProtocol !== 1)
+            return { status: "outcome_unknown", dispatchId: request.key };
+          if (current.dispatchProtocol === 1) {
+            const claimed = await this.journal.claimDispatchAttempt?.(
+              request.key,
+              false,
+            );
+            if (claimed === null || claimed === undefined)
+              return { status: "outcome_unknown", dispatchId: request.key };
+            dispatchAttempt = claimed;
+          }
           const response = object(
             await host.request("thread/read", {
               threadId: current.threadId,
@@ -2037,6 +2091,7 @@ export class PersistentCodexHandoff {
             workspace,
             check,
             context,
+            dispatchAttempt,
           );
         } catch {
           return { status: "outcome_unknown", dispatchId: request.key };
@@ -2110,6 +2165,9 @@ export class PersistentCodexHandoff {
     try {
       reserved = await this.journal.reserve(request.key, {
         requestDigest,
+        ...(this.supportsDispatchAttempts()
+          ? { dispatchProtocol: 1 as const }
+          : {}),
         modelCatalogue: {
           modelId: modelCheck.model.id,
           observedAt: modelCheck.observedAt,
@@ -2155,6 +2213,20 @@ export class PersistentCodexHandoff {
     if (!claimedThread) {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
+    let dispatchAttempt: number | undefined;
+    if (reserved.dispatchProtocol === 1) {
+      try {
+        const claimed = await this.journal.claimDispatchAttempt?.(
+          request.key,
+          true,
+        );
+        if (claimed === null || claimed === undefined)
+          return { status: "outcome_unknown", dispatchId: request.key };
+        dispatchAttempt = claimed;
+      } catch {
+        return { status: "outcome_unknown", dispatchId: request.key };
+      }
+    }
     // The durable claim precedes the first host side effect. A lost response,
     // crash or write failure cannot turn a replay into a second thread/start.
     let threadId: string;
@@ -2199,7 +2271,14 @@ export class PersistentCodexHandoff {
     } catch {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
-    return this.startTurn(request, threadId, workspace, modelCheck, context);
+    return this.startTurn(
+      request,
+      threadId,
+      workspace,
+      modelCheck,
+      context,
+      dispatchAttempt,
+    );
   }
 
   private async startTurn(
@@ -2208,6 +2287,7 @@ export class PersistentCodexHandoff {
     workspace: HandoffWorkspace,
     modelCheck: Extract<CodexModelCheck, { status: "available" }>,
     context: HandoffReadContext,
+    dispatchAttempt?: number,
   ): Promise<HandoffCreateResult> {
     const host = this.readHost(context);
     // recordThread has already made the operation durable. Consume the turn
@@ -2216,11 +2296,24 @@ export class PersistentCodexHandoff {
     try {
       claimedTurn = await this.journal.claimTurn(request.key);
     } catch {
-      return { status: "outcome_unknown", dispatchId: request.key };
+      return this.finishUnsubmittedAttempt(
+        request.key,
+        context,
+        dispatchAttempt,
+        false,
+        false,
+      );
     }
     if (!claimedTurn) {
-      return { status: "outcome_unknown", dispatchId: request.key };
+      return this.finishUnsubmittedAttempt(
+        request.key,
+        context,
+        dispatchAttempt,
+        false,
+        false,
+      );
     }
+    let effectPossible = false;
     try {
       const atSend = await this.authority.resolve(request.workspaceId);
       if (
@@ -2232,6 +2325,7 @@ export class PersistentCodexHandoff {
         throw new HandoffNotSubmittedError(
           "HANDOFF_DISPATCH_AUTHORITY_CHANGED",
         );
+      effectPossible = true;
       const started = object(
         await host.request("turn/start", {
           threadId,
@@ -2262,7 +2356,13 @@ export class PersistentCodexHandoff {
         turnId: turn.id,
       };
     } catch {
-      return { status: "outcome_unknown", dispatchId: request.key };
+      return this.finishUnsubmittedAttempt(
+        request.key,
+        context,
+        dispatchAttempt,
+        effectPossible,
+        false,
+      );
     }
   }
 
@@ -2497,17 +2597,37 @@ export class PersistentCodexHandoff {
     return { status: "outcome_unknown", dispatchId };
   }
 
-  private async consumeCancelledTurn(
+  private supportsDispatchAttempts(): boolean {
+    return (
+      !!this.journal.claimDispatchAttempt &&
+      !!this.journal.recordPreEffectRefusal
+    );
+  }
+
+  private async finishUnsubmittedAttempt(
     key: string,
     context: HandoffReadContext,
+    attempt: number | undefined,
+    effectPossible: boolean,
+    consumeCancellation = true,
   ): Promise<HandoffCreateResult> {
-    if (context.signal?.aborted) {
+    if (!effectPossible) {
       try {
-        // After durable binding, cancellation is terminal even when the gate
-        // refused before its effect. Keep ordinary pre-effect fence recovery.
-        await this.journal.claimTurn(key);
+        if (context.signal?.aborted && consumeCancellation) {
+          // The attempt was consumed before binding. Even if this write fails,
+          // cancellation has no no-effect proof and cannot authorize replay.
+          await this.journal.claimTurn(key);
+        } else if (!context.signal?.aborted && attempt !== undefined) {
+          // Only the owner of this attempt may attest a known pre-send refusal.
+          // Failed publication leaves it consumed, never silently retryable.
+          await this.journal.recordPreEffectRefusal?.(
+            key,
+            attempt,
+            () => !context.signal?.aborted,
+          );
+        }
       } catch {
-        // A failed durable write is still unknown; no provider call is allowed.
+        // No provider effect follows an unknown durable write.
       }
     }
     return { status: "outcome_unknown", dispatchId: key };

@@ -2581,12 +2581,13 @@ describe("persistent Codex handoff core", () => {
     expect(host.calls).not.toContain("thread/start");
   });
 
-  it("resumes the one confirmed thread after restart before any turn intent", async () => {
+  it("resumes the one confirmed thread after a durable known pre-effect proof", async () => {
     const { host, service, journalRoot } = await fixture();
     const journal = new PrivateCodexHandoffJournal(journalRoot);
     const requestDigest = new Sha256HandoffRequestDigester().digest(request);
     await journal.reserve(key, {
       requestDigest,
+      dispatchProtocol: 1,
       workspaceId: request.workspaceId,
       workspace,
       projectId: request.projectId,
@@ -2594,7 +2595,9 @@ describe("persistent Codex handoff core", () => {
       turnIntent: false,
     });
     await journal.claimThread(key);
+    expect(await journal.claimDispatchAttempt(key, true)).toBe(0);
     await journal.recordThread(key, "issued-thread");
+    await journal.recordPreEffectRefusal(key, 0);
     expect(await service().create(request)).toMatchObject({
       status: "dispatched",
       threadId: "issued-thread",
@@ -2604,6 +2607,26 @@ describe("persistent Codex handoff core", () => {
     expect(host.calls.filter((method) => method === "turn/start")).toHaveLength(
       1,
     );
+  });
+
+  it("keeps an incomplete legacy thread binding unknown without inventing retry proof", async () => {
+    const { host, service, journalRoot } = await fixture();
+    const journal = new PrivateCodexHandoffJournal(journalRoot);
+    await journal.reserve(key, {
+      requestDigest: new Sha256HandoffRequestDigester().digest(request),
+      workspaceId: request.workspaceId,
+      workspace,
+      projectId: request.projectId,
+      threadIntent: false,
+      turnIntent: false,
+    });
+    await journal.claimThread(key);
+    await journal.recordThread(key, "issued-thread");
+    expect(await service().create(request)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(host.calls).not.toContain("thread/start");
+    expect(host.calls).not.toContain("turn/start");
   });
 
   it("refuses to resume a confirmed thread whose model has changed", async () => {

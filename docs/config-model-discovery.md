@@ -89,10 +89,15 @@ request cannot reserve new work after discovery. Physical authority is checked
 again after each awaited durable claim, immediately before thread/start or
 turn/start. Cancellation, revocation or root replacement after a durable intent
 leaves an outcome-unknown consumed operation, never permission to dispatch again.
-Once a thread binding is durable, create consumes turn intent before awaited
-preflight. Continuation consumes a cancelled intent before returning unknown,
-while preserving known pre-effect fence recovery for non-cancelled requests.
-A failed journal write remains unknown, never permission to send. An absent model or unsupported
+New journal reservations use a bounded durable dispatch-attempt protocol. The
+attempt is consumed before publishing a thread binding or continuation claim.
+A cancelled attempt has no retry proof, even if writing turn intent fails before
+publication. A same-key retry requires the predecessor's immutable proof of a
+known non-cancelled pre-send refusal, then exclusively claims the next attempt.
+Failed proof publication, incomplete legacy binding, lost acknowledgement and
+exhaustion after 32 attempts stay unknown; they never authorize a send. Existing
+confirmed receipts remain readable. Non-cancelled pre-effect fence recovery stays
+available with this proof; provider submission never generates one. An absent model or unsupported
 effort reports the configured values and bounded reported alternatives. A failed
 or partial catalogue is availability **unknown**, never absence and never a
 reason to use a fallback model.

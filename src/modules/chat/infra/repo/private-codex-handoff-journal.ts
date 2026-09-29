@@ -1,6 +1,6 @@
 import type { ProjectPreferenceRecord } from "../../app/port/codex-project-preference";
 import { z } from "zod";
-import { constants } from "node:fs";
+import { constants, linkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -62,6 +62,11 @@ const CatalogueObservationSchema = z.strictObject({
     .regex(/^[^\s\u0000-\u001f\u007f]+$/u),
 });
 
+const DispatchAttemptSchema = z.strictObject({
+  attempt: z.number().int().min(0).max(31),
+});
+const MAX_DISPATCH_ATTEMPTS = 32;
+
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 
 function validKey(key: string): boolean {
@@ -82,7 +87,11 @@ async function syncDirectory(directory: string): Promise<void> {
   }
 }
 
-async function writeOnce(file: string, value: unknown): Promise<boolean> {
+async function writeOnce(
+  file: string,
+  value: unknown,
+  canPublish?: () => boolean,
+): Promise<boolean> {
   const temporary = `${file}.${randomUUID()}.tmp`;
   let handle;
   try {
@@ -107,7 +116,14 @@ async function writeOnce(file: string, value: unknown): Promise<boolean> {
     // link publishes fully written bytes without replacing another claimant.
     // A reader never observes an empty or partially written final file.
     try {
-      await fs.link(temporary, file);
+      if (canPublish) {
+        // Prepare and sync privately, then check cancellation and publish in
+        // one synchronous segment. No awaited gap can grant retry after abort.
+        if (!canPublish()) return false;
+        linkSync(temporary, file);
+      } else {
+        await fs.link(temporary, file);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
       throw error;
@@ -407,6 +423,78 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     });
   }
 
+  async claimDispatchAttempt(
+    key: string,
+    initial: boolean,
+  ): Promise<number | null> {
+    const record = await this.read(key);
+    if (
+      record?.dispatchProtocol !== 1 ||
+      !record.threadIntent ||
+      record.turnIntent
+    )
+      return null;
+    const directory = this.directory(key);
+    for (let attempt = 0; attempt < MAX_DISPATCH_ATTEMPTS; attempt++) {
+      const file = path.join(directory, `dispatch-attempt-${attempt}.json`);
+      const current = await readPrivate(file, true, true);
+      if (current !== null) {
+        if (DispatchAttemptSchema.parse(current).attempt !== attempt)
+          throw new Error("HANDOFF_DISPATCH_ATTEMPT_INVALID");
+        if (initial) return null;
+        const proof = await readPrivate(
+          path.join(directory, `pre-effect-proof-${attempt}.json`),
+          true,
+          true,
+        );
+        if (proof === null) return null;
+        if (DispatchAttemptSchema.parse(proof).attempt !== attempt)
+          throw new Error("HANDOFF_PRE_EFFECT_PROOF_INVALID");
+        continue;
+      }
+      // Missing attempt zero on a replay is unknown, never ownership. Each
+      // retry consumes its predecessor's immutable no-effect proof by CAS.
+      if ((attempt === 0) !== initial) return null;
+      return (await writeOnce(file, { attempt })) ? attempt : null;
+    }
+    return null;
+  }
+
+  async recordPreEffectRefusal(
+    key: string,
+    attempt: number,
+    canPublish: () => boolean = () => true,
+  ): Promise<void> {
+    DispatchAttemptSchema.parse({ attempt });
+    const record = await this.read(key);
+    if (
+      record?.dispatchProtocol !== 1 ||
+      !record.threadIntent ||
+      record.turnIntent
+    )
+      return;
+    const directory = this.directory(key);
+    const claimed = await readPrivate(
+      path.join(directory, `dispatch-attempt-${attempt}.json`),
+      true,
+      true,
+    );
+    if (
+      claimed === null ||
+      DispatchAttemptSchema.parse(claimed).attempt !== attempt
+    )
+      throw new Error("HANDOFF_DISPATCH_ATTEMPT_MISSING");
+    const proofFile = path.join(directory, `pre-effect-proof-${attempt}.json`);
+    if (!(await writeOnce(proofFile, { attempt }, canPublish))) {
+      const proof = await readPrivate(proofFile, true, true);
+      if (
+        proof === null ||
+        DispatchAttemptSchema.parse(proof).attempt !== attempt
+      )
+        throw new Error("HANDOFF_PRE_EFFECT_PROOF_INVALID");
+    }
+  }
+
   async recordThread(key: string, threadId: string): Promise<void> {
     if (
       !(await writeOnce(
@@ -686,6 +774,8 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
         (typeof record.continuedFrom !== "string" ||
           !validKey(record.continuedFrom))) ||
       record.continuationVerified !== undefined ||
+      (record.dispatchProtocol !== undefined &&
+        record.dispatchProtocol !== 1) ||
       (record.reasoningEffort !== undefined &&
         (typeof record.reasoningEffort !== "string" ||
           !/^[A-Za-z0-9_-]{1,40}$/u.test(record.reasoningEffort))) ||
@@ -769,6 +859,9 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     }
     return {
       requestDigest: record.requestDigest,
+      ...(record.dispatchProtocol === undefined
+        ? {}
+        : { dispatchProtocol: record.dispatchProtocol }),
       ...(record.adopted ? { adopted: true as const } : {}),
       ...(record.model === undefined ? {} : { model: record.model }),
       ...(record.reasoningEffort === undefined

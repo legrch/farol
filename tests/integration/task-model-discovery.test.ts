@@ -105,21 +105,23 @@ async function fixture() {
       throw new Error("unexpected method " + method);
     },
   };
-  const service = new PersistentCodexHandoff(
-    { resolve: async () => (approved ? structuredClone(workspace) : null) },
-    host,
-    journal,
-    new Sha256HandoffRequestDigester(),
-    now() + 60_000,
-    {
-      run: async (preflight, effect) => {
-        await preflight();
-        await beforeEffect?.();
-        return effect();
+  const makeService = (selectedJournal = journal) =>
+    new PersistentCodexHandoff(
+      { resolve: async () => (approved ? structuredClone(workspace) : null) },
+      host,
+      selectedJournal,
+      new Sha256HandoffRequestDigester(),
+      now() + 60_000,
+      {
+        run: async (preflight, effect) => {
+          await preflight();
+          await beforeEffect?.();
+          return effect();
+        },
       },
-    },
-    now,
-  );
+      now,
+    );
+  let service = makeService();
   const route = () =>
     new AdmittedCodexTaskRoute(
       service,
@@ -139,8 +141,16 @@ async function fixture() {
     message: "Fixture only",
   });
   return {
-    service,
+    get service() {
+      return service;
+    },
     journal,
+    journalRoot: path.join(root, "journal"),
+    restart() {
+      service = makeService(
+        new PrivateCodexHandoffJournal(path.join(root, "journal")),
+      );
+    },
     activate: async (dispatchId: string) => {
       const record = await journal.read(dispatchId);
       if (!record?.threadId) throw Error("DISPATCH_MISSING");
@@ -680,4 +690,176 @@ it("cancellation after continuation preflight consumes its intent without strand
     status: "outcome_unknown",
   });
   expect(f.effects()).toHaveLength(count);
+});
+
+it.each(["create", "continue"] as const)(
+  "cancellation after %s binding stays consumed when the turn-intent write fails before publication",
+  async (kind) => {
+    const f = await fixture();
+    const parent = f.request();
+    if (kind === "continue") await f.route().create(parent);
+    const controller = new AbortController();
+    const key = randomUUID();
+    if (kind === "create") {
+      const original = f.journal.recordThread.bind(f.journal);
+      f.journal.recordThread = async (id, thread) => {
+        await original(id, thread);
+        if (id === key) controller.abort();
+      };
+    } else {
+      const original = f.journal.claimContinuation.bind(f.journal);
+      f.journal.claimContinuation = async (...args) => {
+        const claimed = await original(...args);
+        if (args[2] === key && claimed) controller.abort();
+        return claimed;
+      };
+    }
+    let failedWrites = 0;
+    const claimTurn = f.journal.claimTurn.bind(f.journal);
+    f.journal.claimTurn = async (id) => {
+      if (id === key && failedWrites++ === 0)
+        throw new Error("fixture pre-publication I/O refusal");
+      return claimTurn(id);
+    };
+    const create = { ...f.request(), key };
+    const continued = {
+      key,
+      dispatchId: parent.key,
+      message: "Continue fixture",
+    };
+    const first =
+      kind === "create"
+        ? await f.route().create(create, { signal: controller.signal })
+        : await f.route().continue(continued, { signal: controller.signal });
+    expect(first).toMatchObject({ status: "outcome_unknown", dispatchId: key });
+    expect(failedWrites).toBe(1);
+    expect((await f.journal.read(key))?.turnIntent).toBe(false);
+    const count = f.effects().length;
+    f.restart();
+    const replay =
+      kind === "create"
+        ? await f.route().create(create)
+        : await f.route().continue(continued);
+    expect(replay).toMatchObject({
+      status: "outcome_unknown",
+      dispatchId: key,
+    });
+    expect(f.effects()).toHaveLength(count);
+  },
+);
+
+it.each([false, true])(
+  "a known pre-send I/O refusal needs a durable proof (publication fails: %s)",
+  async (proofFails) => {
+    const f = await fixture();
+    const request = f.request();
+    const original = f.journal.claimTurn.bind(f.journal);
+    f.journal.claimTurn = async () => {
+      throw new Error("fixture no turn intent published");
+    };
+    if (proofFails)
+      f.journal.recordPreEffectRefusal = async () => {
+        throw new Error("fixture proof not published");
+      };
+    expect(await f.route().create(request)).toMatchObject({
+      status: "outcome_unknown",
+    });
+    expect(f.effects()).toHaveLength(1);
+    f.journal.claimTurn = original;
+    f.restart();
+    expect((await f.route().create(request)).status).toBe(
+      proofFails ? "outcome_unknown" : "dispatched",
+    );
+    expect(f.effects()).toHaveLength(proofFails ? 1 : 2);
+  },
+);
+
+it("a retry consumes its proof before cancellation and failed turn-intent publication", async () => {
+  const f = await fixture();
+  const request = f.request();
+  f.journal.claimTurn = async () => {
+    throw new Error("fixture no turn intent published");
+  };
+  expect((await f.route().create(request)).status).toBe("outcome_unknown");
+  const controller = new AbortController();
+  f.journal.claimTurn = async () => {
+    controller.abort();
+    throw new Error("fixture cancelled before publication");
+  };
+  expect(
+    (await f.route().create(request, { signal: controller.signal })).status,
+  ).toBe("outcome_unknown");
+  f.restart();
+  expect((await f.route().create(request)).status).toBe("outcome_unknown");
+  expect(f.effects()).toHaveLength(1);
+});
+
+it("durable retry claims are exclusive and bounded", async () => {
+  const f = await fixture();
+  const request = f.request();
+  f.journal.claimTurn = async () => {
+    throw new Error("fixture no turn intent published");
+  };
+  expect((await f.route().create(request)).status).toBe("outcome_unknown");
+  const first = await Promise.all([
+    f.journal.claimDispatchAttempt(request.key, false),
+    f.journal.claimDispatchAttempt(request.key, false),
+  ]);
+  expect(first.filter((x) => x === 1)).toHaveLength(1);
+  expect(first.filter((x) => x === null)).toHaveLength(1);
+  for (let attempt = 1; attempt < 32; attempt++) {
+    await f.journal.recordPreEffectRefusal(request.key, attempt);
+    expect(await f.journal.claimDispatchAttempt(request.key, false)).toBe(
+      attempt === 31 ? null : attempt + 1,
+    );
+  }
+  expect(f.effects()).toHaveLength(1);
+});
+
+it.each(["malformed", "symlink", "null"] as const)(
+  "a %s retry proof cannot authorize a provider effect",
+  async (kind) => {
+    const f = await fixture();
+    const request = f.request();
+    f.journal.claimTurn = async () => {
+      throw new Error("fixture no turn intent published");
+    };
+    expect((await f.route().create(request)).status).toBe("outcome_unknown");
+    const proof = path.join(
+      f.journalRoot,
+      request.key,
+      "pre-effect-proof-0.json",
+    );
+    if (kind === "symlink") {
+      await fs.unlink(proof);
+      await fs.symlink("dispatch-attempt-0.json", proof);
+    } else
+      await fs.writeFile(
+        proof,
+        kind === "null" ? "null" : JSON.stringify({ attempt: 0, extra: true }),
+      );
+    f.restart();
+    expect((await f.route().create(request)).status).toBe("outcome_unknown");
+    expect(f.effects()).toHaveLength(1);
+  },
+);
+
+it("cancellation before no-effect proof publication cannot reopen the consumed attempt", async () => {
+  const f = await fixture();
+  const controller = new AbortController();
+  const request = f.request();
+  f.journal.claimTurn = async () => {
+    throw new Error("fixture no turn intent published");
+  };
+  const original = f.journal.recordPreEffectRefusal.bind(f.journal);
+  f.journal.recordPreEffectRefusal = async (...args) => {
+    controller.abort();
+    return original(...args);
+  };
+  expect(
+    (await f.route().create(request, { signal: controller.signal })).status,
+  ).toBe("outcome_unknown");
+  f.restart();
+  expect((await f.route().create(request)).status).toBe("outcome_unknown");
+  expect(f.effects()).toHaveLength(1);
 });
