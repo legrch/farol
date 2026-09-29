@@ -73,7 +73,28 @@ export function assertResourceManifest(
   candidate,
   code = "PACKAGE_RESOURCE_MANIFEST_INVALID",
 ) {
-  if (!isDeepStrictEqual(candidate, EXPECTED_RESOURCE_MANIFEST)) {
+  const ownerBeta = candidate?.product?.updateChannel === "github-owner-beta";
+  const expected = ownerBeta
+    ? {
+        ...EXPECTED_RESOURCE_MANIFEST,
+        product: {
+          ...EXPECTED_RESOURCE_MANIFEST.product,
+          version: candidate.product.version,
+          updateChannel: "github-owner-beta",
+        },
+        integrations: {
+          ...EXPECTED_RESOURCE_MANIFEST.integrations,
+          updater: "farol-owned-github-releases",
+        },
+      }
+    : EXPECTED_RESOURCE_MANIFEST;
+  if (
+    (ownerBeta &&
+      !/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-owner\.beta\.(0|[1-9][0-9]*)$/u.test(
+        candidate.product.version,
+      )) ||
+    !isDeepStrictEqual(candidate, expected)
+  ) {
     throw new Error(code);
   }
 }

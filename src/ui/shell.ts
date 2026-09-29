@@ -288,7 +288,7 @@ const bootstrapSchema = z.strictObject({
     "review_required",
     "unavailable",
   ]),
-  updateChannel: z.literal("local-preview-only"),
+  updateChannel: z.enum(["local-preview-only", "github-owner-beta"]),
   nativeFilesystem: z.literal(true),
   nativeAgent: z.boolean(),
   liveProvider: z.literal(false),

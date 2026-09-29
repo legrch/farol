@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 const product = "Farol Next Preview";
 const bundleId = "local.farol.next.preview";
-const updateChannel = "local-preview-only";
+const previewChannel = "local-preview-only";
 const exactKeys = Object.freeze(
   [
     "schema",
@@ -24,7 +24,10 @@ function payload(identity) {
     product,
     version: identity.version,
     bundleId,
-    updateChannel,
+    updateChannel: identity.updateChannel ?? previewChannel,
+    ...(identity.buildVersion === undefined
+      ? {}
+      : { buildVersion: identity.buildVersion }),
     builtAt: identity.builtAt,
     sourceCommit: identity.sourceCommit,
     sourceTreeDigest: identity.sourceTreeDigest,
@@ -46,7 +49,9 @@ function validShape(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value)
+    .filter((key) => key !== "buildVersion")
+    .sort();
   return (
     keys.length === exactKeys.length &&
     keys.every((key, index) => key === exactKeys[index]) &&
@@ -55,7 +60,16 @@ function validShape(value) {
     typeof value.version === "string" &&
     /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version) &&
     value.bundleId === bundleId &&
-    value.updateChannel === updateChannel &&
+    (value.updateChannel === previewChannel ||
+      value.updateChannel === "github-owner-beta") &&
+    (value.buildVersion === undefined ||
+      (typeof value.buildVersion === "string" &&
+        /^[1-9][0-9]{0,8}$/u.test(value.buildVersion))) &&
+    (value.updateChannel !== "github-owner-beta" ||
+      (value.buildVersion !== undefined &&
+        /^[0-9]+\.[0-9]+\.[0-9]+-owner\.beta\.(0|[1-9][0-9]*)$/u.test(
+          value.version,
+        ))) &&
     canonicalTimestamp(value.builtAt) &&
     /^[a-f0-9]{40}$/u.test(value.sourceCommit ?? "") &&
     /^[a-f0-9]{64}$/u.test(value.sourceTreeDigest ?? "") &&

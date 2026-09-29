@@ -27,6 +27,37 @@ describe("Farol Next build identity", () => {
     expect(assertBuildIdentity(identity)).toEqual(identity);
   });
 
+  it("binds an owner-beta channel and monotonic bundle build to the identity", () => {
+    const release = createBuildIdentity({
+      ...input,
+      version: "0.1.0-owner.beta.1",
+      updateChannel: "github-owner-beta",
+      buildVersion: "2",
+    });
+    expect(release.updateChannel).toBe("github-owner-beta");
+    expect(release.buildVersion).toBe("2");
+    expect(() =>
+      assertBuildIdentity({ ...release, buildVersion: "3" }),
+    ).toThrow();
+    expect(() =>
+      assertBuildIdentity({ ...release, updateChannel: "local-preview-only" }),
+    ).toThrow();
+  });
+
+  it.each([undefined, "0", "01", "-1", "2.0", "99999999999999999999"])(
+    "refuses owner-beta identity without a valid numeric build: %s",
+    (buildVersion) => {
+      expect(() =>
+        createBuildIdentity({
+          ...input,
+          version: "0.1.0-owner.beta.1",
+          updateChannel: "github-owner-beta",
+          ...(buildVersion === undefined ? {} : { buildVersion }),
+        }),
+      ).toThrow("BUILD_IDENTITY_INVALID");
+    },
+  );
+
   it.each([
     ["version", { version: "preview" }],
     ["build time", { builtAt: "yesterday" }],

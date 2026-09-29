@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { releaseBuildFields } from "./release-identity.mjs";
 import {
   BUILD_ENTRIES,
   snapshotBuildEntries,
@@ -283,6 +284,7 @@ await fs.writeFile(path.join(output, "input-manifest.json"), inputLedgerBytes, {
 });
 const buildIdentity = createBuildIdentity({
   version: packageDocument.version,
+  ...releaseBuildFields(packageDocument),
   builtAt: new Date().toISOString(),
   sourceCommit: initial.commit,
   sourceTreeDigest: initial.treeDigest,

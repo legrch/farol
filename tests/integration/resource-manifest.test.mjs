@@ -14,7 +14,21 @@ describe("Farol Next resource ownership", () => {
       await fs.readFile(path.join(vnextRoot, "resources.json"), "utf8"),
     );
 
-    expect(manifest).toEqual(EXPECTED_RESOURCE_MANIFEST);
+    const packageDocument = JSON.parse(
+      await fs.readFile(path.join(vnextRoot, "package.json"), "utf8"),
+    );
+    expect(manifest).toEqual({
+      ...EXPECTED_RESOURCE_MANIFEST,
+      product: {
+        ...EXPECTED_RESOURCE_MANIFEST.product,
+        version: packageDocument.version,
+        updateChannel: "github-owner-beta",
+      },
+      integrations: {
+        ...EXPECTED_RESOURCE_MANIFEST.integrations,
+        updater: "farol-owned-github-releases",
+      },
+    });
     expect(() => assertResourceManifest(manifest)).not.toThrow();
   });
 

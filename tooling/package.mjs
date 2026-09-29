@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { releaseBuildFields } from "./release-identity.mjs";
 import { TREE_DIGEST_VERSION, treeDigest } from "./artifact-digest.mjs";
 import { BUILD_ENTRIES, verifyBuildEntries } from "./build-contract.mjs";
 import { assertBuildIdentity } from "./build-identity-contract.mjs";
@@ -26,6 +27,7 @@ const packageDocument = JSON.parse(
   await fs.readFile(path.join(root, "package.json"), "utf8"),
 );
 const previewVersion = packageDocument.version;
+const releaseFields = releaseBuildFields(packageDocument);
 const bundleVersion = previewVersion.split("-", 1)[0];
 
 const launcher = `#!/bin/sh
@@ -64,7 +66,7 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleShortVersionString</key>
   <string>${bundleVersion}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${releaseFields.buildVersion ?? "1"}</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
   <key>NSHighResolutionCapable</key>
@@ -211,6 +213,7 @@ const artifact = {
   treeDigestVersion: TREE_DIGEST_VERSION,
   product: "Farol Next Preview",
   version: previewVersion,
+  buildVersion: buildIdentity.buildVersion ?? "1",
   bundleId: "local.farol.next.preview",
   buildId: buildIdentity.buildId,
   builtAt: buildIdentity.builtAt,
@@ -223,11 +226,14 @@ const artifact = {
   runtime: runtimeClosure(ELECTRON_RUNTIME, runtimeRelativePath),
   signing: {
     kind: "unsigned",
-    reason: "local-development-preview",
+    reason:
+      buildIdentity.updateChannel === "github-owner-beta"
+        ? "owner-beta-distribution"
+        : "local-development-preview",
     runtimeBytes: "unmodified-vendor-bundle",
   },
   notarized: false,
-  updateChannel: "local-preview-only",
+  updateChannel: buildIdentity.updateChannel,
 };
 await fs.writeFile(
   path.join(packageRoot, "artifact.json"),

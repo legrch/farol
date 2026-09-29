@@ -2,9 +2,9 @@
   "schema": "farol.next.resource-manifest/1",
   "product": {
     "name": "Farol Next Preview",
-    "version": "0.1.0-preview.0",
+    "version": "0.1.0-owner.beta.1",
     "bundleId": "local.farol.next.preview",
-    "updateChannel": "local-preview-only"
+    "updateChannel": "github-owner-beta"
   },
   "application": {
     "singleInstanceScope": "userData",
@@ -54,7 +54,7 @@
     "providerRegistration": "owner-completed-chatgpt-connector-attachment",
     "nativeComputer": "packaged-computer-mcp-via-app-owned-tunnel",
     "nativeAgent": "absent",
-    "updater": "absent",
+    "updater": "farol-owned-github-releases",
     "loginItem": "absent"
   },
   "exclusions": [
