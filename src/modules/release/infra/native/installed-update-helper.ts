@@ -75,30 +75,53 @@ async function helperBytes(helperPath: string): Promise<Buffer> {
   ) {
     throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
   }
+  const expected = await fs.lstat(helperPath, { bigint: true });
+  if (
+    !expected.isFile() ||
+    expected.nlink !== 1n ||
+    expected.size < 1n ||
+    expected.size > BigInt(MAX_HELPER_BYTES) ||
+    expected.uid !== BigInt(process.geteuid?.() ?? -1) ||
+    (expected.mode & 0o022n) !== 0n
+  ) {
+    throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
+  }
+  const matches = (value: typeof expected): boolean =>
+    value.isFile() &&
+    value.dev === expected.dev &&
+    value.ino === expected.ino &&
+    value.mode === expected.mode &&
+    value.nlink === expected.nlink &&
+    value.uid === expected.uid &&
+    value.gid === expected.gid &&
+    value.size === expected.size &&
+    value.mtimeNs === expected.mtimeNs &&
+    value.ctimeNs === expected.ctimeNs;
   const handle = await fs.open(
     helperPath,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
   );
   try {
-    const before = await handle.stat();
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      before.size < 1 ||
-      before.size > MAX_HELPER_BYTES ||
-      before.uid !== process.geteuid?.() ||
-      (before.mode & 0o022) !== 0
-    ) {
+    if (!matches(await handle.stat({ bigint: true }))) {
       throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
     }
-    const bytes = await handle.readFile();
-    const after = await handle.stat();
+    // The extra byte detects growth without reading beyond the checked bound.
+    const buffer = Buffer.alloc(Number(expected.size) + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        size,
+        buffer.length - size,
+        size,
+      );
+      if (bytesRead === 0) break;
+      size += bytesRead;
+    }
+    const bytes = buffer.subarray(0, size);
     if (
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs ||
+      size !== Number(expected.size) ||
+      !matches(await handle.stat({ bigint: true })) ||
       createHash("sha256").update(bytes).digest("hex") !== HELPER_SHA256
     ) {
       throw new Error("INSTALLED_UPDATE_HELPER_INVALID");
