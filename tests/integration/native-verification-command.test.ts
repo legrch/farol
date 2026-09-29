@@ -1635,6 +1635,18 @@ int main(void) {
     });
 
     it("lists and clones three thousand tracked files without touching the result bound", async () => {
+      // This fixture measures a stable tree. The large commit can otherwise
+      // launch detached auto-maintenance that unlinks objects during capture;
+      // refusing that real metadata race is correct, not a clone-size failure.
+      // Disable it only in this disposable repository, before creating objects.
+      await executeFile(git, [
+        "-C",
+        root,
+        "config",
+        "maintenance.auto",
+        "false",
+      ]);
+      await executeFile(git, ["-C", root, "config", "gc.auto", "0"]);
       await fs.mkdir(path.join(root, "many"), { mode: 0o700 });
       const names = Array.from(
         { length: 3_000 },
@@ -1664,6 +1676,12 @@ int main(void) {
       expect(result.value.stdout).toMatch(
         /^## [^\n]+\n M many\/file-2999-of-three-thousand\.txt\n$/u,
       );
+      expect(await fs.readdir(runtimeDirectory)).toEqual([]);
+      await expect(
+        fs.lstat(path.join(root, ".git", "gc.pid")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     }, 60_000);
 
     it("refuses instead of answering when the index changes between the metadata snapshot and the tracked-path snapshot", async () => {
