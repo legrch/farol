@@ -290,7 +290,8 @@ describe("F3-5 build provenance", () => {
     expect(env.HOME).toBe(directory);
     expect(env.PATH).toBe("/opt/node/bin:/usr/bin:/bin");
     expect(fs.readFileSync(env.npm_config_userconfig, "utf8")).toBe("");
-    expect(env.npm_config_globalconfig).toBe(env.npm_config_userconfig);
+    expect(env.npm_config_globalconfig).not.toBe(env.npm_config_userconfig);
+    expect(fs.readFileSync(env.npm_config_globalconfig, "utf8")).toBe("");
   });
 
   it("runs the candidate wrapper in isolated Python so no user-site hook runs", () => {

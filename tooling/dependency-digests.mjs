@@ -254,15 +254,17 @@ export function cleanInstallEnvironment(
   scratch,
   nodeExecutable = process.execPath,
 ) {
-  const emptyConfig = path.join(scratch, ".npmrc-empty");
-  fs.writeFileSync(emptyConfig, "");
+  const emptyUserConfig = path.join(scratch, ".npmrc-user-empty");
+  const emptyGlobalConfig = path.join(scratch, ".npmrc-global-empty");
+  fs.writeFileSync(emptyUserConfig, "");
+  fs.writeFileSync(emptyGlobalConfig, "");
   return {
     PATH: `${path.dirname(nodeExecutable)}:/usr/bin:/bin`,
     HOME: scratch,
     TMPDIR: os.tmpdir(),
     LANG: "en_US.UTF-8",
-    npm_config_userconfig: emptyConfig,
-    npm_config_globalconfig: emptyConfig,
+    npm_config_userconfig: emptyUserConfig,
+    npm_config_globalconfig: emptyGlobalConfig,
     npm_config_cache: path.join(os.homedir(), ".npm"),
   };
 }
