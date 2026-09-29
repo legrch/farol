@@ -6,7 +6,7 @@ import { createQuitDrain } from "../../src/apps/desktop/quit-drain";
 
 describe("desktop graceful signals", () => {
   it.each(["SIGINT", "SIGTERM"] as const)(
-    "holds an early %s until the quit drain is installed, then quits once",
+    "leaves startup %s handling native until the drain is installed, then quits once",
     async (signal) => {
       const signals = new EventEmitter();
       let quitting = false;
@@ -44,10 +44,13 @@ describe("desktop graceful signals", () => {
         isQuitting: () => quitting,
       });
 
-      signals.emit(signal);
-      signals.emit(signal);
+      // Startup may never finish. No listener may suppress native signal
+      // termination while there is no drain to receive the request.
+      expect(signals.listenerCount("SIGINT")).toBe(0);
+      expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(requestQuit).not.toHaveBeenCalled();
       bridge.ready();
+      signals.emit(signal);
       expect(requestQuit).toHaveBeenCalledTimes(1);
       expect(events).toEqual(["requested-quit"]);
       signals.emit(signal);
@@ -65,6 +68,21 @@ describe("desktop graceful signals", () => {
       expect(signals.listenerCount("SIGTERM")).toBe(0);
     },
   );
+
+  it("does not install listeners if startup was disposed before becoming ready", () => {
+    const signals = new EventEmitter();
+    const requestQuit = vi.fn();
+    const bridge = createGracefulQuitSignals({
+      signals,
+      requestQuit,
+      isQuitting: () => false,
+    });
+    bridge.dispose();
+    bridge.ready();
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(requestQuit).not.toHaveBeenCalled();
+  });
 
   it("ignores signals after a normal quit has begun", () => {
     const signals = new EventEmitter();

@@ -124,6 +124,9 @@ it("carries an explicitly approved primary checkout from folder verification to 
   );
   if (verified.snapshot.status !== "ready")
     throw new Error("fixture verification unavailable");
+  expect(
+    verified.snapshot.settings.computer.workspaces[0]?.gitHistoryApproved,
+  ).toBe(true);
   const selection = {
     transport: "codex-shared-proxy/v1",
     socketPath: "/fixture/codex.sock",
@@ -166,6 +169,22 @@ it("carries an explicitly approved primary checkout from folder verification to 
   expect(
     await new PhysicalCodexHandoffAuthority(route.grant).resolve(workspaceId),
   ).toBeNull();
+  const invalidated = await service.recordComputerVerification(
+    workspaceId,
+    {
+      profile: "computer.local.read/1",
+      runtimeGeneration: "fixture",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    },
+    { rootIdentity, gitMetadata: null },
+  );
+  expect(invalidated).toMatchObject({
+    ok: true,
+    snapshot: {
+      settings: { computer: { workspaces: [{ gitHistoryApproved: false }] } },
+    },
+  });
 });
 
 it("does not turn ordinary primary-folder verification into full Git approval", async () => {

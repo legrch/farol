@@ -380,6 +380,14 @@ describe("Farol Next product configuration", () => {
       commonDirectory: "/Users/example/repo/.git",
     };
 
+    await service.updateComputerCommands("workspace");
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity: { device: "1", inode: "2" },
+    });
+    expect(
+      await service.updateWorkspaceGitHistory(workspaceId, true),
+    ).toMatchObject({ ok: true });
+
     const linked = await service.recordComputerVerification(
       workspaceId,
       verification,
@@ -388,7 +396,13 @@ describe("Farol Next product configuration", () => {
     expect(linked).toMatchObject({
       ok: true,
       snapshot: {
-        settings: { computer: { workspaces: [{ workspaceId, gitMetadata }] } },
+        settings: {
+          computer: {
+            workspaces: [
+              { workspaceId, gitMetadata, gitHistoryApproved: false },
+            ],
+          },
+        },
       },
     });
     const restarted = new ProductConfigurationService(
@@ -397,6 +411,17 @@ describe("Farol Next product configuration", () => {
     );
     await restarted.initialize();
     expect(restarted.snapshot()).toEqual(linked.snapshot);
+
+    expect(
+      await service.updateWorkspaceGitHistory(workspaceId, true),
+    ).toMatchObject({ ok: true });
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity: { device: "1", inode: "2" },
+      gitMetadata,
+    });
+    expect(service.snapshot()).toMatchObject({
+      settings: { computer: { workspaces: [{ gitHistoryApproved: true }] } },
+    });
 
     // The owner verified a layout whose metadata now lives inside the root.
     const primary = await service.recordComputerVerification(
@@ -410,6 +435,9 @@ describe("Farol Next product configuration", () => {
     expect(
       primary.snapshot.settings.computer.workspaces[0]?.gitMetadata,
     ).toBeUndefined();
+    expect(
+      primary.snapshot.settings.computer.workspaces[0]?.gitHistoryApproved,
+    ).toBe(false);
   });
 
   it("persists working preferences and workspace approval across restart", async () => {
@@ -549,6 +577,10 @@ describe("Farol Next product configuration", () => {
     });
     await service.recordComputerVerification(workspaceId, verification, {
       rootIdentity: { device: "1", inode: "2" },
+      gitMetadata: {
+        gitDirectory: "/Users/example/project/.git",
+        commonDirectory: "/Users/example/project/.git",
+      },
     });
     expect(service.snapshot()).toMatchObject({
       settings: { computer: { workspaces: [{ gitHistoryApproved: true }] } },

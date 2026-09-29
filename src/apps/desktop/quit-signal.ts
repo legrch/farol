@@ -6,8 +6,8 @@ type SignalSource = Readonly<{
 }>;
 
 export type GracefulQuitSignals = Readonly<{
-  // Arm only after before-quit is listening, so a signal during startup
-  // cannot bypass the quit drain.
+  // Install only once before-quit is listening. Until then preserve native
+  // termination instead of swallowing a signal behind a stalled startup.
   ready(): void;
   dispose(): void;
 }>;
@@ -20,23 +20,19 @@ export function createGracefulQuitSignals(
   }>,
 ): GracefulQuitSignals {
   let ready = false;
-  let pending = false;
   let requested = false;
   let disposed = false;
   const request = () => {
     if (disposed || requested || ports.isQuitting()) return;
-    pending = true;
-    if (!ready) return;
     requested = true;
     ports.requestQuit();
   };
-  ports.signals.on("SIGINT", request);
-  ports.signals.on("SIGTERM", request);
   return {
     ready: () => {
       if (disposed || ready) return;
       ready = true;
-      if (pending) request();
+      ports.signals.on("SIGINT", request);
+      ports.signals.on("SIGTERM", request);
     },
     dispose: () => {
       if (disposed) return;

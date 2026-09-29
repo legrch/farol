@@ -1538,6 +1538,16 @@ export class ProductConfigurationService {
       ) => {
         if (workspace.workspaceId !== workspaceId) return workspace;
         const { gitMetadata: _previous, ...rest } = workspace;
+        // A primary checkout's first measurement records the in-root layout
+        // covered by its explicit full-Git grant. Linked/outside layouts and
+        // changes to a previous binding still require renewed approval.
+        const initialApprovedPrimary =
+          workspace.gitHistoryApproved === true &&
+          workspace.gitMetadata === undefined &&
+          gitMetadata.data?.gitDirectory ===
+            path.join(workspace.root, ".git") &&
+          gitMetadata.data?.commonDirectory ===
+            path.join(workspace.root, ".git");
         const metadataChanged =
           gitMetadata.data !== undefined &&
           (gitMetadata.data?.gitDirectory !==
@@ -1547,7 +1557,9 @@ export class ProductConfigurationService {
         return {
           ...(gitMetadata.data === undefined ? workspace : rest),
           rootIdentity,
-          ...(metadataChanged ? { gitHistoryApproved: false } : {}),
+          ...(metadataChanged && !initialApprovedPrimary
+            ? { gitHistoryApproved: false }
+            : {}),
           accessCheck: {
             buildId: parsed.data.buildId,
             computerGeneration: this.current!.computer.generation,
