@@ -488,6 +488,19 @@ describe("access acknowledgement and revocation boundaries", () => {
     expect(f.settings.connectors.secureMcp.runtime).toBeNull();
   });
 
+  it("names edits and commands while retaining the complete Git disclosure", () => {
+    const f = fixture();
+    const approval = workspaceAccessConfirmation(f.plan, "project", true);
+    expect(approval.button).toBe("Allow edits & commands");
+    expect(approval.copy).toContain("Allow edits & commands in project?");
+    expect(approval.copy).toContain("complete Git metadata, history and hooks");
+    expect(approval.copy).toContain("your Git settings");
+    expect(approval.copy).toContain("sensitive data or past excluded files");
+    expect(approval.copy).toContain(
+      "No files are deleted and no ChatGPT message is sent",
+    );
+  });
+
   it("does not claim file edits in Git-only consent", () => {
     const approval = workspaceAccessConfirmation(
       {
@@ -501,7 +514,7 @@ describe("access acknowledgement and revocation boundaries", () => {
     expect(approval.copy).toContain("complete Git metadata");
     expect(approval.copy).toContain("their file permissions stay in place");
     expect(approval.copy).not.toContain("editing");
-    expect(approval.button).not.toBe("Allow local work");
+    expect(approval.button).not.toBe("Allow edits & commands");
     expect(
       workspaceAccessConfirmation(
         {

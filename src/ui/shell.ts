@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { chatGptPreSubmitRemedy } from "./chatgpt-pre-submit-remedy";
 import {
   ClientEventSchema,
   type ClientEventDto,
@@ -2869,31 +2870,6 @@ async function acknowledgeWorkspaceEdit(operationId: string): Promise<void> {
   if (outcome.kind === "unconfirmed") return;
   bootstrap = { ...bootstrap, configuration: outcome.result.snapshot };
   render();
-}
-
-function chatGptPreSubmitRemedy(code: string | null): string | null {
-  if (code === "CHATGPT_APP_SELECTION_MISSING") {
-    return "Farol could not select the Farol Dev app in ChatGPT. Nothing was sent. Check that the app is available, then run the check again.";
-  }
-  if (code === "CHATGPT_APP_SELECTION_AMBIGUOUS") {
-    return "Message blocked before send because the Farol Dev app selection was ambiguous. Keep exactly one @Farol Dev chip, then retry.";
-  }
-  if (code === "CHATGPT_APP_SELECTION_CONFLICT") {
-    return "Message blocked before send because another app is selected. Remove it and select @Farol Dev; Farol did not switch apps automatically.";
-  }
-  if (code === "CHATGPT_APP_SELECTION_LOST") {
-    return "The Farol Dev app selection disappeared before send. Nothing was sent. Run the check again.";
-  }
-  if (code === "CHATGPT_COMPOSER_DRAFT_PRESENT") {
-    return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
-  }
-  if (code === "CHATGPT_TEMPORARY_CHAT_REQUIRED") {
-    return "Nothing was sent. Farol could not confirm a personalized temporary chat; your history and draft were left unchanged.";
-  }
-  if (code === "CHATGPT_INSTANT_MODEL_REQUIRED") {
-    return "Nothing was sent. Farol could not confirm Instant as the selected model for this check.";
-  }
-  return null;
 }
 
 function devMcpProofFailureMessage(code: string): string | null {

@@ -386,7 +386,7 @@ export function workspaceAccessConfirmation(
       "Check this folder's existing access without granting new permissions.",
     );
   return {
-    copy: `${localWork ? "Allow local work" : "Update access"} in ${name}? ${changes.join(" ")}${paused ? " The connection will pause while access is checked." : ""} No files are deleted and no ChatGPT message is sent.`,
-    button: localWork ? "Allow local work" : "Apply and check",
+    copy: `${localWork ? "Allow edits & commands" : "Update access"} in ${name}? ${changes.join(" ")}${paused ? " The connection will pause while access is checked." : ""} No files are deleted and no ChatGPT message is sent.`,
+    button: localWork ? "Allow edits & commands" : "Apply and check",
   };
 }

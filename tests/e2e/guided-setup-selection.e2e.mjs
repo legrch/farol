@@ -811,7 +811,7 @@ try {
       await window.locator('[data-onboarding-step="folder"]').click();
       await window
         .locator("#onboarding-folder-list")
-        .getByRole("button", { name: "Allow local work…", exact: true })
+        .getByRole("button", { name: "Allow edits & commands…", exact: true })
         .click();
       await window.locator("#onboarding-confirm-folder").click();
       await window

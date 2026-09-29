@@ -912,7 +912,7 @@ export class GuidedOnboardingView {
           folder.access === "write" &&
           settings?.computer.commands === "workspace" &&
           folder.gitHistoryApproved === true;
-        access.textContent = "Allow local work…";
+        access.textContent = "Allow edits & commands…";
         access.disabled = this.busy || localWork;
         access.hidden = localWork;
         access.addEventListener("click", () =>
