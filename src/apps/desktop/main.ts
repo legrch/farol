@@ -50,7 +50,10 @@ import { z } from "zod";
 import { exactProject } from "../../modules/chat/app/service/persistent-codex-handoff";
 import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
 import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-codex-proxy-host";
-import { codexTaskRouteFailureCode } from "./codex-task-route-error";
+import {
+  codexTaskRouteFailureCode,
+  codexTaskRouteFailureRecord,
+} from "./codex-task-route-error";
 import { PersistentChatGptHandoff } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
 import { PrivateSavedChatJournal } from "../../modules/chat/infra/repo/private-saved-chat-journal";
 import { Sha256SavedChatDigester } from "../../modules/chat/infra/native/sha256-saved-chat-digester";
@@ -5260,6 +5263,9 @@ async function configureAdmittedProduct(
           }),
         );
       } catch (error) {
+        process.stderr.write(
+          `farol-codex-task-route ${codexTaskRouteFailureRecord(error)}\n`,
+        );
         return configurationFailure(codexTaskRouteFailureCode(error));
       } finally {
         proxy?.close();

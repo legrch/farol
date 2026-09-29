@@ -31,3 +31,33 @@ export function codexTaskRouteFailureCode(
   }
   return "CODEX_TASK_ROUTE_UNAVAILABLE";
 }
+
+/** Non-secret, bounded terminal record for the owning launch handle. */
+export function codexTaskRouteFailureRecord(error: unknown): string {
+  const code = codexTaskRouteFailureCode(error);
+  if (error instanceof CodexProxyFailure) {
+    const { phase, method, result, rpcCode } = error.diagnostic;
+    // Methods originate in the fixed proxy method catalogue, never a payload.
+    const safeMethod =
+      /^(initialize|model\/list|project\/list|thread\/(start|read|list|name\/set|turns\/list|items\/list)|turn\/(start|steer)|multiple|none)$/u.test(
+        method,
+      )
+        ? method
+        : "unknown";
+    return JSON.stringify({
+      code,
+      phase,
+      method: safeMethod,
+      result,
+      ...(Number.isSafeInteger(rpcCode) ? { rpcCode } : {}),
+    });
+  }
+  if (error instanceof CodexSocketAdmissionError) {
+    return JSON.stringify({
+      code,
+      phase: error.phase,
+      ...(error.errno ? { errno: error.errno } : {}),
+    });
+  }
+  return JSON.stringify({ code });
+}

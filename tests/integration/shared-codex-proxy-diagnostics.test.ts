@@ -5,7 +5,10 @@ import {
   CodexProxyFailure,
   SharedCodexProxyHost,
 } from "../../src/modules/chat/infra/native/shared-codex-proxy-host";
-import { codexTaskRouteFailureCode } from "../../src/apps/desktop/codex-task-route-error";
+import {
+  codexTaskRouteFailureCode,
+  codexTaskRouteFailureRecord,
+} from "../../src/apps/desktop/codex-task-route-error";
 import { HandoffNotSubmittedError } from "../../src/modules/chat/app/service/persistent-codex-handoff";
 import { ProductConfigurationResultSchema } from "../../src/pkg/product-settings/contract";
 
@@ -74,6 +77,38 @@ function fixture(mode: string) {
 }
 
 describe("shared proxy closed diagnostics", () => {
+  it("records the phase and numeric RPC code without private exception details", () => {
+    expect(
+      JSON.parse(
+        codexTaskRouteFailureRecord(
+          new CodexProxyFailure({
+            phase: "request",
+            method: "project/list",
+            result: "rpc_error",
+            rpcCode: -32600,
+          }),
+        ),
+      ),
+    ).toEqual({
+      code: "CODEX_SHARED_PROXY_RPC_ERROR",
+      phase: "request",
+      method: "project/list",
+      result: "rpc_error",
+      rpcCode: -32600,
+    });
+    expect(
+      codexTaskRouteFailureRecord(new Error("private /Users/account")),
+    ).not.toMatch(/private|account/);
+    expect(
+      codexTaskRouteFailureRecord(
+        new CodexProxyFailure({
+          phase: "request",
+          method: "private payload",
+          result: "rpc_error",
+        }),
+      ),
+    ).not.toContain("private");
+  });
   it("classifies a launcher exception without retaining it or retrying", async () => {
     const launch = vi.fn((): ChildProcessWithoutNullStreams => {
       throw new Error("private executable path /Users/owner/codex");
