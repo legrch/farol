@@ -28,6 +28,7 @@ const METHODS = new Set([
 ]);
 
 type Pending = {
+  method: string;
   resolve(value: unknown): void;
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
@@ -37,6 +38,34 @@ type Launch = () => ChildProcessWithoutNullStreams;
 
 function unavailable(): Error {
   return new Error("CODEX_SHARED_HOST_UNAVAILABLE");
+}
+
+export type CodexProxyFailureResult =
+  | "launch_failed"
+  | "pipe_failed"
+  | "exited"
+  | "timeout"
+  | "invalid_identity"
+  | "invalid_protocol"
+  | "rpc_error"
+  | "closed";
+
+export type CodexProxyDiagnostic = Readonly<{
+  phase: "initialize" | "request" | "idle";
+  method: string;
+  result: CodexProxyFailureResult;
+  rpcCode?: number;
+}>;
+
+/** Closed transport evidence; never retains an exception, payload, or stderr. */
+export class CodexProxyFailure extends Error {
+  readonly diagnostic: CodexProxyDiagnostic;
+
+  constructor(diagnostic: CodexProxyDiagnostic) {
+    super("CODEX_SHARED_HOST_UNAVAILABLE");
+    this.name = "CodexProxyFailure";
+    this.diagnostic = Object.freeze({ ...diagnostic });
+  }
 }
 
 export type CodexSocketAdmissionCode =
@@ -160,6 +189,24 @@ export class SharedCodexProxyHost implements HandoffHost {
   private lost = false;
   private signalFailed = false;
   private escalationAttempted = false;
+  private terminal: CodexProxyDiagnostic | null = null;
+
+  terminalDiagnostic(): CodexProxyDiagnostic | null {
+    return this.terminal;
+  }
+
+  private diagnostic(
+    method: string,
+    result: CodexProxyFailureResult,
+    rpcCode?: number,
+  ): CodexProxyDiagnostic {
+    return Object.freeze({
+      phase: method === "initialize" ? "initialize" : "request",
+      method,
+      result,
+      ...(rpcCode === undefined ? {} : { rpcCode }),
+    });
+  }
 
   constructor(
     private readonly launch: Launch,
@@ -254,17 +301,24 @@ export class SharedCodexProxyHost implements HandoffHost {
   async connect(): Promise<void> {
     if (this.lost) throw unavailable();
     if (this.ready) return this.ready;
-    const child = this.launch();
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      child = this.launch();
+    } catch {
+      const diagnostic = this.diagnostic("initialize", "launch_failed");
+      this.fail("launch_failed", diagnostic);
+      throw new CodexProxyFailure(diagnostic);
+    }
     this.child = child;
-    child.stdin.on("error", () => this.fail());
-    child.stdout.on("error", () => this.fail());
-    child.stderr.on("error", () => this.fail());
+    child.stdin.on("error", () => this.fail("pipe_failed"));
+    child.stdout.on("error", () => this.fail("pipe_failed"));
+    child.stderr.on("error", () => this.fail("pipe_failed"));
     child.stdout.on("data", (chunk: Buffer) => this.receive(chunk));
     child.stderr.on("data", () => {
       // Never forward daemon diagnostics or profile data to connector output.
     });
-    child.once("error", () => this.fail());
-    child.once("exit", () => this.fail());
+    child.once("error", () => this.fail("launch_failed"));
+    child.once("exit", () => this.fail("exited"));
     this.ready = this.send("initialize", {
       clientInfo: { name: "farol-shared-handoff", version: "1" },
     })
@@ -276,18 +330,31 @@ export class SharedCodexProxyHost implements HandoffHost {
           response.platformOs !== "macos" ||
           typeof response.userAgent !== "string"
         ) {
-          throw unavailable();
+          throw new CodexProxyFailure(
+            this.diagnostic("initialize", "invalid_identity"),
+          );
         }
         if (this.lost || !this.child?.stdin.writable) throw unavailable();
-        this.child.stdin.write(
-          `${JSON.stringify({ method: "initialized", params: {} })}\n`,
-          (error) => {
-            if (error) this.fail();
-          },
-        );
+        try {
+          this.child.stdin.write(
+            `${JSON.stringify({ method: "initialized", params: {} })}\n`,
+            (error) => {
+              if (error) this.fail("pipe_failed");
+            },
+          );
+        } catch {
+          throw new CodexProxyFailure(
+            this.diagnostic("initialize", "pipe_failed"),
+          );
+        }
       })
       .catch((error: unknown) => {
-        this.fail();
+        this.fail(
+          error instanceof CodexProxyFailure
+            ? error.diagnostic.result
+            : "closed",
+          error instanceof CodexProxyFailure ? error.diagnostic : undefined,
+        );
         throw error;
       });
     return this.ready;
@@ -318,13 +385,13 @@ export class SharedCodexProxyHost implements HandoffHost {
   }
 
   close(): void {
-    this.fail();
+    this.fail("closed");
   }
 
   async closeAndWait(): Promise<boolean> {
     const child = this.child;
     if (!child) {
-      this.fail();
+      this.fail("closed");
       return true;
     }
     const exited = (timeoutMs: number): Promise<boolean> => {
@@ -348,7 +415,7 @@ export class SharedCodexProxyHost implements HandoffHost {
       });
     };
     const first = exited(1_500);
-    this.fail();
+    this.fail("closed");
     if (await first) return true;
     if (this.signalFailed) return false;
     if (!this.escalationAttempted) {
@@ -358,12 +425,27 @@ export class SharedCodexProxyHost implements HandoffHost {
     return exited(1_000);
   }
 
-  private fail(): void {
+  private fail(
+    result: CodexProxyFailureResult,
+    diagnostic?: CodexProxyDiagnostic,
+  ): void {
     if (this.lost) return;
     this.lost = true;
+    const first = this.pending.values().next().value as Pending | undefined;
+    this.terminal =
+      diagnostic ??
+      (this.pending.size === 1 && first
+        ? this.diagnostic(first.method, result)
+        : Object.freeze({
+            phase: this.pending.size > 1 ? "request" : "idle",
+            method: this.pending.size > 1 ? "multiple" : "none",
+            result,
+          }));
     for (const request of this.pending.values()) {
       clearTimeout(request.timer);
-      request.reject(unavailable());
+      request.reject(
+        new CodexProxyFailure(this.diagnostic(request.method, result)),
+      );
     }
     this.pending.clear();
     this.child?.stdin.destroy();
@@ -404,12 +486,19 @@ export class SharedCodexProxyHost implements HandoffHost {
       return Promise.reject(new Error("CODEX_SHARED_REQUEST_TOO_LARGE"));
     }
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.fail(), this.requestTimeoutMs);
+      const timer = setTimeout(
+        () => this.fail("timeout", this.diagnostic(method, "timeout")),
+        this.requestTimeoutMs,
+      );
       timer.unref?.();
-      this.pending.set(id, { resolve, reject, timer });
-      this.child!.stdin.write(frame, (error) => {
-        if (error) this.fail();
-      });
+      this.pending.set(id, { method, resolve, reject, timer });
+      try {
+        this.child!.stdin.write(frame, (error) => {
+          if (error) this.fail("pipe_failed");
+        });
+      } catch {
+        this.fail("pipe_failed");
+      }
     });
   }
 
@@ -417,7 +506,7 @@ export class SharedCodexProxyHost implements HandoffHost {
     if (this.lost) return;
     this.received = Buffer.concat([this.received, chunk]);
     if (this.received.length > MAX_FRAME_BYTES) {
-      this.fail();
+      this.fail("invalid_protocol");
       return;
     }
     for (;;) {
@@ -435,11 +524,11 @@ export class SharedCodexProxyHost implements HandoffHost {
           ),
         );
       } catch {
-        this.fail();
+        this.fail("invalid_protocol");
         return;
       }
       if (!value) {
-        this.fail();
+        this.fail("invalid_protocol");
         return;
       }
       if (Object.hasOwn(value, "id") && Object.hasOwn(value, "method")) {
@@ -452,7 +541,7 @@ export class SharedCodexProxyHost implements HandoffHost {
           Object.hasOwn(value, "result") ||
           Object.hasOwn(value, "error")
         ) {
-          this.fail();
+          this.fail("invalid_protocol");
           return;
         }
         // This client has no request ownership or owner decision route. An
@@ -463,12 +552,17 @@ export class SharedCodexProxyHost implements HandoffHost {
         // coercion, admission, payload disclosure or implicit approval.
         const frame = `${JSON.stringify({ id: value.id, error: { code: -32601, message: "Method not available" } })}\n`;
         if (Buffer.byteLength(frame) > MAX_FRAME_BYTES) {
-          this.fail();
+          this.fail("invalid_protocol");
           return;
         }
-        this.child?.stdin.write(frame, (error) => {
-          if (error) this.fail();
-        });
+        try {
+          this.child?.stdin.write(frame, (error) => {
+            if (error) this.fail("pipe_failed");
+          });
+        } catch {
+          this.fail("pipe_failed");
+          return;
+        }
         continue;
       }
       if (value.id === undefined) {
@@ -482,19 +576,39 @@ export class SharedCodexProxyHost implements HandoffHost {
         continue;
       }
       if (typeof value.id !== "number" || !Number.isSafeInteger(value.id)) {
-        this.fail();
+        this.fail("invalid_protocol");
         return;
       }
       const pending = this.pending.get(value.id);
       if (!pending) {
-        this.fail();
+        this.fail("invalid_protocol");
         return;
       }
       this.pending.delete(value.id);
       clearTimeout(pending.timer);
-      if ("error" in value || !("result" in value))
-        pending.reject(unavailable());
-      else pending.resolve(value.result);
+      if ("error" in value) {
+        const code = object(value.error)?.code;
+        if (typeof code !== "number" || !Number.isSafeInteger(code)) {
+          pending.reject(
+            new CodexProxyFailure(
+              this.diagnostic(pending.method, "invalid_protocol"),
+            ),
+          );
+          continue;
+        }
+        pending.reject(
+          new CodexProxyFailure(
+            this.diagnostic(pending.method, "rpc_error", code),
+          ),
+        );
+      } else if (!("result" in value)) {
+        pending.reject(
+          new CodexProxyFailure(
+            this.diagnostic(pending.method, "invalid_protocol"),
+          ),
+        );
+        continue;
+      } else pending.resolve(value.result);
     }
   }
 }

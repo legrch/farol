@@ -186,6 +186,20 @@ function sharedCodexSocketRefusalMessage(error: string): string | null {
       return "The selected shared Codex endpoint has the wrong type, owner, or canonical path. No task was started.";
     case "CODEX_SHARED_SOCKET_CHECK_FAILED":
       return "Farol could not classify the selected shared Codex socket. No task was started.";
+    case "CODEX_SHARED_PROXY_LAUNCH_FAILED":
+      return "The shared Codex proxy could not start. No task was started.";
+    case "CODEX_SHARED_PROXY_PIPE_FAILED":
+      return "The shared Codex proxy connection failed. No task was started.";
+    case "CODEX_SHARED_PROXY_EXITED":
+      return "The shared Codex proxy exited before initialization. No task was started.";
+    case "CODEX_SHARED_PROXY_TIMEOUT":
+      return "The shared Codex proxy did not initialize in time. No task was started.";
+    case "CODEX_SHARED_PROXY_INVALID_IDENTITY":
+      return "The shared Codex proxy reported an unexpected runtime identity. No task was started.";
+    case "CODEX_SHARED_PROXY_PROTOCOL_ERROR":
+      return "The shared Codex proxy sent an invalid response. No task was started.";
+    case "CODEX_SHARED_PROXY_RPC_ERROR":
+      return "The shared Codex proxy refused initialization. No task was started.";
     default:
       return null;
   }
