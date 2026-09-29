@@ -746,6 +746,20 @@ export function bindChatGptAppScript(
         }
         return null;
       };
+      const unclippedInPicker = (element, pickerRoot) => {
+        const title = element.getBoundingClientRect();
+        const clips = (overflow) => /^(auto|scroll|hidden|clip)$/u.test(overflow || "");
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+          const style = getComputedStyle(parent);
+          const box = parent.getBoundingClientRect();
+          if (clips(style.overflowY) &&
+            (title.top < box.top || title.bottom > box.bottom)) return false;
+          if (clips(style.overflowX) &&
+            (title.left < box.left || title.right > box.right)) return false;
+          if (parent === pickerRoot) return true;
+        }
+        return false;
+      };
       const headings = labels.filter((element) => normalizedLabel(element) === "Plugins" &&
         pickerRootFor(element) !== null);
       const fileHeadings = labels.filter((element) => normalizedLabel(element) === "Files");
@@ -754,15 +768,20 @@ export function bindChatGptAppScript(
         ![...element.children].some((child) => normalizedLabel(child) === requiredAppName) &&
         headings.some((heading) => {
           const pickerRoot = pickerRootFor(heading);
-          if (pickerRoot === null || pickerRootFor(element) !== pickerRoot) return false;
+          if (pickerRoot === null || pickerRootFor(element) !== pickerRoot ||
+            !unclippedInPicker(element, pickerRoot)) return false;
           const header = heading.getBoundingClientRect();
           const title = element.getBoundingClientRect();
           const nextFilesTop = Math.min(...fileHeadings
             .filter((files) => pickerRootFor(files) === pickerRoot)
             .map((files) => files.getBoundingClientRect().top)
             .filter((top) => top > header.bottom), Infinity);
-          return header.bottom <= title.top + 8 && title.top - header.bottom <= 80 &&
-            title.top < nextFilesTop &&
+          const popup = pickerRoot.getBoundingClientRect();
+          // Inspect the whole bounded Plugins section, including later rows.
+          // A first-row cutoff misses both valid apps and duplicate exact names.
+          return header.bottom <= title.top + 8 && title.bottom <= nextFilesTop &&
+            title.top >= popup.top && title.bottom <= popup.bottom &&
+            title.left >= popup.left && title.right <= popup.right &&
             Math.abs(title.left - header.left) <= 180;
         })
       );

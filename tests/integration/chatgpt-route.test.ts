@@ -1205,259 +1205,369 @@ describe("ChatGPT route submission boundary", () => {
     expect(pickerDelayTicks).toBeGreaterThanOrEqual(3);
   });
 
-  it("selects one exact app from a visible non-semantic Plugins picker", async () => {
-    const expectedHref = "https://chatgpt.com/c/plain-picker";
-    let selected = false;
-    let pickerVisible = false;
-    let pickerAvailable = true;
-    let headingVisible = true;
-    let fileHeadingVisible = false;
-    let transcriptVisible = false;
-    let transcriptClicks = 0;
-    let clicks = 0;
-    let buttonAvailable = false;
-    let buttonClicks = 0;
-    class HTMLElement {
-      parentElement: HTMLElement | null = null;
-      article = false;
-      textContent = "";
-      innerText = "";
-      children: HTMLElement[] = [];
-      rect = {
-        left: 550,
-        right: 640,
-        top: 540,
-        bottom: 560,
+  it.each([540, 620, 700])(
+    "selects one exact app from a visible non-semantic Plugins picker at row y=%i",
+    async (titleTop) => {
+      const expectedHref = "https://chatgpt.com/c/plain-picker";
+      let selected = false;
+      let pickerVisible = false;
+      let pickerAvailable = true;
+      let headingVisible = true;
+      let fileHeadingVisible = false;
+      let transcriptVisible = false;
+      let transcriptClicks = 0;
+      let clicks = 0;
+      let buttonAvailable = false;
+      let buttonClicks = 0;
+      let duplicateVisible = false;
+      let duplicateClicks = 0;
+      let clipMode = "hidden";
+      let clipAxis = "y";
+      class HTMLElement {
+        parentElement: HTMLElement | null = null;
+        article = false;
+        textContent = "";
+        innerText = "";
+        children: HTMLElement[] = [];
+        rect = {
+          left: 550,
+          right: 640,
+          top: 540,
+          bottom: 560,
+          width: 90,
+          height: 20,
+        };
+        getBoundingClientRect() {
+          return this.rect;
+        }
+        getAttribute(): null {
+          return null;
+        }
+        closest(selector: string): HTMLElement | null {
+          if (
+            selector.includes("article") ||
+            selector.includes("data-message-author-role")
+          ) {
+            let current: HTMLElement | null = this;
+            while (current) {
+              if (current.article) return current;
+              current = current.parentElement;
+            }
+            return null;
+          }
+          return this.parentElement;
+        }
+        contains(candidate: unknown): boolean {
+          let current = candidate as HTMLElement | null;
+          while (current) {
+            if (current === this) return true;
+            current = current.parentElement;
+          }
+          return false;
+        }
+        querySelectorAll(): readonly HTMLElement[] {
+          return [];
+        }
+        cloneNode(): HTMLElement {
+          return new HTMLElement();
+        }
+        focus(): void {}
+        replaceChildren(...children: Array<{ text?: string }>): void {
+          this.innerText = children.map((child) => child.text ?? "").join("");
+        }
+        dispatchEvent(): boolean {
+          return true;
+        }
+        click(): void {}
+      }
+      class HTMLTextAreaElement extends HTMLElement {}
+      class InputEvent {
+        constructor(..._arguments: unknown[]) {}
+      }
+      const form = new HTMLElement();
+      const composer = new HTMLElement();
+      composer.rect = {
+        left: 510,
+        right: 1130,
+        top: 420,
+        bottom: 470,
+        width: 620,
+        height: 50,
+      };
+      composer.parentElement = form;
+      const popup = new HTMLElement();
+      popup.rect = {
+        left: 510,
+        right: 1130,
+        top: 480,
+        bottom: 730,
+        width: 620,
+        height: 250,
+      };
+      popup.parentElement = form;
+      const clipper = new HTMLElement();
+      clipper.parentElement = popup;
+      clipper.rect = {
+        ...popup.rect,
+        right: 690,
+        bottom: 600,
+        width: 180,
+        height: 120,
+      };
+      const chip = new HTMLElement();
+      chip.textContent = "Farol Dev";
+      form.querySelectorAll = () => (selected ? [chip] : []);
+      const heading = new HTMLElement();
+      heading.textContent = "Plugins";
+      heading.rect = {
+        left: 530,
+        right: 590,
+        top: 500,
+        bottom: 520,
+        width: 60,
+        height: 20,
+      };
+      heading.parentElement = popup;
+      const fileHeading = new HTMLElement();
+      fileHeading.textContent = "Files";
+      fileHeading.rect = {
+        left: 530,
+        right: 570,
+        top: 580,
+        bottom: 600,
+        width: 40,
+        height: 20,
+      };
+      fileHeading.parentElement = popup;
+      const title = new HTMLElement();
+      title.textContent = "Farol Dev";
+      title.parentElement = popup;
+      title.rect = { ...title.rect, top: titleTop, bottom: titleTop + 20 };
+      const duplicate = new HTMLElement();
+      duplicate.textContent = "Farol Dev";
+      duplicate.parentElement = popup;
+      duplicate.rect = { ...title.rect, top: 680, bottom: 700 };
+      duplicate.click = () => {
+        duplicateClicks += 1;
+      };
+      title.click = () => {
+        clicks += 1;
+        selected = true;
+        composer.innerText = "";
+      };
+      const wrong = new HTMLElement();
+      wrong.textContent = "Farol Dev Other";
+      wrong.rect = {
+        left: 560,
+        right: 700,
+        top: 570,
+        bottom: 590,
+        width: 140,
+        height: 20,
+      };
+      wrong.parentElement = popup;
+      const buttonTitle = new HTMLElement();
+      buttonTitle.textContent = "Farol Dev";
+      const appButton = new HTMLElement();
+      appButton.textContent =
+        "Farol Dev Private development connector to the approved workspace.";
+      appButton.parentElement = popup;
+      appButton.querySelectorAll = () => [buttonTitle];
+      appButton.click = () => {
+        buttonClicks += 1;
+        selected = true;
+        composer.innerText = "";
+      };
+      const transcriptHeading = new HTMLElement();
+      transcriptHeading.textContent = "Plugins";
+      transcriptHeading.rect = { ...heading.rect };
+      const transcriptTitle = new HTMLElement();
+      transcriptTitle.textContent = "Farol Dev";
+      transcriptTitle.rect = { ...title.rect };
+      const message = new HTMLElement();
+      message.article = true;
+      const transcriptPopup = new HTMLElement();
+      transcriptPopup.rect = { ...popup.rect };
+      transcriptPopup.parentElement = message;
+      transcriptHeading.parentElement = transcriptPopup;
+      transcriptTitle.parentElement = transcriptPopup;
+      transcriptTitle.click = () => {
+        transcriptClicks += 1;
+      };
+      const context = vm.createContext({
+        location: { href: expectedHref },
+        document: {
+          querySelector: (selector: string) =>
+            selector.includes("prompt-textarea") ? composer : null,
+          querySelectorAll: (selector: string) =>
+            selector.includes("button")
+              ? pickerVisible && buttonAvailable
+                ? [appButton]
+                : []
+              : selector === "span,div,strong" && pickerVisible
+                ? [
+                    ...(headingVisible ? [heading] : []),
+                    ...(fileHeadingVisible ? [fileHeading] : []),
+                    title,
+                    ...(duplicateVisible ? [duplicate] : []),
+                    wrong,
+                  ]
+                : transcriptVisible
+                  ? [transcriptHeading, transcriptTitle]
+                  : [],
+          createTextNode: (text: string) => ({ text }),
+          execCommand: (_command: string, _showUi: boolean, value: string) => {
+            composer.innerText = value;
+            pickerVisible = pickerAvailable;
+            return true;
+          },
+        },
+        getComputedStyle: (element: HTMLElement) => ({
+          display: "block",
+          visibility: "visible",
+          overflowX:
+            element === clipper && clipAxis === "x" ? clipMode : "visible",
+          overflowY:
+            element === clipper && clipAxis === "y" ? clipMode : "visible",
+          position:
+            element === popup || element === transcriptPopup
+              ? "absolute"
+              : "static",
+        }),
+        setTimeout: (callback: () => void) => {
+          callback();
+          return 0;
+        },
+        HTMLElement,
+        HTMLTextAreaElement,
+        InputEvent,
+        Set,
+        Object,
+        Array,
+      });
+
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "bound" });
+      expect(clicks).toBe(1);
+      selected = false;
+      headingVisible = false;
+      buttonAvailable = true;
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "bound" });
+      expect(clicks).toBe(1);
+      expect(buttonClicks).toBe(1);
+
+      selected = false;
+      buttonAvailable = false;
+      headingVisible = true;
+      duplicateVisible = true;
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "blocked", reason: "ambiguous" });
+      expect(clicks).toBe(1);
+      expect(duplicateClicks).toBe(0);
+      duplicateVisible = false;
+
+      // A scrolled/clipped label outside the popup must not be selected.
+      const visibleTitleRect = { ...title.rect };
+      title.rect = { ...title.rect, top: 740, bottom: 760 };
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "blocked", reason: "missing" });
+      expect(clicks).toBe(1);
+      title.rect = visibleTitleRect;
+
+      // Nonzero bounds inside the popup do not prove visibility through
+      // intermediate clipping ancestors, on either axis.
+      title.parentElement = clipper;
+      for (const axis of ["x", "y"]) {
+        clipAxis = axis;
+        title.rect =
+          axis === "y"
+            ? { ...visibleTitleRect, top: 620, bottom: 640 }
+            : {
+                ...visibleTitleRect,
+                left: 700,
+                right: 790,
+                top: 540,
+                bottom: 560,
+              };
+        for (const mode of ["hidden", "auto", "scroll", "clip"]) {
+          clipMode = mode;
+          await expect(
+            vm.runInContext(
+              bindChatGptAppScript("Farol Dev", expectedHref),
+              context,
+            ),
+          ).resolves.toEqual({ state: "blocked", reason: "missing" });
+          expect(clicks).toBe(1);
+        }
+      }
+      title.parentElement = popup;
+      title.rect = { ...visibleTitleRect, top: 540, bottom: 560 };
+      duplicate.parentElement = clipper;
+      clipAxis = "y";
+      clipMode = "auto";
+      duplicateVisible = true;
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "bound" });
+      expect(clicks).toBe(2);
+      expect(duplicateClicks).toBe(0);
+      selected = false;
+      duplicateVisible = false;
+      duplicate.parentElement = popup;
+      title.rect = visibleTitleRect;
+
+      fileHeadingVisible = false;
+      pickerAvailable = false;
+      transcriptVisible = true;
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "blocked", reason: "missing" });
+      expect(transcriptClicks).toBe(0);
+
+      pickerAvailable = true;
+      transcriptVisible = false;
+      headingVisible = true;
+      fileHeadingVisible = true;
+      title.rect = {
+        left: 560,
+        right: 650,
+        top: 610,
+        bottom: 630,
         width: 90,
         height: 20,
       };
-      getBoundingClientRect() {
-        return this.rect;
-      }
-      getAttribute(): null {
-        return null;
-      }
-      closest(selector: string): HTMLElement | null {
-        if (
-          selector.includes("article") ||
-          selector.includes("data-message-author-role")
-        ) {
-          let current: HTMLElement | null = this;
-          while (current) {
-            if (current.article) return current;
-            current = current.parentElement;
-          }
-          return null;
-        }
-        return this.parentElement;
-      }
-      contains(candidate: unknown): boolean {
-        let current = candidate as HTMLElement | null;
-        while (current) {
-          if (current === this) return true;
-          current = current.parentElement;
-        }
-        return false;
-      }
-      querySelectorAll(): readonly HTMLElement[] {
-        return [];
-      }
-      cloneNode(): HTMLElement {
-        return new HTMLElement();
-      }
-      focus(): void {}
-      replaceChildren(...children: Array<{ text?: string }>): void {
-        this.innerText = children.map((child) => child.text ?? "").join("");
-      }
-      dispatchEvent(): boolean {
-        return true;
-      }
-      click(): void {}
-    }
-    class HTMLTextAreaElement extends HTMLElement {}
-    class InputEvent {
-      constructor(..._arguments: unknown[]) {}
-    }
-    const form = new HTMLElement();
-    const composer = new HTMLElement();
-    composer.rect = {
-      left: 510,
-      right: 1130,
-      top: 420,
-      bottom: 470,
-      width: 620,
-      height: 50,
-    };
-    composer.parentElement = form;
-    const popup = new HTMLElement();
-    popup.rect = {
-      left: 510,
-      right: 1130,
-      top: 480,
-      bottom: 730,
-      width: 620,
-      height: 250,
-    };
-    popup.parentElement = form;
-    const chip = new HTMLElement();
-    chip.textContent = "Farol Dev";
-    form.querySelectorAll = () => (selected ? [chip] : []);
-    const heading = new HTMLElement();
-    heading.textContent = "Plugins";
-    heading.rect = {
-      left: 530,
-      right: 590,
-      top: 500,
-      bottom: 520,
-      width: 60,
-      height: 20,
-    };
-    heading.parentElement = popup;
-    const fileHeading = new HTMLElement();
-    fileHeading.textContent = "Files";
-    fileHeading.rect = {
-      left: 530,
-      right: 570,
-      top: 580,
-      bottom: 600,
-      width: 40,
-      height: 20,
-    };
-    fileHeading.parentElement = popup;
-    const title = new HTMLElement();
-    title.textContent = "Farol Dev";
-    title.parentElement = popup;
-    title.click = () => {
-      clicks += 1;
-      selected = true;
-      composer.innerText = "";
-    };
-    const wrong = new HTMLElement();
-    wrong.textContent = "Farol Dev Other";
-    wrong.rect = {
-      left: 560,
-      right: 700,
-      top: 570,
-      bottom: 590,
-      width: 140,
-      height: 20,
-    };
-    wrong.parentElement = popup;
-    const buttonTitle = new HTMLElement();
-    buttonTitle.textContent = "Farol Dev";
-    const appButton = new HTMLElement();
-    appButton.textContent =
-      "Farol Dev Private development connector to the approved workspace.";
-    appButton.parentElement = popup;
-    appButton.querySelectorAll = () => [buttonTitle];
-    appButton.click = () => {
-      buttonClicks += 1;
-      selected = true;
-      composer.innerText = "";
-    };
-    const transcriptHeading = new HTMLElement();
-    transcriptHeading.textContent = "Plugins";
-    transcriptHeading.rect = { ...heading.rect };
-    const transcriptTitle = new HTMLElement();
-    transcriptTitle.textContent = "Farol Dev";
-    transcriptTitle.rect = { ...title.rect };
-    const message = new HTMLElement();
-    message.article = true;
-    const transcriptPopup = new HTMLElement();
-    transcriptPopup.rect = { ...popup.rect };
-    transcriptPopup.parentElement = message;
-    transcriptHeading.parentElement = transcriptPopup;
-    transcriptTitle.parentElement = transcriptPopup;
-    transcriptTitle.click = () => {
-      transcriptClicks += 1;
-    };
-    const context = vm.createContext({
-      location: { href: expectedHref },
-      document: {
-        querySelector: (selector: string) =>
-          selector.includes("prompt-textarea") ? composer : null,
-        querySelectorAll: (selector: string) =>
-          selector.includes("button")
-            ? pickerVisible && buttonAvailable
-              ? [appButton]
-              : []
-            : selector === "span,div,strong" && pickerVisible
-              ? [
-                  ...(headingVisible ? [heading] : []),
-                  ...(fileHeadingVisible ? [fileHeading] : []),
-                  title,
-                  wrong,
-                ]
-              : transcriptVisible
-                ? [transcriptHeading, transcriptTitle]
-                : [],
-        createTextNode: (text: string) => ({ text }),
-        execCommand: (_command: string, _showUi: boolean, value: string) => {
-          composer.innerText = value;
-          pickerVisible = pickerAvailable;
-          return true;
-        },
-      },
-      getComputedStyle: (element: HTMLElement) => ({
-        display: "block",
-        visibility: "visible",
-        position:
-          element === popup || element === transcriptPopup
-            ? "absolute"
-            : "static",
-      }),
-      setTimeout: (callback: () => void) => {
-        callback();
-        return 0;
-      },
-      HTMLElement,
-      HTMLTextAreaElement,
-      InputEvent,
-      Set,
-      Object,
-      Array,
-    });
-
-    await expect(
-      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
-    ).resolves.toEqual({ state: "bound" });
-    expect(clicks).toBe(1);
-    selected = false;
-    headingVisible = false;
-    buttonAvailable = true;
-    await expect(
-      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
-    ).resolves.toEqual({ state: "bound" });
-    expect(clicks).toBe(1);
-    expect(buttonClicks).toBe(1);
-
-    selected = false;
-    buttonAvailable = false;
-    fileHeadingVisible = false;
-    pickerAvailable = false;
-    transcriptVisible = true;
-    await expect(
-      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
-    ).resolves.toEqual({ state: "blocked", reason: "missing" });
-    expect(transcriptClicks).toBe(0);
-
-    pickerAvailable = true;
-    transcriptVisible = false;
-    headingVisible = true;
-    fileHeadingVisible = true;
-    title.rect = {
-      left: 560,
-      right: 650,
-      top: 610,
-      bottom: 630,
-      width: 90,
-      height: 20,
-    };
-    await expect(
-      vm.runInContext(bindChatGptAppScript("Farol Dev", expectedHref), context),
-    ).resolves.toEqual({ state: "blocked", reason: "missing" });
-    expect(clicks).toBe(1);
-  });
+      await expect(
+        vm.runInContext(
+          bindChatGptAppScript("Farol Dev", expectedHref),
+          context,
+        ),
+      ).resolves.toEqual({ state: "blocked", reason: "missing" });
+      expect(clicks).toBe(2);
+    },
+  );
 
   it("filters the real @ picker and accepts one exact Farol Dev option with description", async () => {
     const expectedHref = "https://chatgpt.com/c/dev-binding";
