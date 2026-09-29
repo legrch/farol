@@ -1,3 +1,9 @@
+import {
+  GuidedWorkspaceAccess,
+  workspaceAccessConfirmation,
+  type WorkspaceAccessPlan,
+  type WorkspaceCommandOutcome,
+} from "./guided-workspace-access";
 import { selectedConnectorApp } from "../pkg/product-settings/connector-app-selection";
 import type {
   ProductConfigurationCommand,
@@ -35,6 +41,11 @@ export interface GuidedOnboardingPort {
     command: ProductConfigurationCommand,
     message: string,
   ) => Promise<boolean>;
+  readonly configureAccess: (
+    command: ProductConfigurationCommand,
+    message: string,
+  ) => Promise<WorkspaceCommandOutcome>;
+  readonly readSettings: () => Promise<boolean>;
   readonly chooseFolder: () => Promise<string | null>;
   readonly pickFolder: (selectionId: string) => Promise<string | null>;
   readonly openSettings: () => void;
@@ -66,7 +77,8 @@ const failureMessages = {
     "The tunnel has not reported ready. Check the message below before reconnecting.",
 } as const;
 type FolderAction = Readonly<{
-  kind: "add" | "remove";
+  kind: "add" | "remove" | "access";
+  plan?: WorkspaceAccessPlan;
   ids: readonly string[];
   authority: string;
   connectionIdentity: string;
@@ -91,6 +103,7 @@ export class GuidedOnboardingView {
   private readonly failedChecks = new Set<number>();
   private readonly backgroundFolderChecks = new Map<string, Promise<boolean>>();
   private backgroundFolderCheckTail: Promise<boolean> = Promise.resolve(true);
+  private readonly workspaceAccess = new GuidedWorkspaceAccess();
   private readonly connection = new GuidedConnectionUpdate();
   private readonly credentials = new GuidedCredentialSave();
   private readonly freshAppVerification = new GuidedFreshAppVerification();
@@ -160,7 +173,10 @@ export class GuidedOnboardingView {
     this.click("#onboarding-confirm-folder", () => {
       const pending = this.pendingFolder;
       this.pendingFolder = null;
-      if (pending) void this.updateFolders(pending);
+      if (pending) {
+        if (pending.kind === "access") void this.applyWorkspaceAccess(pending);
+        else void this.updateFolders(pending);
+      }
     });
     this.click("#onboarding-cancel-folder", () => {
       this.pendingFolder = null;
@@ -368,7 +384,7 @@ export class GuidedOnboardingView {
     element("#onboarding-app-selection-status").textContent =
       connector && selectedConnectorApp(connector)
         ? `Selected app: ${selectedConnectorApp(connector)} · tunnel ${connector.tunnelId}`
-        : "Choose the exact name of your NEW ChatGPT app for this tunnel. Nothing is selected automatically.";
+        : "Use the app connected to this tunnel. Its existing name is fine; nothing is selected automatically.";
     document
       .querySelectorAll<HTMLElement>("[data-onboarding-verification]")
       .forEach((node) => {
@@ -383,7 +399,12 @@ export class GuidedOnboardingView {
     );
     const facts = this.facts();
     const settings = this.port.settings();
-    if (active && settings && !this.busy) {
+    if (
+      active &&
+      settings &&
+      !this.busy &&
+      !this.workspaceAccess.requiresReadback()
+    ) {
       for (const folder of settings.computer.workspaces) {
         if (
           folder.accessCheck == null ||
@@ -394,13 +415,18 @@ export class GuidedOnboardingView {
         if (this.backgroundFolderChecks.has(key)) continue;
         const check = this.backgroundFolderCheckTail
           .then(() =>
-            this.port.configure(
-              {
-                kind: "computer.check-folder",
-                workspaceId: folder.workspaceId,
-              },
-              "Saved folder access refreshed.",
-            ),
+            this.workspaceAccess.requiresReadback() ||
+            this.busy ||
+            this.port.settings()?.computer.generation !==
+              settings.computer.generation
+              ? false
+              : this.port.configure(
+                  {
+                    kind: "computer.check-folder",
+                    workspaceId: folder.workspaceId,
+                  },
+                  "Saved folder access refreshed.",
+                ),
           )
           .catch(() => false);
         this.backgroundFolderChecks.set(key, check);
@@ -738,8 +764,100 @@ export class GuidedOnboardingView {
     );
   }
 
+  hasUnconfirmedWorkspaceChange(): boolean {
+    return this.workspaceAccess.requiresReadback();
+  }
+
+  requestFolderRemoval(workspaceId: string): void {
+    if (this.busy) return;
+    this.select(1);
+    this.requestFolderAction("remove", [workspaceId]);
+  }
+
+  private reconcileWorkspaceChange(): boolean {
+    if (this.workspaceAccess.requiresReadback()) {
+      this.pendingFolder = null;
+      void this.perform("Reading the existing access change…", async () => {
+        const read = await this.port.readSettings();
+        const settings = this.port.settings();
+        this.message =
+          read &&
+          settings &&
+          this.workspaceAccess.reconcileReadback(settings, this.port.buildId())
+            ? "The existing change is confirmed. Review this folder and approve the next change when ready. Nothing was repeated."
+            : "The existing change is still unconfirmed. No access action was repeated.";
+      });
+      return true;
+    }
+    return false;
+  }
+
+  requestWorkspaceAccess(plan: WorkspaceAccessPlan): void {
+    if (this.busy) return;
+    this.select(1);
+    if (this.reconcileWorkspaceChange()) return;
+    const facts = this.facts();
+    if (facts.outcomeUnknown) {
+      this.message =
+        "Check the previous connection result before changing access.";
+      this.port.render();
+      return;
+    }
+    this.pendingFolder = {
+      kind: "access",
+      ids: [plan.workspaceId],
+      plan,
+      authority: facts.authority,
+      connectionIdentity: facts.connectionIdentity,
+    };
+    this.port.render();
+    element("#onboarding-folder-confirmation").scrollIntoView({
+      block: "nearest",
+    });
+  }
+
+  private async applyWorkspaceAccess(action: FolderAction): Promise<void> {
+    await this.perform("Updating folder access…", async () => {
+      if (!action.plan) return;
+      const result = await this.workspaceAccess.run(
+        {
+          settings: () => this.port.settings(),
+          buildId: () => this.port.buildId(),
+          run: (command) =>
+            this.port.configureAccess(
+              command,
+              "Folder access action confirmed.",
+            ),
+        },
+        action.plan,
+        action,
+      );
+      if (result.ok) {
+        this.failedChecks.delete(1);
+        this.message = result.reconnected
+          ? "Folder access is ready. The connection was restored; check its new scope in ChatGPT when ready."
+          : "Folder access is ready. Continue to Connection when ready.";
+      } else {
+        const folder = this.port
+          .settings()
+          ?.computer.workspaces.find(
+            (workspace) => workspace.workspaceId === result.workspaceId,
+          );
+        this.message =
+          result.reason === "unknown"
+            ? "No confirmed result. Select Recheck to read the existing change; nothing is retried."
+            : result.reason === "changed"
+              ? "Access changed during this action. Review the folder list before continuing."
+              : `Access was not fully confirmed${folder ? ` for ${folderDisplayName(folder)}` : ""}. The connection was not automatically restarted. Recheck or remove the affected folder here.`;
+      }
+    });
+  }
+
   private renderFolders(settings: ProductSettings | null): void {
     const folders = settings?.computer.workspaces ?? [];
+    const confirmation = element("#onboarding-folder-confirmation");
+    // Preserve the existing listeners while moving the confirmation beside its folder.
+    element("#onboarding-folder-list").parentElement!.append(confirmation);
     element("#onboarding-folder-empty").hidden = folders.length > 0;
     element<HTMLButtonElement>("#onboarding-add-folder").disabled =
       this.busy || !settings;
@@ -788,7 +906,44 @@ export class GuidedOnboardingView {
         remove.addEventListener("click", () =>
           this.requestFolderAction("remove", [folder.workspaceId]),
         );
-        actions.append(remove);
+        const access = document.createElement("button");
+        access.type = "button";
+        const localWork =
+          folder.access === "write" &&
+          settings?.computer.commands === "workspace" &&
+          folder.gitHistoryApproved === true;
+        access.textContent = "Allow local work…";
+        access.disabled = this.busy || localWork;
+        access.hidden = localWork;
+        access.addEventListener("click", () =>
+          this.requestWorkspaceAccess({
+            workspaceId: folder.workspaceId,
+            access: "write",
+            commands: "workspace",
+            gitHistoryApproved: true,
+          }),
+        );
+        const downgrade = document.createElement("button");
+        downgrade.type = "button";
+        downgrade.textContent = "Use read-only…";
+        downgrade.disabled = this.busy;
+        downgrade.hidden =
+          folder.access !== "write" && folder.gitHistoryApproved !== true;
+        downgrade.addEventListener("click", () =>
+          this.requestWorkspaceAccess({
+            workspaceId: folder.workspaceId,
+            access: "read",
+            gitHistoryApproved: false,
+          }),
+        );
+        const recheck = document.createElement("button");
+        recheck.type = "button";
+        recheck.textContent = "Recheck";
+        recheck.disabled = this.busy;
+        recheck.addEventListener("click", () =>
+          this.requestWorkspaceAccess({ workspaceId: folder.workspaceId }),
+        );
+        actions.append(access, downgrade, recheck, remove);
         row.append(copy, actions);
         return row;
       }),
@@ -800,16 +955,30 @@ export class GuidedOnboardingView {
       const target = folders.find(
         (folder) => folder.workspaceId === pending.ids[0],
       );
+      const card = [...element("#onboarding-folder-list").children].find(
+        (_, index) => folders[index]?.workspaceId === pending.ids[0],
+      );
+      card?.append(confirmation);
+      const approval =
+        pending.kind === "access" && pending.plan
+          ? workspaceAccessConfirmation(
+              pending.plan,
+              target ? folderDisplayName(target) : "this folder",
+              paused,
+            )
+          : null;
       element("#onboarding-folder-confirmation-copy").textContent =
-        pending.kind === "remove"
+        approval?.copy ??
+        (pending.kind === "remove"
           ? `Remove ${target ? folderDisplayName(target) : "this folder"} from Farol? Your files will not be deleted.${paused ? " The connection will pause while access changes." : ""}`
-          : "Farol will update folder access and reconnect if the connection was running.";
+          : "Farol will update folder access and reconnect if the connection was running.");
       element<HTMLButtonElement>("#onboarding-confirm-folder").textContent =
-        pending.kind === "remove"
+        approval?.button ??
+        (pending.kind === "remove"
           ? paused
             ? "Pause and remove"
             : "Remove folder"
-          : "Add folder…";
+          : "Add folder…");
     }
   }
 
@@ -849,6 +1018,7 @@ export class GuidedOnboardingView {
     ids: readonly string[],
   ): void {
     if (this.busy) return;
+    if (this.reconcileWorkspaceChange()) return;
     const facts = this.facts();
     if (facts.outcomeUnknown) {
       this.message =
@@ -865,11 +1035,21 @@ export class GuidedOnboardingView {
     if (kind === "remove") {
       this.pendingFolder = action;
       this.port.render();
+      element("#onboarding-folder-confirmation").scrollIntoView({
+        block: "nearest",
+      });
       return;
     }
     void this.updateFolders(action);
   }
   private async updateFolders(action: FolderAction): Promise<void> {
+    if (this.reconcileWorkspaceChange()) return;
+    const existingIds = new Set(
+      this.port
+        .settings()
+        ?.computer.workspaces.map((workspace) => workspace.workspaceId) ?? [],
+    );
+    let addedWorkspace: string | null = null;
     await this.perform(
       action.kind === "add" ? "Adding a folder…" : "Removing access…",
       async () => {
@@ -926,6 +1106,7 @@ export class GuidedOnboardingView {
             return;
           }
           first = selected;
+          if (!existingIds.has(selected)) addedWorkspace = selected;
         } else if (action.kind === "remove") {
           if (
             !first ||
@@ -1013,6 +1194,25 @@ export class GuidedOnboardingView {
             : "Folder added and ready to use.";
       },
     );
+    const settings = this.port.settings();
+    const added = settings?.computer.workspaces.find(
+      (workspace) => workspace.workspaceId === addedWorkspace,
+    );
+    if (
+      settings &&
+      added &&
+      folderAccessChecked(settings, added, this.port.buildId()) &&
+      !this.facts().outcomeUnknown
+    ) {
+      // The picker saved a read-only choice. The default local-work proposal
+      // is explicit and cancellable; selecting a folder never grants it alone.
+      this.requestWorkspaceAccess({
+        workspaceId: added.workspaceId,
+        access: "write",
+        commands: "workspace",
+        gitHistoryApproved: true,
+      });
+    }
   }
   private async saveCredentials(): Promise<void> {
     await this.perform("Saving credentials…", async () => {
@@ -1188,7 +1388,7 @@ export class GuidedOnboardingView {
       const connector = this.port.settings()?.connectors.secureMcp;
       if (!connector || selectedConnectorApp(connector) === null) {
         this.message =
-          "Save the exact NEW app name for the current tunnel before running the embedded check. No message was sent.";
+          "Choose the ChatGPT app connected to this tunnel before running the check. Keep its existing name. No message was sent.";
         return;
       }
       if (

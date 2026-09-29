@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyConfigurationResponse,
+  configurationEffectOutcome,
   UNCONFIRMED_CONFIGURATION_MESSAGE,
   type ConfigurationTransport,
 } from "../../src/ui/configuration-outcome";
@@ -81,4 +82,36 @@ describe("classifyConfigurationResponse", () => {
     expect(outcome.result.ok).toBe(true);
     expect(outcome.result.snapshot).toEqual(snapshot);
   });
+});
+
+it("distinguishes a settings write with failed readback from a refusal without effects", () => {
+  for (const error of [
+    "SETTINGS_WRITE_FAILED",
+    "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    "CONNECTOR_STOP_UNCONFIRMED",
+    "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+  ]) {
+    const result = classifyConfigurationResponse({
+      settled: "fulfilled",
+      value: {
+        ok: false,
+        error,
+        snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
+      },
+    });
+    expect(result.kind).toBe("refused");
+    expect(configurationEffectOutcome(result)).toBe("unknown");
+  }
+  expect(
+    configurationEffectOutcome(
+      classifyConfigurationResponse({
+        settled: "fulfilled",
+        value: {
+          ok: false,
+          error: "SETTINGS_INPUT_INVALID",
+          snapshot: { status: "error", error: "SETTINGS_READ_FAILED" },
+        },
+      }),
+    ),
+  ).toBe("refused");
 });

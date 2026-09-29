@@ -2221,7 +2221,8 @@ html[data-environment="dev"] [data-panel="settings"] .settings-feedback {
 }
 
 .workspace-policy {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 8px;
   padding: 0 0 12px;
@@ -3971,4 +3972,48 @@ html[data-sidebar="rail"] .onboarding-nav button {
     align-items: flex-start;
     flex-direction: column;
   }
+}
+
+.workspace-policy p {
+  grid-column: 1 / -1;
+  margin: 4px 0;
+  max-width: 72ch;
+  line-height: 1.5;
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.workspace-policy > button:last-child {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+.onboarding-folder-card:has(.onboarding-recovery) {
+  flex-wrap: wrap;
+}
+.onboarding-folder-card > .onboarding-recovery {
+  width: 100%;
+  flex: 1 0 100%;
+}
+.onboarding-folder-actions {
+  flex-wrap: wrap;
+  justify-content: end;
+}
+#onboarding-verification-method,
+#onboarding-app-name {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 10px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+}
+#onboarding-save-app {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  padding: 0 12px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font: inherit;
+  margin-top: 8px;
 }

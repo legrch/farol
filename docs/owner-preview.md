@@ -223,3 +223,43 @@ If the copy is interrupted before the receipt exists, the exact Preview destinat
 may be partial and remains fail-closed. After confirming the sibling receipt is absent,
 the owner may move only `Farol Next Preview.app` to Trash and run the same command
 again; the tool never removes an existing destination on a later invocation.
+
+## Setup access transitions and receipt timing
+
+A newly picked folder remains read-only until the owner confirms the local-work
+proposal beside that folder. This single in-Setup approval requests guarded file
+edits, workspace command mode and full Git/history/user-settings access. The
+confirmation identifies the folder and explains the shared command mode. Cancel
+keeps the read-only choice. Existing exclusions remain in place. Full Git may
+expose old excluded content or sensitive user settings; it is never inferred from
+the native picker. Read-only use remains available.
+
+Settings edit/Git/recheck/command controls lead to this same explicit Setup
+transition. Its existing backend commands pause the running connector, apply
+and read back each admitted change, verify the selected folder and all saved
+folder checks, then restore a previously ready connection. A failed or unknown
+step stops the sequence; partial settings remain visible and no automatic retry
+or ChatGPT Send occurs. A lost reply or failed settings write/readback fences
+subsequent folder/connector changes. Recheck reads the native bootstrap snapshot
+without ending sign-in or probing ChatGPT; an exact matching readback releases
+the fence but never resumes the permission plan. Read-only and full-Git
+revocation are applied before verification, even when the folder is inaccessible. Remove confirmation is beside its folder, not below the
+complete list.
+
+An app-bound temporary connection check can finish its local observation from
+the exact current MCP receipt while provider answer rendering continues. This
+is a distinct receipt-confirmed outcome, not model-answer completion. Lost Send
+acknowledgement remains unknown; receipt observation never sends another message.
+The first home-to-created-conversation transition is preserved, while a second
+conversation, cancellation or closed surface invalidates the observation. The
+owner can still read the page and explicitly return to Setup.
+
+The app field uses the exact name shown in ChatGPT. A name such as Farol Dev
+does not choose the build environment: the selected tunnel/generation, serving
+identity and local receipt bind it. Reuse the app already connected to this
+tunnel; do not create a duplicate or move credentials for a display-name change.
+
+These changes require their own clean-source/package and native qualification.
+Source policy fixtures and the historical1b owner receipt do not qualify new
+bytes; the earlier packaged returning/pending FAIL and denied native repeat
+remain preserved until their supported remedy.

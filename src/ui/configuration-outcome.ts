@@ -68,3 +68,20 @@ export function classifyConfigurationResponse(
     ? { kind: "applied", result: parsed.data }
     : { kind: "refused", result: parsed.data };
 }
+
+// A valid error reply can still describe an effect whose acknowledgement was
+// lost after a write. Access workflows must fence those effects for readback.
+export function configurationEffectOutcome(
+  outcome: ConfigurationOutcome,
+): "applied" | "refused" | "unknown" {
+  if (outcome.kind === "unconfirmed") return "unknown";
+  if (outcome.kind === "applied") return "applied";
+  return [
+    "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    "CONNECTOR_STOP_UNCONFIRMED",
+    "WORKSPACE_MUTATION_OUTCOME_UNKNOWN",
+    "SETTINGS_WRITE_FAILED",
+  ].includes(outcome.result.error)
+    ? "unknown"
+    : "refused";
+}

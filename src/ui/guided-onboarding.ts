@@ -147,7 +147,7 @@ export const onboardingSteps = [
     id: "app",
     label: "Add to ChatGPT",
     title: "Add this Farol to ChatGPT",
-    copy: "Add a separate NEW app for the current tunnel, then choose its exact name below. Run the check explicitly: Farol selects that app, sends one short message, and checks the local receipt. Read the reply before returning to Setup. The manual external check remains a separate option.",
+    copy: "Choose the ChatGPT app connected to the tunnel below. Keep an existing app with this tunnel; otherwise add it in ChatGPT. Run the check explicitly: Farol selects that app, sends one short message, and checks the local receipt. Read the reply before returning to Setup. The manual external check remains a separate option.",
   },
   {
     id: "finish",

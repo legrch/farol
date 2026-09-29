@@ -33,7 +33,6 @@ import {
 } from "../pkg/ipc/task-surface-status";
 import {
   ProductConfigurationCommandSchema,
-  ProductConfigurationResultSchema,
   ProductConfigurationSnapshotSchema,
   type ProductConfigurationCommand,
   type ProductConfigurationEvidence,
@@ -139,6 +138,7 @@ import {
 } from "./setup-media";
 import {
   classifyConfigurationResponse,
+  configurationEffectOutcome,
   UNCONFIRMED_CONFIGURATION_MESSAGE,
   type ConfigurationTransport,
 } from "./configuration-outcome";
@@ -2291,6 +2291,17 @@ function renderComputerConfiguration(): void {
       commands !== "workspace"
     )
       return;
+    const witness =
+      settings.setup.computer.verified?.workspaceId ??
+      settings.computer.workspaces[0]?.workspaceId;
+    if (guidedSetupSelected(bootstrap) && guidedOnboarding && witness) {
+      selectSection("computer");
+      guidedOnboarding.requestWorkspaceAccess({
+        workspaceId: witness,
+        commands,
+      });
+      return;
+    }
     void configureProduct(
       { kind: "computer.update-commands", commands },
       commands === "none"
@@ -2349,6 +2360,13 @@ function renderComputerConfiguration(): void {
       verify.type = "button";
       verify.textContent = verified ? "Recheck" : "Verify folder";
       verify.addEventListener("click", () => {
+        if (guidedSetupSelected(bootstrap) && guidedOnboarding) {
+          selectSection("computer");
+          guidedOnboarding.requestWorkspaceAccess({
+            workspaceId: workspace.workspaceId,
+          });
+          return;
+        }
         void configureProduct(
           {
             kind: "computer.verify-workspace",
@@ -2367,6 +2385,15 @@ function renderComputerConfiguration(): void {
           : "Remove write authority and require a fresh read verification";
       updateAccess.addEventListener("click", () => {
         const access = workspace.access === "read" ? "write" : "read";
+        if (guidedSetupSelected(bootstrap) && guidedOnboarding) {
+          selectSection("computer");
+          guidedOnboarding.requestWorkspaceAccess({
+            workspaceId: workspace.workspaceId,
+            access,
+            ...(access === "read" ? { gitHistoryApproved: false } : {}),
+          });
+          return;
+        }
         void configureProduct(
           {
             kind: "computer.update-access",
@@ -2380,6 +2407,11 @@ function renderComputerConfiguration(): void {
       remove.type = "button";
       remove.textContent = "Remove";
       remove.addEventListener("click", () => {
+        if (guidedSetupSelected(bootstrap) && guidedOnboarding) {
+          selectSection("computer");
+          guidedOnboarding.requestFolderRemoval(workspace.workspaceId);
+          return;
+        }
         void configureProduct(
           {
             kind: "computer.remove-workspace",
@@ -2446,12 +2478,29 @@ function renderComputerConfiguration(): void {
         ? "Revoke full Git and user settings"
         : "Approve full Git and user settings";
       gitHistory.disabled =
+        !guidedSetupSelected(bootstrap) &&
         !workspace.gitHistoryApproved &&
         (!verified || settings.computer.commands !== "workspace");
       gitHistory.title = workspace.gitHistoryApproved
         ? "Remove shell access to this repository's Git metadata and user Git settings"
         : "Allow shell access to complete Git metadata and user Git settings after verifying this folder and reviewing the disclosure above.";
       gitHistory.addEventListener("click", () => {
+        if (guidedSetupSelected(bootstrap) && guidedOnboarding) {
+          selectSection("computer");
+          guidedOnboarding.requestWorkspaceAccess(
+            workspace.gitHistoryApproved
+              ? {
+                  workspaceId: workspace.workspaceId,
+                  gitHistoryApproved: false,
+                }
+              : {
+                  workspaceId: workspace.workspaceId,
+                  commands: "workspace",
+                  gitHistoryApproved: true,
+                },
+          );
+          return;
+        }
         void configureProduct(
           {
             kind: "computer.update-git-history",
@@ -2898,7 +2947,20 @@ async function configureProduct(
   command: ProductConfigurationCommand,
   successMessage: string,
   onEvidence?: (evidence: ProductConfigurationEvidence | undefined) => void,
+  onOutcome?: (outcome: "applied" | "refused" | "unknown") => void,
 ): Promise<boolean> {
+  if (
+    guidedOnboarding?.hasUnconfirmedWorkspaceChange() &&
+    (command.kind.startsWith("computer.") ||
+      command.kind.startsWith("connector."))
+  ) {
+    onOutcome?.("unknown");
+    settingsFeedback =
+      "Read the existing access change from Folders before changing its scope. Nothing was repeated.";
+    settingsFeedbackError = true;
+    render();
+    return false;
+  }
   const configurationRequest = configurationRequestOrder.begin();
   const checkOperation = setupCheckOperation(command);
   const checkRunId = checkOperation
@@ -3044,6 +3106,7 @@ async function configureProduct(
     });
   }
   if (outcome.kind === "unconfirmed") {
+    onOutcome?.("unknown");
     if (checkOperation && checkRunId)
       recordSetupCheck(checkOperation, "outcome_unknown", checkRunId);
     // Neither a malformed reply nor a lost promise proves the command was
@@ -3067,6 +3130,7 @@ async function configureProduct(
     renderedComputerSettingsRevision = -1;
   }
   if (!parsed.ok) {
+    onOutcome?.(configurationEffectOutcome(outcome));
     if (checkOperation && checkRunId)
       recordSetupCheck(checkOperation, "failed", checkRunId, parsed.error);
     if (
@@ -3484,30 +3548,36 @@ async function configureProduct(
       void acknowledgeChatGptTaskResult(taskResultToAcknowledge);
     });
   }
+  onOutcome?.("applied");
   return true;
 }
 
-// Called whenever the main process brings the owner back to Setup
-// ("open-settings" — see onShellAction below). It is always safe to call:
-// `chatgpt.sign-in-return` reads the current settings snapshot only, never
-// probes the ChatGPT page itself, and never shows a "Verifying…" message
-// the way `configureProduct` does — returning from the sign-in surface
-// already recorded a truthful observation (UX34-08). A failure here
-// leaves the existing "Check connection" action as the correct fallback.
-async function refreshSettingsAfterReturn(): Promise<void> {
+// Read the existing native bootstrap snapshot without changing sign-in mode,
+// probing the browser, or replaying any configuration action.
+async function refreshSettingsAfterReturn(): Promise<boolean> {
   try {
-    const parsed = ProductConfigurationResultSchema.safeParse(
-      await window.farolNext.configure({ kind: "chatgpt.sign-in-return" }),
+    const incoming = bootstrapSchema.safeParse(
+      await window.farolNext.bootstrap(),
     );
-    if (parsed.success && parsed.data.ok) {
-      bootstrap = { ...bootstrap, configuration: parsed.data.snapshot };
+    if (
+      incoming.success &&
+      incoming.data.build.buildId === bootstrap.build.buildId &&
+      incoming.data.configuration.status === "ready" &&
+      shouldAdoptConfigurationSnapshot(
+        bootstrap.configuration,
+        incoming.data.configuration,
+      )
+    ) {
+      bootstrap = { ...bootstrap, configuration: incoming.data.configuration };
       renderedGeneralSettingsRevision = -1;
       renderedComputerSettingsRevision = -1;
       render();
+      return true;
     }
   } catch {
-    // Best-effort refresh only.
+    // A failed read leaves an unconfirmed action fenced.
   }
+  return false;
 }
 
 function connectorChallengeCard(
@@ -5974,6 +6044,14 @@ async function start(): Promise<void> {
     buildId: () => bootstrap.build.buildId,
     isActive: () => section === "computer",
     configure: configureProduct,
+    configureAccess: async (command, message) => {
+      let result: "applied" | "refused" | "unknown" = "unknown";
+      await configureProduct(command, message, undefined, (outcome) => {
+        result = outcome;
+      });
+      return result;
+    },
+    readSettings: refreshSettingsAfterReturn,
     chooseFolder: async () => {
       let selectionId: string | null = null;
       await configureProduct(
