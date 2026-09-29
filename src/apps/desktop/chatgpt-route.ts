@@ -2050,6 +2050,15 @@ export class ChatGptRoute {
     }
     if (this.routeWindow !== candidate || candidate.isDestroyed())
       return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+    const profileUrl = contents.getURL();
+    const profileDocumentGeneration = this.routeDocumentGeneration;
+    const profileObservationGeneration = this.taskObservationGeneration;
+    const profileIdentityLost = () =>
+      this.routeWindow !== candidate ||
+      candidate.isDestroyed() ||
+      this.routeDocumentGeneration !== profileDocumentGeneration ||
+      this.taskObservationGeneration !== profileObservationGeneration ||
+      contents.getURL() !== profileUrl;
     const deadline = Date.now() + 12_000;
     let profile = await read();
     while (
@@ -2104,22 +2113,43 @@ export class ChatGptRoute {
         return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
       }
     }
-    if (!profile.data.modelReady) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+    if (!profile.data.modelReady || profileIdentityLost())
+      return "CHATGPT_INSTANT_MODEL_REQUIRED";
 
     try {
       if (
         (await contents.executeJavaScript(
           openInstantPowerPickerScript,
           true,
-        )) !== true
+        )) !== true ||
+        profileIdentityLost()
       )
         return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      // Opening a provider menu does not acknowledge that its controls have
+      // rendered. Observe the same opened picker for a bounded interval; never
+      // click it again or reinterpret an unrecognized result as readiness.
+      const pickerDeadline = Date.now() + 2_000;
       let minimumObserved = false;
       for (let attempt = 0; attempt < 8; attempt += 1) {
-        const slider = instantPowerSliderSchema.safeParse(
+        if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+        let slider = instantPowerSliderSchema.safeParse(
           await contents.executeJavaScript(focusInstantPowerSliderScript, true),
         );
-        if (!slider.success || !slider.data.ready)
+        while (
+          slider.success &&
+          !slider.data.ready &&
+          Date.now() < pickerDeadline
+        ) {
+          await delay(100);
+          if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
+          slider = instantPowerSliderSchema.safeParse(
+            await contents.executeJavaScript(
+              focusInstantPowerSliderScript,
+              true,
+            ),
+          );
+        }
+        if (profileIdentityLost() || !slider.success || !slider.data.ready)
           return "CHATGPT_INSTANT_MODEL_REQUIRED";
         if (slider.data.atMinimum) {
           minimumObserved = true;
@@ -2143,11 +2173,11 @@ export class ChatGptRoute {
       Date.now() < selectedDeadline
     ) {
       await delay(100);
-      if (this.routeWindow !== candidate || candidate.isDestroyed())
-        return "CHATGPT_INSTANT_MODEL_REQUIRED";
+      if (profileIdentityLost()) return "CHATGPT_INSTANT_MODEL_REQUIRED";
       selected = await read();
     }
-    return selected.success &&
+    return !profileIdentityLost() &&
+      selected.success &&
       selected.data.composerReady &&
       !selected.data.draftPresent &&
       selected.data.temporary &&

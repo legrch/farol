@@ -83,43 +83,51 @@ describe("temporary Instant connector profile", () => {
   ) {
     const route = devTaskRoute(vi.fn());
     let current = initial;
+    let currentUrl = "https://chatgpt.com/";
     let minimum = false;
     let pickerOpens = 0;
     let personalizationOpens = 0;
     let readsDuringHydration = 0;
-    const loadURL = vi.fn(async () => {
+    const loadURL = vi.fn(async (url: string) => {
+      currentUrl = url;
       current = hydrating ?? afterLoad;
     });
     const sendInputEvent = vi.fn(() => {
       minimum = true;
       current = { ...current, instant: true };
     });
-    const executeJavaScript = vi.fn(async (script: string) => {
-      if (script === temporaryInstantProfileProbe) {
-        if (hydrating && current === hydrating && ++readsDuringHydration > 2)
-          current = afterLoad;
-        return current;
-      }
-      if (script === openInstantPowerPickerScript) {
-        pickerOpens += 1;
-        return true;
-      }
-      if (script === openTemporaryPersonalizationScript) {
-        personalizationOpens += 1;
-        return true;
-      }
-      if (script === selectTemporaryPersonalizationScript) {
-        current = { ...current, personalized: true };
-        return true;
-      }
-      if (script === focusInstantPowerSliderScript)
-        return { ready: true, atMinimum: minimum };
-      throw new Error("Unexpected provider script");
-    });
+    const executeJavaScript = vi.fn(
+      async (script: string): Promise<unknown> => {
+        if (script === temporaryInstantProfileProbe) {
+          if (hydrating && current === hydrating && ++readsDuringHydration > 2)
+            current = afterLoad;
+          return current;
+        }
+        if (script === openInstantPowerPickerScript) {
+          pickerOpens += 1;
+          return true;
+        }
+        if (script === openTemporaryPersonalizationScript) {
+          personalizationOpens += 1;
+          return true;
+        }
+        if (script === selectTemporaryPersonalizationScript) {
+          current = { ...current, personalized: true };
+          return true;
+        }
+        if (script === focusInstantPowerSliderScript)
+          return { ready: true, atMinimum: minimum };
+        throw new Error("Unexpected provider script");
+      },
+    );
     const surface = {
       isDestroyed: () => false,
       loadURL,
-      webContents: { executeJavaScript, sendInputEvent },
+      webContents: {
+        executeJavaScript,
+        sendInputEvent,
+        getURL: () => currentUrl,
+      },
     };
     Reflect.set(route, "routeWindow", surface);
     const prepare = Reflect.get(route, "prepareTemporaryInstantProfile") as (
@@ -132,6 +140,15 @@ describe("temporary Instant connector profile", () => {
       executeJavaScript,
       pickerOpens: () => pickerOpens,
       personalizationOpens: () => personalizationOpens,
+      close: () => Reflect.set(route, "routeWindow", null),
+      navigate: (url?: string) => {
+        if (url !== undefined) currentUrl = url;
+        Reflect.set(
+          route,
+          "routeDocumentGeneration",
+          Number(Reflect.get(route, "routeDocumentGeneration")) + 1,
+        );
+      },
     };
   }
 
@@ -150,6 +167,124 @@ describe("temporary Instant connector profile", () => {
       type: "keyDown",
       keyCode: "Escape",
     });
+  });
+
+  it("waits for the opened model picker to expose its slider before changing the model", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let sliderReads = 0;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === focusInstantPowerSliderScript && ++sliderReads <= 2) {
+        expect(route.sendInputEvent).not.toHaveBeenCalled();
+        return { ready: false };
+      }
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBeNull();
+    expect(sliderReads).toBeGreaterThan(2);
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.sendInputEvent).toHaveBeenCalledWith({
+      type: "keyDown",
+      keyCode: "Left",
+    });
+  });
+
+  it("stops waiting for an unavailable picker without typing or reopening it", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    route.executeJavaScript.mockImplementation(async (script: string) =>
+      script === focusInstantPowerSliderScript
+        ? { ready: false }
+        : execute(script),
+    );
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on an unrecognized slider response without a readiness retry", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let sliderReads = 0;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === focusInstantPowerSliderScript) {
+        sliderReads += 1;
+        return { ready: "unknown" };
+      }
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(sliderReads).toBe(1);
+    expect(route.pickerOpens()).toBe(1);
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not act on a replacement route while the picker is rendering", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let sliderReads = 0;
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      if (script === focusInstantPowerSliderScript) {
+        sliderReads += 1;
+        route.close();
+        return { ready: false };
+      }
+      return execute(script);
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(sliderReads).toBe(1);
+    expect(route.sendInputEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "https://chatgpt.com/c/other"])(
+    "does not press model keys if the same surface document navigates while probing (%s)",
+    async (url) => {
+      const route = profileRoute();
+      const execute = route.executeJavaScript.getMockImplementation()!;
+      let sliderReads = 0;
+      route.executeJavaScript.mockImplementation(async (script: string) => {
+        if (script === focusInstantPowerSliderScript) {
+          sliderReads += 1;
+          if (sliderReads === 1) return { ready: false };
+          route.navigate(url);
+          return { ready: true, atMinimum: false };
+        }
+        return execute(script);
+      });
+      await expect(route.prepare()).resolves.toBe(
+        "CHATGPT_INSTANT_MODEL_REQUIRED",
+      );
+      expect(sliderReads).toBe(2);
+      expect(route.pickerOpens()).toBe(1);
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still requires the visible Instant label after reaching the slider minimum", async () => {
+    const route = profileRoute();
+    const execute = route.executeJavaScript.getMockImplementation()!;
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+    route.executeJavaScript.mockImplementation(async (script: string) => {
+      const result = await execute(script);
+      return script === temporaryInstantProfileProbe &&
+        typeof result === "object" &&
+        result !== null
+        ? { ...result, instant: false }
+        : result;
+    });
+    await expect(route.prepare()).resolves.toBe(
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+    );
+    expect(route.pickerOpens()).toBe(1);
   });
 
   it("preserves an owner draft before any profile navigation", async () => {

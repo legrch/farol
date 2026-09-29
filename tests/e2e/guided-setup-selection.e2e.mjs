@@ -182,7 +182,7 @@ const chatFixture = createServer(async (request, response) => {
     response.end(`<!doctype html><html><head><title>Owned Setup fixture</title></head><body style="margin:24px;font:18px sans-serif">
       <h1>Owned Setup fixture</h1>
       <button aria-label="Close sidebar" onclick="document.body.dataset.sidebarClicks=String(Number(document.body.dataset.sidebarClicks||0)+1);this.setAttribute('aria-label',this.getAttribute('aria-label')==='Close sidebar'?'Open sidebar':'Close sidebar')">Toggle fixture sidebar</button>
-      <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button aria-label="Select ChatGPT model">Instant</button><input type="range" min="0" max="5" value="0" aria-label="Fixture Instant effort" />
+      <button aria-label="Turn off temporary chat">Temporary fixture</button><button>Personalized</button><button id="fixture-model-control" aria-label="Select ChatGPT model" onclick="setTimeout(() => { document.querySelector('#fixture-instant-effort').hidden=false; }, 250)">Pro</button><input id="fixture-instant-effort" hidden type="range" min="0" max="5" value="4" aria-label="Fixture Instant effort" oninput="document.querySelector('#fixture-model-control').innerText=this.value==='0'?'Instant':'Pro'" />
       <div id="messages"></div><form onsubmit="return false"><span data-testid="composer-app-chip">${fixtureApp}</span><textarea id="prompt-textarea" aria-label="Fixture composer"></textarea><button type="button" data-testid="send-button" onclick="sendFixture()">Send to owned fixture</button></form>
       <script>
       async function sendFixture() {
