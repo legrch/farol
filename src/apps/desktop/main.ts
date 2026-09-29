@@ -50,6 +50,7 @@ import { z } from "zod";
 import { exactProject } from "../../modules/chat/app/service/persistent-codex-handoff";
 import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
 import { SharedCodexProxyHost } from "../../modules/chat/infra/native/shared-codex-proxy-host";
+import { codexTaskRouteFailureCode } from "./codex-task-route-error";
 import { PersistentChatGptHandoff } from "../../modules/chat/app/service/persistent-chatgpt-handoff";
 import { PrivateSavedChatJournal } from "../../modules/chat/infra/repo/private-saved-chat-journal";
 import { Sha256SavedChatDigester } from "../../modules/chat/infra/native/sha256-saved-chat-digester";
@@ -5254,8 +5255,8 @@ async function configureAdmittedProduct(
             expiresAt: Date.parse(approvedAt) + 12 * 60 * 60 * 1_000,
           }),
         );
-      } catch {
-        return configurationFailure("CODEX_TASK_ROUTE_UNAVAILABLE");
+      } catch (error) {
+        return configurationFailure(codexTaskRouteFailureCode(error));
       } finally {
         proxy?.close();
         if (scratch) {

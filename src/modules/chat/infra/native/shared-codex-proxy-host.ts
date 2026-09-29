@@ -39,6 +39,50 @@ function unavailable(): Error {
   return new Error("CODEX_SHARED_HOST_UNAVAILABLE");
 }
 
+export type CodexSocketAdmissionCode =
+  | "CODEX_SHARED_SOCKET_NOT_FOUND"
+  | "CODEX_SHARED_SOCKET_ACCESS_DENIED"
+  | "CODEX_SHARED_SOCKET_ALIAS_UNSUPPORTED"
+  | "CODEX_SHARED_SOCKET_INVALID_TARGET"
+  | "CODEX_SHARED_SOCKET_CHECK_FAILED";
+
+export class CodexSocketAdmissionError extends Error {
+  constructor(
+    readonly code: CodexSocketAdmissionCode,
+    readonly phase: "path" | "lstat" | "realpath",
+    readonly errno?: "ENOENT" | "EPERM" | "EACCES",
+  ) {
+    super(code);
+    this.name = "CodexSocketAdmissionError";
+  }
+}
+
+function socketMetadataError(
+  error: unknown,
+  phase: "lstat" | "realpath",
+): CodexSocketAdmissionError {
+  const errno =
+    error !== null && typeof error === "object" && "code" in error
+      ? error.code
+      : undefined;
+  if (errno === "ENOENT")
+    return new CodexSocketAdmissionError(
+      "CODEX_SHARED_SOCKET_NOT_FOUND",
+      phase,
+      errno,
+    );
+  if (errno === "EPERM" || errno === "EACCES")
+    return new CodexSocketAdmissionError(
+      "CODEX_SHARED_SOCKET_ACCESS_DENIED",
+      phase,
+      errno,
+    );
+  return new CodexSocketAdmissionError(
+    "CODEX_SHARED_SOCKET_CHECK_FAILED",
+    phase,
+  );
+}
+
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -51,16 +95,35 @@ function validSocketPath(value: string): boolean {
 
 /** Attach to an already-running Codex-owned control socket; never start a daemon. */
 export async function existingCodexSocket(socketPath: string): Promise<string> {
-  if (!validSocketPath(socketPath)) throw unavailable();
-  const info = await fs.lstat(socketPath).catch(() => null);
+  if (!validSocketPath(socketPath))
+    throw new CodexSocketAdmissionError(
+      "CODEX_SHARED_SOCKET_INVALID_TARGET",
+      "path",
+    );
+  const info = await fs.lstat(socketPath).catch((error: unknown) => {
+    throw socketMetadataError(error, "lstat");
+  });
+  if (info.isSymbolicLink())
+    throw new CodexSocketAdmissionError(
+      "CODEX_SHARED_SOCKET_ALIAS_UNSUPPORTED",
+      "lstat",
+    );
   if (
-    !info?.isSocket() ||
-    info.isSymbolicLink() ||
-    (process.getuid?.() !== undefined && info.uid !== process.getuid()) ||
-    (await fs.realpath(socketPath).catch(() => null)) !== socketPath
-  ) {
-    throw unavailable();
-  }
+    !info.isSocket() ||
+    (process.getuid?.() !== undefined && info.uid !== process.getuid())
+  )
+    throw new CodexSocketAdmissionError(
+      "CODEX_SHARED_SOCKET_INVALID_TARGET",
+      "lstat",
+    );
+  const canonical = await fs.realpath(socketPath).catch((error: unknown) => {
+    throw socketMetadataError(error, "realpath");
+  });
+  if (canonical !== socketPath)
+    throw new CodexSocketAdmissionError(
+      "CODEX_SHARED_SOCKET_INVALID_TARGET",
+      "realpath",
+    );
   return socketPath;
 }
 

@@ -174,6 +174,23 @@ function transitionRefusalMessage(error: string): string | null {
   return null;
 }
 
+function sharedCodexSocketRefusalMessage(error: string): string | null {
+  switch (error) {
+    case "CODEX_SHARED_SOCKET_NOT_FOUND":
+      return "The selected shared Codex socket is no longer present. No task was started.";
+    case "CODEX_SHARED_SOCKET_ACCESS_DENIED":
+      return "Access was denied while inspecting the selected shared Codex socket. No task was started.";
+    case "CODEX_SHARED_SOCKET_ALIAS_UNSUPPORTED":
+      return "This Farol version does not support the selected shared Codex alias. No task was started.";
+    case "CODEX_SHARED_SOCKET_INVALID_TARGET":
+      return "The selected shared Codex endpoint has the wrong type, owner, or canonical path. No task was started.";
+    case "CODEX_SHARED_SOCKET_CHECK_FAILED":
+      return "Farol could not classify the selected shared Codex socket. No task was started.";
+    default:
+      return null;
+  }
+}
+
 // `bootstrap.productName` carries the release identity the main process
 // validates elsewhere ("Farol Next Preview"); the diagnostics row below
 // only names the app to the owner, so it reads "Farol" with its
@@ -3262,6 +3279,9 @@ async function configureProduct(
                                                                                               parsed.error,
                                                                                             ) ??
                                                                                             workspaceEditRefusalMessage(
+                                                                                              parsed.error,
+                                                                                            ) ??
+                                                                                            sharedCodexSocketRefusalMessage(
                                                                                               parsed.error,
                                                                                             ) ??
                                                                                             `Not applied · ${parsed.error}`);
