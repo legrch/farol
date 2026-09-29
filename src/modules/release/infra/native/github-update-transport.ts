@@ -13,8 +13,9 @@ import {
   type DownloadedArchive,
   type FetchedJson,
   type GithubReleasePorts,
-  type PackageIdentity,
+  type ReleaseManifest,
   type PortFailure,
+  type VerifiedPackage,
 } from "../../domain/github-release-contract";
 
 const CDN_HOST = "release-assets.githubusercontent.com";
@@ -71,7 +72,10 @@ export type GithubUpdateTransport = GithubReleasePorts &
       url: string,
       maxBytes: number,
     ): Promise<TransportResult<DownloadedArchive>>;
-    verifyPackage(handle: string): Promise<TransportResult<PackageIdentity>>;
+    verifyPackage(
+      handle: string,
+      manifest: ReleaseManifest,
+    ): Promise<TransportResult<VerifiedPackage>>;
   }>;
 
 function fail(
@@ -296,7 +300,10 @@ async function cleanup(handle: string): Promise<TransportFailure | null> {
 export function createGithubUpdateTransport(
   options: Readonly<{
     privateStateDirectory: string;
-    verifyPackage: GithubReleasePorts["verifyPackage"];
+    verifyPackage(
+      handle: string,
+      manifest: ReleaseManifest,
+    ): Promise<VerifiedPackage>;
     openHttps?: OpenHttps;
   }>,
 ): GithubUpdateTransport {
@@ -458,15 +465,15 @@ export function createGithubUpdateTransport(
       if (!result.ok) return (await cleanup(handle)) ?? result;
       return result;
     },
-    async verifyPackage(handle) {
+    async verifyPackage(handle, manifest) {
       const directory = await stageDirectory(options.privateStateDirectory);
       if (!directory || !(await validStagedFile(directory, handle)))
         return fail("package_mismatch", "invalid_handle");
       try {
-        const result = await options.verifyPackage(handle);
-        return result.ok
-          ? result
-          : { ...result, certainty: "known", reason: "verification" };
+        return {
+          ok: true,
+          value: await options.verifyPackage(handle, manifest),
+        };
       } catch {
         return fail("package_mismatch", "verification");
       }

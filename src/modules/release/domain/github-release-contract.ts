@@ -93,6 +93,20 @@ export type PackageIdentity = Readonly<{
   notarized: boolean;
 }>;
 
+export type VerifiedPackage = Readonly<{
+  identity: PackageIdentity;
+  stagedAppPath: string;
+  stagingRoot: string;
+}>;
+
+export type VerifiedGithubUpdate = Readonly<{
+  handle: string;
+  manifest: ReleaseManifest;
+  identity: PackageIdentity;
+  stagedAppPath: string;
+  stagingRoot: string;
+}>;
+
 export type PortFailure = Readonly<{
   ok: false;
   kind: "network_failure" | "interrupted" | "oversize" | "package_mismatch";
@@ -111,5 +125,6 @@ export type GithubReleasePorts = Readonly<{
   // Must rehash the staged bytes and verify the extracted package with the existing package verifier.
   verifyPackage(
     handle: string,
-  ): Promise<Readonly<{ ok: true; value: PackageIdentity }> | PortFailure>;
+    manifest: ReleaseManifest,
+  ): Promise<Readonly<{ ok: true; value: VerifiedPackage }> | PortFailure>;
 }>;

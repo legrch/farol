@@ -19,7 +19,10 @@ import {
   type HttpsResponse,
   type OpenHttps,
 } from "../../src/modules/release/infra/native/github-update-transport";
-import { GITHUB_RELEASES_API } from "../../src/modules/release/domain/github-release-contract";
+import {
+  GITHUB_RELEASES_API,
+  type ReleaseManifest,
+} from "../../src/modules/release/domain/github-release-contract";
 
 // All responses are scripted in memory. No test makes a GitHub or other network request.
 const asset =
@@ -28,6 +31,10 @@ const manifestAsset =
   "https://github.com/legrch/farol-releases/releases/download/v0.1.1/farol-release.json";
 const cdn =
   "https://release-assets.githubusercontent.com/opaque?signature=fixture";
+const manifest = {
+  schema: "farol.github-release/1",
+  version: "0.1.1",
+} as ReleaseManifest;
 const roots: string[] = [];
 
 async function privateRoot(): Promise<string> {
@@ -78,8 +85,7 @@ function scripted(...replies: HttpsResponse[]): OpenHttps {
 
 function transport(root: string, openHttps: OpenHttps) {
   const verifyPackage = vi.fn(async () => ({
-    ok: true as const,
-    value: {
+    identity: {
       product: "Farol Next Preview",
       bundleId: "local.farol.next.preview",
       version: "0.1.1",
@@ -92,6 +98,8 @@ function transport(root: string, openHttps: OpenHttps) {
       signing: "unsigned",
       notarized: false,
     },
+    stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+    stagingRoot: "/fixture/stage",
   }));
   return {
     instance: createGithubUpdateTransport({
@@ -206,10 +214,28 @@ describe("GitHub HTTPS transport", () => {
     expect((await lstat(path.dirname(result.value.handle))).mode & 0o077).toBe(
       0,
     );
-    expect(await instance.verifyPackage(result.value.handle)).toMatchObject({
+    expect(
+      await instance.verifyPackage(result.value.handle, manifest),
+    ).toMatchObject({
       ok: true,
     });
-    expect(verifyPackage).toHaveBeenCalledWith(result.value.handle);
+    expect(verifyPackage).toHaveBeenCalledWith(result.value.handle, manifest);
+    const recoveryClient = scripted();
+    const recovered = transport(root, recoveryClient);
+    expect(
+      await recovered.instance.verifyPackage(result.value.handle, manifest),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+        stagingRoot: "/fixture/stage",
+      },
+    });
+    expect(recovered.verifyPackage).toHaveBeenCalledWith(
+      result.value.handle,
+      manifest,
+    );
+    expect(recoveryClient).not.toHaveBeenCalled();
   });
 
   it("rejects foreign inputs without opening a socket", async () => {
@@ -354,13 +380,13 @@ describe("GitHub HTTPS transport", () => {
     });
     const { instance, verifyPackage } = transport(root, scripted());
     expect(
-      await instance.verifyPackage(path.join(root, "outside.zip")),
+      await instance.verifyPackage(path.join(root, "outside.zip"), manifest),
     ).toMatchObject({ ok: false, reason: "invalid_handle" });
     const stage = path.join(root, "github-updates");
     const fake = path.join(stage, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa.zip");
     await writeFile(path.join(root, "outside.zip"), "other", { mode: 0o600 });
     await symlink(path.join(root, "outside.zip"), fake);
-    expect(await instance.verifyPackage(fake)).toMatchObject({
+    expect(await instance.verifyPackage(fake, manifest)).toMatchObject({
       ok: false,
       reason: "invalid_handle",
     });

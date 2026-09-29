@@ -14,6 +14,7 @@ import {
   type ReleaseAsset,
   type ReleaseManifest,
   type UpdateCandidate,
+  type VerifiedGithubUpdate,
 } from "../domain/github-release-contract";
 import {
   compareReleaseVersions,
@@ -344,7 +345,7 @@ export function packageMatchesRelease(
 export async function downloadAndVerifyGithubUpdate(
   candidate: UpdateCandidate,
   ports: Pick<GithubReleasePorts, "download" | "verifyPackage">,
-): Promise<Outcome<Readonly<{ handle: string; manifest: ReleaseManifest }>>> {
+): Promise<Outcome<VerifiedGithubUpdate>> {
   const checked = parseGithubReleaseManifest(candidate.manifest);
   if (!checked.ok) return checked;
   if (
@@ -381,15 +382,21 @@ export async function downloadAndVerifyGithubUpdate(
     return failure("checksum_mismatch");
   let verified;
   try {
-    verified = await ports.verifyPackage(archive.handle);
+    verified = await ports.verifyPackage(archive.handle, candidate.manifest);
   } catch {
     return failure("package_mismatch");
   }
   if (!verified.ok) return failure(verified.kind);
-  if (!packageMatchesRelease(verified.value, candidate.manifest))
+  if (!packageMatchesRelease(verified.value.identity, candidate.manifest))
     return failure("package_mismatch");
   return {
     ok: true,
-    value: { handle: archive.handle, manifest: candidate.manifest },
+    value: {
+      handle: archive.handle,
+      manifest: candidate.manifest,
+      identity: verified.value.identity,
+      stagedAppPath: verified.value.stagedAppPath,
+      stagingRoot: verified.value.stagingRoot,
+    },
   };
 }

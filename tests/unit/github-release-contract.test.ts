@@ -92,17 +92,21 @@ function ports(
     verifyPackage: vi.fn(async () => ({
       ok: true as const,
       value: {
-        product: "Farol Next Preview",
-        bundleId: "local.farol.next.preview",
-        version,
-        buildVersion: "2",
-        updateChannel: "github-stable",
-        buildId: digest("c"),
-        sourceCommit,
-        sourceTreeDigest: digest("b"),
-        artifactSha256: digest("d"),
-        signing: "unsigned",
-        notarized: false,
+        identity: {
+          product: "Farol Next Preview",
+          bundleId: "local.farol.next.preview",
+          version,
+          buildVersion: "2",
+          updateChannel: "github-stable",
+          buildId: digest("c"),
+          sourceCommit,
+          sourceTreeDigest: digest("b"),
+          artifactSha256: digest("d"),
+          signing: "unsigned",
+          notarized: false,
+        },
+        stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+        stagingRoot: "/fixture/stage",
       },
     })),
   };
@@ -392,8 +396,17 @@ describe("staged archive verification", () => {
       await downloadAndVerifyGithubUpdate(candidate.value, source),
     ).toMatchObject({
       ok: true,
-      value: { handle: "staged-opaque-handle", manifest },
+      value: {
+        handle: "staged-opaque-handle",
+        manifest,
+        stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+        stagingRoot: "/fixture/stage",
+      },
     });
+    expect(source.verifyPackage).toHaveBeenCalledWith(
+      "staged-opaque-handle",
+      manifest,
+    );
   });
 
   it.each([
@@ -460,17 +473,21 @@ describe("staged archive verification", () => {
       verifyPackage: vi.fn(async () => ({
         ok: true as const,
         value: {
-          product: "Farol Next Preview",
-          bundleId: "local.farol.next.preview",
-          version,
-          buildVersion: "2",
-          updateChannel: "github-stable",
-          buildId: digest("c"),
-          sourceCommit,
-          sourceTreeDigest: digest("b"),
-          artifactSha256: digest("0"),
-          signing: "unsigned",
-          notarized: false,
+          identity: {
+            product: "Farol Next Preview",
+            bundleId: "local.farol.next.preview",
+            version,
+            buildVersion: "2",
+            updateChannel: "github-stable",
+            buildId: digest("c"),
+            sourceCommit,
+            sourceTreeDigest: digest("b"),
+            artifactSha256: digest("0"),
+            signing: "unsigned",
+            notarized: false,
+          },
+          stagedAppPath: "/fixture/stage/Farol Next Preview.app",
+          stagingRoot: "/fixture/stage",
         },
       })),
     };
