@@ -622,6 +622,81 @@ try {
     assert.equal(saved.configuration.settings.setup.chatgpt.verified, null);
     const inode =
       saved.configuration.settings.computer.workspaces[0].rootIdentity;
+    // These are real UI/configuration transitions in the existing owned,
+    // hidden fixture. No owner profile, live connector or browser Send.
+    await window
+      .locator("#onboarding-folder-confirmation")
+      .waitFor({ state: "visible" });
+    await window.locator("#onboarding-cancel-folder").click();
+    assert.equal(
+      (await window.evaluate(() => window.farolNext.bootstrap())).configuration
+        .settings.computer.workspaces[0].access,
+      "read",
+    );
+    await window
+      .locator('.nav-utility .nav-item[data-section="settings"]')
+      .click();
+    await window
+      .locator('#settings-nav [data-settings-category="preferences"]')
+      .click();
+    await window
+      .locator("#computer-workspaces")
+      .getByRole("button", { name: "Enable edits", exact: true })
+      .click();
+    await window
+      .locator("#onboarding-folder-confirmation")
+      .waitFor({ state: "visible" });
+    assert.equal(
+      (await window.evaluate(() => window.farolNext.bootstrap())).configuration
+        .settings.computer.workspaces[0].access,
+      "read",
+    );
+    await window.locator("#onboarding-confirm-folder").click();
+    await window
+      .locator('#onboarding-form[aria-busy="false"]')
+      .waitFor({ state: "attached" });
+    let accessState = await window.evaluate(() => window.farolNext.bootstrap());
+    assert.equal(
+      accessState.configuration.settings.computer.workspaces[0].access,
+      "write",
+    );
+    assert.notEqual(
+      accessState.configuration.settings.computer.commands,
+      "workspace",
+    );
+    assert.notEqual(
+      accessState.configuration.settings.computer.workspaces[0]
+        .gitHistoryApproved,
+      true,
+    );
+    assert.equal(
+      accessState.configuration.settings.connectors.secureMcp.runtime,
+      null,
+    );
+    // Read-only remains actionable even for an incomplete local-work grant.
+    await window
+      .locator("#onboarding-folder-list")
+      .getByRole("button", { name: "Use read-only…", exact: true })
+      .click();
+    await window.locator("#onboarding-confirm-folder").click();
+    await window
+      .locator('#onboarding-form[aria-busy="false"]')
+      .waitFor({ state: "attached" });
+    accessState = await window.evaluate(() => window.farolNext.bootstrap());
+    assert.equal(
+      accessState.configuration.settings.computer.workspaces[0].access,
+      "read",
+    );
+    assert.notEqual(
+      accessState.configuration.settings.computer.workspaces[0]
+        .gitHistoryApproved,
+      true,
+    );
+    observations.push({
+      kind: "settings-edits-explicit-consent-and-independent-downgrade",
+      environment,
+      liveSends: 0,
+    });
     if (environment === "preview") {
       await window.locator('[data-onboarding-step="app"]').click();
       assert.match(
@@ -730,6 +805,82 @@ try {
         state.configuration.settings.connectors.secureMcp.attachment,
         null,
       );
+      const priorRuntime =
+        state.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration;
+      await window.locator('[data-onboarding-step="folder"]').click();
+      await window
+        .locator("#onboarding-folder-list")
+        .getByRole("button", { name: "Allow local work…", exact: true })
+        .click();
+      await window.locator("#onboarding-confirm-folder").click();
+      await window
+        .locator('#onboarding-form[aria-busy="false"]')
+        .waitFor({ state: "attached", timeout: 30000 });
+      state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(
+        state.configuration.settings.computer.workspaces[0].access,
+        "write",
+      );
+      assert.equal(state.configuration.settings.computer.commands, "workspace");
+      assert.equal(
+        state.configuration.settings.computer.workspaces[0].gitHistoryApproved,
+        true,
+      );
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime.state,
+        "ready",
+      );
+      assert.notEqual(
+        state.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration,
+        priorRuntime,
+      );
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime
+          .computerGeneration,
+        state.configuration.settings.computer.generation,
+      );
+      const grantedRuntime =
+        state.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration;
+      assert.equal(nonReadRequests, 0);
+      await window
+        .locator("#onboarding-folder-list")
+        .getByRole("button", { name: "Use read-only…", exact: true })
+        .click();
+      await window.locator("#onboarding-confirm-folder").click();
+      await window
+        .locator('#onboarding-form[aria-busy="false"]')
+        .waitFor({ state: "attached", timeout: 30000 });
+      state = await window.evaluate(() => window.farolNext.bootstrap());
+      assert.equal(
+        state.configuration.settings.computer.workspaces[0].access,
+        "read",
+      );
+      assert.equal(
+        state.configuration.settings.computer.workspaces[0].gitHistoryApproved,
+        false,
+      );
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime.state,
+        "ready",
+      );
+      assert.equal(nonReadRequests, 0);
+      assert.notEqual(
+        state.configuration.settings.connectors.secureMcp.runtime
+          .runtimeGeneration,
+        grantedRuntime,
+      );
+      assert.equal(
+        state.configuration.settings.connectors.secureMcp.runtime
+          .computerGeneration,
+        state.configuration.settings.computer.generation,
+      );
+      observations.push({
+        kind: "local-work-approval-and-revocation-reconnect-without-send",
+        environment,
+      });
       const noTarget = await window.evaluate(() =>
         window.farolNext.configure({ kind: "connector.verify-app" }),
       );
@@ -829,22 +980,32 @@ try {
         state.configuration.settings.setup.connect.outcomeUnknown,
         false,
       );
-      const visibleReply = await application.evaluate(
-        async ({ BrowserWindow, WebContentsView }) => {
-          const shell = BrowserWindow.getAllWindows().find((window) =>
-            window.webContents.getURL().endsWith("/shell.html"),
-          );
-          const page = shell.contentView.children.find(
-            (child) => child instanceof WebContentsView && child.getVisible(),
-          );
-          return {
-            url: page.webContents.getURL(),
-            reply: await page.webContents.executeJavaScript(
-              "document.querySelector('[data-message-author-role=assistant]')?.innerText",
-            ),
-          };
-        },
-      );
+      let visibleReply;
+      const visibleReplyDeadline = Date.now() + 30000;
+      for (;;) {
+        visibleReply = await bounded(
+          application.evaluate(async ({ BrowserWindow, WebContentsView }) => {
+            const shell = BrowserWindow.getAllWindows().find((window) =>
+              window.webContents.getURL().endsWith("/shell.html"),
+            );
+            const page = shell.contentView.children.find(
+              (child) => child instanceof WebContentsView && child.getVisible(),
+            );
+            return {
+              url: page.webContents.getURL(),
+              reply: await page.webContents.executeJavaScript(
+                "document.querySelector('[data-message-author-role=assistant]')?.innerText",
+              ),
+            };
+          }),
+          "FIXTURE_VISIBLE_REPLY_READ_TIMEOUT",
+          5000,
+        );
+        if (visibleReply.reply === "Owned fixture receipt recorded") break;
+        if (Date.now() >= visibleReplyDeadline)
+          throw new Error("FIXTURE_VISIBLE_REPLY_TIMEOUT");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
       assert.match(visibleReply.url, /temporary-chat=true/);
       assert.equal(visibleReply.reply, "Owned fixture receipt recorded");
       await window.locator("#browser-check-return").click();
