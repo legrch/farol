@@ -1,0 +1,196 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import path from "node:path";
+import { PassThrough, Writable } from "node:stream";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  startInstalledUpdateHelper,
+  type InstalledUpdateRequest,
+} from "../../src/modules/release/infra/native/installed-update-helper.js";
+
+vi.mock("node:child_process", async (original) => ({
+  ...(await original<typeof import("node:child_process")>()),
+  spawn: vi.fn(),
+}));
+afterEach(() => vi.clearAllMocks());
+const helperPath = path.join(
+  process.cwd(),
+  "resources/native/update_helper.py",
+);
+const request: InstalledUpdateRequest = {
+  action: "apply",
+  operationId: "a".repeat(32),
+  source: { digest: "1".repeat(64), version: "0.1.0", buildId: "2".repeat(64) },
+  target: { digest: "3".repeat(64), version: "0.1.1", buildId: "4".repeat(64) },
+  drain: {
+    status: "reconciled",
+    acceptedSource: "2".repeat(64),
+    acceptedTarget: "4".repeat(64),
+  },
+  pid: 987654,
+  processStart: "Tue Sep 29 23:00:00 2026",
+  waitSeconds: 1,
+  relaunch: false,
+};
+const event = () => ({
+  schema: "farol.installed-update-handoff/1",
+  phase: "waiting_for_exit",
+  operationId: request.operationId,
+  action: request.action,
+  source: request.source,
+  target: request.target,
+  pid: request.pid,
+  processStart: request.processStart,
+});
+
+// This fixture models only Node's private pipe transport and lifecycle events.
+// Native readiness, marker, digest and immediate normal-exit evidence lives in
+// installed-update-helper-readiness.test.mjs.
+class Transport extends EventEmitter {
+  readonly pid = 765432;
+  readonly stdin = new Writable({ write: (_chunk, _encoding, done) => done() });
+  readonly stdout = new PassThrough();
+  readonly requestPipe = new Writable({
+    write: (_chunk, _encoding, done) => done(),
+  });
+  readonly ack = new PassThrough();
+  readonly stdio = [this.stdin, this.stdout, null, this.requestPipe, this.ack];
+  readonly unref = vi.fn();
+  finish(code: number, phase = "verified"): void {
+    this.stdout.end(
+      `${JSON.stringify({ phase, operationId: request.operationId })}\n`,
+    );
+    this.emit("close", code, null);
+  }
+}
+const tick = async (): Promise<void> =>
+  await new Promise((resolve) => setImmediate(resolve));
+async function launch(readinessTimeoutMs = 1000, input = request) {
+  const child = new Transport();
+  let seen!: () => void;
+  const spawned = new Promise<void>((resolve) => {
+    seen = resolve;
+  });
+  vi.mocked(spawn).mockImplementationOnce(() => {
+    queueMicrotask(() => {
+      child.emit("spawn");
+      seen();
+    });
+    return child as unknown as ChildProcess;
+  });
+  const pending = startInstalledUpdateHelper(helperPath, input, {
+    readinessTimeoutMs,
+  });
+  await spawned;
+  return { child, pending };
+}
+
+describe("installed helper bounded readiness protocol", () => {
+  it("waits for the entire single frame and EOF, then unrefs the retained operation", async () => {
+    const { child, pending } = await launch();
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    child.ack.write(JSON.stringify(event()));
+    await tick();
+    expect(settled).toBe(false);
+    child.ack.end("\n");
+    const result = await pending;
+    expect(result.status).toBe("ready");
+    expect(child.unref).toHaveBeenCalledOnce();
+    child.finish(0);
+    expect((await result.operation.completion).terminal?.phase).toBe(
+      "verified",
+    );
+  });
+
+  it.each([
+    [
+      "operation",
+      () => JSON.stringify({ ...event(), operationId: "b".repeat(32) }),
+      "readiness_malformed",
+    ],
+    [
+      "source",
+      () => JSON.stringify({ ...event(), source: request.target }),
+      "readiness_malformed",
+    ],
+    [
+      "target",
+      () => JSON.stringify({ ...event(), target: request.source }),
+      "readiness_malformed",
+    ],
+    [
+      "process",
+      () => JSON.stringify({ ...event(), processStart: "other" }),
+      "readiness_malformed",
+    ],
+    [
+      "duplicate",
+      () => `${JSON.stringify(event())}\n${JSON.stringify(event())}`,
+      "readiness_malformed",
+    ],
+    ["oversized", () => "x".repeat(4097), "readiness_oversized"],
+  ] as const)(
+    "keeps the same operation after %s ACK refusal",
+    async (_name, frame, reason) => {
+      const { child, pending } = await launch();
+      child.ack.end(frame());
+      const result = await pending;
+      expect(result).toMatchObject({ status: "outcome_unknown", reason });
+      expect(result.operation.pid).toBe(child.pid);
+      child.finish(79, "unknown");
+      expect((await result.operation.completion).code).toBe(79);
+      expect(spawn).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("returns a terminal recovery result without manufacturing Quit readiness", async () => {
+    const { child, pending } = await launch(1000, {
+      ...request,
+      action: "recover",
+    });
+    child.ack.end();
+    await tick();
+    child.finish(0);
+    const result = await pending;
+    expect(result.status).toBe("terminal");
+    expect(result.operation.observe().handoff).toBeNull();
+    expect((await result.operation.completion).terminal?.phase).toBe(
+      "verified",
+    );
+  });
+
+  it("classifies a helper exit before acknowledgment without granting Quit", async () => {
+    const { child, pending } = await launch();
+    child.ack.end();
+    await tick();
+    child.finish(79, "unknown");
+    const result = await pending;
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: "helper_exited_before_readiness",
+    });
+    expect(result.operation.observe().exit?.code).toBe(79);
+  });
+
+  it("retains observation through timeout, late ACK and exit without another spawn", async () => {
+    const { child, pending } = await launch(10);
+    const result = await pending;
+    expect(result).toMatchObject({
+      status: "outcome_unknown",
+      reason: "readiness_timeout",
+    });
+    expect(result.operation.pid).toBe(child.pid);
+    expect(result.operation.observe().exit).toBeNull();
+    child.ack.end(JSON.stringify(event()));
+    await tick();
+    expect(result.operation.observe().handoff?.phase).toBe("waiting_for_exit");
+    expect(result.status).toBe("outcome_unknown");
+    child.finish(70, "refused");
+    expect((await result.operation.completion).code).toBe(70);
+    expect(result.operation.observe().exit?.code).toBe(70);
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+});

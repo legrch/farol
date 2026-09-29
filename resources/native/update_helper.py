@@ -327,6 +327,43 @@ def confirmed_quit(state, started_at=None):
         fail("quit_invalid")
 
 
+
+_handoff_sent = False
+
+
+def emit_handoff(request, phase, error=None):
+    """One bounded event on the launcher-owned private fd; EOF seals the frame."""
+    global _handoff_sent
+    if _handoff_sent:
+        fail("handoff_duplicate")
+    channel = os.fstat(4)
+    if not (stat.S_ISFIFO(channel.st_mode) or stat.S_ISSOCK(channel.st_mode)):
+        fail("handoff_channel")
+    event = {
+        "schema": "farol.installed-update-handoff/1",
+        "phase": phase,
+        "operationId": request["operationId"],
+        "action": request["action"],
+        "source": request["source"],
+        "target": request["target"],
+        "pid": request["pid"],
+        "processStart": request["processStart"],
+    }
+    if error is not None:
+        event["error"] = error
+    data = (json.dumps(event, separators=(",", ":")) + "\n").encode()
+    if len(data) > 4096:
+        fail("handoff_size")
+    os.set_blocking(4, False)
+    offset = 0
+    while offset < len(data):
+        written = os.write(4, data[offset:])
+        if written <= 0:
+            fail("handoff_write")
+        offset += written
+    _handoff_sent = True
+    os.close(4)
+
 def process_start(pid):
     result = subprocess.run(("/bin/ps", "-p", str(pid), "-o", "lstart="), capture_output=True, text=True, timeout=3, check=False)
     if result.returncode not in (0, 1) or result.stderr:
@@ -381,11 +418,11 @@ def parse_request():
         fail("input")
     for key in ("source", "target"):
         value = request[key]
-        if not isinstance(value, dict) or set(value) != {"digest", "version", "buildId"} or not isinstance(value["version"], str) or not value["version"] or not isinstance(value["buildId"], str) or not isinstance(value["digest"], str) or any(len(value[k]) != 64 or any(c not in "0123456789abcdef" for c in value[k]) for k in ("digest", "buildId")):
+        if not isinstance(value, dict) or set(value) != {"digest", "version", "buildId"} or not isinstance(value["version"], str) or not 1 <= len(value["version"]) <= 128 or not isinstance(value["buildId"], str) or not isinstance(value["digest"], str) or any(len(value[k]) != 64 or any(c not in "0123456789abcdef" for c in value[k]) for k in ("digest", "buildId")):
             fail("input")
     if request["source"] == request["target"] or request["drain"] != {"status": "reconciled", "acceptedSource": request["source"]["buildId"], "acceptedTarget": request["target"]["buildId"]}:
         fail("acceptance")
-    if type(request["pid"]) is not int or request["pid"] <= 1 or not isinstance(request["processStart"], str) or not request["processStart"] or type(request["waitSeconds"]) is not int or not 1 <= request["waitSeconds"] <= 120 or type(request["relaunch"]) is not bool:
+    if type(request["pid"]) is not int or request["pid"] <= 1 or not isinstance(request["processStart"], str) or not 1 <= len(request["processStart"]) <= 128 or type(request["waitSeconds"]) is not int or not 1 <= request["waitSeconds"] <= 120 or type(request["relaunch"]) is not bool:
         fail("input")
     components(request["home"])
     return request
@@ -519,6 +556,7 @@ def run(request):
             # Establish process identity before it may exit; never infer it from an absent PID.
             if process_start(request["pid"]) != request["processStart"]:
                 fail("process_identity")
+            emit_handoff(request, "waiting_for_exit")
             wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
             lease_fd = owner_lease(state)
             confirmed_quit(state, started_at)
@@ -553,7 +591,16 @@ def run(request):
                 fail("target_verification", "rolled_back")
         elif request["action"] == "rollback":
             started_at = initial_marker(state, request)
-            wait_exit(request["pid"], request["processStart"], request["waitSeconds"])
+            if read_phase(op, request) not in ("verified", "completed", "launch_requested", "rollback_started"):
+                fail("rollback_phase")
+            checked_tree(apps, APP, request["target"]["digest"], request["target"]["version"], request["target"]["buildId"])
+            checked_tree(op, "previous.app", request["source"]["digest"], request["source"]["version"], request["source"]["buildId"])
+            if entry(op, "failed.app") is not None:
+                fail("failed_exists")
+            if process_start(request["pid"]) != request["processStart"]:
+                fail("process_identity")
+            emit_handoff(request, "waiting_for_exit")
+            wait_exit(request["pid"], request["processStart"], request["waitSeconds"], observed=True)
             lease_fd = owner_lease(state)
             confirmed_quit(state, started_at)
             assert_parent_path(request["home"], home, apps)
@@ -595,16 +642,44 @@ def run(request):
                     pass
 
 
+def emit_terminal(result):
+    # The app may already have exited and closed its observation pipe. That is
+    # expected after readiness; losing the observer must not undo a journaled result.
+    data = (json.dumps(result) + "\n").encode()
+    try:
+        os.set_blocking(1, False)
+        offset = 0
+        while offset < len(data):
+            written = os.write(1, data[offset:])
+            if written <= 0:
+                return
+            offset += written
+    except OSError:
+        pass
+
+
 def main():
+    request = None
     try:
         request = parse_request()
         phase = run(request)
-        print(json.dumps({"phase": phase, "operationId": request["operationId"]}))
+        emit_terminal({"phase": phase, "operationId": request["operationId"]})
     except Refusal as exc:
-        print(json.dumps({"phase": exc.phase, "error": exc.code}))
+        if request is not None and not _handoff_sent:
+            try:
+                emit_handoff(request, "refused", exc.code)
+            except (OSError, Refusal):
+                pass
+        result = {"phase": exc.phase, "error": exc.code}
+        if request is not None:
+            result["operationId"] = request["operationId"]
+        emit_terminal(result)
         raise SystemExit(70)
     except BaseException:
-        print(json.dumps({"phase": "unknown", "error": "internal"}))
+        result = {"phase": "unknown", "error": "internal"}
+        if request is not None:
+            result["operationId"] = request["operationId"]
+        emit_terminal(result)
         raise SystemExit(79)
 
 

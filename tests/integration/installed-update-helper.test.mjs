@@ -132,7 +132,7 @@ async function invoke(request) {
     const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
       cwd: "/",
       env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
@@ -146,6 +146,7 @@ async function invoke(request) {
     child.on("close", (exitCode) =>
       resolve({ exitCode, result: JSON.parse(stdout), stderr }),
     );
+    child.stdio[4].resume();
     child.stdin.end(code);
     child.stdio[3].end(JSON.stringify(request));
   });
@@ -173,7 +174,7 @@ except helper.Refusal as error:
     const child = spawn(
       "/usr/bin/python3",
       ["-I", "-S", "-B", "-c", program, helper, request.home],
-      { cwd: "/", stdio: ["pipe", "pipe", "pipe"] },
+      { cwd: "/", stdio: ["pipe", "pipe", "pipe", "ignore", "pipe"] },
     );
     let stdout = "";
     child.stdout.on("data", (data) => {
@@ -183,6 +184,7 @@ except helper.Refusal as error:
     child.on("close", (exitCode) =>
       resolve({ exitCode, result: JSON.parse(stdout) }),
     );
+    child.stdio[4].resume();
     child.stdin.end(JSON.stringify(request));
   });
 }

@@ -3,12 +3,12 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { Writable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import path from "node:path";
 import { promisify } from "node:util";
 
 const HELPER_SHA256 =
-  "13eae79f4600e7e5ebe679582a8eafaf96b49ae550fefff2785b8af40c7eed1a";
+  "11f9f8d270a6fb4340e67cfb1c7e5f6ae053c57f3311bc204e907bf1dc79344c";
 const MAX_HELPER_BYTES = 64 * 1024;
 const APP_NAME = "Farol Next Preview.app";
 const execFileAsync = promisify(execFile);
@@ -40,6 +40,7 @@ export interface InstalledUpdateRequest {
 function assertInput(input: InstalledUpdateRequest): void {
   const validBuild = (value: AcceptedInstalledBuild): boolean =>
     !!value &&
+    value.version.length <= 128 &&
     sha.test(value.digest) &&
     sha.test(value.buildId) &&
     /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version);
@@ -56,6 +57,7 @@ function assertInput(input: InstalledUpdateRequest): void {
     input.pid <= 1 ||
     typeof input.processStart !== "string" ||
     !input.processStart.trim() ||
+    input.processStart.length > 128 ||
     !Number.isSafeInteger(input.waitSeconds) ||
     input.waitSeconds < 1 ||
     input.waitSeconds > 120 ||
@@ -122,15 +124,164 @@ export async function captureInstalledProcessStart(
   return stdout.trim();
 }
 
+export type InstalledUpdateHandoff =
+  | Readonly<{ phase: "waiting_for_exit" }>
+  | Readonly<{ phase: "refused"; error: string }>;
+
+export interface InstalledUpdateCompletion {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly terminal: Readonly<{ phase: string; error: string | null }> | null;
+  readonly protocolError: string | null;
+}
+
+export interface InstalledUpdateOperation {
+  readonly operationId: string;
+  readonly pid: number | null;
+  readonly completion: Promise<InstalledUpdateCompletion>;
+  observe(): Readonly<{
+    handoff: InstalledUpdateHandoff | null;
+    exit: InstalledUpdateCompletion | null;
+    protocolError: string | null;
+  }>;
+}
+
+export type InstalledUpdateLaunch =
+  | Readonly<{ status: "ready"; operation: InstalledUpdateOperation }>
+  | Readonly<{
+      status: "refused";
+      reason: string;
+      operation: InstalledUpdateOperation;
+    }>
+  | Readonly<{
+      status: "outcome_unknown";
+      reason: string;
+      operation: InstalledUpdateOperation;
+    }>
+  | Readonly<{
+      status: "terminal";
+      operation: InstalledUpdateOperation;
+      result: InstalledUpdateCompletion;
+    }>;
+
+const MAX_CHANNEL_BYTES = 4096;
+const HANDOFF_SCHEMA = "farol.installed-update-handoff/1";
+
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function sameBuild(value: unknown, expected: AcceptedInstalledBuild): boolean {
+  const record = object(value);
+  return (
+    record !== null &&
+    Object.keys(record).length === 3 &&
+    record["digest"] === expected.digest &&
+    record["version"] === expected.version &&
+    record["buildId"] === expected.buildId
+  );
+}
+
+function parseHandoff(
+  bytes: Buffer,
+  expected: InstalledUpdateRequest,
+): InstalledUpdateHandoff | null {
+  try {
+    const event = object(JSON.parse(bytes.toString("utf8")));
+    if (
+      !event ||
+      event["schema"] !== HANDOFF_SCHEMA ||
+      event["operationId"] !== expected.operationId ||
+      event["action"] !== expected.action ||
+      event["pid"] !== expected.pid ||
+      event["processStart"] !== expected.processStart ||
+      !sameBuild(event["source"], expected.source) ||
+      !sameBuild(event["target"], expected.target)
+    )
+      return null;
+    if (
+      event["phase"] === "waiting_for_exit" &&
+      expected.action !== "recover" &&
+      Object.keys(event).length === 8
+    ) {
+      return { phase: "waiting_for_exit" };
+    }
+    if (
+      event["phase"] === "refused" &&
+      Object.keys(event).length === 9 &&
+      typeof event["error"] === "string" &&
+      /^[a-z][a-z0-9_]{0,79}$/u.test(event["error"])
+    ) {
+      return { phase: "refused", error: event["error"] };
+    }
+  } catch {
+    /* Invalid or multiple frames never authorize Quit. */
+  }
+  return null;
+}
+
+function parseTerminal(
+  bytes: Buffer,
+  operationId: string,
+): InstalledUpdateCompletion["terminal"] {
+  try {
+    const record = object(JSON.parse(bytes.toString("utf8")));
+    if (
+      !record ||
+      record["operationId"] !== operationId ||
+      typeof record["phase"] !== "string" ||
+      !/^[a-z_]{1,40}$/u.test(record["phase"])
+    )
+      return null;
+    if (Object.keys(record).length === 2)
+      return { phase: record["phase"], error: null };
+    if (
+      Object.keys(record).length === 3 &&
+      typeof record["error"] === "string" &&
+      /^[a-z][a-z0-9_]{0,79}$/u.test(record["error"])
+    ) {
+      return { phase: record["phase"], error: record["error"] };
+    }
+  } catch {
+    /* The journal remains authoritative when terminal output is unknown. */
+  }
+  return null;
+}
+
 /**
- * Start the external helper before normal app Quit. Its durable journal is the
- * result; a returned child PID only proves dispatch, not installation.
+ * Only `ready` authorizes normal Quit for apply/rollback. Every post-spawn
+ * outcome retains the same child via its observation/completion handle.
+ * `recover` has no live-app handoff and returns a terminal result instead.
  */
 export async function startInstalledUpdateHelper(
   helperPath: string,
   input: InstalledUpdateRequest,
-): Promise<number> {
+  options: Readonly<{ readinessTimeoutMs?: number }> = {},
+): Promise<InstalledUpdateLaunch> {
   assertInput(input);
+  const readinessTimeoutMs = options.readinessTimeoutMs ?? 180_000;
+  if (
+    !Number.isSafeInteger(readinessTimeoutMs) ||
+    readinessTimeoutMs < 1 ||
+    readinessTimeoutMs > 300_000
+  ) {
+    throw new Error("INSTALLED_UPDATE_READINESS_DEADLINE_INVALID");
+  }
+  // Pin the request before asynchronous preflight; later caller mutation cannot
+  // change either the bytes sent or the identity expected in the acknowledgment.
+  const pinned: InstalledUpdateRequest = {
+    action: input.action,
+    operationId: input.operationId,
+    source: { ...input.source },
+    target: { ...input.target },
+    drain: { ...input.drain },
+    pid: input.pid,
+    processStart: input.processStart,
+    waitSeconds: input.waitSeconds,
+    relaunch: input.relaunch,
+  };
   const bytes = await helperBytes(helperPath);
   const user = os.userInfo();
   if (
@@ -142,39 +293,138 @@ export async function startInstalledUpdateHelper(
   }
   const request = {
     schema: "farol.installed-update/1",
-    ...input,
+    ...pinned,
     home: user.homedir,
   };
   const child = spawn("/usr/bin/python3", ["-I", "-S", "-B", "-"], {
     cwd: "/",
     env: { LANG: "C.UTF-8", PATH: "/usr/bin:/bin" },
     detached: true,
-    stdio: ["pipe", "ignore", "ignore", "pipe"],
+    stdio: ["pipe", "pipe", "ignore", "pipe", "pipe"],
   });
-  const spawned = new Promise<void>((resolve, reject) => {
-    child.once("spawn", resolve);
-    child.once("error", reject);
+  let handoff: InstalledUpdateHandoff | null = null;
+  let exit: InstalledUpdateCompletion | null = null;
+  let protocolError: string | null = null;
+  let resolveCompletion!: (result: InstalledUpdateCompletion) => void;
+  const completion = new Promise<InstalledUpdateCompletion>((resolve) => {
+    resolveCompletion = resolve;
   });
-  const write = (
-    stream: Writable | null,
-    data: Buffer | string,
-  ): Promise<void> =>
-    new Promise((resolve, reject) => {
-      if (!stream) {
-        reject(new Error("INSTALLED_UPDATE_PIPE_INVALID"));
-        return;
-      }
-      stream.once("error", reject);
-      stream.end(data, resolve);
-    });
-  await spawned;
-  await Promise.all([
-    write(child.stdin, bytes),
-    write(child.stdio[3] as Writable | null, JSON.stringify(request)),
-  ]);
-  if (!child.pid) throw new Error("INSTALLED_UPDATE_SPAWN_UNKNOWN");
-  child.unref();
-  return child.pid;
+  const operation: InstalledUpdateOperation = {
+    operationId: pinned.operationId,
+    get pid() {
+      return child.pid ?? null;
+    },
+    completion,
+    observe: () => ({ handoff, exit, protocolError }),
+  };
+  let resolveLaunch!: (result: InstalledUpdateLaunch) => void;
+  const launched = new Promise<InstalledUpdateLaunch>((resolve) => {
+    resolveLaunch = resolve;
+  });
+  let settled = false;
+  const detach = (): void => {
+    child.unref();
+    for (const pipe of child.stdio)
+      (pipe as { unref?: () => void } | null)?.unref?.();
+  };
+  const finish = (result: InstalledUpdateLaunch): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    detach();
+    resolveLaunch(result);
+  };
+  const unknown = (reason: string): void => {
+    protocolError ??= reason;
+    finish({ status: "outcome_unknown", reason, operation });
+  };
+  const timer = setTimeout(
+    () => unknown("readiness_timeout"),
+    readinessTimeoutMs,
+  );
+  const ack = child.stdio[4] as Readable | null;
+  const ackChunks: Buffer[] = [];
+  const outputChunks: Buffer[] = [];
+  let ackBytes = 0;
+  let outputBytes = 0;
+  let ackEnded = false;
+  let ackInvalid = false;
+  child.stdout?.on("data", (chunk: Buffer) => {
+    outputBytes += chunk.length;
+    if (outputBytes > MAX_CHANNEL_BYTES) {
+      unknown("terminal_output_oversized");
+      return;
+    }
+    outputChunks.push(chunk);
+  });
+  child.stdout?.on("error", () => unknown("terminal_channel_error"));
+  ack?.on("data", (chunk: Buffer) => {
+    ackBytes += chunk.length;
+    if (ackBytes > MAX_CHANNEL_BYTES) {
+      ackInvalid = true;
+      unknown("readiness_oversized");
+      return;
+    }
+    ackChunks.push(chunk);
+  });
+  ack?.on("error", () => {
+    ackInvalid = true;
+    unknown("readiness_channel_error");
+  });
+  ack?.on("end", () => {
+    ackEnded = true;
+    if (ackInvalid || ackBytes === 0) return;
+    handoff = parseHandoff(Buffer.concat(ackChunks), pinned);
+    if (!handoff) {
+      unknown("readiness_malformed");
+      return;
+    }
+    if (handoff.phase === "refused")
+      finish({ status: "refused", reason: handoff.error, operation });
+    else finish({ status: "ready", operation });
+  });
+  ack?.on("close", () => {
+    if (!ackEnded) unknown("readiness_channel_closed");
+  });
+  child.once("error", () => unknown("helper_process_error"));
+  child.once("close", (code, signal) => {
+    const terminal =
+      outputBytes <= MAX_CHANNEL_BYTES
+        ? parseTerminal(Buffer.concat(outputChunks), pinned.operationId)
+        : null;
+    exit = {
+      code,
+      signal,
+      terminal,
+      protocolError:
+        protocolError ?? (terminal ? null : "terminal_output_invalid"),
+    };
+    resolveCompletion(exit);
+    if (
+      pinned.action === "recover" &&
+      code === 0 &&
+      !signal &&
+      terminal &&
+      terminal.error === null &&
+      !protocolError
+    ) {
+      finish({ status: "terminal", operation, result: exit });
+    } else if (!settled) unknown("helper_exited_before_readiness");
+  });
+  const write = (stream: Writable | null, data: Buffer | string): void => {
+    if (!stream) {
+      unknown("request_channel_missing");
+      return;
+    }
+    stream.once("error", () => unknown("request_channel_error"));
+    stream.end(data);
+  };
+  child.once("spawn", () => {
+    write(child.stdin, bytes);
+    write(child.stdio[3] as Writable | null, JSON.stringify(request));
+  });
+  if (!ack || !child.stdout) unknown("readiness_channel_missing");
+  return launched;
 }
 
 /** Fixed path for the caller's installed-slot readback; never take it from a workspace. */
