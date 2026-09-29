@@ -83,6 +83,8 @@ export type PackageIdentity = Readonly<{
   product: string;
   bundleId: string;
   version: string;
+  buildVersion: string;
+  updateChannel: string;
   buildId: string;
   sourceCommit: string;
   sourceTreeDigest: string;

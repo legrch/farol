@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   downloadAndVerifyGithubUpdate,
   discoverGithubUpdate as discoverWithBuild,
+  packageMatchesRelease,
 } from "../../src/modules/release/app/github-release";
 import {
   GITHUB_RELEASES_API,
@@ -94,6 +95,8 @@ function ports(
         product: "Farol Next Preview",
         bundleId: "local.farol.next.preview",
         version,
+        buildVersion: "2",
+        updateChannel: "github-stable",
         buildId: digest("c"),
         sourceCommit,
         sourceTreeDigest: digest("b"),
@@ -340,6 +343,47 @@ describe("GitHub update discovery", () => {
 });
 
 describe("staged archive verification", () => {
+  it("matches retained staged packages by build version and owner-beta update channel", () => {
+    const betaManifest = {
+      ...manifest,
+      channel: "owner-beta" as const,
+      version: "0.1.1-owner.beta.1",
+      archiveName: "Farol-0.1.1-owner.beta.1-darwin-arm64.zip",
+    };
+    const packageIdentity = {
+      product: betaManifest.product,
+      bundleId: betaManifest.bundleId,
+      version: betaManifest.version,
+      buildVersion: betaManifest.buildVersion,
+      updateChannel: "github-owner-beta",
+      buildId: betaManifest.buildId,
+      sourceCommit: betaManifest.sourceCommit,
+      sourceTreeDigest: betaManifest.sourceTreeDigest,
+      artifactSha256: betaManifest.artifactSha256,
+      signing: betaManifest.signing,
+      notarized: betaManifest.notarized,
+    };
+    expect(packageMatchesRelease(packageIdentity, betaManifest)).toBe(true);
+    expect(
+      packageMatchesRelease(
+        { ...packageIdentity, buildVersion: "1" },
+        betaManifest,
+      ),
+    ).toBe(false);
+    expect(
+      packageMatchesRelease(
+        { ...packageIdentity, updateChannel: "local-preview-only" },
+        betaManifest,
+      ),
+    ).toBe(false);
+    expect(
+      packageMatchesRelease(
+        { ...packageIdentity, updateChannel: "github-stable" },
+        betaManifest,
+      ),
+    ).toBe(false);
+  });
+
   it("requires matching archive and internal package identity", async () => {
     const source = ports();
     const candidate = await discoverGithubUpdate("0.1.0", "stable", source);
@@ -419,6 +463,8 @@ describe("staged archive verification", () => {
           product: "Farol Next Preview",
           bundleId: "local.farol.next.preview",
           version,
+          buildVersion: "2",
+          updateChannel: "github-stable",
           buildId: digest("c"),
           sourceCommit,
           sourceTreeDigest: digest("b"),

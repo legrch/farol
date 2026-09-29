@@ -319,7 +319,7 @@ export async function discoverGithubUpdate(
   };
 }
 
-function samePackage(
+export function packageMatchesRelease(
   actual: PackageIdentity,
   expected: ReleaseManifest,
 ): boolean {
@@ -327,6 +327,11 @@ function samePackage(
     actual.product === expected.product &&
     actual.bundleId === expected.bundleId &&
     actual.version === expected.version &&
+    actual.buildVersion === expected.buildVersion &&
+    actual.updateChannel ===
+      (expected.channel === "owner-beta"
+        ? "github-owner-beta"
+        : "github-stable") &&
     actual.buildId === expected.buildId &&
     actual.sourceCommit === expected.sourceCommit &&
     actual.sourceTreeDigest === expected.sourceTreeDigest &&
@@ -381,7 +386,7 @@ export async function downloadAndVerifyGithubUpdate(
     return failure("package_mismatch");
   }
   if (!verified.ok) return failure(verified.kind);
-  if (!samePackage(verified.value, candidate.manifest))
+  if (!packageMatchesRelease(verified.value, candidate.manifest))
     return failure("package_mismatch");
   return {
     ok: true,

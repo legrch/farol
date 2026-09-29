@@ -83,6 +83,8 @@ function transport(root: string, openHttps: OpenHttps) {
       product: "Farol Next Preview",
       bundleId: "local.farol.next.preview",
       version: "0.1.1",
+      buildVersion: "2",
+      updateChannel: "github-stable",
       buildId: "a".repeat(64),
       sourceCommit: "b".repeat(40),
       sourceTreeDigest: "c".repeat(64),
