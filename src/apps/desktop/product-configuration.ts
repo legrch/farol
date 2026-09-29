@@ -27,7 +27,8 @@ import { credentialStorePolicy } from "../../modules/computer/infra/native/home-
 
 import { resolveOwnerTaskModel } from "./owner-config";
 
-const FILE_NAME = "product-settings.json";
+const FILE_NAME = "config.json";
+const LEGACY_FILE_NAME = "product-settings.json";
 const MAXIMUM_BYTES = 256 * 1024;
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
@@ -210,6 +211,9 @@ const secureMcpChallengeInputSchema = z.strictObject({
 
 function settingsError(error: unknown): ProductConfigurationSnapshot {
   const message = error instanceof Error ? error.message : "";
+  if (message === "CONFIG_RENAME_REQUIRED") {
+    return { status: "error", error: "CONFIG_RENAME_REQUIRED" };
+  }
   if (message === "SETTINGS_CORRUPT") {
     return { status: "error", error: "SETTINGS_CORRUPT" };
   }
@@ -531,6 +535,7 @@ export class ProductSettingsStore {
       await handle.close();
       handle = undefined;
       await this.hooks.beforeCommit?.();
+      await this.assertConfigName();
       // Last before the bytes become durable: a fence that refuses here
       // leaves the target exactly as it was, and the temporary file is
       // removed by the `finally` below.
@@ -556,6 +561,19 @@ export class ProductSettingsStore {
       throw new Error("SETTINGS_UNSAFE");
     }
     if ((info.mode & 0o077) !== 0) await fs.chmod(this.options.root, 0o700);
+    await this.assertConfigName();
+  }
+
+  private async assertConfigName(): Promise<void> {
+    // Never interpret an older preview's existing config as a fresh install.
+    // No dual readers, automatic reset, overwrite or live profile migration.
+    try {
+      await fs.lstat(path.join(this.options.root, LEGACY_FILE_NAME));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    throw new Error("CONFIG_RENAME_REQUIRED");
   }
 
   private assertPrivateFile(info: Stats): void {

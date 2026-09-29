@@ -48,6 +48,20 @@ const ProjectPreferenceSelectionSchema = z.strictObject({
     ),
 });
 
+const CatalogueObservationSchema = z.strictObject({
+  modelId: z
+    .string()
+    .min(1)
+    .max(160)
+    .regex(/^[^\s\u0000-\u001f\u007f]+$/u),
+  observedAt: z.number().int().nonnegative().safe(),
+  scope: z
+    .string()
+    .min(1)
+    .max(240)
+    .regex(/^[^\s\u0000-\u001f\u007f]+$/u),
+});
+
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0;
 
 function validKey(key: string): boolean {
@@ -699,6 +713,11 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
     ) {
       throw new Error("HANDOFF_JOURNAL_INVALID");
     }
+    if (
+      record.modelCatalogue !== undefined &&
+      !CatalogueObservationSchema.safeParse(record.modelCatalogue).success
+    )
+      throw new Error("HANDOFF_JOURNAL_CATALOGUE_INVALID");
     if (record.modelBinding !== undefined) {
       const binding = TaskModelBindingSchema.safeParse(record.modelBinding);
       if (
@@ -765,6 +784,9 @@ export class PrivateCodexHandoffJournal implements HandoffJournal {
       ...(record.modelBinding === undefined
         ? {}
         : { modelBinding: record.modelBinding }),
+      ...(record.modelCatalogue === undefined
+        ? {}
+        : { modelCatalogue: record.modelCatalogue }),
       ...(record.continuedFrom === undefined
         ? {}
         : {

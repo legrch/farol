@@ -1,5 +1,8 @@
 import { selectedConnectorApp } from "../../pkg/product-settings/connector-app-selection";
 import { resolveOwnerTaskModel } from "./owner-config";
+import { describeTaskModels } from "../../pkg/owner-config/contract";
+import { ReadCodexModelCatalogue } from "../../modules/chat/app/service/read-codex-model-catalogue";
+import type { CodexModelCatalogueResult } from "../../modules/chat/app/port/codex-model-catalogue";
 import {
   app,
   BrowserWindow,
@@ -5043,6 +5046,86 @@ async function configureAdmittedProduct(
       return verifyCodexExecutable(
         snapshot.settings.nativeHosts.codex.executablePath,
       );
+    }
+    case "host.refresh-codex-task-models": {
+      if (codexHostTaskAdmission || codexAgentOperationActive())
+        return configurationFailure("CODEX_HOST_TASK_IN_PROGRESS");
+      const snapshot = configuration.snapshot();
+      if (snapshot.status !== "ready")
+        return configurationFailure("SETTINGS_UNAVAILABLE");
+      const settings = snapshot.settings;
+      const selected = settings.nativeHosts.codex;
+      const route = settings.nativeHosts.taskRoute;
+      if (
+        !selected?.localVerification ||
+        !route ||
+        route.expiresAt <= Date.now() ||
+        route.hostGeneration !== settings.nativeHosts.generation ||
+        route.computerGeneration !== settings.computer.generation
+      )
+        return configurationFailure("CODEX_TASK_ROUTE_UNAVAILABLE");
+      codexHostTaskAdmission = true;
+      let proxy: SharedCodexProxyHost | null = null;
+      let scratch: string | null = null;
+      let result: CodexModelCatalogueResult = {
+        status: "unavailable",
+        code: "TASK_MODEL_CATALOG_UNAVAILABLE",
+      };
+      let cleaned = true;
+      try {
+        scratch = await realpath(
+          await mkdtemp(path.join(os.tmpdir(), "farol-model-catalogue-")),
+        );
+        await chmod(scratch, 0o700);
+        proxy = await SharedCodexProxyHost.attach({
+          executablePath: selected.executablePath,
+          executableSha256: selected.executableSha256,
+          socketPath: route.socketPath,
+          cwd: scratch,
+          expectedCodexHome: route.expectedCodexHome,
+        });
+        result = await new ReadCodexModelCatalogue(proxy, Date.now).read({
+          fresh: true,
+          deadlineAt: route.expiresAt,
+        });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message === "CODEX_PROXY_CLEANUP_UNVERIFIED"
+        )
+          cleaned = false;
+        result = {
+          status: "unavailable",
+          code: "TASK_MODEL_CATALOG_UNAVAILABLE",
+        };
+      } finally {
+        if (proxy) cleaned = await proxy.closeAndWait().catch(() => false);
+        if (scratch && cleaned)
+          await rm(scratch, { recursive: true, force: true }).catch(() => {
+            cleaned = false;
+          });
+        codexHostTaskAdmission = false;
+      }
+      const current = configuration.snapshot();
+      if (
+        !cleaned ||
+        current.status !== "ready" ||
+        current.settings.revision !== settings.revision ||
+        route.expiresAt <= Date.now()
+      )
+        result = { status: "unavailable", code: "TASK_MODEL_CATALOG_CHANGED" };
+      return ProductConfigurationResultSchema.parse({
+        ok: true,
+        snapshot: current,
+        evidence: {
+          kind: "host.task-models",
+          view: describeTaskModels(
+            current.status === "ready" ? current.settings.tasks : undefined,
+            "codex",
+            result,
+          ),
+        },
+      });
     }
     case "host.configure-codex-tasks": {
       if (codexHostTaskAdmission || codexAgentOperationActive()) {

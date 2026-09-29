@@ -42,7 +42,7 @@ export const TaskHarnessSchema = z
     }
   });
 
-/** One section of product-settings.json. Runtime grants and credentials stay separate. */
+/** One section of config.json. Runtime grants and credentials stay separate. */
 export const TaskExecutionSettingsSchema = z
   .strictObject({
     defaultHarness: TaskNameSchema,
@@ -130,6 +130,89 @@ export function resolveTaskModel(
       model: model.model,
       ...(effort === undefined ? {} : { effort }),
     }),
+  };
+}
+
+// Runtime observations are NOT fields in tasks/config. They are projected only
+// into Settings/MCP results and must never rewrite the user's model policy.
+export const RuntimeTaskModelSchema = z.strictObject({
+  id: z.string().min(1).max(160),
+  model: TaskModelSchema.shape.model,
+  displayName: z.string().max(240),
+  hidden: z.boolean(),
+  supportedEfforts: z.array(TaskEffortSchema).max(32).readonly(),
+  defaultEffort: TaskEffortSchema.optional(),
+});
+export const RuntimeTaskCatalogueSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("ready"),
+    source: z.literal("model/list"),
+    scope: z.string().min(1).max(240),
+    observedAt: z.number().int().nonnegative().safe(),
+    models: z.array(RuntimeTaskModelSchema).max(2000).readonly(),
+  }),
+  z.strictObject({
+    status: z.literal("unavailable"),
+    code: z.string().min(1).max(120),
+  }),
+]);
+export const TaskModelCatalogueViewSchema = z.strictObject({
+  harness: TaskNameSchema,
+  catalogue: RuntimeTaskCatalogueSchema,
+  configError: z.string().max(120).nullable(),
+  configured: z
+    .array(
+      z.strictObject({
+        alias: TaskNameSchema,
+        model: TaskModelSchema.shape.model,
+        defaultEffort: TaskEffortSchema.optional(),
+        available: z.enum(["yes", "no", "unknown"]),
+        effortAvailable: z.boolean().nullable(),
+      }),
+    )
+    .max(64),
+});
+export type TaskModelCatalogueView = z.infer<
+  typeof TaskModelCatalogueViewSchema
+>;
+
+export function describeTaskModels(
+  config: unknown,
+  harness: string,
+  catalogue: z.infer<typeof RuntimeTaskCatalogueSchema>,
+): TaskModelCatalogueView {
+  const parsed = TaskExecutionSettingsSchema.safeParse(config);
+  const entry =
+    parsed.success && Object.hasOwn(parsed.data.harnesses, harness)
+      ? parsed.data.harnesses[harness]
+      : undefined;
+  return {
+    harness,
+    catalogue,
+    configError: entry ? null : "TASK_MODEL_CONFIG_UNAVAILABLE",
+    configured: entry
+      ? Object.entries(entry.models).map(([alias, configured]) => {
+          const actual =
+            catalogue.status === "ready"
+              ? catalogue.models.find(
+                  (model) => model.model === configured.model,
+                )
+              : undefined;
+          return {
+            alias,
+            ...configured,
+            available:
+              catalogue.status !== "ready" ? "unknown" : actual ? "yes" : "no",
+            effortAvailable:
+              catalogue.status !== "ready"
+                ? null
+                : !actual
+                  ? false
+                  : configured.defaultEffort === undefined ||
+                    actual.supportedEfforts.includes(configured.defaultEffort),
+          };
+        })
+      : [],
   };
 }
 

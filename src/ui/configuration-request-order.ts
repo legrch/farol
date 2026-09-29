@@ -23,3 +23,19 @@ export function shouldAdoptConfigurationSnapshot(
   if (current.status === "error") return true;
   return incoming.settings.revision >= current.settings.revision;
 }
+
+/** Catalogue evidence belongs to the configuration snapshot in its reply. */
+export function configurationEvidenceRevision(
+  current: RevisionedConfigurationSnapshot,
+  response: RevisionedConfigurationSnapshot,
+  isLatestRequest: boolean,
+): number | null {
+  if (
+    !isLatestRequest ||
+    current.status !== "ready" ||
+    response.status !== "ready" ||
+    response.settings.revision !== current.settings.revision
+  )
+    return null;
+  return response.settings.revision;
+}

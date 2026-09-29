@@ -20,6 +20,7 @@ import { Sha256HandoffRequestDigester } from "../../src/modules/chat/infra/nativ
 import { PrivateCodexHandoffJournal } from "../../src/modules/chat/infra/repo/private-codex-handoff-journal";
 import { createReadonlyComputerMcpServer } from "../../src/modules/computer/infra/mcp/create-readonly-computer-mcp";
 import { taskPolicy } from "../fixtures/task-policy";
+import { catalogueModel } from "../fixtures/codex-model-catalogue";
 
 const workspace: HandoffWorkspace = {
   root: "/fixture/writer",
@@ -86,6 +87,17 @@ describe("settings edit through MCP to the resolved task model", () => {
           async request(method, raw) {
             const params = raw as Record<string, unknown>;
             calls.push({ method, params });
+            if (method === "model/list")
+              return {
+                data: [
+                  catalogueModel(
+                    originalModel,
+                    originalEffort === undefined ? [] : [originalEffort],
+                  ),
+                  catalogueModel("replacement-from-json", ["xhigh"]),
+                ],
+                nextCursor: null,
+              };
             if (method === "project/list")
               return {
                 data: [
@@ -206,6 +218,26 @@ describe("settings edit through MCP to the resolved task model", () => {
           return client;
         }
         const firstClient = await connect();
+        const modelsBefore = await firstClient.callTool({
+          name: "codex_task_models",
+          arguments: { fresh: true },
+        });
+        expect(modelsBefore.structuredContent).toMatchObject({
+          harness: "codex",
+          catalogue: { status: "ready", source: "model/list" },
+          configured: expect.arrayContaining([
+            {
+              alias: initialAlias,
+              model: originalModel,
+              ...(originalEffort === undefined
+                ? {}
+                : { defaultEffort: originalEffort }),
+              available: "yes",
+              effortAvailable: true,
+            },
+          ]),
+        });
+        expect(calls.every((call) => call.method === "model/list")).toBe(true);
         const firstKey = randomUUID();
         const created = await firstClient.callTool({
           name: "codex_task_create",

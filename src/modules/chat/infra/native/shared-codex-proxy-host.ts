@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,6 +15,7 @@ const REQUEST_TIMEOUT_MS = 20_000;
 const SAFE_PATH =
   "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 const METHODS = new Set([
+  "model/list",
   "project/list",
   "thread/start",
   "thread/read",
@@ -85,6 +86,12 @@ export class SharedCodexProxyHost implements HandoffHost {
   private child: ChildProcessWithoutNullStreams | null = null;
   private pending = new Map<number, Pending>();
   private nextId = 1;
+  private readonly catalogueClientId = randomUUID();
+  private catalogueEpoch = 0;
+
+  modelCatalogueScope(): string {
+    return `${this.catalogueClientId}:${this.catalogueEpoch}:${this.lost ? "lost" : "connected"}`;
+  }
   private received = Buffer.alloc(0);
   private ready: Promise<void> | null = null;
   private lost = false;
@@ -401,7 +408,16 @@ export class SharedCodexProxyHost implements HandoffHost {
         });
         continue;
       }
-      if (value.id === undefined) continue; // provider notification
+      if (value.id === undefined) {
+        // A local cache epoch, not a claim that initialize identifies an account.
+        // No auth payload is retained. Reconnect constructs a new client ID.
+        if (
+          value.method === "account/updated" ||
+          value.method === "account/login/completed"
+        )
+          this.catalogueEpoch++;
+        continue;
+      }
       if (typeof value.id !== "number" || !Number.isSafeInteger(value.id)) {
         this.fail();
         return;

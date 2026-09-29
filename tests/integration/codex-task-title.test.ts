@@ -107,6 +107,20 @@ async function fixture(
   const host = {
     async request(method: string, params: unknown) {
       calls.push(method);
+      if (method === "model/list")
+        return {
+          data: [
+            {
+              id: "fixture",
+              model: "fixture-model",
+              displayName: "Fixture",
+              hidden: false,
+              supportedReasoningEfforts: [{ reasoningEffort: "medium" }],
+              defaultReasoningEffort: "medium",
+            },
+          ],
+          nextCursor: null,
+        };
       if (method === "project/list") {
         if (options.catalogue === "unavailable")
           throw new Error("Catalogue unavailable");

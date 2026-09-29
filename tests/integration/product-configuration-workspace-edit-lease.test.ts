@@ -339,7 +339,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
       error: "WORKSPACE_MUTATION_PROMOTION_PENDING",
     });
     // The refusal must be readable AND must never let the edit become
-    // durable: a promotion reading `product-settings.json` right now must
+    // durable: a promotion reading `config.json` right now must
     // still see no pending edit at all.
     expect(refused.snapshot).toMatchObject({
       status: "ready",
@@ -417,7 +417,7 @@ describe("guarded workspace edit takes the promotion lease", () => {
 // `ProductSettingsStore.save`. A lease deleted and re-taken in that window
 // left two holders and the edit was written straight through. The fence now
 // sits where the bytes actually move — the last thing before the rename
-// that commits `product-settings.json`.
+// that commits `config.json`.
 //
 // The adversary is the real one: a real lease file, unlinked by name, and
 // the same `fixtures/promotion-lease-child.mjs` holder process the other
@@ -442,7 +442,7 @@ describe("the guarded edit's fence sits at the durable write (S35-H1R)", () => {
   }
 
   function settingsFileOf(root: string): string {
-    return path.join(root, "farol-next-state", "product-settings.json");
+    return path.join(root, "farol-next-state", "config.json");
   }
 
   it("S35-H1R refuses, releases the hold and leaves the settings bytes untouched when the lease is stolen between the entry check and the write", async () => {

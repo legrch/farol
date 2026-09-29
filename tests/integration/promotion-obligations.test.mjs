@@ -427,11 +427,7 @@ describe("Q-08 activation obligations", () => {
 
   it("HR-012/F2 refuses while a guarded edit recorded before it ran is still undelivered, whatever the tasks say", async () => {
     const root = await userData();
-    const settingsFile = path.join(
-      root,
-      "farol-next-state",
-      "product-settings.json",
-    );
+    const settingsFile = path.join(root, "farol-next-state", "config.json");
     // A complete `ProductSettingsSchema` record. `nativeHosts`, `connectors`
     // and `setup.journey` are omitted deliberately: the real schema defaults
     // them when the key is absent, exactly like a settings file saved before
@@ -890,6 +886,9 @@ describe("Q-08 activation obligations", () => {
     for (const [reason, text, mode] of cases) {
       await fs.rm(markerFile, { force: true });
       await fs.writeFile(markerFile, text, { mode });
+      // Exercise the requested permission fault even under a private umask.
+      await fs.chmod(markerFile, mode);
+      expect((await fs.stat(markerFile)).mode & 0o777).toBe(mode);
       const report = await activationObligations(root, probes);
       expect(report, reason).toMatchObject({
         drained: false,

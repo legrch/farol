@@ -134,6 +134,11 @@ function fixture() {
           ],
           nextCursor: pageItems && params.cursor === null ? "next" : null,
         };
+      else if (method === "model/list")
+        value = {
+          data: [],
+          nextCursor: pageItems && params.cursor === undefined ? "next" : null,
+        };
       else throw Error("READ_METHOD_UNEXPECTED");
       await after(method);
       return value;
@@ -521,6 +526,16 @@ async function mcpFixture(options: { release?: () => Promise<void> } = {}) {
     }
   };
   const delegate = {
+    readModels: async (
+      workspaceId: string,
+      fresh = false,
+      context: CodexTaskReadContext = {},
+    ) => {
+      contexts.push(context);
+      return recordCompletion(
+        f.service.readModels(workspaceId, fresh, context),
+      );
+    },
     create: async (): Promise<never> => {
       throw Error("NO_INFERENCE");
     },
@@ -794,4 +809,178 @@ describe("final MCP read publication after admission release", () => {
       }
     },
   );
+});
+
+describe("merged model catalogue read lifetime", () => {
+  const read = (
+    f: ReturnType<typeof fixture>,
+    fresh = true,
+    context: CodexTaskReadContext = f.context,
+  ) => f.service.readModels("writer", fresh, context);
+
+  it.each(["abort", "expiry"] as const)(
+    "starts no model read after %s",
+    async (reason) => {
+      const f = fixture();
+      if (reason === "abort") f.controller.abort();
+      else f.expire();
+      expect(await read(f)).toMatchObject({ status: "unavailable" });
+      expect(f.calls).toEqual([]);
+    },
+  );
+
+  it.each(["abort", "expiry"] as const)(
+    "stops model pagination after %s",
+    async (reason) => {
+      const f = fixture();
+      f.setItemPages();
+      f.onResponse(() => {
+        if (reason === "abort") f.controller.abort();
+        else f.expire();
+      });
+      expect(await read(f)).toMatchObject({ status: "unavailable" });
+      expect(f.calls).toEqual([{ method: "model/list", deadlineAt: 2000 }]);
+    },
+  );
+
+  it("does not disclose the display cache after caller cancellation", async () => {
+    const f = fixture();
+    expect(await read(f)).toMatchObject({ status: "ready" });
+    f.controller.abort();
+    expect(await read(f, false)).toMatchObject({ status: "unavailable" });
+    expect(f.calls).toEqual([{ method: "model/list", deadlineAt: 2000 }]);
+  });
+
+  it.each([NaN, -1, 0, 1.5])(
+    "rejects invalid/expired model read deadline %s before provider reads",
+    async (deadlineAt) => {
+      const f = fixture();
+      expect(await read(f, true, { deadlineAt })).toMatchObject({
+        status: "unavailable",
+      });
+      expect(f.calls).toEqual([]);
+    },
+  );
+
+  it("forwards the real MCP models signal and bounded provider deadline", async () => {
+    const m = await mcpFixture();
+    try {
+      const reply = await m.client.callTool({
+        name: "codex_task_models",
+        arguments: { fresh: true },
+      });
+      expect(reply.structuredContent).toMatchObject({
+        catalogue: { status: "ready" },
+      });
+      expect(m.contexts).toHaveLength(1);
+      expect(m.contexts[0]?.signal).toBeInstanceOf(AbortSignal);
+      expect(m.contexts[0]?.deadlineAt).toBe(2000);
+      expect(m.f.calls).toEqual([{ method: "model/list", deadlineAt: 2000 }]);
+    } finally {
+      await m.close();
+    }
+  });
+
+  it("discards a model view after expiry during the awaited Computer fence release", async () => {
+    let entered: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const m = await mcpFixture({
+      release: async () => {
+        entered();
+        await barrier;
+      },
+    });
+    const outcome = m.client.callTool({
+      name: "codex_task_models",
+      arguments: { fresh: true },
+    });
+    try {
+      await started;
+      m.f.expire();
+      release();
+      const reply = await outcome;
+      expect(reply.isError).toBe(true);
+      expect(reply.structuredContent).toMatchObject({
+        status: "unavailable",
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      });
+      expect(reply.structuredContent).not.toHaveProperty("configured");
+      expect(m.f.calls).toHaveLength(1);
+    } finally {
+      release();
+      await outcome.catch(() => {});
+      await m.close();
+    }
+  });
+
+  it("stops models after actual MCP cancellation without a next page", async () => {
+    const m = await mcpFixture();
+    m.f.setItemPages();
+    const controller = new AbortController();
+    let entered: () => void = () => {};
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release: () => void = () => {};
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    m.f.onResponse(async () => {
+      entered();
+      await barrier;
+    });
+    const outcome = m.client
+      .callTool(
+        { name: "codex_task_models", arguments: { fresh: true } },
+        { signal: controller.signal },
+      )
+      .then(
+        (value) => ({ kind: "reply", value }),
+        (error) => ({ kind: "error", error }),
+      );
+    try {
+      await started;
+      const signal = m.contexts[0]?.signal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      if (!signal) throw Error("MCP_MODEL_SIGNAL_MISSING");
+      const observed = signal.aborted
+        ? Promise.resolve()
+        : new Promise<void>((resolve) =>
+            signal.addEventListener("abort", () => resolve(), { once: true }),
+          );
+      controller.abort();
+      await observed;
+      release();
+      expect((await outcome).kind).toBe("error");
+      expect(await m.completed).toMatchObject({ status: "unavailable" });
+      expect(m.f.calls).toHaveLength(1);
+    } finally {
+      release();
+      controller.abort();
+      await outcome;
+      await m.close();
+    }
+  });
+
+  it("rejects a caller-supplied models deadline before any provider read", async () => {
+    const m = await mcpFixture();
+    try {
+      const reply = await m.client
+        .callTool({
+          name: "codex_task_models",
+          arguments: { deadlineAt: Number.MAX_SAFE_INTEGER },
+        })
+        .catch((error) => ({ error }));
+      expect(reply).not.toHaveProperty("structuredContent");
+      expect(m.f.calls).toEqual([]);
+    } finally {
+      await m.close();
+    }
+  });
 });

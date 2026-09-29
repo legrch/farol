@@ -146,6 +146,7 @@ import {
 import {
   ConfigurationRequestOrder,
   shouldAdoptConfigurationSnapshot,
+  configurationEvidenceRevision,
 } from "./configuration-request-order";
 import { sidebarToggleLeft } from "./window-chrome-geometry";
 import {
@@ -576,6 +577,10 @@ let windowState: WindowState = {
   trafficLightPosition: null,
 };
 let computerTargetTaskId: string | null = null;
+let taskModelCatalogue: {
+  revision: number;
+  view: import("../pkg/owner-config/contract").TaskModelCatalogueView;
+} | null = null;
 let settingsFeedback = "";
 let settingsFeedbackError = false;
 let settingsFeedbackSurface: "computer" | "settings" | "setup" = "settings";
@@ -3366,6 +3371,18 @@ async function configureProduct(
       : evidence.providerBlockStatus === "install"
         ? "Rotated the Farol Model token. The connection is not written to config.toml yet, so nothing else changed."
         : `Rotated the Farol Model token, but config.toml was not updated (${evidence.providerBlockStatus.replace("_", " ")}). Preview the connection to see why.`;
+  } else if (evidence?.kind === "host.task-models") {
+    const revision = configurationEvidenceRevision(
+      bootstrap.configuration,
+      parsed.snapshot,
+      configurationRequestOrder.isLatest(configurationRequest),
+    );
+    if (revision !== null)
+      taskModelCatalogue = { revision, view: evidence.view };
+    evidenceError = evidence.view.catalogue.status !== "ready";
+    settingsFeedback = evidenceError
+      ? "Model catalogue unavailable. No task was started; configured models were not changed."
+      : "Runtime model catalogue refreshed. Availability is not a quota guarantee.";
   } else if (evidence?.kind === "host.codex-probe") {
     settingsFeedback = `Codex ${evidence.version} contract verified · ${evidence.protocol} · executable ${evidence.executableSha256.slice(0, 12)} · schema ${evidence.schemaSha256.slice(0, 12)}.`;
   } else if (evidence?.kind === "host.route-b") {
@@ -3723,6 +3740,13 @@ function renderSettings(): void {
   renderSettingsNavigation();
   const configured = bootstrap.configuration;
   const values = [
+    [
+      "Configuration",
+      configured.status === "error" &&
+      configured.error === "CONFIG_RENAME_REQUIRED"
+        ? "Quit every Farol preview, then rename product-settings.json to config.json in the same preview state folder. Do not overwrite an existing config.json; resolve that conflict first. No settings were reset."
+        : "config.json · tasks.harnesses contains model policy",
+    ],
     [
       "Application",
       `${displayProductName} · ${displayEdition} · ${bootstrap.applicationId}`,
@@ -4426,8 +4450,61 @@ function renderSettings(): void {
         );
         const modelPolicy = document.createElement("p");
         modelPolicy.textContent =
-          "Model names and default effort come from tasks.harnesses in product-settings.json. Each task may select a configured model and override effort. Close Farol before editing; restart to load the new policy.";
+          "Model names and default effort come from tasks.harnesses in config.json. Each task may select a configured model and override effort. Close Farol before editing; restart to load the new policy.";
         taskForm.append(modelPolicy);
+        const refreshModels = document.createElement("button");
+        refreshModels.type = "button";
+        refreshModels.textContent = "Refresh models";
+        refreshModels.disabled = taskRoute == null;
+        refreshModels.addEventListener("click", () => {
+          void configureProduct(
+            { kind: "host.refresh-codex-task-models" },
+            "Models refreshed.",
+          );
+        });
+        taskForm.append(refreshModels);
+        const modelStatus = document.createElement("div");
+        modelStatus.dataset.taskModels = "runtime-catalogue";
+        const modelView =
+          taskModelCatalogue?.revision === settings.revision
+            ? taskModelCatalogue.view
+            : null;
+        if (!modelView) {
+          modelStatus.textContent =
+            "Not checked. Verify the task route, then refresh models. Configured names are not availability evidence.";
+        } else {
+          const checked = document.createElement("p");
+          const catalogue = modelView.catalogue;
+          checked.textContent =
+            catalogue.status === "ready"
+              ? `Runtime observed at ${new Date(catalogue.observedAt).toISOString()}${Date.now() - catalogue.observedAt >= 60_000 ? " · stale, refresh before relying on this display" : ""}. Every new dispatch rechecks the runtime.`
+              : `Availability unknown · ${catalogue.code}`;
+          modelStatus.append(checked);
+          if (modelView.configError) {
+            const warning = document.createElement("p");
+            warning.textContent =
+              "Configure tasks.harnesses.codex in config.json. The runtime catalogue does not change the config.";
+            modelStatus.append(warning);
+          }
+          for (const item of modelView.configured) {
+            const row = document.createElement("p");
+            row.textContent = `${item.alias} → ${item.model} · configured effort: ${item.defaultEffort ?? "runtime default"} · available: ${item.available}${item.effortAvailable === false && item.available === "yes" ? " · configured effort unavailable" : ""}`;
+            modelStatus.append(row);
+          }
+          if (catalogue.status === "ready") {
+            const available = document.createElement("p");
+            available.textContent =
+              "Reported by Codex: " +
+              catalogue.models
+                .map(
+                  (item) =>
+                    `${item.model} (${item.supportedEfforts.join(", ") || "no effort"}${item.hidden ? "; hidden from picker" : ""})`,
+                )
+                .join("; ");
+            modelStatus.append(available);
+          }
+        }
+        taskForm.append(modelStatus);
         const workspaceLabel = document.createElement("label");
         workspaceLabel.textContent = "Verified Computer workspace";
         const workspaceSelect = document.createElement("select");

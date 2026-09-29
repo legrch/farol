@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { catalogueModel } from "../fixtures/codex-model-catalogue";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -80,6 +81,8 @@ class FixtureHost implements HandoffHost {
 
   async request(method: string, params: unknown): Promise<unknown> {
     this.calls.push(method);
+    if (method === "model/list")
+      return { data: [catalogueModel(request.model)], nextCursor: null };
     if (method === "project/list") {
       if (this.failProject) throw new Error("PROJECT_LIST_FAILED");
       this.onProjectList?.();
@@ -326,6 +329,8 @@ function byteBudgetFixture() {
   const host: HandoffHost = {
     async request(method, params) {
       hostCalls.push(method);
+      if (method === "model/list")
+        return { data: [catalogueModel(request.model)], nextCursor: null };
       if (method === "project/list")
         return {
           data: [
@@ -1090,13 +1095,26 @@ describe("persistent Codex handoff core", () => {
   it("refuses continuation when an old task lacks an exact model and effort binding", async () => {
     const host = new FixtureHost();
     host.turnResponse = { turn: { id: "issued-turn" } };
-    const { service } = await fixture(host);
+    const { service, journalRoot } = await fixture(host);
     const original = {
       ...request,
       key: randomUUID(),
       reasoningEffort: undefined,
     };
     expect((await service().create(original)).status).toBe("dispatched");
+    // Reproduce a pre-discovery record; new dispatches bind the runtime default.
+    const reservationPath = path.join(
+      journalRoot,
+      original.key,
+      "reservation.json",
+    );
+    const legacy = JSON.parse(await fs.readFile(reservationPath, "utf8"));
+    delete legacy.reasoningEffort;
+    delete legacy.modelBinding;
+    delete legacy.modelCatalogue;
+    await fs.writeFile(reservationPath, JSON.stringify(legacy), {
+      mode: 0o600,
+    });
     expect(
       await service().continue({
         key: randomUUID(),
@@ -2185,6 +2203,7 @@ describe("persistent Codex handoff core", () => {
         dispatchId: request.key,
       });
       expect(fixture.counts().hostCalls).toEqual([
+        "model/list",
         "project/list",
         "thread/start",
         "turn/start",

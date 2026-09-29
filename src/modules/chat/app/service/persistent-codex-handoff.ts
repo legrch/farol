@@ -1,4 +1,9 @@
 import type { CodexThreadRuntime } from "../port/codex-thread-runtime";
+import type {
+  CodexModelCatalogue,
+  CodexModelCheck,
+} from "../port/codex-model-catalogue";
+import { ReadCodexModelCatalogue } from "./read-codex-model-catalogue";
 import { readCodexThreadRuntime } from "./read-codex-thread-runtime";
 import type {
   LatestProjectPreference,
@@ -116,6 +121,9 @@ export type HandoffWorkspace = Readonly<{
 
 export type HandoffRecord = Readonly<{
   requestDigest: string;
+  modelCatalogue?:
+    | Readonly<{ modelId: string; observedAt: number; scope: string }>
+    | undefined;
   adopted?: true | undefined;
   model?: string;
   reasoningEffort?: string | undefined;
@@ -192,6 +200,7 @@ export type HandoffReadContext = Readonly<{
 }>;
 
 export interface HandoffHost {
+  modelCatalogueScope?(): string;
   request(
     method: string,
     params: unknown,
@@ -426,7 +435,61 @@ export class PersistentCodexHandoff {
     private readonly mutationGate: HandoffMutationGate,
     private readonly now: () => number = Date.now,
     private readonly selectedOwnerThreadId?: string,
+    private readonly modelCatalogue: CodexModelCatalogue = new ReadCodexModelCatalogue(
+      host,
+      now,
+    ),
   ) {}
+
+  async readModels(
+    workspaceId: string,
+    fresh = false,
+    context: HandoffReadContext = {},
+  ) {
+    const unavailable = {
+      status: "unavailable" as const,
+      code: "TASK_MODEL_CATALOG_UNAVAILABLE" as const,
+    };
+    const bounded = {
+      signal: context.signal,
+      deadlineAt: Math.min(
+        context.deadlineAt ?? this.mutationExpiresAt,
+        this.mutationExpiresAt,
+      ),
+    };
+    if (!this.readStillAllowed(bounded)) return unavailable;
+    try {
+      const workspace = await this.authority.resolve(workspaceId);
+      if (!validWorkspace(workspace) || !this.readStillAllowed(bounded))
+        return unavailable;
+      const result = await this.modelCatalogue.read({
+        fresh,
+        deadlineAt: bounded.deadlineAt,
+        signal: bounded.signal,
+      });
+      if (!this.readStillAllowed(bounded)) return unavailable;
+      const after = await this.authority.resolve(workspaceId);
+      if (
+        !validWorkspace(after) ||
+        !sameWorkspace(workspace, after) ||
+        !this.readStillAllowed(bounded)
+      )
+        return unavailable;
+      return result;
+    } catch {
+      return unavailable;
+    }
+  }
+
+  private unavailableModel(
+    check: Extract<CodexModelCheck, { status: "refused" }>,
+  ) {
+    return {
+      status: "refused" as const,
+      code: check.code,
+      modelAvailability: check,
+    };
+  }
 
   async lookupProjectPreference(
     request: ProjectPreferenceLookupRequest,
@@ -1415,7 +1478,11 @@ export class PersistentCodexHandoff {
       record.workspaceId !== request.workspaceId ||
       record.projectId !== request.projectId ||
       record.model !== request.model ||
-      record.reasoningEffort !== request.reasoningEffort
+      // Steer adds input to the issued turn; it does not select another model or
+      // effort. An omitted value retains the journal's effective binding, while
+      // an explicit conflicting value must still refuse before any effect.
+      (request.reasoningEffort !== undefined &&
+        record.reasoningEffort !== request.reasoningEffort)
     )
       return { status: "refused", code: "HANDOFF_DISPATCH_BINDING_CHANGED" };
     const turnId = record.turnId;
@@ -1536,7 +1603,18 @@ export class PersistentCodexHandoff {
     }
   }
 
-  async continue(request: HandoffContinue): Promise<HandoffCreateResult> {
+  async continue(
+    request: HandoffContinue,
+    context: HandoffReadContext = {},
+  ): Promise<HandoffCreateResult> {
+    context = {
+      ...context,
+      deadlineAt: Math.min(
+        context.deadlineAt ?? this.mutationExpiresAt,
+        this.mutationExpiresAt,
+      ),
+    };
+    const host = this.readHost(context);
     const unknown = {
       status: "outcome_unknown" as const,
       dispatchId: request.key,
@@ -1555,7 +1633,7 @@ export class PersistentCodexHandoff {
       new TextEncoder().encode(request.message).byteLength > 8_192
     )
       return { status: "refused", code: "HANDOFF_CONTINUE_INPUT_INVALID" };
-    if (this.now() >= this.mutationExpiresAt)
+    if (!this.dispatchStillAllowed(context))
       return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
     if (
       !this.digester.digestContinue ||
@@ -1604,19 +1682,13 @@ export class PersistentCodexHandoff {
     )
       return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
     try {
-      if (
-        !(await exactProject(
-          this.host,
-          parent.projectId,
-          workspace.project.root,
-        ))
-      )
+      if (!(await exactProject(host, parent.projectId, workspace.project.root)))
         return {
           status: "refused",
           code: "HANDOFF_PROJECT_AMBIGUOUS_OR_MISSING",
         };
       const response = object(
-        await this.host.request("thread/read", {
+        await host.request("thread/read", {
           threadId: parent.threadId,
           includeTurns: false,
         }),
@@ -1671,9 +1743,30 @@ export class PersistentCodexHandoff {
         : unknown;
     if (child?.turnIntent) return unknown;
 
+    // Revalidate the issued binding, not today's configured defaults. Replays
+    // above do not depend on the current catalogue or start any new work.
+    const modelCheck = await this.modelCatalogue.check(
+      parent.model,
+      parent.reasoningEffort,
+      {
+        deadlineAt: context.deadlineAt ?? this.mutationExpiresAt,
+        signal: context.signal,
+        resolveDefault: false,
+      },
+    );
+    const afterCatalogue = await this.authority.resolve(parent.workspaceId);
+    if (
+      !this.dispatchStillAllowed(context) ||
+      !validWorkspace(afterCatalogue) ||
+      !sameWorkspace(afterCatalogue, workspace)
+    )
+      return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+    if (modelCheck.status === "refused")
+      return this.unavailableModel(modelCheck);
+
     try {
       const latest = object(
-        await this.host.request("thread/turns/list", {
+        await host.request("thread/turns/list", {
           threadId: parent.threadId,
           cursor: null,
           limit: 1,
@@ -1691,10 +1784,22 @@ export class PersistentCodexHandoff {
       return unknown;
     }
 
+    const beforeReservation = await this.authority.resolve(parent.workspaceId);
+    if (
+      !this.dispatchStillAllowed(context) ||
+      !validWorkspace(beforeReservation) ||
+      !sameWorkspace(beforeReservation, workspace)
+    )
+      return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
     if (!child) {
       try {
         child = await this.journal.reserve(request.key, {
           ...expected,
+          modelCatalogue: {
+            modelId: modelCheck.model.id,
+            observedAt: modelCheck.observedAt,
+            scope: modelCheck.scope,
+          },
           threadIntent: false,
           turnIntent: false,
         });
@@ -1732,7 +1837,7 @@ export class PersistentCodexHandoff {
             parent.workspaceId,
           );
           if (
-            this.now() >= this.mutationExpiresAt ||
+            !this.dispatchStillAllowed(context) ||
             !validWorkspace(stillApproved) ||
             !sameWorkspace(stillApproved, workspace) ||
             (await this.journal.hasUnconfirmedMessage!(request.dispatchId)) ||
@@ -1740,8 +1845,15 @@ export class PersistentCodexHandoff {
               (await this.journal.hasUnconfirmedTitle(request.dispatchId)))
           )
             throw new Error("HANDOFF_CONTINUE_PREFLIGHT_DENIED");
+          if (
+            !this.modelCatalogue.isCurrent(
+              modelCheck.scope,
+              modelCheck.observedAt,
+            )
+          )
+            throw new HandoffNotSubmittedError("TASK_MODEL_CATALOG_CHANGED");
           const latest = object(
-            await this.host.request("thread/turns/list", {
+            await host.request("thread/turns/list", {
               threadId: parent.threadId,
               cursor: null,
               limit: 1,
@@ -1754,9 +1866,16 @@ export class PersistentCodexHandoff {
           );
           if (turn?.id !== parent.turnId || turn?.status !== "completed")
             throw new Error("HANDOFF_CONTINUE_PARENT_CHANGED");
+          if (
+            !this.modelCatalogue.isCurrent(
+              modelCheck.scope,
+              modelCheck.observedAt,
+            )
+          )
+            throw new HandoffNotSubmittedError("TASK_MODEL_CATALOG_CHANGED");
         },
         async () => {
-          if (this.now() >= this.mutationExpiresAt)
+          if (!this.dispatchStillAllowed(context))
             throw new HandoffNotSubmittedError("HANDOFF_TASK_ADMISSION_DENIED");
           if (!(await this.journal.claimTurn(request.key)))
             throw new HandoffNotSubmittedError(
@@ -1764,15 +1883,19 @@ export class PersistentCodexHandoff {
             );
           const atSend = await this.authority.resolve(parent.workspaceId);
           if (
-            this.now() >= this.mutationExpiresAt ||
+            !this.dispatchStillAllowed(context) ||
             !validWorkspace(atSend) ||
-            !sameWorkspace(atSend, workspace)
+            !sameWorkspace(atSend, workspace) ||
+            !this.modelCatalogue.isCurrent(
+              modelCheck.scope,
+              modelCheck.observedAt,
+            )
           )
             throw new HandoffNotSubmittedError(
               "HANDOFF_CONTINUE_AUTHORITY_CHANGED",
             );
           const started = object(
-            await this.host.request(
+            await host.request(
               "turn/start",
               {
                 threadId: parent.threadId,
@@ -1792,7 +1915,7 @@ export class PersistentCodexHandoff {
                         networkAccess: false,
                       },
               },
-              this.mutationExpiresAt,
+              context.deadlineAt,
             ),
           );
           const turn = object(started?.turn);
@@ -1809,7 +1932,7 @@ export class PersistentCodexHandoff {
 
     try {
       const response = object(
-        await this.host.request("thread/turns/list", {
+        await host.request("thread/turns/list", {
           threadId: parent.threadId,
           cursor: null,
           limit: 2,
@@ -1838,7 +1961,20 @@ export class PersistentCodexHandoff {
     };
   }
 
-  async create(request: HandoffRequest): Promise<HandoffCreateResult> {
+  async create(
+    request: HandoffRequest,
+    context: HandoffReadContext = {},
+  ): Promise<HandoffCreateResult> {
+    context = {
+      ...context,
+      deadlineAt: Math.min(
+        context.deadlineAt ?? this.mutationExpiresAt,
+        this.mutationExpiresAt,
+      ),
+    };
+    if (!this.dispatchStillAllowed(context))
+      return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+    const host = this.readHost(context);
     if (!validRequest(request))
       return { status: "refused", code: "HANDOFF_INPUT_INVALID" };
     const workspace = await this.authority.resolve(request.workspaceId);
@@ -1865,7 +2001,7 @@ export class PersistentCodexHandoff {
       if (current.threadId && !current.turnIntent) {
         try {
           const response = object(
-            await this.host.request("thread/read", {
+            await host.request("thread/read", {
               threadId: current.threadId,
               includeTurns: false,
             }),
@@ -1879,7 +2015,29 @@ export class PersistentCodexHandoff {
           ) {
             return { status: "outcome_unknown", dispatchId: request.key };
           }
-          return this.startTurn(request, current.threadId, workspace);
+          const check = await this.modelCatalogue.check(
+            current.model ?? request.model,
+            current.reasoningEffort ?? request.reasoningEffort,
+            {
+              deadlineAt: context.deadlineAt ?? this.mutationExpiresAt,
+              signal: context.signal,
+              resolveDefault: false,
+            },
+          );
+          if (check.status === "refused") return this.unavailableModel(check);
+          return this.startTurn(
+            {
+              ...request,
+              model: current.model ?? request.model,
+              reasoningEffort:
+                current.reasoningEffort ?? request.reasoningEffort,
+              modelBinding: current.modelBinding ?? request.modelBinding,
+            },
+            current.threadId,
+            workspace,
+            check,
+            context,
+          );
         } catch {
           return { status: "outcome_unknown", dispatchId: request.key };
         }
@@ -1887,13 +2045,46 @@ export class PersistentCodexHandoff {
       return this.knownOrUnknown(request.key, current);
     }
 
+    // A UI snapshot is never dispatch authority. Check this serving host before
+    // a reservation or provider effect. The request digest above remains the
+    // original intent; a runtime default cannot change same-key replay identity.
+    const modelCheck = await this.modelCatalogue.check(
+      request.model,
+      current?.reasoningEffort ?? request.reasoningEffort,
+      {
+        deadlineAt: context.deadlineAt ?? this.mutationExpiresAt,
+        signal: context.signal,
+        resolveDefault: current === null,
+      },
+    );
+    const afterCatalogue = await this.authority.resolve(request.workspaceId);
+    if (
+      !this.dispatchStillAllowed(context) ||
+      !validWorkspace(afterCatalogue) ||
+      !sameWorkspace(afterCatalogue, workspace)
+    )
+      return { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" };
+    if (modelCheck.status === "refused")
+      return this.unavailableModel(modelCheck);
+    request = {
+      ...request,
+      reasoningEffort: modelCheck.effort,
+      ...(request.modelBinding
+        ? {
+            modelBinding: {
+              ...request.modelBinding,
+              selection: {
+                ...request.modelBinding.selection,
+                effort: modelCheck.effort,
+              },
+            },
+          }
+        : {}),
+    };
+
     try {
       if (
-        !(await exactProject(
-          this.host,
-          request.projectId,
-          workspace.project.root,
-        ))
+        !(await exactProject(host, request.projectId, workspace.project.root))
       ) {
         return {
           status: "refused",
@@ -1910,10 +2101,20 @@ export class PersistentCodexHandoff {
     ) {
       return { status: "refused", code: "HANDOFF_WORKSPACE_CHANGED" };
     }
+    if (
+      !this.dispatchStillAllowed(context) ||
+      !this.modelCatalogue.isCurrent(modelCheck.scope, modelCheck.observedAt)
+    )
+      return { status: "refused", code: "TASK_MODEL_CATALOG_CHANGED" };
     let reserved: HandoffRecord;
     try {
       reserved = await this.journal.reserve(request.key, {
         requestDigest,
+        modelCatalogue: {
+          modelId: modelCheck.model.id,
+          observedAt: modelCheck.observedAt,
+          scope: modelCheck.scope,
+        },
         model: request.model,
         reasoningEffort: request.reasoningEffort,
         ...(request.modelBinding ? { modelBinding: request.modelBinding } : {}),
@@ -1936,6 +2137,14 @@ export class PersistentCodexHandoff {
     ) {
       return { status: "refused", code: "HANDOFF_RESERVATION_CONFLICT" };
     }
+    // Concurrent same-key requests can observe different runtime defaults.
+    // The journal winner, not the last catalogue response, owns the binding.
+    if (
+      reserved.modelCatalogue &&
+      (reserved.model !== request.model ||
+        reserved.reasoningEffort !== request.reasoningEffort)
+    )
+      return { status: "outcome_unknown", dispatchId: request.key };
     let claimedThread: boolean;
     try {
       claimedThread =
@@ -1950,8 +2159,18 @@ export class PersistentCodexHandoff {
     // crash or write failure cannot turn a replay into a second thread/start.
     let threadId: string;
     try {
+      const atSend = await this.authority.resolve(request.workspaceId);
+      if (
+        !this.dispatchStillAllowed(context) ||
+        !validWorkspace(atSend) ||
+        !sameWorkspace(atSend, workspace) ||
+        !this.modelCatalogue.isCurrent(modelCheck.scope, modelCheck.observedAt)
+      )
+        throw new HandoffNotSubmittedError(
+          "HANDOFF_DISPATCH_AUTHORITY_CHANGED",
+        );
       const started = object(
-        await this.host.request("thread/start", {
+        await host.request("thread/start", {
           projectId: request.projectId,
           cwd: workspace.root,
           ephemeral: false,
@@ -1980,18 +2199,26 @@ export class PersistentCodexHandoff {
     } catch {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
-    return this.startTurn(request, threadId, workspace);
+    return this.startTurn(request, threadId, workspace, modelCheck, context);
   }
 
   private async startTurn(
     request: HandoffRequest,
     threadId: string,
     workspace: HandoffWorkspace,
+    modelCheck: Extract<CodexModelCheck, { status: "available" }>,
+    context: HandoffReadContext,
   ): Promise<HandoffCreateResult> {
+    const host = this.readHost(context);
     const current = await this.authority.resolve(request.workspaceId);
     if (!validWorkspace(current) || !sameWorkspace(current, workspace)) {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
+    if (
+      !this.dispatchStillAllowed(context) ||
+      !this.modelCatalogue.isCurrent(modelCheck.scope, modelCheck.observedAt)
+    )
+      return { status: "outcome_unknown", dispatchId: request.key };
     let claimedTurn: boolean;
     try {
       claimedTurn = await this.journal.claimTurn(request.key);
@@ -2002,8 +2229,18 @@ export class PersistentCodexHandoff {
       return { status: "outcome_unknown", dispatchId: request.key };
     }
     try {
+      const atSend = await this.authority.resolve(request.workspaceId);
+      if (
+        !this.dispatchStillAllowed(context) ||
+        !validWorkspace(atSend) ||
+        !sameWorkspace(atSend, workspace) ||
+        !this.modelCatalogue.isCurrent(modelCheck.scope, modelCheck.observedAt)
+      )
+        throw new HandoffNotSubmittedError(
+          "HANDOFF_DISPATCH_AUTHORITY_CHANGED",
+        );
       const started = object(
-        await this.host.request("turn/start", {
+        await host.request("turn/start", {
           threadId,
           input: [{ type: "text", text: request.message }],
           cwd: workspace.root,
@@ -2265,6 +2502,12 @@ export class PersistentCodexHandoff {
       // Result reads never create a replacement task or a model turn.
     }
     return { status: "outcome_unknown", dispatchId };
+  }
+
+  private dispatchStillAllowed(context: HandoffReadContext): boolean {
+    return (
+      this.now() < this.mutationExpiresAt && this.readStillAllowed(context)
+    );
   }
 
   private readStillAllowed(context: HandoffReadContext): boolean {

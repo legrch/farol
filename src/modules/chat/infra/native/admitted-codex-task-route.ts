@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
 
 import type { HandoffRequest } from "../../app/service/persistent-codex-handoff";
+import type { CodexModelCatalogueResult } from "../../app/port/codex-model-catalogue";
 import type {
   CodexTaskRoute,
   CodexTaskReadContext,
+  CodexTaskRequestContext,
 } from "../../contract/codex-task-route";
 import {
   resolveTaskModel,
+  describeTaskModels,
   taskPolicyIdentity,
   TaskExecutionSettingsSchema,
   type TaskExecutionSettings,
@@ -39,7 +42,15 @@ type ResolvedTaskRoute = Pick<
   | "history"
   | "title"
 > & {
-  create(request: HandoffRequest): ReturnType<CodexTaskRoute["create"]>;
+  create(
+    request: HandoffRequest,
+    context?: CodexTaskRequestContext,
+  ): ReturnType<CodexTaskRoute["create"]>;
+  readModels?(
+    workspaceId: string,
+    fresh?: boolean,
+    context?: CodexTaskReadContext,
+  ): Promise<CodexModelCatalogueResult>;
 };
 
 /** An exact physical grant with an owned task-policy snapshot. */
@@ -318,11 +329,41 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
       : result;
   }
 
-  async create(request: Parameters<CodexTaskRoute["create"]>[0]) {
+  async models(fresh = false, context: CodexTaskReadContext = {}) {
+    const bounded = this.readContext(context);
+    if (!bounded)
+      return describeTaskModels(undefined, "codex", {
+        status: "unavailable",
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      });
+    const catalogue = this.delegate.readModels
+      ? await this.delegate.readModels(
+          this.admission.workspaceId,
+          fresh,
+          bounded,
+        )
+      : {
+          status: "unavailable" as const,
+          code: "TASK_MODEL_CATALOG_UNAVAILABLE" as const,
+        };
+    if (!this.readContext(bounded))
+      return describeTaskModels(undefined, "codex", {
+        status: "unavailable",
+        code: "HANDOFF_TASK_ADMISSION_DENIED",
+      });
+    return describeTaskModels(this.admission.tasks, "codex", catalogue);
+  }
+
+  async create(
+    request: Parameters<CodexTaskRoute["create"]>[0],
+    context: CodexTaskRequestContext = {},
+  ) {
+    const bounded = this.readContext(context);
     if (
       this.now() >= this.admission.expiresAt ||
       request.workspaceId !== this.admission.workspaceId ||
-      request.projectId !== this.admission.projectId
+      request.projectId !== this.admission.projectId ||
+      !bounded
     ) {
       return {
         status: "refused" as const,
@@ -345,20 +386,23 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
           "TASK_MODEL_" + resolved.status.toUpperCase().replaceAll("-", "_"),
       };
     }
-    return this.delegate.create({
-      key: request.key,
-      workspaceId: request.workspaceId,
-      projectId: request.projectId,
-      message: request.message,
-      model: resolved.selection.model,
-      ...(resolved.selection.effort === undefined
-        ? {}
-        : { reasoningEffort: resolved.selection.effort }),
-      modelBinding: {
-        selection: resolved.selection,
-        configSha256: this.admission.configSha256,
+    return this.delegate.create(
+      {
+        key: request.key,
+        workspaceId: request.workspaceId,
+        projectId: request.projectId,
+        message: request.message,
+        model: resolved.selection.model,
+        ...(resolved.selection.effort === undefined
+          ? {}
+          : { reasoningEffort: resolved.selection.effort }),
+        modelBinding: {
+          selection: resolved.selection,
+          configSha256: this.admission.configSha256,
+        },
       },
-    });
+      bounded,
+    );
   }
 
   async title(
@@ -401,19 +445,23 @@ export class AdmittedCodexTaskRoute implements CodexTaskRoute {
     return this.delegate.message(request);
   }
 
-  async continue(request: {
-    key: string;
-    dispatchId: string;
-    message: string;
-  }) {
+  async continue(
+    request: {
+      key: string;
+      dispatchId: string;
+      message: string;
+    },
+    context: CodexTaskRequestContext = {},
+  ) {
+    const bounded = this.readContext(context);
     if (!this.controlCapabilities.continue || !this.delegate.continue)
       return { status: "refused" as const, code: "TASK_CONTROL_NOT_QUALIFIED" };
-    if (this.now() >= this.admission.expiresAt)
+    if (!bounded)
       return {
         status: "refused" as const,
         code: "HANDOFF_TASK_ADMISSION_DENIED",
       };
-    return this.delegate.continue(request);
+    return this.delegate.continue(request, bounded);
   }
 
   private readContext(

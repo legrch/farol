@@ -758,10 +758,7 @@ describe("Farol Next product configuration", () => {
     await restarted.initialize();
     expect(restarted.snapshot()).toEqual(attached.snapshot);
 
-    const saved = await fs.readFile(
-      path.join(root, "product-settings.json"),
-      "utf8",
-    );
+    const saved = await fs.readFile(path.join(root, "config.json"), "utf8");
     expect(saved).not.toMatch(/api[-_ ]?key|secret|bearer/iu);
 
     const previousProfile = service.snapshot();
@@ -999,7 +996,7 @@ describe("Farol Next product configuration", () => {
       dependencies(),
     );
     await original.initialize();
-    const settingsPath = path.join(root, "product-settings.json");
+    const settingsPath = path.join(root, "config.json");
     const legacy = JSON.parse(await fs.readFile(settingsPath, "utf8")) as {
       setup?: Record<string, unknown>;
     };
@@ -1602,7 +1599,7 @@ describe("Farol Next product configuration", () => {
   it("reports corrupt state without silently replacing it", async () => {
     const root = await stateRoot();
     await fs.mkdir(root, { mode: 0o700 });
-    await fs.writeFile(path.join(root, "product-settings.json"), "{broken", {
+    await fs.writeFile(path.join(root, "config.json"), "{broken", {
       mode: 0o600,
     });
     const service = new ProductConfigurationService(
@@ -1628,7 +1625,7 @@ describe("Farol Next product configuration", () => {
       dependencies(),
     );
     await first.initialize();
-    const target = path.join(root, "product-settings.json");
+    const target = path.join(root, "config.json");
     const current = JSON.parse(await fs.readFile(target, "utf8")) as Record<
       string,
       unknown
@@ -2100,7 +2097,7 @@ describe("Farol Next product configuration", () => {
     await restarted.initialize();
     expect(restarted.snapshot()).toMatchObject(authenticated.snapshot);
 
-    const saved = await fs.readFile(path.join(root, "product-settings.json"), {
+    const saved = await fs.readFile(path.join(root, "config.json"), {
       encoding: "utf8",
     });
     expect(saved).not.toMatch(/cookie|token|conversation|prompt|answer/iu);

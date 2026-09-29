@@ -305,7 +305,7 @@ handle and exact final text, not internal thread, turn or item IDs. These
 fixtures consume no model turn. The owner-facing Native hosts setting selects
 an exact existing socket,
 serving Codex home, saved project ID/root, verified Computer workspace and
-execution policy. The candidate's `tasks` section in `product-settings.json`
+execution policy. The candidate's `tasks` section in `config.json`
 selects `defaultHarness` and each harness's `defaultModel`, model aliases and
 optional `defaultEffort`. Only Codex is implemented; an unsupported harness
 refuses instead of falling back. A create request may override the alias and

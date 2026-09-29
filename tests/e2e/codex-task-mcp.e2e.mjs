@@ -111,6 +111,24 @@ function hostResult(method, params) {
       userAgent: "disposable-fixture",
     };
   }
+  if (method === "model/list") {
+    assert.equal(params.includeHidden, true);
+    return {
+      data: [
+        {
+          id: "fixture-picker",
+          model: "gpt-6-luna",
+          displayName: "Fixture Luna",
+          hidden: false,
+          supportedReasoningEfforts: [
+            { reasoningEffort: "medium", description: "fixture" },
+          ],
+          defaultReasoningEffort: "medium",
+        },
+      ],
+      nextCursor: null,
+    };
+  }
   if (method === "project/list") {
     return {
       data: [{ id: projectId, roots: [{ path: projectRoot }] }],
@@ -502,6 +520,7 @@ try {
     (tool) => tool.name,
   );
   assert(tools.includes("codex_task_create"), stderr);
+  assert(tools.includes("codex_task_models"), stderr);
   assert(tools.includes("codex_task_status"), stderr);
   assert(tools.includes("codex_task_result"), stderr);
   assert(tools.includes("codex_task_observe"), stderr);
@@ -515,6 +534,52 @@ try {
   assert(tools.includes("chatgpt_chat_status"), stderr);
   assert(!tools.includes("codex_task_message"), stderr);
   assert(!tools.includes("codex_task_title"), stderr);
+  const beforeModels = calls.length;
+  const models = await callFixtureTool({
+    name: "codex_task_models",
+    arguments: { fresh: true },
+  });
+  assert.equal(models.isError, undefined, JSON.stringify(models));
+  assert.equal(models.structuredContent.harness, "codex");
+  assert.equal(models.structuredContent.catalogue.source, "model/list");
+  assert.equal(models.structuredContent.catalogue.status, "ready");
+  assert.deepEqual(models.structuredContent.configured, [
+    {
+      alias: "luna",
+      model: "gpt-6-luna",
+      defaultEffort: "medium",
+      available: "yes",
+      effortAvailable: true,
+    },
+  ]);
+  assert.deepEqual(models.structuredContent.catalogue.models, [
+    {
+      id: "fixture-picker",
+      model: "gpt-6-luna",
+      displayName: "Fixture Luna",
+      hidden: false,
+      supportedEfforts: ["medium"],
+      defaultEffort: "medium",
+    },
+  ]);
+  assert.deepEqual(calls.slice(beforeModels), ["model/list"]);
+  const cachedModels = await callFixtureTool({
+    name: "codex_task_models",
+    arguments: {},
+  });
+  assert.deepEqual(cachedModels.structuredContent, models.structuredContent);
+  assert.deepEqual(calls.slice(beforeModels), ["model/list"]);
+  await callFixtureTool({
+    name: "codex_task_models",
+    arguments: { fresh: true },
+  });
+  assert.deepEqual(calls.slice(beforeModels), ["model/list", "model/list"]);
+  assert.equal(
+    calls.filter((method) =>
+      ["thread/start", "turn/start", "turn/steer"].includes(method),
+    ).length,
+    0,
+  );
   const preferenceInput = {
     key,
     workspaceId: "approved-writer",

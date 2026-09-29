@@ -4152,7 +4152,7 @@ async function waitForSetup(instance, predicate, arg) {
     };
     const stateRoot = path.join(instance.userData, "farol-next-state");
     const settingsText = await fs
-      .readFile(path.join(stateRoot, "product-settings.json"), "utf8")
+      .readFile(path.join(stateRoot, "config.json"), "utf8")
       .catch(() => null);
     let settingsSection = null;
     try {
@@ -5312,7 +5312,7 @@ async function runLifecycleSoak() {
 function durableStateFiles(userData) {
   const state = path.join(userData, "farol-next-state");
   return {
-    settings: path.join(state, "product-settings.json"),
+    settings: path.join(state, "config.json"),
     tasks: path.join(state, "live-tasks", "live-tasks.json"),
     context: path.join(state, "context-continuity"),
   };
@@ -9485,7 +9485,7 @@ demoMainSegment: try {
     dismissed: true,
   });
   const settingsRoot = path.join(normal.userData, "farol-next-state");
-  const settingsPath = path.join(settingsRoot, "product-settings.json");
+  const settingsPath = path.join(settingsRoot, "config.json");
   assert.equal((await fs.stat(settingsRoot)).mode & 0o777, 0o700);
   assert.equal((await fs.stat(settingsPath)).mode & 0o777, 0o600);
   const savedSettings = await fs.readFile(settingsPath, "utf8");
@@ -12998,7 +12998,7 @@ n10ComputerPanelSegment: {
     const settingsPath = path.join(
       panel.userData,
       "farol-next-state",
-      "product-settings.json",
+      "config.json",
     );
     // Filling and submitting is ONE attempt, retried as a unit, for the same
     // reason the two rows below are: a card re-render can land between the
@@ -13149,7 +13149,7 @@ n10ComputerPanelSegment: {
     // operation, applies the edit, writes the receipt and releases its
     // admission — and the reply it returns is dropped on the way to the
     // renderer, so `ipcRenderer.invoke` never settles. Nothing here writes
-    // `product-settings.json`: every pending-edit byte below is the
+    // `config.json`: every pending-edit byte below is the
     // product's own.
     //
     // NOT exercised, stated rather than implied: a reply that IS delivered
@@ -13225,7 +13225,7 @@ n10ComputerPanelSegment: {
       const droppedSettingsPath = path.join(
         droppedReply.userData,
         "farol-next-state",
-        "product-settings.json",
+        "config.json",
       );
       // The product's own operation records, at the root
       // `observeWorkspaceEdit` reads. Counting them before and after is what
@@ -13611,7 +13611,7 @@ n10ComputerPanelSegment: {
       const heldSettingsPath = path.join(
         heldAck.userData,
         "farol-next-state",
-        "product-settings.json",
+        "config.json",
       );
       const heldRecordRoot = path.join(
         heldAck.userData,
@@ -13710,7 +13710,7 @@ n10ComputerPanelSegment: {
 
       // (3) The acknowledgement was held, once, and the product's own
       // pending record is still there because nothing cleared it. Nothing
-      // here writes product-settings.json.
+      // here writes config.json.
       for (let attempt = 0; attempt < 200 && ackDiagnostics.length === 0;) {
         attempt += 1;
         await heldAck.window.waitForTimeout(50);

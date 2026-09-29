@@ -1,10 +1,12 @@
 import { z } from "zod";
+import type { TaskModelCatalogueView } from "../../../pkg/owner-config/contract";
 
 /** Trusted request lifetime; never accepted as a connector tool argument. */
-export type CodexTaskReadContext = Readonly<{
+export type CodexTaskRequestContext = Readonly<{
   signal?: AbortSignal | undefined;
   deadlineAt?: number | undefined;
 }>;
+export type CodexTaskReadContext = CodexTaskRequestContext;
 
 const ThreadRuntimeSnapshot = {
   scope: z.literal("thread"),
@@ -395,6 +397,11 @@ export interface CodexTaskRoute {
     | Readonly<{ status: "refused"; code: string }>
     | Readonly<{ status: "outcome_unknown"; dispatchId: string }>
   >;
+  /** Read-only model catalogue from this route's selected serving connection. */
+  models?(
+    fresh?: boolean,
+    context?: CodexTaskReadContext,
+  ): Promise<TaskModelCatalogueView>;
   /** Control is advertised only after the serving host is qualified. */
   readonly controlCapabilities?: Readonly<{
     message: boolean;
@@ -435,6 +442,7 @@ export interface CodexTaskRoute {
       dispatchId: string;
       message: string;
     }>,
+    context?: CodexTaskRequestContext,
   ): ReturnType<CodexTaskRoute["create"]>;
   create(
     request: Readonly<{
@@ -447,6 +455,7 @@ export interface CodexTaskRoute {
       model?: string | undefined;
       effort?: string | undefined;
     }>,
+    context?: CodexTaskRequestContext,
   ): Promise<
     | Readonly<{
         status: "dispatched";

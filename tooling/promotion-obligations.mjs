@@ -62,7 +62,7 @@ import {
 export const PROMOTION_OBLIGATIONS_SCHEMA =
   "farol.next.promotion-obligations/1";
 
-// `product-settings.json`'s decode bound. `ProductSettingsStore`
+// `config.json`'s decode bound. `ProductSettingsStore`
 // (`src/apps/desktop/product-configuration.ts`) keeps its `MAXIMUM_BYTES`
 // private and that file is not this change's to edit, so the bound is
 // restated here — the one bound in this file that is not imported from its
@@ -200,8 +200,16 @@ const STATE_FILES = Object.freeze([
   ],
   [
     "product-settings",
-    ["product-settings.json"],
+    ["config.json"],
     productSettings,
+    PRODUCT_SETTINGS_MAX_BYTES,
+  ],
+  // A legacy filename is not an empty config: block promotion until an owner
+  // resolves the rename with every preview closed. Never silently ignore edits.
+  [
+    "legacy-config",
+    ["product-settings.json"],
+    () => ({ ok: false, reason: "CONFIG_RENAME_REQUIRED" }),
     PRODUCT_SETTINGS_MAX_BYTES,
   ],
   ["last-quit", [QUIT_RECEIPT_FILE_NAME], quitReceipt, MAX_QUIT_RECEIPT_BYTES],
@@ -211,6 +219,24 @@ const STATE_FILES = Object.freeze([
 async function readStateFiles(state) {
   const read = {};
   for (const [name, segments, shape, maxBytes] of STATE_FILES) {
+    if (name === "legacy-config") {
+      // Presence alone blocks the rename. Never open/decode the legacy node:
+      // opening a FIFO before inspecting its type could wait for a writer.
+      try {
+        await fs.lstat(path.join(state, ...segments));
+        read[name] = {
+          status: "unreadable",
+          digest: "legacy-config-present",
+          reason: "CONFIG_RENAME_REQUIRED",
+        };
+      } catch (error) {
+        read[name] =
+          error?.code === "ENOENT"
+            ? { status: "absent", digest: null }
+            : { status: "unreadable", digest: null, reason: "UNSAFE" };
+      }
+      continue;
+    }
     read[name] = await readState(
       path.join(state, ...segments),
       shape,
@@ -283,6 +309,8 @@ export async function activationObligations(userData, options = {}) {
     }
   }
 
+  if (confirmed["legacy-config"].status !== "absent")
+    unreadable.push("legacy-config:CONFIG_RENAME_REQUIRED");
   const settings = confirmed["product-settings"];
   if (settings.status === "unreadable")
     unreadable.push(`product-settings:${settings.reason}`);

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TaskModelCatalogueViewSchema } from "../owner-config/contract.ts";
 import {
   CHATGPT_MODEL_ID,
   FAROL_PROVIDER_ID,
@@ -442,6 +443,7 @@ export const ProductConfigurationSnapshotSchema = z.discriminatedUnion(
       status: z.literal("error"),
       error: z.enum([
         "SETTINGS_CORRUPT",
+        "CONFIG_RENAME_REQUIRED",
         "SETTINGS_UNSAFE",
         "SETTINGS_READ_FAILED",
       ]),
@@ -480,6 +482,7 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     path: CanonicalAbsolutePathSchema,
   }),
   z.strictObject({ kind: z.literal("host.verify-codex") }),
+  z.strictObject({ kind: z.literal("host.refresh-codex-task-models") }),
   z.strictObject({
     kind: z.literal("host.configure-codex-tasks"),
     socketPath: CanonicalAbsolutePathSchema,
@@ -695,6 +698,10 @@ const DiscoveryCandidateSchema = z.strictObject({
 });
 
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("host.task-models"),
+    view: TaskModelCatalogueViewSchema,
+  }),
   z.strictObject({
     kind: z.literal("computer.workspace-pick"),
     selectionId: IdentifierSchema,

@@ -307,10 +307,10 @@ describe("promotion reads each state file exactly as its owner does", () => {
     });
   });
 
-  it("product-settings.json: the settings store and the promotion reader accept and refuse the same records, holding the restated bound to the store's", async () => {
+  it("config.json: the settings store and the promotion reader accept and refuse the same records, holding the restated bound to the store's", async () => {
     await verifyCorpus({
       name: "product-settings",
-      file: ["product-settings.json"],
+      file: ["config.json"],
       refusal: "SETTINGS_CORRUPT",
       load: (root) =>
         new ProductSettingsStore({

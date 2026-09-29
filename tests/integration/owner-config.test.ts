@@ -44,7 +44,7 @@ describe("one existing JSON configuration container", () => {
         effort: "medium",
       },
     });
-    expect((await fs.readdir(root)).sort()).toEqual(["product-settings.json"]);
+    expect((await fs.readdir(root)).sort()).toEqual(["config.json"]);
   });
   it("a new settings load applies a model/effort edit without rebuilding", async () => {
     const { store, settings } = await fixture();

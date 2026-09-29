@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   TaskEffortSchema,
   TaskNameSchema,
+  TaskModelCatalogueViewSchema,
 } from "../../../../pkg/owner-config/contract";
 
 import {
@@ -1203,6 +1204,70 @@ export function createReadonlyComputerMcpServer(
           }
         }),
       );
+    if (codexTasks.models)
+      server.registerTool(
+        "codex_task_models",
+        {
+          title: "Read configured and runtime Codex models",
+          description:
+            "Compare configured aliases with model/list from the selected runtime. Display cache lasts at most 60 seconds; fresh=true refreshes it. No task or inference is started. Availability is a catalogue observation, not a quota guarantee.",
+          inputSchema: z.strictObject({ fresh: z.boolean().optional() }),
+          annotations: READONLY_ANNOTATIONS,
+        },
+        guarded(
+          async ({ fresh }, context) => {
+            const signal = context.mcpReq.signal;
+            if (!codexReadAdmitted(signal))
+              return taskResponse(
+                {
+                  status: "unavailable",
+                  code: "HANDOFF_TASK_ADMISSION_DENIED",
+                },
+                true,
+              );
+            try {
+              const parsed = TaskModelCatalogueViewSchema.safeParse(
+                await codexTasks.models!(fresh ?? false, { signal }),
+              );
+              if (!codexReadAdmitted(signal))
+                return taskResponse(
+                  {
+                    status: "unavailable",
+                    code: "HANDOFF_TASK_ADMISSION_DENIED",
+                  },
+                  true,
+                );
+              if (!parsed.success)
+                return taskResponse(
+                  { status: "unavailable", code: "TASK_MODEL_CATALOG_INVALID" },
+                  true,
+                );
+              return taskResponse(
+                parsed.data,
+                parsed.data.catalogue.status !== "ready",
+              );
+            } catch {
+              return taskResponse(
+                {
+                  status: "unavailable",
+                  code: "TASK_MODEL_CATALOG_UNAVAILABLE",
+                },
+                true,
+              );
+            }
+          },
+          (_input, context) =>
+            codexReadAdmitted(context.mcpReq.signal)
+              ? null
+              : taskResponse(
+                  {
+                    status: "unavailable",
+                    code: "HANDOFF_TASK_ADMISSION_DENIED",
+                  },
+                  true,
+                ),
+        ),
+      );
     server.registerTool(
       "codex_task_create",
       {
@@ -1212,9 +1277,11 @@ export function createReadonlyComputerMcpServer(
         inputSchema: CodexTaskCreateInputSchema,
         annotations: CODEX_TASK_CREATE_ANNOTATIONS,
       },
-      guarded(async (request) => {
+      guarded(async (request, context) => {
         try {
-          const result = await codexTasks.create(request);
+          const result = await codexTasks.create(request, {
+            signal: context.mcpReq.signal,
+          });
           const publicResult =
             result.status === "dispatched"
               ? { status: "dispatched", dispatchId: result.dispatchId }
@@ -1302,9 +1369,11 @@ export function createReadonlyComputerMcpServer(
           inputSchema: CodexTaskContinueInputSchema,
           annotations: CODEX_TASK_CREATE_ANNOTATIONS,
         },
-        guarded(async (request) => {
+        guarded(async (request, context) => {
           try {
-            const result = await codexTasks.continue!(request);
+            const result = await codexTasks.continue!(request, {
+              signal: context.mcpReq.signal,
+            });
             return taskResponse(
               result.status === "dispatched"
                 ? { status: "dispatched", dispatchId: result.dispatchId }

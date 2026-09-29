@@ -52,7 +52,7 @@ Dev homes, native shortcuts and host diagnostic authority remain Dev-only.
 **Check inside Farol** is the default connection-check method. Add a separate NEW
 ChatGPT app for the current tunnel and explicitly save its exact name on Add to
 ChatGPT. Farol never guesses a target from its build environment or an old app name.
-The selection is stored in the existing `product-settings.json`, bound to the
+The selection is stored in `config.json`, bound to the
 current tunnel and connector generation. A changed generation requires a new
 selection; a pending/unknown check cannot be retargeted.
 
