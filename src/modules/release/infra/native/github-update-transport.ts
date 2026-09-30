@@ -1,6 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
-import { lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  type FileHandle,
+} from "node:fs/promises";
 import { get as httpsGet, type RequestOptions } from "node:https";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
@@ -288,15 +294,20 @@ async function validStagedFile(
   }
 }
 
-async function cleanup(handle: string): Promise<TransportFailure | null> {
-  try {
-    await unlink(handle);
-    return null;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? null
-      : fail("interrupted", "stage_cleanup", "unknown");
-  }
+function sameOwnedFile(current: BigIntStats, issued: BigIntStats): boolean {
+  return (
+    current.isFile() &&
+    issued.isFile() &&
+    current.nlink === 1n &&
+    current.uid === BigInt(process.getuid!()) &&
+    (current.mode & 0o077n) === 0n &&
+    current.dev === issued.dev &&
+    current.ino === issued.ino &&
+    current.size === issued.size &&
+    current.mode === issued.mode &&
+    current.mtimeNs === issued.mtimeNs &&
+    current.ctimeNs === issued.ctimeNs
+  );
 }
 
 export function createGithubUpdateTransport(
@@ -311,6 +322,20 @@ export function createGithubUpdateTransport(
 ): GithubUpdateTransport {
   const client = options.openHttps ?? openNativeHttps;
   const issuedArchives = new Map<string, BigIntStats>();
+  let emptySlot: { handle: string; identity: BigIntStats } | null = null;
+  // Reclaim only bytes of the opened file. Unlinking a checked path would race
+  // replacement. Keep one empty slot for subsequent checks in this lifetime.
+  const emptyOpenedArchive = async (file: FileHandle, handle: string) => {
+    await file.truncate(0);
+    await file.sync();
+    const identity = await file.stat({ bigint: true });
+    if (
+      !(await privateDirectory(path.dirname(handle))) ||
+      !sameOwnedFile(await lstat(handle, { bigint: true }), identity)
+    )
+      throw new Error("UPDATE_STAGE_CHANGED");
+    return { handle, identity };
+  };
   return {
     async fetchJson(url, maxBytes) {
       const kind = initialKind(url);
@@ -388,7 +413,10 @@ export function createGithubUpdateTransport(
         response.destroy();
         return fail("interrupted", "private_state");
       }
-      const handle = path.join(directory, `${randomUUID()}.zip`);
+      const reusable = emptySlot;
+      emptySlot = null;
+      const handle =
+        reusable?.handle ?? path.join(directory, `${randomUUID()}.zip`);
       let file;
       try {
         const closeOnExec =
@@ -396,14 +424,21 @@ export function createGithubUpdateTransport(
         file = await open(
           handle,
           constants.O_WRONLY |
-            constants.O_CREAT |
-            constants.O_EXCL |
+            (reusable ? 0 : constants.O_CREAT | constants.O_EXCL) |
             constants.O_NOFOLLOW |
+            constants.O_NONBLOCK |
             closeOnExec,
           0o600,
         );
+        if (
+          reusable &&
+          !sameOwnedFile(await file.stat({ bigint: true }), reusable.identity)
+        )
+          throw new Error("UPDATE_STAGE_CHANGED");
       } catch {
         response.destroy();
+        if (file) await file.close().catch(() => undefined);
+        if (reusable) return fail("interrupted", "stage_cleanup", "unknown");
         return fail("interrupted", "private_state");
       }
       let bytes = 0;
@@ -459,17 +494,32 @@ export function createGithubUpdateTransport(
         result = fail(bytes > 0 ? "interrupted" : "network_failure", "stream");
       } finally {
         response.destroy();
+        if (result && !result.ok) {
+          try {
+            emptySlot = await emptyOpenedArchive(file, handle);
+          } catch {
+            result = fail("interrupted", "stage_cleanup", "unknown");
+          }
+        }
         try {
           await file.close();
         } catch {
+          emptySlot = null;
           result = fail("interrupted", "stage_cleanup", "unknown");
         }
       }
-      if (result.ok && !(await validStagedFile(directory, handle)))
-        result = fail("interrupted", "private_state", "unknown");
-      if (!result.ok) return (await cleanup(handle)) ?? result;
+      if (!result.ok) return result;
       if (!issuedIdentity)
         return fail("interrupted", "stage_cleanup", "unknown");
+      try {
+        if (
+          !(await privateDirectory(directory)) ||
+          !sameOwnedFile(await lstat(handle, { bigint: true }), issuedIdentity)
+        )
+          return fail("interrupted", "private_state", "unknown");
+      } catch {
+        return fail("interrupted", "private_state", "unknown");
+      }
       issuedArchives.set(handle, issuedIdentity);
       return result;
     },
@@ -479,37 +529,23 @@ export function createGithubUpdateTransport(
       const directory = path.join(options.privateStateDirectory, STAGING_NAME);
       if (!(await privateDirectory(directory)))
         return fail("interrupted", "stage_cleanup", "unknown");
+      let file;
       try {
-        const current = await lstat(handle, { bigint: true });
-        if (
-          !current.isFile() ||
-          current.isSymbolicLink() ||
-          !issued.isFile() ||
-          issued.isSymbolicLink() ||
-          current.nlink !== 1n ||
-          current.uid !== BigInt(process.getuid!()) ||
-          (current.mode & 0o077n) !== 0n ||
-          current.dev !== issued.dev ||
-          current.ino !== issued.ino ||
-          current.size !== issued.size ||
-          current.mode !== issued.mode ||
-          current.mtimeNs !== issued.mtimeNs ||
-          current.ctimeNs !== issued.ctimeNs
-        )
-          return fail("interrupted", "stage_cleanup", "unknown");
-        await unlink(handle);
-        const parent = await open(
-          directory,
-          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY,
+        file = await open(
+          handle,
+          constants.O_WRONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
         );
-        try {
-          await parent.sync();
-        } finally {
-          await parent.close();
-        }
+        if (!sameOwnedFile(await file.stat({ bigint: true }), issued))
+          throw new Error("UPDATE_STAGE_CHANGED");
+        const reusable = await emptyOpenedArchive(file, handle);
+        const closing = file;
+        file = undefined;
+        await closing.close();
+        emptySlot = reusable;
         issuedArchives.delete(handle);
         return { ok: true, value: undefined };
       } catch {
+        if (file) await file.close().catch(() => undefined);
         return fail("interrupted", "stage_cleanup", "unknown");
       }
     },

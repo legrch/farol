@@ -21,6 +21,14 @@ the unchanged slot/journal, preserves the refusal receipt, clears only that
 pre-mutation intent and releases admission. A missing, timed-out or conflicting
 terminal result remains unknown and never permits a substitute helper.
 
+A rejected download releases its extracted stage and archive bytes before the
+download intent is cleared. Archive cleanup opens the issued file without
+following links, checks its descriptor identity, and truncates that descriptor;
+it never unlinks a path after a metadata check. One empty archive slot is reused
+within the updater lifetime, preventing rejected checks from accumulating large
+archives. A substituted entry stays untouched. Unknown cleanup preserves the
+intent and blocks another download.
+
 At startup the updater reads the same operation journal and measures the current
 slot and predecessor/staged/failed pair. It does not launch a helper while
 rendering or silently download a replacement. A settled target offers the measured

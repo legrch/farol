@@ -1,4 +1,33 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+const race = vi.hoisted(() => ({
+  afterMetadata: null as null | ((file: unknown) => Promise<void>),
+}));
+vi.mock("node:fs/promises", async (original) => {
+  const actual = await original<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: async (...args: Parameters<typeof actual.lstat>) => {
+      const info = await actual.lstat(...args);
+      await race.afterMetadata?.(args[0]);
+      return info;
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const file = await actual.open(...args);
+      return new Proxy(file, {
+        get(target, property) {
+          if (property === "stat")
+            return async (...options: Parameters<typeof file.stat>) => {
+              const info = await target.stat(...options);
+              await race.afterMetadata?.(args[0]);
+              return info;
+            };
+          const value: unknown = Reflect.get(target, property, target);
+          return typeof value === "function" ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+});
 import { createHash } from "node:crypto";
 import {
   chmod,
@@ -7,6 +36,7 @@ import {
   readFile,
   readdir,
   realpath,
+  rename,
   rm,
   symlink,
   unlink,
@@ -45,8 +75,14 @@ async function privateRoot(): Promise<string> {
   roots.push(root);
   return root;
 }
+async function expectEmptySlot(directory: string): Promise<void> {
+  const names = await readdir(directory);
+  expect(names).toHaveLength(1);
+  expect((await lstat(path.join(directory, names[0]!))).size).toBe(0);
+}
 
 afterEach(async () => {
+  race.afterMetadata = null;
   for (const root of roots.splice(0)) {
     await chmod(root, 0o700).catch(() => undefined);
     await chmod(path.join(root, "github-updates"), 0o700).catch(
@@ -113,11 +149,34 @@ function transport(root: string, openHttps: OpenHttps) {
 }
 
 describe("GitHub HTTPS transport", () => {
-  it("discards only an unchanged archive issued by this transport", async () => {
+  it("never deletes a replacement installed after the cleanup metadata check", async () => {
     const root = await privateRoot();
     const { instance } = transport(
       root,
       scripted(response(200, [Buffer.from("ZIP")])),
+    );
+    const result = await instance.download(asset, 3);
+    if (!result.ok) throw new Error("fixture download failed");
+    race.afterMetadata = async (file) => {
+      if (file !== result.value.handle) return;
+      race.afterMetadata = null;
+      await rename(result.value.handle, result.value.handle + ".original");
+      await writeFile(result.value.handle, "replacement", { mode: 0o600 });
+    };
+    expect(await instance.discard(result.value.handle)).toMatchObject({
+      ok: false,
+      certainty: "unknown",
+    });
+    expect(await readFile(result.value.handle, "utf8")).toBe("replacement");
+  });
+  it("discards only an unchanged archive issued by this transport", async () => {
+    const root = await privateRoot();
+    const { instance } = transport(
+      root,
+      scripted(
+        response(200, [Buffer.from("ZIP")]),
+        response(200, [Buffer.from("NEW")]),
+      ),
     );
     const result = await instance.download(asset, 3);
     expect(result.ok).toBe(true);
@@ -132,7 +191,17 @@ describe("GitHub HTTPS transport", () => {
     expect(await instance.discard(result.value.handle)).toMatchObject({
       ok: true,
     });
-    expect(await readdir(path.dirname(result.value.handle))).toEqual([]);
+    await expectEmptySlot(path.dirname(result.value.handle));
+    const again = await instance.download(asset, 3);
+    expect(again).toMatchObject({
+      ok: true,
+      value: { handle: result.value.handle },
+    });
+    expect(await readFile(result.value.handle, "utf8")).toBe("NEW");
+    expect(await instance.discard(result.value.handle)).toMatchObject({
+      ok: true,
+    });
+    await expectEmptySlot(path.dirname(result.value.handle));
   });
   it("preserves a replaced archive and reports unknown cleanup", async () => {
     const root = await privateRoot();
@@ -336,7 +405,7 @@ describe("GitHub HTTPS transport", () => {
       kind: "oversize",
       reason: "limit",
     });
-    expect(await readdir(path.join(root, "github-updates"))).toEqual([]);
+    await expectEmptySlot(path.join(root, "github-updates"));
     const json = transport(
       root,
       scripted(response(200, [Buffer.from("12345")])),
@@ -358,7 +427,7 @@ describe("GitHub HTTPS transport", () => {
       kind: "interrupted",
       certainty: "known",
     });
-    expect(await readdir(path.join(root, "github-updates"))).toEqual([]);
+    await expectEmptySlot(path.join(root, "github-updates"));
     const openHttps = vi.fn(async () => {
       throw new Error("offline");
     });
@@ -395,7 +464,7 @@ describe("GitHub HTTPS transport", () => {
       kind: "interrupted",
       reason: "content_length",
     });
-    expect(await readdir(path.join(root, "github-updates"))).toEqual([]);
+    await expectEmptySlot(path.join(root, "github-updates"));
   });
 
   it("reports unknown when the staged path changes before readback", async () => {
@@ -422,7 +491,8 @@ describe("GitHub HTTPS transport", () => {
       certainty: "unknown",
       reason: "private_state",
     });
-    expect(await readdir(stage)).toEqual([]);
+    expect(await readdir(stage)).toHaveLength(1);
+    expect(await readFile(outside, "utf8")).toBe("foreign");
   });
 
   it("rejects symlink state and forged or symlink staged handles", async () => {
