@@ -139,7 +139,7 @@ async function writeOnce(
 async function readPrivate(
   file: string,
   rejectJsonNull = false,
-  nonBlocking = false,
+  nonBlocking = true,
 ): Promise<unknown | null> {
   if (
     nonBlocking &&
@@ -187,11 +187,24 @@ async function readPrivate(
       !stat.isFile() ||
       (stat.nlink !== 1 && !publishedPair) ||
       (stat.mode & 0o077) !== 0 ||
+      stat.uid !== process.geteuid?.() ||
       stat.size > 4_096
     ) {
       throw new Error("HANDOFF_JOURNAL_UNSAFE");
     }
-    const value = JSON.parse(await handle.readFile("utf8")) as unknown;
+    const bytes = Buffer.alloc(4_097);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    const after = await handle.stat();
+    if (
+      bytesRead !== stat.size ||
+      stat.size !== after.size ||
+      stat.mtimeMs !== after.mtimeMs ||
+      stat.ctimeMs !== after.ctimeMs
+    )
+      throw new Error("HANDOFF_JOURNAL_CHANGED");
+    const value = JSON.parse(
+      bytes.subarray(0, bytesRead).toString("utf8"),
+    ) as unknown;
     // Missing file is the only absence proof for the new title records.
     if (rejectJsonNull && value === null)
       throw new Error("HANDOFF_JOURNAL_INVALID");
@@ -211,6 +224,99 @@ function stringRecord(value: unknown): string {
 export class PrivateCodexHandoffJournal implements HandoffJournal {
   constructor(private readonly root: string) {
     if (!path.isAbsolute(root)) throw new Error("HANDOFF_JOURNAL_ROOT_INVALID");
+  }
+
+  /** Read only, under the caller's exclusive dispatch/Computer fence. No
+   * persisted intent is dismissed because a client or process has exited. */
+  async updateTaskKeys(): Promise<readonly string[]> {
+    if (!(await this.verifyRoot())) return [];
+    const before = await fs.lstat(this.root);
+    const keys: string[] = [];
+    let count = 0;
+    const directory = await fs.opendir(this.root);
+    for await (const entry of directory) {
+      if (++count > 4096) throw new Error("HANDOFF_JOURNAL_SCAN_LIMIT");
+      if (
+        /^project-preference-(?:[a-f0-9-]{36}\.json|selections-[a-f0-9]{64})$/u.test(
+          entry.name,
+        )
+      )
+        continue;
+      if (!validKey(entry.name))
+        throw new Error("HANDOFF_JOURNAL_UNEXPECTED_ENTRY");
+      const child = path.join(this.root, entry.name);
+      const childBefore = await this.verifyPreferenceDirectory(child);
+      if ((await fs.realpath(child)) !== child)
+        throw new Error("HANDOFF_JOURNAL_UNSAFE");
+      let files = 0;
+      for await (const file of await fs.opendir(child)) {
+        // Only complete published records participate. A leftover temporary or
+        // unknown record may hide an interrupted dispatch and is not discarded.
+        if (
+          ++files > 80 ||
+          !/^(?:reservation|thread-intent|thread|turn-intent|turn|continuation-child|continuation-verified|message-intent|message|title-intent|title|(?:dispatch-attempt|pre-effect-proof)-(?:[0-9]|[12][0-9]|3[01]))\.json$/u.test(
+            file.name,
+          )
+        )
+          throw new Error("HANDOFF_JOURNAL_UNEXPECTED_ENTRY");
+        if ((await readPrivate(path.join(child, file.name), true)) === null)
+          throw new Error("HANDOFF_JOURNAL_CHANGED");
+      }
+      const record = await this.read(entry.name);
+      if (
+        !record ||
+        (await this.hasUnconfirmedMessage(entry.name)) ||
+        (await this.hasUnconfirmedTitle(entry.name))
+      )
+        throw new Error("HANDOFF_JOURNAL_UNRESOLVED");
+      const continuation = await readPrivate(
+        path.join(child, "continuation-child.json"),
+        true,
+      );
+      if (continuation !== null) {
+        const parsed = z
+          .strictObject({ key: z.string().uuid(), turnId: z.string() })
+          .parse(continuation);
+        const next = await this.read(parsed.key);
+        if (
+          parsed.turnId !== record.turnId ||
+          !next?.continuationVerified ||
+          next.continuedFrom !== entry.name ||
+          next.threadId !== record.threadId
+        )
+          throw new Error("HANDOFF_JOURNAL_UNRESOLVED");
+      }
+      // A reservation before any dispatch has no remote effect. Once an intent
+      // exists, only the normal exact-identity status path may establish idle.
+      if (
+        files > 1 ||
+        record.threadIntent ||
+        record.turnIntent ||
+        record.threadId ||
+        record.turnId
+      )
+        keys.push(entry.name);
+      const childAfter = await this.verifyPreferenceDirectory(child);
+      if (
+        childBefore.dev !== childAfter.dev ||
+        childBefore.ino !== childAfter.ino ||
+        childBefore.mtimeMs !== childAfter.mtimeMs ||
+        childBefore.ctimeMs !== childAfter.ctimeMs ||
+        (await fs.realpath(child)) !== child
+      )
+        throw new Error("HANDOFF_JOURNAL_CHANGED");
+    }
+    const after = await fs.lstat(this.root);
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      (await fs.realpath(this.root)) !== this.root ||
+      !(await this.verifyRoot())
+    )
+      throw new Error("HANDOFF_JOURNAL_CHANGED");
+    return keys;
   }
 
   async readProjectPreference(

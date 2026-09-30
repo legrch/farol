@@ -1,5 +1,6 @@
 import { promises as rawFs } from "original-fs";
 import { createInstalledUpdateRuntime } from "./installed-update-runtime";
+import { drainInstalledComputer } from "./installed-computer-drain";
 import {
   InstalledUpdateCommandSchema,
   type InstalledUpdateView,
@@ -717,11 +718,7 @@ async function initializeInstalledUpdater(): Promise<void> {
           hostCheckClients.size > 0
         )
           return { ok: false, code: "UPDATE_WORK_PENDING" };
-        if (
-          connectorTaskAdmission ||
-          connectorStartInFlight ||
-          secureMcpConnectorRuntime?.isRunning()
-        )
+        if (connectorTaskAdmission || connectorStartInFlight)
           return { ok: false, code: "UPDATE_CONNECTOR_ACTIVE" };
         if (
           chatGptRoute?.hasOpenUpdateSurface() ||
@@ -733,10 +730,6 @@ async function initializeInstalledUpdater(): Promise<void> {
         const snapshot = configuration?.snapshot();
         if (!snapshot || snapshot.status !== "ready")
           return { ok: false, code: "UPDATE_STATE_UNREADABLE" };
-        // A configured shared host can own turns outside the local browser registry.
-        // Until its exact journal is reconciled, it is never assumed idle.
-        if (snapshot.settings.nativeHosts.taskRoute)
-          return { ok: false, code: "UPDATE_TASK_ROUTE_NEEDS_DRAIN" };
         const transition = authorityTransitions.tryReserve("authority-change");
         if (!transition) return { ok: false, code: "UPDATE_WORK_PENDING" };
         const taskClaim = taskMutations.tryEnter();
@@ -765,6 +758,30 @@ async function initializeInstalledUpdater(): Promise<void> {
             return { ok: false, code: "UPDATE_WORK_PENDING" };
           }
           await liveTaskPersistence;
+          const drained = await drainInstalledComputer({
+            root: secureMcpLaunchRoot(),
+            settings: snapshot.settings,
+            stillCurrent: () => {
+              const current = configuration?.snapshot();
+              return (
+                !quitInProgress &&
+                current?.status === "ready" &&
+                current.settings.revision === snapshot.settings.revision
+              );
+            },
+            stopOwnedClients: async () => {
+              await stopAndConfirmComputerMcp();
+              // Preserve route, grants, selected app and credentials. Only the
+              // runtime attachment becomes stopped after a verified drain.
+              const recorded = await configuration?.recordSecureMcpStopped();
+              if (!recorded?.ok)
+                throw new Error("UPDATE_CONNECTOR_DRAIN_UNCONFIRMED");
+            },
+          });
+          if (!drained.ok) {
+            await release();
+            return drained;
+          }
           return { ok: true, release };
         } catch {
           await release();

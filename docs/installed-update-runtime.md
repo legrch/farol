@@ -5,6 +5,25 @@ its existing owner data directory. Temporary `task run` copies do not update the
 installed app. The GitHub channel and package identity are fixed by the release
 contract; no source checkout, credentials or local diagnostics are published.
 
+On explicit Restart, a configured idle connector is drained without deleting its
+saved route. Desktop first reserves configuration/task admission and the promotion
+lease. The Computer fence then exclusively excludes file/shell handlers and Codex
+dispatch. Pending or unknown mutation records, shell reservations, dispatch locks,
+unreadable journals and incomplete task intents block the update. Issued Codex
+handles use the existing exact-identity read-only status path; only terminal turns
+and an observed idle thread qualify. The selected route must still admit those
+reads; an unavailable, expired or mismatched route is not idle. These are bounded
+thread snapshots, not a global lock over independent native clients.
+
+After those checks the normal NEW connector/MCP/proxy shutdown must confirm its
+owned processes and handlers ended. The external Codex daemon is never stopped.
+Only runtime/attachment state is recorded as stopped; workspace grants, task
+selection, route, credentials and selected ChatGPT app remain saved. A failed
+drain does not launch the updater helper. Later does not enter this drain at all.
+Open browser documents still require explicit closure because they can contain
+owner work outside Farol's journals. Reconnect after relaunch remains a separate
+qualification step; no automatic Send or verification challenge is performed.
+
 Electron's ASAR filesystem must not reinterpret release bytes. The desktop copy
 port uses Electron's `original-fs`, and trusted verifier/readback subprocesses use
 `ELECTRON_RUN_AS_NODE=1` plus `ELECTRON_NO_ASAR=1`. The ordinary application keeps

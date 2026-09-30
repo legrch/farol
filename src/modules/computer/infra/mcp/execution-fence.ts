@@ -89,6 +89,7 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
   private async withLock<T>(
     work: () => Promise<T>,
     retainIfWorkFails: (error: unknown) => boolean = () => false,
+    timeoutMs = 30_000,
   ): Promise<T> {
     const root = path.dirname(this.mutationLock);
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
@@ -102,7 +103,7 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
       (await fs.realpath(root)) !== root
     )
       throw new Error("COMPUTER_EXECUTION_FENCE_ROOT_UNSAFE");
-    const deadline = Date.now() + 30_000;
+    const deadline = Date.now() + timeoutMs;
     for (;;) {
       try {
         await fs.mkdir(this.mutationLock, { mode: 0o700 });
@@ -146,6 +147,26 @@ export class PrivateExecutionFence implements ExecutionFenceReader {
         return effect();
       },
       (error) => effectStarted && !safeToReleaseError(error),
+    );
+  }
+
+  /** Fence both Computer handlers and Codex dispatch while checking/draining
+   * NEW-owned clients. Busy/unknown work is refused, never cancelled for update. */
+  async withUpdateDrain<T>(work: () => Promise<T>): Promise<T> {
+    return this.withLock(
+      async () => {
+        const lease = await this.lock(true);
+        if (!lease) throw new Error("EXECUTION_FENCE_ACTIVE_COMPUTER_WORK");
+        try {
+          const admission = await this.admits();
+          if (!admission.admitted) throw new Error(admission.code);
+          return await work();
+        } finally {
+          await lease.close();
+        }
+      },
+      () => false,
+      0,
     );
   }
 

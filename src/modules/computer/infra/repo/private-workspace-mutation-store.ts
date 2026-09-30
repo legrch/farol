@@ -184,6 +184,70 @@ export class PrivateWorkspaceMutationStore implements WorkspaceMutationRepositor
     }
   }
 
+  /** Read-only admission check under the exclusive Computer fence. */
+  async settledForUpdate(): Promise<boolean> {
+    const directory = path.join(this.options.root, "mutations");
+    let before: Stats;
+    try {
+      before = await fs.lstat(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
+    if (
+      !before.isDirectory() ||
+      before.isSymbolicLink() ||
+      (before.mode & 0o077) !== 0 ||
+      before.uid !== process.geteuid?.() ||
+      (await fs.realpath(directory)) !== directory
+    )
+      throw new Error("WORKSPACE_MUTATION_DIRECTORY_UNSAFE");
+    let count = 0;
+    for await (const entry of await fs.opendir(directory)) {
+      if (++count > 4096 || !/^[a-f0-9]{64}\.json$/u.test(entry.name))
+        return false;
+      const handle = await fs.open(
+        path.join(directory, entry.name),
+        fsConstants.O_RDONLY |
+          NO_FOLLOW |
+          CLOSE_ON_EXEC |
+          fsConstants.O_NONBLOCK,
+      );
+      try {
+        const info = await handle.stat();
+        this.assertPrivateFile(info);
+        const bytes = Buffer.alloc(MAXIMUM_RECORD_BYTES + 1);
+        const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+        const after = await handle.stat();
+        if (
+          bytesRead !== info.size ||
+          info.size !== after.size ||
+          info.mtimeMs !== after.mtimeMs
+        )
+          return false;
+        const envelope = envelopeSchema.parse(
+          JSON.parse(bytes.subarray(0, bytesRead).toString("utf8")),
+        );
+        const record = this.validateRecord(envelope.record);
+        if (
+          entry.name !== `${digestIdentity(record.identity)}.json` ||
+          !["completed", "failed"].includes(record.phase)
+        )
+          return false;
+      } finally {
+        await handle.close();
+      }
+    }
+    const after = await fs.lstat(directory);
+    return (
+      after.isDirectory() &&
+      !after.isSymbolicLink() &&
+      before.dev === after.dev &&
+      before.ino === after.ino &&
+      before.mtimeMs === after.mtimeMs
+    );
+  }
+
   async admit(
     record: StoredWorkspaceMutation,
   ): Promise<WorkspaceMutationAdmission> {

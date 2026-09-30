@@ -11,6 +11,8 @@ const blockedMessages: Readonly<Record<string, string>> = {
   UPDATE_BROWSER_OPEN:
     "Close open ChatGPT tabs before restarting so no browser work is interrupted.",
   UPDATE_WORK_PENDING: "Finish or cancel active work before restarting.",
+  UPDATE_WORK_DRAIN_UNCONFIRMED:
+    "Farol could not confirm that local work has finished. Review its current result before restarting.",
   UPDATE_STATE_UNREADABLE: "Farol couldn’t read its update status.",
 };
 
