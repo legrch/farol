@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { createInstalledUpdateView } from "../../src/ui/installed-update-view";
-import type { InstalledUpdateView } from "../../src/modules/release/contract/installed-update";
+import {
+  InstalledUpdateViewSchema,
+  type InstalledUpdateView,
+} from "../../src/modules/release/contract/installed-update";
 
 // A small DOM fixture for the existing Node test environment. IDs and initial
 // visibility come from the actual shell; this is not a browser layout test.
@@ -96,6 +99,39 @@ describe("installed update view", () => {
     f.node("rollback").click();
     expect(f.onCommand.mock.calls).toEqual([["recover"], ["rollback"]]);
   });
+  it("keeps local rollback visible after a known network failure, with no automatic action", () => {
+    const f = fixture();
+    const state = InstalledUpdateViewSchema.parse({
+      phase: "failed",
+      code: "UPDATE_NETWORK_FAILURE",
+      recoveryRequired: false,
+      rollbackVersion: "0.1.0-owner.beta.1",
+    });
+    f.view.render(state);
+    expect(f.node("rollback").hidden).toBe(false);
+    expect(f.node("rollback").disabled).toBe(false);
+    expect(f.node("summary").textContent).toContain(
+      "previous accepted version",
+    );
+    expect(f.node("summary").textContent).toContain("couldn’t");
+    expect(f.onCommand).not.toHaveBeenCalled();
+    f.node("rollback").click();
+    f.node("rollback").click();
+    expect(f.onCommand.mock.calls).toEqual([["rollback"]]);
+    expect(
+      InstalledUpdateViewSchema.safeParse({ ...state, recoveryRequired: true })
+        .success,
+    ).toBe(false);
+    f.view.render({
+      phase: "failed",
+      code: "UPDATE_HANDOFF_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(f.node("rollback").hidden).toBe(true);
+    f.node("rollback").click();
+    expect(f.onCommand).toHaveBeenCalledTimes(1);
+  });
+
   it("starts passive and keeps idle checks in Preferences without a rail notice", () => {
     const f = fixture();
     for (const name of allControls) f.node(name).click();

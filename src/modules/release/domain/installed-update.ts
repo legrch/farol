@@ -15,4 +15,9 @@ export type InstalledUpdateView =
       blockedBy: string | null;
     }>
   | Readonly<{ phase: "applying"; version: string }>
-  | Readonly<{ phase: "failed"; code: string; recoveryRequired: boolean }>;
+  | Readonly<{
+      phase: "failed";
+      code: string;
+      recoveryRequired: boolean;
+      rollbackVersion?: string;
+    }>;

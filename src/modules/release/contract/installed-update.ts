@@ -26,11 +26,16 @@ export const InstalledUpdateViewSchema = z.discriminatedUnion("phase", [
     phase: z.literal("applying"),
     version: z.string().max(128),
   }),
-  z.strictObject({
-    phase: z.literal("failed"),
-    code: Code,
-    recoveryRequired: z.boolean(),
-  }),
+  z
+    .strictObject({
+      phase: z.literal("failed"),
+      code: Code,
+      recoveryRequired: z.boolean(),
+      rollbackVersion: z.string().max(128).optional(),
+    })
+    .refine(
+      (view) => !view.recoveryRequired || view.rollbackVersion === undefined,
+    ),
 ]);
 export type InstalledUpdateView = z.infer<typeof InstalledUpdateViewSchema>;
 export const InstalledUpdateCommandSchema = z.strictObject({

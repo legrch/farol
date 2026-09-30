@@ -58,8 +58,10 @@ function description(view: InstalledUpdateView): string {
     case "failed": {
       const reason =
         blockedMessages[view.code] ?? "Farol couldn’t complete the update.";
-      return view.recoveryRequired
-        ? `${reason} Updating is paused until recovery is complete. Review Settings → Diagnostics.`
+      if (view.recoveryRequired)
+        return `${reason} Updating is paused until recovery is complete. Review Settings → Diagnostics.`;
+      return view.rollbackVersion
+        ? `${reason} The previous accepted version, ${updateName(view.rollbackVersion)}, is still available to restore. Your settings and folders are kept.`
         : `${reason} You can check for updates again when you’re ready.`;
     }
   }
@@ -167,7 +169,9 @@ export function createInstalledUpdateView(
           const available =
             kind === "recover"
               ? view.phase === "recovery"
-              : view.phase === "idle" && !!view.rollbackVersion;
+              : (view.phase === "idle" ||
+                  (view.phase === "failed" && !view.recoveryRequired)) &&
+                !!view.rollbackVersion;
           node.hidden = !available;
           node.disabled = !available;
           node.title = message;

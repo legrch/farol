@@ -216,6 +216,83 @@ describe("installed update orchestration (port fixture, no native or GitHub acce
       recoveryRequired: true,
     });
   });
+  for (const outcome of ["accepted", "blocked", "unknown"] as const) {
+    it(`keeps verified local rollback after a known offline check (${outcome})`, async () => {
+      const { updater, ports } = fixture();
+      ports.recover.mockResolvedValue({
+        ok: true,
+        update: null,
+        rollbackVersion: "0.1.0-owner.beta.1",
+      });
+      ports.discover.mockResolvedValue({
+        ok: false,
+        code: "UPDATE_NETWORK_FAILURE",
+      });
+      ports.restore.mockResolvedValue({
+        status: outcome,
+        code: "UPDATE_WORK_PENDING",
+      });
+      await updater.initialize();
+      await updater.check();
+      expect(updater.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: false,
+        code: "UPDATE_NETWORK_FAILURE",
+        rollbackVersion: "0.1.0-owner.beta.1",
+      });
+      expect(ports.download).not.toHaveBeenCalled();
+      await updater.restore("rollback");
+      expect(ports.restore).toHaveBeenCalledExactlyOnceWith("rollback");
+      if (outcome === "blocked") {
+        expect(updater.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: false,
+          code: "UPDATE_WORK_PENDING",
+          rollbackVersion: "0.1.0-owner.beta.1",
+        });
+        ports.restore.mockResolvedValue({ status: "accepted" });
+        await updater.restore("rollback");
+        expect(ports.restore).toHaveBeenCalledTimes(2);
+      } else {
+        await updater.restore("rollback");
+        await updater.check(true);
+        expect(ports.restore).toHaveBeenCalledTimes(1);
+        expect(ports.discover).toHaveBeenCalledTimes(1);
+        if (outcome === "unknown")
+          expect(updater.snapshot()).toEqual({
+            phase: "failed",
+            recoveryRequired: true,
+            code: "UPDATE_WORK_PENDING",
+          });
+      }
+    });
+  }
+
+  it("does not expose rollback after uncertain discovery or download", async () => {
+    for (const failureStage of ["discover", "download"] as const) {
+      const { updater, ports } = fixture();
+      ports.recover.mockResolvedValue({
+        ok: true,
+        update: null,
+        rollbackVersion: "0.1.0-owner.beta.1",
+      });
+      ports[failureStage].mockResolvedValue({
+        ok: false,
+        code: "UPDATE_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      await updater.initialize();
+      await updater.check();
+      await updater.restore("rollback");
+      expect(ports.restore).not.toHaveBeenCalled();
+      expect(updater.snapshot()).toEqual({
+        phase: "failed",
+        code: "UPDATE_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+    }
+  });
+
   it("downloads and persists once; Later keeps working and never restarts", async () => {
     const { updater, ports } = fixture();
     await updater.initialize();

@@ -169,6 +169,11 @@ export class InstalledUpdater {
           phase: "failed",
           code: found.code,
           recoveryRequired: found.recoveryRequired ?? false,
+          // Discovery has not staged or dispatched anything. Its known failure
+          // cannot revoke the independently reconciled local predecessor.
+          ...(!found.recoveryRequired && this.rollbackVersion
+            ? { rollbackVersion: this.rollbackVersion }
+            : {}),
         });
         return;
       }
@@ -269,7 +274,9 @@ export class InstalledUpdater {
     const version =
       action === "recover" && previous.phase === "recovery"
         ? previous.version
-        : action === "rollback" && previous.phase === "idle"
+        : action === "rollback" &&
+            (previous.phase === "idle" ||
+              (previous.phase === "failed" && !previous.recoveryRequired))
           ? previous.rollbackVersion
           : undefined;
     if (this.closed || this.busy || !version) return;
@@ -280,6 +287,8 @@ export class InstalledUpdater {
       if (outcome.status === "blocked") {
         if (previous.phase === "recovery" || previous.phase === "idle")
           this.publish({ ...previous, blockedBy: outcome.code });
+        else if (previous.phase === "failed" && !previous.recoveryRequired)
+          this.publish({ ...previous, code: outcome.code });
       } else if (outcome.status === "unknown") {
         this.publish({
           phase: "failed",
