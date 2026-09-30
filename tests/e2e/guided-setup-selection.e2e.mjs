@@ -981,6 +981,14 @@ try {
         throw new Error("BROWSER_FIXTURE_READINESS_TIMEOUT");
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    // The layout can restore before the asynchronous auth outcome arrives.
+    // Readiness alone must not hide the restored Setup step afterward.
+    assert.equal(
+      await window.locator("html").getAttribute("data-section"),
+      "computer",
+      "SIGN_IN_RETURN_LEFT_GUIDED_SETUP",
+    );
+    assert.equal(await window.locator("#onboarding-nav").isVisible(), true);
     observations.push({
       kind: "embedded-sign-in-return",
       environment,

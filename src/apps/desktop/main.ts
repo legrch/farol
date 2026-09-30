@@ -1471,11 +1471,11 @@ async function recordChatGptSignInOutcome(
       // connection" or sign-in attempt tries again.
     }
   }
-  // Outside Setup the owner is brought to Settings; inside Setup the open
-  // step is told the window closed, so it shows the recorded outcome and
-  // its next action instead of the state from before sign-in.
+  // Guided Setup owns the computer section with the legacy wizard closed.
+  // Its restored step receives readiness without another Settings navigation.
+  // Outside either Setup surface, the existing Settings return still applies.
   publishShellAction(
-    runtimeEnvironment === "dev" || setupOpen
+    runtimeEnvironment === "dev" || setupOpen || section === "computer"
       ? "sign-in-returned"
       : "open-settings",
     "auth-window-closed",
