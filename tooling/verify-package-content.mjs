@@ -316,6 +316,11 @@ export async function verifyPackageContent({
     "PACKAGE_MCP_NOTICE_INVALID",
   );
 
+  requireValue(
+    notices.includes("ws 8.22.0 (MIT)"),
+    "PACKAGE_WS_NOTICE_INVALID",
+  );
+
   const launcherPath = path.join(appPath, "Contents/MacOS/Farol Next Preview");
   const launcherStat = await fs.lstat(launcherPath);
   requireValue(

@@ -154,6 +154,12 @@ const packageDocument = JSON.parse(
 
 const common = {
   bundle: true,
+  // Only the attested JavaScript transport is part of the package. Optional
+  // native addons must never resolve from the owner's ambient installation.
+  define: {
+    "process.env.WS_NO_BUFFER_UTIL": '"1"',
+    "process.env.WS_NO_UTF_8_VALIDATE": '"1"',
+  },
   logLevel: "warning",
   sourcemap: false,
   target: "node24",
